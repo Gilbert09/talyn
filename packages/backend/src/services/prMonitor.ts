@@ -223,7 +223,7 @@ class PRMonitorService extends EventEmitter {
     const ownPRs = all.filter((pr) => pr.user.login === currentUserLogin);
 
     if (ownPRs.length === 0) {
-      await this.sweepClosed(workspaceId, repo.id, []);
+      await this.sweepClosed(workspaceId, repo, []);
       return;
     }
 
@@ -233,7 +233,7 @@ class PRMonitorService extends EventEmitter {
     if (stalePrs.length === 0) {
       // Still sweep closed — the user might have merged something
       // outside the TTL window.
-      await this.sweepClosed(workspaceId, repo.id, ownPRs.map((p) => p.number));
+      await this.sweepClosed(workspaceId, repo, ownPRs.map((p) => p.number));
       return;
     }
 
@@ -254,7 +254,7 @@ class PRMonitorService extends EventEmitter {
       });
     }
 
-    await this.sweepClosed(workspaceId, repo.id, ownPRs.map((p) => p.number));
+    await this.sweepClosed(workspaceId, repo, ownPRs.map((p) => p.number));
   }
 
   private async filterStale(
@@ -304,13 +304,16 @@ class PRMonitorService extends EventEmitter {
    * but keeps the row around so the user can filter "merged PRs from
    * my old tasks" on the GitHub page.
    *
-   * Not strict about "merged" vs "closed" — the next time the user
-   * opens the detail panel a fresh GraphQL fetch will populate the
-   * exact state. We just need the row out of the active-poll set.
+   * Disambiguates merged vs closed by hitting the per-PR REST endpoint
+   * (`merged_at` is the canonical signal). The batch GraphQL query
+   * filters on `states: [OPEN]`, so it can't tell us — and without
+   * this distinction every merged PR ends up wrongly stuck in the
+   * Closed tab. On REST failure we fall back to 'closed' so a flaky
+   * call doesn't keep repolling the row forever.
    */
   private async sweepClosed(
     workspaceId: string,
-    repositoryId: string,
+    repo: WatchedRepo,
     seenNumbers: number[]
   ): Promise<void> {
     const rows = await this.db
@@ -319,7 +322,7 @@ class PRMonitorService extends EventEmitter {
       .where(
         and(
           eq(pullRequestsTable.workspaceId, workspaceId),
-          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.repositoryId, repo.id),
           eq(pullRequestsTable.state, 'open')
         )
       );
@@ -327,9 +330,28 @@ class PRMonitorService extends EventEmitter {
     const stale = rows.filter((r) => !seen.has(r.number));
     if (stale.length === 0) return;
     for (const row of stale) {
+      let nextState: 'merged' | 'closed' = 'closed';
+      let mergedAt: Date | null = null;
+      try {
+        const pr = await githubService.getPullRequest(
+          workspaceId,
+          repo.owner,
+          repo.repo,
+          row.number
+        );
+        if (pr.merged_at || pr.merged) {
+          nextState = 'merged';
+          mergedAt = pr.merged_at ? new Date(pr.merged_at) : new Date();
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        console.warn(
+          `[pr-monitor] sweep state lookup failed for ${repo.fullName}#${row.number}: ${msg}`
+        );
+      }
       await this.db
         .update(pullRequestsTable)
-        .set({ state: 'closed', updatedAt: new Date() })
+        .set({ state: nextState, mergedAt, updatedAt: new Date() })
         .where(eq(pullRequestsTable.id, row.id));
     }
   }

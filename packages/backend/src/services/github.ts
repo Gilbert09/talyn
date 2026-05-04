@@ -57,6 +57,9 @@ interface GitHubPullRequest {
   mergeable_state: string;
   head: { ref: string; sha: string };
   base: { ref: string };
+  // Present on the single-PR endpoint; the list endpoint omits these.
+  merged?: boolean;
+  merged_at?: string | null;
 }
 
 interface GitHubCheckRun {

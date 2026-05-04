@@ -227,7 +227,7 @@ describe('prMonitor — poll orchestration', () => {
     expect(graphqlSpy.mock.calls[0][0].branches).toEqual(['feature/b']);
   });
 
-  it('marks tracked rows that disappear from the open-list as closed', async () => {
+  it('marks tracked rows that disappear from the open-list as merged when GitHub says so', async () => {
     // Seed two open rows.
     await db.insert(pullRequestsTable).values([
       {
@@ -262,6 +262,73 @@ describe('prMonitor — poll orchestration', () => {
       fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
     ] as never);
     vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
+      state: 'closed',
+      merged: true,
+      merged_at: '2026-01-02T00:00:00Z',
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-2'));
+    expect(rows[0].state).toBe('merged');
+    expect(rows[0].mergedAt?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('marks tracked rows as closed when GitHub reports closed (not merged)', async () => {
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-2',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 2,
+      state: 'open',
+      lastPolledAt: new Date(),
+      lastSummary: { headBranch: 'feature/b' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
+    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
+      state: 'closed',
+      merged: false,
+      merged_at: null,
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-2'));
+    expect(rows[0].state).toBe('closed');
+    expect(rows[0].mergedAt).toBeNull();
+  });
+
+  it('falls back to closed when the per-PR state lookup fails', async () => {
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-2',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 2,
+      state: 'open',
+      lastPolledAt: new Date(),
+      lastSummary: { headBranch: 'feature/b' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
+    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockRejectedValue(new Error('rate limit'));
 
     await prMonitorService.forcePoll();
 
