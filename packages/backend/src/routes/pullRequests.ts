@@ -4,6 +4,7 @@ import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { forceFetchAndUpsert } from '../services/prCache.js';
 import { batchPullRequests } from '../services/githubGraphql.js';
+import { githubService } from '../services/github.js';
 import {
   setFocused,
   clearFocused,
@@ -133,6 +134,42 @@ export function pullRequestRoutes(): Router {
       success: true,
       data: { row: rowToPublicShape(row), fresh },
     });
+  });
+
+  // File-by-file diff for a PR. Returns each changed file's status,
+  // per-file +/- stats, and the unified-diff `patch` so the desktop can
+  // render it inline via the same PatchDiff viewer the task Files tab
+  // uses — no more "view on GitHub" hand-off. This is a live REST hit
+  // (not cached): the files list is only fetched when the user opens the
+  // Files tab, so it's low-frequency.
+  router.get('/:id/files', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    try {
+      const files = await githubService.getPRFiles(
+        row.workspaceId,
+        row.owner,
+        row.repo,
+        row.number
+      );
+      res.json({ success: true, data: files });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
   });
 
   // Force a fresh fetch + upsert. Bypasses the cache TTL. Returns the

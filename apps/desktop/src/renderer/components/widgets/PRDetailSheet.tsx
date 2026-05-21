@@ -5,14 +5,26 @@ import {
   X,
   Loader2,
   FileText,
+  FilePlus,
+  FileMinus,
+  FileDiff,
+  ChevronRight,
+  ChevronDown,
   CheckCircle2,
   MessageSquare,
   Layers,
 } from 'lucide-react';
+import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/utils';
-import { api, type PRRow, type PRSummaryShape, type PRFreshDetail } from '../../lib/api';
+import {
+  api,
+  type PRRow,
+  type PRSummaryShape,
+  type PRFreshDetail,
+  type PRFile,
+} from '../../lib/api';
 import { PRStatusPill } from './PRStatusPill';
 
 /**
@@ -472,26 +484,188 @@ function FilesTab({
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
 }) {
-  // Files content lives behind a separate GraphQL query that's
-  // worth its own follow-up commit (full diff fetch, paginated).
-  // For now the tab links to GitHub.
+  const [files, setFiles] = useState<PRFile[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api.pullRequests
+      .files(data.row.id)
+      .then((res) => {
+        if (cancelled) return;
+        setFiles(res);
+        // Auto-expand the first file so the tab isn't a wall of
+        // collapsed rows on open.
+        if (res.length > 0) setExpanded(res[0].filename);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.row.id]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading files…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-muted-foreground">Couldn't load files: {error}</p>
+        <GitHubFilesLink url={data.row.summary.url} />
+      </div>
+    );
+  }
+  if (!files || files.length === 0) {
+    return <p className="text-xs text-muted-foreground">No file changes in this PR.</p>;
+  }
+
+  const totals = files.reduce(
+    (acc, f) => ({ added: acc.added + f.additions, removed: acc.removed + f.deletions }),
+    { added: 0, removed: 0 }
+  );
+
   return (
-    <div className="space-y-3 text-sm">
-      <p className="text-xs text-muted-foreground">
-        File-by-file diffs are best viewed on GitHub for now — the desktop
-        will inline them in a follow-up.
-      </p>
-      <a
-        href={`${data.row.summary.url}/files`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-xs text-primary underline"
-      >
-        Open Files tab on GitHub
-        <ExternalLink className="h-3 w-3" />
-      </a>
+    <div className="space-y-2 text-sm">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>
+          {files.length} {files.length === 1 ? 'file' : 'files'} changed
+          <span className="ml-2 tabular-nums">
+            <span className="text-emerald-600 dark:text-emerald-500">+{totals.added}</span>{' '}
+            <span className="text-red-600 dark:text-red-500">−{totals.removed}</span>
+          </span>
+        </span>
+        <GitHubFilesLink url={data.row.summary.url} compact />
+      </div>
+      <ul className="divide-y rounded-md border">
+        {files.map((f) => (
+          <PRFileRow
+            key={f.filename}
+            file={f}
+            open={expanded === f.filename}
+            onToggle={() =>
+              setExpanded((cur) => (cur === f.filename ? null : f.filename))
+            }
+          />
+        ))}
+      </ul>
     </div>
   );
+}
+
+function PRFileRow({
+  file,
+  open,
+  onToggle,
+}: {
+  file: PRFile;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const StatusIcon =
+    file.status === 'added'
+      ? FilePlus
+      : file.status === 'removed'
+        ? FileMinus
+        : file.status === 'renamed'
+          ? FileDiff
+          : FileText;
+  const statusColor =
+    file.status === 'added'
+      ? 'text-emerald-600 dark:text-emerald-500'
+      : file.status === 'removed'
+        ? 'text-red-600 dark:text-red-500'
+        : 'text-muted-foreground';
+
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-accent"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+        )}
+        <StatusIcon className={cn('h-3.5 w-3.5 shrink-0', statusColor)} />
+        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.filename}>
+          {file.filename}
+        </span>
+        <span className="ml-2 shrink-0 text-[11px] tabular-nums">
+          {file.additions > 0 && (
+            <span className="text-emerald-600 dark:text-emerald-500">+{file.additions}</span>
+          )}
+          {file.additions > 0 && file.deletions > 0 && ' '}
+          {file.deletions > 0 && (
+            <span className="text-red-600 dark:text-red-500">−{file.deletions}</span>
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="overflow-x-auto border-t bg-card max-w-full">
+          {file.patch ? (
+            <PatchDiff
+              patch={toUnifiedDiff(file)}
+              options={{ diffStyle: 'unified' }}
+            />
+          ) : (
+            <p className="px-3 py-4 text-xs text-muted-foreground">
+              {file.status === 'renamed'
+                ? 'Renamed with no content change.'
+                : 'No textual diff available (binary file or diff too large — view on GitHub).'}
+            </p>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function GitHubFilesLink({ url, compact }: { url: string; compact?: boolean }) {
+  return (
+    <a
+      href={`${url}/files`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-xs text-primary underline"
+    >
+      {compact ? 'On GitHub' : 'Open Files tab on GitHub'}
+      <ExternalLink className="h-3 w-3" />
+    </a>
+  );
+}
+
+/**
+ * GitHub's `/pulls/:n/files` `patch` field carries only the hunks
+ * (`@@ … @@` onward) — no `diff --git` / `---` / `+++` header. PatchDiff
+ * parses a full unified diff, so synthesise the missing header from the
+ * filename + status. /dev/null on the appropriate side keeps added /
+ * removed files rendering as pure inserts / deletes.
+ */
+function toUnifiedDiff(file: PRFile): string {
+  const a = file.status === 'added' ? '/dev/null' : `a/${file.filename}`;
+  const b = file.status === 'removed' ? '/dev/null' : `b/${file.filename}`;
+  return [
+    `diff --git a/${file.filename} b/${file.filename}`,
+    `--- ${a}`,
+    `+++ ${b}`,
+    file.patch ?? '',
+  ].join('\n');
 }
 
 function BranchRef({ head, base }: { head: string; base: string }) {

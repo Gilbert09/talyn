@@ -15,6 +15,7 @@ import {
 } from '../../db/schema.js';
 import * as graphqlModule from '../../services/githubGraphql.js';
 import type { PRSummary } from '../../services/githubGraphql.js';
+import { githubService } from '../../services/github.js';
 
 const OTHER_USER_ID = 'user-other';
 
@@ -317,6 +318,60 @@ describe('routes/pullRequests', () => {
       };
       expect(body.data.row.id).toBe(id);
       expect(body.data.fresh).toBeNull();
+    });
+  });
+
+  // -------- GET /:id/files --------
+
+  describe('GET /pull-requests/:id/files', () => {
+    it('returns the file list (with patches) from githubService', async () => {
+      const id = await insertPR(db);
+      const spy = vi.spyOn(githubService, 'getPRFiles').mockResolvedValue([
+        {
+          sha: 'abc',
+          filename: 'src/app.ts',
+          status: 'modified',
+          additions: 3,
+          deletions: 1,
+          changes: 4,
+          patch: '@@ -1,2 +1,4 @@\n a\n+b\n+c\n-d',
+        },
+      ]);
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/files`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: Array<{ filename: string; patch: string }> };
+      expect(body.data[0].filename).toBe('src/app.ts');
+      expect(body.data[0].patch).toContain('@@');
+      expect(spy).toHaveBeenCalledWith('ws-mine', 'acme', 'widgets', expect.any(Number));
+    });
+
+    it('returns 404 for a missing PR', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/missing/files`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('refuses cross-workspace file access', async () => {
+      const id = await insertPR(db, {
+        workspaceId: 'ws-other',
+        repositoryId: 'repo-other',
+      });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/files`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('surfaces a 400 when the GitHub fetch throws (e.g. token revoked)', async () => {
+      const id = await insertPR(db);
+      vi.spyOn(githubService, 'getPRFiles').mockRejectedValue(new Error('bad credentials'));
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/files`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(400);
     });
   });
 

@@ -381,6 +381,21 @@ export interface PRFreshDetail {
   body: string;
 }
 
+/**
+ * One changed file in a PR. Mirrors GitHub's `/pulls/:n/files` payload:
+ * `patch` is the unified diff (absent for binary files / very large
+ * diffs GitHub omits).
+ */
+export interface PRFile {
+  sha: string;
+  filename: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed' | 'copied' | 'changed' | 'unchanged';
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+}
+
 export const pullRequests = {
   list: (params: {
     workspaceId: string;
@@ -406,6 +421,8 @@ export const pullRequests = {
     request<PRRow>('POST', `/pull-requests/${id}/refresh`),
   focus: (id: string, focused = true) =>
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
+  files: (id: string) =>
+    request<PRFile[]>('GET', `/pull-requests/${id}/files`),
 };
 
 export const repositories = {
