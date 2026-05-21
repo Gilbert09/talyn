@@ -2,6 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { api, wsClient } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import type {
+  AgentEvent,
   AgentStatusEvent,
   AgentOutputEvent,
   TaskStatusEvent,
@@ -14,6 +15,71 @@ import type {
   EnvironmentStatusEvent,
   WorkspaceSettings,
 } from '@fastowl/shared';
+
+// ---------------------------------------------------------------------------
+// task:event coalescing
+//
+// A running agent emits a `task:event` per stream-json event — during a
+// turn that's dozens per second. The naive handler did an O(n) dedup +
+// O(n log n) re-sort of the whole transcript AND triggered a full React
+// re-render *per event*. On a long transcript that's O(n²) work plus a
+// re-render storm, which is the single biggest source of the "task screen
+// feels sluggish" complaint.
+//
+// Instead we buffer incoming events per task and flush once per frame:
+// one merge, one store write, one re-render — no matter how many events
+// arrived in that window. Append is the hot path (events almost always
+// arrive in order), so we only re-sort when we actually detect an
+// out-of-order seq.
+// ---------------------------------------------------------------------------
+
+const pendingTaskEvents = new Map<string, AgentEvent[]>();
+let taskEventFlushTimer: number | null = null;
+
+function flushTaskEvents() {
+  taskEventFlushTimer = null;
+  if (pendingTaskEvents.size === 0) return;
+  const store = useWorkspaceStore.getState();
+  const batch = pendingTaskEvents;
+  // Swap the buffer up front so events arriving mid-flush queue cleanly
+  // for the next frame rather than being dropped.
+  pendingTaskEvents.clear();
+
+  for (const [taskId, incoming] of batch) {
+    const task = store.tasks.find((t) => t.id === taskId);
+    if (!task) continue;
+    const existing = task.transcript ?? [];
+    const seen = new Set(existing.map((e) => e.seq));
+    const merged = existing.slice();
+    let changed = false;
+    for (const ev of incoming) {
+      if (seen.has(ev.seq)) continue; // reconnects can replay events
+      seen.add(ev.seq);
+      merged.push(ev);
+      changed = true;
+    }
+    if (!changed) continue;
+    // Cheap ordered-check; only pay for a sort when seqs actually arrived
+    // out of order (rare — happens across WS reconnects).
+    let ordered = true;
+    for (let i = 1; i < merged.length; i++) {
+      if (merged[i].seq < merged[i - 1].seq) {
+        ordered = false;
+        break;
+      }
+    }
+    if (!ordered) merged.sort((a, b) => a.seq - b.seq);
+    store.updateTask(taskId, { transcript: merged });
+  }
+}
+
+function scheduleTaskEventFlush() {
+  if (taskEventFlushTimer !== null) return;
+  // ~1 frame. setTimeout (not rAF) so it still flushes when the window is
+  // backgrounded — a continuous-build run shouldn't silently stall its
+  // transcript just because the user tabbed away.
+  taskEventFlushTimer = window.setTimeout(flushTaskEvents, 40);
+}
 
 /**
  * Hook to initialize API connection and real-time updates
@@ -140,20 +206,15 @@ export function useApiConnection() {
       })
     );
 
-    // Structured-renderer events (stream-json). Each event is appended
-    // to the task's in-memory transcript. Out-of-order events (rare but
-    // possible across WS reconnects) are resolved by the event's `seq`.
+    // Structured-renderer events (stream-json). Buffered per task and
+    // flushed once per frame (see scheduleTaskEventFlush) — dedup on
+    // `seq` and out-of-order resolution happen in the flush.
     unsubscribers.push(
       wsClient.on<TaskEventBroadcast>('task:event', (payload) => {
-        const store = useWorkspaceStore.getState();
-        const task = store.tasks.find((t) => t.id === payload.taskId);
-        if (!task) return;
-        const existing = task.transcript ?? [];
-        // Dedup on `seq`: reconnects can replay events the client
-        // already has.
-        if (existing.some((e) => e.seq === payload.event.seq)) return;
-        const next = [...existing, payload.event].sort((a, b) => a.seq - b.seq);
-        updateTask(payload.taskId, { transcript: next });
+        const buf = pendingTaskEvents.get(payload.taskId);
+        if (buf) buf.push(payload.event);
+        else pendingTaskEvents.set(payload.taskId, [payload.event]);
+        scheduleTaskEventFlush();
       })
     );
 
@@ -184,6 +245,12 @@ export function useApiConnection() {
 
     return () => {
       unsubscribers.forEach((unsub) => unsub());
+      // Drain any buffered transcript events before tearing down so a
+      // teardown mid-burst doesn't drop the tail of a turn.
+      if (taskEventFlushTimer !== null) {
+        window.clearTimeout(taskEventFlushTimer);
+        flushTaskEvents();
+      }
     };
   }, [updateAgent, updateTask, addInboxItem, updateInboxItem, updateEnvironment]);
 }

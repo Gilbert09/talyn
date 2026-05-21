@@ -348,7 +348,39 @@ function buildBlocks(events: AgentEvent[]): Block[] {
 // Block views
 // ---------------------------------------------------------------------------
 
-function BlockView({
+/**
+ * Cheap render-affecting signature for a block. Most blocks are
+ * immutable once created (their `key` encodes the source event's seq +
+ * index), so the key alone is a stable identity. The two exceptions:
+ *  - permission cards mutate in place (pending → allowed/denied), and
+ *  - the live streaming-text tail grows token by token.
+ * Including those mutable fields lets React.memo skip every settled
+ * block on each per-frame transcript update while still re-rendering
+ * the handful that actually changed.
+ */
+function blockSignature(block: Block): string {
+  switch (block.kind) {
+    case 'permission':
+      return `${block.key}|${block.status}|${block.persist ? 1 : 0}`;
+    case 'text':
+      // Settled text blocks have a stable key + length; the streaming
+      // tail keeps the same key while its length grows.
+      return `${block.key}|${block.text.length}`;
+    default:
+      return block.key;
+  }
+}
+
+const BlockView = React.memo(
+  BlockViewImpl,
+  (prev, next) =>
+    prev.taskId === next.taskId &&
+    prev.interactive === next.interactive &&
+    prev.envName === next.envName &&
+    blockSignature(prev.block) === blockSignature(next.block)
+);
+
+function BlockViewImpl({
   block,
   taskId,
   interactive,
