@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 24 — Conductor-parity polish (feed perf, PR diffs, merge, markdown)
+
+Kicked off after comparing the task view against Conductor (conductor.build). Goal: close the "feels buggy / lower quality" gap. Full assessment + remaining backlog in [`docs/QUALITY_PARITY.md`](./QUALITY_PARITY.md). Landed in four commits:
+
+- **Feed performance (the main "sluggish" cause).** Every stream-json `task:event` did an O(n) dedup + O(n log n) re-sort of the whole transcript AND triggered a full React re-render — dozens of times a second during a turn. Now: `task:event` is buffered per task in `useApi.ts` and flushed once per frame (`setTimeout(40ms)` so it survives backgrounding); append is the hot path, re-sort only on a detected out-of-order seq; drains on teardown. `BlockView` in `AgentConversation.tsx` is now `React.memo`'d with a cheap render-affecting signature (`blockSignature`) so a transcript update only re-renders the live streaming tail + any mutating permission card, not every settled block.
+- **PR file diffs in-app.** `GET /pull-requests/:id/files` exposes the previously-dead `githubService.getPRFiles`. The `PRDetailSheet` Files tab now fetches the list, shows a changed-files summary (count + total +/-), and renders each file's diff inline via `@pierre/diffs` `PatchDiff` (the same viewer the task Files tab uses) in an expandable accordion. GitHub's hunks-only `patch` is wrapped in a synthesised `diff --git`/`---`/`+++` header (`toUnifiedDiff`) so added/removed files render as pure inserts/deletes. +4 route tests.
+- **In-app merge + per-check breakdown.** `POST /pull-requests/:id/merge` (squash default) wraps `githubService.mergePullRequest` and force-refetches so the row flips to merged immediately. The sheet shows a green Merge button only for an open, mergeable PR, behind a two-step confirm. **This deliberately reverses the Phase-7 decision** to make all PR writes deep-links — merge is now the one in-app write path; review/comment composition still deep-links out. Per-check rows (`checkContexts`: name, normalized state, link) are now exposed on the live `PRSummary` detail fetch (data was already normalized for the rollup counts; not persisted to the cached summary, so no DB bloat) and rendered as individual rows in the Checks tab. +1 graphql decode assertion.
+- **Richer markdown in the feed.** `renderMarkdownish` (still dependency-free) now covers headings, bullet/numbered lists, blockquotes, horizontal rules, and an inline parser for `**bold**`, `*italic*`, `[links](url)`, and `` `code` ``. Unrecognised input still falls through as a plain paragraph.
+
+**Already-fixed-in-code backlog items** confirmed during the sweep: the "duplicate Stop button" (QueuePanel intentionally renders none — TaskTerminal owns Finish/Abort) and the "non-functional inbox 3-dot menu" (fully wires markRead/archive/delete) were both already resolved.
+
+**Deferred** (need backend contract work — see QUALITY_PARITY.md): composer model picker + attachments (adding non-functional UI would reintroduce the placeholder feeling we're removing), a true simultaneous 3-pane layout (the PR sheet overlay already gives task→PR continuity), and desktop component/E2E test coverage.
+
 ## Session 23 — PR / CI tracking rebuild (Phases 1–7)
 
 Replaces the per-PR-REST-fan-out poller + the lone PRListWidget with a batched-GraphQL DB-as-cache pipeline plus a real GitHub page and a task-screen status pill. Inspired by supacode's `batchPullRequests` + `statusCheckRollup` design (see `docs/SUPACODE_COMPARISON.md`).

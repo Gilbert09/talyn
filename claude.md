@@ -19,6 +19,7 @@ After completing each task: stage relevant files, commit with a descriptive mess
 - **[`docs/SESSIONS.md`](./docs/SESSIONS.md)** — chronological session notes
 - **[`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md)** — active "production ready" plan (hosted backend, daemon split, etc.)
 - **[`docs/DAEMON_EVERYWHERE.md`](./docs/DAEMON_EVERYWHERE.md)** — active refactor: daemon becomes a bundled OS-level user service; collapses local/ssh/daemon into one transport; fixes backend-restart session loss
+- **[`docs/QUALITY_PARITY.md`](./docs/QUALITY_PARITY.md)** — desktop polish/parity assessment vs Conductor; what's done + prioritized backlog (feed perf, PR diffs/merge, composer, tests)
 - **[`docs/CONTINUOUS_BUILD.md`](./docs/CONTINUOUS_BUILD.md)** — user-facing feature doc
 - **[`docs/SSH_VM_SETUP.md`](./docs/SSH_VM_SETUP.md)** — running against a remote VM
 - **[`docs/SETUP.md`](./docs/SETUP.md)** — env vars / account setup
