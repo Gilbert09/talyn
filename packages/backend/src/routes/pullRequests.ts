@@ -14,17 +14,16 @@ import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
- * Read-only routes for the new PR/CI surface. The desktop never writes
- * to GitHub through these — every actionable button (approve, merge,
- * comment) deep-links to github.com.
+ * Routes for the PR/CI surface. Mostly read-only — the one write path is
+ * merge (gated in the UI to mergeable PRs and behind an explicit
+ * confirm). Review/comment composition still deep-links to github.com.
  *
  *   GET   /pull-requests                  list workspace PRs
  *   GET   /pull-requests/:id              full detail (always fresh GraphQL)
+ *   GET   /pull-requests/:id/files        file-by-file diff (live REST)
  *   POST  /pull-requests/:id/refresh      force fetch + upsert
- *   POST  /pull-requests/:id/focus        mark focused (Phase 6 wires the
- *                                         adaptive-poll signal; this
- *                                         endpoint exists now so the
- *                                         desktop can start emitting it)
+ *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
+ *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
  */
 
 export function pullRequestRoutes(): Router {
@@ -242,6 +241,60 @@ export function pullRequestRoutes(): Router {
       clearFocused(row.workspaceId, req.params.id);
     }
     res.status(204).send();
+  });
+
+  // Merge a PR. The only write path in this router — the desktop gates
+  // the button to mergeable PRs and shows a confirm first, but we
+  // re-validate nothing here beyond ownership: GitHub itself rejects the
+  // merge (405) if the PR isn't actually mergeable, and we surface that
+  // as a 400. On success we force a refetch so the row flips to `merged`
+  // immediately instead of waiting for the next poll tick.
+  router.post('/:id/merge', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+
+    const method = (req.body as { method?: string } | undefined)?.method;
+    const mergeMethod =
+      method === 'squash' || method === 'rebase' || method === 'merge'
+        ? method
+        : 'squash';
+
+    try {
+      const result = await githubService.mergePullRequest(
+        row.workspaceId,
+        row.owner,
+        row.repo,
+        row.number,
+        { merge_method: mergeMethod }
+      );
+      // Reflect the merged state right away (best-effort — the merge
+      // already happened either way).
+      await forceFetchAndUpsert({
+        workspaceId: row.workspaceId,
+        repositoryId: row.repositoryId,
+        taskId: row.taskId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+      }).catch(() => {});
+      res.json({ success: true, data: result } as ApiResponse<typeof result>);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Merge failed';
+      res.status(400).json({ success: false, error: message });
+    }
   });
 
   return router;

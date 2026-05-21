@@ -72,6 +72,14 @@ export interface PRSummary {
   reviewDecision: ReviewDecision;
   blockingReason: BlockingReason;
   checks: CheckBreakdown;
+  /**
+   * Per-check rows behind the `checks` rollup — name, normalized state,
+   * and a link to the run/target. Not persisted (summaryToJsonb keeps
+   * only the counts); flows through the live detail fetch so the
+   * desktop Checks tab can render individual rows instead of a rollup +
+   * "view on GitHub".
+   */
+  checkContexts: Array<{ name: string; state: CheckState; url: string | null }>;
   /** Rolling hash of `headSha + sorted(check.state per name)` — used by
    *  the cursor logic to detect "checks changed" without diffing the
    *  whole rollup payload. */
@@ -491,6 +499,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
         ? { status: c.status, conclusion: c.conclusion }
         : { state: c.state }
     ),
+    url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
   }));
   const checks: CheckBreakdown = {
     total: normalizedContexts.length,
@@ -529,6 +538,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     reviewDecision: raw.reviewDecision,
     blockingReason,
     checks,
+    checkContexts: normalizedContexts,
     checkDigest: computeCheckDigest(raw.headRefOid, normalizedContexts),
     recentReviews: raw.reviews.nodes
       .slice()

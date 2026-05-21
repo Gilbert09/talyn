@@ -356,6 +356,13 @@ describe('decodeBatchResponse', () => {
     });
     // Failed check trumps APPROVED review for the verdict.
     expect(pr.blockingReason).toBe('checks_failed');
+    // Per-check rows are exposed alongside the rollup (live detail
+    // fetch surfaces these to the desktop Checks tab).
+    expect(pr.checkContexts).toEqual([
+      { name: 'lint', state: 'success', url: null },
+      { name: 'test', state: 'failure', url: null },
+      { name: 'ci/external', state: 'pending', url: null },
+    ]);
   });
 
   it('treats a PR with no statusCheckRollup as zero checks (early-PR case)', () => {

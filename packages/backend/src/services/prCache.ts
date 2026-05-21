@@ -560,6 +560,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
       inProgress: 0,
       skipped: 0,
     },
+    checkContexts: [], // not cached — only the live detail fetch carries per-check rows
     checkDigest: row.lastCheckDigest ?? '',
     recentReviews: [],
     recentReviewComments: [],

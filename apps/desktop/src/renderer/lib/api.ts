@@ -314,6 +314,19 @@ export interface PRChecks {
   skipped: number;
 }
 
+export type PRCheckState =
+  | 'success'
+  | 'failure'
+  | 'pending'
+  | 'in_progress'
+  | 'skipped';
+
+export interface PRCheckContext {
+  name: string;
+  state: PRCheckState;
+  url: string | null;
+}
+
 /**
  * The persisted lastSummary jsonb from `pull_requests`. Same shape the
  * backend's `summaryToJsonb` writes — minimal columns for instant
@@ -379,6 +392,8 @@ export interface PRFreshDetail {
   // The fresh fetch returns the full PRSummary shape — include the
   // body for the Overview tab.
   body: string;
+  // Per-check rows behind the rollup counts (live fetch only).
+  checkContexts: PRCheckContext[];
 }
 
 /**
@@ -423,6 +438,12 @@ export const pullRequests = {
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
+  merge: (id: string, method: 'merge' | 'squash' | 'rebase' = 'squash') =>
+    request<{ sha: string; merged: boolean; message: string }>(
+      'POST',
+      `/pull-requests/${id}/merge`,
+      { method }
+    ),
 };
 
 export const repositories = {

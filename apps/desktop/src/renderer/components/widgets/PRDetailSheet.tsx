@@ -11,6 +11,8 @@ import {
   ChevronRight,
   ChevronDown,
   CheckCircle2,
+  CircleDot,
+  GitMerge,
   MessageSquare,
   Layers,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   type PRSummaryShape,
   type PRFreshDetail,
   type PRFile,
+  type PRCheckContext,
 } from '../../lib/api';
 import { PRStatusPill } from './PRStatusPill';
 
@@ -55,6 +58,8 @@ export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [confirmMerge, setConfirmMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -130,7 +135,29 @@ export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
     }
   }
 
+  async function handleMerge(): Promise<void> {
+    if (!pullRequestId) return;
+    setMerging(true);
+    setError(null);
+    try {
+      await api.pullRequests.merge(pullRequestId);
+      const next = await api.pullRequests.get(pullRequestId);
+      setData(next);
+      setConfirmMerge(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Merge failed');
+    } finally {
+      setMerging(false);
+    }
+  }
+
   if (!pullRequestId) return null;
+
+  // Show the merge affordance only for an open PR GitHub reports as
+  // mergeable (no conflicts, checks/reviews satisfied). Anything else
+  // routes the user to GitHub to resolve the blocker.
+  const canMerge =
+    !!data && data.row.state === 'open' && data.row.summary.blockingReason === 'mergeable';
 
   return (
     <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-2xl flex-col border-l bg-background shadow-2xl">
@@ -169,6 +196,43 @@ export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {canMerge &&
+            (confirmMerge ? (
+              <>
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={handleMerge}
+                  disabled={merging}
+                  title="Squash-merge this PR on GitHub"
+                >
+                  {merging ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <GitMerge className="mr-1 h-4 w-4" />
+                  )}
+                  Confirm merge
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirmMerge(false)}
+                  disabled={merging}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                className="bg-emerald-600 text-white hover:bg-emerald-700"
+                onClick={() => setConfirmMerge(true)}
+                title="Merge this PR"
+              >
+                <GitMerge className="mr-1 h-4 w-4" />
+                Merge
+              </Button>
+            ))}
           <Button
             size="sm"
             variant="outline"
@@ -368,10 +432,10 @@ function ChecksTab({
   if (checks.total === 0) {
     return <p className="text-xs text-muted-foreground">No checks have run yet.</p>;
   }
-  // Placeholder rendering — Phase 6/7 (or a follow-up) wires up a
-  // dedicated GraphQL fetch that returns the per-check rows. For
-  // now we surface the rolled-up counts and link to GitHub for the
-  // detailed view.
+  // Per-check rows come from the live detail fetch (data.fresh). When
+  // that's unavailable (env offline) we still show the rollup tiles +
+  // a GitHub link.
+  const contexts = data.fresh?.checkContexts ?? [];
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
@@ -380,21 +444,83 @@ function ChecksTab({
         <CheckCountTile label="Running" value={checks.inProgress} tone="blue" />
         <CheckCountTile label="Skipped" value={checks.skipped} tone="grey" />
       </div>
-      <p className="text-xs text-muted-foreground">
-        Per-check breakdown is on GitHub (the desktop wraps the rollup; the
-        per-check list is one round-trip away).
-      </p>
-      <a
-        href={`${data.row.summary.url}/checks`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-xs text-primary underline"
-      >
-        Open checks on GitHub
-        <ExternalLink className="h-3 w-3" />
-      </a>
+      {contexts.length > 0 ? (
+        <ul className="divide-y rounded-md border">
+          {contexts.map((c) => (
+            <CheckRow key={`${c.name}-${c.url ?? ''}`} check={c} />
+          ))}
+        </ul>
+      ) : (
+        <a
+          href={`${data.row.summary.url}/checks`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-primary underline"
+        >
+          Open checks on GitHub
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
     </div>
   );
+}
+
+function CheckRow({ check }: { check: PRCheckContext }) {
+  const { icon, color } = checkStateVisual(check.state);
+  const row = (
+    <div className="flex items-center gap-2 px-2.5 py-1.5">
+      <span className={cn('shrink-0', color)}>{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-xs" title={check.name}>
+        {check.name}
+      </span>
+      <span className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+        {check.state.replace('_', ' ')}
+      </span>
+      {check.url && <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />}
+    </div>
+  );
+  if (!check.url) return <li>{row}</li>;
+  return (
+    <li>
+      <a
+        href={check.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block hover:bg-accent"
+      >
+        {row}
+      </a>
+    </li>
+  );
+}
+
+function checkStateVisual(state: PRCheckContext['state']): {
+  icon: React.ReactNode;
+  color: string;
+} {
+  switch (state) {
+    case 'success':
+      return {
+        icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+        color: 'text-emerald-600 dark:text-emerald-500',
+      };
+    case 'failure':
+      return {
+        icon: <X className="h-3.5 w-3.5" />,
+        color: 'text-red-600 dark:text-red-500',
+      };
+    case 'in_progress':
+    case 'pending':
+      return {
+        icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
+        color: 'text-blue-600 dark:text-blue-500',
+      };
+    default:
+      return {
+        icon: <CircleDot className="h-3.5 w-3.5" />,
+        color: 'text-muted-foreground',
+      };
+  }
 }
 
 function CheckCountTile({
