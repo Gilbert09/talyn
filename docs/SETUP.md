@@ -50,19 +50,35 @@ The approval lands in your user-level Claude config and sticks. You don't need t
 
 ### 3. GitHub OAuth app (already scaffolded in backend)
 
-Used by Phase 6 integration (connect GitHub → PR monitoring, PR actions, repo listing).
+Used by the GitHub integration (connect GitHub → PR monitoring, PR actions, repo listing).
 
-1. https://github.com/settings/developers → **New OAuth App**
+> **Use a classic OAuth App, NOT a GitHub App.** The connect flow in
+> `services/github.ts` is the classic OAuth web flow (`scope=repo
+> read:user read:org`, exchange code → long-lived user token). A GitHub
+> App grants access *by installation*, so it can't read a repo you
+> personally have access to (e.g. `posthog/posthog`) without being
+> installed on that org — the wrong model here. A classic OAuth App's
+> token acts as you, so it reads any public repo and any private repo
+> your account can reach (private *org* repos may still need the org to
+> approve the app under its third-party-access policy). You can tell the
+> two apart by the client ID: classic OAuth = bare hex / `Ov23…`; a
+> GitHub App is `Iv1.…` / `Iv23…` — if you see that prefix, you made the
+> wrong app type.
+
+1. https://github.com/settings/developers → **OAuth Apps** tab → **New OAuth App** (do *not* use the "GitHub Apps" tab)
 2. Application name: `FastOwl (Dev)` (make a separate prod one later)
 3. Homepage URL: `http://localhost:4747`
-4. Authorization callback URL: `http://localhost:4747/api/v1/github/callback`
+4. Authorization callback URL: `http://localhost:4747/api/v1/github/callback` (must match `GITHUB_REDIRECT_URI` exactly)
 5. Create, then **Generate a new client secret**
 6. Export before running the backend:
    ```bash
-   export GITHUB_CLIENT_ID=Iv1.xxxxx
+   export GITHUB_CLIENT_ID=Ov23xxxxx        # classic OAuth App id (NOT Iv1./Iv23 — that's a GitHub App)
    export GITHUB_CLIENT_SECRET=xxxxx
    export GITHUB_REDIRECT_URI=http://localhost:4747/api/v1/github/callback
    ```
+
+No scopes are configured on the app itself — the backend requests
+`repo read:user read:org` at authorize time.
 
 Without these, the "Connect GitHub" button in Settings will fail loudly.
 
