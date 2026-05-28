@@ -302,6 +302,15 @@ function WorkspaceSettings() {
     setEditingPath(repo.localPath ?? '');
   };
 
+  // Open the native folder picker, seeding it from the current value;
+  // applies the chosen path if the user didn't cancel.
+  const pickDirectory = async (current: string, apply: (p: string) => void) => {
+    const picked = await window.electron?.dialog?.selectDirectory({
+      defaultPath: current.trim() || undefined,
+    });
+    if (picked) apply(picked);
+  };
+
   const handleSaveEditPath = async () => {
     if (!editingRepoId) return;
     const trimmed = editingPath.trim();
@@ -496,6 +505,16 @@ function WorkspaceSettings() {
                           autoFocus
                         />
                         <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8"
+                          onClick={() => pickDirectory(editingPath, setEditingPath)}
+                          disabled={loadingRepos}
+                          title="Choose folder…"
+                        >
+                          <FolderKanban className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
                           variant="default"
                           size="sm"
                           className="h-8"
@@ -547,13 +566,24 @@ function WorkspaceSettings() {
                     <label className="text-xs text-muted-foreground">
                       Local path on the environment where this repo is checked out
                     </label>
-                    <Input
-                      value={pendingLocalPath}
-                      onChange={(e) => setPendingLocalPath(e.target.value)}
-                      placeholder="/Users/you/dev/owner/repo"
-                      className="font-mono text-xs"
-                      autoFocus
-                    />
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={pendingLocalPath}
+                        onChange={(e) => setPendingLocalPath(e.target.value)}
+                        placeholder="/Users/you/dev/owner/repo"
+                        className="font-mono text-xs"
+                        autoFocus
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => pickDirectory(pendingLocalPath, setPendingLocalPath)}
+                        title="Choose folder…"
+                      >
+                        <FolderKanban className="w-4 h-4 mr-1" />
+                        Browse
+                      </Button>
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Required for agent tasks to branch + commit here. You can set it later from the list.
                     </p>
