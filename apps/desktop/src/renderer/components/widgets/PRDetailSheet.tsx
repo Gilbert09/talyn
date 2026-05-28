@@ -190,6 +190,7 @@ export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
                 <PRStatusPill
                   blockingReason={data.row.summary.blockingReason}
                   checks={data.row.summary.checks}
+                  state={data.row.state}
                 />
               </div>
             </>

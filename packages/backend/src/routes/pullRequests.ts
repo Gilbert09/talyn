@@ -167,9 +167,18 @@ export function pullRequestRoutes(): Router {
       console.warn(`[pull-requests] fresh detail fetch failed for ${row.id}:`, err);
     }
 
+    // GraphQL only returns OPEN PRs. A null result on a row still marked
+    // 'open' means it merged/closed upstream — reconcile so the row (and
+    // its tab) stops claiming it's open.
+    let outRow = row;
+    if (!fresh && row.state === 'open') {
+      const reconciled = await reconcileTerminalState(row);
+      if (reconciled) outRow = reconciled;
+    }
+
     res.json({
       success: true,
-      data: { row: rowToPublicShape(row), fresh },
+      data: { row: rowToPublicShape(outRow), fresh },
     });
   });
 
@@ -237,6 +246,13 @@ export function pullRequestRoutes(): Router {
       number: row.number,
     });
     if (!result) {
+      // GraphQL returned nothing → the PR isn't open. Reconcile its
+      // terminal state via REST so a manual refresh can recover a row
+      // that's stuck (e.g. a merged PR still showing as closed/open).
+      const reconciled = await reconcileTerminalState(row);
+      if (reconciled) {
+        return res.json({ success: true, data: rowToPublicShape(reconciled) });
+      }
       return res
         .status(404)
         .json({ success: false, error: 'PR not found on GitHub or has no head branch in cache' });
@@ -354,16 +370,14 @@ export function pullRequestRoutes(): Router {
         row.number,
         { merge_method: mergeMethod }
       );
-      // Reflect the merged state right away (best-effort — the merge
-      // already happened either way).
-      await forceFetchAndUpsert({
-        workspaceId: row.workspaceId,
-        repositoryId: row.repositoryId,
-        taskId: row.taskId,
-        owner: row.owner,
-        repo: row.repo,
-        number: row.number,
-      }).catch(() => {});
+      // Mark the row merged directly. We can't rely on a GraphQL refetch
+      // here — `batchPullRequests` filters to `states: [OPEN]`, so a
+      // just-merged PR comes back empty and the row would stay stuck on
+      // its last open state ("Ready"). The merge succeeded, so set it.
+      await db
+        .update(pullRequestsTable)
+        .set({ state: 'merged', mergedAt: new Date(), updatedAt: new Date() })
+        .where(eq(pullRequestsTable.id, row.id));
       res.json({ success: true, data: result } as ApiResponse<typeof result>);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Merge failed';
@@ -393,6 +407,50 @@ interface PullRequestRow {
   lastCheckDigest: string | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Reconcile a PR's lifecycle state against GitHub via REST. The GraphQL
+ * batch query only returns OPEN PRs, so once a PR is merged/closed our
+ * normal fetch paths can't tell merged from closed — and a row that was
+ * mis-classified (e.g. a transient sweep failure marking a merged PR
+ * "closed") never gets re-checked. This hits the authoritative per-PR
+ * REST endpoint and corrects state + mergedAt. Returns the updated row,
+ * or null if nothing changed / the lookup failed.
+ */
+async function reconcileTerminalState(
+  row: PullRequestRow
+): Promise<PullRequestRow | null> {
+  let pr: Awaited<ReturnType<typeof githubService.getPullRequest>>;
+  try {
+    pr = await githubService.getPullRequest(row.workspaceId, row.owner, row.repo, row.number);
+  } catch (err) {
+    console.warn(`[pull-requests] terminal reconcile failed for ${row.id}:`, err);
+    return null;
+  }
+  let nextState: 'open' | 'closed' | 'merged';
+  let mergedAt: Date | null = null;
+  if (pr.merged_at || pr.merged) {
+    nextState = 'merged';
+    mergedAt = pr.merged_at ? new Date(pr.merged_at) : new Date();
+  } else if (pr.state === 'closed') {
+    nextState = 'closed';
+  } else {
+    nextState = 'open';
+  }
+  if (nextState === row.state) return null;
+
+  const db = getDbClient();
+  await db
+    .update(pullRequestsTable)
+    .set({ state: nextState, mergedAt, updatedAt: new Date() })
+    .where(eq(pullRequestsTable.id, row.id));
+  const fresh = await db
+    .select()
+    .from(pullRequestsTable)
+    .where(eq(pullRequestsTable.id, row.id))
+    .limit(1);
+  return (fresh[0] as PullRequestRow | undefined) ?? null;
 }
 
 function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {

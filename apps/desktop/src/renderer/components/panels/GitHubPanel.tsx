@@ -694,7 +694,11 @@ function PRTableRow({
         </span>
       </td>
       <td className="px-2 py-2">
-        <PRStatusPill blockingReason={summary.blockingReason} checks={summary.checks} />
+        <PRStatusPill
+          blockingReason={summary.blockingReason}
+          checks={summary.checks}
+          state={row.state}
+        />
       </td>
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}

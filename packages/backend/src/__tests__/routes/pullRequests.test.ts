@@ -520,6 +520,98 @@ describe('routes/pullRequests', () => {
     return id;
   }
 
+  // GitHub REST single-PR shape for getPullRequest mocks.
+  function fakeRESTPR(over: Partial<{ state: string; merged: boolean; mergedAt: string | null }> = {}) {
+    return {
+      id: 1,
+      number: 42,
+      title: 't',
+      state: over.state ?? 'closed',
+      html_url: 'https://github.com/acme/widgets/pull/42',
+      user: { login: 'me', avatar_url: 'x' },
+      created_at: 'now',
+      updated_at: 'now',
+      draft: false,
+      mergeable: null,
+      mergeable_state: 'clean',
+      head: { ref: 'feature/x', sha: 'sha1' },
+      base: { ref: 'main' },
+      merged: over.merged ?? false,
+      merged_at: over.mergedAt ?? null,
+    };
+  }
+
+  describe('POST /pull-requests/:id/merge', () => {
+    it('marks the row merged directly (not via a GraphQL refetch)', async () => {
+      const id = await insertPR(db, { state: 'open' });
+      const mergeSpy = vi
+        .spyOn(githubService, 'mergePullRequest')
+        .mockResolvedValue({ sha: 'abc', merged: true, message: 'Merged' });
+      // GraphQL must NOT be relied on — a merged PR returns empty there.
+      const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequests');
+
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/merge`, {
+        method: 'POST',
+        headers: authMine,
+        body: JSON.stringify({ method: 'squash' }),
+      });
+      expect(res.status).toBe(200);
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(graphqlSpy).not.toHaveBeenCalled();
+
+      const row = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, id))
+        .limit(1);
+      expect(row[0].state).toBe('merged');
+      expect(row[0].mergedAt).not.toBeNull();
+    });
+  });
+
+  describe('terminal-state reconciliation', () => {
+    it('refresh recovers a stuck closed row that is actually merged', async () => {
+      // Row mis-classified as closed (e.g. a transient sweep failure).
+      const id = await insertPR(db, { state: 'closed' });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feature/x', pr: null },
+      ]);
+      vi.spyOn(githubService, 'getPullRequest').mockResolvedValue(
+        fakeRESTPR({ state: 'closed', merged: true, mergedAt: '2026-04-30T00:00:00Z' }) as never
+      );
+
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/refresh`, {
+        method: 'POST',
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { state: string } };
+      expect(body.data.state).toBe('merged');
+
+      const row = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, id))
+        .limit(1);
+      expect(row[0].state).toBe('merged');
+      expect(row[0].mergedAt).not.toBeNull();
+    });
+
+    it('GET /:id reconciles an open row that merged upstream', async () => {
+      const id = await insertPR(db, { state: 'open' });
+      // GraphQL only returns OPEN PRs → empty for a merged one.
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+      vi.spyOn(githubService, 'getPullRequest').mockResolvedValue(
+        fakeRESTPR({ state: 'closed', merged: true, mergedAt: '2026-04-30T00:00:00Z' }) as never
+      );
+
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { row: { state: string } } };
+      expect(body.data.row.state).toBe('merged');
+    });
+  });
+
   describe('GET /pull-requests unreadCount', () => {
     it('counts unread inbox items linked to each PR by prUrl', async () => {
       const url = 'https://github.com/acme/widgets/pull/7';

@@ -8,7 +8,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import type { PRBlockingReason, PRChecks } from '../../lib/api';
+import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
 
 /**
  * One-glance status badge for a task's PR. Mirrors supacode's
@@ -28,6 +28,12 @@ import type { PRBlockingReason, PRChecks } from '../../lib/api';
 interface PRStatusPillProps {
   blockingReason: PRBlockingReason;
   checks: PRChecks;
+  /**
+   * PR lifecycle state. When merged/closed it overrides blockingReason
+   * — a terminal PR shows "Merged"/"Closed", not its last open verdict
+   * (which would otherwise leave a merged PR stuck on a green "Ready").
+   */
+  state?: PRState;
   /** Click target — usually opens the side-sheet detail panel. */
   onClick?: () => void;
   /** Hide the inline rollup bar; shrinks the pill for tight headers. */
@@ -39,25 +45,29 @@ interface PillVariant {
   icon: React.ElementType;
   label: string;
   /** Tailwind class fragment. */
-  tone: 'green' | 'amber' | 'red' | 'blue' | 'grey';
+  tone: 'green' | 'amber' | 'red' | 'blue' | 'grey' | 'purple';
   spin?: boolean;
 }
 
 export function PRStatusPill({
   blockingReason,
   checks,
+  state,
   onClick,
   compact = false,
   className,
 }: PRStatusPillProps) {
-  const variant = pickVariant(blockingReason, checks);
+  const terminal = terminalVariant(state);
+  const variant = terminal ?? pickVariant(blockingReason, checks);
   const Icon = variant.icon;
+  // A merged/closed PR's check rollup is no longer meaningful.
+  const showRollup = !terminal && !compact && checks.total > 0;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      title={titleFor(blockingReason, checks)}
+      title={terminal ? terminal.label : titleFor(blockingReason, checks)}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
         toneClass(variant.tone),
@@ -69,9 +79,23 @@ export function PRStatusPill({
         className={cn('w-3.5 h-3.5 shrink-0', variant.spin && 'animate-spin')}
       />
       <span className="truncate">{variant.label}</span>
-      {!compact && checks.total > 0 && <CheckRollupBar checks={checks} />}
+      {showRollup && <CheckRollupBar checks={checks} />}
     </button>
   );
+}
+
+/**
+ * Terminal-state override. Returns a variant for merged/closed PRs;
+ * null for open PRs (fall through to the blocking-reason logic).
+ */
+function terminalVariant(state?: PRState): PillVariant | null {
+  if (state === 'merged') {
+    return { icon: GitMerge, label: 'Merged', tone: 'purple' };
+  }
+  if (state === 'closed') {
+    return { icon: XCircle, label: 'Closed', tone: 'grey' };
+  }
+  return null;
 }
 
 /**
@@ -193,6 +217,8 @@ function toneClass(tone: PillVariant['tone']): string {
       return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400';
     case 'blue':
       return 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400';
+    case 'purple':
+      return 'border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-400';
     case 'grey':
     default:
       return 'border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';

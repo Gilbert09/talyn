@@ -37,7 +37,7 @@ import { TaskGitPanel } from './TaskGitPanel';
 import { useTaskGitLog } from '../../hooks/useTaskGitLog';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
-import type { PRSummaryShape } from '../../lib/api';
+import type { PRSummaryShape, PRState } from '../../lib/api';
 import { isAgentTask } from '@fastowl/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority, AgentStatus, AgentAttention } from '@fastowl/shared';
 
@@ -1214,6 +1214,7 @@ function PRStatusPillForTask({
   onOpen: () => void;
 }) {
   const [summary, setSummary] = useState<PRSummaryShape | null>(null);
+  const [state, setState] = useState<PRState>('open');
 
   useEffect(() => {
     let cancelled = false;
@@ -1222,6 +1223,7 @@ function PRStatusPillForTask({
       .then((res) => {
         if (cancelled) return;
         setSummary(res.row.summary);
+        setState(res.row.state);
       })
       .catch(() => {
         if (cancelled) return;
@@ -1234,9 +1236,10 @@ function PRStatusPillForTask({
 
   useEffect(() => {
     const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
-      const p = payload as { id: string; lastSummary: unknown };
+      const p = payload as { id: string; state?: PRState; lastSummary: unknown };
       if (p.id !== pullRequestId) return;
       setSummary(p.lastSummary as PRSummaryShape);
+      if (p.state) setState(p.state);
     });
     return unsubscribe;
   }, [pullRequestId]);
@@ -1256,6 +1259,7 @@ function PRStatusPillForTask({
     <PRStatusPill
       blockingReason={summary.blockingReason}
       checks={summary.checks}
+      state={state}
       onClick={onOpen}
     />
   );
