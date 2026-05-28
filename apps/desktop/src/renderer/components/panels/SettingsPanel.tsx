@@ -497,13 +497,15 @@ function WorkspaceSettings() {
                     </div>
                     {editingRepoId === repo.id ? (
                       <div className="flex items-center gap-2">
-                        <Input
-                          value={editingPath}
-                          onChange={(e) => setEditingPath(e.target.value)}
-                          placeholder="/absolute/path/to/repo"
-                          className="h-8 text-xs font-mono flex-1"
-                          autoFocus
-                        />
+                        <div className="flex-1">
+                          <Input
+                            value={editingPath}
+                            onChange={(e) => setEditingPath(e.target.value)}
+                            placeholder="/absolute/path/to/repo"
+                            className="h-8 text-xs font-mono"
+                            autoFocus
+                          />
+                        </div>
                         <Button
                           variant="outline"
                           size="sm"
@@ -567,13 +569,15 @@ function WorkspaceSettings() {
                       Local path on the environment where this repo is checked out
                     </label>
                     <div className="flex items-center gap-2">
-                      <Input
-                        value={pendingLocalPath}
-                        onChange={(e) => setPendingLocalPath(e.target.value)}
-                        placeholder="/Users/you/dev/owner/repo"
-                        className="font-mono text-xs flex-1"
-                        autoFocus
-                      />
+                      <div className="flex-1">
+                        <Input
+                          value={pendingLocalPath}
+                          onChange={(e) => setPendingLocalPath(e.target.value)}
+                          placeholder="/Users/you/dev/owner/repo"
+                          className="font-mono text-xs"
+                          autoFocus
+                        />
+                      </div>
                       <Button
                         variant="outline"
                         size="sm"
