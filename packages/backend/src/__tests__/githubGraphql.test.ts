@@ -5,7 +5,9 @@ import {
   computeBlockingReason,
   computeCheckDigest,
   decodeBatchResponse,
+  decodeBatchByNumberResponse,
   makeBatchPullRequestsQuery,
+  makeBatchPullRequestsByNumberQuery,
   normalizeCheckState,
 } from '../services/githubGraphql.js';
 import { githubService } from '../services/github.js';
@@ -228,6 +230,70 @@ describe('makeBatchPullRequestsQuery', () => {
     expect(q).toContain('mergeable');
     expect(q).toContain('mergeStateStatus');
     expect(q).toContain('reviewDecision');
+  });
+});
+
+describe('makeBatchPullRequestsByNumberQuery', () => {
+  it('aliases each PR by number and embeds the shared fragment', () => {
+    const q = makeBatchPullRequestsByNumberQuery([60538, 60539]);
+    expect(q).toMatch(/repository\(owner: \$owner, name: \$repo\)/);
+    expect(q).toContain(`${aliasForBranch(0)}: pullRequest(number: 60538)`);
+    expect(q).toContain(`${aliasForBranch(1)}: pullRequest(number: 60539)`);
+    expect(q).toContain('fragment PRFields on PullRequest');
+    expect(q).toContain('statusCheckRollup');
+  });
+});
+
+describe('decodeBatchByNumberResponse', () => {
+  it('maps each alias node back to its number; null when absent', () => {
+    const result = decodeBatchByNumberResponse(
+      [1, 2],
+      {
+        repository: {
+          [aliasForBranch(0)]: {
+            number: 1,
+            title: 't',
+            body: '',
+            url: 'u',
+            isDraft: false,
+            state: 'OPEN',
+            mergedAt: null,
+            closedAt: null,
+            updatedAt: '2026-01-01T00:00:00Z',
+            mergeable: 'MERGEABLE',
+            mergeStateStatus: 'CLEAN',
+            reviewDecision: null,
+            author: { login: 'me' },
+            headRefName: 'feature/a',
+            baseRefName: 'main',
+            headRefOid: 'sha',
+            reviews: { nodes: [] },
+            reviewThreads: { nodes: [] },
+            comments: { nodes: [] },
+            commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+          },
+          [aliasForBranch(1)]: null,
+        },
+      } as never,
+      'acme',
+      'widgets'
+    );
+    expect(result[0].number).toBe(1);
+    expect(result[0].pr?.number).toBe(1);
+    expect(result[1]).toEqual({ number: 2, pr: null });
+  });
+
+  it('returns all-null when the repository node is null', () => {
+    const result = decodeBatchByNumberResponse(
+      [1, 2],
+      { repository: null },
+      'acme',
+      'widgets'
+    );
+    expect(result).toEqual([
+      { number: 1, pr: null },
+      { number: 2, pr: null },
+    ]);
   });
 });
 

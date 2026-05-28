@@ -7,7 +7,7 @@ import {
   pullRequests as pullRequestsTable,
 } from '../db/schema.js';
 import { githubService } from './github.js';
-import { batchPullRequests } from './githubGraphql.js';
+import { batchPullRequestsByNumber } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor } from './prFocus.js';
 
@@ -180,18 +180,18 @@ class PRMonitorService extends EventEmitter {
 
   /**
    * One workspace per tick. Per repo:
-   *   1. List open PRs (REST, single page of 100) and filter to ones
-   *      authored by the connected user. This is the "all PRs owned
-   *      by the authed user in watched repos" scope.
-   *   2. Group their head branches and call `batchPullRequests` for
-   *      the GraphQL summary + checks rollup in one round-trip per
-   *      chunk of 25.
+   *   1. Search for the connected user's open PRs (authored +
+   *      review-requested). Search — not "list the repo's open PRs and
+   *      filter" — because a big repo (hundreds of open PRs) buries the
+   *      user's own beyond the first page, dropping them silently.
+   *   2. For the stale ones, call `batchPullRequestsByNumber` for the
+   *      GraphQL summary + checks rollup in one round-trip per chunk.
    *   3. For each result, hand off to `prCache.upsertFromBatchResult`
    *      — that's where the cursor diff runs and inbox items get
    *      emitted.
    *   4. Sweep any tracked PRs we own in the DB but didn't see in the
-   *      open list and mark them closed/merged so the GitHub page
-   *      stops actively polling them.
+   *      search and mark them closed/merged so the GitHub page stops
+   *      actively polling them.
    */
   private async pollWorkspace(workspaceId: string): Promise<void> {
     const login = await this.resolveCurrentUser(workspaceId);
@@ -213,47 +213,48 @@ class PRMonitorService extends EventEmitter {
     repo: WatchedRepo,
     currentUserLogin: string
   ): Promise<void> {
-    // REST list is cheap: one paginated call returns up to 100 open
-    // PRs with author + requested reviewers. We watch two relationships:
-    // PRs the user authored, and PRs awaiting the user's review. We
-    // don't need the full detail here — the GraphQL batch fetch supplies
-    // that.
-    const all = await githubService.listPullRequests(workspaceId, repo.owner, repo.repo, {
-      state: 'open',
-      per_page: 100,
-    });
-    const watched = all.filter(
-      (pr) =>
-        pr.user.login === currentUserLogin ||
-        (pr.requested_reviewers ?? []).some((r) => r.login === currentUserLogin)
-    );
+    // Two scoped searches: PRs the user authored, and PRs awaiting their
+    // review. Each returns exactly the matches regardless of how many
+    // open PRs the repo has overall.
+    const full = `${repo.owner}/${repo.repo}`;
+    const [authored, reviewRequested] = await Promise.all([
+      githubService.searchPullRequestNumbers(
+        workspaceId,
+        `repo:${full} is:pr is:open author:${currentUserLogin}`
+      ),
+      githubService.searchPullRequestNumbers(
+        workspaceId,
+        `repo:${full} is:pr is:open review-requested:${currentUserLogin}`
+      ),
+    ]);
     // number → "the user is a requested reviewer (not the author)".
     const reviewRequestedByNumber = new Map<number, boolean>();
-    for (const pr of watched) {
-      reviewRequestedByNumber.set(pr.number, pr.user.login !== currentUserLogin);
+    for (const n of authored) reviewRequestedByNumber.set(n, false);
+    for (const n of reviewRequested) {
+      if (!reviewRequestedByNumber.has(n)) reviewRequestedByNumber.set(n, true);
     }
+    const watchedNumbers = Array.from(reviewRequestedByNumber.keys());
 
-    if (watched.length === 0) {
+    if (watchedNumbers.length === 0) {
       await this.sweepClosed(workspaceId, repo, []);
       return;
     }
 
     // Determine which PRs are actually stale enough to need a refetch
     // (saves the GraphQL call when nothing has aged past the TTL).
-    const stalePrs = await this.filterStale(workspaceId, repo.id, watched);
-    if (stalePrs.length === 0) {
+    const staleNumbers = await this.filterStale(workspaceId, repo.id, watchedNumbers);
+    if (staleNumbers.length === 0) {
       // Still sweep closed — the user might have merged something
       // outside the TTL window.
-      await this.sweepClosed(workspaceId, repo, watched.map((p) => p.number));
+      await this.sweepClosed(workspaceId, repo, watchedNumbers);
       return;
     }
 
-    const branches = stalePrs.map((p) => p.head.ref);
-    const results = await batchPullRequests({
+    const results = await batchPullRequestsByNumber({
       workspaceId,
       owner: repo.owner,
       repo: repo.repo,
-      branches,
+      numbers: staleNumbers,
     });
 
     for (const result of results) {
@@ -266,16 +267,15 @@ class PRMonitorService extends EventEmitter {
       });
     }
 
-    await this.sweepClosed(workspaceId, repo, watched.map((p) => p.number));
+    await this.sweepClosed(workspaceId, repo, watchedNumbers);
   }
 
   private async filterStale(
     workspaceId: string,
     repositoryId: string,
-    prs: Array<{ number: number; head: { ref: string } }>
-  ): Promise<Array<{ number: number; head: { ref: string } }>> {
-    if (prs.length === 0) return [];
-    const numbers = prs.map((p) => p.number);
+    numbers: number[]
+  ): Promise<number[]> {
+    if (numbers.length === 0) return [];
     const rows = await this.db
       .select({
         id: pullRequestsTable.id,
@@ -299,8 +299,8 @@ class PRMonitorService extends EventEmitter {
       }
     }
     const now = Date.now();
-    return prs.filter((p) => {
-      const entry = cached.get(p.number);
+    return numbers.filter((number) => {
+      const entry = cached.get(number);
       if (!entry) return true; // never seen; always stale
       // Per-PR TTL: focused = 30 s, unfocused = 60 s, cooldown =
       // effectively infinite. The poll tick fires every 30 s so a

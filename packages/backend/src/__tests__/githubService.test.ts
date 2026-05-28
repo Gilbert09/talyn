@@ -294,6 +294,31 @@ describe('githubService', () => {
       expect(String(url)).toContain('per_page=5');
     });
 
+    it('searchPullRequestNumbers paginates the search API and returns numbers', async () => {
+      // Page 1 is a full page (100) so the loop continues; page 2 is
+      // short (2) so it stops. Total = 102.
+      const page1 = Array.from({ length: 100 }, (_, i) => ({ number: i + 1 }));
+      const stub = vi.fn(async (input: FetchInput) => {
+        const url = String(input);
+        const page = Number(url.match(/[?&]page=(\d+)/)?.[1] ?? '1');
+        const items = page === 1 ? page1 : [{ number: 101 }, { number: 102 }];
+        return new Response(JSON.stringify({ total_count: 102, items }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+      vi.stubGlobal('fetch', stub);
+
+      const numbers = await githubService.searchPullRequestNumbers(
+        'ws1',
+        'repo:acme/widgets is:pr is:open author:me'
+      );
+      expect(numbers).toHaveLength(102);
+      expect(numbers[0]).toBe(1);
+      expect(numbers[101]).toBe(102);
+      expect(String(stub.mock.calls[0][0])).toContain('/search/issues?q=');
+    });
+
     it('getCheckRuns hits /repos/:owner/:repo/commits/:ref/check-runs', async () => {
       const fetchStub = mockFetch({
         'commits/abc123/check-runs': () => ({ check_runs: [] }),

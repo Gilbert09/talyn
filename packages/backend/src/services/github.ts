@@ -497,6 +497,31 @@ class GitHubService extends EventEmitter {
     );
   }
 
+  /**
+   * Find PR numbers via the search API. Used instead of listing a repo's
+   * open PRs and filtering client-side: in a huge repo (hundreds of open
+   * PRs) the user's own PRs fall outside the first page, so listing
+   * silently drops them. Search returns exactly the matches regardless of
+   * repo size. Paginated (search caps at 1000 results / 10 pages of 100).
+   */
+  async searchPullRequestNumbers(workspaceId: string, query: string): Promise<number[]> {
+    const out: number[] = [];
+    for (let page = 1; page <= 10; page++) {
+      const params = new URLSearchParams({
+        q: query,
+        per_page: '100',
+        page: String(page),
+      });
+      const res = await this.apiRequest<{
+        total_count: number;
+        items: Array<{ number: number }>;
+      }>(workspaceId, `/search/issues?${params}`);
+      out.push(...res.items.map((i) => i.number));
+      if (res.items.length < 100) break;
+    }
+    return out;
+  }
+
   async getCheckRuns(
     workspaceId: string,
     owner: string,

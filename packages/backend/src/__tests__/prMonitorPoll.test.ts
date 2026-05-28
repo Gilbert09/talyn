@@ -77,6 +77,19 @@ function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
   };
 }
 
+// Mock the search-driven discovery: authored PR numbers + the subset
+// the user is a requested reviewer on. The monitor distinguishes the two
+// searches by the `author:` / `review-requested:` qualifier in the query.
+function mockSearch(authored: number[], reviewRequested: number[] = []) {
+  return vi
+    .spyOn(githubService, 'searchPullRequestNumbers')
+    .mockImplementation(async (_ws: string, q: string) => {
+      if (q.includes('review-requested:')) return reviewRequested;
+      if (q.includes('author:')) return authored;
+      return [];
+    });
+}
+
 async function seed(db: Database): Promise<void> {
   await seedUser(db, { id: TEST_USER_ID });
   await db.insert(workspacesTable).values({
@@ -127,57 +140,39 @@ describe('prMonitor — poll orchestration', () => {
 
   it('does nothing when there are no connected workspaces', async () => {
     vi.spyOn(githubService, 'getConnectedWorkspaces').mockReturnValue([]);
-    const restSpy = vi.spyOn(githubService, 'listPullRequests');
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequests');
+    const searchSpy = vi.spyOn(githubService, 'searchPullRequestNumbers');
+    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
     await prMonitorService.forcePoll();
-    expect(restSpy).not.toHaveBeenCalled();
+    expect(searchSpy).not.toHaveBeenCalled();
     expect(graphqlSpy).not.toHaveBeenCalled();
   });
 
-  it('filters the open PR list to user-authored only and batches them via GraphQL', async () => {
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-      fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'someone-else' }),
-      fakeRESTPullRequest({ number: 3, headRef: 'feature/c', userLogin: 'me' }),
-    ] as never);
+  it('searches the user\'s authored PRs and batches them by number', async () => {
+    mockSearch([1, 3]);
     const graphqlSpy = vi
-      .spyOn(graphqlModule, 'batchPullRequests')
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
       .mockResolvedValue([
-        { branch: 'feature/a', pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
-        { branch: 'feature/c', pr: fakeSummary({ number: 3, headBranch: 'feature/c' }) },
+        { number: 1, pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
+        { number: 3, pr: fakeSummary({ number: 3, headBranch: 'feature/c' }) },
       ]);
 
     await prMonitorService.forcePoll();
 
     expect(graphqlSpy).toHaveBeenCalledTimes(1);
-    // Only the two user-authored branches should be in the batch.
-    const branches = graphqlSpy.mock.calls[0][0].branches;
-    expect(branches).toEqual(['feature/a', 'feature/c']);
+    // The two authored PR numbers should be in the batch.
+    const numbers = graphqlSpy.mock.calls[0][0].numbers;
+    expect(numbers.sort()).toEqual([1, 3]);
 
     const rows = await db.select().from(pullRequestsTable);
     expect(rows.map((r) => r.number).sort()).toEqual([1, 3]);
   });
 
   it('also watches PRs where the user is a requested reviewer and flags them', async () => {
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      // Authored by me → watched, reviewRequested=false.
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-      // Someone else's PR, I'm a requested reviewer → watched, flagged.
-      fakeRESTPullRequest({
-        number: 2,
-        headRef: 'feature/b',
-        userLogin: 'someone-else',
-        requestedReviewers: ['me'],
-      }),
-      // Someone else's PR, not my review → ignored.
-      fakeRESTPullRequest({ number: 3, headRef: 'feature/c', userLogin: 'someone-else' }),
-    ] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
-      { branch: 'feature/a', pr: fakeSummary({ number: 1, headBranch: 'feature/a', author: 'me' }) },
-      {
-        branch: 'feature/b',
-        pr: fakeSummary({ number: 2, headBranch: 'feature/b', author: 'someone-else' }),
-      },
+    // #1 authored by me; #2 someone else's PR awaiting my review.
+    mockSearch([1], [2]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 1, pr: fakeSummary({ number: 1, headBranch: 'feature/a', author: 'me' }) },
+      { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b', author: 'someone-else' }) },
     ]);
 
     await prMonitorService.forcePoll();
@@ -204,10 +199,8 @@ describe('prMonitor — poll orchestration', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-    ] as never);
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequests');
+    mockSearch([1]);
+    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
 
     await prMonitorService.forcePoll();
     expect(graphqlSpy).not.toHaveBeenCalled();
@@ -245,19 +238,16 @@ describe('prMonitor — poll orchestration', () => {
         updatedAt: new Date(),
       },
     ]);
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-      fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-    ] as never);
+    mockSearch([1, 2]);
     const graphqlSpy = vi
-      .spyOn(graphqlModule, 'batchPullRequests')
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
       .mockResolvedValue([
-        { branch: 'feature/b', pr: fakeSummary({ number: 2, headBranch: 'feature/b' }) },
+        { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b' }) },
       ]);
 
     await prMonitorService.forcePoll();
     expect(graphqlSpy).toHaveBeenCalledTimes(1);
-    expect(graphqlSpy.mock.calls[0][0].branches).toEqual(['feature/b']);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([2]);
   });
 
   it('marks tracked rows that disappear from the open-list as merged when GitHub says so', async () => {
@@ -290,11 +280,9 @@ describe('prMonitor — poll orchestration', () => {
         updatedAt: new Date(),
       },
     ]);
-    // The user merged #2 — it's gone from the open list.
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-    ] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    // The user merged #2 — it's gone from the search results.
+    mockSearch([1]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
     vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
       ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
       state: 'closed',
@@ -326,8 +314,8 @@ describe('prMonitor — poll orchestration', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    mockSearch([]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
     vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
       ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
       state: 'closed',
@@ -362,8 +350,8 @@ describe('prMonitor — poll orchestration', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    mockSearch([]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
     vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
       ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'someone-else' }),
       state: 'open',
@@ -394,8 +382,8 @@ describe('prMonitor — poll orchestration', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    mockSearch([]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
     vi.spyOn(githubService, 'getPullRequest').mockRejectedValue(new Error('rate limit'));
 
     await prMonitorService.forcePoll();
@@ -415,12 +403,16 @@ describe('prMonitor — poll orchestration', () => {
       url: 'https://github.com/acme/other',
       defaultBranch: 'main',
     });
-    vi.spyOn(githubService, 'listPullRequests').mockImplementation(async (_ws, _owner, repo) => {
-      if (repo === 'widgets') throw new Error('rate limit');
-      return [fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' })] as never;
-    });
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
-      { branch: 'feature/a', pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
+    // The search query embeds `repo:acme/widgets` etc, so we branch on it.
+    vi.spyOn(githubService, 'searchPullRequestNumbers').mockImplementation(
+      async (_ws: string, q: string) => {
+        if (q.includes('acme/widgets')) throw new Error('rate limit');
+        if (q.includes('author:')) return [1];
+        return [];
+      }
+    );
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 1, pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
     ]);
 
     await prMonitorService.forcePoll();
@@ -433,15 +425,13 @@ describe('prMonitor — poll orchestration', () => {
   });
 
   it('emits inbox items only for deltas (cursor-based, no double-fire)', async () => {
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-    ] as never);
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequests');
+    mockSearch([1]);
+    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
 
     // Tick 1: baseline. No inbox items.
     graphqlSpy.mockResolvedValueOnce([
       {
-        branch: 'feature/a',
+        number: 1,
         pr: fakeSummary({
           number: 1,
           headBranch: 'feature/a',
@@ -468,7 +458,7 @@ describe('prMonitor — poll orchestration', () => {
     // Tick 2: r2 lands. Should emit one pr_review item.
     graphqlSpy.mockResolvedValueOnce([
       {
-        branch: 'feature/a',
+        number: 1,
         pr: fakeSummary({
           number: 1,
           headBranch: 'feature/a',
@@ -532,22 +522,19 @@ describe('prMonitor — poll orchestration', () => {
     ]);
     setFocused('ws1', 'pr-focused');
 
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-      fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-    ] as never);
+    mockSearch([1, 2]);
     const graphqlSpy = vi
-      .spyOn(graphqlModule, 'batchPullRequests')
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
       .mockResolvedValue([
-        { branch: 'feature/a', pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
+        { number: 1, pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
       ]);
 
     await prMonitorService.forcePoll();
 
-    // Only the focused PR's branch was batched — unfocused row is
-    // still inside its TTL.
+    // Only the focused PR was batched — unfocused row is still inside
+    // its TTL.
     expect(graphqlSpy).toHaveBeenCalledTimes(1);
-    expect(graphqlSpy.mock.calls[0][0].branches).toEqual(['feature/a']);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([1]);
   });
 
   it('post-refresh cooldown skips a PR even when its TTL has expired', async () => {
@@ -568,10 +555,8 @@ describe('prMonitor — poll orchestration', () => {
     // User just hit /refresh — cooldown set.
     markRefreshed('ws1', 'pr-cooldown');
 
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-    ] as never);
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequests');
+    mockSearch([1]);
+    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
 
     await prMonitorService.forcePoll();
     // Cooldown overrode TTL — no GraphQL fetch despite 90 s of staleness.
@@ -582,12 +567,10 @@ describe('prMonitor — poll orchestration', () => {
   });
 
   it('does not double-fire when forcePoll runs twice with no new state', async () => {
-    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
-      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
-    ] as never);
-    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+    mockSearch([1]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
       {
-        branch: 'feature/a',
+        number: 1,
         pr: fakeSummary({
           number: 1,
           headBranch: 'feature/a',

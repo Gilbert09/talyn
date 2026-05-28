@@ -167,6 +167,53 @@ export async function batchPullRequests(opts: {
   return results;
 }
 
+export interface BatchPRByNumberResult {
+  number: number;
+  pr: PRSummary | null;
+}
+
+/**
+ * Fetch PR summaries by number (chunked + bounded-concurrency, same as
+ * batchPullRequests). Unlike the branch variant this returns
+ * merged/closed PRs too — `pullRequest(number:)` has no `states` filter.
+ */
+export async function batchPullRequestsByNumber(opts: {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  numbers: number[];
+}): Promise<BatchPRByNumberResult[]> {
+  const { workspaceId, owner, repo, numbers } = opts;
+  if (numbers.length === 0) return [];
+
+  const chunks: number[][] = [];
+  for (let i = 0; i < numbers.length; i += CHUNK_SIZE) {
+    chunks.push(numbers.slice(i, i + CHUNK_SIZE));
+  }
+
+  const results: BatchPRByNumberResult[] = [];
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < chunks.length) {
+      const idx = cursor++;
+      const chunk = chunks[idx];
+      const query = makeBatchPullRequestsByNumberQuery(chunk);
+      const data = await githubService.executeGraphql<BatchByNumberResponse>(
+        workspaceId,
+        query,
+        { owner, repo }
+      );
+      results.push(...decodeBatchByNumberResponse(chunk, data, owner, repo));
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, chunks.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 // ---------- Pure helpers (unit-tested) ----------
 
 /**
@@ -293,25 +340,7 @@ export function computeCheckDigest(
  * head order). Aliases must be valid GraphQL identifiers — we hash the
  * branch name to a stable safe alias.
  */
-export function makeBatchPullRequestsQuery(branches: string[]): string {
-  const aliasFields = branches
-    .map((branch, idx) => {
-      const alias = aliasForBranch(idx);
-      // Escape branch names safely as JSON strings inside the GraphQL doc.
-      const head = JSON.stringify(branch);
-      return `    ${alias}: pullRequests(headRefName: ${head}, first: 1, states: [OPEN]) {
-      nodes { ...PRFields }
-    }`;
-    })
-    .join('\n');
-
-  return `query BatchPullRequests($owner: String!, $repo: String!) {
-  repository(owner: $owner, name: $repo) {
-${aliasFields}
-  }
-}
-
-fragment PRFields on PullRequest {
+const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
   number
   title
   body
@@ -374,6 +403,51 @@ fragment PRFields on PullRequest {
     }
   }
 }`;
+
+export function makeBatchPullRequestsQuery(branches: string[]): string {
+  const aliasFields = branches
+    .map((branch, idx) => {
+      const alias = aliasForBranch(idx);
+      // Escape branch names safely as JSON strings inside the GraphQL doc.
+      const head = JSON.stringify(branch);
+      return `    ${alias}: pullRequests(headRefName: ${head}, first: 1, states: [OPEN]) {
+      nodes { ...PRFields }
+    }`;
+    })
+    .join('\n');
+
+  return `query BatchPullRequests($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+${aliasFields}
+  }
+}
+
+${PR_FIELDS_FRAGMENT}`;
+}
+
+/**
+ * Same as makeBatchPullRequestsQuery but keyed by PR number instead of
+ * branch — `pullRequest(number:)` resolves to a single node (no
+ * `states` filter, so it also returns merged/closed PRs). Used by the
+ * search-driven monitor, where we know numbers but not head refs.
+ */
+export function makeBatchPullRequestsByNumberQuery(numbers: number[]): string {
+  const aliasFields = numbers
+    .map((number, idx) => {
+      const alias = aliasForBranch(idx);
+      return `    ${alias}: pullRequest(number: ${number}) {
+      ...PRFields
+    }`;
+    })
+    .join('\n');
+
+  return `query BatchPullRequestsByNumber($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+${aliasFields}
+  }
+}
+
+${PR_FIELDS_FRAGMENT}`;
 }
 
 export function aliasForBranch(idx: number): string {
@@ -384,6 +458,27 @@ export function aliasForBranch(idx: number): string {
 
 interface BatchPullRequestsResponse {
   repository: Record<string, { nodes: Array<RawPullRequest> }> | null;
+}
+
+interface BatchByNumberResponse {
+  repository: Record<string, RawPullRequest | null> | null;
+}
+
+export function decodeBatchByNumberResponse(
+  numbers: number[],
+  data: BatchByNumberResponse,
+  owner: string,
+  repo: string
+): BatchPRByNumberResult[] {
+  if (!data.repository) {
+    return numbers.map((number) => ({ number, pr: null }));
+  }
+  return numbers.map((number, idx) => {
+    const alias = aliasForBranch(idx);
+    const node = data.repository?.[alias];
+    if (!node) return { number, pr: null };
+    return { number, pr: rawToSummary(node, owner, repo) };
+  });
 }
 
 interface RawPullRequest {
