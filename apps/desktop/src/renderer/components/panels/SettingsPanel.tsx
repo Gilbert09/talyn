@@ -349,15 +349,22 @@ function WorkspaceSettings() {
     }
   };
 
-  // Candidate repos (all accessible), minus already-watched.
-  const filteredRepos = availableRepos
+  // Candidate repos (all accessible), minus already-watched, sorted
+  // alphabetically so owners cluster and the list is browsable without
+  // searching. Capped only to keep the DOM bounded on huge accounts.
+  const matchedRepos = availableRepos
     .filter((repo) => !watchedRepos.some((w) => w.fullName === repo.full_name))
     .filter((repo) =>
       repoSearch
         ? repo.full_name.toLowerCase().includes(repoSearch.toLowerCase())
         : true
     )
-    .slice(0, 20);
+    .sort((a, b) =>
+      a.full_name.toLowerCase().localeCompare(b.full_name.toLowerCase())
+    );
+  const REPO_LIST_CAP = 500;
+  const filteredRepos = matchedRepos.slice(0, REPO_LIST_CAP);
+  const reposTruncated = matchedRepos.length > REPO_LIST_CAP;
 
   return (
     <div className="space-y-6">
@@ -623,6 +630,11 @@ function WorkspaceSettings() {
                         {repoSearch
                           ? 'No matching repositories. Try Refresh if a repo is missing.'
                           : 'No repositories found. Try Refresh.'}
+                      </p>
+                    )}
+                    {reposTruncated && (
+                      <p className="text-xs text-muted-foreground">
+                        Showing first {REPO_LIST_CAP} of {matchedRepos.length}. Type to narrow.
                       </p>
                     )}
                     <Button
