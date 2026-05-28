@@ -138,6 +138,13 @@ function WorkspaceSettings() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
+  // Repo source: 'user' (GET /user/repos) or an org login (GET
+  // /orgs/:org/repos). Org browsing surfaces repos that don't appear in
+  // /user/repos — e.g. public repos in an org you belong to.
+  const [orgs, setOrgs] = useState<Array<{ login: string; avatar_url: string }>>([]);
+  const [repoSource, setRepoSource] = useState<string>('user');
+  const [orgRepos, setOrgRepos] = useState<GitHubRepo[]>([]);
+  const [loadingSource, setLoadingSource] = useState(false);
   // Two-step add: user picks a repo, then supplies the local path.
   const [pendingAddRepo, setPendingAddRepo] = useState<GitHubRepo | null>(null);
   const [pendingLocalPath, setPendingLocalPath] = useState('');
@@ -163,11 +170,36 @@ function WorkspaceSettings() {
       if (status.connected) {
         const repos = await api.github.listRepos(currentWorkspaceId);
         setAvailableRepos(repos);
+        try {
+          const orgList = await api.github.listOrgs(currentWorkspaceId);
+          setOrgs(orgList);
+        } catch (_e) {
+          setOrgs([]);
+        }
       }
     } catch (_e) {
       setGithubConnected(false);
     }
   }, [currentWorkspaceId]);
+
+  // Switch the repo-picker source between "my repos" and an org's repos.
+  const handleSelectSource = async (source: string) => {
+    setRepoSource(source);
+    setRepoSearch('');
+    if (source === 'user' || !currentWorkspaceId) {
+      setOrgRepos([]);
+      return;
+    }
+    setLoadingSource(true);
+    try {
+      const repos = await api.github.listOrgRepos(currentWorkspaceId, source);
+      setOrgRepos(repos);
+    } catch (_e) {
+      setOrgRepos([]);
+    } finally {
+      setLoadingSource(false);
+    }
+  };
 
   useEffect(() => {
     loadRepos();
@@ -282,15 +314,16 @@ function WorkspaceSettings() {
     }
   };
 
-  // Filter available repos that aren't already watched
-  const filteredRepos = availableRepos
+  // Candidate repos for the active source, minus already-watched.
+  const sourceRepos = repoSource === 'user' ? availableRepos : orgRepos;
+  const filteredRepos = sourceRepos
     .filter((repo) => !watchedRepos.some((w) => w.fullName === repo.full_name))
     .filter((repo) =>
       repoSearch
         ? repo.full_name.toLowerCase().includes(repoSearch.toLowerCase())
         : true
     )
-    .slice(0, 10);
+    .slice(0, 15);
 
   return (
     <div className="space-y-6">
@@ -503,13 +536,33 @@ function WorkspaceSettings() {
                   </div>
                 ) : (
                   <>
+                    {/* Source: my repos, or browse an org you belong to. */}
+                    {orgs.length > 0 && (
+                      <Select
+                        value={repoSource}
+                        onChange={(e) => handleSelectSource(e.target.value)}
+                        disabled={loadingSource}
+                      >
+                        <option value="user">My repositories</option>
+                        {orgs.map((o) => (
+                          <option key={o.login} value={o.login}>
+                            {o.login} (org)
+                          </option>
+                        ))}
+                      </Select>
+                    )}
                     <Input
                       placeholder="Search repositories..."
                       value={repoSearch}
                       onChange={(e) => setRepoSearch(e.target.value)}
                       autoFocus
                     />
-                    {filteredRepos.length > 0 ? (
+                    {loadingSource ? (
+                      <p className="text-sm text-muted-foreground p-2 flex items-center gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Loading {repoSource}'s repositories…
+                      </p>
+                    ) : filteredRepos.length > 0 ? (
                       <div className="border rounded-md max-h-48 overflow-y-auto">
                         {filteredRepos.map((repo) => (
                           <button
@@ -526,15 +579,23 @@ function WorkspaceSettings() {
                           </button>
                         ))}
                       </div>
-                    ) : repoSearch ? (
-                      <p className="text-sm text-muted-foreground p-2">No matching repositories</p>
-                    ) : null}
+                    ) : (
+                      <p className="text-sm text-muted-foreground p-2">
+                        {repoSearch
+                          ? 'No matching repositories'
+                          : repoSource === 'user'
+                            ? 'No repositories found'
+                            : `No repositories found in ${repoSource}`}
+                      </p>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
                         setShowRepoSelector(false);
                         setRepoSearch('');
+                        setRepoSource('user');
+                        setOrgRepos([]);
                       }}
                     >
                       Cancel

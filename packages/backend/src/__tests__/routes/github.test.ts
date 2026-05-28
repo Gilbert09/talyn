@@ -297,6 +297,38 @@ describe('routes/github', () => {
     });
   });
 
+  describe('GET /api/v1/github/orgs', () => {
+    it('delegates to listOrganizations', async () => {
+      vi.spyOn(githubService, 'listOrganizations').mockResolvedValue([
+        { login: 'PostHog', avatar_url: 'x' },
+      ]);
+      const res = await fetch(`${serverUrl}/api/v1/github/orgs?workspaceId=ws1`, {
+        headers: authHeaders,
+      });
+      const body = await res.json();
+      expect(body.data).toEqual([{ login: 'PostHog', avatar_url: 'x' }]);
+    });
+  });
+
+  describe('GET /api/v1/github/orgs/:org/repos', () => {
+    it('delegates to listOrgRepositories with the org param', async () => {
+      const spy = vi.spyOn(githubService, 'listOrgRepositories').mockResolvedValue([
+        {
+          id: 1, name: 'posthog', full_name: 'PostHog/posthog', private: false,
+          html_url: 'u', default_branch: 'master', owner: { login: 'PostHog', avatar_url: 'x' },
+        },
+      ]);
+      const res = await fetch(
+        `${serverUrl}/api/v1/github/orgs/posthog/repos?workspaceId=ws1`,
+        { headers: authHeaders }
+      );
+      const body = await res.json();
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0].full_name).toBe('PostHog/posthog');
+      expect(spy).toHaveBeenCalledWith('ws1', 'posthog');
+    });
+  });
+
   // The PR-management routes (list / get / create / merge /
   // review / comment) were dropped in Phase 7. Those tests went
   // with them. Coverage for createPullRequest still lives in

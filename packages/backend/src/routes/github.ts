@@ -235,12 +235,35 @@ export function githubRoutes(): Router {
   router.get('/repos', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;
-    const { per_page, page } = req.query;
     try {
-      const repos = await githubService.listRepositories(workspaceId, {
-        per_page: per_page ? parseInt(per_page as string, 10) : undefined,
-        page: page ? parseInt(page as string, 10) : undefined,
-      });
+      const repos = await githubService.listRepositories(workspaceId);
+      res.json({ success: true, data: repos });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // Orgs the user belongs to — drives the org-browse repo picker.
+  router.get('/orgs', async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res);
+    if (!workspaceId) return;
+    try {
+      const orgs = await githubService.listOrganizations(workspaceId);
+      res.json({ success: true, data: orgs });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // Repos in a specific org. Lets the user watch repos in orgs they
+  // belong to (e.g. public org repos) that don't surface in /user/repos.
+  router.get('/orgs/:org/repos', async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res);
+    if (!workspaceId) return;
+    try {
+      const repos = await githubService.listOrgRepositories(workspaceId, req.params.org);
       res.json({ success: true, data: repos });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';

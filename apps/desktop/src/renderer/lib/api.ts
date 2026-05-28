@@ -280,6 +280,16 @@ export const github = {
     request<GitHubUser>('GET', `/github/user?workspaceId=${workspaceId}`),
   listRepos: (workspaceId: string) =>
     request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}`),
+  listOrgs: (workspaceId: string) =>
+    request<Array<{ login: string; avatar_url: string }>>(
+      'GET',
+      `/github/orgs?workspaceId=${workspaceId}`
+    ),
+  listOrgRepos: (workspaceId: string, org: string) =>
+    request<GitHubRepo[]>(
+      'GET',
+      `/github/orgs/${encodeURIComponent(org)}/repos?workspaceId=${workspaceId}`
+    ),
 };
 
 // Watched Repositories

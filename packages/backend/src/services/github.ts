@@ -349,16 +349,58 @@ class GitHubService extends EventEmitter {
     return this.apiRequest<GitHubUser>(workspaceId, '/user');
   }
 
-  async listRepositories(
+  /**
+   * Every repo the user can access (owner + collaborator + org member),
+   * across all pages. GitHub caps `per_page` at 100, so we walk pages
+   * until a short page signals the end. A hard page cap guards against
+   * runaway loops on pathological accounts.
+   */
+  async listRepositories(workspaceId: string): Promise<GitHubRepo[]> {
+    return this.paginate<GitHubRepo>(
+      workspaceId,
+      (page) =>
+        `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`
+    );
+  }
+
+  /** Orgs the user belongs to (public memberships always; private ones
+   * when the token can see them). Drives the org-browse picker. */
+  async listOrganizations(
+    workspaceId: string
+  ): Promise<Array<{ login: string; avatar_url: string }>> {
+    return this.paginate<{ login: string; avatar_url: string }>(
+      workspaceId,
+      (page) => `/user/orgs?per_page=100&page=${page}`
+    );
+  }
+
+  /**
+   * Repos in a specific org. `type=all` returns private repos too when
+   * the token has access (org approved the app); public org repos always
+   * come back regardless of OAuth-app approval, since public data is
+   * exempt from third-party-app restrictions.
+   */
+  async listOrgRepositories(workspaceId: string, org: string): Promise<GitHubRepo[]> {
+    return this.paginate<GitHubRepo>(
+      workspaceId,
+      (page) =>
+        `/orgs/${encodeURIComponent(org)}/repos?per_page=100&page=${page}&type=all&sort=pushed`
+    );
+  }
+
+  /** Walk a paginated GitHub list endpoint until a non-full page. */
+  private async paginate<T>(
     workspaceId: string,
-    options: { per_page?: number; page?: number; sort?: 'pushed' | 'full_name' } = {}
-  ): Promise<GitHubRepo[]> {
-    const params = new URLSearchParams({
-      per_page: String(options.per_page || 30),
-      page: String(options.page || 1),
-      sort: options.sort || 'pushed',
-    });
-    return this.apiRequest<GitHubRepo[]>(workspaceId, `/user/repos?${params}`);
+    urlForPage: (page: number) => string,
+    maxPages = 20
+  ): Promise<T[]> {
+    const out: T[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const batch = await this.apiRequest<T[]>(workspaceId, urlForPage(page));
+      out.push(...batch);
+      if (batch.length < 100) break;
+    }
+    return out;
   }
 
   async getRepository(workspaceId: string, owner: string, repo: string): Promise<GitHubRepo> {
