@@ -501,7 +501,7 @@ function WorkspaceSettings() {
                           value={editingPath}
                           onChange={(e) => setEditingPath(e.target.value)}
                           placeholder="/absolute/path/to/repo"
-                          className="h-8 text-xs font-mono"
+                          className="h-8 text-xs font-mono flex-1"
                           autoFocus
                         />
                         <Button
@@ -571,12 +571,13 @@ function WorkspaceSettings() {
                         value={pendingLocalPath}
                         onChange={(e) => setPendingLocalPath(e.target.value)}
                         placeholder="/Users/you/dev/owner/repo"
-                        className="font-mono text-xs"
+                        className="font-mono text-xs flex-1"
                         autoFocus
                       />
                       <Button
                         variant="outline"
                         size="sm"
+                        className="shrink-0"
                         onClick={() => pickDirectory(pendingLocalPath, setPendingLocalPath)}
                         title="Choose folder…"
                       >
