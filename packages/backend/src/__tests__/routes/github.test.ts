@@ -297,6 +297,29 @@ describe('routes/github', () => {
     });
   });
 
+  describe('GET /api/v1/github/all-repos', () => {
+    it('delegates to listAllAccessibleRepos', async () => {
+      vi.spyOn(githubService, 'listAllAccessibleRepos').mockResolvedValue([
+        {
+          id: 1, name: 'owl', full_name: 'Gilbert09/owl', private: false,
+          html_url: 'u', default_branch: 'main', owner: { login: 'Gilbert09', avatar_url: 'x' },
+        },
+        {
+          id: 2, name: 'posthog', full_name: 'PostHog/posthog', private: false,
+          html_url: 'u', default_branch: 'master', owner: { login: 'PostHog', avatar_url: 'x' },
+        },
+      ]);
+      const res = await fetch(`${serverUrl}/api/v1/github/all-repos?workspaceId=ws1`, {
+        headers: authHeaders,
+      });
+      const body = await res.json();
+      expect(body.data.map((r: { full_name: string }) => r.full_name)).toEqual([
+        'Gilbert09/owl',
+        'PostHog/posthog',
+      ]);
+    });
+  });
+
   describe('GET /api/v1/github/orgs', () => {
     it('delegates to listOrganizations', async () => {
       vi.spyOn(githubService, 'listOrganizations').mockResolvedValue([

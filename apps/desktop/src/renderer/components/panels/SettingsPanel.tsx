@@ -63,6 +63,43 @@ import { Select } from '../ui/select';
 import { useAuth } from '../auth/AuthProvider';
 import { getSupabase } from '../../lib/supabase';
 
+// Repo-list cache (localStorage). The full repo set (user + all orgs) is
+// expensive to fetch, so we cache it per workspace and only re-fetch on
+// an explicit refresh or once the cache ages past the TTL.
+const REPO_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
+const repoCacheKey = (workspaceId: string) => `fastowl:github-repos:${workspaceId}`;
+
+function readRepoCache(
+  workspaceId: string
+): { repos: GitHubRepo[]; fetchedAt: number } | null {
+  try {
+    const raw = localStorage.getItem(repoCacheKey(workspaceId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.repos) || typeof parsed.fetchedAt !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeRepoCache(workspaceId: string, repos: GitHubRepo[], fetchedAt: number): void {
+  try {
+    localStorage.setItem(repoCacheKey(workspaceId), JSON.stringify({ repos, fetchedAt }));
+  } catch {
+    // Quota/serialization failure — non-fatal, we just won't cache.
+  }
+}
+
+/** Coarse "x ago" for the repo-cache freshness hint. */
+function formatAge(ts: number): string {
+  const sec = Math.round((Date.now() - ts) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+  return `${Math.round(sec / 86400)}d ago`;
+}
+
 type SettingsSection =
   | 'workspace'
   | 'continuous_build'
@@ -133,23 +170,15 @@ function WorkspaceSettings() {
 
   // Repository state
   const [watchedRepos, setWatchedRepos] = useState<WatchedRepo[]>([]);
+  // The full set of repos the user can watch (own + every org's),
+  // hydrated from a localStorage cache and refreshed on demand.
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
+  const [reposFetchedAt, setReposFetchedAt] = useState<number | null>(null);
+  const [reposLoading, setReposLoading] = useState(false);
   const [githubConnected, setGithubConnected] = useState(false);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
-  // Repo source: 'user' (GET /user/repos) or an org login (GET
-  // /orgs/:org/repos). Org browsing surfaces repos that don't appear in
-  // /user/repos — e.g. public repos in an org you belong to.
-  const [orgs, setOrgs] = useState<Array<{ login: string; avatar_url: string }>>([]);
-  const [repoSource, setRepoSource] = useState<string>('user');
-  const [orgRepos, setOrgRepos] = useState<GitHubRepo[]>([]);
-  const [loadingSource, setLoadingSource] = useState(false);
-  // Free-text org browse — works even when /user/orgs doesn't list the
-  // org (e.g. an org that restricts the OAuth app); /orgs/:org/repos
-  // still returns its public repos.
-  const [orgNameInput, setOrgNameInput] = useState('');
-  const [sourceError, setSourceError] = useState<string | null>(null);
   // Two-step add: user picks a repo, then supplies the local path.
   const [pendingAddRepo, setPendingAddRepo] = useState<GitHubRepo | null>(null);
   const [pendingLocalPath, setPendingLocalPath] = useState('');
@@ -157,7 +186,28 @@ function WorkspaceSettings() {
   const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
   const [editingPath, setEditingPath] = useState('');
 
-  // Load watched repos and GitHub status
+  // Fetch the full repo set from GitHub (user + all orgs) and cache it.
+  // This is the expensive call, so it only runs on a cache miss/stale or
+  // an explicit refresh — never on every picker open.
+  const refreshRepos = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    setReposLoading(true);
+    try {
+      const repos = await api.github.listAllRepos(currentWorkspaceId);
+      const now = Date.now();
+      setAvailableRepos(repos);
+      setReposFetchedAt(now);
+      writeRepoCache(currentWorkspaceId, repos, now);
+    } catch (_e) {
+      // Keep whatever the cache gave us.
+    } finally {
+      setReposLoading(false);
+    }
+  }, [currentWorkspaceId]);
+
+  // Load watched repos + GitHub status. Repos hydrate from the
+  // localStorage cache for instant render; a stale/empty cache triggers
+  // a background refresh.
   const loadRepos = useCallback(async () => {
     if (!currentWorkspaceId) return;
 
@@ -171,45 +221,20 @@ function WorkspaceSettings() {
     try {
       const status = await api.github.getStatus(currentWorkspaceId);
       setGithubConnected(status.connected);
+      if (!status.connected) return;
 
-      if (status.connected) {
-        const repos = await api.github.listRepos(currentWorkspaceId);
-        setAvailableRepos(repos);
-        try {
-          const orgList = await api.github.listOrgs(currentWorkspaceId);
-          setOrgs(orgList);
-        } catch (_e) {
-          setOrgs([]);
-        }
+      const cached = readRepoCache(currentWorkspaceId);
+      if (cached) {
+        setAvailableRepos(cached.repos);
+        setReposFetchedAt(cached.fetchedAt);
+      }
+      if (!cached || Date.now() - cached.fetchedAt > REPO_CACHE_TTL_MS) {
+        void refreshRepos();
       }
     } catch (_e) {
       setGithubConnected(false);
     }
-  }, [currentWorkspaceId]);
-
-  // Switch the repo-picker source between "my repos" and an org's repos.
-  const handleSelectSource = async (source: string) => {
-    setRepoSource(source);
-    setRepoSearch('');
-    setSourceError(null);
-    if (source === 'user' || !currentWorkspaceId) {
-      setOrgRepos([]);
-      return;
-    }
-    setLoadingSource(true);
-    try {
-      const repos = await api.github.listOrgRepos(currentWorkspaceId, source);
-      setOrgRepos(repos);
-      if (repos.length === 0) {
-        setSourceError(`No repositories visible in "${source}".`);
-      }
-    } catch (e) {
-      setOrgRepos([]);
-      setSourceError(e instanceof Error ? e.message : `Couldn't load ${source}'s repositories.`);
-    } finally {
-      setLoadingSource(false);
-    }
-  };
+  }, [currentWorkspaceId, refreshRepos]);
 
   useEffect(() => {
     loadRepos();
@@ -324,16 +349,15 @@ function WorkspaceSettings() {
     }
   };
 
-  // Candidate repos for the active source, minus already-watched.
-  const sourceRepos = repoSource === 'user' ? availableRepos : orgRepos;
-  const filteredRepos = sourceRepos
+  // Candidate repos (all accessible), minus already-watched.
+  const filteredRepos = availableRepos
     .filter((repo) => !watchedRepos.some((w) => w.fullName === repo.full_name))
     .filter((repo) =>
       repoSearch
         ? repo.full_name.toLowerCase().includes(repoSearch.toLowerCase())
         : true
     )
-    .slice(0, 15);
+    .slice(0, 20);
 
   return (
     <div className="space-y-6">
@@ -546,70 +570,36 @@ function WorkspaceSettings() {
                   </div>
                 ) : (
                   <>
-                    {/* Source: my repos, or browse an org you belong to. */}
-                    {orgs.length > 0 && (
-                      <Select
-                        value={orgs.some((o) => o.login === repoSource) ? repoSource : 'user'}
-                        onChange={(e) => handleSelectSource(e.target.value)}
-                        disabled={loadingSource}
-                      >
-                        <option value="user">My repositories</option>
-                        {orgs.map((o) => (
-                          <option key={o.login} value={o.login}>
-                            {o.login} (org)
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-
-                    {/* Browse any org by name — works even if the org
-                        isn't listed above (e.g. it restricts the app). */}
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       <Input
-                        placeholder="Browse an org by name (e.g. posthog)"
-                        value={orgNameInput}
-                        onChange={(e) => setOrgNameInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && orgNameInput.trim()) {
-                            void handleSelectSource(orgNameInput.trim());
-                          }
-                        }}
+                        placeholder="Search all your repositories…"
+                        value={repoSearch}
+                        onChange={(e) => setRepoSearch(e.target.value)}
+                        autoFocus
                       />
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleSelectSource(orgNameInput.trim())}
-                        disabled={!orgNameInput.trim() || loadingSource}
+                        onClick={refreshRepos}
+                        disabled={reposLoading}
+                        title="Re-fetch your repos + all your orgs' repos from GitHub"
                       >
-                        Browse
+                        <RefreshCw className={cn('w-4 h-4', reposLoading && 'animate-spin')} />
                       </Button>
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Your repos + every org you belong to.{' '}
+                      {reposLoading
+                        ? 'Refreshing…'
+                        : reposFetchedAt
+                          ? `Updated ${formatAge(reposFetchedAt)}.`
+                          : ''}
+                    </p>
 
-                    {repoSource !== 'user' && (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>
-                          Showing repositories in <span className="font-medium">{repoSource}</span>
-                        </span>
-                        <button
-                          type="button"
-                          className="underline hover:text-foreground"
-                          onClick={() => handleSelectSource('user')}
-                        >
-                          back to my repos
-                        </button>
-                      </div>
-                    )}
-
-                    <Input
-                      placeholder="Search repositories..."
-                      value={repoSearch}
-                      onChange={(e) => setRepoSearch(e.target.value)}
-                      autoFocus
-                    />
-                    {loadingSource ? (
+                    {reposLoading && availableRepos.length === 0 ? (
                       <p className="text-sm text-muted-foreground p-2 flex items-center gap-2">
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Loading {repoSource}'s repositories…
+                        Loading repositories…
                       </p>
                     ) : filteredRepos.length > 0 ? (
                       <div className="border rounded-md max-h-48 overflow-y-auto">
@@ -630,13 +620,9 @@ function WorkspaceSettings() {
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground p-2">
-                        {sourceError
-                          ? sourceError
-                          : repoSearch
-                            ? 'No matching repositories'
-                            : repoSource === 'user'
-                              ? 'No repositories found'
-                              : `No repositories found in ${repoSource}`}
+                        {repoSearch
+                          ? 'No matching repositories. Try Refresh if a repo is missing.'
+                          : 'No repositories found. Try Refresh.'}
                       </p>
                     )}
                     <Button
@@ -645,10 +631,6 @@ function WorkspaceSettings() {
                       onClick={() => {
                         setShowRepoSelector(false);
                         setRepoSearch('');
-                        setRepoSource('user');
-                        setOrgRepos([]);
-                        setOrgNameInput('');
-                        setSourceError(null);
                       }}
                     >
                       Cancel

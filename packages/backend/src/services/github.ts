@@ -363,15 +363,42 @@ class GitHubService extends EventEmitter {
     );
   }
 
-  /** Orgs the user belongs to (public memberships always; private ones
-   * when the token can see them). Drives the org-browse picker. */
+  /**
+   * Orgs the user belongs to. Unions two endpoints because neither is
+   * complete on its own:
+   *   - `/user/orgs` (authenticated): includes private memberships, but
+   *     is GATED by the org's OAuth-app approval — an org that restricts
+   *     third-party apps and hasn't approved us is omitted.
+   *   - `/users/{login}/orgs` (public): returns public memberships
+   *     regardless of app approval, so it catches restricted orgs (e.g.
+   *     PostHog) that `/user/orgs` drops.
+   * Each is best-effort; we merge + dedupe by login.
+   */
   async listOrganizations(
     workspaceId: string
   ): Promise<Array<{ login: string; avatar_url: string }>> {
-    return this.paginate<{ login: string; avatar_url: string }>(
-      workspaceId,
-      (page) => `/user/orgs?per_page=100&page=${page}`
-    );
+    const byLogin = new Map<string, { login: string; avatar_url: string }>();
+    try {
+      const authed = await this.paginate<{ login: string; avatar_url: string }>(
+        workspaceId,
+        (page) => `/user/orgs?per_page=100&page=${page}`
+      );
+      for (const o of authed) byLogin.set(o.login, o);
+    } catch (err) {
+      console.warn('[github] /user/orgs failed:', err);
+    }
+    try {
+      const user = await this.getUser(workspaceId);
+      const publicOrgs = await this.paginate<{ login: string; avatar_url: string }>(
+        workspaceId,
+        (page) =>
+          `/users/${encodeURIComponent(user.login)}/orgs?per_page=100&page=${page}`
+      );
+      for (const o of publicOrgs) byLogin.set(o.login, o);
+    } catch (err) {
+      console.warn('[github] /users/:login/orgs failed:', err);
+    }
+    return Array.from(byLogin.values());
   }
 
   /**
@@ -386,6 +413,41 @@ class GitHubService extends EventEmitter {
       (page) =>
         `/orgs/${encodeURIComponent(org)}/repos?per_page=100&page=${page}&type=all&sort=pushed`
     );
+  }
+
+  /**
+   * Every repo the user can reach: their own/collaborator/org-member
+   * repos, plus the repos of every org they belong to (which surfaces
+   * org repos that don't appear in `/user/repos`). Merged + deduped by
+   * full_name. Each source is best-effort — one org failing (e.g. a
+   * permissions blip) doesn't sink the whole list. This is the
+   * expensive call the desktop caches client-side behind a refresh.
+   */
+  async listAllAccessibleRepos(workspaceId: string): Promise<GitHubRepo[]> {
+    const byFullName = new Map<string, GitHubRepo>();
+    try {
+      for (const r of await this.listRepositories(workspaceId)) {
+        byFullName.set(r.full_name, r);
+      }
+    } catch (err) {
+      console.warn('[github] listRepositories failed:', err);
+    }
+    let orgs: string[] = [];
+    try {
+      orgs = (await this.listOrganizations(workspaceId)).map((o) => o.login);
+    } catch (err) {
+      console.warn('[github] listOrganizations failed:', err);
+    }
+    for (const org of orgs) {
+      try {
+        for (const r of await this.listOrgRepositories(workspaceId, org)) {
+          byFullName.set(r.full_name, r);
+        }
+      } catch (err) {
+        console.warn(`[github] org repos failed for ${org}:`, err);
+      }
+    }
+    return Array.from(byFullName.values());
   }
 
   /** Walk a paginated GitHub list endpoint until a non-full page. */

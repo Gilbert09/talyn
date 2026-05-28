@@ -244,6 +244,21 @@ export function githubRoutes(): Router {
     }
   });
 
+  // Everything the user can watch: their own repos + all their orgs'
+  // repos, merged. Expensive (fans out across orgs) — the desktop caches
+  // the result in localStorage and only re-hits this on explicit refresh.
+  router.get('/all-repos', async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res);
+    if (!workspaceId) return;
+    try {
+      const repos = await githubService.listAllAccessibleRepos(workspaceId);
+      res.json({ success: true, data: repos });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
   // Orgs the user belongs to — drives the org-browse repo picker.
   router.get('/orgs', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res);

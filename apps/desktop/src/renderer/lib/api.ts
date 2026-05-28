@@ -280,6 +280,10 @@ export const github = {
     request<GitHubUser>('GET', `/github/user?workspaceId=${workspaceId}`),
   listRepos: (workspaceId: string) =>
     request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}`),
+  // User's own repos + all their orgs' repos, merged. Expensive — the
+  // desktop caches this in localStorage behind a manual refresh.
+  listAllRepos: (workspaceId: string) =>
+    request<GitHubRepo[]>('GET', `/github/all-repos?workspaceId=${workspaceId}`),
   listOrgs: (workspaceId: string) =>
     request<Array<{ login: string; avatar_url: string }>>(
       'GET',
