@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 25 — GitHub page: bug fixes, row actions, unread dots, review-requested PRs
+
+Continuation of the Conductor-parity work, focused on the GitHub page (`GitHubPanel.tsx`) after a full assessment of its bugs/gaps (#1–#9). Landed in four commits:
+
+- **Quick fixes + table polish (#1 #2 #3 #9).** Refresh now triggers a real GitHub force-poll (`repositories.forcePoll()`) then re-reads the cache — previously it only re-read the local DB, so "Refresh" never actually hit GitHub. Added a "Connect GitHub" empty state (via `github.getStatus`) so a disconnected workspace no longer shows the same misleading "no PRs match" message as a connected-but-empty one. Sortable Updated column, live counts on the Open / Needs-attention pills, keyboard-navigable rows, a Task badge that deep-links to its task, and fixed the stale tabs doc comment.
+- **Row actions (#8).** Each PR row reveals on hover a squash-merge action (confirm-gated, shown only when GitHub reports the PR mergeable, reusing `pullRequests.merge`) and a create-task action that spins up a `pr_response` task for the PR and jumps to it.
+- **Unread indicators (#7).** A blue dot + count on PRs with unread activity. Derived with **zero schema change** from unread `inbox_items` linked to a PR via the existing `data->>'prUrl'` jsonb key (there's no inbox→PR FK). The list route (`GET /pull-requests`) now returns `unreadCount` per row via one grouped query; opening a PR clears the dot and flips its inbox items to read via new `POST /pull-requests/:id/seen`; an `inbox:new` WS event bumps the dot live. +4 route tests.
+- **Review-requested PRs (#4).** The monitor previously watched only PRs authored by the connected user. It now also watches PRs where the user is a requested reviewer (`requested_reviewers` from the REST list), persisting a new `review_requested` boolean column (migration `0014`). `pollRepo` widens the filter and threads the flag through `upsertFromBatchResult` → `upsertRow`. `sweepClosed` gained a guard: a review-requested PR drops off the watch list the moment the user reviews it but stays OPEN on GitHub, so we no longer wrongly mark still-open PRs closed. The list route gained a `relationship=authored|review_requested|all` filter, the page a Mine/Review/All pill group, and review-requested rows a purple "Review" badge. +6 tests (3 monitor, 1 route filter, plus sweep-guard + flag assertions).
+
+**Migration note:** `drizzle-kit generate` is currently broken by a pre-existing snapshot collision in `meta/`, unrelated to this change — `0014_pr_review_requested.sql` + the `_journal.json` entry were hand-written to match convention (the runtime postgres migrator only reads the journal + `.sql` files).
+
+**Recovered session:** this work resumed a prior session (`03099785…`) that crashed mid-research on a `thinking`-block API error before writing any code.
+
 ## Session 24 — Conductor-parity polish (feed perf, PR diffs, merge, markdown)
 
 Kicked off after comparing the task view against Conductor (conductor.build). Goal: close the "feels buggy / lower quality" gap. Full assessment + remaining backlog in [`docs/QUALITY_PARITY.md`](./QUALITY_PARITY.md). Landed in four commits:

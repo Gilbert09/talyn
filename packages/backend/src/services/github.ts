@@ -57,6 +57,9 @@ interface GitHubPullRequest {
   mergeable_state: string;
   head: { ref: string; sha: string };
   base: { ref: string };
+  // Users with a pending review request. Present on the list endpoint;
+  // a reviewer drops off once they submit a review.
+  requested_reviewers?: Array<{ login: string }>;
   // Present on the single-PR endpoint; the list endpoint omits these.
   merged?: boolean;
   merged_at?: string | null;

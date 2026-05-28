@@ -35,6 +35,26 @@ summaries, permission cards, live streaming). Sessions 24+ attack (1) and
 - **Richer markdown** in the agent feed (headings, lists, blockquotes,
   bold/italic/links).
 
+## Done (Session 25 — GitHub page)
+
+- **Real Refresh.** Forces a GitHub poll (`repositories.forcePoll`) then
+  re-reads the cache, instead of only re-reading the local DB.
+- **Connect-GitHub empty state** when the workspace isn't connected
+  (distinct from connected-but-empty).
+- **Unread dots.** Per-row "new activity since you looked" indicator +
+  count, from unread `inbox_items` matched via `data->>'prUrl'` (no
+  schema change). `GET /pull-requests` returns `unreadCount`; opening a
+  PR clears it via `POST /pull-requests/:id/seen`; `inbox:new` bumps live.
+- **Row actions.** Hover-revealed squash-merge (mergeable only, confirm)
+  and create-task (`pr_response`) per row.
+- **Review-requested PRs.** Monitor now watches PRs awaiting the user's
+  review, not just authored ones (`review_requested` column, migration
+  0014). `relationship` list filter + Mine/Review/All pills + "Review"
+  badge. `sweepClosed` guarded so reviewed-but-still-open PRs aren't
+  wrongly closed.
+- **Table polish.** Sortable Updated column, filter-pill counts,
+  keyboard-navigable rows, Task badge deep-links to its task.
+
 ## Backlog (prioritized)
 
 ### Tier 1 — felt quality

@@ -357,6 +357,8 @@ export interface PRRow {
   repo: string;
   number: number;
   state: PRState;
+  /** True when the user is a requested reviewer (not the author). */
+  reviewRequested: boolean;
   mergedAt: string | null;
   lastPolledAt: string;
   summary: PRSummaryShape;
@@ -420,6 +422,7 @@ export const pullRequests = {
     repo?: string;
     taskOnly?: boolean;
     search?: string;
+    relationship?: 'authored' | 'review_requested' | 'all';
   }) => {
     const query = new URLSearchParams();
     query.set('workspaceId', params.workspaceId);
@@ -427,6 +430,7 @@ export const pullRequests = {
     if (params.repo) query.set('repo', params.repo);
     if (params.taskOnly) query.set('taskOnly', 'true');
     if (params.search) query.set('search', params.search);
+    if (params.relationship) query.set('relationship', params.relationship);
     return request<PRRow[]>('GET', `/pull-requests?${query.toString()}`);
   },
   get: (id: string) =>

@@ -36,7 +36,8 @@ export function pullRequestRoutes(): Router {
   // List PRs for a workspace. Filters: state ('open' | 'closed' |
   // 'merged' | 'all', default 'open'), repo (repository_id),
   // taskOnly (true → only PRs linked to a task), search (substring
-  // match on title or owner/repo).
+  // match on title or owner/repo), relationship ('authored' |
+  // 'review_requested' | 'all', default 'all').
   router.get('/', async (req, res) => {
     const workspaceId = req.query.workspaceId as string | undefined;
     if (!workspaceId) {
@@ -53,6 +54,9 @@ export function pullRequestRoutes(): Router {
     const repoFilter = req.query.repo as string | undefined;
     const taskOnly = req.query.taskOnly === 'true';
     const search = (req.query.search as string | undefined)?.toLowerCase().trim();
+    // 'authored' (PRs the user opened) | 'review_requested' (PRs
+    // awaiting the user's review) | 'all' (default).
+    const relationship = req.query.relationship as string | undefined;
 
     const conditions = [eq(pullRequestsTable.workspaceId, workspaceId)];
     if (stateFilter !== 'all') {
@@ -60,6 +64,11 @@ export function pullRequestRoutes(): Router {
     }
     if (repoFilter) {
       conditions.push(eq(pullRequestsTable.repositoryId, repoFilter));
+    }
+    if (relationship === 'authored') {
+      conditions.push(eq(pullRequestsTable.reviewRequested, false));
+    } else if (relationship === 'review_requested') {
+      conditions.push(eq(pullRequestsTable.reviewRequested, true));
     }
 
     const rows = await db
@@ -374,6 +383,7 @@ interface PullRequestRow {
   repo: string;
   number: number;
   state: string;
+  reviewRequested: boolean;
   mergedAt: Date | null;
   lastPolledAt: Date;
   lastSummary: unknown;
@@ -395,6 +405,7 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
     repo: row.repo,
     number: row.number,
     state: row.state,
+    reviewRequested: row.reviewRequested,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
     lastPolledAt: row.lastPolledAt.toISOString(),
     summary: row.lastSummary,

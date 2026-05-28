@@ -559,6 +559,56 @@ describe('routes/pullRequests', () => {
     });
   });
 
+  describe('GET /pull-requests relationship filter', () => {
+    async function insertWithRelationship(id: string, reviewRequested: boolean) {
+      await db.insert(pullRequestsTable).values({
+        id,
+        workspaceId: 'ws-mine',
+        repositoryId: 'repo-mine',
+        owner: 'acme',
+        repo: 'widgets',
+        number: ++prNumberCounter,
+        state: 'open',
+        reviewRequested,
+        lastPolledAt: new Date(),
+        lastSummary: { title: 't', headBranch: 'h', author: 'a', url: `u-${id}` },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    it('filters to authored vs review_requested, and returns the flag', async () => {
+      await insertWithRelationship('p-mine', false);
+      await insertWithRelationship('p-review', true);
+
+      const authored = await fetch(
+        `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=authored`,
+        { headers: authMine }
+      );
+      const aBody = (await authored.json()) as {
+        data: Array<{ id: string; reviewRequested: boolean }>;
+      };
+      expect(aBody.data.map((r) => r.id)).toEqual(['p-mine']);
+      expect(aBody.data[0].reviewRequested).toBe(false);
+
+      const review = await fetch(
+        `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=review_requested`,
+        { headers: authMine }
+      );
+      const rBody = (await review.json()) as {
+        data: Array<{ id: string; reviewRequested: boolean }>;
+      };
+      expect(rBody.data.map((r) => r.id)).toEqual(['p-review']);
+      expect(rBody.data[0].reviewRequested).toBe(true);
+
+      const all = await fetch(`${serverUrl}/pull-requests?workspaceId=ws-mine`, {
+        headers: authMine,
+      });
+      const allBody = (await all.json()) as { data: Array<{ id: string }> };
+      expect(allBody.data.map((r) => r.id).sort()).toEqual(['p-mine', 'p-review']);
+    });
+  });
+
   describe('POST /pull-requests/:id/seen', () => {
     it('flips the PR’s unread inbox items to read', async () => {
       const url = 'https://github.com/acme/widgets/pull/10';

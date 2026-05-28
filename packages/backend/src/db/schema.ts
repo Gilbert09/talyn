@@ -408,6 +408,12 @@ export const pullRequests = pgTable(
     repo: text('repo').notNull(),
     number: integer('number').notNull(),
     state: text('state').notNull(), // 'open' | 'closed' | 'merged'
+    /**
+     * True when the connected user is a requested reviewer on this PR
+     * (rather than its author). The monitor watches both; this lets the
+     * GitHub page separate "my PRs" from "PRs awaiting my review".
+     */
+    reviewRequested: boolean('review_requested').notNull().default(false),
     mergedAt: timestamp('merged_at', { withTimezone: true }),
     /**
      * Drives the TTL: prCache returns this row if `last_polled_at` is

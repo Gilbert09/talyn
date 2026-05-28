@@ -40,7 +40,14 @@ import { cn } from '../../lib/utils';
  */
 
 type StateFilter = 'open' | 'closed' | 'merged' | 'all';
+type RelationshipFilter = 'all' | 'authored' | 'review_requested';
 type SortDir = 'asc' | 'desc';
+
+const RELATIONSHIP_OPTIONS: Array<{ value: RelationshipFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'authored', label: 'Mine' },
+  { value: 'review_requested', label: 'Review' },
+];
 
 const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
   { value: 'open', label: 'Open' },
@@ -57,6 +64,7 @@ export function GitHubPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
+  const [relationship, setRelationship] = useState<RelationshipFilter>('all');
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [needsAttention, setNeedsAttention] = useState(false);
   const [search, setSearch] = useState('');
@@ -94,6 +102,7 @@ export function GitHubPanel() {
         workspaceId: currentWorkspaceId,
         state: stateFilter,
         repo: repoFilter === 'all' ? undefined : repoFilter,
+        relationship: relationship === 'all' ? undefined : relationship,
       })
       .then((data) => {
         if (cancelled) return;
@@ -109,7 +118,7 @@ export function GitHubPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentWorkspaceId, stateFilter, repoFilter]);
+  }, [currentWorkspaceId, stateFilter, repoFilter, relationship]);
 
   // Live updates from the prMonitor.
   useEffect(() => {
@@ -131,6 +140,7 @@ export function GitHubPanel() {
                 workspaceId: currentWorkspaceId,
                 state: stateFilter,
                 repo: repoFilter === 'all' ? undefined : repoFilter,
+                relationship: relationship === 'all' ? undefined : relationship,
               })
               .then(setRows)
               .catch(() => {});
@@ -147,7 +157,7 @@ export function GitHubPanel() {
       });
     });
     return unsubscribe;
-  }, [currentWorkspaceId, stateFilter, repoFilter]);
+  }, [currentWorkspaceId, stateFilter, repoFilter, relationship]);
 
   // A new inbox item (review/comment/CI) for a watched PR — bump its
   // unread dot live without a refetch. Matched on the PR URL, the same
@@ -212,6 +222,7 @@ export function GitHubPanel() {
         workspaceId: currentWorkspaceId,
         state: stateFilter,
         repo: repoFilter === 'all' ? undefined : repoFilter,
+        relationship: relationship === 'all' ? undefined : relationship,
       });
       setRows(data);
       // A successful poll implies a working GitHub connection.
@@ -293,6 +304,8 @@ export function GitHubPanel() {
       <FilterBar
         stateFilter={stateFilter}
         onStateFilter={setStateFilter}
+        relationship={relationship}
+        onRelationship={setRelationship}
         repoFilter={repoFilter}
         onRepoFilter={setRepoFilter}
         repos={repositories.map((r) => ({ id: r.id, name: r.fullName }))}
@@ -367,6 +380,8 @@ function isNeedsAttention(r: PRRow): boolean {
 interface FilterBarProps {
   stateFilter: StateFilter;
   onStateFilter: (v: StateFilter) => void;
+  relationship: RelationshipFilter;
+  onRelationship: (v: RelationshipFilter) => void;
   repoFilter: string;
   onRepoFilter: (v: string) => void;
   repos: Array<{ id: string; name: string }>;
@@ -382,6 +397,8 @@ interface FilterBarProps {
 function FilterBar({
   stateFilter,
   onStateFilter,
+  relationship,
+  onRelationship,
   repoFilter,
   onRepoFilter,
   repos,
@@ -417,6 +434,32 @@ function FilterBar({
             </button>
           );
         })}
+      </div>
+
+      {/* Relationship pills — authored vs awaiting-my-review. */}
+      <div className="flex rounded-md border bg-muted/40 p-0.5">
+        {RELATIONSHIP_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onRelationship(opt.value)}
+            className={cn(
+              'rounded px-2 py-1 transition-colors',
+              relationship === opt.value
+                ? 'bg-background shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title={
+              opt.value === 'review_requested'
+                ? 'PRs awaiting your review'
+                : opt.value === 'authored'
+                  ? 'PRs you authored'
+                  : 'All watched PRs'
+            }
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
 
       {/* Repo dropdown — native select keeps the bar compact + keyboard-friendly. */}
@@ -613,6 +656,14 @@ function PRTableRow({
             {summary.draft && (
               <span className="ml-2 rounded bg-zinc-200 px-1 py-0.5 text-[10px] uppercase text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
                 Draft
+              </span>
+            )}
+            {row.reviewRequested && (
+              <span
+                className="ml-2 rounded bg-purple-200 px-1 py-0.5 text-[10px] uppercase text-purple-800 dark:bg-purple-900 dark:text-purple-200"
+                title="You're a requested reviewer on this PR"
+              >
+                Review
               </span>
             )}
             {row.taskId && (

@@ -251,6 +251,7 @@ export async function upsertFromBatchResult(opts: {
   repositoryId: string;
   taskId?: string | null;
   summary: PRSummary;
+  reviewRequested?: boolean;
 }): Promise<UpsertResult> {
   const db = getDbClient();
   const existing = await readRow(
@@ -273,6 +274,7 @@ export async function upsertFromBatchResult(opts: {
     repositoryId: opts.repositoryId,
     taskId: opts.taskId ?? null,
     summary: opts.summary,
+    reviewRequested: opts.reviewRequested,
     existingId: existing?.id,
   });
   await emitDeltaInboxItems(opts.workspaceId, opts.summary, delta);
@@ -428,6 +430,7 @@ async function upsertRow(
     repositoryId: string;
     taskId: string | null;
     summary: PRSummary;
+    reviewRequested?: boolean;
     existingId?: string;
   }
 ): Promise<string> {
@@ -450,6 +453,11 @@ async function upsertRow(
         lastReviewCommentId: cursors.lastReviewCommentId,
         lastCommentId: cursors.lastCommentId,
         lastCheckDigest: cursors.lastCheckDigest,
+        // Only the monitor knows the relationship — leave it untouched on
+        // refresh paths (detail refresh, merge) that don't pass it.
+        ...(opts.reviewRequested === undefined
+          ? {}
+          : { reviewRequested: opts.reviewRequested }),
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, opts.existingId));
@@ -463,6 +471,7 @@ async function upsertRow(
       repo: opts.summary.repo,
       number: opts.summary.number,
       state: opts.summary.state,
+      reviewRequested: opts.reviewRequested ?? false,
       mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
       lastPolledAt: now,
       lastSummary,

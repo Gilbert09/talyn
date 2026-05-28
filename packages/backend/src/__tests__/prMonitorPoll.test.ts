@@ -27,6 +27,7 @@ function fakeRESTPullRequest(over: Partial<{
   userLogin: string;
   headRef: string;
   headSha: string;
+  requestedReviewers: string[];
 }> = {}) {
   return {
     id: 1,
@@ -42,6 +43,7 @@ function fakeRESTPullRequest(over: Partial<{
     mergeable_state: 'clean',
     head: { ref: over.headRef ?? 'feature/x', sha: over.headSha ?? 'sha1' },
     base: { ref: 'main' },
+    requested_reviewers: (over.requestedReviewers ?? []).map((login) => ({ login })),
   };
 }
 
@@ -154,6 +156,37 @@ describe('prMonitor — poll orchestration', () => {
 
     const rows = await db.select().from(pullRequestsTable);
     expect(rows.map((r) => r.number).sort()).toEqual([1, 3]);
+  });
+
+  it('also watches PRs where the user is a requested reviewer and flags them', async () => {
+    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([
+      // Authored by me → watched, reviewRequested=false.
+      fakeRESTPullRequest({ number: 1, headRef: 'feature/a', userLogin: 'me' }),
+      // Someone else's PR, I'm a requested reviewer → watched, flagged.
+      fakeRESTPullRequest({
+        number: 2,
+        headRef: 'feature/b',
+        userLogin: 'someone-else',
+        requestedReviewers: ['me'],
+      }),
+      // Someone else's PR, not my review → ignored.
+      fakeRESTPullRequest({ number: 3, headRef: 'feature/c', userLogin: 'someone-else' }),
+    ] as never);
+    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+      { branch: 'feature/a', pr: fakeSummary({ number: 1, headBranch: 'feature/a', author: 'me' }) },
+      {
+        branch: 'feature/b',
+        pr: fakeSummary({ number: 2, headBranch: 'feature/b', author: 'someone-else' }),
+      },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db.select().from(pullRequestsTable);
+    const byNumber = Object.fromEntries(rows.map((r) => [r.number, r.reviewRequested]));
+    expect(Object.keys(byNumber).map(Number).sort()).toEqual([1, 2]);
+    expect(byNumber[1]).toBe(false);
+    expect(byNumber[2]).toBe(true);
   });
 
   it('skips the GraphQL call entirely when every cached row is still fresh', async () => {
@@ -310,6 +343,41 @@ describe('prMonitor — poll orchestration', () => {
       .where(eq(pullRequestsTable.id, 'pr-2'));
     expect(rows[0].state).toBe('closed');
     expect(rows[0].mergedAt).toBeNull();
+  });
+
+  it('leaves a still-open PR untouched when it drops off the watch list (reviewed)', async () => {
+    // A review-requested PR we tracked, then the user reviewed it so it
+    // fell out of requested_reviewers — but it's still OPEN on GitHub.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-rev',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 2,
+      state: 'open',
+      reviewRequested: true,
+      lastPolledAt: new Date(),
+      lastSummary: { headBranch: 'feature/b' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    vi.spyOn(githubService, 'listPullRequests').mockResolvedValue([] as never);
+    vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'someone-else' }),
+      state: 'open',
+      merged: false,
+      merged_at: null,
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-rev'));
+    expect(rows[0].state).toBe('open');
   });
 
   it('falls back to closed when the per-PR state lookup fails', async () => {

@@ -214,26 +214,37 @@ class PRMonitorService extends EventEmitter {
     currentUserLogin: string
   ): Promise<void> {
     // REST list is cheap: one paginated call returns up to 100 open
-    // PRs with author. Filter to user-authored. We don't need the full
-    // detail here — the GraphQL batch fetch supplies that.
+    // PRs with author + requested reviewers. We watch two relationships:
+    // PRs the user authored, and PRs awaiting the user's review. We
+    // don't need the full detail here — the GraphQL batch fetch supplies
+    // that.
     const all = await githubService.listPullRequests(workspaceId, repo.owner, repo.repo, {
       state: 'open',
       per_page: 100,
     });
-    const ownPRs = all.filter((pr) => pr.user.login === currentUserLogin);
+    const watched = all.filter(
+      (pr) =>
+        pr.user.login === currentUserLogin ||
+        (pr.requested_reviewers ?? []).some((r) => r.login === currentUserLogin)
+    );
+    // number → "the user is a requested reviewer (not the author)".
+    const reviewRequestedByNumber = new Map<number, boolean>();
+    for (const pr of watched) {
+      reviewRequestedByNumber.set(pr.number, pr.user.login !== currentUserLogin);
+    }
 
-    if (ownPRs.length === 0) {
+    if (watched.length === 0) {
       await this.sweepClosed(workspaceId, repo, []);
       return;
     }
 
     // Determine which PRs are actually stale enough to need a refetch
     // (saves the GraphQL call when nothing has aged past the TTL).
-    const stalePrs = await this.filterStale(workspaceId, repo.id, ownPRs);
+    const stalePrs = await this.filterStale(workspaceId, repo.id, watched);
     if (stalePrs.length === 0) {
       // Still sweep closed — the user might have merged something
       // outside the TTL window.
-      await this.sweepClosed(workspaceId, repo, ownPRs.map((p) => p.number));
+      await this.sweepClosed(workspaceId, repo, watched.map((p) => p.number));
       return;
     }
 
@@ -251,10 +262,11 @@ class PRMonitorService extends EventEmitter {
         workspaceId,
         repositoryId: repo.id,
         summary: result.pr,
+        reviewRequested: reviewRequestedByNumber.get(result.pr.number) ?? false,
       });
     }
 
-    await this.sweepClosed(workspaceId, repo, ownPRs.map((p) => p.number));
+    await this.sweepClosed(workspaceId, repo, watched.map((p) => p.number));
   }
 
   private async filterStale(
@@ -339,6 +351,12 @@ class PRMonitorService extends EventEmitter {
           repo.repo,
           row.number
         );
+        // A review-requested PR drops out of our watch list the moment
+        // the user submits their review, but stays OPEN on GitHub. Don't
+        // mark such a PR closed — leave its state untouched.
+        if (pr.state === 'open' && !pr.merged_at && !pr.merged) {
+          continue;
+        }
         if (pr.merged_at || pr.merged) {
           nextState = 'merged';
           mergedAt = pr.merged_at ? new Date(pr.merged_at) : new Date();
