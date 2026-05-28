@@ -6,6 +6,9 @@ import {
   RefreshCw,
   ExternalLink,
   GitPullRequest,
+  GitMerge,
+  ListPlus,
+  Loader2,
   ArrowUpDown,
   X,
 } from 'lucide-react';
@@ -13,6 +16,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { useTaskActions } from '../../hooks/useApi';
 import { api, type PRRow, type PRSummaryShape, type PRState } from '../../lib/api';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
@@ -48,6 +52,7 @@ const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
 export function GitHubPanel() {
   const { setActivePanel, currentWorkspaceId, repositories, selectTask } =
     useWorkspaceStore();
+  const { createTask } = useTaskActions();
   const [rows, setRows] = useState<PRRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +206,35 @@ export function GitHubPanel() {
     }
   }
 
+  // Squash-merge a PR straight from its row. Re-list afterwards so the
+  // merged PR drops out of the Open view.
+  async function handleMergeRow(row: PRRow) {
+    await api.pullRequests.merge(row.id);
+    if (!currentWorkspaceId) return;
+    const data = await api.pullRequests.list({
+      workspaceId: currentWorkspaceId,
+      state: stateFilter,
+      repo: repoFilter === 'all' ? undefined : repoFilter,
+    });
+    setRows(data);
+  }
+
+  // Spin up a pr_response task to address a PR, then jump to it.
+  async function handleCreateTaskFromPR(row: PRRow) {
+    if (!currentWorkspaceId) return;
+    const ref = `${row.owner}/${row.repo}#${row.number}`;
+    const created = await createTask({
+      workspaceId: currentWorkspaceId,
+      type: 'pr_response',
+      title: `Address ${ref}: ${row.summary.title}`,
+      description: `Respond to review feedback / failing checks on ${ref}.`,
+      prompt: `Address the open review feedback and any failing checks on PR ${row.summary.url} (${ref}: "${row.summary.title}").`,
+      repositoryId: row.repositoryId,
+    });
+    selectTask(created.id);
+    setActivePanel('queue');
+  }
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b p-4">
@@ -282,6 +316,8 @@ export function GitHubPanel() {
                 selectTask(taskId);
                 setActivePanel('queue');
               }}
+              onMerge={handleMergeRow}
+              onCreateTask={handleCreateTaskFromPR}
             />
           )}
         </ScrollArea>
@@ -417,6 +453,8 @@ interface PRTableProps {
   sortDir: SortDir;
   onToggleSort: () => void;
   onOpenTask: (taskId: string) => void;
+  onMerge: (row: PRRow) => Promise<void>;
+  onCreateTask: (row: PRRow) => Promise<void>;
 }
 
 function PRTable({
@@ -426,6 +464,8 @@ function PRTable({
   sortDir,
   onToggleSort,
   onOpenTask,
+  onMerge,
+  onCreateTask,
 }: PRTableProps) {
   return (
     <table className="w-full text-sm">
@@ -456,6 +496,8 @@ function PRTable({
             isSelected={row.id === selectedId}
             onSelect={() => onSelect(row.id)}
             onOpenTask={onOpenTask}
+            onMerge={onMerge}
+            onCreateTask={onCreateTask}
           />
         ))}
       </tbody>
@@ -468,18 +510,53 @@ function PRTableRow({
   isSelected,
   onSelect,
   onOpenTask,
+  onMerge,
+  onCreateTask,
 }: {
   row: PRRow;
   isSelected: boolean;
   onSelect: () => void;
   onOpenTask: (taskId: string) => void;
+  onMerge: (row: PRRow) => Promise<void>;
+  onCreateTask: (row: PRRow) => Promise<void>;
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
+  const [confirmMerge, setConfirmMerge] = useState(false);
+  const [busy, setBusy] = useState<null | 'merge' | 'task'>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+  const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
+
+  async function runMerge(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy('merge');
+    setRowError(null);
+    try {
+      await onMerge(row);
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : 'Merge failed');
+      setConfirmMerge(false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runCreateTask(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy('task');
+    setRowError(null);
+    try {
+      await onCreateTask(row);
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : 'Could not create task');
+    } finally {
+      setBusy(null);
+    }
+  }
   return (
     <tr
       className={cn(
-        'cursor-pointer border-b transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'group cursor-pointer border-b transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         isSelected && 'bg-muted/40'
       )}
       tabIndex={0}
@@ -534,17 +611,63 @@ function PRTableRow({
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>
-      <td className="px-2 py-2">
-        <a
-          href={summary.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="text-muted-foreground hover:text-foreground"
-          title="Open on GitHub"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
+      <td className="px-2 py-2" title={rowError ?? undefined}>
+        <div className="flex items-center justify-end gap-1">
+          {/* Row actions reveal on hover/focus to keep the table calm. */}
+          {canMerge &&
+            (confirmMerge ? (
+              <button
+                type="button"
+                onClick={runMerge}
+                disabled={busy !== null}
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium uppercase text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
+                title="Confirm squash-merge"
+              >
+                {busy === 'merge' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  'Confirm'
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmMerge(true);
+                }}
+                className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-emerald-500/10 hover:text-emerald-600 focus:opacity-100 group-hover:opacity-100"
+                title="Merge this PR"
+              >
+                <GitMerge className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          {!row.taskId && (
+            <button
+              type="button"
+              onClick={runCreateTask}
+              disabled={busy !== null}
+              className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+              title="Create a task to address this PR"
+            >
+              {busy === 'task' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ListPlus className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+          <a
+            href={summary.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="rounded p-1 text-muted-foreground hover:text-foreground"
+            title="Open on GitHub"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
       </td>
     </tr>
   );
