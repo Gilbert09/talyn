@@ -145,6 +145,11 @@ function WorkspaceSettings() {
   const [repoSource, setRepoSource] = useState<string>('user');
   const [orgRepos, setOrgRepos] = useState<GitHubRepo[]>([]);
   const [loadingSource, setLoadingSource] = useState(false);
+  // Free-text org browse — works even when /user/orgs doesn't list the
+  // org (e.g. an org that restricts the OAuth app); /orgs/:org/repos
+  // still returns its public repos.
+  const [orgNameInput, setOrgNameInput] = useState('');
+  const [sourceError, setSourceError] = useState<string | null>(null);
   // Two-step add: user picks a repo, then supplies the local path.
   const [pendingAddRepo, setPendingAddRepo] = useState<GitHubRepo | null>(null);
   const [pendingLocalPath, setPendingLocalPath] = useState('');
@@ -186,6 +191,7 @@ function WorkspaceSettings() {
   const handleSelectSource = async (source: string) => {
     setRepoSource(source);
     setRepoSearch('');
+    setSourceError(null);
     if (source === 'user' || !currentWorkspaceId) {
       setOrgRepos([]);
       return;
@@ -194,8 +200,12 @@ function WorkspaceSettings() {
     try {
       const repos = await api.github.listOrgRepos(currentWorkspaceId, source);
       setOrgRepos(repos);
-    } catch (_e) {
+      if (repos.length === 0) {
+        setSourceError(`No repositories visible in "${source}".`);
+      }
+    } catch (e) {
       setOrgRepos([]);
+      setSourceError(e instanceof Error ? e.message : `Couldn't load ${source}'s repositories.`);
     } finally {
       setLoadingSource(false);
     }
@@ -539,7 +549,7 @@ function WorkspaceSettings() {
                     {/* Source: my repos, or browse an org you belong to. */}
                     {orgs.length > 0 && (
                       <Select
-                        value={repoSource}
+                        value={orgs.some((o) => o.login === repoSource) ? repoSource : 'user'}
                         onChange={(e) => handleSelectSource(e.target.value)}
                         disabled={loadingSource}
                       >
@@ -551,6 +561,45 @@ function WorkspaceSettings() {
                         ))}
                       </Select>
                     )}
+
+                    {/* Browse any org by name — works even if the org
+                        isn't listed above (e.g. it restricts the app). */}
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Browse an org by name (e.g. posthog)"
+                        value={orgNameInput}
+                        onChange={(e) => setOrgNameInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && orgNameInput.trim()) {
+                            void handleSelectSource(orgNameInput.trim());
+                          }
+                        }}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleSelectSource(orgNameInput.trim())}
+                        disabled={!orgNameInput.trim() || loadingSource}
+                      >
+                        Browse
+                      </Button>
+                    </div>
+
+                    {repoSource !== 'user' && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          Showing repositories in <span className="font-medium">{repoSource}</span>
+                        </span>
+                        <button
+                          type="button"
+                          className="underline hover:text-foreground"
+                          onClick={() => handleSelectSource('user')}
+                        >
+                          back to my repos
+                        </button>
+                      </div>
+                    )}
+
                     <Input
                       placeholder="Search repositories..."
                       value={repoSearch}
@@ -581,11 +630,13 @@ function WorkspaceSettings() {
                       </div>
                     ) : (
                       <p className="text-sm text-muted-foreground p-2">
-                        {repoSearch
-                          ? 'No matching repositories'
-                          : repoSource === 'user'
-                            ? 'No repositories found'
-                            : `No repositories found in ${repoSource}`}
+                        {sourceError
+                          ? sourceError
+                          : repoSearch
+                            ? 'No matching repositories'
+                            : repoSource === 'user'
+                              ? 'No repositories found'
+                              : `No repositories found in ${repoSource}`}
                       </p>
                     )}
                     <Button
@@ -596,6 +647,8 @@ function WorkspaceSettings() {
                         setRepoSearch('');
                         setRepoSource('user');
                         setOrgRepos([]);
+                        setOrgNameInput('');
+                        setSourceError(null);
                       }}
                     >
                       Cancel
