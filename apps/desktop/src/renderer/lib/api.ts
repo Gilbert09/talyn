@@ -360,6 +360,8 @@ export interface PRRow {
   mergedAt: string | null;
   lastPolledAt: string;
   summary: PRSummaryShape;
+  /** Unread inbox items linked to this PR (new reviews/comments/CI). */
+  unreadCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -436,6 +438,8 @@ export const pullRequests = {
     request<PRRow>('POST', `/pull-requests/${id}/refresh`),
   focus: (id: string, focused = true) =>
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
+  markSeen: (id: string) =>
+    request<null>('POST', `/pull-requests/${id}/seen`),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
   merge: (id: string, method: 'merge' | 'squash' | 'rebase' = 'squash') =>
