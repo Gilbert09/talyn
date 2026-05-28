@@ -6,6 +6,7 @@ import {
   RefreshCw,
   ExternalLink,
   GitPullRequest,
+  ArrowUpDown,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -21,18 +22,21 @@ import { cn } from '../../lib/utils';
  * The GitHub page — every user-authored PR across watched repos at a
  * glance. Phase 5 of the rebuild:
  *
- *   - Filter bar: state, repo, search, "needs attention" toggle.
+ *   - Filter bar: state, repo, search, "needs attention" toggle, with
+ *     live counts on the state pills.
  *   - Table: title, author, branch refs, status pill (5-segment
- *     check rollup inline), updated time. Sortable by updated.
+ *     check rollup inline), updated time. Sortable by updated; rows are
+ *     keyboard-navigable and the Task badge deep-links to its task.
  *   - Side-sheet: opens on row click. Same component the task screen
- *     uses; tabs come in a follow-up commit.
+ *     uses, with in-app file diffs, per-check breakdown, and merge.
  *
+ * Refresh triggers a real GitHub force-poll, not just a cache re-read.
  * Subscribes to `pull_request:updated` to patch rows in place — no
- * full refetch on every WS event. The list is fetched once on mount
- * and kept fresh by the WS deltas + an explicit refresh button.
+ * full refetch on every WS event.
  */
 
 type StateFilter = 'open' | 'closed' | 'merged' | 'all';
+type SortDir = 'asc' | 'desc';
 
 const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
   { value: 'open', label: 'Open' },
@@ -42,7 +46,8 @@ const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
 ];
 
 export function GitHubPanel() {
-  const { setActivePanel, currentWorkspaceId, repositories } = useWorkspaceStore();
+  const { setActivePanel, currentWorkspaceId, repositories, selectTask } =
+    useWorkspaceStore();
   const [rows, setRows] = useState<PRRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +56,27 @@ export function GitHubPanel() {
   const [needsAttention, setNeedsAttention] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // null = not yet checked. Distinguishes "GitHub disconnected" from
+  // "connected but no PRs" so the empty state isn't misleading.
+  const [connected, setConnected] = useState<boolean | null>(null);
+
+  // Connection status — drives the "Connect GitHub" CTA vs the empty list.
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    api.github
+      .getStatus(currentWorkspaceId)
+      .then((s) => {
+        if (!cancelled) setConnected(s.connected);
+      })
+      .catch(() => {
+        if (!cancelled) setConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
 
   // Initial fetch + refetch on filter change.
   useEffect(() => {
@@ -118,6 +144,8 @@ export function GitHubPanel() {
     return unsubscribe;
   }, [currentWorkspaceId, stateFilter, repoFilter]);
 
+  const attentionCount = useMemo(() => rows.filter(isNeedsAttention).length, [rows]);
+
   const filtered = useMemo(() => {
     let out = rows;
     if (search.trim()) {
@@ -129,30 +157,47 @@ export function GitHubPanel() {
       });
     }
     if (needsAttention) {
-      out = out.filter(
-        (r) =>
-          r.summary.blockingReason === 'changes_requested' ||
-          r.summary.blockingReason === 'checks_failed' ||
-          r.summary.blockingReason === 'merge_conflicts'
-      );
+      out = out.filter(isNeedsAttention);
     }
-    return out;
-  }, [rows, search, needsAttention]);
+    const sorted = out.slice().sort((a, b) => {
+      const ta = new Date(a.summary.updatedAt || a.lastPolledAt).getTime();
+      const tb = new Date(b.summary.updatedAt || b.lastPolledAt).getTime();
+      return sortDir === 'desc' ? tb - ta : ta - tb;
+    });
+    return sorted;
+  }, [rows, search, needsAttention, sortDir]);
 
+  // Refresh = a real GitHub force-poll, then re-read the freshly-updated
+  // cache. The poll also emits WS deltas, but re-listing guarantees the
+  // current filter view reflects the new state immediately.
   async function handleRefresh() {
     if (!currentWorkspaceId) return;
     setLoading(true);
+    setError(null);
     try {
+      await api.repositories.forcePoll();
       const data = await api.pullRequests.list({
         workspaceId: currentWorkspaceId,
         state: stateFilter,
         repo: repoFilter === 'all' ? undefined : repoFilter,
       });
       setRows(data);
+      // A successful poll implies a working GitHub connection.
+      setConnected(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Refresh failed');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleConnect() {
+    if (!currentWorkspaceId) return;
+    try {
+      const { authUrl } = await api.github.connect(currentWorkspaceId);
+      window.open(authUrl, '_blank', 'width=600,height=700');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start GitHub connect');
     }
   }
 
@@ -194,6 +239,8 @@ export function GitHubPanel() {
         onSearch={setSearch}
         needsAttention={needsAttention}
         onNeedsAttention={setNeedsAttention}
+        stateCount={rows.length}
+        attentionCount={attentionCount}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -203,7 +250,20 @@ export function GitHubPanel() {
               {error}
             </div>
           )}
-          {!loading && filtered.length === 0 && !error && (
+          {!loading && filtered.length === 0 && !error && connected === false && (
+            <div className="flex flex-col items-center justify-center p-10 text-center text-muted-foreground">
+              <Github className="mb-2 h-8 w-8 opacity-50" />
+              <p className="text-sm">GitHub isn't connected for this workspace.</p>
+              <p className="mt-1 text-xs">
+                Connect GitHub to watch pull requests across your repos.
+              </p>
+              <Button size="sm" className="mt-3" onClick={handleConnect}>
+                <Github className="mr-1 h-4 w-4" />
+                Connect GitHub
+              </Button>
+            </div>
+          )}
+          {!loading && filtered.length === 0 && !error && connected !== false && (
             <div className="flex flex-col items-center justify-center p-10 text-center text-muted-foreground">
               <GitPullRequest className="mb-2 h-8 w-8 opacity-50" />
               <p className="text-sm">No pull requests match the current filters.</p>
@@ -214,6 +274,14 @@ export function GitHubPanel() {
               rows={filtered}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              sortDir={sortDir}
+              onToggleSort={() =>
+                setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
+              }
+              onOpenTask={(taskId) => {
+                selectTask(taskId);
+                setActivePanel('queue');
+              }}
             />
           )}
         </ScrollArea>
@@ -221,6 +289,15 @@ export function GitHubPanel() {
 
       <PRDetailSheet pullRequestId={selectedId} onClose={() => setSelectedId(null)} />
     </div>
+  );
+}
+
+/** A PR has a blocking issue the user should act on. */
+function isNeedsAttention(r: PRRow): boolean {
+  return (
+    r.summary.blockingReason === 'changes_requested' ||
+    r.summary.blockingReason === 'checks_failed' ||
+    r.summary.blockingReason === 'merge_conflicts'
   );
 }
 
@@ -234,6 +311,9 @@ interface FilterBarProps {
   onSearch: (v: string) => void;
   needsAttention: boolean;
   onNeedsAttention: (v: boolean) => void;
+  /** Count of loaded rows for the active state (the only state we hold data for). */
+  stateCount: number;
+  attentionCount: number;
 }
 
 function FilterBar({
@@ -246,26 +326,34 @@ function FilterBar({
   onSearch,
   needsAttention,
   onNeedsAttention,
+  stateCount,
+  attentionCount,
 }: FilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs">
-      {/* State pills */}
+      {/* State pills — the active one shows its loaded count. */}
       <div className="flex rounded-md border bg-muted/40 p-0.5">
-        {STATE_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onStateFilter(opt.value)}
-            className={cn(
-              'rounded px-2 py-1 transition-colors',
-              stateFilter === opt.value
-                ? 'bg-background shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            {opt.label}
-          </button>
-        ))}
+        {STATE_OPTIONS.map((opt) => {
+          const active = stateFilter === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onStateFilter(opt.value)}
+              className={cn(
+                'rounded px-2 py-1 transition-colors',
+                active
+                  ? 'bg-background shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {opt.label}
+              {active && (
+                <span className="ml-1 text-muted-foreground">{stateCount}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Repo dropdown — native select keeps the bar compact + keyboard-friendly. */}
@@ -295,6 +383,7 @@ function FilterBar({
         title="Only show PRs with blocking issues (conflicts, changes requested, failing checks)"
       >
         Needs attention
+        {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
       </button>
 
       {/* Search input — flex-1 so it grows. */}
@@ -325,9 +414,19 @@ interface PRTableProps {
   rows: PRRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  sortDir: SortDir;
+  onToggleSort: () => void;
+  onOpenTask: (taskId: string) => void;
 }
 
-function PRTable({ rows, selectedId, onSelect }: PRTableProps) {
+function PRTable({
+  rows,
+  selectedId,
+  onSelect,
+  sortDir,
+  onToggleSort,
+  onOpenTask,
+}: PRTableProps) {
   return (
     <table className="w-full text-sm">
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
@@ -335,7 +434,17 @@ function PRTable({ rows, selectedId, onSelect }: PRTableProps) {
           <th className="px-4 py-2 text-left font-medium">Title</th>
           <th className="px-2 py-2 text-left font-medium">Branch</th>
           <th className="px-2 py-2 text-left font-medium">Status</th>
-          <th className="px-2 py-2 text-left font-medium">Updated</th>
+          <th className="px-2 py-2 text-left font-medium">
+            <button
+              type="button"
+              onClick={onToggleSort}
+              className="flex items-center gap-1 uppercase tracking-wide hover:text-foreground"
+              title={`Sort by updated (${sortDir === 'desc' ? 'newest first' : 'oldest first'})`}
+            >
+              Updated
+              <ArrowUpDown className="h-3 w-3" />
+            </button>
+          </th>
           <th className="w-8 px-2 py-2"></th>
         </tr>
       </thead>
@@ -346,6 +455,7 @@ function PRTable({ rows, selectedId, onSelect }: PRTableProps) {
             row={row}
             isSelected={row.id === selectedId}
             onSelect={() => onSelect(row.id)}
+            onOpenTask={onOpenTask}
           />
         ))}
       </tbody>
@@ -357,20 +467,29 @@ function PRTableRow({
   row,
   isSelected,
   onSelect,
+  onOpenTask,
 }: {
   row: PRRow;
   isSelected: boolean;
   onSelect: () => void;
+  onOpenTask: (taskId: string) => void;
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   return (
     <tr
       className={cn(
-        'cursor-pointer border-b transition-colors hover:bg-muted/40',
+        'cursor-pointer border-b transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         isSelected && 'bg-muted/40'
       )}
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
     >
       <td className="px-4 py-2">
         <div className="flex flex-col gap-0.5">
@@ -383,9 +502,17 @@ function PRTableRow({
               </span>
             )}
             {row.taskId && (
-              <span className="ml-2 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenTask(row.taskId!);
+                }}
+                className="ml-2 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
+                title="Open the linked task"
+              >
                 Task
-              </span>
+              </button>
             )}
           </span>
         </div>
