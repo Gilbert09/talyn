@@ -5,6 +5,7 @@ import {
   XCircle,
   Loader2,
   GitMerge,
+  Eye,
   HelpCircle,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -108,11 +109,15 @@ function terminalVariant(state?: PRState): PillVariant | null {
  */
 function CheckRollupBar({ checks }: { checks: PRChecks }) {
   const total = Math.max(checks.total, 1);
+  // Skipped checks count as green — a PR with everything passing or
+  // skipped should read as a solid green bar, not a partly-grey one.
   const segments: Array<{ width: number; bg: string; title: string }> = [
     {
-      width: (checks.passed / total) * 100,
+      width: ((checks.passed + checks.skipped) / total) * 100,
       bg: 'bg-emerald-500',
-      title: `${checks.passed} passed`,
+      title:
+        `${checks.passed} passed` +
+        (checks.skipped ? ` · ${checks.skipped} skipped` : ''),
     },
     {
       width: (checks.failed / total) * 100,
@@ -123,11 +128,6 @@ function CheckRollupBar({ checks }: { checks: PRChecks }) {
       width: (checks.inProgress / total) * 100,
       bg: 'bg-blue-500',
       title: `${checks.inProgress} in progress`,
-    },
-    {
-      width: (checks.skipped / total) * 100,
-      bg: 'bg-zinc-400',
-      title: `${checks.skipped} skipped`,
     },
   ];
   return (
@@ -174,7 +174,9 @@ function pickVariant(blockingReason: PRBlockingReason, checks: PRChecks): PillVa
       }
       return { icon: CheckCircle2, label: 'Ready', tone: 'green' };
     case 'blocked':
-      return { icon: GitMerge, label: 'Blocked', tone: 'amber' };
+      // Mergeable on its own — held only by branch protection, almost
+      // always a required review/approval that hasn't landed yet.
+      return { icon: Eye, label: 'Review', tone: 'amber' };
     case 'unknown':
     default:
       return { icon: HelpCircle, label: '—', tone: 'grey' };
@@ -200,7 +202,7 @@ function humanReason(b: PRBlockingReason): string {
     case 'checks_failed':
       return 'CI checks failing';
     case 'blocked':
-      return 'Blocked by branch protection';
+      return 'Waiting on required review';
     case 'unknown':
     default:
       return 'Status pending';

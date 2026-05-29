@@ -10,6 +10,8 @@ import {
   ListPlus,
   Loader2,
   ArrowUpDown,
+  Copy,
+  Check,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -64,7 +66,9 @@ export function GitHubPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
-  const [relationship, setRelationship] = useState<RelationshipFilter>('all');
+  // Relationship is filtered client-side off each row's `reviewRequested`
+  // flag (no refetch), so the All/Mine/Review pills can all show counts.
+  const [relationship, setRelationship] = useState<RelationshipFilter>('authored');
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [needsAttention, setNeedsAttention] = useState(false);
   const [search, setSearch] = useState('');
@@ -102,7 +106,6 @@ export function GitHubPanel() {
         workspaceId: currentWorkspaceId,
         state: stateFilter,
         repo: repoFilter === 'all' ? undefined : repoFilter,
-        relationship: relationship === 'all' ? undefined : relationship,
       })
       .then((data) => {
         if (cancelled) return;
@@ -118,7 +121,7 @@ export function GitHubPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentWorkspaceId, stateFilter, repoFilter, relationship]);
+  }, [currentWorkspaceId, stateFilter, repoFilter]);
 
   // Live updates from the prMonitor.
   useEffect(() => {
@@ -140,7 +143,6 @@ export function GitHubPanel() {
                 workspaceId: currentWorkspaceId,
                 state: stateFilter,
                 repo: repoFilter === 'all' ? undefined : repoFilter,
-                relationship: relationship === 'all' ? undefined : relationship,
               })
               .then(setRows)
               .catch(() => {});
@@ -157,7 +159,7 @@ export function GitHubPanel() {
       });
     });
     return unsubscribe;
-  }, [currentWorkspaceId, stateFilter, repoFilter, relationship]);
+  }, [currentWorkspaceId, stateFilter, repoFilter]);
 
   // A new inbox item (review/comment/CI) for a watched PR — bump its
   // unread dot live without a refetch. Matched on the PR URL, the same
@@ -188,8 +190,24 @@ export function GitHubPanel() {
 
   const attentionCount = useMemo(() => rows.filter(isNeedsAttention).length, [rows]);
 
+  // Relationship buckets for the current state+repo set — drive the
+  // always-on counts on the All/Mine/Review pills.
+  const relationshipCounts = useMemo(
+    () => ({
+      all: rows.length,
+      authored: rows.filter((r) => !r.reviewRequested).length,
+      review_requested: rows.filter((r) => r.reviewRequested).length,
+    }),
+    [rows]
+  );
+
   const filtered = useMemo(() => {
     let out = rows;
+    if (relationship === 'authored') {
+      out = out.filter((r) => !r.reviewRequested);
+    } else if (relationship === 'review_requested') {
+      out = out.filter((r) => r.reviewRequested);
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((r) => {
@@ -207,7 +225,7 @@ export function GitHubPanel() {
       return sortDir === 'desc' ? tb - ta : ta - tb;
     });
     return sorted;
-  }, [rows, search, needsAttention, sortDir]);
+  }, [rows, relationship, search, needsAttention, sortDir]);
 
   // Refresh = a real GitHub force-poll, then re-read the freshly-updated
   // cache. The poll also emits WS deltas, but re-listing guarantees the
@@ -222,7 +240,6 @@ export function GitHubPanel() {
         workspaceId: currentWorkspaceId,
         state: stateFilter,
         repo: repoFilter === 'all' ? undefined : repoFilter,
-        relationship: relationship === 'all' ? undefined : relationship,
       });
       setRows(data);
       // A successful poll implies a working GitHub connection.
@@ -315,6 +332,7 @@ export function GitHubPanel() {
         onNeedsAttention={setNeedsAttention}
         stateCount={rows.length}
         attentionCount={attentionCount}
+        relationshipCounts={relationshipCounts}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -392,6 +410,7 @@ interface FilterBarProps {
   /** Count of loaded rows for the active state (the only state we hold data for). */
   stateCount: number;
   attentionCount: number;
+  relationshipCounts: Record<RelationshipFilter, number>;
 }
 
 function FilterBar({
@@ -408,6 +427,7 @@ function FilterBar({
   onNeedsAttention,
   stateCount,
   attentionCount,
+  relationshipCounts,
 }: FilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs">
@@ -458,6 +478,9 @@ function FilterBar({
             }
           >
             {opt.label}
+            <span className="ml-1 text-muted-foreground">
+              {relationshipCounts[opt.value]}
+            </span>
           </button>
         ))}
       </div>
@@ -542,7 +565,6 @@ function PRTable({
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
-          <th className="px-2 py-2 text-left font-medium">Branch</th>
           <th className="px-2 py-2 text-left font-medium">Status</th>
           <th className="px-2 py-2 text-left font-medium">
             <button
@@ -595,7 +617,16 @@ function PRTableRow({
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [busy, setBusy] = useState<null | 'merge' | 'task'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
+
+  function copyBranch(e: React.MouseEvent) {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(summary.headBranch).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
 
   async function runMerge(e: React.MouseEvent) {
     e.stopPropagation();
@@ -682,17 +713,6 @@ function PRTableRow({
           </span>
         </div>
       </td>
-      <td className="px-2 py-2 text-xs">
-        <span className="font-mono">
-          <span className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
-            {summary.headBranch}
-          </span>
-          <span className="px-1 text-muted-foreground">→</span>
-          <span className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
-            {summary.baseBranch}
-          </span>
-        </span>
-      </td>
       <td className="px-2 py-2">
         <PRStatusPill
           blockingReason={summary.blockingReason}
@@ -749,6 +769,18 @@ function PRTableRow({
               )}
             </button>
           )}
+          <button
+            type="button"
+            onClick={copyBranch}
+            className="rounded p-1 text-muted-foreground hover:text-foreground"
+            title={copied ? 'Copied!' : `Copy branch: ${summary.headBranch}`}
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5 text-emerald-600" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
           <a
             href={summary.url}
             target="_blank"
