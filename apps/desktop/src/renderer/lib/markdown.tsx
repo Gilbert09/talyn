@@ -4,10 +4,11 @@ import { cn } from './utils';
 /**
  * Light-weight "markdownish" renderer. Deliberately dependency-free, but
  * covers the block + inline constructs we actually emit: fenced code,
- * headings, bullet / numbered lists, blockquotes, horizontal rules, and
- * inline code / bold / italic / links. Anything it doesn't recognise
- * falls through as a plain paragraph, so it can never render worse than
- * raw text.
+ * headings, bullet / numbered lists, blockquotes, horizontal rules,
+ * GFM tables, collapsible `<details>`/`<summary>` blocks, and inline
+ * code / bold / italic / links. Anything it doesn't recognise falls
+ * through as a plain paragraph, so it can never render worse than raw
+ * text.
  *
  * Two variants because the colour palette differs by surface:
  *   - `feed`    — the always-dark agent transcript (bg #1a1a1a).
@@ -103,6 +104,91 @@ export function renderMarkdownish(
       continue;
     }
 
+    // Collapsible <details>/<summary> block. Common in bot review
+    // comments (CI summaries, coverage tables, etc.). Collect the whole
+    // block (handles nesting), pull out the <summary>, and render the
+    // body recursively as markdown inside a native <details>.
+    if (/^\s*<details(\s|>)/i.test(line)) {
+      flushParagraph();
+      const buf: string[] = [];
+      let depth = 0;
+      while (i < lines.length) {
+        const l = lines[i];
+        buf.push(l);
+        depth += (l.match(/<details(\s|>)/gi) ?? []).length;
+        depth -= (l.match(/<\/details>/gi) ?? []).length;
+        i++;
+        if (depth <= 0) break;
+      }
+      const inner = buf.join('\n');
+      const summaryMatch = /<summary>([\s\S]*?)<\/summary>/i.exec(inner);
+      const summaryText = summaryMatch ? summaryMatch[1].trim() : 'Details';
+      const body = inner
+        .replace(/^\s*<details[^>]*>/i, '')
+        .replace(/<\/details>\s*$/i, '')
+        .replace(/<summary>[\s\S]*?<\/summary>/i, '')
+        .trim();
+      parts.push(
+        <details
+          key={`d-${parts.length}`}
+          className={cn('my-1 rounded border px-3 py-2 [overflow-wrap:anywhere]', c.hr)}
+        >
+          <summary className={cn('cursor-pointer font-medium', c.heading)}>
+            {renderInline(stripTags(summaryText), c)}
+          </summary>
+          {body && <div className="mt-2">{renderMarkdownish(body, variant)}</div>}
+        </details>
+      );
+      continue;
+    }
+
+    // GFM table: a header row of `| a | b |` immediately followed by a
+    // delimiter row of `| --- | :--: |`.
+    if (
+      line.includes('|') &&
+      i + 1 < lines.length &&
+      /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/.test(lines[i + 1])
+    ) {
+      flushParagraph();
+      const header = splitTableRow(line);
+      i += 2; // consume header + delimiter
+      const bodyRows: string[][] = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        bodyRows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      parts.push(
+        <div key={`t-${parts.length}`} className="my-1 overflow-x-auto">
+          <table className={cn('w-full border-collapse text-xs', c.heading)}>
+            <thead>
+              <tr>
+                {header.map((cell, idx) => (
+                  <th
+                    key={idx}
+                    className={cn('border px-2 py-1 text-left font-semibold', c.hr)}
+                  >
+                    {renderInline(cell, c)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, rIdx) => (
+                <tr key={rIdx}>
+                  {header.map((_, cIdx) => (
+                    <td key={cIdx} className={cn('border px-2 py-1 align-top', c.hr)}>
+                      {renderInline(row[cIdx] ?? '', c)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
     // Heading (#..######).
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
@@ -180,6 +266,20 @@ export function renderMarkdownish(
   }
   flushParagraph();
   return parts;
+}
+
+/** Split a GFM table row into trimmed cells, dropping the outer pipes. */
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((cell) => cell.trim());
+}
+
+/** Strip simple HTML tags (e.g. <b>, <code>) so a <summary> renders as
+ *  plain text rather than literal angle-bracket markup. */
+function stripTags(text: string): string {
+  return text.replace(/<\/?[a-z][^>]*>/gi, '').trim();
 }
 
 /**
