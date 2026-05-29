@@ -559,6 +559,48 @@ describe('decodeBatchResponse', () => {
     expect(pr.recentReviewComments.map((c) => c.id)).toEqual(['rc-new', 'rc-old']);
   });
 
+  it('counts unresolved review threads (capped at the first 100)', () => {
+    const data = {
+      repository: {
+        [aliasForBranch(0)]: {
+          nodes: [
+            rawPR({
+              unresolvedThreads: {
+                nodes: [
+                  { isResolved: false },
+                  { isResolved: true },
+                  { isResolved: false },
+                ],
+              },
+            }),
+          ],
+        },
+      },
+    };
+    const pr = decodeBatchResponse(
+      ['feature/x'],
+      data as Parameters<typeof decodeBatchResponse>[1],
+      'acme',
+      'widgets'
+    )[0].pr!;
+    expect(pr.unresolvedReviewThreads).toBe(2);
+  });
+
+  it('defaults unresolvedReviewThreads to 0 when the field is absent', () => {
+    const data = {
+      repository: {
+        [aliasForBranch(0)]: { nodes: [rawPR()] },
+      },
+    };
+    const pr = decodeBatchResponse(
+      ['feature/x'],
+      data as Parameters<typeof decodeBatchResponse>[1],
+      'acme',
+      'widgets'
+    )[0].pr!;
+    expect(pr.unresolvedReviewThreads).toBe(0);
+  });
+
   it('captures top-level PR comments freshest-first', () => {
     const data = {
       repository: {

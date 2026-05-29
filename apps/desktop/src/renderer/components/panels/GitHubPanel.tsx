@@ -13,6 +13,8 @@ import {
   Copy,
   Check,
   X,
+  Bot,
+  MessageSquare,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -42,6 +44,91 @@ import { cn } from '../../lib/utils';
  * full refetch on every WS event.
  */
 
+/**
+ * A PR has something a PostHog Code follow-up run could fix: merge
+ * conflicts, requested changes, failing CI, or unresolved review
+ * threads. Drives whether the "Get PR mergeable" button is enabled.
+ */
+function prNeedsFollowup(s: PRSummaryShape): boolean {
+  return (
+    s.blockingReason === 'merge_conflicts' ||
+    s.blockingReason === 'changes_requested' ||
+    s.blockingReason === 'checks_failed' ||
+    s.mergeable === 'CONFLICTING' ||
+    s.reviewDecision === 'CHANGES_REQUESTED' ||
+    (s.unresolvedReviewThreads ?? 0) > 0 ||
+    s.checks.failed > 0
+  );
+}
+
+/** Bulleted list of the issues we detected, for the agent prompt. */
+function buildIssuesSummary(s: PRSummaryShape): string {
+  const lines: string[] = [];
+  if (s.blockingReason === 'merge_conflicts' || s.mergeable === 'CONFLICTING') {
+    lines.push('- Merge conflicts with the base branch');
+  }
+  if ((s.unresolvedReviewThreads ?? 0) > 0) {
+    lines.push(`- Unresolved review threads: ${s.unresolvedReviewThreads}`);
+  }
+  if (s.reviewDecision === 'CHANGES_REQUESTED') {
+    lines.push('- A reviewer has requested changes');
+  }
+  if (s.checks.failed > 0) {
+    lines.push(`- Failing CI checks: ${s.checks.failed}/${s.checks.total}`);
+  }
+  return lines.length > 0
+    ? lines.join('\n')
+    : '- (Re-fetch the PR to confirm the current issues.)';
+}
+
+/**
+ * The "take this PR to a clean, mergeable state" prompt handed to a
+ * PostHog Code cloud run. Modelled on the task-script follow-up prompt:
+ * resolve every reviewer comment, get CI green, and resolve conflicts,
+ * looping until all three hold on the latest commit.
+ */
+function buildPostHogPrompt(row: PRRow): string {
+  const s = row.summary;
+  const ref = `${row.owner}/${row.repo}#${row.number}`;
+  return `You are taking a pull request to a fully clean, mergeable state.
+
+Pull request: ${s.url}
+Repository: ${row.owner}/${row.repo}
+PR number: #${row.number}
+Branch: ${s.headBranch}
+
+Current issues detected (verify by re-fetching — state may have changed since this task was created):
+${buildIssuesSummary(s)}
+
+Your job is to keep iterating on this PR until ALL of the following are true and stay true:
+
+1. Every reviewer comment is resolved.
+   - For each unresolved review comment / review thread on the PR (top-level review comments AND inline code review threads):
+     a. Read the comment carefully and understand what the reviewer is asking for.
+     b. If the feedback is correct or reasonable: implement the requested change in code, push the fix, then mark the thread as resolved.
+     c. If you disagree with the feedback: reply to the thread on GitHub explaining your reasoning clearly and respectfully, then mark the thread as resolved.
+     d. Do NOT silently ignore a comment. Every thread must end either with a code change you pushed, or with a reply from you, and in both cases the thread must be marked resolved.
+   - Re-fetch review comments after pushing changes — reviewers may have left new feedback while you were working.
+
+2. CI is fully green on the latest commit of the PR branch.
+   - Inspect the check runs / status checks via \`gh pr checks\` (or the GitHub API).
+   - If any required check is failing, investigate the failure (logs, test output) and fix the underlying problem in code. Push the fix.
+   - Flaky tests: re-run them once to confirm they're actually flaky; if they are, document it briefly in a PR comment, but otherwise still try to fix the root cause rather than ignoring it.
+   - Do not bypass checks (no --no-verify, no skipping required checks). Fix the real issue.
+
+3. The branch merges cleanly into its base branch (no merge conflicts).
+   - Check mergeability via \`gh pr view ${row.number} --json mergeable,mergeStateStatus\`.
+   - If the branch is CONFLICTING / DIRTY, update it against the base branch (merge the latest base branch in, or rebase onto it) and resolve every conflict carefully — preserve the intent of both sides, don't blindly discard changes.
+   - After resolving, re-run the build/tests locally where feasible, then push. Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
+
+Loop discipline:
+  - After every push, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
+  - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
+  - If you genuinely get stuck (e.g. you need credentials you don't have, or a reviewer's request is impossible without product-level decisions), leave a clear PR comment describing exactly what you need and why, then stop. Otherwise keep going.
+
+Start by checking out the PR branch (${ref}), fetching the current state of review threads and CI, and then work the loop until done.`;
+}
+
 type StateFilter = 'open' | 'closed' | 'merged' | 'all';
 type RelationshipFilter = 'all' | 'authored' | 'review_requested';
 type SortDir = 'asc' | 'desc';
@@ -60,7 +147,7 @@ const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
 ];
 
 export function GitHubPanel() {
-  const { setActivePanel, currentWorkspaceId, repositories, selectTask } =
+  const { setActivePanel, currentWorkspaceId, repositories, environments, selectTask } =
     useWorkspaceStore();
   const { createTask } = useTaskActions();
   const [rows, setRows] = useState<PRRow[]>([]);
@@ -78,6 +165,16 @@ export function GitHubPanel() {
   // null = not yet checked. Distinguishes "GitHub disconnected" from
   // "connected but no PRs" so the empty state isn't misleading.
   const [connected, setConnected] = useState<boolean | null>(null);
+  // Whether PostHog Code (cloud tasks) is configured for this workspace.
+  // Gates the "Get PR mergeable" follow-up button.
+  const [posthogConnected, setPosthogConnected] = useState(false);
+
+  // The auto-provisioned cloud env a follow-up task gets assigned to.
+  const posthogEnvId = useMemo(
+    () => environments.find((e) => e.type === 'posthog_code')?.id ?? null,
+    [environments]
+  );
+  const posthogEnabled = posthogConnected && posthogEnvId !== null;
 
   // Connection status — drives the "Connect GitHub" CTA vs the empty list.
   useEffect(() => {
@@ -90,6 +187,23 @@ export function GitHubPanel() {
       })
       .catch(() => {
         if (!cancelled) setConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
+
+  // PostHog Code connection status — gates the follow-up task button.
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    api.posthog
+      .getStatus(currentWorkspaceId)
+      .then((s) => {
+        if (!cancelled) setPosthogConnected(s.connected);
+      })
+      .catch(() => {
+        if (!cancelled) setPosthogConnected(false);
       });
     return () => {
       cancelled = true;
@@ -291,6 +405,26 @@ export function GitHubPanel() {
     setActivePanel('queue');
   }
 
+  // Kick off a PostHog Code cloud run to take the PR to a clean,
+  // mergeable state (resolve comments, fix CI, resolve conflicts).
+  // Assigns the task to the cloud env so the scheduler dispatches it
+  // to PostHog Code rather than a local agent.
+  async function handleCreatePostHogTask(row: PRRow) {
+    if (!currentWorkspaceId || !posthogEnvId) return;
+    const ref = `${row.owner}/${row.repo}#${row.number}`;
+    const created = await createTask({
+      workspaceId: currentWorkspaceId,
+      type: 'pr_response',
+      title: `Get ${ref} mergeable`,
+      description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state via PostHog Code.`,
+      prompt: buildPostHogPrompt(row),
+      repositoryId: row.repositoryId,
+      assignedEnvironmentId: posthogEnvId,
+    });
+    selectTask(created.id);
+    setActivePanel('queue');
+  }
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b p-4">
@@ -377,6 +511,8 @@ export function GitHubPanel() {
               }}
               onMerge={handleMergeRow}
               onCreateTask={handleCreateTaskFromPR}
+              onCreatePostHogTask={handleCreatePostHogTask}
+              posthogEnabled={posthogEnabled}
             />
           )}
         </ScrollArea>
@@ -549,6 +685,9 @@ interface PRTableProps {
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
   onCreateTask: (row: PRRow) => Promise<void>;
+  onCreatePostHogTask: (row: PRRow) => Promise<void>;
+  /** PostHog Code is configured + a cloud env exists to dispatch to. */
+  posthogEnabled: boolean;
 }
 
 function PRTable({
@@ -560,6 +699,8 @@ function PRTable({
   onOpenTask,
   onMerge,
   onCreateTask,
+  onCreatePostHogTask,
+  posthogEnabled,
 }: PRTableProps) {
   return (
     <table className="w-full text-sm">
@@ -591,6 +732,8 @@ function PRTable({
             onOpenTask={onOpenTask}
             onMerge={onMerge}
             onCreateTask={onCreateTask}
+            onCreatePostHogTask={onCreatePostHogTask}
+            posthogEnabled={posthogEnabled}
           />
         ))}
       </tbody>
@@ -605,6 +748,8 @@ function PRTableRow({
   onOpenTask,
   onMerge,
   onCreateTask,
+  onCreatePostHogTask,
+  posthogEnabled,
 }: {
   row: PRRow;
   isSelected: boolean;
@@ -612,14 +757,20 @@ function PRTableRow({
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
   onCreateTask: (row: PRRow) => Promise<void>;
+  onCreatePostHogTask: (row: PRRow) => Promise<void>;
+  posthogEnabled: boolean;
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const [confirmMerge, setConfirmMerge] = useState(false);
-  const [busy, setBusy] = useState<null | 'merge' | 'task'>(null);
+  const [busy, setBusy] = useState<null | 'merge' | 'task' | 'posthog'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
+  const unresolved = summary.unresolvedReviewThreads ?? 0;
+  // A follow-up run only makes sense on an open PR with something to fix.
+  const canFollowUp =
+    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary);
 
   function copyBranch(e: React.MouseEvent) {
     e.stopPropagation();
@@ -651,6 +802,19 @@ function PRTableRow({
       await onCreateTask(row);
     } catch (err) {
       setRowError(err instanceof Error ? err.message : 'Could not create task');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runCreatePostHogTask(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy('posthog');
+    setRowError(null);
+    try {
+      await onCreatePostHogTask(row);
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : 'Could not start PostHog Code task');
     } finally {
       setBusy(null);
     }
@@ -727,6 +891,15 @@ function PRTableRow({
             state={row.state}
             hideReviewState
           />
+          {row.state === 'open' && unresolved > 0 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-400"
+              title={`${unresolved} unresolved review ${unresolved === 1 ? 'comment' : 'comments'}`}
+            >
+              <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+              {unresolved}
+            </span>
+          )}
         </div>
       </td>
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
@@ -775,6 +948,25 @@ function PRTableRow({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <ListPlus className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+          {posthogEnabled && row.state === 'open' && (
+            <button
+              type="button"
+              onClick={runCreatePostHogTask}
+              disabled={!canFollowUp || busy !== null}
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
+              title={
+                canFollowUp
+                  ? 'Get this PR mergeable with PostHog Code (resolve comments, fix CI, resolve conflicts)'
+                  : 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
+              }
+            >
+              {busy === 'posthog' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Bot className="h-3.5 w-3.5" />
               )}
             </button>
           )}

@@ -153,6 +153,7 @@ export async function linkTaskToPullRequest(opts: {
     reviewDecision: null,
     blockingReason: 'unknown' as const,
     checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 },
+    unresolvedReviewThreads: 0,
   };
   const existing = await readRow(db, opts.workspaceId, opts.repositoryId, opts.number);
   if (existing) {
@@ -538,6 +539,7 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     reviewDecision: s.reviewDecision,
     blockingReason: s.blockingReason,
     checks: s.checks,
+    unresolvedReviewThreads: s.unresolvedReviewThreads,
   };
 }
 
@@ -570,6 +572,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
       inProgress: 0,
       skipped: 0,
     },
+    unresolvedReviewThreads: (meta.unresolvedReviewThreads as number) ?? 0,
     checkContexts: [], // not cached — only the live detail fetch carries per-check rows
     checkDigest: row.lastCheckDigest ?? '',
     recentReviews: [],

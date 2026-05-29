@@ -74,6 +74,8 @@ export interface PRSummary {
   reviewDecision: ReviewDecision;
   blockingReason: BlockingReason;
   checks: CheckBreakdown;
+  /** Count of unresolved review threads (capped at the first 100 threads). */
+  unresolvedReviewThreads: number;
   /**
    * Per-check rows behind the `checks` rollup — name, normalized state,
    * and a link to the run/target. Not persisted (summaryToJsonb keeps
@@ -551,6 +553,9 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
       }
     }
   }
+  unresolvedThreads: reviewThreads(first: 100) {
+    nodes { isResolved }
+  }
   comments(last: 5) {
     nodes { id author { login __typename } createdAt url bodyText }
   }
@@ -687,6 +692,9 @@ interface RawPullRequest {
       };
     }>;
   };
+  unresolvedThreads: {
+    nodes: Array<{ isResolved: boolean }>;
+  };
   comments: {
     nodes: Array<{
       id: string;
@@ -781,6 +789,9 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     reviewDecision: raw.reviewDecision,
     checks,
   });
+  const unresolvedReviewThreads = (raw.unresolvedThreads?.nodes ?? []).filter(
+    (t) => !t.isResolved
+  ).length;
   const state: PRState = raw.state === 'MERGED' ? 'merged' : raw.state === 'CLOSED' ? 'closed' : 'open';
   return {
     owner,
@@ -803,6 +814,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     reviewDecision: raw.reviewDecision,
     blockingReason,
     checks,
+    unresolvedReviewThreads,
     checkContexts: normalizedContexts,
     checkDigest: computeCheckDigest(raw.headRefOid, normalizedContexts),
     recentReviews: raw.reviews.nodes

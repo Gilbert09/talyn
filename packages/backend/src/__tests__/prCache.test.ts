@@ -47,6 +47,7 @@ function makeSummary(over: Partial<PRSummary> = {}): PRSummary {
     reviewDecision: null,
     blockingReason: 'mergeable',
     checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 },
+    unresolvedReviewThreads: 0,
     checkDigest: 'sha1:',
     recentReviews: [],
     recentReviewComments: [],

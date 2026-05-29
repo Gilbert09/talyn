@@ -383,6 +383,9 @@ export interface PRSummaryShape {
   reviewDecision: PRReviewDecision;
   blockingReason: PRBlockingReason;
   checks: PRChecks;
+  /** Unresolved review threads (capped at the first 100). Optional for
+   *  rows cached before this field was tracked. */
+  unresolvedReviewThreads?: number;
 }
 
 export interface PRRow {

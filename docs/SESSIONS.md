@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 27 — "Get PR mergeable" follow-up button + unresolved-comment count
+
+Added a one-click way to dispatch a **PostHog Code** cloud run that takes a PR to a clean, mergeable state (resolve every review comment, get CI green, resolve conflicts — looping until all three hold). Modelled on the `task-script/pr_review_followup/create_pr_tasks.py` prompt.
+
+- **Unresolved review thread count surfaced in the GitHub list.** Extended the batched GraphQL fetch (`services/githubGraphql.ts`) with an aliased `unresolvedThreads: reviewThreads(first: 100) { nodes { isResolved } }`, counting unresolved into a new `PRSummary.unresolvedReviewThreads`. Persisted through `prCache` (`summaryToJsonb` / `rowToSummary` / placeholder) and exposed on the renderer `PRSummaryShape` (optional, for rows cached before the field existed). Rendered as an amber `MessageSquare N` badge next to the Status pill in `GitHubPanel`.
+- **The button** sits in the row action cluster, immediately left of the copy-branch button. Only rendered when PostHog Code is connected for the workspace *and* the PR is open; disabled (greyed) unless the PR actually has something to fix — `prNeedsFollowup()` = merge conflicts ∥ changes-requested ∥ failing checks ∥ `unresolvedReviewThreads > 0`.
+- **Dispatch path:** builds the full follow-up prompt (`buildPostHogPrompt`) and creates a `pr_response` task with `assignedEnvironmentId` = the auto-provisioned `posthog_code` env, which the task queue already routes to `dispatchTaskToPostHogCode`. Then jumps to the new task. PostHog status is fetched via `api.posthog.getStatus`; the cloud env id comes from the workspace store.
+- **Tests:** two new decode cases in `githubGraphql.test.ts` (counts unresolved; defaults to 0 when absent); updated the three `PRSummary` test builders. Full backend suite green (117).
+
 ## Session 26 — PostHog Code: cloud execution provider
 
 Added **PostHog Code** as a new way to run tasks — a `posthog_code` environment type that delegates the entire agent loop to PostHog's sandboxed cloud runners instead of driving Claude locally over a daemon. Landed in two commits (backend, then desktop UI).
