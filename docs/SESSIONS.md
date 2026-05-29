@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 28 — PR detail panel polish (checks filter, reviews experience, panel switching)
+
+Four UX improvements to the PR detail side-panel (`PRDetailSheet`) and the GitHub list:
+
+- **Checks tab — tile filters.** The Passed/Failed/Running/Skipped rollup tiles are now toggle buttons (`CheckCountTile` → `<button>` with `aria-pressed` + ring highlight). Clicking one filters the per-check list to that state; clicking again clears. Tiles with a zero count are disabled.
+- **Checks tab — failed first.** The per-check list is sorted by a fixed state rank (`failure → in_progress → pending → success → skipped`, unknown states last) so anything needing attention sits at the top.
+- **Reviews tab — full GitHub-like experience.** New backend endpoint `GET /pull-requests/:id/reviews` (`fetchPRReviewDetail` / `decodeReviewDetail` in `githubGraphql.ts`) does one GraphQL round-trip for every submitted review (with body), every inline review thread (grouped, with diff hunk + resolved/outdated state), and the top-level conversation comments — all with author avatars and markdown bodies. The tab fetches this on open and renders Reviews / Inline comments (unresolved-first, with an unresolved count) / Conversation sections. Replaced the old terse `ActivityList` link-outs.
+- **PR list — switch the open panel.** The detail panel overlays the right edge; the GitHub list now shifts left (`marginRight: min(42rem, 100%)`) while a PR is selected, so every row stays visible and clicking another PR switches the panel.
+
+New renderer API types: `PRReviewDetail` / `PRReviewThread` / `PRReviewThreadComment` / `PRReviewDetailReview` / `PRConversationComment` + `pullRequests.reviews(id)`. Five new `decodeReviewDetail` tests (filtering, sort order, diff-hunk extraction). Typecheck + lint clean, backend suite green.
+
 ## Session 27 — "Get PR mergeable" follow-up button + unresolved-comment count
 
 Added a one-click way to dispatch a **PostHog Code** cloud run that takes a PR to a clean, mergeable state (resolve every review comment, get CI green, resolve conflicts — looping until all three hold). Modelled on the `task-script/pr_review_followup/create_pr_tasks.py` prompt.

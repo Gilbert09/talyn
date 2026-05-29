@@ -426,7 +426,14 @@ export function GitHubPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      {/* When the detail panel is open it overlays the right edge; shift
+          the list left so every row stays visible and clickable, so
+          selecting another PR switches the open panel. */}
+      <div
+        className="flex h-full min-h-0 flex-col transition-[margin] duration-200"
+        style={{ marginRight: selectedId ? 'min(42rem, 100%)' : undefined }}
+      >
       <header className="flex items-center justify-between border-b p-4">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Github className="h-5 w-5" />
@@ -516,6 +523,7 @@ export function GitHubPanel() {
             />
           )}
         </ScrollArea>
+      </div>
       </div>
 
       <PRDetailSheet pullRequestId={selectedId} onClose={() => setSelectedId(null)} />

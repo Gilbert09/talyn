@@ -6,6 +6,7 @@ import {
   computeCheckDigest,
   decodeBatchResponse,
   decodeBatchByNumberResponse,
+  decodeReviewDetail,
   makeBatchPullRequestsQuery,
   makeBatchPullRequestsByNumberQuery,
   normalizeCheckState,
@@ -828,5 +829,101 @@ describe('batchPullRequests — orchestration', () => {
       branches,
     });
     expect(peak).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('decodeReviewDetail', () => {
+  function resp(over: {
+    reviews?: unknown[];
+    threads?: unknown[];
+    comments?: unknown[];
+  } = {}) {
+    return {
+      repository: {
+        pullRequest: {
+          reviews: { nodes: over.reviews ?? [] },
+          reviewThreads: { nodes: over.threads ?? [] },
+          comments: { nodes: over.comments ?? [] },
+        },
+      },
+    } as Parameters<typeof decodeReviewDetail>[0];
+  }
+
+  it('returns empty arrays when the PR is missing', () => {
+    const out = decodeReviewDetail({ repository: null } as Parameters<typeof decodeReviewDetail>[0]);
+    expect(out).toEqual({ reviews: [], threads: [], comments: [] });
+  });
+
+  it('drops PENDING reviews and bodyless COMMENTED reviews, keeps the rest', () => {
+    const out = decodeReviewDetail(
+      resp({
+        reviews: [
+          { id: 'r1', author: { login: 'a', avatarUrl: null }, state: 'PENDING', body: 'x', submittedAt: '2026-01-01T00:00:00Z', url: 'u1' },
+          { id: 'r2', author: { login: 'b', avatarUrl: null }, state: 'COMMENTED', body: '   ', submittedAt: '2026-01-02T00:00:00Z', url: 'u2' },
+          { id: 'r3', author: { login: 'c', avatarUrl: null }, state: 'COMMENTED', body: 'real comment', submittedAt: '2026-01-03T00:00:00Z', url: 'u3' },
+          { id: 'r4', author: { login: 'd', avatarUrl: null }, state: 'APPROVED', body: '', submittedAt: '2026-01-04T00:00:00Z', url: 'u4' },
+        ],
+      })
+    );
+    expect(out.reviews.map((r) => r.id)).toEqual(['r3', 'r4']);
+  });
+
+  it('sorts reviews oldest-first by submittedAt', () => {
+    const out = decodeReviewDetail(
+      resp({
+        reviews: [
+          { id: 'late', author: { login: 'a', avatarUrl: null }, state: 'APPROVED', body: '', submittedAt: '2026-02-01T00:00:00Z', url: 'u' },
+          { id: 'early', author: { login: 'b', avatarUrl: null }, state: 'APPROVED', body: '', submittedAt: '2026-01-01T00:00:00Z', url: 'u' },
+        ],
+      })
+    );
+    expect(out.reviews.map((r) => r.id)).toEqual(['early', 'late']);
+  });
+
+  it('orders threads unresolved-first and pulls diffHunk from the first comment', () => {
+    const out = decodeReviewDetail(
+      resp({
+        threads: [
+          {
+            id: 'resolved',
+            isResolved: true,
+            isOutdated: false,
+            path: 'a.ts',
+            line: 1,
+            comments: { nodes: [{ id: 'c1', author: { login: 'a', avatarUrl: null }, body: 'b', diffHunk: '@@ -1 +1 @@', createdAt: '2026-01-01T00:00:00Z', url: 'u' }] },
+          },
+          {
+            id: 'open',
+            isResolved: false,
+            isOutdated: true,
+            path: 'b.ts',
+            line: 2,
+            comments: { nodes: [{ id: 'c2', author: { login: 'a', avatarUrl: null }, body: 'b', diffHunk: '@@ -2 +2 @@', createdAt: '2026-01-02T00:00:00Z', url: 'u' }] },
+          },
+          {
+            id: 'empty',
+            isResolved: false,
+            isOutdated: false,
+            path: 'c.ts',
+            line: 3,
+            comments: { nodes: [] },
+          },
+        ],
+      })
+    );
+    expect(out.threads.map((t) => t.id)).toEqual(['open', 'resolved']);
+    expect(out.threads[0].diffHunk).toBe('@@ -2 +2 @@');
+  });
+
+  it('sorts conversation comments oldest-first', () => {
+    const out = decodeReviewDetail(
+      resp({
+        comments: [
+          { id: 'late', author: { login: 'a', avatarUrl: null }, body: 'b', createdAt: '2026-03-01T00:00:00Z', url: 'u' },
+          { id: 'early', author: { login: 'a', avatarUrl: null }, body: 'b', createdAt: '2026-01-01T00:00:00Z', url: 'u' },
+        ],
+      })
+    );
+    expect(out.comments.map((c) => c.id)).toEqual(['early', 'late']);
   });
 });

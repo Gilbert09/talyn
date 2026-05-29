@@ -6,7 +6,7 @@ import {
   inboxItems as inboxItemsTable,
 } from '../db/schema.js';
 import { forceFetchAndUpsert } from '../services/prCache.js';
-import { batchPullRequests } from '../services/githubGraphql.js';
+import { batchPullRequests, fetchPRReviewDetail } from '../services/githubGraphql.js';
 import { githubService } from '../services/github.js';
 import {
   setFocused,
@@ -212,6 +212,40 @@ export function pullRequestRoutes(): Router {
         row.number
       );
       res.json({ success: true, data: files });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // Full review/comment detail for the Reviews tab — every submitted
+  // review (with body), every inline review thread (grouped, with diff
+  // hunk + resolved state), and the top-level conversation comments.
+  // Live GraphQL fetch, only when the user opens the tab.
+  router.get('/:id/reviews', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    try {
+      const detail = await fetchPRReviewDetail({
+        workspaceId: row.workspaceId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+      });
+      res.json({ success: true, data: detail });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(400).json({ success: false, error: message });

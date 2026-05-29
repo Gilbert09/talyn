@@ -866,3 +866,210 @@ function isBotActor(
   if (author.__typename === 'Bot') return true;
   return author.login.endsWith('[bot]');
 }
+
+// ---------- Full review detail (Reviews tab) ----------
+//
+// The summary path keeps only the last 5 of each kind (delta detection).
+// The detail panel's Reviews tab wants the full, GitHub-like picture:
+// every submitted review with its body, every inline review thread
+// (grouped, with the diff hunk + resolved state), and the top-level
+// conversation comments — all with author avatars and markdown bodies.
+
+export interface PRReviewDetailReview {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED. */
+  state: string;
+  body: string;
+  submittedAt: string | null;
+  url: string;
+}
+
+export interface PRReviewThreadComment {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface PRReviewThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string | null;
+  line: number | null;
+  /** Diff context for the thread (from its first comment). */
+  diffHunk: string | null;
+  comments: PRReviewThreadComment[];
+}
+
+export interface PRConversationComment {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface PRReviewDetail {
+  reviews: PRReviewDetailReview[];
+  threads: PRReviewThread[];
+  comments: PRConversationComment[];
+}
+
+interface RawReviewDetailResponse {
+  repository: {
+    pullRequest: {
+      reviews: {
+        nodes: Array<{
+          id: string;
+          author: { login: string; avatarUrl: string | null } | null;
+          state: string;
+          body: string | null;
+          submittedAt: string | null;
+          url: string;
+        }>;
+      };
+      reviewThreads: {
+        nodes: Array<{
+          id: string;
+          isResolved: boolean;
+          isOutdated: boolean;
+          path: string | null;
+          line: number | null;
+          comments: {
+            nodes: Array<{
+              id: string;
+              author: { login: string; avatarUrl: string | null } | null;
+              body: string | null;
+              diffHunk: string | null;
+              createdAt: string;
+              url: string;
+            }>;
+          };
+        }>;
+      };
+      comments: {
+        nodes: Array<{
+          id: string;
+          author: { login: string; avatarUrl: string | null } | null;
+          body: string | null;
+          createdAt: string;
+          url: string;
+        }>;
+      };
+    } | null;
+  } | null;
+}
+
+const REVIEW_DETAIL_QUERY = `query PRReviewDetail($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviews(first: 50) {
+        nodes { id author { login avatarUrl } state body submittedAt url }
+      }
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 100) {
+            nodes { id author { login avatarUrl } body diffHunk createdAt url }
+          }
+        }
+      }
+      comments(first: 100) {
+        nodes { id author { login avatarUrl } body createdAt url }
+      }
+    }
+  }
+}`;
+
+/**
+ * Fetch the full review/comment thread for a PR for the detail panel's
+ * Reviews tab. One GraphQL round-trip; decoded into a GitHub-like shape
+ * (reviews timeline + grouped inline threads + conversation comments).
+ */
+export async function fetchPRReviewDetail(opts: {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<PRReviewDetail> {
+  const data = await githubService.executeGraphql<RawReviewDetailResponse>(
+    opts.workspaceId,
+    REVIEW_DETAIL_QUERY,
+    { owner: opts.owner, repo: opts.repo, number: opts.number }
+  );
+  return decodeReviewDetail(data);
+}
+
+export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetail {
+  const pr = data.repository?.pullRequest;
+  if (!pr) return { reviews: [], threads: [], comments: [] };
+
+  const reviews: PRReviewDetailReview[] = pr.reviews.nodes
+    // A COMMENTED review with no body is just a container for inline
+    // comments (rendered as threads below) — drop it to cut noise.
+    .filter((r) => {
+      const state = (r.state || '').toUpperCase();
+      if (state === 'PENDING') return false;
+      if (state === 'COMMENTED') return Boolean(r.body && r.body.trim());
+      return true;
+    })
+    .map((r) => ({
+      id: r.id,
+      author: r.author?.login ?? 'unknown',
+      avatarUrl: r.author?.avatarUrl ?? null,
+      state: (r.state || '').toUpperCase(),
+      body: r.body ?? '',
+      submittedAt: r.submittedAt,
+      url: r.url,
+    }))
+    .sort((a, b) => (a.submittedAt ?? '').localeCompare(b.submittedAt ?? ''));
+
+  const threads: PRReviewThread[] = pr.reviewThreads.nodes
+    .map((t) => ({
+      id: t.id,
+      isResolved: t.isResolved,
+      isOutdated: t.isOutdated,
+      path: t.path,
+      line: t.line,
+      diffHunk: t.comments.nodes[0]?.diffHunk ?? null,
+      comments: t.comments.nodes.map((c) => ({
+        id: c.id,
+        author: c.author?.login ?? 'unknown',
+        avatarUrl: c.author?.avatarUrl ?? null,
+        body: c.body ?? '',
+        createdAt: c.createdAt,
+        url: c.url,
+      })),
+    }))
+    .filter((t) => t.comments.length > 0)
+    // Unresolved threads first; within each group, oldest first.
+    .sort((a, b) => {
+      if (a.isResolved !== b.isResolved) return a.isResolved ? 1 : -1;
+      return (a.comments[0]?.createdAt ?? '').localeCompare(
+        b.comments[0]?.createdAt ?? ''
+      );
+    });
+
+  const comments: PRConversationComment[] = pr.comments.nodes
+    .map((c) => ({
+      id: c.id,
+      author: c.author?.login ?? 'unknown',
+      avatarUrl: c.author?.avatarUrl ?? null,
+      body: c.body ?? '',
+      createdAt: c.createdAt,
+      url: c.url,
+    }))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  return { reviews, threads, comments };
+}

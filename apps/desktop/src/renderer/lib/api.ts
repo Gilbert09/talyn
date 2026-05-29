@@ -455,6 +455,52 @@ export interface PRFile {
   patch?: string;
 }
 
+/** Full review/comment detail for the PR detail Reviews tab. */
+export interface PRReviewDetailReview {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  /** APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED. */
+  state: string;
+  body: string;
+  submittedAt: string | null;
+  url: string;
+}
+
+export interface PRReviewThreadComment {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface PRReviewThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string | null;
+  line: number | null;
+  diffHunk: string | null;
+  comments: PRReviewThreadComment[];
+}
+
+export interface PRConversationComment {
+  id: string;
+  author: string;
+  avatarUrl: string | null;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface PRReviewDetail {
+  reviews: PRReviewDetailReview[];
+  threads: PRReviewThread[];
+  comments: PRConversationComment[];
+}
+
 export const pullRequests = {
   list: (params: {
     workspaceId: string;
@@ -486,6 +532,8 @@ export const pullRequests = {
     request<null>('POST', `/pull-requests/${id}/seen`),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
+  reviews: (id: string) =>
+    request<PRReviewDetail>('GET', `/pull-requests/${id}/reviews`),
   merge: (id: string, method: 'merge' | 'squash' | 'rebase' = 'squash') =>
     request<{ sha: string; merged: boolean; message: string }>(
       'POST',

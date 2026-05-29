@@ -15,6 +15,8 @@ import {
   GitMerge,
   MessageSquare,
   Layers,
+  Check,
+  XCircle,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
@@ -28,6 +30,9 @@ import {
   type PRFreshDetail,
   type PRFile,
   type PRCheckContext,
+  type PRCheckState,
+  type PRReviewDetail,
+  type PRReviewThread,
 } from '../../lib/api';
 import { PRStatusPill } from './PRStatusPill';
 
@@ -425,12 +430,34 @@ function OverviewTab({
   );
 }
 
+type CheckFilter = 'passed' | 'failed' | 'running' | 'skipped';
+
+// Failed first, then in-flight, then passed, then skipped — so the
+// rows that need attention sit at the top of the list.
+const CHECK_STATE_ORDER: Record<PRCheckState, number> = {
+  failure: 0,
+  in_progress: 1,
+  pending: 2,
+  success: 3,
+  skipped: 4,
+};
+
+const FILTER_STATES: Record<CheckFilter, PRCheckState[]> = {
+  passed: ['success'],
+  failed: ['failure'],
+  running: ['in_progress', 'pending'],
+  skipped: ['skipped'],
+};
+
 function ChecksTab({
   data,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
 }) {
   const checks = data.row.summary.checks;
+  // Clicking a tile filters the list to that state (toggle off by
+  // clicking again).
+  const [filter, setFilter] = useState<CheckFilter | null>(null);
   if (checks.total === 0) {
     return <p className="text-xs text-muted-foreground">No checks have run yet.</p>;
   }
@@ -438,20 +465,68 @@ function ChecksTab({
   // that's unavailable (env offline) we still show the rollup tiles +
   // a GitHub link.
   const contexts = data.fresh?.checkContexts ?? [];
+  const sorted = contexts
+    .slice()
+    .sort((a, b) => (CHECK_STATE_ORDER[a.state] ?? 99) - (CHECK_STATE_ORDER[b.state] ?? 99));
+  const visible = filter
+    ? sorted.filter((c) => FILTER_STATES[filter].includes(c.state))
+    : sorted;
+
+  function toggle(key: CheckFilter) {
+    setFilter((cur) => (cur === key ? null : key));
+  }
+
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-        <CheckCountTile label="Passed" value={checks.passed} tone="green" />
-        <CheckCountTile label="Failed" value={checks.failed} tone="red" />
-        <CheckCountTile label="Running" value={checks.inProgress} tone="blue" />
-        <CheckCountTile label="Skipped" value={checks.skipped} tone="grey" />
+        <CheckCountTile
+          label="Passed"
+          value={checks.passed}
+          tone="green"
+          active={filter === 'passed'}
+          onClick={() => toggle('passed')}
+        />
+        <CheckCountTile
+          label="Failed"
+          value={checks.failed}
+          tone="red"
+          active={filter === 'failed'}
+          onClick={() => toggle('failed')}
+        />
+        <CheckCountTile
+          label="Running"
+          value={checks.inProgress}
+          tone="blue"
+          active={filter === 'running'}
+          onClick={() => toggle('running')}
+        />
+        <CheckCountTile
+          label="Skipped"
+          value={checks.skipped}
+          tone="grey"
+          active={filter === 'skipped'}
+          onClick={() => toggle('skipped')}
+        />
       </div>
       {contexts.length > 0 ? (
-        <ul className="divide-y rounded-md border">
-          {contexts.map((c) => (
-            <CheckRow key={`${c.name}-${c.url ?? ''}`} check={c} />
-          ))}
-        </ul>
+        visible.length > 0 ? (
+          <ul className="divide-y rounded-md border">
+            {visible.map((c) => (
+              <CheckRow key={`${c.name}-${c.url ?? ''}`} check={c} />
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No {filter} checks.{' '}
+            <button
+              type="button"
+              onClick={() => setFilter(null)}
+              className="text-primary underline"
+            >
+              Clear filter
+            </button>
+          </p>
+        )
       ) : (
         <a
           href={`${data.row.summary.url}/checks`}
@@ -529,10 +604,14 @@ function CheckCountTile({
   label,
   value,
   tone,
+  active = false,
+  onClick,
 }: {
   label: string;
   value: number;
   tone: 'green' | 'red' | 'blue' | 'grey';
+  active?: boolean;
+  onClick?: () => void;
 }) {
   const toneClass = {
     green: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
@@ -540,11 +619,37 @@ function CheckCountTile({
     blue: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400',
     grey: 'border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
   }[tone];
+  const ringClass = {
+    green: 'ring-emerald-500',
+    red: 'ring-red-500',
+    blue: 'ring-blue-500',
+    grey: 'ring-zinc-400',
+  }[tone];
+  // Tiles with no checks of that kind aren't useful to filter on.
+  const disabled = value === 0;
   return (
-    <div className={cn('rounded-md border p-3', toneClass)}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      title={
+        disabled
+          ? `No ${label.toLowerCase()} checks`
+          : active
+            ? `Showing only ${label.toLowerCase()} — click to clear`
+            : `Show only ${label.toLowerCase()} checks`
+      }
+      className={cn(
+        'rounded-md border p-3 text-left transition-all',
+        toneClass,
+        active && cn('ring-2 ring-offset-1 ring-offset-background', ringClass),
+        disabled ? 'cursor-default opacity-50' : 'cursor-pointer hover:brightness-105'
+      )}
+    >
       <div className="text-2xl font-semibold leading-none">{value}</div>
       <div className="mt-1 text-[11px] uppercase tracking-wide opacity-75">{label}</div>
-    </div>
+    </button>
   );
 }
 
@@ -553,58 +658,332 @@ function ReviewsTab({
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
 }) {
-  const fresh = data.fresh;
-  if (!fresh) {
+  const [detail, setDetail] = useState<PRReviewDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api.pullRequests
+      .reviews(data.row.id)
+      .then((res) => {
+        if (!cancelled) setDetail(res);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.row.id]);
+
+  if (loading) {
     return (
-      <p className="text-xs text-muted-foreground">Fresh fetch unavailable.</p>
+      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading reviews…
+      </div>
     );
   }
-  if (fresh.recentReviews.length === 0 && fresh.recentReviewComments.length === 0) {
-    return <p className="text-xs text-muted-foreground">No reviews yet.</p>;
+  if (error) {
+    return (
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-muted-foreground">Couldn't load reviews: {error}</p>
+        <a
+          href={data.row.summary.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-primary underline"
+        >
+          View on GitHub
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+    );
   }
+  if (
+    !detail ||
+    (detail.reviews.length === 0 &&
+      detail.threads.length === 0 &&
+      detail.comments.length === 0)
+  ) {
+    return <p className="text-xs text-muted-foreground">No reviews or comments yet.</p>;
+  }
+
+  const unresolvedCount = detail.threads.filter((t) => !t.isResolved).length;
+
   return (
-    <div className="space-y-4 text-sm">
-      <ActivityList
-        title="Recent reviews"
-        items={fresh.recentReviews.map((r) => ({
-          key: r.id,
-          author: r.author,
-          line: r.state.toLowerCase().replace('_', ' '),
-          at: r.submittedAt ?? '',
-          url: r.url,
-        }))}
-      />
-      <ActivityList
-        title="Inline comments"
-        items={fresh.recentReviewComments.map((c) => ({
-          key: c.id,
-          author: c.author,
-          line: 'commented on diff',
-          at: c.createdAt,
-          url: c.url,
-        }))}
-      />
-      <ActivityList
-        title="Top-level comments"
-        items={fresh.recentComments.map((c) => ({
-          key: c.id,
-          author: c.author,
-          line: 'commented',
-          at: c.createdAt,
-          url: c.url,
-        }))}
-      />
+    <div className="space-y-5 text-sm">
+      {detail.reviews.length > 0 && (
+        <section className="space-y-3">
+          <SectionHeading>Reviews</SectionHeading>
+          {detail.reviews.map((r) => (
+            <ReviewCard key={r.id} review={r} />
+          ))}
+        </section>
+      )}
+
+      {detail.threads.length > 0 && (
+        <section className="space-y-3">
+          <SectionHeading>
+            Inline comments
+            {unresolvedCount > 0 && (
+              <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium normal-case text-amber-700 dark:text-amber-400">
+                {unresolvedCount} unresolved
+              </span>
+            )}
+          </SectionHeading>
+          {detail.threads.map((t) => (
+            <ThreadCard key={t.id} thread={t} />
+          ))}
+        </section>
+      )}
+
+      {detail.comments.length > 0 && (
+        <section className="space-y-3">
+          <SectionHeading>Conversation</SectionHeading>
+          {detail.comments.map((c) => (
+            <CommentCard
+              key={c.id}
+              author={c.author}
+              avatarUrl={c.avatarUrl}
+              body={c.body}
+              at={c.createdAt}
+              url={c.url}
+            />
+          ))}
+        </section>
+      )}
+
       <a
-        href={`${data.row.summary.url}/files`}
+        href={data.row.summary.url}
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex items-center gap-1 text-xs text-primary underline"
       >
-        View full review history on GitHub
+        Open full conversation on GitHub
         <ExternalLink className="h-3 w-3" />
       </a>
     </div>
   );
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="flex items-center text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      {children}
+    </h3>
+  );
+}
+
+function Avatar({ url, login }: { url: string | null; login: string }) {
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={`@${login}`}
+        className="h-6 w-6 shrink-0 rounded-full border bg-muted"
+      />
+    );
+  }
+  return (
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border bg-muted text-[10px] font-medium uppercase text-muted-foreground">
+      {login.slice(0, 2)}
+    </span>
+  );
+}
+
+function ReviewStateBadge({ state }: { state: string }) {
+  const map: Record<
+    string,
+    { label: string; cls: string; icon: React.ReactNode }
+  > = {
+    APPROVED: {
+      label: 'approved',
+      cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+      icon: <CheckCircle2 className="h-3 w-3" />,
+    },
+    CHANGES_REQUESTED: {
+      label: 'requested changes',
+      cls: 'bg-red-500/15 text-red-700 dark:text-red-400',
+      icon: <XCircle className="h-3 w-3" />,
+    },
+    COMMENTED: {
+      label: 'commented',
+      cls: 'bg-muted text-muted-foreground',
+      icon: <MessageSquare className="h-3 w-3" />,
+    },
+    DISMISSED: {
+      label: 'dismissed',
+      cls: 'bg-muted text-muted-foreground line-through',
+      icon: <CircleDot className="h-3 w-3" />,
+    },
+  };
+  const v = map[state] ?? map.COMMENTED;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+        v.cls
+      )}
+    >
+      {v.icon}
+      {v.label}
+    </span>
+  );
+}
+
+function ReviewCard({
+  review,
+}: {
+  review: PRReviewDetail['reviews'][number];
+}) {
+  return (
+    <div className="rounded-md border">
+      <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
+        <Avatar url={review.avatarUrl} login={review.author} />
+        <span className="text-xs font-medium">@{review.author}</span>
+        <ReviewStateBadge state={review.state} />
+        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+          {fmtTime(review.submittedAt)}
+          <a
+            href={review.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </span>
+      </div>
+      {review.body.trim() && (
+        <div className="px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere]">
+          {renderMarkdownish(review.body, 'surface')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThreadCard({ thread }: { thread: PRReviewThread }) {
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-md border',
+        thread.isResolved && 'opacity-70'
+      )}
+    >
+      <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px]">
+        <span className="min-w-0 flex-1 truncate font-mono" title={thread.path ?? ''}>
+          {thread.path ?? 'comment'}
+          {thread.line != null && (
+            <span className="text-muted-foreground">:{thread.line}</span>
+          )}
+        </span>
+        {thread.isOutdated && (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase tracking-wide text-muted-foreground">
+            outdated
+          </span>
+        )}
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium',
+            thread.isResolved
+              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+              : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+          )}
+        >
+          {thread.isResolved ? <Check className="h-3 w-3" /> : <CircleDot className="h-3 w-3" />}
+          {thread.isResolved ? 'resolved' : 'unresolved'}
+        </span>
+      </div>
+      {thread.diffHunk && (
+        <pre className="overflow-x-auto border-b bg-card px-3 py-2 font-mono text-[11px] leading-snug text-muted-foreground">
+          {lastHunkLines(thread.diffHunk)}
+        </pre>
+      )}
+      <div className="divide-y">
+        {thread.comments.map((c) => (
+          <CommentCard
+            key={c.id}
+            author={c.author}
+            avatarUrl={c.avatarUrl}
+            body={c.body}
+            at={c.createdAt}
+            url={c.url}
+            dense
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CommentCard({
+  author,
+  avatarUrl,
+  body,
+  at,
+  url,
+  dense = false,
+}: {
+  author: string;
+  avatarUrl: string | null;
+  body: string;
+  at: string;
+  url: string;
+  dense?: boolean;
+}) {
+  return (
+    <div className={cn(dense ? 'px-3 py-2' : 'rounded-md border px-3 py-2')}>
+      <div className="mb-1 flex items-center gap-2">
+        <Avatar url={avatarUrl} login={author} />
+        <span className="text-xs font-medium">@{author}</span>
+        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+          {fmtTime(at)}
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </span>
+      </div>
+      <div className="text-xs leading-relaxed [overflow-wrap:anywhere]">
+        {body.trim() ? (
+          renderMarkdownish(body, 'surface')
+        ) : (
+          <span className="text-muted-foreground">(no content)</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Keep a diff hunk readable in a tight card — show only the last few
+ *  lines (the ones the comment actually anchors to). */
+function lastHunkLines(hunk: string, max = 6): string {
+  const lines = hunk.split('\n');
+  return lines.length <= max ? hunk : lines.slice(-max).join('\n');
+}
+
+function fmtTime(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function FilesTab({
@@ -807,45 +1186,3 @@ function BranchRef({ head, base }: { head: string; base: string }) {
 }
 
 
-interface ActivityItem {
-  key: string;
-  author: string;
-  line: string;
-  at: string;
-  url: string;
-}
-
-function ActivityList({
-  title,
-  items,
-}: {
-  title: string;
-  items: ActivityItem[];
-}) {
-  if (items.length === 0) return null;
-  return (
-    <section>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h3>
-      <ul className="space-y-1.5">
-        {items.map((item) => (
-          <li key={item.key} className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate">
-              <span className="font-medium">@{item.author}</span>
-              <span className="ml-2 text-muted-foreground">{item.line}</span>
-            </span>
-            <a
-              href={item.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shrink-0 text-muted-foreground hover:text-foreground"
-            >
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
