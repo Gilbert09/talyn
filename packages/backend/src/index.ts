@@ -21,6 +21,7 @@ import { continuousBuildScheduler } from './services/continuousBuild.js';
 import { permissionInboxService } from './services/permissionInbox.js';
 import { taskFileWatcher } from './services/taskFileWatcher.js';
 import { daemonAutoUpdate } from './services/daemonAutoUpdate.js';
+import { postHogCodePoller } from './services/posthogCode/poller.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -45,6 +46,7 @@ async function main() {
   permissionInboxService.init();
   taskFileWatcher.init();
   daemonAutoUpdate.init();
+  postHogCodePoller.init();
 
   const app = express();
   // Only real browser origins need CORS. Desktop/CLI/MCP clients send no
@@ -130,6 +132,7 @@ async function main() {
   const shutdown = async () => {
     console.log('Shutting down...');
     continuousBuildScheduler.shutdown();
+    postHogCodePoller.shutdown();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
     agentService.shutdown();
@@ -163,7 +166,10 @@ async function connectSavedEnvironments() {
   const db = getDbClient();
   const envs = await db.select().from(environmentsTable);
   for (const env of envs) {
-    if (env.type === 'local') {
+    if (env.type === 'local' || env.type === 'posthog_code') {
+      // Local daemon is always reachable in-process; PostHog Code envs
+      // are a credential-backed delegation marker with no daemon to dial
+      // in — both are synthetically "connected" at boot.
       await db
         .update(environmentsTable)
         .set({ status: 'connected' })

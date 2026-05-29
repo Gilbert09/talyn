@@ -1,0 +1,144 @@
+import { eq } from 'drizzle-orm';
+import type { Environment, PostHogCodeRuntimeAdapter, Task } from '@fastowl/shared';
+import { getDbClient } from '../../db/client.js';
+import {
+  tasks as tasksTable,
+  repositories as repositoriesTable,
+} from '../../db/schema.js';
+import { patchTaskMetadata } from '../taskMetadataMutex.js';
+import { emitTaskStatus } from '../websocket.js';
+import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.js';
+
+const DEFAULT_RUNTIME_ADAPTER: PostHogCodeRuntimeAdapter = 'claude';
+const DEFAULT_MODEL = 'claude-opus-4-7';
+
+export type DispatchResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Hand a task off to PostHog Code: create the remote task, start a
+ * background run, and stash the remote ids on `task.metadata`. The
+ * cloud owns the agent loop from here — the poller (poller.ts) drives
+ * the FastOwl task through to `awaiting_review` / `failed`.
+ *
+ * Idempotent: if the task already carries a `posthogTaskId`, we assume a
+ * prior dispatch succeeded and do nothing (the poller owns it).
+ */
+export async function dispatchTaskToPostHogCode(
+  task: Task,
+  env: Environment,
+): Promise<DispatchResult> {
+  const meta = (task.metadata ?? {}) as Record<string, unknown>;
+  if (typeof meta.posthogTaskId === 'string' && meta.posthogTaskId) {
+    return { ok: true };
+  }
+
+  const creds = await getPostHogCodeCredentials(task.workspaceId);
+  const client = await getPostHogCodeClient(task.workspaceId);
+  if (!creds || !client) {
+    return {
+      ok: false,
+      error:
+        'PostHog Code is not configured for this workspace — add an API key and project id in workspace settings.',
+    };
+  }
+
+  if (!task.repositoryId) {
+    return { ok: false, error: 'PostHog Code tasks require a repository.' };
+  }
+  const repository = await resolveRepositorySlug(task.repositoryId);
+  if (!repository) {
+    return {
+      ok: false,
+      error: 'Could not resolve a GitHub owner/repo for this task’s repository.',
+    };
+  }
+
+  const runtimeAdapter =
+    (meta.runtimeAdapter as PostHogCodeRuntimeAdapter | undefined) ??
+    runtimeAdapterFromEnv(env) ??
+    DEFAULT_RUNTIME_ADAPTER;
+  const model =
+    (typeof meta.model === 'string' && meta.model) ||
+    modelFromEnv(env) ||
+    DEFAULT_MODEL;
+
+  const description = task.prompt?.trim() || task.description?.trim() || task.title;
+
+  try {
+    const remoteTask = await client.createTask({
+      title: task.title,
+      description,
+      repository,
+    });
+
+    // Record the remote task id before starting the run so a failure
+    // mid-flight doesn't strand us into re-creating a duplicate task.
+    await patchTaskMetadata(task.id, (existing) => ({
+      ...existing,
+      posthogTaskId: remoteTask.id,
+      posthogProjectId: creds.projectId,
+      posthogHost: creds.host,
+      posthogStatus: 'not_started',
+    }));
+
+    const run = await client.startRun(remoteTask.id, { runtimeAdapter, model });
+
+    await patchTaskMetadata(task.id, (existing) => ({
+      ...existing,
+      posthogRunId: run.id,
+      posthogStatus: run.status ?? 'queued',
+      posthogLogUrl: run.log_url ?? existing.posthogLogUrl,
+    }));
+
+    // Pin the env + flip to in_progress so the UI stops showing it as
+    // queued. The poller takes it from here.
+    await getDbClient()
+      .update(tasksTable)
+      .set({
+        status: 'in_progress',
+        assignedEnvironmentId: env.id,
+        updatedAt: new Date(),
+      })
+      .where(eq(tasksTable.id, task.id));
+    emitTaskStatus(task.workspaceId, task.id, 'in_progress');
+
+    console.log(
+      `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTask.id} run ${run.id} (${repository})`,
+    );
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function resolveRepositorySlug(repositoryId: string): Promise<string | null> {
+  const rows = await getDbClient()
+    .select({ url: repositoriesTable.url, name: repositoriesTable.name })
+    .from(repositoriesTable)
+    .where(eq(repositoriesTable.id, repositoryId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return parseGitHubSlug(row.url) ?? sanitizeSlug(row.name);
+}
+
+function parseGitHubSlug(url: string): string | null {
+  const match = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+)/);
+  if (!match) return null;
+  return `${match[1]}/${match[2].replace(/\.git$/, '')}`;
+}
+
+function sanitizeSlug(name: string): string | null {
+  // Repository.name is conventionally "owner/repo" already.
+  return /^[\w.-]+\/[\w.-]+$/.test(name) ? name : null;
+}
+
+function runtimeAdapterFromEnv(env: Environment): PostHogCodeRuntimeAdapter | undefined {
+  const config = env.config as { runtimeAdapter?: PostHogCodeRuntimeAdapter };
+  return config?.runtimeAdapter;
+}
+
+function modelFromEnv(env: Environment): string | undefined {
+  const config = env.config as { model?: string };
+  return config?.model;
+}

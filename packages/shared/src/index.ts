@@ -79,8 +79,16 @@ export interface ContinuousBuildSettings {
  *
  * Legacy types ('ssh', 'coder', 'daemon') were removed in the "daemon
  * everywhere" refactor (docs/DAEMON_EVERYWHERE.md).
+ *
+ *   - `posthog_code` — not daemon-backed at all. A delegation marker: a
+ *               task assigned to this env is handed off to PostHog Code,
+ *               which runs the whole agent loop on its own sandboxed
+ *               machine and opens a PR. FastOwl creates the remote task,
+ *               polls its run, and ingests the resulting PR. Credentials
+ *               live on the task's workspace (`PostHogIntegration`), not
+ *               on the env. See services/posthogCode/*.
  */
-export type EnvironmentType = 'local' | 'remote';
+export type EnvironmentType = 'local' | 'remote' | 'posthog_code';
 
 export type EnvironmentStatus =
   | 'connected'
@@ -141,7 +149,10 @@ export interface Environment {
 
 export type EnvironmentRenderer = 'pty' | 'structured';
 
-export type EnvironmentConfig = LocalEnvironmentConfig | RemoteEnvironmentConfig;
+export type EnvironmentConfig =
+  | LocalEnvironmentConfig
+  | RemoteEnvironmentConfig
+  | PostHogCodeEnvironmentConfig;
 
 export interface LocalEnvironmentConfig {
   type: 'local';
@@ -156,6 +167,23 @@ export interface RemoteEnvironmentConfig {
   hostname?: string;
   workingDirectory?: string;
 }
+
+/**
+ * PostHog Code (cloud) env config. Deliberately a marker with no
+ * secrets — the personal API key + project id live on the task's
+ * workspace `PostHogIntegration` so one set of credentials is shared
+ * by every cloud task in the workspace. `projectId`/`host` here are
+ * optional display hints only.
+ */
+export interface PostHogCodeEnvironmentConfig {
+  type: 'posthog_code';
+  /** Default agent runtime for tasks on this env. */
+  runtimeAdapter?: PostHogCodeRuntimeAdapter;
+  /** Default agent model for tasks on this env. */
+  model?: string;
+}
+
+export type PostHogCodeRuntimeAdapter = 'claude' | 'codex';
 
 // ============================================================================
 // Agent
@@ -642,6 +670,35 @@ export interface CreateTaskRequest {
   priority?: TaskPriority;
   repositoryId?: string;
   assignedEnvironmentId?: string;
+  /**
+   * Cloud (PostHog Code) overrides. Only meaningful when the task is
+   * assigned to a `posthog_code` env; ignored otherwise. Fall back to
+   * the env's defaults, then the backend defaults (claude / opus).
+   */
+  runtimeAdapter?: PostHogCodeRuntimeAdapter;
+  model?: string;
+}
+
+/**
+ * Fields FastOwl writes onto `task.metadata` for a cloud (PostHog Code)
+ * run. Stored loosely (metadata is `Record<string, unknown>`); this
+ * interface documents the shape the poller + UI rely on.
+ */
+export interface PostHogCodeTaskMetadata {
+  /** Remote PostHog task id. */
+  posthogTaskId: string;
+  /** Remote run id (the `run/` response). */
+  posthogRunId?: string;
+  /** PostHog project (team) id the task was created under. */
+  posthogProjectId: string;
+  /** PostHog host the task lives on, e.g. https://us.posthog.com. */
+  posthogHost: string;
+  /** Deep link to the run's log/console in the PostHog UI. */
+  posthogLogUrl?: string;
+  /** PR URL once the cloud run opens one. */
+  posthogPrUrl?: string;
+  /** Last remote run status we observed. */
+  posthogStatus?: string;
 }
 
 export interface GenerateTaskMetadataRequest {

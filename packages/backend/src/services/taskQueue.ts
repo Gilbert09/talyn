@@ -4,6 +4,7 @@ import type { Task, TaskPriority, Agent, TaskStatus, TaskType } from '@fastowl/s
 import { isAgentTask } from '@fastowl/shared';
 import { agentService } from './agent.js';
 import { environmentService } from './environment.js';
+import { dispatchTaskToPostHogCode } from './posthogCode/executor.js';
 import { gitService } from './git.js';
 import { resolveTaskGitContext } from './gitContext.js';
 import { withTaskGitLog } from './gitLogService.js';
@@ -108,6 +109,7 @@ class TaskQueueService extends EventEmitter {
         id: tasksTable.id,
         workspaceId: tasksTable.workspaceId,
         title: tasksTable.title,
+        metadata: tasksTable.metadata,
       })
       .from(tasksTable)
       .leftJoin(agentsTable, eq(tasksTable.assignedAgentId, agentsTable.id))
@@ -139,6 +141,14 @@ class TaskQueueService extends EventEmitter {
     //     kill a live session and re-spawn the seed prompt, which is
     //     a very bad surprise.
     const actionable = stuckTasks.filter((t) => {
+      // Cloud (PostHog Code) tasks legitimately have no FastOwl agent —
+      // the run lives on PostHog's sandbox and the poller owns its
+      // lifecycle. Don't yank them back to queued (that would re-dispatch
+      // a duplicate remote run).
+      const meta = (t.metadata as Record<string, unknown> | null) ?? {};
+      if (meta.posthogRunId) {
+        return false;
+      }
       if (permissionService.hasPendingForTask(t.id)) {
         console.log(
           `[TaskQueue] Task "${t.title}" looks stuck but has pending permission prompts — leaving alone`
@@ -261,6 +271,39 @@ class TaskQueueService extends EventEmitter {
         console.log(`[TaskQueue] Processing task: "${task.title}"`);
 
         const targetEnvironmentId = task.assignedEnvironmentId;
+
+        // PostHog Code (cloud) delegation. These envs have no daemon and
+        // no FastOwl agent — the whole agent loop runs on PostHog's
+        // sandbox — so they bypass the idle-agent / (env,repo) slot /
+        // concurrency machinery entirely. The poller drives the task to
+        // awaiting_review / failed once the remote run finishes.
+        if (targetEnvironmentId) {
+          const targetEnv = connectedEnvironments.find(
+            (e) => e.id === targetEnvironmentId
+          );
+          if (targetEnv?.type === 'posthog_code') {
+            const result = await dispatchTaskToPostHogCode(task, targetEnv);
+            if (!result.ok) {
+              console.error(
+                `[TaskQueue] PostHog Code dispatch failed for "${task.title}": ${result.error}`
+              );
+              await patchTaskMetadata(task.id, (existing) => ({
+                ...existing,
+                lastScheduleError: {
+                  at: new Date().toISOString(),
+                  reason: result.error,
+                },
+              }));
+              await this.db
+                .update(tasksTable)
+                .set({ status: 'queued', updatedAt: new Date() })
+                .where(eq(tasksTable.id, task.id));
+              emitTaskStatus(task.workspaceId, task.id, 'queued');
+            }
+            continue;
+          }
+        }
+
         let agentToUse: Agent | null = null;
 
         for (const agent of idleAgents) {

@@ -61,8 +61,11 @@ export function environmentRoutes(): Router {
     const now = new Date();
     // Both local and remote envs are now daemon-backed. Status starts
     // at 'disconnected' until the daemon dials in and pairs; the
-    // registry flips it to 'connected' on register().
-    const initialStatus = 'disconnected';
+    // registry flips it to 'connected' on register(). PostHog Code envs
+    // have no daemon to pair — they're a delegation marker, so they're
+    // immediately 'connected' (credentials live on the workspace and are
+    // validated at dispatch time).
+    const initialStatus = body.type === 'posthog_code' ? 'connected' : 'disconnected';
 
     // Remote envs are typically throwaway VMs — default them to
     // bypass permissions so autonomous tasks run without prompts.

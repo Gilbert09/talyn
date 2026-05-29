@@ -178,6 +178,12 @@ export function taskRoutes(): Router {
     const id = uuid();
     const now = new Date();
 
+    // Stash cloud (PostHog Code) overrides on metadata — the executor
+    // reads them at dispatch. Harmless for non-cloud tasks.
+    const initialMetadata: Record<string, unknown> = {};
+    if (body.runtimeAdapter) initialMetadata.runtimeAdapter = body.runtimeAdapter;
+    if (body.model) initialMetadata.model = body.model;
+
     await db.insert(tasksTable).values({
       id,
       workspaceId: body.workspaceId,
@@ -194,6 +200,7 @@ export function taskRoutes(): Router {
       priority: body.priority || 'medium',
       repositoryId: body.repositoryId ?? null,
       assignedEnvironmentId: body.assignedEnvironmentId ?? null,
+      metadata: Object.keys(initialMetadata).length > 0 ? initialMetadata : undefined,
       createdAt: now,
       updatedAt: now,
     });

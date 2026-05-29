@@ -192,7 +192,11 @@ class EnvironmentService extends EventEmitter {
     // by the daemon dialling in, not by the backend pinging it.
     // Local and remote both return success; the real state is reflected
     // in the env's status column once pairing completes.
-    if (config.type === 'local' || config.type === 'remote') {
+    if (
+      config.type === 'local' ||
+      config.type === 'remote' ||
+      config.type === 'posthog_code'
+    ) {
       return { success: true };
     }
     return { success: false, error: `Unknown environment type` };
