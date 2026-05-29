@@ -39,6 +39,14 @@ interface PRStatusPillProps {
   onClick?: () => void;
   /** Hide the inline rollup bar; shrinks the pill for tight headers. */
   compact?: boolean;
+  /**
+   * Drop review-related verdicts (changes_requested, blocked-on-review)
+   * so this pill reflects only conflicts / CI / mergeability. Used where
+   * approval state lives in its own column (the GitHub table's Review
+   * column via PRReviewPill). Off elsewhere so the task-screen pill keeps
+   * its all-in-one rollup.
+   */
+  hideReviewState?: boolean;
   className?: string;
 }
 
@@ -56,10 +64,11 @@ export function PRStatusPill({
   state,
   onClick,
   compact = false,
+  hideReviewState = false,
   className,
 }: PRStatusPillProps) {
   const terminal = terminalVariant(state);
-  const variant = terminal ?? pickVariant(blockingReason, checks);
+  const variant = terminal ?? pickVariant(blockingReason, checks, hideReviewState);
   const Icon = variant.icon;
   // A merged/closed PR's check rollup is no longer meaningful.
   const showRollup = !terminal && !compact && checks.total > 0;
@@ -149,7 +158,20 @@ function CheckRollupBar({ checks }: { checks: PRChecks }) {
   );
 }
 
-function pickVariant(blockingReason: PRBlockingReason, checks: PRChecks): PillVariant {
+function pickVariant(
+  blockingReason: PRBlockingReason,
+  checks: PRChecks,
+  hideReviewState = false
+): PillVariant {
+  // When approval lives in its own column, the review-related verdicts
+  // ('changes_requested', 'blocked'-on-review) shouldn't drive this pill
+  // — fall back to the conflicts/CI/mergeability picture instead.
+  if (
+    hideReviewState &&
+    (blockingReason === 'changes_requested' || blockingReason === 'blocked')
+  ) {
+    return pickVariant(checks.failed > 0 ? 'checks_failed' : 'mergeable', checks);
+  }
   switch (blockingReason) {
     case 'merge_conflicts':
       return { icon: AlertTriangle, label: 'Conflicts', tone: 'red' };
