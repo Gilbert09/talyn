@@ -266,7 +266,7 @@ export function environmentRoutes(): Router {
   return router;
 }
 
-function rowToEnvironment(row: typeof environmentsTable.$inferSelect): Environment {
+export function rowToEnvironment(row: typeof environmentsTable.$inferSelect): Environment {
   return {
     id: row.id,
     name: row.name,

@@ -13,6 +13,7 @@ import type {
   InboxNewEvent,
   InboxUpdateEvent,
   EnvironmentStatusEvent,
+  EnvironmentCreatedEvent,
   WorkspaceSettings,
 } from '@fastowl/shared';
 
@@ -92,6 +93,7 @@ export function useApiConnection() {
     addInboxItem,
     updateInboxItem,
     updateEnvironment,
+    addEnvironment,
   } = useWorkspaceStore();
 
   // Connect to WebSocket on mount. `connect()` is async because it needs
@@ -243,6 +245,14 @@ export function useApiConnection() {
       })
     );
 
+    // New environments (e.g. PostHog Code auto-provisioned on integration
+    // connect) — add to the store live so they appear without a restart.
+    unsubscribers.push(
+      wsClient.on<EnvironmentCreatedEvent>('environment:created', (payload) => {
+        addEnvironment(payload.environment);
+      })
+    );
+
     return () => {
       unsubscribers.forEach((unsub) => unsub());
       // Drain any buffered transcript events before tearing down so a
@@ -252,7 +262,7 @@ export function useApiConnection() {
         flushTaskEvents();
       }
     };
-  }, [updateAgent, updateTask, addInboxItem, updateInboxItem, updateEnvironment]);
+  }, [updateAgent, updateTask, addInboxItem, updateInboxItem, updateEnvironment, addEnvironment]);
 }
 
 /**

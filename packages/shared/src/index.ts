@@ -478,6 +478,7 @@ export type WSEventType =
   | 'inbox:remove'
   | 'pull_request:updated'
   | 'environment:status'
+  | 'environment:created'
   | 'connection:status';
 
 export interface WSEvent<T = unknown> {
@@ -542,6 +543,10 @@ export interface EnvironmentStatusEvent {
   environmentId: string;
   status: EnvironmentStatus;
   error?: string;
+}
+
+export interface EnvironmentCreatedEvent {
+  environment: Environment;
 }
 
 export interface AgentEventBroadcast {

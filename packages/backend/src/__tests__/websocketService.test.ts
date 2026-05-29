@@ -6,7 +6,9 @@ import {
   setupWebSocket,
   broadcastToWorkspace,
   emitTaskStatus,
+  emitEnvironmentCreated,
 } from '../services/websocket.js';
+import type { Environment } from '@fastowl/shared';
 import * as authModule from '../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -292,6 +294,31 @@ describe('websocket service', () => {
     };
     expect(msg.payload.taskId).toBe('t1');
     expect(msg.payload.status).toBe('completed');
+
+    await closeClient(client);
+  });
+
+  it('emitEnvironmentCreated broadcasts the new environment to connected clients', async () => {
+    const client = await authed(serverUrl, 'token-mine');
+    await client.waitFor('connection:status');
+
+    const env: Environment = {
+      id: 'env-ph',
+      name: 'PostHog Code',
+      type: 'posthog_code',
+      status: 'connected',
+      config: { type: 'posthog_code' },
+      autonomousBypassPermissions: false,
+      renderer: 'structured',
+      toolAllowlist: [],
+    };
+    emitEnvironmentCreated(env);
+
+    const msg = (await client.waitFor('environment:created')) as {
+      payload: { environment: Environment };
+    };
+    expect(msg.payload.environment.id).toBe('env-ph');
+    expect(msg.payload.environment.type).toBe('posthog_code');
 
     await closeClient(client);
   });

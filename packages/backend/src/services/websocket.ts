@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import type {
   AgentEvent,
+  Environment,
   InboxItem,
   PermissionRequest,
   PermissionResponse,
@@ -374,6 +375,14 @@ export function emitEnvironmentStatus(environmentId: string, status: string, err
   broadcast({
     type: 'environment:status',
     payload: { environmentId, status, error },
+    timestamp: new Date().toISOString(),
+  });
+}
+
+export function emitEnvironmentCreated(environment: Environment): void {
+  broadcast({
+    type: 'environment:created',
+    payload: { environment },
     timestamp: new Date().toISOString(),
   });
 }

@@ -79,6 +79,7 @@ interface WorkspaceState {
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
+  addEnvironment: (environment: Environment) => void;
 
   setAgents: (agents: Agent[]) => void;
   updateAgent: (id: string, updates: Partial<Agent>) => void;
@@ -139,6 +140,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         e.id === id ? { ...e, ...updates } : e
       ),
     })),
+
+  addEnvironment: (environment) =>
+    set((state) =>
+      state.environments.some((e) => e.id === environment.id)
+        ? { environments: state.environments.map((e) => (e.id === environment.id ? environment : e)) }
+        : { environments: [...state.environments, environment] }
+    ),
 
   setAgents: (agents) => set({ agents }),
 

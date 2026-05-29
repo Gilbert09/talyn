@@ -10,6 +10,8 @@ import {
   removePostHogCodeCredentials,
 } from '../services/posthogCode/credentials.js';
 import { PostHogCodeClient } from '../services/posthogCode/client.js';
+import { rowToEnvironment } from './environments.js';
+import { emitEnvironmentCreated } from '../services/websocket.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
@@ -160,16 +162,20 @@ async function ensurePostHogCodeEnvironment(userId: string): Promise<void> {
   if (existing[0]) return;
 
   const now = new Date();
-  await db.insert(environmentsTable).values({
+  const row = {
     id: uuid(),
     ownerId: userId,
     name: 'PostHog Code',
-    type: 'posthog_code',
-    status: 'connected',
-    config: { type: 'posthog_code' },
+    type: 'posthog_code' as const,
+    status: 'connected' as const,
+    config: { type: 'posthog_code' as const },
     autonomousBypassPermissions: false,
-    renderer: 'structured',
+    renderer: 'structured' as const,
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  const [inserted] = await db.insert(environmentsTable).values(row).returning();
+
+  // Tell connected clients live so the env appears without an app restart.
+  emitEnvironmentCreated(rowToEnvironment(inserted ?? (row as typeof inserted)));
 }
