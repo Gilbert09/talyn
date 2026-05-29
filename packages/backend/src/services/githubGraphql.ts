@@ -4,10 +4,12 @@ import { githubService } from './github.js';
  * Batched GraphQL fetch for a workspace's PRs, modelled on supacode's
  * `GithubCLIClient.batchPullRequests`.
  *
- * One repo at a time, branches chunked into groups of 25 per query
- * (GitHub's GraphQL endpoint caps argument count and we want a single
- * round-trip per chunk). Up to 3 chunks fire concurrently — same number
- * supacode uses, balances throughput against secondary rate-limit risk.
+ * One repo at a time, PRs chunked into small groups per query. Each PR
+ * pulls a full `statusCheckRollup.contexts(first: 100)` + reviews +
+ * comments, which is expensive server-side — large repos (e.g. ones
+ * with big CI matrices) make a 25-wide query time out (504). Keep the
+ * chunk small so each request stays within GitHub's GraphQL budget. Up
+ * to 3 chunks fire concurrently.
  *
  * Each query aliases per-branch sub-queries inside one `repository`
  * node and pulls everything the cache layer needs in one shot:
@@ -125,7 +127,10 @@ export interface BatchPRResult {
 
 // ---------- Public API ----------
 
-const CHUNK_SIZE = 25;
+// Small chunk: each PR's statusCheckRollup is heavy to resolve, so a
+// wide query times out on big repos. 5 keeps requests fast at the cost
+// of a few more round-trips.
+const CHUNK_SIZE = 5;
 const CONCURRENCY = 3;
 
 export async function batchPullRequests(opts: {

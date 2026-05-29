@@ -620,7 +620,7 @@ describe('batchPullRequests — orchestration', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('chunks 60 branches into 3 queries (chunk size 25 → 25 + 25 + 10)', async () => {
+  it('chunks 12 branches into 3 queries (chunk size 5 → 5 + 5 + 2)', async () => {
     const spy = vi
       .spyOn(githubService, 'executeGraphql')
       .mockImplementation(async (_workspaceId, _query, _vars) => {
@@ -628,14 +628,14 @@ describe('batchPullRequests — orchestration', () => {
         // We assert the chunking, not the decoding, here.
         return { repository: {} } as never;
       });
-    const branches = Array.from({ length: 60 }, (_, i) => `b/${i}`);
+    const branches = Array.from({ length: 12 }, (_, i) => `b/${i}`);
     const out = await batchPullRequests({
       workspaceId: 'ws1',
       owner: 'acme',
       repo: 'widgets',
       branches,
     });
-    expect(out).toHaveLength(60);
+    expect(out).toHaveLength(12);
     expect(spy).toHaveBeenCalledTimes(3);
   });
 
@@ -666,8 +666,8 @@ describe('batchPullRequests — orchestration', () => {
       inFlight--;
       return { repository: {} } as never;
     });
-    // 250 branches → 10 chunks of 25 each.
-    const branches = Array.from({ length: 250 }, (_, i) => `b/${i}`);
+    // 50 branches → 10 chunks of 5 each.
+    const branches = Array.from({ length: 50 }, (_, i) => `b/${i}`);
     await batchPullRequests({
       workspaceId: 'ws1',
       owner: 'acme',

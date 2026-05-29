@@ -319,6 +319,25 @@ describe('githubService', () => {
       expect(String(stub.mock.calls[0][0])).toContain('/search/issues?q=');
     });
 
+    it('executeGraphql retries a 504 and succeeds on the next attempt', async () => {
+      let calls = 0;
+      const stub = vi.fn(async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response('', { status: 504, statusText: 'Gateway Timeout' });
+        }
+        return new Response(JSON.stringify({ data: { ok: true } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+      vi.stubGlobal('fetch', stub);
+
+      const data = await githubService.executeGraphql<{ ok: boolean }>('ws1', 'query{}');
+      expect(data.ok).toBe(true);
+      expect(calls).toBe(2);
+    });
+
     it('getCheckRuns hits /repos/:owner/:repo/commits/:ref/check-runs', async () => {
       const fetchStub = mockFetch({
         'commits/abc123/check-runs': () => ({ check_runs: [] }),
