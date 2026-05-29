@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 26 — PostHog Code: cloud execution provider
+
+Added **PostHog Code** as a new way to run tasks — a `posthog_code` environment type that delegates the entire agent loop to PostHog's sandboxed cloud runners instead of driving Claude locally over a daemon. Landed in two commits (backend, then desktop UI).
+
+**The key insight:** PostHog Code is a *delegation* provider, not a daemon transport. FastOwl's existing model drives the agent itself (spawns `claude -p`, parses JSONL, branches git, auto-commits → `awaiting_review`). PostHog Code instead owns the whole loop on its own machine (clones repo, runs agent, commits, pushes, opens a PR). So FastOwl's role becomes **create → poll → ingest the PR**. It's a new execution provider at the task-queue level, *not* a new entry in the daemon `stream_spawn`/`git` wire protocol.
+
+**API used** (`{host}/api/projects/{projectId}`, `Authorization: Bearer <personal key>`): `POST /tasks/` (create), `POST /tasks/{id}/run/` (`{mode:'background', runtime_adapter, model}`), `GET /tasks/{id}/` → `latest_run.{status, branch, output, error_message, log_url}`. Run status enum `not_started|queued|in_progress|completed|failed|cancelled`. PostHog auto-detects the opened PR URL and attaches it to the task, so we scan the task/run JSON for the first `github.com/.../pull/N`.
+
+- **Backend** (`services/posthogCode/`): `client.ts` (typed REST), `credentials.ts` (per-workspace key stored encrypted on the existing `posthog` integration row, reusing `tokenCrypto`), `executor.ts` (create remote task + start run, stash `posthogTaskId/posthogRunId` on `task.metadata`, idempotent), `poller.ts` (10s reconcile of in-flight runs → `awaiting_review` when a PR opened, else `completed`; `failed`/`cancelled` → `failed`; links the PR via `linkTaskToPullRequest` so it flows into the existing PR monitor + inbox).
+- **Task queue fork:** `posthog_code` tasks bypass the idle-agent / `(env,repo)` slot / concurrency machinery entirely (no working-tree contention in the cloud — concurrency control dropped by design) and are excluded from stuck-recovery (they have no FastOwl agent). Cloud envs are opt-in: excluded from the "any connected env" default pick.
+- **Auth model:** key + project id live **per workspace** (the `posthog` integration row); the env is a secret-free marker. Created/booted as `connected` with no pairing.
+- **Routes:** `/posthog` workspace-credential CRUD — key is write-only over the API and validated (`ping`) before persist.
+- **Desktop:** Add-Environment "PostHog Code (cloud)" option; Settings → Integrations PostHog Code card; Create-Task runtime/model overrides when a cloud env is picked; a cloud-run banner (status + log link) in the task detail. PR pill renders from `metadata.pullRequest` once the poller links it.
+
+**Open follow-ups:** confirm the exact PR-URL field against a live response (currently regex-scans the whole task/run JSON); optional live transcript via the `GET …/runs/{id}/stream/` SSE endpoint (left a clean seam, not built — decision was status+final-result only).
+
+**Test note:** full backend suite shows ~22 `PGlite is closed` cleanup failures under the parallel run (pre-existing infra flakiness); all touched files pass clean in isolation (taskQueueProcess 9/9, environments+tasks+environmentService 65/65).
+
 ## Session 25 — GitHub page: bug fixes, row actions, unread dots, review-requested PRs
 
 Continuation of the Conductor-parity work, focused on the GitHub page (`GitHubPanel.tsx`) after a full assessment of its bugs/gaps (#1–#9). Landed in four commits:
