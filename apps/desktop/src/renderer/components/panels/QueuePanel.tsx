@@ -19,6 +19,7 @@ import {
   GitCommit,
   ExternalLink,
   GitPullRequest,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -437,6 +438,14 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const task = tasks.find((t) => t.id === taskId);
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
+  const assignedEnv = task?.assignedEnvironmentId
+    ? environments.find((e) => e.id === task.assignedEnvironmentId)
+    : null;
+  const cloudMeta = task?.metadata as
+    | { posthogStatus?: string; posthogLogUrl?: string; posthogTaskId?: string }
+    | undefined;
+  const isCloudTask =
+    assignedEnv?.type === 'posthog_code' || Boolean(cloudMeta?.posthogTaskId);
 
   if (!task) {
     return (
@@ -650,6 +659,29 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             */}
           </div>
         </div>
+
+        {/* PostHog Code (cloud) run banner */}
+        {isCloudTask && (
+          <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
+            <BarChart3 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className="text-muted-foreground">Running on PostHog Code</span>
+            {cloudMeta?.posthogStatus && (
+              <Badge variant="secondary" className="text-[10px]">
+                {cloudMeta.posthogStatus}
+              </Badge>
+            )}
+            {cloudMeta?.posthogLogUrl && (
+              <button
+                type="button"
+                onClick={() => window.open(cloudMeta.posthogLogUrl!, '_blank')}
+                className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+              >
+                <ExternalLink className="w-3 h-3" />
+                View run
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="border-b px-4 flex items-center gap-1">

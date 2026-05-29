@@ -83,6 +83,8 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
   const [prompt, setPrompt] = useState('');
   const [repositoryId, setRepositoryId] = useState('');
   const [environmentId, setEnvironmentId] = useState('');
+  const [runtimeAdapter, setRuntimeAdapter] = useState<'claude' | 'codex'>('claude');
+  const [model, setModel] = useState('claude-opus-4-7');
   const [isLoading, setIsLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,8 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
   const connectedEnvironments = environments.filter((e) => e.status === 'connected');
   const typeConfig = typeOptions.find((t) => t.value === type)!;
   const isAgent = isAgentTask(type);
+  const selectedEnv = connectedEnvironments.find((e) => e.id === environmentId);
+  const isCloudEnv = selectedEnv?.type === 'posthog_code';
 
   // Load repositories when modal opens. When there's exactly one watched
   // repo, default the dropdown to it — no point making the user pick
@@ -133,6 +137,8 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
         prompt: isAgent ? prompt || undefined : undefined,
         repositoryId: isAgent && repositoryId ? repositoryId : undefined,
         assignedEnvironmentId: isAgent && environmentId ? environmentId : undefined,
+        runtimeAdapter: isAgent && isCloudEnv ? runtimeAdapter : undefined,
+        model: isAgent && isCloudEnv ? model || undefined : undefined,
       });
       // Jump straight to the new task's detail pane — user wants to
       // watch it run. Also force the Tasks panel visible in case the
@@ -155,7 +161,7 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [title, description, type, priority, prompt, repositoryId, environmentId, currentWorkspaceId, createTask, onOpenChange, isAgent, selectTask, setActivePanel]);
+  }, [title, description, type, priority, prompt, repositoryId, environmentId, isCloudEnv, runtimeAdapter, model, currentWorkspaceId, createTask, onOpenChange, isAgent, selectTask, setActivePanel]);
 
   const handleClose = useCallback(() => {
     if (!isLoading) {
@@ -283,11 +289,41 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
                       <option value="">Any available</option>
                       {connectedEnvironments.map((env) => (
                         <option key={env.id} value={env.id}>
-                          {env.name} ({env.type})
+                          {env.name} ({env.type === 'posthog_code' ? 'cloud' : env.type})
                         </option>
                       ))}
                     </Select>
                   </div>
+
+                  {isCloudEnv && (
+                    <div className="space-y-4">
+                      <p className="text-xs text-muted-foreground">
+                        Runs on PostHog Code's cloud sandbox. It clones the repo,
+                        works the task, and opens a PR — FastOwl tracks the run and
+                        surfaces the PR when it's ready.
+                      </p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Select
+                          label="Runtime"
+                          value={runtimeAdapter}
+                          onChange={(e) =>
+                            setRuntimeAdapter(e.target.value as 'claude' | 'codex')
+                          }
+                          disabled={isLoading}
+                        >
+                          <option value="claude">Claude</option>
+                          <option value="codex">Codex</option>
+                        </Select>
+                        <Input
+                          label="Model"
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          disabled={isLoading}
+                          placeholder="claude-opus-4-7"
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </>

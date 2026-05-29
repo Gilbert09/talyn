@@ -44,6 +44,7 @@ import {
   GitHubUser,
   GitHubRepo,
   WatchedRepo,
+  type PostHogCodeStatus,
 } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -811,14 +812,6 @@ function IntegrationsSettings() {
       connected: false,
       comingSoon: true,
     },
-    {
-      id: 'posthog',
-      name: 'PostHog',
-      icon: BarChart3,
-      description: 'View product analytics and receive alerts',
-      connected: false,
-      comingSoon: true,
-    },
   ];
 
   return (
@@ -900,6 +893,9 @@ function IntegrationsSettings() {
           </div>
         </Card>
 
+        {/* PostHog Code (cloud tasks) */}
+        <PostHogCodeCard />
+
         {/* Other Integrations */}
         {integrations.map((integration) => (
           <Card key={integration.id} className="p-4">
@@ -942,6 +938,179 @@ function IntegrationsSettings() {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * PostHog Code (cloud tasks) credentials, per workspace. The API key is
+ * write-only — once saved, the backend never returns it, so we show
+ * connection state + project id and let the user re-enter to rotate.
+ */
+function PostHogCodeCard() {
+  const { currentWorkspaceId } = useWorkspaceStore();
+  const [status, setStatus] = useState<PostHogCodeStatus | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [host, setHost] = useState('https://us.posthog.com');
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    try {
+      const s = await api.posthog.getStatus(currentWorkspaceId);
+      setStatus(s);
+      if (s.projectId) setProjectId(s.projectId);
+      if (s.host) setHost(s.host);
+    } catch {
+      setStatus({ connected: false });
+    }
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const handleSave = async () => {
+    if (!currentWorkspaceId || !apiKey.trim() || !projectId.trim()) return;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const s = await api.posthog.saveConfig(currentWorkspaceId, {
+        apiKey: apiKey.trim(),
+        projectId: projectId.trim(),
+        host: host.trim() || undefined,
+      });
+      setStatus(s);
+      setApiKey('');
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save credentials');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!currentWorkspaceId) return;
+    setIsSaving(true);
+    try {
+      await api.posthog.disconnect(currentWorkspaceId);
+      setStatus({ connected: false });
+      setProjectId('');
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to disconnect');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const connected = Boolean(status?.connected);
+  const showForm = editing || !connected;
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-4">
+        <div
+          className={cn(
+            'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
+            connected ? 'bg-green-500/10' : 'bg-secondary'
+          )}
+        >
+          <BarChart3 className={cn('w-5 h-5', connected && 'text-green-500')} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium">PostHog Code</h4>
+            {connected ? (
+              <Badge variant="default" className="bg-green-600">
+                <Check className="w-3 h-3 mr-1" />
+                Connected
+              </Badge>
+            ) : (
+              <Badge variant="secondary">Not Connected</Badge>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            {connected
+              ? `Cloud tasks run under project ${status?.projectId} on ${status?.host}.`
+              : 'Add a personal API key + project id to run tasks on PostHog Code’s cloud sandbox.'}
+          </p>
+
+          {showForm && (
+            <div className="mt-3 space-y-3">
+              <Input
+                label="Personal API key"
+                type="password"
+                placeholder="phx_..."
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                disabled={isSaving}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Project (team) id"
+                  placeholder="e.g. 2"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  disabled={isSaving}
+                />
+                <Input
+                  label="Host"
+                  placeholder="https://us.posthog.com"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  disabled={isSaving}
+                />
+              </div>
+              {error && (
+                <div className="text-sm text-destructive flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={isSaving || !apiKey.trim() || !projectId.trim() || !currentWorkspaceId}
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}
+                </Button>
+                {connected && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditing(false);
+                      setApiKey('');
+                      setError(null);
+                    }}
+                    disabled={isSaving}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {connected && !showForm && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={isSaving}>
+              <Pencil className="w-4 h-4 mr-1" />
+              Edit
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleDisconnect} disabled={isSaving}>
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

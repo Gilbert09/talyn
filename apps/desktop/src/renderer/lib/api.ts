@@ -296,6 +296,29 @@ export const github = {
     ),
 };
 
+// PostHog Code (cloud tasks) integration — per-workspace credentials.
+export interface PostHogCodeStatus {
+  connected: boolean;
+  projectId?: string;
+  host?: string;
+}
+
+export const posthog = {
+  getStatus: (workspaceId: string) =>
+    request<PostHogCodeStatus>('GET', `/posthog/status?workspaceId=${workspaceId}`),
+  saveConfig: (
+    workspaceId: string,
+    config: { apiKey: string; projectId: string; host?: string }
+  ) =>
+    request<PostHogCodeStatus>('PUT', '/posthog/config', { workspaceId, ...config }),
+  test: (workspaceId: string) =>
+    request<{ connected: boolean; error?: string }>('POST', '/posthog/test', {
+      workspaceId,
+    }),
+  disconnect: (workspaceId: string) =>
+    request<void>('DELETE', `/posthog/config?workspaceId=${workspaceId}`),
+};
+
 // Watched Repositories
 export interface WatchedRepo {
   id: string;
@@ -677,6 +700,7 @@ export const api = {
   tasks,
   inbox,
   github,
+  posthog,
   repositories,
   pullRequests,
   backlog,

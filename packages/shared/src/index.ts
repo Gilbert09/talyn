@@ -177,6 +177,9 @@ export interface RemoteEnvironmentConfig {
  */
 export interface PostHogCodeEnvironmentConfig {
   type: 'posthog_code';
+  /** Display-only, for parity with the other configs. Unused for cloud. */
+  hostname?: string;
+  workingDirectory?: string;
   /** Default agent runtime for tasks on this env. */
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   /** Default agent model for tasks on this env. */
