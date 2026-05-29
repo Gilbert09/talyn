@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 29 — Replace hand-rolled markdown with react-markdown
+
+Ripped out the bespoke `renderMarkdownish` parser (`apps/desktop/src/renderer/lib/markdown.tsx`) and rebuilt it on **react-markdown + remark-gfm + rehype-raw + rehype-sanitize**. The hand-rolled parser kept hitting gaps on real PR/review content (tables, then `<details>` — patched twice); the library handles GFM (tables, task lists, strikethrough, autolinks) and raw HTML for free, sanitized.
+
+- **Same public API.** `renderMarkdownish(text, variant)` is now a thin shim over a new `<Markdown text variant />` component, so all four call sites (`AgentConversation` feed, `PRDetailSheet` surface ×3) are unchanged. The `feed`/`surface` palette split is preserved via a per-variant `components` map (links, code/pre, headings, lists, blockquote, hr, tables, details/summary, img).
+- **Safety.** `rehype-raw` → `rehype-sanitize` (extended `defaultSchema` to allow `<details>`/`<summary open>`) so untrusted GitHub HTML renders without XSS.
+- **Jest + ESM.** react-markdown's plugin tree is pure ESM and breaks ts-jest's CommonJS transform — followed the repo's existing pattern (the `@pierre/diffs/react` mock) and stubbed `react-markdown` / `remark-gfm` / `rehype-raw` / `rehype-sanitize` via `moduleNameMapper` + `.erb/mocks/*`. Markdown-rendering correctness now relies on react-markdown's upstream tests; our jest test is a wrapper smoke test (the old DOM-level table/details tests were removed since the renderer is mocked). Verified the real bundle with a production `build:renderer` (webpack resolves the ESM cleanly).
+
 ## Session 28 — PR detail panel polish (checks filter, reviews experience, panel switching)
 
 Four UX improvements to the PR detail side-panel (`PRDetailSheet`) and the GitHub list:

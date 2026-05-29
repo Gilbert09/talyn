@@ -43,7 +43,11 @@
     "moduleNameMapper": {
       "\\.(jpg|jpeg|png|gif|eot|otf|webp|svg|ttf|woff|woff2|mp4|webm|wav|mp3|m4a|aac|oga)$": "<rootDir>/.erb/mocks/fileMock.js",
       "\\.(css|less|sass|scss)$": "identity-obj-proxy",
-      "^@pierre/diffs/react$": "<rootDir>/.erb/mocks/pierreDiffsReactMock.js"
+      "^@pierre/diffs/react$": "<rootDir>/.erb/mocks/pierreDiffsReactMock.js",
+      "^react-markdown$": "<rootDir>/.erb/mocks/reactMarkdownMock.js",
+      "^remark-gfm$": "<rootDir>/.erb/mocks/remarkRehypePluginMock.js",
+      "^rehype-raw$": "<rootDir>/.erb/mocks/remarkRehypePluginMock.js",
+      "^rehype-sanitize$": "<rootDir>/.erb/mocks/rehypeSanitizeMock.js"
     },
     "setupFiles": [
       "./.erb/scripts/check-build-exists.ts"
@@ -71,7 +75,11 @@
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^9.1.0",
     "react-router-dom": "^7.3.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
