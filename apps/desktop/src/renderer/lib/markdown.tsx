@@ -51,7 +51,11 @@ export function renderMarkdownish(
 ): React.ReactNode {
   const c = variant === 'surface' ? SURFACE : FEED;
   const parts: React.ReactNode[] = [];
-  const lines = text.split('\n');
+  // Normalise CRLF/CR → LF first. GitHub PR bodies (and other sources)
+  // often arrive as CRLF; the leftover `\r` defeats the `$`-anchored
+  // heading / hr / blockquote regexes below, so those PRs would render
+  // their `##` headings as raw text while LF-authored ones rendered fine.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
   let i = 0;
   let paragraphBuf: string[] = [];
 
