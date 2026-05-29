@@ -43,6 +43,8 @@ interface ActiveStream {
   /** Events appended since the last DB flush. */
   unpersisted: number;
   closed: boolean;
+  /** Skip SSE, pull the durable S3 log once (terminal runs). */
+  backfillOnly: boolean;
 }
 
 class PostHogCodeStreamer {
@@ -57,6 +59,12 @@ class PostHogCodeStreamer {
     workspaceId: string;
     posthogTaskId: string;
     posthogRunId: string;
+    /**
+     * Skip the live SSE stream and pull the durable S3 log once. Used for
+     * terminal runs (whose live Redis stream is gone, so an SSE attempt
+     * just blocks until it times out).
+     */
+    backfillOnly?: boolean;
   }): void {
     if (this.active.has(input.taskId)) return;
     const stream: ActiveStream = {
@@ -69,6 +77,7 @@ class PostHogCodeStreamer {
       transcript: [],
       unpersisted: 0,
       closed: false,
+      backfillOnly: Boolean(input.backfillOnly),
     };
     this.active.set(input.taskId, stream);
     void this.run(stream).catch((err) => {
@@ -102,6 +111,14 @@ class PostHogCodeStreamer {
   private async run(stream: ActiveStream): Promise<void> {
     const client = await getPostHogCodeClient(stream.workspaceId);
     if (!client) {
+      this.cleanup(stream);
+      return;
+    }
+
+    // Terminal runs have no live stream — go straight to the durable log.
+    if (stream.backfillOnly) {
+      await this.backfillFromSessionLogs(stream, client);
+      await this.persist(stream);
       this.cleanup(stream);
       return;
     }

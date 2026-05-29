@@ -73,6 +73,20 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
 
   const StatusIcon = statusConfig[agentStatus].icon;
 
+  // PostHog Code tasks run in the cloud; their logs aren't streamed until
+  // something asks for them. On opening a cloud task with no transcript
+  // yet, kick the backend to backfill/stream — events then arrive over
+  // the WS. Fire-and-forget; intentionally only keyed on the task id so
+  // it runs once per open, not on every transcript update.
+  const hasTranscript = (task.transcript?.length ?? 0) > 0;
+  useEffect(() => {
+    if (isCloudTask && !hasTranscript) {
+      void api.tasks.refreshLogs(task.id).catch(() => {});
+    }
+    // Keyed only on task id/type — see comment above (hasTranscript is
+    // read at fire time, not a trigger).
+  }, [task.id, isCloudTask]);
+
   const handleSendInput = useCallback(async () => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;

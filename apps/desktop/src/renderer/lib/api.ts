@@ -210,6 +210,9 @@ export const tasks = {
   // Generate task metadata from prompt using AI
   generateMetadata: (prompt: string) =>
     request<TaskMetadata>('POST', '/tasks/generate-metadata', { prompt }),
+  // Kick a PostHog Code (cloud) task's log stream/backfill on demand.
+  // Transcript events arrive over the WS, so the response is just ok.
+  refreshLogs: (id: string) => request<void>('POST', `/tasks/${id}/refresh-logs`),
 };
 
 // Inbox

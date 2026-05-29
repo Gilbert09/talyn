@@ -16,6 +16,9 @@ import { autoCommitAndSnapshot, writeFinalFilesSnapshot } from '../services/task
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { findTaskHoldingEnvRepoSlot } from '../services/taskQueue.js';
 import { emitTaskStatus, emitTaskUpdate, emitTaskDeleted } from '../services/websocket.js';
+import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
+import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
+import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
 import {
   generateTaskMetadata,
   generateTaskTitle,
@@ -1135,6 +1138,76 @@ export function taskRoutes(): Router {
       success: false,
       error: prState.pullRequestError || 'PR creation failed',
     });
+  });
+
+  // On-demand log fetch for a PostHog Code (cloud) task. The poller only
+  // streams `in_progress` tasks, so opening a finished task — or a
+  // running one before the first poll tick — would otherwise show a blank
+  // transcript. This resolves the real run id (older tasks mis-stored the
+  // task id), then kicks the streamer: a live SSE tail for running runs,
+  // or a one-shot durable S3 backfill for terminal ones. Events flow back
+  // over the existing `task:event` WS, so we just return ok.
+  router.post('/:id/refresh-logs', async (req, res) => {
+    try {
+      await requireTaskAccess(req, req.params.id);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(tasksTable)
+      .where(eq(tasksTable.id, req.params.id))
+      .limit(1);
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    const task = rowToTask(rows[0]);
+    const meta = (task.metadata ?? {}) as Record<string, unknown>;
+    const posthogTaskId = meta.posthogTaskId as string | undefined;
+    if (!posthogTaskId) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Not a PostHog Code task.' });
+    }
+    const client = await getPostHogCodeClient(task.workspaceId);
+    if (!client) {
+      return res.status(400).json({
+        success: false,
+        error: 'PostHog Code is not configured for this workspace.',
+      });
+    }
+
+    let runId: string | undefined;
+    let terminal = false;
+    try {
+      const remote = await client.getTask(posthogTaskId);
+      runId = remote.latest_run?.id;
+      const status = remote.latest_run?.status;
+      terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+    } catch (err) {
+      return res.status(502).json({
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to reach PostHog Code.',
+      });
+    }
+    if (!runId) {
+      return res
+        .status(409)
+        .json({ success: false, error: 'The run has not started yet.' });
+    }
+
+    if (runId !== meta.posthogRunId) {
+      await patchTaskMetadata(task.id, (existing) => ({ ...existing, posthogRunId: runId }));
+    }
+    postHogCodeStreamer.ensure({
+      taskId: task.id,
+      workspaceId: task.workspaceId,
+      posthogTaskId,
+      posthogRunId: runId,
+      backfillOnly: terminal,
+    });
+    return res.json({ success: true });
   });
 
   // Read the audit log of every git command FastOwl ran on this
