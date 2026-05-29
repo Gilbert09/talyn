@@ -162,6 +162,20 @@ describe('computeBlockingReason', () => {
     ).toBe('unknown');
   });
 
+  it('returns blocked for REVIEW_REQUIRED even while mergeable is UNKNOWN', () => {
+    // GitHub computes `mergeable` lazily (UNKNOWN on first fetch), but
+    // reviewDecision is already known — a waiting-on-review PR should read
+    // "Review", not flash an unknown "—".
+    expect(
+      computeBlockingReason({
+        mergeable: 'UNKNOWN',
+        mergeStateStatus: 'UNKNOWN',
+        reviewDecision: 'REVIEW_REQUIRED',
+        checks: baseChecks,
+      })
+    ).toBe('blocked');
+  });
+
   it('priority order: conflicts wins over changes_requested wins over checks_failed', () => {
     // All three blocking signals at once → only one is surfaced. Conflicts
     // is the most actionable so wins.

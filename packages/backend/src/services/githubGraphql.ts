@@ -301,6 +301,12 @@ export function computeBlockingReason(input: {
   if (input.mergeable === 'CONFLICTING') return 'merge_conflicts';
   if (input.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
   if (input.checks.failed > 0) return 'checks_failed';
+  // A required review that hasn't landed yet → "Review". Checked before
+  // the mergeable branch because GitHub computes `mergeable` lazily and
+  // returns UNKNOWN on first fetch — reviewDecision is computed
+  // independently, so this keeps a waiting-on-review PR from flashing as
+  // an unknown "—" until mergeability resolves.
+  if (input.reviewDecision === 'REVIEW_REQUIRED') return 'blocked';
   if (input.mergeable === 'MERGEABLE') {
     // A PR can be MERGEABLE but still BLOCKED by branch-protection
     // (e.g. required reviews missing). The mergeStateStatus surfaces
