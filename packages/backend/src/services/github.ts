@@ -156,6 +156,10 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
 
 class GitHubService extends EventEmitter {
   private tokens: Map<string, StoredToken> = new Map();
+  // Authenticated user's login per workspace. Resolved once via /user
+  // and reused — the inbox filter checks it on every comment, so we
+  // can't afford an API round-trip each time.
+  private viewerLoginCache: Map<string, string> = new Map();
 
   private get db(): Database {
     return getDbClient();
@@ -297,6 +301,7 @@ class GitHubService extends EventEmitter {
         and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github'))
       );
     this.tokens.delete(workspaceId);
+    this.viewerLoginCache.delete(workspaceId);
     this.emit('disconnected', workspaceId);
   }
 
@@ -347,6 +352,24 @@ class GitHubService extends EventEmitter {
 
   async getUser(workspaceId: string): Promise<GitHubUser> {
     return this.apiRequest<GitHubUser>(workspaceId, '/user');
+  }
+
+  /**
+   * The connected user's login for a workspace, cached. Returns null
+   * when GitHub isn't connected or the lookup fails — callers treat a
+   * null login as "can't tell, don't filter on identity".
+   */
+  async getViewerLogin(workspaceId: string): Promise<string | null> {
+    const cached = this.viewerLoginCache.get(workspaceId);
+    if (cached) return cached;
+    if (!this.tokens.has(workspaceId)) return null;
+    try {
+      const user = await this.getUser(workspaceId);
+      this.viewerLoginCache.set(workspaceId, user.login);
+      return user.login;
+    } catch {
+      return null;
+    }
   }
 
   /**

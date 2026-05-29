@@ -102,6 +102,10 @@ export interface PRSummary {
   recentReviewComments: Array<{
     id: string;
     author: string;
+    /** True when the author is a GitHub App / bot (e.g. `foo[bot]`). */
+    authorIsBot: boolean;
+    /** Plain-text comment body — used to detect @-mentions of the viewer. */
+    bodyText: string;
     createdAt: string;
     url: string;
   }>;
@@ -112,6 +116,8 @@ export interface PRSummary {
   recentComments: Array<{
     id: string;
     author: string;
+    authorIsBot: boolean;
+    bodyText: string;
     createdAt: string;
     url: string;
   }>;
@@ -541,12 +547,12 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
   reviewThreads(last: 5) {
     nodes {
       comments(last: 1) {
-        nodes { id author { login } createdAt url }
+        nodes { id author { login __typename } createdAt url bodyText }
       }
     }
   }
   comments(last: 5) {
-    nodes { id author { login } createdAt url }
+    nodes { id author { login __typename } createdAt url bodyText }
   }
   commits(last: 1) {
     nodes {
@@ -673,9 +679,10 @@ interface RawPullRequest {
       comments: {
         nodes: Array<{
           id: string;
-          author: { login: string } | null;
+          author: { login: string; __typename?: string } | null;
           createdAt: string;
           url: string;
+          bodyText?: string | null;
         }>;
       };
     }>;
@@ -683,9 +690,10 @@ interface RawPullRequest {
   comments: {
     nodes: Array<{
       id: string;
-      author: { login: string } | null;
+      author: { login: string; __typename?: string } | null;
       createdAt: string;
       url: string;
+      bodyText?: string | null;
     }>;
   };
   commits: {
@@ -815,6 +823,8 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
       .map((c) => ({
         id: c.id,
         author: c.author?.login ?? '',
+        authorIsBot: isBotActor(c.author),
+        bodyText: c.bodyText ?? '',
         createdAt: c.createdAt,
         url: c.url,
       })),
@@ -824,8 +834,23 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
       .map((c) => ({
         id: c.id,
         author: c.author?.login ?? '',
+        authorIsBot: isBotActor(c.author),
+        bodyText: c.bodyText ?? '',
         createdAt: c.createdAt,
         url: c.url,
       })),
   };
+}
+
+/**
+ * Whether a comment author is a GitHub App / bot rather than a person.
+ * GitHub marks App actors with `__typename: 'Bot'`; the `[bot]` login
+ * suffix is the canonical fallback for cases where typename is absent.
+ */
+function isBotActor(
+  author: { login: string; __typename?: string } | null | undefined
+): boolean {
+  if (!author) return false;
+  if (author.__typename === 'Bot') return true;
+  return author.login.endsWith('[bot]');
 }

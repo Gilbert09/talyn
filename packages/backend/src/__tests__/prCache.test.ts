@@ -21,6 +21,7 @@ import {
   tasks as tasksTable,
 } from '../db/schema.js';
 import * as websocketModule from '../services/websocket.js';
+import { githubService } from '../services/github.js';
 
 // ---------- Helpers ----------
 
@@ -64,19 +65,31 @@ function review(id: string, state = 'APPROVED', author = 'reviewer'): PRSummary[
   };
 }
 
-function reviewComment(id: string, author = 'reviewer'): PRSummary['recentReviewComments'][number] {
+function reviewComment(
+  id: string,
+  author = 'reviewer',
+  opts: { authorIsBot?: boolean; bodyText?: string } = {}
+): PRSummary['recentReviewComments'][number] {
   return {
     id,
     author,
+    authorIsBot: opts.authorIsBot ?? false,
+    bodyText: opts.bodyText ?? '',
     createdAt: '2026-01-02T00:00:00Z',
     url: `https://github.com/acme/widgets/pull/42#discussion_r-${id}`,
   };
 }
 
-function comment(id: string, author = 'reviewer'): PRSummary['recentComments'][number] {
+function comment(
+  id: string,
+  author = 'reviewer',
+  opts: { authorIsBot?: boolean; bodyText?: string } = {}
+): PRSummary['recentComments'][number] {
   return {
     id,
     author,
+    authorIsBot: opts.authorIsBot ?? false,
+    bodyText: opts.bodyText ?? '',
     createdAt: '2026-01-02T00:00:00Z',
     url: `https://github.com/acme/widgets/pull/42#issuecomment-${id}`,
   };
@@ -390,6 +403,70 @@ describe('prCache — DB integration', () => {
       }),
     });
     expect(await inboxCount('pr_comment')).toBe(2);
+  });
+
+  it('suppresses bot-authored comments that do not mention the viewer', async () => {
+    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({
+        recentReviewComments: [reviewComment('rc1')],
+        recentComments: [comment('c1')],
+      }),
+    });
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({
+        recentReviewComments: [
+          reviewComment('rc2', 'coverage[bot]', { authorIsBot: true, bodyText: 'coverage went up' }),
+          reviewComment('rc1'),
+        ],
+        recentComments: [
+          comment('c2', 'dependabot[bot]', { authorIsBot: true, bodyText: 'bumped a dep' }),
+          comment('c1'),
+        ],
+      }),
+    });
+    expect(await inboxCount('pr_comment')).toBe(0);
+  });
+
+  it('keeps a bot comment that @-mentions the viewer', async () => {
+    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({ recentComments: [comment('c1')] }),
+    });
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({
+        recentComments: [
+          comment('c2', 'sentry[bot]', { authorIsBot: true, bodyText: 'hey @me this regressed' }),
+          comment('c1'),
+        ],
+      }),
+    });
+    expect(await inboxCount('pr_comment')).toBe(1);
+  });
+
+  it('still emits comments from real people regardless of viewer login', async () => {
+    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({ recentComments: [comment('c1')] }),
+    });
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({
+        recentComments: [comment('c2', 'alice'), comment('c1')],
+      }),
+    });
+    expect(await inboxCount('pr_comment')).toBe(1);
   });
 
   it('emits ci_failure when checks transition into failure between polls', async () => {

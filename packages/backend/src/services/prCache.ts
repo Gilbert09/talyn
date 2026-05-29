@@ -6,6 +6,7 @@ import {
   inboxItems as inboxItemsTable,
 } from '../db/schema.js';
 import { broadcastToWorkspace, emitPullRequestUpdated } from './websocket.js';
+import { githubService } from './github.js';
 import {
   batchPullRequests,
   type CheckBreakdown,
@@ -579,11 +580,44 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
 
 // ---------- Inbox event emission ----------
 
+/**
+ * Suppress a bot-authored PR comment unless it @-mentions the viewer.
+ * Human comments always pass. When we don't know the viewer's login
+ * (GitHub not connected / lookup failed), a bot comment is dropped —
+ * we can't confirm a mention, and the whole point is to cut bot noise.
+ */
+function suppressBotComment(
+  comment: { authorIsBot: boolean; bodyText: string },
+  viewerLogin: string | null
+): boolean {
+  if (!comment.authorIsBot) return false;
+  if (viewerLogin && mentionsUser(comment.bodyText, viewerLogin)) return false;
+  return true;
+}
+
+function mentionsUser(body: string, login: string): boolean {
+  if (!body) return false;
+  // `@login` not immediately followed by another login char, so `@tom`
+  // doesn't match `@tomato`. GitHub logins are alphanumeric + hyphen.
+  const re = new RegExp(`@${escapeRegExp(login)}(?![A-Za-z0-9-])`, 'i');
+  return re.test(body);
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function emitDeltaInboxItems(
   workspaceId: string,
   summary: PRSummary,
   delta: PRDelta
 ): Promise<void> {
+  // Bot-authored PR comments (CI bots, coverage, changelog, etc.) are
+  // mostly noise. Drop them from the inbox unless they directly
+  // @-mention the connected user — that's a deliberate ping worth
+  // surfacing. Reviews and CI/ready items are unaffected.
+  const viewerLogin = await githubService.getViewerLogin(workspaceId);
+
   for (const review of delta.newReviews) {
     if (review.state === 'PENDING') continue;
     await createInboxItem(workspaceId, summary, {
@@ -603,6 +637,7 @@ async function emitDeltaInboxItems(
     });
   }
   for (const comment of delta.newReviewComments) {
+    if (suppressBotComment(comment, viewerLogin)) continue;
     await createInboxItem(workspaceId, summary, {
       type: 'pr_comment',
       priority: 'medium',
@@ -620,6 +655,7 @@ async function emitDeltaInboxItems(
     });
   }
   for (const comment of delta.newComments) {
+    if (suppressBotComment(comment, viewerLogin)) continue;
     await createInboxItem(workspaceId, summary, {
       type: 'pr_comment',
       priority: 'low',
