@@ -20,6 +20,7 @@ import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/utils';
+import { renderMarkdownish } from '../../lib/markdown';
 import {
   api,
   type PRRow,
@@ -388,9 +389,9 @@ function OverviewTab({
           <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Description
           </h3>
-          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed">
-            {body}
-          </pre>
+          <div className="text-xs leading-relaxed [overflow-wrap:anywhere]">
+            {renderMarkdownish(body, 'surface')}
+          </div>
         </section>
       ) : (
         <p className="text-xs text-muted-foreground">No description provided.</p>
