@@ -56,8 +56,9 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
 
   const agentStatus = task.agentStatus || 'working';
   const agentAttention = task.agentAttention || 'none';
-  const envName =
-    environments.find((e) => e.id === task.assignedEnvironmentId)?.name;
+  const assignedEnv = environments.find((e) => e.id === task.assignedEnvironmentId);
+  const envName = assignedEnv?.name;
+  const isCloudTask = assignedEnv?.type === 'posthog_code';
   // Tasks whose child already exited (awaiting_review / completed /
   // failed) can still be resumed if we captured a `claudeSessionId`
   // on their metadata. The input bar routes Send to /continue in that
@@ -200,6 +201,7 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           taskId={task.id}
           transcript={task.transcript}
           envName={envName}
+          waitingHint={isCloudTask ? 'Running on PostHog Code — fetching logs…' : undefined}
           interactive
         />
       </div>

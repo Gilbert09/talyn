@@ -9,6 +9,7 @@ import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
 import { getPostHogCodeClient } from './credentials.js';
+import { postHogCodeStreamer } from './streamer.js';
 import type { PostHogRun, PostHogRunStatus } from './client.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -69,6 +70,7 @@ class PostHogCodePoller {
             repositoryId: row.repositoryId,
             posthogTaskId,
             lastStatus: meta.posthogStatus as string | undefined,
+            transcriptEmpty: !Array.isArray(row.transcript) || row.transcript.length === 0,
           });
         } catch (err) {
           // Transient API hiccups are fine — we retry next tick. Don't
@@ -95,6 +97,7 @@ class PostHogCodePoller {
     repositoryId: string | null;
     posthogTaskId: string;
     lastStatus?: string;
+    transcriptEmpty: boolean;
   }): Promise<void> {
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) return; // credentials removed mid-run; leave as-is.
@@ -104,12 +107,38 @@ class PostHogCodePoller {
     const status = run?.status;
     if (!status) return;
 
+    // The real run id lives on `latest_run.id`. Early FastOwl builds
+    // mis-stored the task id here (the `run/` endpoint returns the task),
+    // so trust the live value and self-heal the stored metadata below.
+    const runId = run?.id;
+
+    // Drive the log stream into the task transcript. `ensure` is
+    // idempotent and self-heals across reconnects/backend restarts.
+    //   - running: keep a live SSE stream open.
+    //   - terminal but no transcript yet (run finished while the backend
+    //     was down): one-shot durable backfill from S3 — the stream
+    //     self-terminates once drained.
+    //   - terminal with a transcript: nothing left to do; drop any
+    //     lingering stream.
+    const isTerminal = TERMINAL.has(status);
+    if (runId && (!isTerminal || task.transcriptEmpty)) {
+      postHogCodeStreamer.ensure({
+        taskId: task.id,
+        workspaceId: task.workspaceId,
+        posthogTaskId: task.posthogTaskId,
+        posthogRunId: runId,
+      });
+    } else if (isTerminal) {
+      postHogCodeStreamer.stop(task.id);
+    }
+
     const prUrl = findPullRequestUrl(remote, run);
 
-    // Keep metadata fresh (status + PR url + log url) even while running.
+    // Keep metadata fresh (status + run id + PR url + log url) even while running.
     await patchTaskMetadata(task.id, (existing) => ({
       ...existing,
       posthogStatus: status,
+      posthogRunId: runId ?? existing.posthogRunId,
       posthogLogUrl: run?.log_url ?? existing.posthogLogUrl,
       posthogPrUrl: prUrl ?? existing.posthogPrUrl,
     }));

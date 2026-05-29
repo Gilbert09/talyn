@@ -22,6 +22,7 @@ import { permissionInboxService } from './services/permissionInbox.js';
 import { taskFileWatcher } from './services/taskFileWatcher.js';
 import { daemonAutoUpdate } from './services/daemonAutoUpdate.js';
 import { postHogCodePoller } from './services/posthogCode/poller.js';
+import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -133,6 +134,7 @@ async function main() {
     console.log('Shutting down...');
     continuousBuildScheduler.shutdown();
     postHogCodePoller.shutdown();
+    postHogCodeStreamer.shutdownAll();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
     agentService.shutdown();

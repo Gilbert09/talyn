@@ -8,6 +8,7 @@ import {
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
 import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.js';
+import { postHogCodeStreamer } from './streamer.js';
 
 const DEFAULT_RUNTIME_ADAPTER: PostHogCodeRuntimeAdapter = 'claude';
 const DEFAULT_MODEL = 'claude-opus-4-7';
@@ -81,13 +82,18 @@ export async function dispatchTaskToPostHogCode(
       posthogStatus: 'not_started',
     }));
 
-    const run = await client.startRun(remoteTask.id, { runtimeAdapter, model });
+    // `run/` returns the task; the new run is on `latest_run`. Its
+    // `latest_run.id` (NOT the returned `id`, which is the task id) is the
+    // run id the logs/stream endpoints are keyed on.
+    const startedTask = await client.startRun(remoteTask.id, { runtimeAdapter, model });
+    const startedRun = startedTask.latest_run ?? null;
+    const runId = startedRun?.id;
 
     await patchTaskMetadata(task.id, (existing) => ({
       ...existing,
-      posthogRunId: run.id,
-      posthogStatus: run.status ?? 'queued',
-      posthogLogUrl: run.log_url ?? existing.posthogLogUrl,
+      posthogRunId: runId ?? existing.posthogRunId,
+      posthogStatus: startedRun?.status ?? 'queued',
+      posthogLogUrl: startedRun?.log_url ?? existing.posthogLogUrl,
     }));
 
     // Pin the env + flip to in_progress so the UI stops showing it as
@@ -102,8 +108,21 @@ export async function dispatchTaskToPostHogCode(
       .where(eq(tasksTable.id, task.id));
     emitTaskStatus(task.workspaceId, task.id, 'in_progress');
 
+    // Start streaming the run's logs into the transcript right away so
+    // the task terminal shows progress without waiting for the poller's
+    // first tick. If the run id isn't on the response yet, the poller
+    // picks it up from `latest_run` on its next tick.
+    if (runId) {
+      postHogCodeStreamer.ensure({
+        taskId: task.id,
+        workspaceId: task.workspaceId,
+        posthogTaskId: remoteTask.id,
+        posthogRunId: runId,
+      });
+    }
+
     console.log(
-      `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTask.id} run ${run.id} (${repository})`,
+      `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTask.id} run ${runId ?? '(pending)'} (${repository})`,
     );
     return { ok: true };
   } catch (err) {

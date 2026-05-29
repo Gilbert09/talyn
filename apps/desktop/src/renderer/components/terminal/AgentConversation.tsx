@@ -19,6 +19,8 @@ interface AgentConversationProps {
   interactive?: boolean;
   /** Display name of the env the task runs on. Surfaced in the auto-allowed indicator. */
   envName?: string;
+  /** Overrides the "Waiting for the agent to start…" empty-state copy (e.g. cloud tasks). */
+  waitingHint?: string;
 }
 
 /**
@@ -37,6 +39,7 @@ export function AgentConversation({
   transcript,
   interactive = true,
   envName,
+  waitingHint,
 }: AgentConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Track "was the user at the bottom before the latest re-render?" so
@@ -72,7 +75,7 @@ export function AgentConversation({
       <div className="h-full flex items-center justify-center text-xs text-zinc-500 bg-[#1a1a1a]">
         {hasAnyEvents
           ? 'Claude is thinking…'
-          : 'Waiting for the agent to start…'}
+          : (waitingHint ?? 'Waiting for the agent to start…')}
       </div>
     );
   }

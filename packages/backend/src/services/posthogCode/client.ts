@@ -1,4 +1,5 @@
 import type { PostHogCodeRuntimeAdapter } from '@fastowl/shared';
+import type { AcpLogEntry } from './acpConverter.js';
 
 /**
  * Thin typed wrapper over the PostHog Code (tasks) REST API.
@@ -32,12 +33,16 @@ export class PostHogCodeClient {
     });
   }
 
-  /** Kick off a background run for a task. Returns the run id. */
+  /**
+   * Kick off a background run for a task. The endpoint returns the parent
+   * *task* (not the run) — the new run is on `task.latest_run`, and its
+   * `latest_run.id` is the run id used by the logs/stream endpoints.
+   */
   async startRun(
     taskId: string,
     input: { runtimeAdapter: PostHogCodeRuntimeAdapter; model: string },
-  ): Promise<PostHogRun> {
-    return this.request<PostHogRun>('POST', `/tasks/${taskId}/run/`, {
+  ): Promise<PostHogTask> {
+    return this.request<PostHogTask>('POST', `/tasks/${taskId}/run/`, {
       mode: 'background',
       runtime_adapter: input.runtimeAdapter,
       model: input.model,
@@ -57,6 +62,56 @@ export class PostHogCodeClient {
   /** Fetch a run's log text. Best-effort — shape varies, returned raw. */
   async getRunLogs(taskId: string, runId: string): Promise<unknown> {
     return this.request<unknown>('GET', `/tasks/${taskId}/runs/${runId}/logs/`);
+  }
+
+  /**
+   * Fetch a run's parsed JSONL log entries from durable storage (S3).
+   * Used as the backfill source for tasks whose live Redis stream is gone
+   * (completed runs reopened later, or runs that finished while the
+   * backend was down). `after` is an ISO timestamp to fetch only newer
+   * entries. Returns the entries in order.
+   */
+  async getSessionLogs(
+    taskId: string,
+    runId: string,
+    opts: { after?: string; limit?: number } = {},
+  ): Promise<AcpLogEntry[]> {
+    const qs = new URLSearchParams();
+    if (opts.after) qs.set('after', opts.after);
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const data = await this.request<unknown>(
+      'GET',
+      `/tasks/${taskId}/runs/${runId}/session_logs/${suffix}`,
+    );
+    return Array.isArray(data) ? (data as AcpLogEntry[]) : [];
+  }
+
+  /**
+   * Open the live SSE stream for a run. Returns the raw `fetch` Response
+   * whose body is the `text/event-stream`; the caller parses frames.
+   * `lastEventId` resumes from a prior position (Redis stream id); omit
+   * it to replay the run from the beginning, then tail live.
+   */
+  async openRunStream(
+    taskId: string,
+    runId: string,
+    opts: { lastEventId?: string; signal?: AbortSignal } = {},
+  ): Promise<Response> {
+    const url = `${this.baseUrl}/tasks/${taskId}/runs/${runId}/stream/`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      Accept: 'text/event-stream',
+    };
+    if (opts.lastEventId) headers['Last-Event-ID'] = opts.lastEventId;
+    const res = await fetch(url, { method: 'GET', headers, signal: opts.signal });
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => '');
+      throw new Error(
+        `PostHog Code stream open failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    }
+    return res;
   }
 
   /** Cheap auth/connectivity probe. Throws on bad creds / unreachable host. */
