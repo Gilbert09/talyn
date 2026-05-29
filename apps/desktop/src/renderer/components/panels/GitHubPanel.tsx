@@ -566,7 +566,6 @@ function PRTable({
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
-          <th className="px-2 py-2 text-left font-medium">Review</th>
           <th className="px-2 py-2 text-left font-medium">Status</th>
           <th className="px-2 py-2 text-left font-medium">
             <button
@@ -716,15 +715,19 @@ function PRTableRow({
         </div>
       </td>
       <td className="px-2 py-2">
-        <PRReviewPill reviewDecision={summary.reviewDecision} state={row.state} />
-      </td>
-      <td className="px-2 py-2">
-        <PRStatusPill
-          blockingReason={summary.blockingReason}
-          checks={summary.checks}
-          state={row.state}
-          hideReviewState
-        />
+        <div className="flex items-center gap-1.5">
+          <PRReviewPill
+            reviewDecision={summary.reviewDecision}
+            state={row.state}
+            minimal
+          />
+          <PRStatusPill
+            blockingReason={summary.blockingReason}
+            checks={summary.checks}
+            state={row.state}
+            hideReviewState
+          />
+        </div>
       </td>
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}

@@ -17,6 +17,12 @@ interface PRReviewPillProps {
   reviewDecision: PRReviewDecision;
   /** Merged/closed PRs don't carry a meaningful pending-review state. */
   state?: PRState;
+  /**
+   * Icon-only badge (no label) — for sitting alongside the status pill
+   * in a single column. Renders nothing when there's no actionable
+   * review state (no decision yet, or a terminal PR).
+   */
+  minimal?: boolean;
   className?: string;
 }
 
@@ -27,9 +33,33 @@ interface ReviewVariant {
   title: string;
 }
 
-export function PRReviewPill({ reviewDecision, state, className }: PRReviewPillProps) {
+export function PRReviewPill({
+  reviewDecision,
+  state,
+  minimal = false,
+  className,
+}: PRReviewPillProps) {
   const variant = pickVariant(reviewDecision, state);
   const Icon = variant.icon;
+
+  // Nothing actionable to show in minimal mode — keep the cell calm.
+  if (minimal && variant.tone === 'grey') return null;
+
+  if (minimal) {
+    return (
+      <span
+        title={variant.title}
+        className={cn(
+          'inline-flex items-center rounded-md border p-1',
+          toneClass(variant.tone),
+          className
+        )}
+      >
+        <Icon className="w-3.5 h-3.5 shrink-0" />
+      </span>
+    );
+  }
+
   return (
     <span
       title={variant.title}
