@@ -55,9 +55,19 @@ import { PRStatusPill } from './PRStatusPill';
 interface PRDetailSheetProps {
   pullRequestId: string | null;
   onClose: () => void;
+  /**
+   * `overlay` (default) — a fixed slide-in over the right edge (task
+   * screen / QueuePanel). `inline` — an in-flow flex sibling so the
+   * adjacent list keeps its width and stays clickable (GitHub page).
+   */
+  layout?: 'overlay' | 'inline';
 }
 
-export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
+export function PRDetailSheet({
+  pullRequestId,
+  onClose,
+  layout = 'overlay',
+}: PRDetailSheetProps) {
   const [data, setData] = useState<{
     row: PRRow;
     fresh: (PRSummaryShape & PRFreshDetail) | null;
@@ -166,7 +176,14 @@ export function PRDetailSheet({ pullRequestId, onClose }: PRDetailSheetProps) {
     !!data && data.row.state === 'open' && data.row.summary.blockingReason === 'mergeable';
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-2xl flex-col border-l bg-background shadow-2xl">
+    <div
+      className={cn(
+        'flex w-full max-w-2xl flex-col border-l bg-background',
+        layout === 'inline'
+          ? 'h-full shrink-0'
+          : 'fixed inset-y-0 right-0 z-40 shadow-2xl'
+      )}
+    >
       <header className="flex shrink-0 items-start gap-3 border-b p-4">
         <div className="min-w-0 flex-1">
           {loading && !data ? (

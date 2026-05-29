@@ -2,6 +2,10 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 30 — Fix: switching the open PR detail panel from the list
+
+The Session 28 "shift the list left" margin hack didn't actually fix switching — `marginRight: min(42rem, 100%)` collapses the list to zero width on any content area ≤ 42rem (common at typical window sizes), so rows still weren't clickable and the panel never switched. Replaced it with a real split layout: on the GitHub page the `PRDetailSheet` now renders as an **in-flow flex sibling** beside the list (new `layout="inline"` prop) instead of a `fixed` overlay, so the list keeps `flex-1` width and stays clickable; clicking another PR changes `selectedId` and the already-mounted sheet refetches. `QueuePanel` keeps the default `layout="overlay"` (unchanged). The sheet's container class switches between `h-full shrink-0` (inline) and the original `fixed inset-y-0 right-0 z-40 shadow-2xl` (overlay).
+
 ## Session 29 — Replace hand-rolled markdown with react-markdown
 
 Ripped out the bespoke `renderMarkdownish` parser (`apps/desktop/src/renderer/lib/markdown.tsx`) and rebuilt it on **react-markdown + remark-gfm + rehype-raw + rehype-sanitize**. The hand-rolled parser kept hitting gaps on real PR/review content (tables, then `<details>` — patched twice); the library handles GFM (tables, task lists, strikethrough, autolinks) and raw HTML for free, sanitized.

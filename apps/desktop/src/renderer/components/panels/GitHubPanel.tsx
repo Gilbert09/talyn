@@ -426,14 +426,7 @@ export function GitHubPanel() {
   }
 
   return (
-    <div className="relative flex h-full flex-col">
-      {/* When the detail panel is open it overlays the right edge; shift
-          the list left so every row stays visible and clickable, so
-          selecting another PR switches the open panel. */}
-      <div
-        className="flex h-full min-h-0 flex-col transition-[margin] duration-200"
-        style={{ marginRight: selectedId ? 'min(42rem, 100%)' : undefined }}
-      >
+    <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b p-4">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Github className="h-5 w-5" />
@@ -477,7 +470,12 @@ export function GitHubPanel() {
         relationshipCounts={relationshipCounts}
       />
 
-      <div className="flex-1 overflow-hidden">
+      {/* Split row: the list keeps its own width (flex-1) and the detail
+          panel sits beside it as an in-flow sibling — not a fixed overlay
+          — so every row stays visible and clicking another PR switches
+          the open panel. */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="min-w-0 flex-1 overflow-hidden">
         <ScrollArea className="h-full">
           {error && (
             <div className="m-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
@@ -524,9 +522,13 @@ export function GitHubPanel() {
           )}
         </ScrollArea>
       </div>
-      </div>
 
-      <PRDetailSheet pullRequestId={selectedId} onClose={() => setSelectedId(null)} />
+        <PRDetailSheet
+          pullRequestId={selectedId}
+          onClose={() => setSelectedId(null)}
+          layout="inline"
+        />
+      </div>
     </div>
   );
 }
