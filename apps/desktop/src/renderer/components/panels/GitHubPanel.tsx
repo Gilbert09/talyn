@@ -527,6 +527,7 @@ export function GitHubPanel() {
           pullRequestId={selectedId}
           onClose={() => setSelectedId(null)}
           layout="inline"
+          seedRow={rows.find((r) => r.id === selectedId) ?? null}
         />
       </div>
     </div>

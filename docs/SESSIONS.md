@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 31 — Instant PR panel switching (seed-from-cache) + Esc to close
+
+Switching PRs felt laggy because `PRDetailSheet` blocked on a full `GET /pull-requests/:id` round-trip every time. Now the list passes the already-loaded row (`seedRow`) into the panel; the panel renders that cached summary **instantly** (title, branch, status pill, check rollup) and refreshes the live detail (reviews/files/check rows/body) in place.
+
+- **`view` selection** (`useMemo`): the fetched `data` once it matches the current `pullRequestId`, else the `seedRow` while the fetch is in flight. An id guard stops the previous PR's detail flashing during a switch (and the `pull_request:updated` WS patch now also guards `prev.row.id === p.id`).
+- **Minimal spinner**: a small `Loader2` next to the title while `detailPending` (current PR's detail fetch unresolved), instead of a full-panel "Loading…". Threaded into `OverviewTab` ("Loading description…") and `ChecksTab` ("Loading checks…") so they show a spinner rather than the empty/"unavailable"/GitHub-fallback states while loading. The "Detail fetch unavailable" note only shows once the fetch resolves empty.
+- **Esc closes the panel** (`keydown` listener, both layouts). QueuePanel's overlay usage passes no `seedRow`, so it keeps the original full-loading behaviour — unchanged except it now also closes on Esc.
+
 ## Session 30 — Fix: switching the open PR detail panel from the list
 
 The Session 28 "shift the list left" margin hack didn't actually fix switching — `marginRight: min(42rem, 100%)` collapses the list to zero width on any content area ≤ 42rem (common at typical window sizes), so rows still weren't clickable and the panel never switched. Replaced it with a real split layout: on the GitHub page the `PRDetailSheet` now renders as an **in-flow flex sibling** beside the list (new `layout="inline"` prop) instead of a `fixed` overlay, so the list keeps `flex-1` width and stays clickable; clicking another PR changes `selectedId` and the already-mounted sheet refetches. `QueuePanel` keeps the default `layout="overlay"` (unchanged). The sheet's container class switches between `h-full shrink-0` (inline) and the original `fixed inset-y-0 right-0 z-40 shadow-2xl` (overlay).

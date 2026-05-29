@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
   RefreshCw,
@@ -61,12 +61,19 @@ interface PRDetailSheetProps {
    * adjacent list keeps its width and stays clickable (GitHub page).
    */
   layout?: 'overlay' | 'inline';
+  /**
+   * The list's already-loaded row for this PR. When supplied, the panel
+   * renders the cached summary instantly on switch and refreshes the
+   * detail (reviews/files/check rows) in place — no full-panel spinner.
+   */
+  seedRow?: PRRow | null;
 }
 
 export function PRDetailSheet({
   pullRequestId,
   onClose,
   layout = 'overlay',
+  seedRow = null,
 }: PRDetailSheetProps) {
   const [data, setData] = useState<{
     row: PRRow;
@@ -112,7 +119,8 @@ export function PRDetailSheet({
       const p = payload as { id: string; lastSummary: unknown };
       if (p.id !== pullRequestId) return;
       setData((prev) => {
-        if (!prev) return prev;
+        // Guard against patching a stale row mid-switch.
+        if (!prev || prev.row.id !== p.id) return prev;
         return {
           ...prev,
           row: { ...prev.row, summary: p.lastSummary as PRSummaryShape },
@@ -121,6 +129,16 @@ export function PRDetailSheet({
     });
     return unsubscribe;
   }, [pullRequestId]);
+
+  // Esc closes the panel.
+  useEffect(() => {
+    if (!pullRequestId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [pullRequestId, onClose]);
 
   // Adaptive polling: while this sheet is open the PR is "focused"
   // and the backend tightens its TTL to 30 s. Cleared on close /
@@ -132,6 +150,23 @@ export function PRDetailSheet({
       api.pullRequests.focus(pullRequestId, false).catch(() => {});
     };
   }, [pullRequestId]);
+
+  // What to render: the fetched detail once it matches the current PR,
+  // else the list-supplied cached row (instant) while the detail loads.
+  // The id guard stops the previous PR's detail flashing during a switch.
+  const view = useMemo(() => {
+    if (data && data.row.id === pullRequestId) return data;
+    if (seedRow && seedRow.id === pullRequestId) {
+      return { row: seedRow, fresh: null as (PRSummaryShape & PRFreshDetail) | null };
+    }
+    return null;
+  }, [data, seedRow, pullRequestId]);
+
+  // True until the fresh detail fetch for the *current* PR resolves —
+  // drives a minimal in-place spinner rather than a full-panel one. Once
+  // it resolves, `data` carries this PR's id (fresh may still be null if
+  // the fetch came back empty, e.g. env offline).
+  const detailPending = data?.row.id !== pullRequestId;
 
   async function handleRefresh(): Promise<void> {
     if (!pullRequestId) return;
@@ -173,7 +208,7 @@ export function PRDetailSheet({
   // mergeable (no conflicts, checks/reviews satisfied). Anything else
   // routes the user to GitHub to resolve the blocker.
   const canMerge =
-    !!data && data.row.state === 'open' && data.row.summary.blockingReason === 'mergeable';
+    !!view && view.row.state === 'open' && view.row.summary.blockingReason === 'mergeable';
 
   return (
     <div
@@ -186,38 +221,46 @@ export function PRDetailSheet({
     >
       <header className="flex shrink-0 items-start gap-3 border-b p-4">
         <div className="min-w-0 flex-1">
-          {loading && !data ? (
+          {!view ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading…
             </div>
-          ) : data ? (
+          ) : (
             <>
               <div className="flex items-center gap-2">
                 <h2 className="truncate text-base font-semibold">
-                  {data.row.summary.title}
+                  {view.row.summary.title}
                 </h2>
                 <span className="shrink-0 text-sm text-muted-foreground">
-                  {data.row.owner}/{data.row.repo}#{data.row.number}
+                  {view.row.owner}/{view.row.repo}#{view.row.number}
                 </span>
+                {/* Minimal in-place refresh indicator while the fresh
+                    detail loads — the cached summary is already shown. */}
+                {detailPending && (
+                  <Loader2
+                    className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                    aria-label="Refreshing"
+                  />
+                )}
               </div>
               <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <span>by @{data.row.summary.author}</span>
+                <span>by @{view.row.summary.author}</span>
                 <span>·</span>
                 <BranchRef
-                  head={data.row.summary.headBranch}
-                  base={data.row.summary.baseBranch}
+                  head={view.row.summary.headBranch}
+                  base={view.row.summary.baseBranch}
                 />
               </div>
               <div className="mt-2">
                 <PRStatusPill
-                  blockingReason={data.row.summary.blockingReason}
-                  checks={data.row.summary.checks}
-                  state={data.row.state}
+                  blockingReason={view.row.summary.blockingReason}
+                  checks={view.row.summary.checks}
+                  state={view.row.state}
                 />
               </div>
             </>
-          ) : null}
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {canMerge &&
@@ -266,11 +309,11 @@ export function PRDetailSheet({
           >
             <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
           </Button>
-          {data && (
+          {view && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => window.open(data.row.summary.url, '_blank', 'noopener,noreferrer')}
+              onClick={() => window.open(view.row.summary.url, '_blank', 'noopener,noreferrer')}
               title="Open on GitHub"
             >
               <ExternalLink className="h-4 w-4" />
@@ -282,7 +325,7 @@ export function PRDetailSheet({
         </div>
       </header>
 
-      {data && <DetailTabs data={data} error={error} />}
+      {view && <DetailTabs data={view} error={error} detailPending={detailPending} />}
     </div>
   );
 }
@@ -292,9 +335,11 @@ type TabKey = 'overview' | 'files' | 'checks' | 'reviews';
 function DetailTabs({
   data,
   error,
+  detailPending,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
   error: string | null;
+  detailPending: boolean;
 }) {
   const [tab, setTab] = useState<TabKey>('overview');
 
@@ -348,13 +393,13 @@ function DetailTabs({
               {error}
             </div>
           )}
-          {!data.fresh && (
+          {!data.fresh && !detailPending && (
             <p className="mb-4 text-xs text-muted-foreground">
               Detail fetch unavailable (env offline?). Showing cached state only.
             </p>
           )}
-          {tab === 'overview' && <OverviewTab data={data} />}
-          {tab === 'checks' && <ChecksTab data={data} />}
+          {tab === 'overview' && <OverviewTab data={data} detailPending={detailPending} />}
+          {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
           {tab === 'reviews' && <ReviewsTab data={data} />}
           {tab === 'files' && <FilesTab data={data} />}
         </div>
@@ -400,8 +445,10 @@ function TabButton({
 
 function OverviewTab({
   data,
+  detailPending,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
+  detailPending: boolean;
 }) {
   const body = data.fresh?.body ?? '';
   return (
@@ -415,6 +462,11 @@ function OverviewTab({
             {renderMarkdownish(body, 'surface')}
           </div>
         </section>
+      ) : detailPending ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading description…
+        </p>
       ) : (
         <p className="text-xs text-muted-foreground">No description provided.</p>
       )}
@@ -468,8 +520,10 @@ const FILTER_STATES: Record<CheckFilter, PRCheckState[]> = {
 
 function ChecksTab({
   data,
+  detailPending,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
+  detailPending: boolean;
 }) {
   const checks = data.row.summary.checks;
   // Clicking a tile filters the list to that state (toggle off by
@@ -544,6 +598,11 @@ function ChecksTab({
             </button>
           </p>
         )
+      ) : detailPending ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading checks…
+        </p>
       ) : (
         <a
           href={`${data.row.summary.url}/checks`}
