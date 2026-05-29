@@ -161,6 +161,11 @@ export async function batchPullRequests(opts: {
         query,
         { owner, repo }
       );
+      await topUpCheckContexts(extractBranchPRs(data, chunk.length), {
+        workspaceId,
+        owner,
+        repo,
+      });
       results.push(...decodeBatchResponse(chunk, data, owner, repo));
     }
   }
@@ -208,6 +213,11 @@ export async function batchPullRequestsByNumber(opts: {
         query,
         { owner, repo }
       );
+      await topUpCheckContexts(extractByNumberPRs(data, chunk.length), {
+        workspaceId,
+        owner,
+        repo,
+      });
       results.push(...decodeBatchByNumberResponse(chunk, data, owner, repo));
     }
   }
@@ -217,6 +227,140 @@ export async function batchPullRequestsByNumber(opts: {
   );
   await Promise.all(workers);
   return results;
+}
+
+// ---------- statusCheckRollup pagination ----------
+//
+// GraphQL caps a connection's `first` at 100, so a PR with >100 check
+// contexts comes back truncated — wrong counts AND a wrong blocking
+// reason (a failure beyond #100 would read as green). For any PR whose
+// `contexts` page reports `hasNextPage`, we walk the remaining pages and
+// splice them into the raw nodes before `rawToSummary` counts them.
+// Cheap in practice: only PRs with 100+ checks pay for extra round-trips.
+
+const MAX_CONTEXT_PAGES = 50; // 50 * 100 = 5000 checks — a sane ceiling.
+
+interface ContextsPageResponse {
+  repository: {
+    pullRequest: {
+      commits: {
+        nodes: Array<{
+          commit: {
+            statusCheckRollup: {
+              contexts: {
+                nodes: Array<RawCheckContext>;
+                pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              };
+            } | null;
+          };
+        }>;
+      };
+    } | null;
+  } | null;
+}
+
+function makeContextsPageQuery(): string {
+  return `query ContextsPage($owner: String!, $repo: String!, $number: Int!, $after: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              contexts(first: 100, after: $after) {
+                nodes {
+                  ${CONTEXT_NODE_FIELDS}
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+}
+
+async function fetchRemainingCheckContexts(
+  workspaceId: string,
+  owner: string,
+  repo: string,
+  number: number,
+  startCursor: string
+): Promise<RawCheckContext[]> {
+  const out: RawCheckContext[] = [];
+  const query = makeContextsPageQuery();
+  let after: string | null = startCursor;
+  let page = 0;
+  while (after && page < MAX_CONTEXT_PAGES) {
+    page++;
+    const data: ContextsPageResponse =
+      await githubService.executeGraphql<ContextsPageResponse>(workspaceId, query, {
+        owner,
+        repo,
+        number,
+        after,
+      });
+    const conn =
+      data.repository?.pullRequest?.commits.nodes[0]?.commit.statusCheckRollup
+        ?.contexts;
+    if (!conn) break;
+    out.push(...conn.nodes);
+    after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+  }
+  return out;
+}
+
+/**
+ * For each PR whose first contexts page reports more pages, fetch the
+ * rest and append them in place. Mutates the raw nodes so the existing
+ * `rawToSummary` path sees the complete list. Runs sequentially — the
+ * surrounding batch worker is already concurrency-bounded, and >100-check
+ * PRs are rare enough that serial top-ups don't meaningfully add latency.
+ */
+async function topUpCheckContexts(
+  prs: RawPullRequest[],
+  ctx: { workspaceId: string; owner: string; repo: string }
+): Promise<void> {
+  for (const pr of prs) {
+    const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
+    const pageInfo = rollup?.contexts.pageInfo;
+    if (!rollup || !pageInfo?.hasNextPage || !pageInfo.endCursor) continue;
+    const remaining = await fetchRemainingCheckContexts(
+      ctx.workspaceId,
+      ctx.owner,
+      ctx.repo,
+      pr.number,
+      pageInfo.endCursor
+    );
+    rollup.contexts.nodes.push(...remaining);
+    rollup.contexts.pageInfo = { hasNextPage: false, endCursor: null };
+  }
+}
+
+function extractBranchPRs(
+  data: BatchPullRequestsResponse,
+  count: number
+): RawPullRequest[] {
+  const prs: RawPullRequest[] = [];
+  for (let idx = 0; idx < count; idx++) {
+    const node = data.repository?.[aliasForBranch(idx)]?.nodes?.[0];
+    if (node) prs.push(node);
+  }
+  return prs;
+}
+
+function extractByNumberPRs(
+  data: BatchByNumberResponse,
+  count: number
+): RawPullRequest[] {
+  const prs: RawPullRequest[] = [];
+  for (let idx = 0; idx < count; idx++) {
+    const node = data.repository?.[aliasForBranch(idx)];
+    if (node) prs.push(node);
+  }
+  return prs;
 }
 
 // ---------- Pure helpers (unit-tested) ----------
@@ -351,6 +495,29 @@ export function computeCheckDigest(
  * head order). Aliases must be valid GraphQL identifiers — we hash the
  * branch name to a stable safe alias.
  */
+// Selection for one statusCheckRollup context node. Shared by the
+// PRFields fragment and the standalone contexts-pagination query so the
+// two never drift.
+const CONTEXT_NODE_FIELDS = `__typename
+              ... on CheckRun {
+                id
+                name
+                status
+                conclusion
+                detailsUrl
+                startedAt
+                completedAt
+                checkSuite { app { name } }
+              }
+              ... on StatusContext {
+                id
+                context
+                state
+                description
+                targetUrl
+                createdAt
+              }`;
+
 const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
   number
   title
@@ -388,26 +555,9 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
           state
           contexts(first: 100) {
             nodes {
-              __typename
-              ... on CheckRun {
-                id
-                name
-                status
-                conclusion
-                detailsUrl
-                startedAt
-                completedAt
-                checkSuite { app { name } }
-              }
-              ... on StatusContext {
-                id
-                context
-                state
-                description
-                targetUrl
-                createdAt
-              }
+              ${CONTEXT_NODE_FIELDS}
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
@@ -545,6 +695,7 @@ interface RawPullRequest {
           state: string;
           contexts: {
             nodes: Array<RawCheckContext>;
+            pageInfo?: { hasNextPage: boolean; endCursor: string | null };
           };
         } | null;
       };

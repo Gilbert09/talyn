@@ -669,6 +669,103 @@ describe('batchPullRequests — orchestration', () => {
     expect(callArgs[2]).toEqual({ owner: 'acme', repo: 'widgets' });
   });
 
+  it('paginates statusCheckRollup contexts past the 100-node cap', async () => {
+    const ctx = (over: Record<string, unknown>) => ({ __typename: 'CheckRun', status: 'COMPLETED', ...over });
+    const spy = vi
+      .spyOn(githubService, 'executeGraphql')
+      .mockImplementation(async (_ws, query: string) => {
+        if (query.includes('ContextsPage')) {
+          // Page 2: the remaining contexts, including a failure that the
+          // first (capped) page didn't contain.
+          return {
+            repository: {
+              pullRequest: {
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        statusCheckRollup: {
+                          contexts: {
+                            nodes: [
+                              ctx({ id: '2', name: 'b', conclusion: 'SUCCESS' }),
+                              ctx({ id: '3', name: 'c', conclusion: 'FAILURE' }),
+                            ],
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          } as never;
+        }
+        // Page 1 (the batch query): one passing check + "more to come".
+        return {
+          repository: {
+            [aliasForBranch(0)]: {
+              nodes: [
+                {
+                  number: 42,
+                  title: 'big',
+                  body: '',
+                  url: 'https://github.com/acme/widgets/pull/42',
+                  isDraft: false,
+                  state: 'OPEN',
+                  mergedAt: null,
+                  closedAt: null,
+                  updatedAt: '2026-01-01T00:00:00Z',
+                  mergeable: 'MERGEABLE',
+                  mergeStateStatus: 'CLEAN',
+                  reviewDecision: 'APPROVED',
+                  author: { login: 'alice' },
+                  headRefName: 'feature/x',
+                  baseRefName: 'main',
+                  headRefOid: 'abc',
+                  reviews: { nodes: [] },
+                  reviewThreads: { nodes: [] },
+                  comments: { nodes: [] },
+                  commits: {
+                    nodes: [
+                      {
+                        commit: {
+                          statusCheckRollup: {
+                            state: 'FAILURE',
+                            contexts: {
+                              nodes: [ctx({ id: '1', name: 'a', conclusion: 'SUCCESS' })],
+                              pageInfo: { hasNextPage: true, endCursor: 'C1' },
+                            },
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        } as never;
+      });
+
+    const out = await batchPullRequests({
+      workspaceId: 'ws1',
+      owner: 'acme',
+      repo: 'widgets',
+      branches: ['feature/x'],
+    });
+
+    // One batch query + one follow-up contexts page.
+    expect(spy).toHaveBeenCalledTimes(2);
+    const pr = out[0].pr!;
+    expect(pr.checks.total).toBe(3);
+    expect(pr.checks.passed).toBe(2);
+    expect(pr.checks.failed).toBe(1);
+    // The failure lived past the first page — the blocking reason must
+    // reflect it rather than reading green.
+    expect(pr.blockingReason).toBe('checks_failed');
+  });
+
   it('limits in-flight queries to 3 even when more chunks exist', async () => {
     let inFlight = 0;
     let peak = 0;
