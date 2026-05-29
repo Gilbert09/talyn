@@ -24,9 +24,11 @@ const BACKEND_URL = process.env.FASTOWL_API_URL || 'http://localhost:4747';
  * Add a remote environment.
  *
  * Local envs are managed automatically by `useLocalDaemon` on app
- * start — users never add them manually. What "add environment" means
- * now is: pair a new remote machine by minting a pairing token the
- * user pastes into a one-liner on the target VM.
+ * start — users never add them manually. PostHog Code (cloud) envs are
+ * auto-provisioned when the PostHog integration is connected (see
+ * Settings → Integrations). What "add environment" means here is: pair
+ * a new remote machine by minting a pairing token the user pastes into
+ * a one-liner on the target VM.
  *
  * Flow:
  *   1. User picks a name.
@@ -38,24 +40,20 @@ const BACKEND_URL = process.env.FASTOWL_API_URL || 'http://localhost:4747';
 export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalProps) {
   const { createEnvironment } = useEnvironmentActions();
 
-  const [kind, setKind] = useState<'remote' | 'posthog_code'>('remote');
   const [name, setName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [_envId, setEnvId] = useState<string | null>(null);
   const [daemonStatus, setDaemonStatus] = useState<'pending' | 'connected' | 'failed'>('pending');
-  const [cloudCreated, setCloudCreated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const resetForm = useCallback(() => {
-    setKind('remote');
     setName('');
     setIsCreating(false);
     setPairingToken(null);
     setEnvId(null);
     setDaemonStatus('pending');
-    setCloudCreated(false);
     setError(null);
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -77,27 +75,6 @@ export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalP
     if (!name.trim()) return;
     setError(null);
     setIsCreating(true);
-
-    // PostHog Code envs have no daemon to pair — create the marker env
-    // and we're done. Credentials are configured per-workspace in
-    // Settings → Integrations.
-    if (kind === 'posthog_code') {
-      try {
-        const env = await createEnvironment({
-          name: name.trim(),
-          type: 'posthog_code',
-          config: { type: 'posthog_code' },
-        });
-        if (!env) throw new Error('Failed to create environment');
-        setEnvId(env.id);
-        setCloudCreated(true);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setIsCreating(false);
-      }
-      return;
-    }
 
     try {
       const env = await createEnvironment({
@@ -132,7 +109,7 @@ export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalP
       setError(err instanceof Error ? err.message : String(err));
       setIsCreating(false);
     }
-  }, [name, kind, createEnvironment]);
+  }, [name, createEnvironment]);
 
   const handleClose = useCallback(() => {
     onOpenChange(false);
@@ -150,75 +127,30 @@ export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Add environment</DialogTitle>
+          <DialogTitle>Add remote environment</DialogTitle>
           <DialogDescription>
-            {kind === 'remote'
-              ? "Pair a new machine to FastOwl. We'll mint a one-time token; paste the install command on the target VM to bring up a daemon."
-              : 'Run tasks on PostHog Code’s cloud sandbox — no machine to manage. Tasks assigned here are handed off to PostHog, which opens a PR when done.'}
+            Pair a new machine to FastOwl. We'll mint a one-time token; paste
+            the install command on the target VM to bring up a daemon.
           </DialogDescription>
         </DialogHeader>
 
-        {!pairingToken && !cloudCreated && (
+        {!pairingToken && (
           <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type="button"
-                variant={kind === 'remote' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setKind('remote')}
-                disabled={isCreating}
-              >
-                Remote VM (daemon)
-              </Button>
-              <Button
-                type="button"
-                variant={kind === 'posthog_code' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setKind('posthog_code')}
-                disabled={isCreating}
-              >
-                PostHog Code (cloud)
-              </Button>
-            </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Name</label>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={
-                  kind === 'remote'
-                    ? 'e.g. Hetzner box, Dev VM, GPU rig'
-                    : 'e.g. PostHog Cloud'
-                }
+                placeholder="e.g. Hetzner box, Dev VM, GPU rig"
                 disabled={isCreating}
               />
             </div>
-            {kind === 'posthog_code' && (
-              <p className="text-xs text-muted-foreground">
-                After creating, add your PostHog API key + project id in
-                Settings → Integrations to enable cloud tasks for this workspace.
-              </p>
-            )}
             {error && (
               <div className="text-sm text-destructive flex items-start gap-2">
                 <X className="w-4 h-4 mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
-          </div>
-        )}
-
-        {cloudCreated && (
-          <div className="space-y-3 py-2">
-            <div className="flex items-center gap-2 text-sm">
-              <Check className="w-4 h-4 text-green-500" />
-              <span>Cloud environment ready.</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Configure your PostHog API key + project id in Settings →
-              Integrations, then assign tasks to this environment to run them in
-              the cloud.
-            </p>
           </div>
         )}
 
@@ -265,7 +197,7 @@ export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalP
         )}
 
         <DialogFooter>
-          {!pairingToken && !cloudCreated && (
+          {!pairingToken && (
             <>
               <Button variant="outline" onClick={handleClose} disabled={isCreating}>
                 Cancel
@@ -274,13 +206,13 @@ export function AddEnvironmentModal({ open, onOpenChange }: AddEnvironmentModalP
                 {isCreating ? (
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 ) : null}
-                {kind === 'remote' ? 'Create & pair' : 'Create'}
+                Create & pair
               </Button>
             </>
           )}
-          {(pairingToken || cloudCreated) && (
+          {pairingToken && (
             <Button onClick={handleClose}>
-              {cloudCreated || daemonStatus === 'connected' ? 'Done' : 'Close'}
+              {daemonStatus === 'connected' ? 'Done' : 'Close'}
             </Button>
           )}
         </DialogFooter>

@@ -1,5 +1,9 @@
 import { Router } from 'express';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { v4 as uuid } from 'uuid';
+import { and, eq } from 'drizzle-orm';
+import { getDbClient } from '../db/client.js';
+import { environments as environmentsTable } from '../db/schema.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   getPostHogCodeCredentials,
   storePostHogCodeCredentials,
@@ -81,6 +85,13 @@ export function posthogRoutes(): Router {
         error: `Could not store credentials: ${msg}`,
       });
     }
+
+    // Connecting the integration auto-provisions the cloud environment
+    // (users don't add it manually). One per user is enough — it's a
+    // secret-free marker; the per-workspace credentials above are what
+    // actually authorise a run.
+    await ensurePostHogCodeEnvironment(assertUser(req).id);
+
     res.json({
       success: true,
       data: { connected: true, projectId, host: resolvedHost },
@@ -127,4 +138,38 @@ export function posthogRoutes(): Router {
   });
 
   return router;
+}
+
+/**
+ * Ensure the user has a `posthog_code` environment. Created on first
+ * integration connect, marked `connected` immediately (no daemon to
+ * pair). Idempotent — at most one cloud env per user.
+ */
+async function ensurePostHogCodeEnvironment(userId: string): Promise<void> {
+  const db = getDbClient();
+  const existing = await db
+    .select({ id: environmentsTable.id })
+    .from(environmentsTable)
+    .where(
+      and(
+        eq(environmentsTable.ownerId, userId),
+        eq(environmentsTable.type, 'posthog_code'),
+      ),
+    )
+    .limit(1);
+  if (existing[0]) return;
+
+  const now = new Date();
+  await db.insert(environmentsTable).values({
+    id: uuid(),
+    ownerId: userId,
+    name: 'PostHog Code',
+    type: 'posthog_code',
+    status: 'connected',
+    config: { type: 'posthog_code' },
+    autonomousBypassPermissions: false,
+    renderer: 'structured',
+    createdAt: now,
+    updatedAt: now,
+  });
 }

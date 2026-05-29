@@ -1407,27 +1407,32 @@ function EnvironmentsSettings() {
                       {env.error}
                     </div>
                   )}
-                  <label className="flex items-start gap-2 mt-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={env.autonomousBypassPermissions}
-                      disabled={togglingBypass === env.id}
-                      onChange={(e) => void handleToggleBypass(env, e.target.checked)}
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1">
-                      <div className="text-sm font-medium">
-                        Allow unattended Claude runs to bypass permission prompts
+                  {/* Permission bypass is meaningless for cloud envs —
+                      PostHog Code runs in its own sandbox and manages its
+                      own permissions. */}
+                  {env.type !== 'posthog_code' && (
+                    <label className="flex items-start gap-2 mt-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={env.autonomousBypassPermissions}
+                        disabled={togglingBypass === env.id}
+                        onChange={(e) => void handleToggleBypass(env, e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <div className="flex-1">
+                        <div className="text-sm font-medium">
+                          Allow unattended Claude runs to bypass permission prompts
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {env.type === 'remote'
+                            ? 'Recommended for throwaway remote VMs — the blast radius is bounded to that machine.'
+                            : env.autonomousBypassPermissions
+                              ? 'Enabled on your local machine: Claude can run any shell command and edit any file on this machine during autonomous tasks.'
+                              : 'Off (recommended for local envs). Autonomous tasks use acceptEdits mode; they may pause on bash / MCP trust prompts — you can answer from the task terminal input below.'}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {env.type === 'remote'
-                          ? 'Recommended for throwaway remote VMs — the blast radius is bounded to that machine.'
-                          : env.autonomousBypassPermissions
-                            ? 'Enabled on your local machine: Claude can run any shell command and edit any file on this machine during autonomous tasks.'
-                            : 'Off (recommended for local envs). Autonomous tasks use acceptEdits mode; they may pause on bash / MCP trust prompts — you can answer from the task terminal input below.'}
-                      </p>
-                    </div>
-                  </label>
+                    </label>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
