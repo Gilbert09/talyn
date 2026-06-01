@@ -34,6 +34,7 @@ import {
   type PRReviewDetail,
   type PRReviewThread,
 } from '../../lib/api';
+import { prime } from '../../lib/prSummaryCache';
 import { PRStatusPill } from './PRStatusPill';
 
 /**
@@ -98,6 +99,9 @@ export function PRDetailSheet({
       .then((res) => {
         if (cancelled) return;
         setData(res);
+        // Warm the shared cache so the task-header status pill paints
+        // instantly next time this PR is shown.
+        prime(res.row.id, { summary: res.row.summary, state: res.row.state });
       })
       .catch((err: Error) => {
         if (cancelled) return;

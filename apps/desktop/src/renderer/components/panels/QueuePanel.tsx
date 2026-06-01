@@ -39,6 +39,11 @@ import { useTaskGitLog } from '../../hooks/useTaskGitLog';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import type { PRSummaryShape, PRState } from '../../lib/api';
+import {
+  getCachedPRStatus,
+  prime,
+  subscribePRStatus,
+} from '../../lib/prSummaryCache';
 import { isAgentTask } from '@fastowl/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority, AgentStatus, AgentAttention } from '@fastowl/shared';
 
@@ -854,9 +859,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               return (
                 <>
                   {pr.id && (
-                    // key on the PR id so switching tasks remounts the pill
-                    // with fresh state instead of briefly showing the prior
-                    // task's status until the new fetch resolves.
+                    // key on the PR id so switching tasks remounts the pill,
+                    // letting it re-seed synchronously from the PR status
+                    // cache instead of carrying the prior task's state.
                     <PRStatusPillForTask
                       key={pr.id}
                       pullRequestId={pr.id}
@@ -1237,10 +1242,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
 }
 
 /**
- * Wraps PRStatusPill with a fetch + WS subscription so the task header
- * always shows the current state of the linked PR. Renders nothing
- * (silently) until the first fetch resolves — pre-render placeholder
- * would jitter the header layout for a fraction of a second.
+ * Wraps PRStatusPill so the task header always shows the linked PR's
+ * status. Seeds synchronously from the shared {@link prSummaryCache} so a
+ * previously-seen PR paints instantly on task switch, then revalidates with
+ * a background fetch. WS updates flow through the cache too. Renders nothing
+ * only the first time a PR is ever seen (until its first fetch resolves).
  */
 function PRStatusPillForTask({
   pullRequestId,
@@ -1249,35 +1255,30 @@ function PRStatusPillForTask({
   pullRequestId: string;
   onOpen: () => void;
 }) {
-  const [summary, setSummary] = useState<PRSummaryShape | null>(null);
-  const [state, setState] = useState<PRState>('open');
+  // Initialise from cache so there's no blank-then-pop on switch.
+  const cached = getCachedPRStatus(pullRequestId);
+  const [summary, setSummary] = useState<PRSummaryShape | null>(cached?.summary ?? null);
+  const [state, setState] = useState<PRState>(cached?.state ?? 'open');
 
+  // Subscribe to cache updates (own fetch + the global WS handler both
+  // write through prime()), and revalidate in the background on mount.
   useEffect(() => {
+    const unsubscribe = subscribePRStatus(pullRequestId, (status) => {
+      setSummary(status.summary);
+      setState(status.state);
+    });
     let cancelled = false;
     api.pullRequests
       .get(pullRequestId)
       .then((res) => {
         if (cancelled) return;
-        setSummary(res.row.summary);
-        setState(res.row.state);
+        prime(pullRequestId, { summary: res.row.summary, state: res.row.state });
       })
-      .catch(() => {
-        if (cancelled) return;
-        setSummary(null);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
+      unsubscribe();
     };
-  }, [pullRequestId]);
-
-  useEffect(() => {
-    const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
-      const p = payload as { id: string; state?: PRState; lastSummary: unknown };
-      if (p.id !== pullRequestId) return;
-      setSummary(p.lastSummary as PRSummaryShape);
-      if (p.state) setState(p.state);
-    });
-    return unsubscribe;
   }, [pullRequestId]);
 
   // Mark this PR focused while the task is on screen — backend
