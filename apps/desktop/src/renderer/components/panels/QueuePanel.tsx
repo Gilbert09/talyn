@@ -854,7 +854,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               return (
                 <>
                   {pr.id && (
+                    // key on the PR id so switching tasks remounts the pill
+                    // with fresh state instead of briefly showing the prior
+                    // task's status until the new fetch resolves.
                     <PRStatusPillForTask
+                      key={pr.id}
                       pullRequestId={pr.id}
                       onOpen={() => setPRSheetId(pr.id ?? null)}
                     />
