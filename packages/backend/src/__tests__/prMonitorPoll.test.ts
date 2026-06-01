@@ -586,4 +586,68 @@ describe('prMonitor — poll orchestration', () => {
     await prMonitorService.forcePoll();
     expect((await db.select().from(inboxItemsTable)).length).toBe(0);
   });
+
+  // ---------- lazy mergeability (UNKNOWN) re-poll ----------
+
+  it('re-queries an open PR with mergeable UNKNOWN until it resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSearch([1]);
+      const spy = vi
+        .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+        // First poll: GitHub hasn't computed mergeability yet.
+        .mockResolvedValueOnce([
+          { number: 1, pr: fakeSummary({ number: 1, mergeable: 'UNKNOWN', blockingReason: 'unknown' }) },
+        ])
+        // Retry: it's resolved to a conflict.
+        .mockResolvedValueOnce([
+          { number: 1, pr: fakeSummary({ number: 1, mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }) },
+        ]);
+
+      const poll = prMonitorService.forcePoll();
+      await vi.advanceTimersByTimeAsync(10_000); // cover the backoff(s)
+      await poll;
+
+      expect(spy).toHaveBeenCalledTimes(2);
+      const [row] = await db.select().from(pullRequestsTable);
+      expect((row.lastSummary as { blockingReason: string }).blockingReason).toBe('merge_conflicts');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up after the retry budget and persists the UNKNOWN result', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSearch([1]);
+      const spy = vi
+        .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+        .mockResolvedValue([
+          { number: 1, pr: fakeSummary({ number: 1, mergeable: 'UNKNOWN', blockingReason: 'unknown' }) },
+        ]);
+
+      const poll = prMonitorService.forcePoll();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await poll;
+
+      // 1 initial + 3 retries.
+      expect(spy).toHaveBeenCalledTimes(4);
+      const [row] = await db.select().from(pullRequestsTable);
+      expect((row.lastSummary as { blockingReason: string }).blockingReason).toBe('unknown');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-query a closed/merged PR that reports UNKNOWN', async () => {
+    // Mergeability is meaningless once a PR is merged — no retry, one call.
+    mockSearch([1]);
+    const spy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 1, pr: fakeSummary({ number: 1, state: 'merged', mergeable: 'UNKNOWN', blockingReason: 'unknown' }) },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });

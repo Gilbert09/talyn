@@ -7,7 +7,10 @@ import {
   pullRequests as pullRequestsTable,
 } from '../db/schema.js';
 import { githubService } from './github.js';
-import { batchPullRequestsByNumber } from './githubGraphql.js';
+import {
+  batchPullRequestsByNumber,
+  type BatchPRByNumberResult,
+} from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor } from './prFocus.js';
 
@@ -30,6 +33,15 @@ interface WatchedRepo {
 // instant it ages past 30 s. Unfocused PRs hit a 60 s TTL inside
 // `filterStale` so they only get refetched every other tick.
 const POLL_INTERVAL_MS = 30_000;
+
+// GitHub computes `mergeable` lazily: the first query kicks off a
+// background job and returns UNKNOWN, and every base-branch push resets it
+// to UNKNOWN until recomputed. On a busy repo a single poll usually lands
+// on UNKNOWN, which renders as a blank status pill. Re-query the still-
+// UNKNOWN open PRs a few times with a short backoff so we persist the
+// resolved MERGEABLE/CONFLICTING instead.
+const UNKNOWN_MERGEABLE_RETRIES = 3;
+const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 
 class PRMonitorService extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
@@ -250,12 +262,16 @@ class PRMonitorService extends EventEmitter {
       return;
     }
 
-    const results = await batchPullRequestsByNumber({
+    const results = await this.resolveUnknownMergeable(
       workspaceId,
-      owner: repo.owner,
-      repo: repo.repo,
-      numbers: staleNumbers,
-    });
+      repo,
+      await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers: staleNumbers,
+      })
+    );
 
     for (const result of results) {
       if (!result.pr) continue;
@@ -268,6 +284,50 @@ class PRMonitorService extends EventEmitter {
     }
 
     await this.sweepClosed(workspaceId, repo, watchedNumbers);
+  }
+
+  /**
+   * Resolve PRs GitHub returned with `mergeable: UNKNOWN` (open PRs only —
+   * merged/closed have no meaningful mergeability). GitHub computes it
+   * lazily, so the first query triggers the job and a follow-up a moment
+   * later returns the real value. Re-query the UNKNOWN ones a few times
+   * with a short backoff and splice resolved summaries back in. Returns a
+   * new results array; gives up (keeping UNKNOWN) after the retry budget.
+   */
+  private async resolveUnknownMergeable(
+    workspaceId: string,
+    repo: WatchedRepo,
+    results: BatchPRByNumberResult[]
+  ): Promise<BatchPRByNumberResult[]> {
+    const byNumber = new Map(results.map((r) => [r.number, r]));
+    let pending = results
+      .filter((r) => r.pr?.state === 'open' && r.pr.mergeable === 'UNKNOWN')
+      .map((r) => r.number);
+    if (pending.length === 0) return results;
+
+    for (let attempt = 0; attempt < UNKNOWN_MERGEABLE_RETRIES && pending.length > 0; attempt++) {
+      await delay(UNKNOWN_MERGEABLE_BACKOFF_MS);
+      const refetched = await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers: pending,
+      });
+      const stillPending: number[] = [];
+      for (const r of refetched) {
+        if (r.pr) byNumber.set(r.number, r);
+        if (r.pr?.state === 'open' && r.pr.mergeable === 'UNKNOWN') {
+          stillPending.push(r.number);
+        }
+      }
+      pending = stillPending;
+    }
+    if (pending.length > 0) {
+      console.log(
+        `[prMonitor] ${repo.owner}/${repo.repo}: ${pending.length} PR(s) still UNKNOWN mergeable after ${UNKNOWN_MERGEABLE_RETRIES} retries — GitHub still computing`
+      );
+    }
+    return results.map((r) => byNumber.get(r.number) ?? r);
   }
 
   private async filterStale(
@@ -406,6 +466,10 @@ class PRMonitorService extends EventEmitter {
   invalidateUserLogin(workspaceId: string): void {
     this.userLoginCache.delete(workspaceId);
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export const prMonitorService = new PRMonitorService();
