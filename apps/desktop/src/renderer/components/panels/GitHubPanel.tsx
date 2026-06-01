@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Github,
   Settings,
@@ -160,6 +160,7 @@ export function GitHubPanel() {
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [needsAttention, setNeedsAttention] = useState(false);
   const [search, setSearch] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   // null = not yet checked. Distinguishes "GitHub disconnected" from
@@ -209,6 +210,20 @@ export function GitHubPanel() {
       cancelled = true;
     };
   }, [currentWorkspaceId]);
+
+  // Cmd/Ctrl+F focuses the PR search box. This panel only mounts while the
+  // GitHub page is active, so the listener is naturally scoped to it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'f' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   // Initial fetch + refetch on filter change.
   useEffect(() => {
@@ -463,6 +478,7 @@ export function GitHubPanel() {
         repos={repositories.map((r) => ({ id: r.id, name: r.fullName }))}
         search={search}
         onSearch={setSearch}
+        searchRef={searchInputRef}
         needsAttention={needsAttention}
         onNeedsAttention={setNeedsAttention}
         stateCount={rows.length}
@@ -553,6 +569,7 @@ interface FilterBarProps {
   repos: Array<{ id: string; name: string }>;
   search: string;
   onSearch: (v: string) => void;
+  searchRef?: React.Ref<HTMLInputElement>;
   needsAttention: boolean;
   onNeedsAttention: (v: boolean) => void;
   /** Count of loaded rows for the active state (the only state we hold data for). */
@@ -571,6 +588,7 @@ function FilterBar({
   repos,
   search,
   onSearch,
+  searchRef,
   needsAttention,
   onNeedsAttention,
   stateCount,
@@ -667,9 +685,10 @@ function FilterBar({
       <div className="relative ml-auto flex-1 min-w-[160px] max-w-md">
         <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
+          ref={searchRef}
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          placeholder="Search title or repo…"
+          placeholder="Search title or repo… (⌘F)"
           className="h-7 pl-7 pr-7 text-xs"
         />
         {search && (
