@@ -14,7 +14,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
-import { useTaskActions } from '../../hooks/useApi';
+import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
 import type { Task, AgentStatus, AgentAttention } from '@fastowl/shared';
@@ -73,18 +73,31 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
 
   const StatusIcon = statusConfig[agentStatus].icon;
 
-  // PostHog Code tasks run in the cloud; their logs aren't streamed until
-  // something asks for them. On opening a cloud task with no transcript
-  // yet, kick the backend to backfill/stream — events then arrive over
-  // the WS. Fire-and-forget; intentionally only keyed on the task id so
-  // it runs once per open, not on every transcript update.
-  const hasTranscript = (task.transcript?.length ?? 0) > 0;
+  // PostHog Code tasks run in the cloud and their transcript is NOT included
+  // in the task-list payload, so the store opens them with an empty
+  // transcript. On open we (1) kick the backend to start/continue the log
+  // stream and flush any buffered events, then (2) fetch the full task —
+  // GET /:id is the only endpoint that returns `transcript` — and hydrate
+  // the store. Live `task:event`s keep appending afterwards (deduped on
+  // seq). Without this, an in-progress run shows only the placeholder until
+  // it completes, because its events were broadcast before the user opened
+  // it. Keyed on task id so it runs once per open.
   useEffect(() => {
-    if (isCloudTask && !hasTranscript) {
-      void api.tasks.refreshLogs(task.id).catch(() => {});
-    }
-    // Keyed only on task id/type — see comment above (hasTranscript is
-    // read at fire time, not a trigger).
+    if (!isCloudTask) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await api.tasks.refreshLogs(task.id);
+        const full = await api.tasks.get(task.id);
+        if (cancelled || !full.transcript?.length) return;
+        mergeTaskTranscript(task.id, full.transcript);
+      } catch {
+        // Best-effort — the live stream still populates the transcript.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [task.id, isCloudTask]);
 
   const handleSendInput = useCallback(async () => {

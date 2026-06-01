@@ -92,6 +92,21 @@ class PostHogCodeStreamer {
     });
   }
 
+  /**
+   * Force-persist a live stream's in-memory transcript, if one is active.
+   * The read loop only persists every PERSIST_EVERY events, so a reader
+   * opening the task mid-run (which fetches the durable transcript) would
+   * otherwise miss the last few buffered events. Called from the
+   * refresh-logs route before it returns. No-op if no stream is active.
+   */
+  async flushNow(taskId: string): Promise<void> {
+    const stream = this.active.get(taskId);
+    if (!stream || stream.transcript.length === 0) return;
+    // Mark everything dirty so persist() writes the current array.
+    stream.unpersisted = Math.max(stream.unpersisted, 1);
+    await this.persist(stream);
+  }
+
   /** Stop streaming a task (terminal status, or shutdown). */
   stop(taskId: string): void {
     const stream = this.active.get(taskId);

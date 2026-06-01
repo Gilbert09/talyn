@@ -37,40 +37,51 @@ import type {
 const pendingTaskEvents = new Map<string, AgentEvent[]>();
 let taskEventFlushTimer: number | null = null;
 
+/**
+ * Merge new events into a task's transcript in the store, deduping on `seq`
+ * (reconnects/backfills can replay) and re-sorting only when seqs actually
+ * arrive out of order. Shared by the live `task:event` flush and the
+ * on-open transcript hydration (TaskTerminal). No-op if nothing changed.
+ */
+export function mergeTaskTranscript(taskId: string, incoming: AgentEvent[]): void {
+  if (incoming.length === 0) return;
+  const store = useWorkspaceStore.getState();
+  const task = store.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const existing = task.transcript ?? [];
+  const seen = new Set(existing.map((e) => e.seq));
+  const merged = existing.slice();
+  let changed = false;
+  for (const ev of incoming) {
+    if (seen.has(ev.seq)) continue; // reconnects can replay events
+    seen.add(ev.seq);
+    merged.push(ev);
+    changed = true;
+  }
+  if (!changed) return;
+  // Cheap ordered-check; only pay for a sort when seqs actually arrived
+  // out of order (rare — happens across WS reconnects).
+  let ordered = true;
+  for (let i = 1; i < merged.length; i++) {
+    if (merged[i].seq < merged[i - 1].seq) {
+      ordered = false;
+      break;
+    }
+  }
+  if (!ordered) merged.sort((a, b) => a.seq - b.seq);
+  store.updateTask(taskId, { transcript: merged });
+}
+
 function flushTaskEvents() {
   taskEventFlushTimer = null;
   if (pendingTaskEvents.size === 0) return;
-  const store = useWorkspaceStore.getState();
   const batch = pendingTaskEvents;
   // Swap the buffer up front so events arriving mid-flush queue cleanly
   // for the next frame rather than being dropped.
   pendingTaskEvents.clear();
 
   for (const [taskId, incoming] of batch) {
-    const task = store.tasks.find((t) => t.id === taskId);
-    if (!task) continue;
-    const existing = task.transcript ?? [];
-    const seen = new Set(existing.map((e) => e.seq));
-    const merged = existing.slice();
-    let changed = false;
-    for (const ev of incoming) {
-      if (seen.has(ev.seq)) continue; // reconnects can replay events
-      seen.add(ev.seq);
-      merged.push(ev);
-      changed = true;
-    }
-    if (!changed) continue;
-    // Cheap ordered-check; only pay for a sort when seqs actually arrived
-    // out of order (rare — happens across WS reconnects).
-    let ordered = true;
-    for (let i = 1; i < merged.length; i++) {
-      if (merged[i].seq < merged[i - 1].seq) {
-        ordered = false;
-        break;
-      }
-    }
-    if (!ordered) merged.sort((a, b) => a.seq - b.seq);
-    store.updateTask(taskId, { transcript: merged });
+    mergeTaskTranscript(taskId, incoming);
   }
 }
 

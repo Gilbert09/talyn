@@ -1210,6 +1210,11 @@ export function taskRoutes(): Router {
       posthogRunId: runId,
       backfillOnly: terminal,
     });
+    // If a stream is already live (poller-owned), it may have replayed the
+    // run before this client opened the task — those events were broadcast
+    // and missed. Persist the in-memory transcript so the client's
+    // follow-up GET /:id hydrates the full history.
+    await postHogCodeStreamer.flushNow(task.id);
     return res.json({ success: true });
   });
 

@@ -31,6 +31,21 @@ function sseStream(frames: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+/**
+ * A stream that emits the given frames then stays open (never closes), so
+ * the streamer tails it without hitting its periodic-persist threshold —
+ * lets us exercise flushNow() on a live, mid-run stream.
+ */
+function openSseStream(frames: string[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const f of frames) controller.enqueue(enc.encode(f));
+      // intentionally no close()
+    },
+  });
+}
+
 /** A minimal `fetch` Response stand-in carrying the scripted SSE body. */
 function sseResponse(frames: string[]): Partial<Response> {
   return {
@@ -146,6 +161,41 @@ describe('postHogCodeStreamer', () => {
     expect(transcript).toHaveLength(1);
     const text = (transcript[0].message as { content: Array<{ text: string }> }).content[0].text;
     expect(text).toBe('from S3');
+  });
+
+  it('flushNow() persists the in-memory transcript of a live stream mid-run', async () => {
+    // Two events — below PERSIST_EVERY (25), so the stream would not persist
+    // on its own. The body stays open (in-progress run still tailing).
+    mockClient.openRunStream.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: openSseStream([
+        acpFrame({ sessionUpdate: 'agent_message', content: { text: 'one' } }, '1-0'),
+        acpFrame({ sessionUpdate: 'agent_message', content: { text: 'two' } }, '2-0'),
+      ]),
+    });
+
+    postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
+
+    // The stream never closes, so it won't auto-persist; poll flushNow until
+    // the processed events land in the DB (or time out).
+    const start = Date.now();
+    let transcript = await getTranscript(db);
+    while (transcript.length < 2 && Date.now() - start < 2000) {
+      await postHogCodeStreamer.flushNow(TASK);
+      transcript = await getTranscript(db);
+      if (transcript.length < 2) await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(transcript.map((e) => (e.message as { content: Array<{ text: string }> }).content[0].text)).toEqual([
+      'one',
+      'two',
+    ]);
+  });
+
+  it('flushNow() is a harmless no-op when no stream is active', async () => {
+    await expect(postHogCodeStreamer.flushNow('no-such-task')).resolves.toBeUndefined();
   });
 
   it('pages through session_logs with `after` until a short page drains the run', async () => {
