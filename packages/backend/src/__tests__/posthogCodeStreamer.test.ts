@@ -31,6 +31,16 @@ function sseStream(frames: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+/** A minimal `fetch` Response stand-in carrying the scripted SSE body. */
+function sseResponse(frames: string[]): Partial<Response> {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: sseStream(frames),
+  };
+}
+
 function acpFrame(update: Record<string, unknown>, id: string): string {
   const entry = { type: 'notification', notification: { method: 'session/update', params: { update } } };
   return `id: ${id}\ndata: ${JSON.stringify(entry)}\n\n`;
@@ -84,15 +94,14 @@ describe('postHogCodeStreamer', () => {
   });
 
   it('consumes the SSE stream, persists a transcript, and stamps ordered seqs', async () => {
-    mockClient.openRunStream.mockResolvedValue({
-      ok: true,
-      body: sseStream([
+    mockClient.openRunStream.mockResolvedValue(
+      sseResponse([
         acpFrame({ sessionUpdate: 'agent_message', content: { text: 'Hello' } }, '1-0'),
         acpFrame({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'Bash', rawInput: { command: 'ls' } }, '2-0'),
         acpFrame({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed', rawOutput: 'a.txt' }, '3-0'),
         'event: keepalive\ndata: {"type":"keepalive"}\n\n',
       ]),
-    });
+    );
 
     postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
     const transcript = await waitForTranscript(db);
@@ -111,10 +120,9 @@ describe('postHogCodeStreamer', () => {
   });
 
   it('is idempotent — a concurrent second ensure does not reopen the stream', async () => {
-    mockClient.openRunStream.mockResolvedValue({
-      ok: true,
-      body: sseStream([acpFrame({ sessionUpdate: 'agent_message', content: { text: 'hi' } }, '1-0')]),
-    });
+    mockClient.openRunStream.mockResolvedValue(
+      sseResponse([acpFrame({ sessionUpdate: 'agent_message', content: { text: 'hi' } }, '1-0')]),
+    );
 
     // The second ensure runs while the first is still active (the stream
     // is registered synchronously), so it must be a no-op.
@@ -138,5 +146,35 @@ describe('postHogCodeStreamer', () => {
     expect(transcript).toHaveLength(1);
     const text = (transcript[0].message as { content: Array<{ text: string }> }).content[0].text;
     expect(text).toBe('from S3');
+  });
+
+  it('pages through session_logs with `after` until a short page drains the run', async () => {
+    mockClient.openRunStream.mockRejectedValue(new Error('(404): Stream not available'));
+    // A full 5000-entry first page (forces a second fetch), then a short
+    // page that ends pagination. Only two entries carry visible text.
+    const PAGE = 5000;
+    const firstPage = Array.from({ length: PAGE }, (_, i) => ({
+      type: 'notification',
+      timestamp: `2026-01-01T00:00:${String(i).padStart(4, '0')}Z`,
+      notification: { method: 'session/update', params: { update: { sessionUpdate: 'usage_update' } } },
+    }));
+    firstPage[0].notification.params.update = { sessionUpdate: 'agent_message', content: { text: 'p1' } };
+    const lastTs = firstPage[PAGE - 1].timestamp;
+    const secondPage = [
+      {
+        type: 'notification',
+        timestamp: '2026-01-02T00:00:00Z',
+        notification: { method: 'session/update', params: { update: { sessionUpdate: 'agent_message', content: { text: 'p2' } } } },
+      },
+    ];
+    mockClient.getSessionLogs.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+
+    postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
+    const transcript = await waitForTranscript(db);
+
+    expect(mockClient.getSessionLogs).toHaveBeenCalledTimes(2);
+    // Second fetch resumes after the last timestamp of the first page.
+    expect(mockClient.getSessionLogs.mock.calls[1][2]).toMatchObject({ after: lastTs });
+    expect(transcript.map((e) => (e.message as { content: Array<{ text: string }> }).content[0].text)).toEqual(['p1', 'p2']);
   });
 });

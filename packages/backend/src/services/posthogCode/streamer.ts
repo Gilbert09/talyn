@@ -30,6 +30,9 @@ const PERSIST_EVERY = 25; // events
 const TRANSCRIPT_MAX_EVENTS = 2000;
 const MAX_RECONNECTS = 5;
 const RECONNECT_DELAY_MS = 1500;
+/** session_logs page size (the API caps `limit` at 5000) and a safety bound. */
+const SESSION_LOG_PAGE = 5000;
+const SESSION_LOG_MAX_PAGES = 50;
 
 interface ActiveStream {
   taskId: string;
@@ -109,16 +112,20 @@ class PostHogCodeStreamer {
   }
 
   private async run(stream: ActiveStream): Promise<void> {
+    const tag = `${stream.taskId.slice(0, 8)} run ${stream.posthogRunId.slice(0, 8)}`;
     const client = await getPostHogCodeClient(stream.workspaceId);
     if (!client) {
+      console.warn(`[posthogCode] ${tag}: no client (credentials missing) — not streaming`);
       this.cleanup(stream);
       return;
     }
 
     // Terminal runs have no live stream — go straight to the durable log.
     if (stream.backfillOnly) {
+      console.log(`[posthogCode] ${tag}: backfilling from session_logs`);
       await this.backfillFromSessionLogs(stream, client);
       await this.persist(stream);
+      console.log(`[posthogCode] ${tag}: backfill done — ${stream.transcript.length} events`);
       this.cleanup(stream);
       return;
     }
@@ -126,15 +133,19 @@ class PostHogCodeStreamer {
     let attempts = 0;
     while (!stream.closed && attempts <= MAX_RECONNECTS) {
       try {
+        console.log(`[posthogCode] ${tag}: opening SSE stream${stream.lastEventId ? ` (resume ${stream.lastEventId})` : ''}`);
         await this.consumeStream(stream, client);
         // Clean end (STREAM_STATUS complete / body ended). Done.
+        console.log(`[posthogCode] ${tag}: stream ended — ${stream.transcript.length} events`);
         break;
       } catch (err) {
         if (stream.closed) break;
         const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[posthogCode] ${tag}: stream error: ${msg}`);
         // The live stream may not exist (run finished, Redis trimmed).
         // Fall back to the durable S3 log once, then we're done.
         if (msg.includes('Stream not available') || msg.includes('(404)')) {
+          console.log(`[posthogCode] ${tag}: live stream unavailable — falling back to session_logs`);
           await this.backfillFromSessionLogs(stream, client);
           break;
         }
@@ -149,8 +160,9 @@ class PostHogCodeStreamer {
       }
     }
 
-    // Settle any trailing streamed (chunked) text into a final block.
-    this.appendEvents(stream, stream.converter.flush());
+    // Settle trailing streamed text + any tool calls left without a
+    // terminal update (run still in progress / interrupted).
+    this.appendEvents(stream, stream.converter.end());
     await this.persist(stream);
     this.cleanup(stream);
   }
@@ -164,9 +176,14 @@ class PostHogCodeStreamer {
       lastEventId: stream.lastEventId,
       signal: stream.abort.signal,
     });
+    console.log(
+      `[posthogCode] ${stream.taskId.slice(0, 8)}: stream connected (${res.status} ${res.headers.get('content-type') ?? '?'})`,
+    );
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let frames = 0;
+    let acpEntries = 0;
 
     try {
       for (;;) {
@@ -179,47 +196,73 @@ class PostHogCodeStreamer {
         while ((sep = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sep);
           buffer = buffer.slice(sep + 2);
-          this.handleFrame(stream, frame);
+          frames += 1;
+          if (this.handleFrame(stream, frame)) {
+            acpEntries += 1;
+            if (acpEntries === 1) {
+              console.log(`[posthogCode] ${stream.taskId.slice(0, 8)}: first ACP event received`);
+            }
+          }
         }
       }
     } finally {
+      console.log(
+        `[posthogCode] ${stream.taskId.slice(0, 8)}: read loop done — ${frames} frames, ${acpEntries} ACP entries`,
+      );
       reader.releaseLock();
     }
   }
 
-  private handleFrame(stream: ActiveStream, frame: string): void {
+  /** Returns true if the frame carried an ACP log entry (not a keepalive). */
+  private handleFrame(stream: ActiveStream, frame: string): boolean {
     const { eventName, eventId, data } = parseSseFrame(frame);
-    if (eventName === 'keepalive' || !data) return;
+    if (eventName === 'keepalive' || !data) return false;
 
     let parsed: AcpLogEntry & { error?: string; type?: string };
     try {
       parsed = JSON.parse(data);
     } catch {
-      return;
+      return false;
     }
 
     if (eventName === 'error') {
       throw new StreamError(typeof parsed.error === 'string' ? parsed.error : 'stream error');
     }
-    if (parsed.type === 'keepalive') return;
+    if (parsed.type === 'keepalive') return false;
 
     if (eventId) stream.lastEventId = eventId;
     this.appendEvents(stream, stream.converter.push(parsed));
+    return true;
   }
 
-  /** Durable fallback: rebuild the transcript from the S3 session log. */
+  /**
+   * Durable fallback: rebuild the transcript from the S3 session log.
+   * The endpoint caps each page at `SESSION_LOG_PAGE` entries, so we page
+   * through with `after` (an ISO timestamp) until drained — a long run can
+   * have tens of thousands of entries and a single fetch would truncate it.
+   */
   private async backfillFromSessionLogs(
     stream: ActiveStream,
     client: PostHogCodeClient,
   ): Promise<void> {
-    const entries = await client.getSessionLogs(
-      stream.posthogTaskId,
-      stream.posthogRunId,
-    );
-    for (const entry of entries) {
-      this.appendEvents(stream, stream.converter.push(entry));
+    let after: string | undefined;
+    for (let page = 0; page < SESSION_LOG_MAX_PAGES; page += 1) {
+      const batch = await client.getSessionLogs(stream.posthogTaskId, stream.posthogRunId, {
+        after,
+        limit: SESSION_LOG_PAGE,
+      });
+      if (batch.length === 0) break;
+      // `after` is inclusive on some backends — drop entries we've already
+      // consumed at the boundary timestamp.
+      const fresh = after ? batch.filter((e) => (e.timestamp ?? '') > after!) : batch;
+      for (const entry of fresh) {
+        this.appendEvents(stream, stream.converter.push(entry));
+      }
+      const last = batch[batch.length - 1]?.timestamp;
+      if (!last || batch.length < SESSION_LOG_PAGE || last === after) break;
+      after = last;
     }
-    this.appendEvents(stream, stream.converter.flush());
+    this.appendEvents(stream, stream.converter.end());
   }
 
   private appendEvents(stream: ActiveStream, inputs: AgentEventInput[]): void {

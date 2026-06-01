@@ -1200,6 +1200,9 @@ export function taskRoutes(): Router {
     if (runId !== meta.posthogRunId) {
       await patchTaskMetadata(task.id, (existing) => ({ ...existing, posthogRunId: runId }));
     }
+    console.log(
+      `[posthogCode] refresh-logs: task ${task.id.slice(0, 8)} → run ${runId.slice(0, 8)} (terminal=${terminal})`,
+    );
     postHogCodeStreamer.ensure({
       taskId: task.id,
       workspaceId: task.workspaceId,

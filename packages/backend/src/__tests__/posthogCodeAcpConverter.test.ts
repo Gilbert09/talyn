@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { AcpConverter, type AcpLogEntry } from '../services/posthogCode/acpConverter.js';
+import {
+  AcpConverter,
+  type AcpLogEntry,
+  type AgentEventInput,
+} from '../services/posthogCode/acpConverter.js';
 import { parseSseFrame } from '../services/posthogCode/streamer.js';
 
 // Helpers to build ACP entries tersely.
@@ -81,44 +85,122 @@ describe('AcpConverter — thinking', () => {
 });
 
 describe('AcpConverter — tool calls', () => {
-  it('maps tool_call to an assistant tool_use, flushing pending text first', () => {
+  type ToolUseBlock = { type: string; id: string; name: string; input: Record<string, unknown> };
+  type ToolResultBlock = { type: string; tool_use_id: string; content: string; is_error: boolean };
+  const block = <T>(e: AgentEventInput): T =>
+    (e.message as { content: T[] }).content[0];
+
+  it('does NOT emit a tool_use at tool_call time — only flushes pending text', () => {
     const c = new AcpConverter();
     c.push(sessionUpdate({ sessionUpdate: 'agent_message_chunk', content: { text: 'Running ls' } }));
     const out = c.push(
-      sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Bash', rawInput: { command: 'ls' } }),
+      // rawInput is empty at call time, as PostHog Code actually sends it.
+      sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Execute command', kind: 'execute', rawInput: {} }),
     );
-    const types = out.map((e) => e.type);
-    expect(types).toContain('assistant');
-    const toolUseEvent = out[out.length - 1];
-    const block = (toolUseEvent.message as { content: Array<{ type: string; id: string; name: string; input: unknown }> }).content[0];
-    expect(block).toEqual({ type: 'tool_use', id: 'call-1', name: 'Bash', input: { command: 'ls' } });
+    // The in-flight text is flushed, but the tool itself is buffered until
+    // its terminal update — no tool_use yet.
+    expect(out).toHaveLength(1);
+    expect(out[0].type).toBe('assistant');
+    expect((block<{ type: string }>(out[0]) as { type: string }).type).toBe('text');
+  });
+
+  it('emits tool_use + tool_result on the terminal update, with the real name/command/output', () => {
+    const c = new AcpConverter();
+    c.push(sessionUpdate({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-1',
+      title: 'Execute command',
+      kind: 'execute',
+      rawInput: {},
+      _meta: { claudeCode: { toolName: 'Bash' } },
+    }));
+    // Intermediate streaming updates carry no status — emit nothing.
+    expect(c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', rawInput: { command: 'l' } }))).toEqual([]);
+
+    const out = c.push(sessionUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call-1',
+      status: 'completed',
+      _meta: { claudeCode: { toolName: 'Bash', bashCommand: 'ls -la' } },
+      rawOutput: { stdout: 'file.txt', stderr: '' },
+    }));
+
+    expect(out.map((e) => e.type)).toEqual(['assistant', 'user']);
+    expect(block<ToolUseBlock>(out[0])).toEqual({
+      type: 'tool_use',
+      id: 'call-1',
+      name: 'Bash',
+      input: { command: 'ls -la' },
+    });
+    expect(block<ToolResultBlock>(out[1])).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'call-1',
+      content: 'file.txt',
+      is_error: false,
+    });
   });
 
   it.each([
     ['completed', false],
     ['failed', true],
     ['error', true],
-  ])('maps a %s tool_call_update to a user tool_result (is_error=%s)', (status, isError) => {
+  ])('a %s terminal update sets is_error=%s on the result', (status, isError) => {
     const c = new AcpConverter();
-    const out = c.push(
-      sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status, rawOutput: 'file.txt' }),
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0].type).toBe('user');
-    const block = (out[0].message as { content: Array<{ type: string; tool_use_id: string; content: string; is_error: boolean }> }).content[0];
-    expect(block).toEqual({ type: 'tool_result', tool_use_id: 'call-1', content: 'file.txt', is_error: isError });
+    c.push(sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'call-1', _meta: { claudeCode: { toolName: 'Bash' } } }));
+    const out = c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status, rawOutput: { stdout: 'out' } }));
+    expect(block<ToolResultBlock>(out[1]).is_error).toBe(isError);
   });
 
-  it('ignores intermediate (in_progress) tool_call_updates', () => {
+  it('ignores intermediate (no-status / in_progress) tool_call_updates', () => {
     const c = new AcpConverter();
+    c.push(sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'x', _meta: { claudeCode: { toolName: 'Bash' } } }));
+    expect(c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'x' }))).toEqual([]);
     expect(c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'x', status: 'in_progress' }))).toEqual([]);
   });
 
-  it('stringifies object tool output', () => {
+  it('combines stdout and stderr in tool output', () => {
     const c = new AcpConverter();
+    c.push(sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'c' }));
+    const out = c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'c', status: 'completed', rawOutput: { stdout: 'out', stderr: 'err' } }));
+    expect(block<ToolResultBlock>(out[1]).content).toBe('out\nerr');
+  });
+
+  it('extracts output from nested ACP content blocks when rawOutput is absent', () => {
+    const c = new AcpConverter();
+    c.push(sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'c' }));
+    const out = c.push(sessionUpdate({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'c',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'nested out' } }],
+    }));
+    expect(block<ToolResultBlock>(out[1]).content).toBe('nested out');
+  });
+
+  it('falls back to JSON for an opaque object output', () => {
+    const c = new AcpConverter();
+    c.push(sessionUpdate({ sessionUpdate: 'tool_call', toolCallId: 'c' }));
     const out = c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'c', status: 'completed', rawOutput: { rows: 2 } }));
-    const block = (out[0].message as { content: Array<{ content: string }> }).content[0];
-    expect(block.content).toBe('{"rows":2}');
+    expect(block<ToolResultBlock>(out[1]).content).toBe('{"rows":2}');
+  });
+
+  it('end() drains tool calls that never reached a terminal update', () => {
+    const c = new AcpConverter();
+    c.push(sessionUpdate({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-1',
+      _meta: { claudeCode: { toolName: 'Read' } },
+      rawInput: { file_path: '/a.ts' },
+    }));
+    expect(c.push(sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', rawInput: { file_path: '/a.ts' } }))).toEqual([]);
+    const out = c.end();
+    expect(out).toHaveLength(1);
+    expect(block<ToolUseBlock>(out[0])).toEqual({
+      type: 'tool_use',
+      id: 'call-1',
+      name: 'Read',
+      input: { file_path: '/a.ts' },
+    });
   });
 });
 
