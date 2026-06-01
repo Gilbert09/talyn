@@ -30,6 +30,10 @@ const PERSIST_EVERY = 25; // events
 const TRANSCRIPT_MAX_EVENTS = 2000;
 const MAX_RECONNECTS = 5;
 const RECONNECT_DELAY_MS = 1500;
+// A live run's SSE closes between bursts; we reconnect-to-tail until this
+// many consecutive reconnects bring nothing new (then the run is idle and
+// the poller will finalise it). At RECONNECT_DELAY_MS each, ~6s of quiet.
+const MAX_EMPTY_RECONNECTS = 4;
 /** session_logs page size (the API caps `limit` at 5000) and a safety bound. */
 const SESSION_LOG_PAGE = 5000;
 const SESSION_LOG_MAX_PAGES = 50;
@@ -158,14 +162,31 @@ class PostHogCodeStreamer {
       return;
     }
 
-    let attempts = 0;
-    while (!stream.closed && attempts <= MAX_RECONNECTS) {
+    let errorAttempts = 0;
+    let emptyReconnects = 0;
+    while (!stream.closed) {
+      const before = stream.transcript.length;
       try {
         console.log(`[posthogCode] ${tag}: opening SSE stream${stream.lastEventId ? ` (resume ${stream.lastEventId})` : ''}`);
         await this.consumeStream(stream, client);
-        // Clean end (STREAM_STATUS complete / body ended). Done.
-        console.log(`[posthogCode] ${tag}: stream ended — ${stream.transcript.length} events`);
-        break;
+        if (stream.closed) break;
+        // A clean end means the SSE body closed. PostHog drains the buffered
+        // Redis stream then closes between bursts rather than holding a
+        // forever-tail, so this does NOT mean the run is done — keep tailing
+        // by reconnecting and resuming from `lastEventId` (no re-replay, no
+        // dupes). Give up only after several reconnects bring nothing new
+        // (run idle/finished — the poller finalises it from there).
+        errorAttempts = 0;
+        if (stream.transcript.length > before) {
+          // Got events — resume immediately to catch the next burst.
+          emptyReconnects = 0;
+          continue;
+        }
+        if (++emptyReconnects >= MAX_EMPTY_RECONNECTS) {
+          console.log(`[posthogCode] ${tag}: no new events after ${MAX_EMPTY_RECONNECTS} reconnects — stopping tail (${stream.transcript.length} events)`);
+          break;
+        }
+        await delay(RECONNECT_DELAY_MS);
       } catch (err) {
         if (stream.closed) break;
         const msg = err instanceof Error ? err.message : String(err);
@@ -177,8 +198,8 @@ class PostHogCodeStreamer {
           await this.backfillFromSessionLogs(stream, client);
           break;
         }
-        attempts += 1;
-        if (attempts > MAX_RECONNECTS) {
+        errorAttempts += 1;
+        if (errorAttempts > MAX_RECONNECTS) {
           // Last resort: pull whatever durable log exists so the user
           // isn't left with a blank pane.
           await this.backfillFromSessionLogs(stream, client).catch(() => {});
@@ -258,7 +279,16 @@ class PostHogCodeStreamer {
     }
     if (parsed.type === 'keepalive') return false;
 
-    if (eventId) stream.lastEventId = eventId;
+    if (eventId) {
+      // Client-side dedup by Redis stream id. A reconnect resumes via
+      // Last-Event-ID, but if PostHog ignores it and replays from the
+      // start, skip everything we've already processed — so reconnect-to-
+      // tail can't double-emit or grow the transcript unbounded.
+      if (stream.lastEventId && !streamIdGreaterThan(eventId, stream.lastEventId)) {
+        return false;
+      }
+      stream.lastEventId = eventId;
+    }
     this.appendEvents(stream, stream.converter.push(parsed));
     return true;
   }
@@ -361,6 +391,20 @@ export function parseSseFrame(frame: string): {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Compare two Redis stream ids (`<ms>-<seq>`). Returns true if `a` is
+ * strictly newer than `b`. Non-numeric ids fall back to string compare.
+ */
+export function streamIdGreaterThan(a: string, b: string): boolean {
+  const [am, as] = a.split('-');
+  const [bm, bs] = b.split('-');
+  const amN = Number(am);
+  const bmN = Number(bm);
+  if (Number.isNaN(amN) || Number.isNaN(bmN)) return a > b;
+  if (amN !== bmN) return amN > bmN;
+  return Number(as || 0) > Number(bs || 0);
 }
 
 export const postHogCodeStreamer = new PostHogCodeStreamer();

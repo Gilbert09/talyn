@@ -11,7 +11,10 @@ vi.mock('../services/posthogCode/credentials.js', () => ({
 }));
 
 import { eq } from 'drizzle-orm';
-import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
+import {
+  postHogCodeStreamer,
+  streamIdGreaterThan,
+} from '../services/posthogCode/streamer.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
 import type { Database } from '../db/client.js';
@@ -109,14 +112,19 @@ describe('postHogCodeStreamer', () => {
   });
 
   it('consumes the SSE stream, persists a transcript, and stamps ordered seqs', async () => {
-    mockClient.openRunStream.mockResolvedValue(
-      sseResponse([
-        acpFrame({ sessionUpdate: 'agent_message', content: { text: 'Hello' } }, '1-0'),
-        acpFrame({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'Bash', rawInput: { command: 'ls' } }, '2-0'),
-        acpFrame({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed', rawOutput: 'a.txt' }, '3-0'),
-        'event: keepalive\ndata: {"type":"keepalive"}\n\n',
-      ]),
-    );
+    // First connect delivers the run; the reconnect-to-tail resume then
+    // gets a 404 (run drained), so the stream settles and persists.
+    mockClient.openRunStream
+      .mockResolvedValueOnce(
+        sseResponse([
+          acpFrame({ sessionUpdate: 'agent_message', content: { text: 'Hello' } }, '1-0'),
+          acpFrame({ sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'Bash', rawInput: { command: 'ls' } }, '2-0'),
+          acpFrame({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'completed', rawOutput: 'a.txt' }, '3-0'),
+          'event: keepalive\ndata: {"type":"keepalive"}\n\n',
+        ]) as Response,
+      )
+      .mockRejectedValue(new Error('PostHog Code stream open failed (404): Stream not available'));
+    mockClient.getSessionLogs.mockResolvedValue([]);
 
     postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
     const transcript = await waitForTranscript(db);
@@ -126,7 +134,6 @@ describe('postHogCodeStreamer', () => {
     const types = transcript.map((e) => e.type);
     expect(types).toEqual(['assistant', 'assistant', 'user']);
     expect(transcript.map((e) => e.seq)).toEqual([0, 1, 2]);
-    expect(mockClient.openRunStream).toHaveBeenCalledOnce();
 
     // tool_use / tool_result pair on the same id so the renderer can collapse them.
     const toolUse = (transcript[1].message as { content: Array<{ id: string }> }).content[0];
@@ -135,17 +142,22 @@ describe('postHogCodeStreamer', () => {
   });
 
   it('is idempotent — a concurrent second ensure does not reopen the stream', async () => {
-    mockClient.openRunStream.mockResolvedValue(
-      sseResponse([acpFrame({ sessionUpdate: 'agent_message', content: { text: 'hi' } }, '1-0')]),
-    );
+    mockClient.openRunStream
+      .mockResolvedValueOnce(
+        sseResponse([acpFrame({ sessionUpdate: 'agent_message', content: { text: 'hi' } }, '1-0')]) as Response,
+      )
+      .mockRejectedValue(new Error('(404) Stream not available'));
+    mockClient.getSessionLogs.mockResolvedValue([]);
 
     // The second ensure runs while the first is still active (the stream
-    // is registered synchronously), so it must be a no-op.
+    // is registered synchronously), so it must be a no-op. One lifecycle
+    // therefore hits the durable backfill (after its resume 404s) exactly
+    // once; a second lifecycle would call it again.
     postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
     postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
     await waitForTranscript(db);
 
-    expect(mockClient.openRunStream).toHaveBeenCalledOnce();
+    expect(mockClient.getSessionLogs).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the durable session-log backfill when the live stream is unavailable', async () => {
@@ -226,5 +238,19 @@ describe('postHogCodeStreamer', () => {
     // Second fetch resumes after the last timestamp of the first page.
     expect(mockClient.getSessionLogs.mock.calls[1][2]).toMatchObject({ after: lastTs });
     expect(transcript.map((e) => (e.message as { content: Array<{ text: string }> }).content[0].text)).toEqual(['p1', 'p2']);
+  });
+});
+
+describe('streamIdGreaterThan', () => {
+  it('orders Redis stream ids by ms then seq', () => {
+    expect(streamIdGreaterThan('1780316106450-0', '1780316106449-0')).toBe(true);
+    expect(streamIdGreaterThan('1780316106450-1', '1780316106450-0')).toBe(true);
+    expect(streamIdGreaterThan('1780316106450-0', '1780316106450-0')).toBe(false); // equal → not newer
+    expect(streamIdGreaterThan('1780316106449-9', '1780316106450-0')).toBe(false);
+  });
+
+  it('falls back to string compare for non-numeric ids', () => {
+    expect(streamIdGreaterThan('b', 'a')).toBe(true);
+    expect(streamIdGreaterThan('a', 'a')).toBe(false);
   });
 });
