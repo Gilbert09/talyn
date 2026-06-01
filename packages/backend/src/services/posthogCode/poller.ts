@@ -22,7 +22,7 @@ const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
 /**
  * Reconciles FastOwl tasks that were delegated to PostHog Code. PostHog
  * owns the agent loop on its own sandbox; we poll each in-flight run and
- * drive the local task to `awaiting_review` (PR opened) or `failed`.
+ * drive the local task to `completed` or `failed`.
  *
  * Cloud tasks have no FastOwl agent — they're identified purely by a
  * `posthogRunId` on `task.metadata`. recoverStuckTasks() in taskQueue is
@@ -152,13 +152,14 @@ class PostHogCodePoller {
       if (prUrl && task.repositoryId) {
         await this.linkPr(task, run, prUrl);
       }
-      const nextStatus: TaskStatus = prUrl ? 'awaiting_review' : 'completed';
+      // PostHog Code runs are reviewed in PostHog itself (the PR), so there's
+      // nothing for FastOwl to approve — land straight in `completed`.
       const result: TaskResult = {
         success: true,
         summary: prUrl ? `PostHog Code opened ${prUrl}` : 'PostHog Code run completed',
         output: stringifyOutput(run?.output),
       };
-      await this.finalize(task, nextStatus, result);
+      await this.finalize(task, 'completed', result);
     } else {
       // failed | cancelled
       const result: TaskResult = {

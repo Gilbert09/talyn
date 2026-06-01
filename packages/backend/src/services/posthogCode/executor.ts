@@ -19,7 +19,7 @@ export type DispatchResult = { ok: true } | { ok: false; error: string };
  * Hand a task off to PostHog Code: create the remote task, start a
  * background run, and stash the remote ids on `task.metadata`. The
  * cloud owns the agent loop from here — the poller (poller.ts) drives
- * the FastOwl task through to `awaiting_review` / `failed`.
+ * the FastOwl task through to `completed` / `failed`.
  *
  * Idempotent: if the task already carries a `posthogTaskId`, we assume a
  * prior dispatch succeeded and do nothing (the poller owns it).
