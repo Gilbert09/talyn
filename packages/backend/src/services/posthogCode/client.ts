@@ -54,6 +54,51 @@ export class PostHogCodeClient {
     return this.request<PostHogTask>('GET', `/tasks/${taskId}/`);
   }
 
+  /**
+   * Send a follow-up to a task whose latest run has finished: start a NEW
+   * run that resumes the prior run's session and carries the user's
+   * message. Returns the task with the freshly-created `latest_run`.
+   * (Mirrors the PostHog Tasks `run/` action with `resume_from_run_id` +
+   * `pending_user_message`.)
+   */
+  async resumeRun(
+    taskId: string,
+    input: {
+      resumeFromRunId: string;
+      message: string;
+      runtimeAdapter: PostHogCodeRuntimeAdapter;
+      model?: string;
+      reasoningEffort?: string;
+    },
+  ): Promise<PostHogTask> {
+    return this.request<PostHogTask>('POST', `/tasks/${taskId}/run/`, {
+      mode: 'background',
+      runtime_adapter: input.runtimeAdapter,
+      resume_from_run_id: input.resumeFromRunId,
+      pending_user_message: input.message,
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
+    });
+  }
+
+  /**
+   * Forward a JSON-RPC command to the live agent server of an in-progress
+   * run (e.g. `user_message` to inject a follow-up mid-flight). Only valid
+   * while the run's sandbox is still alive.
+   */
+  async sendRunCommand(
+    taskId: string,
+    runId: string,
+    input: { method: string; params?: Record<string, unknown> },
+  ): Promise<unknown> {
+    return this.request<unknown>('POST', `/tasks/${taskId}/runs/${runId}/command/`, {
+      jsonrpc: '2.0',
+      method: input.method,
+      params: input.params ?? {},
+      id: 1,
+    });
+  }
+
   /** Fetch a single run by id. */
   async getRun(taskId: string, runId: string): Promise<PostHogRun> {
     return this.request<PostHogRun>('GET', `/tasks/${taskId}/runs/${runId}/`);

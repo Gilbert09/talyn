@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Square,
-  Send,
   Loader2,
   MessageSquare,
   CheckCircle,
@@ -14,6 +13,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
+import { TaskComposer, EFFORTS_BY_MODEL } from './TaskComposer';
 import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
@@ -53,6 +53,10 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   const [inputValue, setInputValue] = useState('');
   const [isStopping, setIsStopping] = useState(false);
   const [isMarkingReady, setIsMarkingReady] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const cloudMeta = task.metadata as { model?: string; reasoningEffort?: string } | undefined;
+  const [model, setModel] = useState(cloudMeta?.model || 'claude-opus-4-7');
+  const [effort, setEffort] = useState(cloudMeta?.reasoningEffort || 'high');
 
   const agentStatus = task.agentStatus || 'working';
   const agentAttention = task.agentAttention || 'none';
@@ -102,9 +106,17 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
 
   const handleSendInput = useCallback(async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
+    if (!trimmed || isSending) return;
+    setIsSending(true);
     try {
-      if (task.status === 'in_progress') {
+      if (isCloudTask) {
+        // Cloud task — resume a finished run or inject into a live one.
+        await api.tasks.sendCloudMessage(task.id, {
+          message: trimmed,
+          model,
+          reasoningEffort: effort,
+        });
+      } else if (task.status === 'in_progress') {
         await sendTaskInput(task.id, inputValue);
       } else if (isResumable) {
         await continueTask(task.id, inputValue);
@@ -119,8 +131,28 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
       // socket, etc). Refetch so the input bar + buttons reflect
       // reality on the next render.
       api.tasks.get(task.id).then((fresh) => updateTask(task.id, fresh)).catch(() => {});
+    } finally {
+      setIsSending(false);
     }
-  }, [task.id, task.status, inputValue, sendTaskInput, continueTask, isResumable, updateTask]);
+  }, [
+    task.id,
+    task.status,
+    inputValue,
+    isSending,
+    isCloudTask,
+    model,
+    effort,
+    sendTaskInput,
+    continueTask,
+    isResumable,
+    updateTask,
+  ]);
+
+  // Keep effort valid when the model changes (some models offer fewer levels).
+  const handleModelChange = useCallback((next: string) => {
+    setModel(next);
+    setEffort((cur) => (EFFORTS_BY_MODEL[next]?.includes(cur) ? cur : 'high'));
+  }, []);
 
   const handleStopTask = useCallback(async () => {
     setIsStopping(true);
@@ -143,6 +175,35 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
       setIsMarkingReady(false);
     }
   }, [task.id, readyForReview]);
+
+  // Composer enable/placeholder policy. Cloud tasks accept follow-ups in
+  // any state once a run exists (resume finished runs / inject into live
+  // ones); local tasks only accept input while in_progress or when an
+  // ended session is resumable.
+  let composerDisabled: boolean;
+  let composerPlaceholder: string;
+  if (isCloudTask) {
+    const started = task.status !== 'pending' && task.status !== 'queued';
+    composerDisabled = isSending || !started;
+    composerPlaceholder = !started
+      ? 'Task hasn’t started yet…'
+      : task.status === 'in_progress'
+        ? 'Message the running agent…'
+        : 'Send a follow-up to continue this task…';
+  } else {
+    const ended = task.status !== 'in_progress';
+    const busy = !ended && (agentStatus === 'working' || agentStatus === 'tool_use');
+    composerDisabled = isSending || busy || (ended && !isResumable);
+    composerPlaceholder = ended
+      ? isResumable
+        ? 'Continue the conversation…'
+        : `Task is ${task.status} — no active session.`
+      : busy
+        ? 'Claude is working…'
+        : agentStatus === 'awaiting_input'
+          ? 'Type your response…'
+          : 'Send a message to Claude…';
+  }
 
   return (
     <div
@@ -233,122 +294,24 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
         />
       </div>
 
-      {/* Input Area — sends a message as the next stream-json turn. */}
-      <TaskInputBar
-        taskStatus={task.status}
-        agentStatus={agentStatus}
-        resumable={isResumable}
-        inputValue={inputValue}
+      {/* Composer — message the agent (live), continue a finished local
+          session, or send a follow-up to a PostHog Code cloud task. */}
+      <TaskComposer
+        value={inputValue}
         onChange={setInputValue}
         onSend={handleSendInput}
+        sending={isSending}
+        disabled={composerDisabled}
+        placeholder={composerPlaceholder}
+        attention={!isCloudTask && agentStatus === 'awaiting_input'}
+        autoFocus={!isCloudTask && agentStatus === 'awaiting_input'}
+        showModelControls={isCloudTask}
+        model={model}
+        onModelChange={handleModelChange}
+        effort={effort}
+        onEffortChange={setEffort}
       />
     </div>
   );
 }
 
-/**
- * Bottom-of-panel input. Auto-growing textarea; Enter sends,
- * Shift+Enter inserts a newline.
- *
- * Disabled states:
- *  - mid-turn (agent working / using a tool): user shouldn't queue
- *    a message thinking it interrupts.
- *  - task not in_progress (awaiting_review / completed / failed /
- *    cancelled): the child process has exited, there's nothing to
- *    send to. UI explains + suggests Retry.
- */
-function TaskInputBar({
-  taskStatus,
-  agentStatus,
-  resumable,
-  inputValue,
-  onChange,
-  onSend,
-}: {
-  taskStatus: Task['status'];
-  agentStatus: AgentStatus;
-  /** True if an ended task can still accept input via `/continue`. */
-  resumable: boolean;
-  inputValue: string;
-  onChange: (v: string) => void;
-  onSend: () => void;
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Auto-grow: scale with content, cap at ~8 lines so the input can't
-  // eat the whole panel.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-  }, [inputValue]);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        onSend();
-      }
-    },
-    [onSend]
-  );
-
-  const ended = taskStatus !== 'in_progress';
-  const busy = !ended && (agentStatus === 'working' || agentStatus === 'tool_use');
-  // Input stays enabled for resumable ended tasks (we'll POST
-  // /continue instead of /input). Only hard-disable for irretrievable
-  // states (cancelled, or any ended state where we never captured a
-  // claudeSessionId).
-  const disabled = busy || (ended && !resumable);
-  const placeholder = ended
-    ? resumable
-      ? 'Continue the conversation… (Shift+Enter for newline)'
-      : `Task is ${taskStatus} — no active session.`
-    : busy
-      ? 'Claude is working…'
-      : agentStatus === 'awaiting_input'
-        ? 'Type your response…'
-        : 'Send a message to Claude… (Shift+Enter for newline)';
-
-  return (
-    <div
-      className={cn(
-        'p-3 border-t',
-        agentStatus === 'awaiting_input' ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-card'
-      )}
-    >
-      <div className="flex gap-2 items-end">
-        <textarea
-          ref={textareaRef}
-          placeholder={placeholder}
-          value={inputValue}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          className={cn(
-            'flex-1 px-3 py-2 text-sm rounded-md border bg-background resize-none',
-            'focus:outline-none focus:ring-2 focus:ring-ring',
-            'min-h-[38px] max-h-[200px]'
-          )}
-          disabled={disabled}
-          autoFocus={!ended && agentStatus === 'awaiting_input'}
-        />
-        <Button
-          size="sm"
-          onClick={onSend}
-          disabled={!inputValue.trim() || disabled}
-          className="h-[38px]"
-        >
-          <Send className="w-4 h-4 mr-1" />
-          Send
-        </Button>
-      </div>
-      {agentStatus === 'awaiting_input' && (
-        <p className="text-xs text-yellow-500 mt-2">
-          Claude is waiting for your input
-        </p>
-      )}
-    </div>
-  );
-}

@@ -15,7 +15,12 @@ import { enterTaskGitLog, getGitLog } from '../services/gitLogService.js';
 import { autoCommitAndSnapshot, writeFinalFilesSnapshot } from '../services/taskCommitSnapshot.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { findTaskHoldingEnvRepoSlot } from '../services/taskQueue.js';
-import { emitTaskStatus, emitTaskUpdate, emitTaskDeleted } from '../services/websocket.js';
+import {
+  emitTaskStatus,
+  emitTaskUpdate,
+  emitTaskDeleted,
+  emitTaskEvent,
+} from '../services/websocket.js';
 import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
 import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
@@ -41,6 +46,8 @@ import type {
   ApiResponse,
   GenerateTaskMetadataRequest,
   GenerateTaskMetadataResponse,
+  AgentEvent,
+  PostHogCodeRuntimeAdapter,
 } from '@fastowl/shared';
 import { isAgentTask } from '@fastowl/shared';
 
@@ -1216,6 +1223,145 @@ export function taskRoutes(): Router {
     // follow-up GET /:id hydrates the full history.
     await postHogCodeStreamer.flushNow(task.id);
     return res.json({ success: true });
+  });
+
+  // Send a follow-up message to a PostHog Code (cloud) task. If the latest
+  // run is still in_progress we inject the message into the live agent
+  // session (`runs/:id/command`); if it has finished we start a fresh run
+  // that resumes the prior session with the message (`run/` +
+  // resume_from_run_id). The task flips back to in_progress and its
+  // transcript keeps the prior history with the message appended.
+  router.post('/:id/message', async (req, res) => {
+    try {
+      await requireTaskAccess(req, req.params.id);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const message =
+      typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'Message is required.' });
+    }
+    const model = typeof req.body?.model === 'string' ? req.body.model : undefined;
+    const reasoningEffort =
+      typeof req.body?.reasoningEffort === 'string' ? req.body.reasoningEffort : undefined;
+
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(tasksTable)
+      .where(eq(tasksTable.id, req.params.id))
+      .limit(1);
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    const task = rowToTask(rows[0], { includeTerminalOutput: true });
+    const meta = (task.metadata ?? {}) as Record<string, unknown>;
+    const posthogTaskId = meta.posthogTaskId as string | undefined;
+    if (!posthogTaskId) {
+      return res.status(400).json({ success: false, error: 'Not a PostHog Code task.' });
+    }
+    const client = await getPostHogCodeClient(task.workspaceId);
+    if (!client) {
+      return res.status(400).json({
+        success: false,
+        error: 'PostHog Code is not configured for this workspace.',
+      });
+    }
+
+    let runId: string | undefined;
+    let runStatus: string | undefined;
+    try {
+      const remote = await client.getTask(posthogTaskId);
+      runId = remote.latest_run?.id;
+      runStatus = remote.latest_run?.status;
+    } catch (err) {
+      return res.status(502).json({
+        success: false,
+        error: err instanceof Error ? err.message : 'Failed to reach PostHog Code.',
+      });
+    }
+    if (!runId) {
+      return res.status(409).json({ success: false, error: 'No run to continue yet.' });
+    }
+
+    const runtimeAdapter =
+      (meta.runtimeAdapter as PostHogCodeRuntimeAdapter | undefined) ?? 'claude';
+
+    try {
+      if (runStatus === 'in_progress') {
+        // Live run — inject the message into the running agent. The active
+        // stream surfaces the agent's reaction; leave status as-is.
+        await client.sendRunCommand(posthogTaskId, runId, {
+          method: 'user_message',
+          params: { content: message },
+        });
+        await patchTaskMetadata(task.id, (existing) => ({
+          ...existing,
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        }));
+        return res.json({ success: true });
+      }
+
+      // Finished run — resume into a fresh run carrying the message.
+      const resumed = await client.resumeRun(posthogTaskId, {
+        resumeFromRunId: runId,
+        message,
+        runtimeAdapter,
+        model,
+        reasoningEffort,
+      });
+      const newRunId = resumed.latest_run?.id ?? runId;
+
+      // Echo the user's message into the transcript (continuing seqs) and
+      // flip the task back to in_progress; the streamer appends the new
+      // run's events onto this seed so prior history stays visible.
+      const existing = Array.isArray(task.transcript)
+        ? (task.transcript as AgentEvent[])
+        : [];
+      const nextSeq = existing.reduce((m, e) => Math.max(m, e.seq + 1), 0);
+      const userEvent = {
+        seq: nextSeq,
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: message }] },
+      } as AgentEvent;
+      const seeded = [...existing, userEvent];
+
+      await db
+        .update(tasksTable)
+        .set({
+          status: 'in_progress',
+          transcript: seeded as unknown as object,
+          completedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(tasksTable.id, task.id));
+      await patchTaskMetadata(task.id, (existing2) => ({
+        ...existing2,
+        posthogRunId: newRunId,
+        posthogStatus: resumed.latest_run?.status ?? 'queued',
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      }));
+      emitTaskStatus(task.workspaceId, task.id, 'in_progress');
+      emitTaskEvent(task.workspaceId, task.id, userEvent);
+
+      postHogCodeStreamer.stop(task.id);
+      postHogCodeStreamer.ensure({
+        taskId: task.id,
+        workspaceId: task.workspaceId,
+        posthogTaskId,
+        posthogRunId: newRunId,
+        seedTranscript: seeded,
+      });
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(502).json({
+        success: false,
+        error: err instanceof Error ? err.message : 'PostHog Code rejected the message.',
+      });
+    }
   });
 
   // Read the audit log of every git command FastOwl ran on this

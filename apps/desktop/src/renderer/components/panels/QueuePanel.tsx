@@ -1182,13 +1182,12 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           );
         })()}
 
-      {/* Cloud tasks: no Files/Git data — show the agent log directly.
-          See the in_progress view for the rationale. */}
+      {/* Cloud tasks: no Files/Git data. Render the full TaskTerminal (log +
+          composer) even when finished, so a completed PostHog Code task can
+          still take a follow-up message. */}
       {isCloudTask ? (
-        <div className="flex-1 overflow-hidden p-4">
-          <div className="h-full overflow-auto">
-            <TerminalHistory taskId={task.id} />
-          </div>
+        <div className="flex-1 overflow-hidden">
+          <TaskTerminal task={task} />
         </div>
       ) : (
         <>

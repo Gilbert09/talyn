@@ -42,6 +42,9 @@ interface ActiveStream {
   abort: AbortController;
   converter: AcpConverter;
   transcript: AgentEvent[];
+  /** Monotonic seq for the next appended event (survives a seeded
+   *  transcript that may contain a truncation marker with seq -1). */
+  nextSeq: number;
   lastEventId?: string;
   /** Events appended since the last DB flush. */
   unpersisted: number;
@@ -68,8 +71,16 @@ class PostHogCodeStreamer {
      * just blocks until it times out).
      */
     backfillOnly?: boolean;
+    /**
+     * Pre-existing transcript to append the new run's events onto, rather
+     * than replacing it. Used for follow-up runs (resume) so the prior
+     * conversation stays visible and seqs continue. Persisted on the first
+     * flush so the seed survives even if the new run is empty.
+     */
+    seedTranscript?: AgentEvent[];
   }): void {
     if (this.active.has(input.taskId)) return;
+    const seed = input.seedTranscript ?? [];
     const stream: ActiveStream = {
       taskId: input.taskId,
       workspaceId: input.workspaceId,
@@ -77,8 +88,10 @@ class PostHogCodeStreamer {
       posthogRunId: input.posthogRunId,
       abort: new AbortController(),
       converter: new AcpConverter(),
-      transcript: [],
-      unpersisted: 0,
+      transcript: [...seed],
+      nextSeq: seed.reduce((max, e) => Math.max(max, e.seq + 1), 0),
+      // Persist on the next append so a seed-only resume still saves.
+      unpersisted: seed.length > 0 ? 1 : 0,
       closed: false,
       backfillOnly: Boolean(input.backfillOnly),
     };
@@ -283,7 +296,7 @@ class PostHogCodeStreamer {
   private appendEvents(stream: ActiveStream, inputs: AgentEventInput[]): void {
     if (inputs.length === 0) return;
     for (const input of inputs) {
-      const event: AgentEvent = { ...input, seq: stream.transcript.length } as AgentEvent;
+      const event: AgentEvent = { ...input, seq: stream.nextSeq++ } as AgentEvent;
       stream.transcript.push(event);
       emitTaskEvent(stream.workspaceId, stream.taskId, event);
       stream.unpersisted += 1;
