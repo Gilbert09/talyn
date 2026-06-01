@@ -118,8 +118,14 @@ Your job is to keep iterating on this PR until ALL of the following are true and
 
 3. The branch merges cleanly into its base branch (no merge conflicts).
    - Check mergeability via \`gh pr view ${row.number} --json mergeable,mergeStateStatus\`.
-   - If the branch is CONFLICTING / DIRTY, update it against the base branch (merge the latest base branch in, or rebase onto it) and resolve every conflict carefully — preserve the intent of both sides, don't blindly discard changes.
-   - After resolving, re-run the build/tests locally where feasible, then push. Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
+   - If the branch is CONFLICTING / DIRTY, update it by MERGING the base branch IN. Do NOT rebase:
+       git fetch origin ${s.baseBranch}
+       git merge origin/${s.baseBranch}
+     Then resolve each conflict by hand and commit the merge.
+   - CRITICAL — do NOT rebase, reset, cherry-pick, squash, amend existing commits, or force-push this branch. Rebasing rewrites the PR's history and is what drags unrelated/duplicate commits and changes into the PR. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch.
+   - Resolve ONLY the genuine conflicts. Preserve the intent of both sides; never blindly discard the PR's changes or the base's. The update must add nothing beyond (a) one merge commit and (b) your conflict resolutions — no unrelated files, commits, or edits.
+   - Before pushing, verify you didn't pull in stray changes: \`git diff origin/${s.baseBranch}...HEAD\` should show ONLY this PR's intended changes (plus conflict resolutions). If you see unrelated changes, abort the merge (\`git merge --abort\` / reset to \`origin/${s.headBranch}\`) and redo it cleanly.
+   - After resolving, re-run the build/tests locally where feasible, then push (a normal \`git push\`, no \`--force\`). Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
 
 Loop discipline:
   - After every push, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
