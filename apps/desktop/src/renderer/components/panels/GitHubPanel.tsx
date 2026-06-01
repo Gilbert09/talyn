@@ -408,11 +408,13 @@ export function GitHubPanel() {
   // Kick off a PostHog Code cloud run to take the PR to a clean,
   // mergeable state (resolve comments, fix CI, resolve conflicts).
   // Assigns the task to the cloud env so the scheduler dispatches it
-  // to PostHog Code rather than a local agent.
+  // to PostHog Code rather than a local agent. The run happens entirely
+  // in the cloud, so — unlike a local task — there's nothing to watch
+  // live; stay on the GitHub page rather than jumping to the task screen.
   async function handleCreatePostHogTask(row: PRRow) {
     if (!currentWorkspaceId || !posthogEnvId) return;
     const ref = `${row.owner}/${row.repo}#${row.number}`;
-    const created = await createTask({
+    await createTask({
       workspaceId: currentWorkspaceId,
       type: 'pr_response',
       title: `Get ${ref} mergeable`,
@@ -421,8 +423,6 @@ export function GitHubPanel() {
       repositoryId: row.repositoryId,
       assignedEnvironmentId: posthogEnvId,
     });
-    selectTask(created.id);
-    setActivePanel('queue');
   }
 
   return (
@@ -777,6 +777,9 @@ function PRTableRow({
   const [busy, setBusy] = useState<null | 'merge' | 'task' | 'posthog'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Brief confirmation flash after a PostHog Code run is kicked off — we
+  // stay on the GitHub page, so this is the only signal it started.
+  const [posthogStarted, setPosthogStarted] = useState(false);
   const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
   const unresolved = summary.unresolvedReviewThreads ?? 0;
   // A follow-up run only makes sense on an open PR with something to fix.
@@ -824,6 +827,8 @@ function PRTableRow({
     setRowError(null);
     try {
       await onCreatePostHogTask(row);
+      setPosthogStarted(true);
+      setTimeout(() => setPosthogStarted(false), 2000);
     } catch (err) {
       setRowError(err instanceof Error ? err.message : 'Could not start PostHog Code task');
     } finally {
@@ -969,13 +974,17 @@ function PRTableRow({
               disabled={!canFollowUp || busy !== null}
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
               title={
-                canFollowUp
+                posthogStarted
+                  ? 'PostHog Code run started — see the Tasks panel'
+                  : canFollowUp
                   ? 'Get this PR mergeable with PostHog Code (resolve comments, fix CI, resolve conflicts)'
                   : 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
               }
             >
               {busy === 'posthog' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : posthogStarted ? (
+                <Check className="h-3.5 w-3.5 text-emerald-600" />
               ) : (
                 <Bot className="h-3.5 w-3.5" />
               )}
