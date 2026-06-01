@@ -179,6 +179,8 @@ export interface PostHogRun {
   log_url?: string | null;
   runtime_adapter?: string;
   model?: string;
+  /** Bumps on real run-state progress; goes stale when the agent is idle. */
+  updated_at?: string | null;
   completed_at?: string | null;
   [k: string]: unknown;
 }

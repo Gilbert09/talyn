@@ -10,7 +10,8 @@ import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
-import type { PostHogRun, PostHogRunStatus } from './client.js';
+import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.js';
+import type { AcpLogEntry } from './acpConverter.js';
 
 const POLL_INTERVAL_MS = 10_000;
 const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
@@ -18,6 +19,21 @@ const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
   'failed',
   'cancelled',
 ]);
+
+/**
+ * A cloud run can finish its work yet sit in `in_progress` forever — the
+ * PostHog API only flips to `completed` on certain finalisation paths, so a
+ * background agent that reached end-of-turn just stays "running". We detect
+ * that and auto-complete: the run's `updated_at` stops advancing once the
+ * agent is idle (idle keepalive logs don't bump it), and we confirm the log
+ * actually ended on a `turn_complete` so we never kill a long silent tool.
+ */
+const IDLE_FINALIZE_MS =
+  Number(process.env.POSTHOG_CODE_IDLE_TIMEOUT_MS) || 10 * 60 * 1000;
+/** Don't re-pull the log tail more often than this per task while stale. */
+const IDLE_RECHECK_MS = 5 * 60 * 1000;
+/** How far back from `updated_at` to read the log tail for confirmation. */
+const IDLE_TAIL_WINDOW_MS = 5 * 60 * 1000;
 
 /**
  * Reconciles FastOwl tasks that were delegated to PostHog Code. PostHog
@@ -31,6 +47,8 @@ const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
 class PostHogCodePoller {
   private interval: NodeJS.Timeout | null = null;
   private ticking = false;
+  /** Per-task throttle for the idle-confirmation log fetch (taskId → ms). */
+  private lastIdleCheck = new Map<string, number>();
 
   init(): void {
     if (this.interval) return;
@@ -146,6 +164,11 @@ class PostHogCodePoller {
       metadata: { posthogStatus: status, posthogPrUrl: prUrl ?? undefined },
     });
 
+    // A run that's done working but stuck in `in_progress` — auto-complete it.
+    if (run && status === 'in_progress' && runId) {
+      await this.maybeFinalizeIdle(task, client, run, runId, prUrl);
+    }
+
     if (!TERMINAL.has(status)) return;
 
     if (status === 'completed') {
@@ -219,11 +242,65 @@ class PostHogCodePoller {
     }
   }
 
+  /**
+   * Auto-complete a run that's done working but stuck in `in_progress`.
+   * Gated on (a) the run's `updated_at` being stale past IDLE_FINALIZE_MS,
+   * and (b) the session log having ended on a turn/task completion (not an
+   * in-flight tool call) — so a long silent tool is never cut short. The
+   * log-tail confirmation is throttled per task to avoid refetching every
+   * tick while a run is stale-but-still-working.
+   */
+  private async maybeFinalizeIdle(
+    task: { id: string; workspaceId: string; repositoryId: string | null; posthogTaskId: string },
+    client: PostHogCodeClient,
+    run: PostHogRun,
+    runId: string,
+    prUrl: string | null,
+  ): Promise<void> {
+    const updatedAtMs = run.updated_at ? Date.parse(run.updated_at) : NaN;
+    if (Number.isNaN(updatedAtMs)) return;
+    if (Date.now() - updatedAtMs < IDLE_FINALIZE_MS) {
+      // Active recently — clear any throttle so a later idle spell re-checks.
+      this.lastIdleCheck.delete(task.id);
+      return;
+    }
+
+    const lastCheck = this.lastIdleCheck.get(task.id) ?? 0;
+    if (Date.now() - lastCheck < IDLE_RECHECK_MS) return;
+    this.lastIdleCheck.set(task.id, Date.now());
+
+    let entries: AcpLogEntry[];
+    try {
+      entries = await client.getSessionLogs(task.posthogTaskId, runId, {
+        after: new Date(updatedAtMs - IDLE_TAIL_WINDOW_MS).toISOString(),
+        limit: 5000,
+      });
+    } catch {
+      return; // can't confirm → leave it; we'll retry next window.
+    }
+    if (!lastFlowEventIsTurnComplete(entries)) return;
+
+    const idleMin = Math.round((Date.now() - updatedAtMs) / 60_000);
+    console.log(
+      `[posthogCode] task ${task.id.slice(0, 8)}: run idle ${idleMin}m after turn_complete — auto-finalizing as completed`,
+    );
+    postHogCodeStreamer.stop(task.id);
+    if (prUrl && task.repositoryId) await this.linkPr(task, run, prUrl);
+    await this.finalize(task, 'completed', {
+      success: true,
+      summary: prUrl
+        ? `PostHog Code went idle after opening ${prUrl}`
+        : 'PostHog Code run went idle — auto-completed',
+      output: stringifyOutput(run.output),
+    });
+  }
+
   private async finalize(
     task: { id: string; workspaceId: string },
     status: TaskStatus,
     result: TaskResult,
   ): Promise<void> {
+    this.lastIdleCheck.delete(task.id);
     const now = new Date();
     await getDbClient()
       .update(tasksTable)
@@ -236,6 +313,43 @@ class PostHogCodePoller {
       .where(eq(tasksTable.id, task.id));
     emitTaskStatus(task.workspaceId, task.id, status, result);
   }
+}
+
+/**
+ * Walk a session-log tail backwards and decide whether the run is sitting
+ * at end-of-turn (vs mid-work). Returns true if the most recent meaningful
+ * event is a `turn_complete`/`task_complete`; false if it's an in-flight
+ * tool call, agent message, or error (still working / not a clean end), or
+ * if no end-of-turn marker is present. Idle keepalives (`console`,
+ * `usage_update`, `progress`) are skipped. Pure — exported for tests.
+ */
+export function lastFlowEventIsTurnComplete(entries: AcpLogEntry[]): boolean {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const method = entries[i]?.notification?.method;
+    if (method === '_posthog/turn_complete' || method === '_posthog/task_complete') {
+      return true;
+    }
+    if (method === '_posthog/error') return false;
+    if (method === 'session/update') {
+      const su = (
+        entries[i]?.notification?.params as
+          | { update?: { sessionUpdate?: string } }
+          | undefined
+      )?.update?.sessionUpdate;
+      if (
+        su === 'tool_call' ||
+        su === 'tool_call_update' ||
+        su === 'agent_message' ||
+        su === 'agent_message_chunk' ||
+        su === 'agent_thought' ||
+        su === 'agent_thought_chunk' ||
+        su === 'user_message'
+      ) {
+        return false; // last real event was work, not a turn end
+      }
+    }
+  }
+  return false;
 }
 
 /** Scan the remote task + run for the first GitHub PR URL. */
