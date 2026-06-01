@@ -300,10 +300,14 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
   const agentAttention = task.agentAttention || 'none';
 
   // Diff stats (+NN -MM) only make sense once the task has a branch to
-  // diff against. Gate the fetch so branch-less tasks (pending / queued
-  // pre-scheduler) don't hit the backend for an empty list.
+  // diff against, and only for tasks FastOwl runs locally. Cloud (PostHog
+  // Code) tasks have no local checkout to diff, so gate the fetch off for
+  // them too — otherwise every cloud row hits the backend for an empty list.
+  const isCloudTask = Boolean(
+    (task.metadata as { posthogTaskId?: string } | undefined)?.posthogTaskId,
+  );
   const { files: changedFiles } = useTaskFiles(task.id, {
-    enabled: !!task.branch,
+    enabled: !!task.branch && !isCloudTask,
   });
   const diffStats = changedFiles.reduce(
     (acc, f) => ({
@@ -470,11 +474,15 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   // tab. We pass the result down into TaskFilesPanel instead of
   // having the panel call the hook itself, so the badge and the
   // list body never show different counts.
+  // Cloud (PostHog Code) tasks run in PostHog's sandbox — FastOwl has no
+  // local git checkout or command audit for them, so the Files/Git tabs
+  // have nothing to show. Skip those fetches and hide the tabs; the diff
+  // lives on the linked GitHub PR instead (the PR panel's Files tab).
   const {
     files: changedFiles,
     loading: changedFilesLoading,
     error: changedFilesError,
-  } = useTaskFiles(taskId);
+  } = useTaskFiles(taskId, { enabled: !isCloudTask });
   // Same pattern for the Git tab badge — count of recorded commands.
   // Lifted here (instead of the panel owning it) so the badge number
   // never drifts from the list the user sees after clicking the tab.
@@ -482,7 +490,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     entries: gitLogEntries,
     loading: gitLogLoading,
     error: gitLogError,
-  } = useTaskGitLog(taskId);
+  } = useTaskGitLog(taskId, { enabled: !isCloudTask });
 
   const handleStartTask = async () => {
     setActiveAction('start');
@@ -688,81 +696,93 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="border-b px-4 flex items-center gap-1">
-          <TabButton
-            active={activeTab === 'terminal'}
-            onClick={() => setActiveTab('terminal')}
-          >
-            <Terminal className="w-3.5 h-3.5 mr-1.5" />
-            Terminal
-          </TabButton>
-          <TabButton
-            active={activeTab === 'files'}
-            onClick={() => setActiveTab('files')}
-          >
-            <GitBranch className="w-3.5 h-3.5 mr-1.5" />
-            Files
-            {changedFiles.length > 0 && (
-              <Badge
-                variant="secondary"
-                className={cn(
-                  'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                  activeTab !== 'files' && 'bg-primary/15 text-primary'
-                )}
-              >
-                {changedFiles.length}
-              </Badge>
-            )}
-          </TabButton>
-          <TabButton
-            active={activeTab === 'git'}
-            onClick={() => setActiveTab('git')}
-          >
-            <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-            Git
-            {gitLogEntries.length > 0 && (
-              <Badge
-                variant="secondary"
-                className={cn(
-                  'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                  activeTab !== 'git' && 'bg-primary/15 text-primary'
-                )}
-              >
-                {gitLogEntries.length}
-              </Badge>
-            )}
-          </TabButton>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-hidden p-4">
-          {activeTab === 'terminal' && (
+        {/* Cloud tasks have no local Files/Git data — show the agent log
+            directly, no tab strip. Everything else keeps the tabs. */}
+        {isCloudTask ? (
+          <div className="flex-1 overflow-hidden p-4">
             <div className="h-full">
               <TaskTerminal task={task} />
             </div>
-          )}
-          {activeTab === 'files' && (
-            <div className="h-full">
-              <TaskFilesPanel
-              taskId={task.id}
-              files={changedFiles}
-              loading={changedFilesLoading}
-              error={changedFilesError}
-            />
+          </div>
+        ) : (
+          <>
+            {/* Tabs */}
+            <div className="border-b px-4 flex items-center gap-1">
+              <TabButton
+                active={activeTab === 'terminal'}
+                onClick={() => setActiveTab('terminal')}
+              >
+                <Terminal className="w-3.5 h-3.5 mr-1.5" />
+                Terminal
+              </TabButton>
+              <TabButton
+                active={activeTab === 'files'}
+                onClick={() => setActiveTab('files')}
+              >
+                <GitBranch className="w-3.5 h-3.5 mr-1.5" />
+                Files
+                {changedFiles.length > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
+                      activeTab !== 'files' && 'bg-primary/15 text-primary'
+                    )}
+                  >
+                    {changedFiles.length}
+                  </Badge>
+                )}
+              </TabButton>
+              <TabButton
+                active={activeTab === 'git'}
+                onClick={() => setActiveTab('git')}
+              >
+                <GitCommit className="w-3.5 h-3.5 mr-1.5" />
+                Git
+                {gitLogEntries.length > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
+                      activeTab !== 'git' && 'bg-primary/15 text-primary'
+                    )}
+                  >
+                    {gitLogEntries.length}
+                  </Badge>
+                )}
+              </TabButton>
             </div>
-          )}
-          {activeTab === 'git' && (
-            <div className="h-full">
-              <TaskGitPanel
-              taskId={task.id}
-              entries={gitLogEntries}
-              loading={gitLogLoading}
-              error={gitLogError}
-            />
+
+            {/* Body */}
+            <div className="flex-1 overflow-hidden p-4">
+              {activeTab === 'terminal' && (
+                <div className="h-full">
+                  <TaskTerminal task={task} />
+                </div>
+              )}
+              {activeTab === 'files' && (
+                <div className="h-full">
+                  <TaskFilesPanel
+                    taskId={task.id}
+                    files={changedFiles}
+                    loading={changedFilesLoading}
+                    error={changedFilesError}
+                  />
+                </div>
+              )}
+              {activeTab === 'git' && (
+                <div className="h-full">
+                  <TaskGitPanel
+                    taskId={task.id}
+                    entries={gitLogEntries}
+                    loading={gitLogLoading}
+                    error={gitLogError}
+                  />
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
       </>
     );
   }
@@ -1162,80 +1182,92 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           );
         })()}
 
-      {/* Tabs — same shape as the in_progress view. */}
-      <div className="border-b px-4 flex items-center gap-1 shrink-0">
-        <TabButton
-          active={activeTab === 'terminal'}
-          onClick={() => setActiveTab('terminal')}
-        >
-          <Terminal className="w-3.5 h-3.5 mr-1.5" />
-          Terminal
-        </TabButton>
-        <TabButton
-          active={activeTab === 'files'}
-          onClick={() => setActiveTab('files')}
-        >
-          <GitBranch className="w-3.5 h-3.5 mr-1.5" />
-          Files
-          {changedFiles.length > 0 && (
-            <Badge
-              variant="secondary"
-              className={cn(
-                'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                activeTab !== 'files' && 'bg-primary/15 text-primary'
-              )}
-            >
-              {changedFiles.length}
-            </Badge>
-          )}
-        </TabButton>
-        <TabButton
-          active={activeTab === 'git'}
-          onClick={() => setActiveTab('git')}
-        >
-          <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-          Git
-          {gitLogEntries.length > 0 && (
-            <Badge
-              variant="secondary"
-              className={cn(
-                'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                activeTab !== 'git' && 'bg-primary/15 text-primary'
-              )}
-            >
-              {gitLogEntries.length}
-            </Badge>
-          )}
-        </TabButton>
-      </div>
-
-      <div className="flex-1 overflow-hidden p-4">
-        {activeTab === 'terminal' && (
+      {/* Cloud tasks: no Files/Git data — show the agent log directly.
+          See the in_progress view for the rationale. */}
+      {isCloudTask ? (
+        <div className="flex-1 overflow-hidden p-4">
           <div className="h-full overflow-auto">
             <TerminalHistory taskId={task.id} />
           </div>
-        )}
-        {activeTab === 'files' && (
-          <div className="h-full">
-            <TaskFilesPanel
-              taskId={task.id}
-              files={changedFiles}
-              loading={changedFilesLoading}
-              error={changedFilesError}
-            />
+        </div>
+      ) : (
+        <>
+          {/* Tabs — same shape as the in_progress view. */}
+          <div className="border-b px-4 flex items-center gap-1 shrink-0">
+            <TabButton
+              active={activeTab === 'terminal'}
+              onClick={() => setActiveTab('terminal')}
+            >
+              <Terminal className="w-3.5 h-3.5 mr-1.5" />
+              Terminal
+            </TabButton>
+            <TabButton
+              active={activeTab === 'files'}
+              onClick={() => setActiveTab('files')}
+            >
+              <GitBranch className="w-3.5 h-3.5 mr-1.5" />
+              Files
+              {changedFiles.length > 0 && (
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
+                    activeTab !== 'files' && 'bg-primary/15 text-primary'
+                  )}
+                >
+                  {changedFiles.length}
+                </Badge>
+              )}
+            </TabButton>
+            <TabButton
+              active={activeTab === 'git'}
+              onClick={() => setActiveTab('git')}
+            >
+              <GitCommit className="w-3.5 h-3.5 mr-1.5" />
+              Git
+              {gitLogEntries.length > 0 && (
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
+                    activeTab !== 'git' && 'bg-primary/15 text-primary'
+                  )}
+                >
+                  {gitLogEntries.length}
+                </Badge>
+              )}
+            </TabButton>
           </div>
-        )}
-        {activeTab === 'git' && (
-          <div className="h-full">
-            <TaskGitPanel
-              taskId={task.id}
-              entries={gitLogEntries}
-              loading={gitLogLoading}
-              error={gitLogError}
-            />
+
+          <div className="flex-1 overflow-hidden p-4">
+            {activeTab === 'terminal' && (
+              <div className="h-full overflow-auto">
+                <TerminalHistory taskId={task.id} />
+              </div>
+            )}
+            {activeTab === 'files' && (
+              <div className="h-full">
+                <TaskFilesPanel
+                  taskId={task.id}
+                  files={changedFiles}
+                  loading={changedFilesLoading}
+                  error={changedFilesError}
+                />
+              </div>
+            )}
+            {activeTab === 'git' && (
+              <div className="h-full">
+                <TaskGitPanel
+                  taskId={task.id}
+                  entries={gitLogEntries}
+                  loading={gitLogLoading}
+                  error={gitLogError}
+                />
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
       <PRDetailSheet pullRequestId={prSheetId} onClose={() => setPRSheetId(null)} />
     </>
   );

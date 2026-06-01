@@ -21,16 +21,26 @@ function entryKey(e: GitLogEntry): string {
  * to `task:git_log` for new entries appended during /start, /approve,
  * /reject, or scheduler-driven branch prep.
  */
-export function useTaskGitLog(taskId: string): {
+export function useTaskGitLog(
+  taskId: string,
+  options: { enabled?: boolean } = {},
+): {
   entries: GitLogEntry[];
   loading: boolean;
   error: string | null;
 } {
+  const { enabled = true } = options;
   const [entries, setEntries] = useState<GitLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setEntries([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -64,9 +74,10 @@ export function useTaskGitLog(taskId: string): {
     return () => {
       cancelled = true;
     };
-  }, [taskId]);
+  }, [taskId, enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     const unsub = wsClient.on<{
       taskId: string;
       entry: GitLogEntry;
@@ -79,7 +90,7 @@ export function useTaskGitLog(taskId: string): {
       });
     });
     return () => unsub();
-  }, [taskId]);
+  }, [taskId, enabled]);
 
   return { entries, loading, error };
 }
