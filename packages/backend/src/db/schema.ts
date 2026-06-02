@@ -430,7 +430,7 @@ export const pullRequests = pgTable(
      *     mergeable, mergeStateStatus, reviewDecision,
      *     blockingReason: 'mergeable' | 'merge_conflicts'
      *                   | 'changes_requested' | 'checks_failed'
-     *                   | 'blocked' | 'unknown',
+     *                   | 'checks_failed_optional' | 'blocked' | 'unknown',
      *     checksTotal, checksPassed, checksFailed,
      *     checksInProgress, checksSkipped
      *   }

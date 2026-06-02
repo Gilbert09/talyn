@@ -346,6 +346,9 @@ export type PRBlockingReason =
   | 'merge_conflicts'
   | 'changes_requested'
   | 'checks_failed'
+  // Mergeable, but non-required checks are failing — de-emphasised (amber)
+  // rather than the hard red 'checks_failed'.
+  | 'checks_failed_optional'
   | 'blocked'
   | 'unknown';
 

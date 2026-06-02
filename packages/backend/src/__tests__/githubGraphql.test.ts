@@ -100,7 +100,21 @@ describe('computeBlockingReason', () => {
     ).toBe('changes_requested');
   });
 
-  it('returns checks_failed when there is at least one failed check', () => {
+  it('returns checks_failed when a REQUIRED check fails (merge is BLOCKED)', () => {
+    // GitHub reports a failing *required* check as BLOCKED (not UNSTABLE).
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BLOCKED',
+        reviewDecision: 'APPROVED',
+        checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
+      })
+    ).toBe('checks_failed');
+  });
+
+  it('returns checks_failed_optional when failures are non-required (UNSTABLE → still mergeable)', () => {
+    // UNSTABLE = mergeable despite non-passing checks ⇒ none of the failing
+    // checks are required, so they don't block.
     expect(
       computeBlockingReason({
         mergeable: 'MERGEABLE',
@@ -108,7 +122,31 @@ describe('computeBlockingReason', () => {
         reviewDecision: 'APPROVED',
         checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
       })
+    ).toBe('checks_failed_optional');
+  });
+
+  it('treats CLEAN/unknown states with failures as blocking (conservative default)', () => {
+    // If GitHub doesn't tell us it's UNSTABLE, we can't prove the failure
+    // is optional — keep the hard 'checks_failed'.
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        reviewDecision: 'APPROVED',
+        checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
+      })
     ).toBe('checks_failed');
+  });
+
+  it('a required review still wins over non-required failing checks', () => {
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'UNSTABLE',
+        reviewDecision: 'REVIEW_REQUIRED',
+        checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
+      })
+    ).toBe('blocked');
   });
 
   it('returns mergeable for the happy path (CLEAN)', () => {

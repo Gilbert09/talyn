@@ -392,6 +392,9 @@ function takeUntilCursor<T extends { id: string }>(
  */
 function detectCiJustFailed(previous: CursorState, summary: PRSummary): boolean {
   if (summary.checks.failed === 0) return false;
+  // Non-required checks failing don't block the merge — don't ping the
+  // inbox about them (matches the de-emphasised UI treatment).
+  if (summary.blockingReason === 'checks_failed_optional') return false;
   if (previous.lastCheckDigest === summary.checkDigest) return false;
   if (!previous.lastCheckDigest) {
     // First time we're seeing checks for this PR; emit only if it's
@@ -408,7 +411,13 @@ function detectCiJustFailed(previous: CursorState, summary: PRSummary): boolean 
 }
 
 function detectBecameMergeReady(previous: CursorState, summary: PRSummary): boolean {
-  if (summary.blockingReason !== 'mergeable') return false;
+  // Optional (non-required) checks failing still leaves the PR mergeable,
+  // so it counts as merge-ready too.
+  if (
+    summary.blockingReason !== 'mergeable' &&
+    summary.blockingReason !== 'checks_failed_optional'
+  )
+    return false;
   // We don't persist the previous blocking_reason, but we can infer
   // "transitioned into mergeable" by digest change + the current
   // verdict. If the digest was identical AND we already emitted, we'd

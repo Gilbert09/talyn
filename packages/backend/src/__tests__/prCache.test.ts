@@ -240,6 +240,44 @@ describe('computePRDeltas', () => {
     expect(delta.ciJustFailed).toBe(true);
   });
 
+  it('does NOT emit ciJustFailed for non-required (optional) check failures', () => {
+    // A mergeable PR whose only failing checks aren't required shouldn't
+    // ping the inbox — it isn't blocked.
+    const summary = makeSummary({
+      blockingReason: 'checks_failed_optional',
+      checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 },
+      checkDigest: 'sha2:lint=success|flaky=failure',
+    });
+    const delta = computePRDeltas(
+      {
+        lastReviewId: null,
+        lastReviewCommentId: null,
+        lastCommentId: null,
+        lastCheckDigest: 'sha1:lint=success|flaky=success',
+      },
+      summary
+    );
+    expect(delta.ciJustFailed).toBe(false);
+  });
+
+  it('treats an optional-failing (mergeable) PR as becameMergeReady', () => {
+    const summary = makeSummary({
+      blockingReason: 'checks_failed_optional',
+      checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 },
+      checkDigest: 'sha1:lint=success|flaky=failure',
+    });
+    const delta = computePRDeltas(
+      {
+        lastReviewId: null,
+        lastReviewCommentId: null,
+        lastCommentId: null,
+        lastCheckDigest: 'sha1:lint=in_progress|flaky=in_progress',
+      },
+      summary
+    );
+    expect(delta.becameMergeReady).toBe(true);
+  });
+
   it('detects becameMergeReady when blockingReason flips to mergeable on a digest change', () => {
     const summary = makeSummary({
       blockingReason: 'mergeable',

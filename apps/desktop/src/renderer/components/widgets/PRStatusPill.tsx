@@ -17,18 +17,26 @@ import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
  * shape, the 5-segment check bar shows progress at a glance.
  *
  * State priority (top wins):
- *   merge_conflicts     → red, "Conflicts"
- *   changes_requested   → amber, "N changes requested" (use review count)
- *   checks_failed       → red, "N/M failing"
- *   checks running      → blue spinner, "N/M running"
- *   mergeable           → green, "Ready"
- *   blocked             → amber, "Blocked"
- *   unknown             → grey, "—"
+ *   merge_conflicts        → red, "Conflicts"
+ *   changes_requested      → amber, "N changes requested" (use review count)
+ *   checks_failed          → red, "N/M failing"
+ *   checks_failed_optional → amber, "N non-required" (mergeable; not blocking)
+ *   checks running         → blue spinner, "N/M running"
+ *   mergeable              → green, "Ready"
+ *   blocked                → amber, "Blocked"
+ *   unknown                → grey, "—"
  */
 
 interface PRStatusPillProps {
   blockingReason: PRBlockingReason;
   checks: PRChecks;
+  /**
+   * GitHub's mergeStateStatus. Only used to tell required from
+   * non-required check failures when review verdicts are stripped
+   * (see `hideReviewState`); UNSTABLE ⇒ the failing checks aren't
+   * required.
+   */
+  mergeStateStatus?: string;
   /**
    * PR lifecycle state. When merged/closed it overrides blockingReason
    * — a terminal PR shows "Merged"/"Closed", not its last open verdict
@@ -56,11 +64,14 @@ interface PillVariant {
   /** Tailwind class fragment. */
   tone: 'green' | 'amber' | 'red' | 'blue' | 'grey' | 'purple';
   spin?: boolean;
+  /** Failing checks are non-required → draw the rollup's fail bar amber. */
+  optionalFailures?: boolean;
 }
 
 export function PRStatusPill({
   blockingReason,
   checks,
+  mergeStateStatus,
   state,
   onClick,
   compact = false,
@@ -68,7 +79,8 @@ export function PRStatusPill({
   className,
 }: PRStatusPillProps) {
   const terminal = terminalVariant(state);
-  const variant = terminal ?? pickVariant(blockingReason, checks, hideReviewState);
+  const variant =
+    terminal ?? pickVariant(blockingReason, checks, hideReviewState, mergeStateStatus);
   const Icon = variant.icon;
   // A merged/closed PR's check rollup is no longer meaningful.
   const showRollup = !terminal && !compact && checks.total > 0;
@@ -89,7 +101,9 @@ export function PRStatusPill({
         className={cn('w-3.5 h-3.5 shrink-0', variant.spin && 'animate-spin')}
       />
       <span className="truncate">{variant.label}</span>
-      {showRollup && <CheckRollupBar checks={checks} />}
+      {showRollup && (
+        <CheckRollupBar checks={checks} optionalFailures={variant.optionalFailures} />
+      )}
     </button>
   );
 }
@@ -116,7 +130,13 @@ function terminalVariant(state?: PRState): PillVariant | null {
  * Segments are proportional to `checks.total`. Zero-width segments
  * collapse so e.g. an all-passing PR shows a single solid green bar.
  */
-function CheckRollupBar({ checks }: { checks: PRChecks }) {
+function CheckRollupBar({
+  checks,
+  optionalFailures = false,
+}: {
+  checks: PRChecks;
+  optionalFailures?: boolean;
+}) {
   const total = Math.max(checks.total, 1);
   // Skipped checks count as green — a PR with everything passing or
   // skipped should read as a solid green bar, not a partly-grey one.
@@ -130,8 +150,9 @@ function CheckRollupBar({ checks }: { checks: PRChecks }) {
     },
     {
       width: (checks.failed / total) * 100,
-      bg: 'bg-red-500',
-      title: `${checks.failed} failed`,
+      // Non-required failures read amber, not red — they don't block.
+      bg: optionalFailures ? 'bg-amber-500' : 'bg-red-500',
+      title: `${checks.failed} failed${optionalFailures ? ' (not required)' : ''}`,
     },
     {
       width: (checks.inProgress / total) * 100,
@@ -161,16 +182,24 @@ function CheckRollupBar({ checks }: { checks: PRChecks }) {
 function pickVariant(
   blockingReason: PRBlockingReason,
   checks: PRChecks,
-  hideReviewState = false
+  hideReviewState = false,
+  mergeStateStatus?: string
 ): PillVariant {
   // When approval lives in its own column, the review-related verdicts
   // ('changes_requested', 'blocked'-on-review) shouldn't drive this pill
-  // — fall back to the conflicts/CI/mergeability picture instead.
+  // — fall back to the conflicts/CI/mergeability picture instead. UNSTABLE
+  // means any failing checks aren't required, so prefer the optional state.
   if (
     hideReviewState &&
     (blockingReason === 'changes_requested' || blockingReason === 'blocked')
   ) {
-    return pickVariant(checks.failed > 0 ? 'checks_failed' : 'mergeable', checks);
+    const ciReason: PRBlockingReason =
+      checks.failed > 0
+        ? mergeStateStatus?.toUpperCase() === 'UNSTABLE'
+          ? 'checks_failed_optional'
+          : 'checks_failed'
+        : 'mergeable';
+    return pickVariant(ciReason, checks);
   }
   switch (blockingReason) {
     case 'merge_conflicts':
@@ -182,6 +211,24 @@ function pickVariant(
         icon: XCircle,
         label: `${checks.failed}/${checks.total} failing`,
         tone: 'red',
+      };
+    case 'checks_failed_optional':
+      // Mergeable despite failing checks — none are required. Amber, and a
+      // running spinner still wins if some checks haven't finished.
+      if (checks.inProgress > 0) {
+        return {
+          icon: Loader2,
+          label: `${checks.inProgress}/${checks.total} running`,
+          tone: 'blue',
+          spin: true,
+          optionalFailures: true,
+        };
+      }
+      return {
+        icon: AlertTriangle,
+        label: `${checks.failed} non-required`,
+        tone: 'amber',
+        optionalFailures: true,
       };
     case 'mergeable':
       // Special-case in-progress checks even when overall verdict is
@@ -222,7 +269,9 @@ function humanReason(b: PRBlockingReason): string {
     case 'changes_requested':
       return 'Reviewer requested changes';
     case 'checks_failed':
-      return 'CI checks failing';
+      return 'Required CI checks failing';
+    case 'checks_failed_optional':
+      return 'Mergeable — only non-required checks failing';
     case 'blocked':
       return 'Waiting on required review';
     case 'unknown':

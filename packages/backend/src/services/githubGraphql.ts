@@ -42,6 +42,10 @@ export type BlockingReason =
   | 'merge_conflicts'
   | 'changes_requested'
   | 'checks_failed'
+  // Mergeable, but one or more *non-required* checks are failing. GitHub
+  // doesn't block the merge on these, so we surface them as a distinct,
+  // de-emphasised state rather than the hard red 'checks_failed'.
+  | 'checks_failed_optional'
   | 'blocked'
   | 'unknown';
 
@@ -452,7 +456,17 @@ export function computeBlockingReason(input: {
 }): BlockingReason {
   if (input.mergeable === 'CONFLICTING') return 'merge_conflicts';
   if (input.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
-  if (input.checks.failed > 0) return 'checks_failed';
+
+  const upper = input.mergeStateStatus.toUpperCase();
+  // A failing check only *blocks* the merge when it's a required check.
+  // GitHub reports "mergeable, but with non-passing checks" as the
+  // UNSTABLE merge state — those failing checks aren't required (a failing
+  // required check would make the PR BLOCKED instead), so they don't
+  // block. Any other state with failures means a required check is red.
+  const failuresBlock =
+    input.checks.failed > 0 && !(input.mergeable === 'MERGEABLE' && upper === 'UNSTABLE');
+  if (failuresBlock) return 'checks_failed';
+
   // A required review that hasn't landed yet → "Review". Checked before
   // the mergeable branch because GitHub computes `mergeable` lazily and
   // returns UNKNOWN on first fetch — reviewDecision is computed
@@ -463,11 +477,10 @@ export function computeBlockingReason(input: {
     // A PR can be MERGEABLE but still BLOCKED by branch-protection
     // (e.g. required reviews missing). The mergeStateStatus surfaces
     // that.
-    const upper = input.mergeStateStatus.toUpperCase();
-    if (upper === 'CLEAN' || upper === 'HAS_HOOKS' || upper === 'UNSTABLE') {
-      return 'mergeable';
-    }
     if (upper === 'BLOCKED') return 'blocked';
+    // Mergeable, but non-required checks are failing (we only reach here
+    // with failures when the state is UNSTABLE) — de-emphasised, not red.
+    if (input.checks.failed > 0) return 'checks_failed_optional';
     return 'mergeable';
   }
   // mergeable === 'UNKNOWN' — GitHub hasn't computed it yet (background

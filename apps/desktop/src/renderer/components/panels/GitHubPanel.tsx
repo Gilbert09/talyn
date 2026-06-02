@@ -58,7 +58,9 @@ function prNeedsFollowup(s: PRSummaryShape): boolean {
     s.mergeable === 'CONFLICTING' ||
     s.reviewDecision === 'CHANGES_REQUESTED' ||
     (s.unresolvedReviewThreads ?? 0) > 0 ||
-    s.checks.failed > 0
+    // Failing checks count — but not when they're all non-required, since
+    // those don't block the merge and there's nothing to "fix".
+    (s.checks.failed > 0 && s.blockingReason !== 'checks_failed_optional')
   );
 }
 
@@ -75,7 +77,11 @@ function buildIssuesSummary(s: PRSummaryShape): string {
     lines.push('- A reviewer has requested changes');
   }
   if (s.checks.failed > 0) {
-    lines.push(`- Failing CI checks: ${s.checks.failed}/${s.checks.total}`);
+    const optional = s.blockingReason === 'checks_failed_optional';
+    lines.push(
+      `- Failing CI checks: ${s.checks.failed}/${s.checks.total}` +
+        (optional ? ' (none required — not blocking the merge)' : '')
+    );
   }
   return lines.length > 0
     ? lines.join('\n')
@@ -1003,6 +1009,7 @@ function PRTableRow({
           <PRStatusPill
             blockingReason={summary.blockingReason}
             checks={summary.checks}
+            mergeStateStatus={summary.mergeStateStatus}
             state={row.state}
             hideReviewState
           />

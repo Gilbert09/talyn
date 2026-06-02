@@ -260,6 +260,7 @@ export function PRDetailSheet({
                 <PRStatusPill
                   blockingReason={view.row.summary.blockingReason}
                   checks={view.row.summary.checks}
+                  mergeStateStatus={view.row.summary.mergeStateStatus}
                   state={view.row.state}
                 />
               </div>
@@ -530,6 +531,10 @@ function ChecksTab({
   detailPending: boolean;
 }) {
   const checks = data.row.summary.checks;
+  // When the PR is mergeable despite failing checks, none of those
+  // failures are required — colour them amber ("not required") instead of
+  // a blocking red.
+  const failuresOptional = data.row.summary.blockingReason === 'checks_failed_optional';
   // Clicking a tile filters the list to that state (toggle off by
   // clicking again).
   const [filter, setFilter] = useState<CheckFilter | null>(null);
@@ -562,9 +567,9 @@ function ChecksTab({
           onClick={() => toggle('passed')}
         />
         <CheckCountTile
-          label="Failed"
+          label={failuresOptional ? 'Failed (optional)' : 'Failed'}
           value={checks.failed}
-          tone="red"
+          tone={failuresOptional ? 'amber' : 'red'}
           active={filter === 'failed'}
           onClick={() => toggle('failed')}
         />
@@ -587,7 +592,11 @@ function ChecksTab({
         visible.length > 0 ? (
           <ul className="divide-y rounded-md border">
             {visible.map((c) => (
-              <CheckRow key={`${c.name}-${c.url ?? ''}`} check={c} />
+              <CheckRow
+                key={`${c.name}-${c.url ?? ''}`}
+                check={c}
+                failuresOptional={failuresOptional}
+              />
             ))}
           </ul>
         ) : (
@@ -622,14 +631,28 @@ function ChecksTab({
   );
 }
 
-function CheckRow({ check }: { check: PRCheckContext }) {
-  const { icon, color } = checkStateVisual(check.state);
+function CheckRow({
+  check,
+  failuresOptional = false,
+}: {
+  check: PRCheckContext;
+  failuresOptional?: boolean;
+}) {
+  // A non-required failing check reads amber, not red, and carries a
+  // "not required" tag so it's clear it isn't blocking the merge.
+  const optionalFail = failuresOptional && check.state === 'failure';
+  const { icon, color } = checkStateVisual(check.state, optionalFail);
   const row = (
     <div className="flex items-center gap-2 px-2.5 py-1.5">
       <span className={cn('shrink-0', color)}>{icon}</span>
       <span className="min-w-0 flex-1 truncate text-xs" title={check.name}>
         {check.name}
       </span>
+      {optionalFail && (
+        <span className="shrink-0 rounded bg-amber-500/10 px-1 py-px text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+          not required
+        </span>
+      )}
       <span className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
         {check.state.replace('_', ' ')}
       </span>
@@ -651,7 +674,10 @@ function CheckRow({ check }: { check: PRCheckContext }) {
   );
 }
 
-function checkStateVisual(state: PRCheckContext['state']): {
+function checkStateVisual(
+  state: PRCheckContext['state'],
+  optionalFail = false
+): {
   icon: React.ReactNode;
   color: string;
 } {
@@ -664,7 +690,9 @@ function checkStateVisual(state: PRCheckContext['state']): {
     case 'failure':
       return {
         icon: <X className="h-3.5 w-3.5" />,
-        color: 'text-red-600 dark:text-red-500',
+        color: optionalFail
+          ? 'text-amber-600 dark:text-amber-500'
+          : 'text-red-600 dark:text-red-500',
       };
     case 'in_progress':
     case 'pending':
@@ -689,19 +717,21 @@ function CheckCountTile({
 }: {
   label: string;
   value: number;
-  tone: 'green' | 'red' | 'blue' | 'grey';
+  tone: 'green' | 'red' | 'amber' | 'blue' | 'grey';
   active?: boolean;
   onClick?: () => void;
 }) {
   const toneClass = {
     green: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
     red: 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400',
+    amber: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
     blue: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-400',
     grey: 'border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
   }[tone];
   const ringClass = {
     green: 'ring-emerald-500',
     red: 'ring-red-500',
+    amber: 'ring-amber-500',
     blue: 'ring-blue-500',
     grey: 'ring-zinc-400',
   }[tone];
