@@ -34,7 +34,7 @@ import type {
 // out-of-order seq.
 // ---------------------------------------------------------------------------
 
-const pendingTaskEvents = new Map<string, AgentEvent[]>();
+let pendingTaskEvents = new Map<string, AgentEvent[]>();
 let taskEventFlushTimer: number | null = null;
 
 /**
@@ -75,10 +75,12 @@ export function mergeTaskTranscript(taskId: string, incoming: AgentEvent[]): voi
 function flushTaskEvents() {
   taskEventFlushTimer = null;
   if (pendingTaskEvents.size === 0) return;
+  // Swap the buffer for a fresh Map up front so events arriving mid-flush
+  // queue cleanly for the next frame rather than being dropped. NOTE: this
+  // must reassign, not `.clear()` — clearing the same Map `batch` points at
+  // would empty it before we iterate and silently drop every event.
   const batch = pendingTaskEvents;
-  // Swap the buffer up front so events arriving mid-flush queue cleanly
-  // for the next frame rather than being dropped.
-  pendingTaskEvents.clear();
+  pendingTaskEvents = new Map();
 
   for (const [taskId, incoming] of batch) {
     mergeTaskTranscript(taskId, incoming);
