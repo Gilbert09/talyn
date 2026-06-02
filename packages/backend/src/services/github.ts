@@ -344,10 +344,39 @@ class GitHubService extends EventEmitter {
         await this.removeToken(workspaceId);
         throw new Error('GitHub token expired or revoked');
       }
-      throw new Error(`GitHub API error: ${response.statusText}`);
+      throw new Error(await this.describeApiError(response));
     }
 
     return response.json();
+  }
+
+  /**
+   * Turn a failed GitHub response into a useful message. GitHub returns
+   * a JSON body — `{ message, documentation_url, errors }` — that almost
+   * always explains *why* (e.g. a 403 on merge: "At least 1 approving
+   * review is required" or "Resource not accessible by personal access
+   * token"). We previously threw only `statusText` ("Forbidden"), which
+   * told the user nothing. Read the body and surface its message,
+   * falling back to the status line if it isn't JSON.
+   */
+  private async describeApiError(response: Response): Promise<string> {
+    let detail = '';
+    try {
+      const body = (await response.json()) as {
+        message?: string;
+        errors?: Array<{ message?: string; code?: string; field?: string }>;
+      };
+      detail = body.message ?? '';
+      const sub = (body.errors ?? [])
+        .map((e) => e.message ?? [e.field, e.code].filter(Boolean).join(' '))
+        .filter(Boolean)
+        .join('; ');
+      if (sub) detail = detail ? `${detail} (${sub})` : sub;
+    } catch {
+      // Non-JSON / empty body — fall back to the status line below.
+    }
+    const base = `GitHub API error ${response.status} ${response.statusText}`.trim();
+    return detail ? `${base}: ${detail}` : base;
   }
 
   async getUser(workspaceId: string): Promise<GitHubUser> {

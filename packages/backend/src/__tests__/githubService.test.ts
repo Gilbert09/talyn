@@ -260,6 +260,45 @@ describe('githubService', () => {
       expect(githubService.isConnected('ws1')).toBe(false);
     });
 
+    it('surfaces GitHub\'s error message (not just "Forbidden") on a 403', async () => {
+      const fetchStub = mockFetch({
+        '/repos/acme/widgets/pulls/7/merge': () => ({
+          status: 403,
+          payload: { message: 'Resource not accessible by personal access token' },
+        }),
+      });
+      vi.stubGlobal('fetch', fetchStub);
+
+      await expect(
+        githubService.mergePullRequest('ws1', 'acme', 'widgets', 7, { merge_method: 'squash' })
+      ).rejects.toThrow(/403.*Resource not accessible by personal access token/);
+    });
+
+    it('appends sub-errors from the GitHub error body when present', async () => {
+      const fetchStub = mockFetch({
+        '/repos/acme/widgets/pulls/8/merge': () => ({
+          status: 405,
+          payload: {
+            message: 'Pull Request is not mergeable',
+            errors: [{ message: 'At least 1 approving review is required' }],
+          },
+        }),
+      });
+      vi.stubGlobal('fetch', fetchStub);
+
+      await expect(
+        githubService.mergePullRequest('ws1', 'acme', 'widgets', 8)
+      ).rejects.toThrow(/not mergeable \(At least 1 approving review is required\)/);
+    });
+
+    it('falls back to the status line when the error body is not JSON', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('<html>nope</html>', { status: 403, statusText: 'Forbidden' }))
+      );
+      await expect(githubService.getUser('ws1')).rejects.toThrow(/GitHub API error 403 Forbidden/);
+    });
+
     it('createPullRequest POSTs to /repos/:owner/:repo/pulls with body', async () => {
       const fetchStub = mockFetch({
         '/repos/acme/widgets/pulls': (init) => {
