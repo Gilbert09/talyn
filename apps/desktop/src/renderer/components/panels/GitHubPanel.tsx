@@ -794,6 +794,7 @@ function PRTable({
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
           <th className="px-2 py-2 text-left font-medium">Status</th>
+          <th className="px-2 py-2 text-left font-medium">Updated</th>
           <th className="w-8 px-2 py-2"></th>
         </tr>
       </thead>
@@ -840,6 +841,7 @@ function PRTableRow({
   taskStatus?: TaskStatus;
 }) {
   const summary = row.summary;
+  const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [busy, setBusy] = useState<null | 'merge' | 'task' | 'posthog'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
@@ -1030,6 +1032,9 @@ function PRTableRow({
             </span>
           )}
         </div>
+      </td>
+      <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
+        {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>
       <td className="px-2 py-2" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
