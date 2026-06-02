@@ -22,6 +22,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
 import { api, type PRRow, type PRSummaryShape, type PRState } from '../../lib/api';
+import type { TaskStatus } from '@fastowl/shared';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
@@ -153,7 +154,7 @@ const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
 ];
 
 export function GitHubPanel() {
-  const { setActivePanel, currentWorkspaceId, repositories, environments, selectTask } =
+  const { setActivePanel, currentWorkspaceId, repositories, environments, selectTask, tasks } =
     useWorkspaceStore();
   const { createTask } = useTaskActions();
   const [rows, setRows] = useState<PRRow[]>([]);
@@ -264,6 +265,7 @@ export function GitHubPanel() {
     const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
       const p = payload as {
         id: string;
+        taskId: string | null;
         state: PRState;
         lastSummary: PRSummaryShape;
       };
@@ -290,6 +292,9 @@ export function GitHubPanel() {
           ...next[idx],
           state: p.state,
           summary: p.lastSummary,
+          // Preserve a known link if the echo omits it; adopt a new one
+          // when the backend reports it (e.g. just-started fix task).
+          taskId: p.taskId ?? next[idx].taskId,
         };
         return next;
       });
@@ -336,6 +341,15 @@ export function GitHubPanel() {
     }),
     [rows]
   );
+
+  // Live status of each linked task, so a row can show whether its fix
+  // task is still running. Driven by the workspace store, which the WS
+  // task:status handler keeps current.
+  const taskStatusById = useMemo(() => {
+    const m = new Map<string, TaskStatus>();
+    for (const t of tasks) m.set(t.id, t.status);
+    return m;
+  }, [tasks]);
 
   const filtered = useMemo(() => {
     let out = rows;
@@ -421,7 +435,13 @@ export function GitHubPanel() {
       description: `Respond to review feedback / failing checks on ${ref}.`,
       prompt: `Address the open review feedback and any failing checks on PR ${row.summary.url} (${ref}: "${row.summary.title}").`,
       repositoryId: row.repositoryId,
+      pullRequestId: row.id,
     });
+    // Optimistically link the row so the in-progress indicator shows
+    // instantly, ahead of the backend's pull_request:updated echo.
+    setRows((prev) =>
+      prev.map((r) => (r.id === row.id ? { ...r, taskId: created.id } : r))
+    );
     selectTask(created.id);
     setActivePanel('queue');
   }
@@ -435,7 +455,7 @@ export function GitHubPanel() {
   async function handleCreatePostHogTask(row: PRRow) {
     if (!currentWorkspaceId || !posthogEnvId) return;
     const ref = `${row.owner}/${row.repo}#${row.number}`;
-    await createTask({
+    const created = await createTask({
       workspaceId: currentWorkspaceId,
       type: 'pr_response',
       title: `Get ${ref} mergeable`,
@@ -443,7 +463,14 @@ export function GitHubPanel() {
       prompt: buildPostHogPrompt(row),
       repositoryId: row.repositoryId,
       assignedEnvironmentId: posthogEnvId,
+      pullRequestId: row.id,
     });
+    // Optimistically link the row so the in-progress indicator shows
+    // instantly — this path stays on the GitHub page, so the row badge
+    // is the user's main signal the run started.
+    setRows((prev) =>
+      prev.map((r) => (r.id === row.id ? { ...r, taskId: created.id } : r))
+    );
   }
 
   return (
@@ -540,6 +567,7 @@ export function GitHubPanel() {
               onCreateTask={handleCreateTaskFromPR}
               onCreatePostHogTask={handleCreatePostHogTask}
               posthogEnabled={posthogEnabled}
+              taskStatusById={taskStatusById}
             />
           )}
         </ScrollArea>
@@ -724,6 +752,8 @@ interface PRTableProps {
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   /** PostHog Code is configured + a cloud env exists to dispatch to. */
   posthogEnabled: boolean;
+  /** Live status of each linked task, keyed by task id. */
+  taskStatusById: Map<string, TaskStatus>;
 }
 
 function PRTable({
@@ -737,6 +767,7 @@ function PRTable({
   onCreateTask,
   onCreatePostHogTask,
   posthogEnabled,
+  taskStatusById,
 }: PRTableProps) {
   return (
     <table className="w-full text-sm">
@@ -770,6 +801,7 @@ function PRTable({
             onCreateTask={onCreateTask}
             onCreatePostHogTask={onCreatePostHogTask}
             posthogEnabled={posthogEnabled}
+            taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
           />
         ))}
       </tbody>
@@ -786,6 +818,7 @@ function PRTableRow({
   onCreateTask,
   onCreatePostHogTask,
   posthogEnabled,
+  taskStatus,
 }: {
   row: PRRow;
   isSelected: boolean;
@@ -795,6 +828,8 @@ function PRTableRow({
   onCreateTask: (row: PRRow) => Promise<void>;
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   posthogEnabled: boolean;
+  /** Live status of the row's linked task, if any is loaded. */
+  taskStatus?: TaskStatus;
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
@@ -807,9 +842,21 @@ function PRTableRow({
   const [posthogStarted, setPosthogStarted] = useState(false);
   const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
   const unresolved = summary.unresolvedReviewThreads ?? 0;
-  // A follow-up run only makes sense on an open PR with something to fix.
+
+  // A linked task is "active" while it's running or awaiting your review —
+  // i.e. not yet fully done. Drives the row's in-progress indicator and
+  // suppresses the start-task buttons so you can't double-launch.
+  const taskRunning =
+    taskStatus === 'pending' || taskStatus === 'queued' || taskStatus === 'in_progress';
+  const taskAwaitingReview = taskStatus === 'awaiting_review';
+  // taskStatus is undefined when the task isn't loaded in the store — keep
+  // the link visible (plain badge) rather than guessing it's done.
+  const taskActive = taskRunning || taskAwaitingReview || (!!row.taskId && !taskStatus);
+
+  // A follow-up run only makes sense on an open PR with something to fix,
+  // and not while one is already working it.
   const canFollowUp =
-    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary);
+    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary) && !taskActive;
 
   function copyBranch(e: React.MouseEvent) {
     e.stopPropagation();
@@ -903,17 +950,44 @@ function PRTableRow({
                 Review
               </span>
             )}
-            {row.taskId && (
+            {/* Linked-task indicator. Shows while a fix task is running
+                ("Working") or awaiting your review ("Review"); deep-links
+                to the task. Disappears once the task is fully done
+                (completed / failed / cancelled). */}
+            {row.taskId && taskActive && (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTask(row.taskId!);
                 }}
-                className="ml-2 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
-                title="Open the linked task"
+                className={cn(
+                  'ml-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase',
+                  taskAwaitingReview
+                    ? 'bg-amber-200 text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800'
+                    : 'bg-blue-200 text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800'
+                )}
+                title={
+                  taskRunning
+                    ? 'A task is working this PR — click to open it'
+                    : taskAwaitingReview
+                    ? 'Fix task finished — awaiting your review. Click to open it'
+                    : 'Open the linked task'
+                }
               >
-                Task
+                {taskRunning ? (
+                  <>
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    Working
+                  </>
+                ) : taskAwaitingReview ? (
+                  <>
+                    <Check className="h-2.5 w-2.5" />
+                    Review
+                  </>
+                ) : (
+                  'Task'
+                )}
               </button>
             )}
           </span>
@@ -977,7 +1051,7 @@ function PRTableRow({
                 <GitMerge className="h-3.5 w-3.5" />
               </button>
             ))}
-          {!row.taskId && (
+          {!taskActive && (
             <button
               type="button"
               onClick={runCreateTask}
@@ -1001,6 +1075,8 @@ function PRTableRow({
               title={
                 posthogStarted
                   ? 'PostHog Code run started — see the Tasks panel'
+                  : taskActive
+                  ? 'A task is already working this PR — open it from the Working/Review badge'
                   : canFollowUp
                   ? 'Get this PR mergeable with PostHog Code (resolve comments, fix CI, resolve conflicts)'
                   : 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'

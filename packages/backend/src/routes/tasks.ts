@@ -14,6 +14,7 @@ import { resolveTaskGitContext } from '../services/gitContext.js';
 import { enterTaskGitLog, getGitLog } from '../services/gitLogService.js';
 import { autoCommitAndSnapshot, writeFinalFilesSnapshot } from '../services/taskCommitSnapshot.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
+import { attachTaskToPullRequestRow } from '../services/prCache.js';
 import { findTaskHoldingEnvRepoSlot } from '../services/taskQueue.js';
 import {
   emitTaskStatus,
@@ -221,6 +222,19 @@ export function taskRoutes(): Router {
       .where(eq(tasksTable.id, id))
       .limit(1);
     res.status(201).json({ success: true, data: rowToTask(rows[0]) } as ApiResponse<Task>);
+
+    // Link the task to the PR it was started from, so the GitHub screen
+    // can show a live in-progress indicator that deep-links back here.
+    // Best-effort — a stale/cross-workspace id just no-ops.
+    if (body.pullRequestId) {
+      void attachTaskToPullRequestRow({
+        workspaceId: body.workspaceId,
+        pullRequestId: body.pullRequestId,
+        taskId: id,
+      }).catch((err) => {
+        console.error('[tasks] failed to link task to PR:', err);
+      });
+    }
 
     // Fire-and-forget title refinement. The modal sends a placeholder
     // title (typically the prompt's first 60 chars); the fast Haiku

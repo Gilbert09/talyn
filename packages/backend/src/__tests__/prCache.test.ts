@@ -6,6 +6,7 @@ import {
   forceFetchAndUpsert,
   getOrFetchPRSummary,
   linkTaskToPullRequest,
+  attachTaskToPullRequestRow,
   DEFAULT_TTL_MS,
   type CursorState,
 } from '../services/prCache.js';
@@ -666,6 +667,89 @@ describe('prCache — DB integration', () => {
       });
       const rows = await db.select().from(pullRequestsTable);
       expect(rows[0].taskId).toBe(taskA);
+    });
+  });
+
+  describe('attachTaskToPullRequestRow', () => {
+    async function seedTask(status = 'queued'): Promise<string> {
+      const id = `task-${Math.random().toString(36).slice(2, 8)}`;
+      await db.insert(tasksTable).values({
+        id,
+        workspaceId: 'ws1',
+        type: 'pr_response',
+        status,
+        priority: 'medium',
+        title: 't',
+        description: 'd',
+      });
+      return id;
+    }
+
+    async function seedRow(): Promise<string> {
+      const { rowId } = await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 99 }),
+      });
+      return rowId;
+    }
+
+    it('sets task_id on an existing row and emits pull_request:updated', async () => {
+      const rowId = await seedRow();
+      const taskId = await seedTask();
+      const spy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+      const ok = await attachTaskToPullRequestRow({
+        workspaceId: 'ws1',
+        pullRequestId: rowId,
+        taskId,
+      });
+
+      expect(ok).toBe(true);
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows[0].taskId).toBe(taskId);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][1]).toMatchObject({ id: rowId, taskId, number: 99 });
+    });
+
+    it('OVERWRITES an existing task_id (row tracks the active fix task)', async () => {
+      const rowId = await seedRow();
+      const taskA = await seedTask();
+      await attachTaskToPullRequestRow({ workspaceId: 'ws1', pullRequestId: rowId, taskId: taskA });
+      const taskB = await seedTask();
+      await attachTaskToPullRequestRow({ workspaceId: 'ws1', pullRequestId: rowId, taskId: taskB });
+
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows[0].taskId).toBe(taskB);
+    });
+
+    it('is a no-op for an unknown row id (returns false, no emit)', async () => {
+      const taskId = await seedTask();
+      const spy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+      const ok = await attachTaskToPullRequestRow({
+        workspaceId: 'ws1',
+        pullRequestId: 'does-not-exist',
+        taskId,
+      });
+
+      expect(ok).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('refuses to link across workspaces', async () => {
+      const rowId = await seedRow();
+      const taskId = await seedTask();
+
+      const ok = await attachTaskToPullRequestRow({
+        workspaceId: 'ws2',
+        pullRequestId: rowId,
+        taskId,
+      });
+
+      expect(ok).toBe(false);
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows[0].taskId).toBeNull();
     });
   });
 

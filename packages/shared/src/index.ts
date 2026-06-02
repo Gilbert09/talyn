@@ -679,6 +679,14 @@ export interface CreateTaskRequest {
   repositoryId?: string;
   assignedEnvironmentId?: string;
   /**
+   * Associate the new task with an existing pull_requests row (its `id`).
+   * Set when the task is started from a PR row ("Get PR mergeable" /
+   * "Address PR") so the GitHub screen can show a live in-progress
+   * indicator on that row and deep-link back to the task. Best-effort:
+   * an unknown / cross-workspace id is silently ignored.
+   */
+  pullRequestId?: string;
+  /**
    * Cloud (PostHog Code) overrides. Only meaningful when the task is
    * assigned to a `posthog_code` env; ignored otherwise. Fall back to
    * the env's defaults, then the backend defaults (claude / opus).

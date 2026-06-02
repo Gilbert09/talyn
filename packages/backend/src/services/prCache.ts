@@ -187,6 +187,53 @@ export async function linkTaskToPullRequest(opts: {
 }
 
 /**
+ * Point an existing pull_requests row at a task. Used when a task is
+ * started *from* a PR row (e.g. "Get PR mergeable") — the reverse of
+ * linkTaskToPullRequest, where the task opens a brand-new PR.
+ *
+ * Unlike linkTaskToPullRequest this OVERWRITES any prior task_id: the
+ * row should track whatever task is currently working it, so the
+ * GitHub screen's live indicator deep-links to the active run.
+ *
+ * Best-effort and workspace-scoped: an unknown row id, or one in a
+ * different workspace than `workspaceId`, is a no-op (returns false).
+ * Emits `pull_request:updated` so the GitHub page patches the row's
+ * taskId without a refetch.
+ */
+export async function attachTaskToPullRequestRow(opts: {
+  workspaceId: string;
+  pullRequestId: string;
+  taskId: string;
+}): Promise<boolean> {
+  const db = getDbClient();
+  const rows = await db
+    .select()
+    .from(pullRequestsTable)
+    .where(eq(pullRequestsTable.id, opts.pullRequestId))
+    .limit(1);
+  const row = rows[0] as PullRequestRow | undefined;
+  if (!row || row.workspaceId !== opts.workspaceId) return false;
+
+  const now = new Date();
+  await db
+    .update(pullRequestsTable)
+    .set({ taskId: opts.taskId, updatedAt: now })
+    .where(eq(pullRequestsTable.id, opts.pullRequestId));
+
+  emitPullRequestUpdated(opts.workspaceId, {
+    id: row.id,
+    taskId: opts.taskId,
+    repositoryId: row.repositoryId,
+    owner: row.owner,
+    repo: row.repo,
+    number: row.number,
+    state: row.state,
+    lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+  });
+  return true;
+}
+
+/**
  * Force-fetch a single PR and upsert it. Used by the focused-poll
  * path and the `/refresh` endpoint. Always hits GraphQL.
  */
