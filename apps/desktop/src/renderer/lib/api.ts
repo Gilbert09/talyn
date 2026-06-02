@@ -413,14 +413,14 @@ export interface PRRow {
   repo: string;
   number: number;
   state: PRState;
-  /** True when the user is a requested reviewer (not the author). */
-  reviewRequested: boolean;
   /**
-   * True when the user is *individually* named as a requested reviewer
-   * (not pulled in only via a team request). Drives whether an approved
-   * PR stays on the "Review" list.
+   * True when the PR is awaiting the user's review — they're a requested
+   * reviewer (directly or via a team) and haven't reviewed it yet. Cleared
+   * once they submit a review, so an approved PR leaves the "Review" list.
    */
-  explicitlyReviewRequested: boolean;
+  reviewRequested: boolean;
+  /** True when the PR was opened by the user. Drives the "Mine" tab. */
+  authored: boolean;
   mergedAt: string | null;
   lastPolledAt: string;
   summary: PRSummaryShape;

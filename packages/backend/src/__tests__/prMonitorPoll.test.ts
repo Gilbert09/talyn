@@ -79,20 +79,18 @@ function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
 }
 
 // Mock the search-driven discovery: authored PR numbers, the subset the
-// user is a requested reviewer on (incl. via team), and the subset where
-// they're named individually. The monitor distinguishes the searches by
-// the `author:` / `review-requested:` / `user-review-requested:`
-// qualifier — order matters since `user-review-requested:` contains
-// `review-requested:` as a substring.
+// user is a requested reviewer on (incl. via team), and the subset they've
+// already reviewed. The monitor distinguishes the searches by the
+// `author:` / `review-requested:` / `reviewed-by:` qualifier.
 function mockSearch(
   authored: number[],
   reviewRequested: number[] = [],
-  explicitlyReviewRequested: number[] = []
+  reviewedBy: number[] = []
 ) {
   return vi
     .spyOn(githubService, 'searchPullRequestNumbers')
     .mockImplementation(async (_ws: string, q: string) => {
-      if (q.includes('user-review-requested:')) return explicitlyReviewRequested;
+      if (q.includes('reviewed-by:')) return reviewedBy;
       if (q.includes('review-requested:')) return reviewRequested;
       if (q.includes('author:')) return authored;
       return [];
@@ -191,11 +189,15 @@ describe('prMonitor — poll orchestration', () => {
     expect(Object.keys(byNumber).map(Number).sort()).toEqual([1, 2]);
     expect(byNumber[1]).toBe(false);
     expect(byNumber[2]).toBe(true);
+    // #1 is mine, #2 is someone else's awaiting my review.
+    const authoredByNumber = Object.fromEntries(rows.map((r) => [r.number, r.authored]));
+    expect(authoredByNumber[1]).toBe(true);
+    expect(authoredByNumber[2]).toBe(false);
   });
 
-  it('flags individually-requested reviews separately from team-only ones', async () => {
-    // #2 and #3 both await my review (team + individual), but only #3
-    // names me directly via `user-review-requested:`.
+  it('does not flag a review-requested PR I have already reviewed (e.g. approved)', async () => {
+    // #2 and #3 are both review-requested (GitHub keeps a team request
+    // standing), but I've already reviewed #3 — so only #2 is pending.
     mockSearch([], [2, 3], [3]);
     vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
       { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b', author: 'someone-else' }) },
@@ -205,14 +207,37 @@ describe('prMonitor — poll orchestration', () => {
     await prMonitorService.forcePoll();
 
     const rows = await db.select().from(pullRequestsTable);
-    const byNumber = Object.fromEntries(
-      rows.map((r) => [r.number, r.explicitlyReviewRequested])
+    const byNumber = Object.fromEntries(rows.map((r) => [r.number, r.reviewRequested]));
+    expect(byNumber[2]).toBe(true);
+    expect(byNumber[3]).toBe(false);
+  });
+
+  it('reconciles a stale review flag once I review the PR, without a refetch', async () => {
+    let reviewed: number[] = [];
+    vi.spyOn(githubService, 'searchPullRequestNumbers').mockImplementation(
+      async (_ws: string, q: string) => {
+        if (q.includes('reviewed-by:')) return reviewed;
+        if (q.includes('review-requested:')) return [5];
+        if (q.includes('author:')) return [];
+        return [];
+      }
     );
-    // Both are review-requested…
-    expect(rows.every((r) => r.reviewRequested)).toBe(true);
-    // …but only #3 is the user's *individual* request.
-    expect(byNumber[2]).toBe(false);
-    expect(byNumber[3]).toBe(true);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 5, pr: fakeSummary({ number: 5, headBranch: 'feature/e', author: 'someone-else' }) },
+    ]);
+
+    // First poll: #5 awaits my review.
+    await prMonitorService.forcePoll();
+    let row = (await db.select().from(pullRequestsTable)).find((r) => r.number === 5);
+    expect(row?.reviewRequested).toBe(true);
+
+    // I review it. #5 is still team-requested (still in review-requested)
+    // and fresh (within TTL → no GraphQL refetch), but the reconcile pass
+    // must still clear the flag off the back of reviewed-by.
+    reviewed = [5];
+    await prMonitorService.forcePoll();
+    row = (await db.select().from(pullRequestsTable)).find((r) => r.number === 5);
+    expect(row?.reviewRequested).toBe(false);
   });
 
   it('skips the GraphQL call entirely when every cached row is still fresh', async () => {

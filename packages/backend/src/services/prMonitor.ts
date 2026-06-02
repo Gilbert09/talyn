@@ -13,6 +13,7 @@ import {
 } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor } from './prFocus.js';
+import { emitPullRequestUpdated } from './websocket.js';
 
 interface WatchedRepo {
   id: string;
@@ -230,13 +231,16 @@ class PRMonitorService extends EventEmitter {
     // open PRs the repo has overall.
     const full = `${repo.owner}/${repo.repo}`;
     // Three scoped searches:
-    //   - authored: PRs the user opened.
-    //   - review-requested: PRs awaiting the user's review, INCLUDING ones
+    //   - authored: PRs the user opened ("Mine").
+    //   - review-requested: PRs the user is asked to review, INCLUDING ones
     //     where only a team they're on was asked.
-    //   - user-review-requested: the subset where the user is named
-    //     *individually*. Lets the GitHub page keep an approved PR on the
-    //     Review list only when the user was explicitly asked.
-    const [authored, reviewRequested, explicitlyReviewRequested] = await Promise.all([
+    //   - reviewed-by: PRs the user has already reviewed (approved, requested
+    //     changes, or commented).
+    // "Awaiting my review" = review-requested MINUS reviewed-by (and minus my
+    // own PRs). GitHub drops you from a PR's *individual* request once you
+    // review it, but leaves a *team* request standing — so subtracting
+    // reviewed-by is what actually clears an approved PR off the list.
+    const [authoredNums, requestedNums, reviewedNums] = await Promise.all([
       githubService.searchPullRequestNumbers(
         workspaceId,
         `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -247,56 +251,115 @@ class PRMonitorService extends EventEmitter {
       ),
       githubService.searchPullRequestNumbers(
         workspaceId,
-        `repo:${full} is:pr is:open user-review-requested:${currentUserLogin}`
+        `repo:${full} is:pr is:open reviewed-by:${currentUserLogin}`
       ),
     ]);
-    // number → "the user is a requested reviewer (not the author)".
-    const reviewRequestedByNumber = new Map<number, boolean>();
-    for (const n of authored) reviewRequestedByNumber.set(n, false);
-    for (const n of reviewRequested) {
-      if (!reviewRequestedByNumber.has(n)) reviewRequestedByNumber.set(n, true);
+    const authoredSet = new Set(authoredNums);
+    const reviewedSet = new Set(reviewedNums);
+    const pendingSet = new Set<number>();
+    for (const n of requestedNums) {
+      if (!reviewedSet.has(n) && !authoredSet.has(n)) pendingSet.add(n);
     }
-    const explicitlyRequestedNumbers = new Set(explicitlyReviewRequested);
-    const watchedNumbers = Array.from(reviewRequestedByNumber.keys());
-
-    if (watchedNumbers.length === 0) {
-      await this.sweepClosed(workspaceId, repo, []);
-      return;
-    }
+    // Watch everything we have any relationship with — incl. reviewed
+    // review-requested PRs, so their summary stays fresh and the reconcile
+    // pass below sees them — but only pendingSet drives the review flag.
+    const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums]));
 
     // Determine which PRs are actually stale enough to need a refetch
     // (saves the GraphQL call when nothing has aged past the TTL).
-    const staleNumbers = await this.filterStale(workspaceId, repo.id, watchedNumbers);
-    if (staleNumbers.length === 0) {
-      // Still sweep closed — the user might have merged something
-      // outside the TTL window.
-      await this.sweepClosed(workspaceId, repo, watchedNumbers);
-      return;
-    }
+    const staleNumbers = watchedNumbers.length
+      ? await this.filterStale(workspaceId, repo.id, watchedNumbers)
+      : [];
 
-    const results = await this.resolveUnknownMergeable(
-      workspaceId,
-      repo,
-      await batchPullRequestsByNumber({
+    if (staleNumbers.length > 0) {
+      const results = await this.resolveUnknownMergeable(
         workspaceId,
-        owner: repo.owner,
-        repo: repo.repo,
-        numbers: staleNumbers,
-      })
-    );
+        repo,
+        await batchPullRequestsByNumber({
+          workspaceId,
+          owner: repo.owner,
+          repo: repo.repo,
+          numbers: staleNumbers,
+        })
+      );
 
-    for (const result of results) {
-      if (!result.pr) continue;
-      await upsertFromBatchResult({
-        workspaceId,
-        repositoryId: repo.id,
-        summary: result.pr,
-        reviewRequested: reviewRequestedByNumber.get(result.pr.number) ?? false,
-        explicitlyReviewRequested: explicitlyRequestedNumbers.has(result.pr.number),
-      });
+      for (const result of results) {
+        if (!result.pr) continue;
+        await upsertFromBatchResult({
+          workspaceId,
+          repositoryId: repo.id,
+          summary: result.pr,
+          reviewRequested: pendingSet.has(result.pr.number),
+          authored: authoredSet.has(result.pr.number),
+        });
+      }
     }
 
     await this.sweepClosed(workspaceId, repo, watchedNumbers);
+    // Reconcile relationship flags against the authoritative search results
+    // for EVERY tracked-open row — not just the freshly-upserted ones — so a
+    // PR whose flag should change but which didn't need a summary refetch
+    // (e.g. it fell out of review-requested, or the user just reviewed it)
+    // still flips. Without this an approved PR lingers on the Review list.
+    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet);
+  }
+
+  /**
+   * Bring each tracked-open row's `authored` / `reviewRequested` flags into
+   * line with the current search results, emitting `pull_request:updated`
+   * for any row that changed so the GitHub page re-buckets it live. Only
+   * touches rows whose flags actually differ.
+   */
+  private async reconcileRelationshipFlags(
+    workspaceId: string,
+    repositoryId: string,
+    authoredSet: Set<number>,
+    pendingSet: Set<number>
+  ): Promise<void> {
+    const rows = await this.db
+      .select({
+        id: pullRequestsTable.id,
+        number: pullRequestsTable.number,
+        taskId: pullRequestsTable.taskId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        state: pullRequestsTable.state,
+        lastSummary: pullRequestsTable.lastSummary,
+        reviewRequested: pullRequestsTable.reviewRequested,
+        authored: pullRequestsTable.authored,
+      })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.state, 'open')
+        )
+      );
+
+    for (const row of rows) {
+      const authored = authoredSet.has(row.number);
+      const reviewRequested = pendingSet.has(row.number);
+      if (authored === row.authored && reviewRequested === row.reviewRequested) {
+        continue;
+      }
+      await this.db
+        .update(pullRequestsTable)
+        .set({ authored, reviewRequested, updatedAt: new Date() })
+        .where(eq(pullRequestsTable.id, row.id));
+      emitPullRequestUpdated(workspaceId, {
+        id: row.id,
+        taskId: row.taskId,
+        repositoryId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+        state: row.state,
+        lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+        reviewRequested,
+        authored,
+      });
+    }
   }
 
   /**

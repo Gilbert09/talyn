@@ -409,21 +409,20 @@ export const pullRequests = pgTable(
     number: integer('number').notNull(),
     state: text('state').notNull(), // 'open' | 'closed' | 'merged'
     /**
-     * True when the connected user is a requested reviewer on this PR
-     * (rather than its author). The monitor watches both; this lets the
-     * GitHub page separate "my PRs" from "PRs awaiting my review".
+     * True when this PR is awaiting the connected user's review: they're a
+     * requested reviewer (directly or via a team) AND haven't reviewed it
+     * yet. The monitor reconciles this every poll, so it clears once the
+     * user submits a review — which is what keeps an approved PR off the
+     * GitHub page's "Review" list even when GitHub leaves a team review
+     * request standing.
      */
     reviewRequested: boolean('review_requested').notNull().default(false),
     /**
-     * True when the user is *individually* named as a requested reviewer
-     * (GitHub `user-review-requested:`), not merely pulled in via a team
-     * request. The GitHub page keeps an approved PR on the "Review" list
-     * only when this is set — otherwise an approved, team-requested PR
-     * (which the user has no direct obligation to review) drops off.
+     * True when the PR was opened by the connected user. Drives the "Mine"
+     * tab independently of {@link reviewRequested} (a PR can be neither —
+     * e.g. one the user already reviewed — and then belongs to neither tab).
      */
-    explicitlyReviewRequested: boolean('explicitly_review_requested')
-      .notNull()
-      .default(false),
+    authored: boolean('authored').notNull().default(false),
     mergedAt: timestamp('merged_at', { withTimezone: true }),
     /**
      * Drives the TTL: prCache returns this row if `last_polled_at` is

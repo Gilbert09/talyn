@@ -64,19 +64,6 @@ function prNeedsFollowup(s: PRSummaryShape): boolean {
   );
 }
 
-/**
- * Whether a PR belongs on the "Review" list — i.e. it's genuinely
- * awaiting the user's review. A PR the user was requested on stays here
- * until it's approved; once approved it drops off UNLESS the user was
- * named as a reviewer individually (not merely via a team request), in
- * which case GitHub is still explicitly asking them to weigh in.
- */
-function isAwaitingMyReview(r: PRRow): boolean {
-  if (!r.reviewRequested) return false;
-  if (r.explicitlyReviewRequested) return true;
-  return r.summary.reviewDecision !== 'APPROVED';
-}
-
 /** Bulleted list of the issues we detected, for the agent prompt. */
 function buildIssuesSummary(s: PRSummaryShape): string {
   const lines: string[] = [];
@@ -287,6 +274,8 @@ export function GitHubPanel() {
         taskId: string | null;
         state: PRState;
         lastSummary: PRSummaryShape;
+        reviewRequested?: boolean;
+        authored?: boolean;
       };
       setRows((prev) => {
         const idx = prev.findIndex((r) => r.id === p.id);
@@ -314,6 +303,11 @@ export function GitHubPanel() {
           // Preserve a known link if the echo omits it; adopt a new one
           // when the backend reports it (e.g. just-started fix task).
           taskId: p.taskId ?? next[idx].taskId,
+          // Relationship flags are only on the payload when the monitor
+          // re-bucketed the row (e.g. it left Review after being reviewed);
+          // otherwise keep what we have.
+          reviewRequested: p.reviewRequested ?? next[idx].reviewRequested,
+          authored: p.authored ?? next[idx].authored,
         };
         return next;
       });
@@ -355,8 +349,8 @@ export function GitHubPanel() {
   const relationshipCounts = useMemo(
     () => ({
       all: rows.length,
-      authored: rows.filter((r) => !r.reviewRequested).length,
-      review_requested: rows.filter(isAwaitingMyReview).length,
+      authored: rows.filter((r) => r.authored).length,
+      review_requested: rows.filter((r) => r.reviewRequested).length,
     }),
     [rows]
   );
@@ -373,9 +367,9 @@ export function GitHubPanel() {
   const filtered = useMemo(() => {
     let out = rows;
     if (relationship === 'authored') {
-      out = out.filter((r) => !r.reviewRequested);
+      out = out.filter((r) => r.authored);
     } else if (relationship === 'review_requested') {
-      out = out.filter(isAwaitingMyReview);
+      out = out.filter((r) => r.reviewRequested);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();

@@ -350,6 +350,11 @@ export function emitPullRequestUpdated(
     number: number;
     state: string;
     lastSummary: Record<string, unknown>;
+    // Relationship flags — present so the GitHub page can re-bucket a row
+    // (Mine / Review) live, e.g. when a PR drops off Review after the user
+    // reviews it. Optional: emitters that don't change them omit them.
+    reviewRequested?: boolean;
+    authored?: boolean;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {

@@ -230,6 +230,8 @@ export async function attachTaskToPullRequestRow(opts: {
     number: row.number,
     state: row.state,
     lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+    reviewRequested: row.reviewRequested,
+    authored: row.authored,
   });
   return true;
 }
@@ -302,7 +304,7 @@ export async function upsertFromBatchResult(opts: {
   taskId?: string | null;
   summary: PRSummary;
   reviewRequested?: boolean;
-  explicitlyReviewRequested?: boolean;
+  authored?: boolean;
 }): Promise<UpsertResult> {
   const db = getDbClient();
   const existing = await readRow(
@@ -326,7 +328,7 @@ export async function upsertFromBatchResult(opts: {
     taskId: opts.taskId ?? null,
     summary: opts.summary,
     reviewRequested: opts.reviewRequested,
-    explicitlyReviewRequested: opts.explicitlyReviewRequested,
+    authored: opts.authored,
     existingId: existing?.id,
   });
   await emitDeltaInboxItems(opts.workspaceId, opts.summary, delta);
@@ -451,6 +453,8 @@ interface PullRequestRow {
   repo: string;
   number: number;
   state: string;
+  reviewRequested: boolean;
+  authored: boolean;
   mergedAt: Date | null;
   lastPolledAt: Date;
   lastSummary: unknown;
@@ -492,7 +496,7 @@ async function upsertRow(
     taskId: string | null;
     summary: PRSummary;
     reviewRequested?: boolean;
-    explicitlyReviewRequested?: boolean;
+    authored?: boolean;
     existingId?: string;
   }
 ): Promise<string> {
@@ -520,9 +524,7 @@ async function upsertRow(
         ...(opts.reviewRequested === undefined
           ? {}
           : { reviewRequested: opts.reviewRequested }),
-        ...(opts.explicitlyReviewRequested === undefined
-          ? {}
-          : { explicitlyReviewRequested: opts.explicitlyReviewRequested }),
+        ...(opts.authored === undefined ? {} : { authored: opts.authored }),
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, opts.existingId));
@@ -537,7 +539,7 @@ async function upsertRow(
       number: opts.summary.number,
       state: opts.summary.state,
       reviewRequested: opts.reviewRequested ?? false,
-      explicitlyReviewRequested: opts.explicitlyReviewRequested ?? false,
+      authored: opts.authored ?? false,
       mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
       lastPolledAt: now,
       lastSummary,
@@ -560,6 +562,8 @@ async function upsertRow(
     number: opts.summary.number,
     state: opts.summary.state,
     lastSummary,
+    ...(opts.reviewRequested === undefined ? {} : { reviewRequested: opts.reviewRequested }),
+    ...(opts.authored === undefined ? {} : { authored: opts.authored }),
   });
   return id;
 }

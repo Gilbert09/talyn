@@ -655,8 +655,7 @@ describe('routes/pullRequests', () => {
   describe('GET /pull-requests relationship filter', () => {
     async function insertWithRelationship(
       id: string,
-      reviewRequested: boolean,
-      opts: { explicitlyReviewRequested?: boolean; reviewDecision?: string | null } = {}
+      flags: { authored?: boolean; reviewRequested?: boolean }
     ) {
       await db.insert(pullRequestsTable).values({
         id,
@@ -666,34 +665,30 @@ describe('routes/pullRequests', () => {
         repo: 'widgets',
         number: ++prNumberCounter,
         state: 'open',
-        reviewRequested,
-        explicitlyReviewRequested: opts.explicitlyReviewRequested ?? false,
+        authored: flags.authored ?? false,
+        reviewRequested: flags.reviewRequested ?? false,
         lastPolledAt: new Date(),
-        lastSummary: {
-          title: 't',
-          headBranch: 'h',
-          author: 'a',
-          url: `u-${id}`,
-          reviewDecision: opts.reviewDecision ?? null,
-        },
+        lastSummary: { title: 't', headBranch: 'h', author: 'a', url: `u-${id}` },
         createdAt: new Date(),
         updatedAt: new Date(),
       });
     }
 
-    it('filters to authored vs review_requested, and returns the flag', async () => {
-      await insertWithRelationship('p-mine', false);
-      await insertWithRelationship('p-review', true);
+    it('filters to authored vs review_requested, and returns the flags', async () => {
+      await insertWithRelationship('p-mine', { authored: true });
+      await insertWithRelationship('p-review', { reviewRequested: true });
+      // A PR I've already reviewed: neither tab, but still under "All".
+      await insertWithRelationship('p-reviewed', {});
 
       const authored = await fetch(
         `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=authored`,
         { headers: authMine }
       );
       const aBody = (await authored.json()) as {
-        data: Array<{ id: string; reviewRequested: boolean }>;
+        data: Array<{ id: string; authored: boolean }>;
       };
       expect(aBody.data.map((r) => r.id)).toEqual(['p-mine']);
-      expect(aBody.data[0].reviewRequested).toBe(false);
+      expect(aBody.data[0].authored).toBe(true);
 
       const review = await fetch(
         `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=review_requested`,
@@ -709,34 +704,11 @@ describe('routes/pullRequests', () => {
         headers: authMine,
       });
       const allBody = (await all.json()) as { data: Array<{ id: string }> };
-      expect(allBody.data.map((r) => r.id).sort()).toEqual(['p-mine', 'p-review']);
-    });
-
-    it('drops an APPROVED review_requested PR unless the user was named individually', async () => {
-      // Pending review → stays. Approved + only team-requested → drops.
-      // Approved but the user is individually requested → stays.
-      await insertWithRelationship('p-pending', true, { reviewDecision: null });
-      await insertWithRelationship('p-approved-team', true, { reviewDecision: 'APPROVED' });
-      await insertWithRelationship('p-approved-explicit', true, {
-        reviewDecision: 'APPROVED',
-        explicitlyReviewRequested: true,
-      });
-
-      const review = await fetch(
-        `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=review_requested`,
-        { headers: authMine }
-      );
-      const body = (await review.json()) as {
-        data: Array<{ id: string; explicitlyReviewRequested: boolean }>;
-      };
-      expect(body.data.map((r) => r.id).sort()).toEqual([
-        'p-approved-explicit',
-        'p-pending',
+      expect(allBody.data.map((r) => r.id).sort()).toEqual([
+        'p-mine',
+        'p-review',
+        'p-reviewed',
       ]);
-      // The flag round-trips on the public shape.
-      expect(
-        body.data.find((r) => r.id === 'p-approved-explicit')?.explicitlyReviewRequested
-      ).toBe(true);
     });
   });
 

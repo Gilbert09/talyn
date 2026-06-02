@@ -66,15 +66,11 @@ export function pullRequestRoutes(): Router {
       conditions.push(eq(pullRequestsTable.repositoryId, repoFilter));
     }
     if (relationship === 'authored') {
-      conditions.push(eq(pullRequestsTable.reviewRequested, false));
+      conditions.push(eq(pullRequestsTable.authored, true));
     } else if (relationship === 'review_requested') {
+      // `reviewRequested` already means "awaiting my review" — the monitor
+      // clears it once the user reviews the PR, so an approved PR is gone.
       conditions.push(eq(pullRequestsTable.reviewRequested, true));
-      // An approved PR drops off the Review list unless the user was
-      // explicitly (individually) asked to review it — a team-only request
-      // the user has already de facto satisfied is no longer actionable.
-      conditions.push(
-        sql`(${pullRequestsTable.explicitlyReviewRequested} = true OR coalesce(${pullRequestsTable.lastSummary} ->> 'reviewDecision', '') <> 'APPROVED')`
-      );
     }
 
     const rows = await db
@@ -438,7 +434,7 @@ interface PullRequestRow {
   number: number;
   state: string;
   reviewRequested: boolean;
-  explicitlyReviewRequested: boolean;
+  authored: boolean;
   mergedAt: Date | null;
   lastPolledAt: Date;
   lastSummary: unknown;
@@ -505,7 +501,7 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
     number: row.number,
     state: row.state,
     reviewRequested: row.reviewRequested,
-    explicitlyReviewRequested: row.explicitlyReviewRequested,
+    authored: row.authored,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
     lastPolledAt: row.lastPolledAt.toISOString(),
     summary: row.lastSummary,
