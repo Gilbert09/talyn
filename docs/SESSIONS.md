@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 32 — Link PR-fix tasks to their PR row + live in-progress indicator
+
+Starting a task from a PR row ("Get PR mergeable" / "Address PR") now **associates the task with that `pull_requests` row**, and the GitHub list shows a status-aware badge on the row that deep-links to the task.
+
+- **Linking.** `CreateTaskRequest` gains optional `pullRequestId`. New `attachTaskToPullRequestRow()` in `prCache.ts` sets `task_id` by row id (workspace-scoped; **overwrites** any prior link so the row tracks the *active* fix task — the reverse of `linkTaskToPullRequest`, which is sticky for PRs a task *opens*) and emits `pull_request:updated`. The tasks `POST` route links best-effort (fire-and-forget) after insert.
+- **Indicator.** `PRTableRow` reads the linked task's live status from the workspace store (`task:status` keeps it current). Shows **"Working"** (spinner) while `pending/queued/in_progress`, **"Review"** (amber) while `awaiting_review`, and **nothing** once `completed/failed/cancelled` — matching "indicator while running, gone when complete". Unknown/unloaded status falls back to a plain "Task" badge so the link isn't lost. Clicking opens the task (`selectTask` + Queue panel).
+- **Button gating.** The start-task buttons suppress while a task is active on the row (create-task hidden via `!taskActive`; "Get PR mergeable" disabled with a clearer tooltip) so you can't double-launch. Both create handlers pass `pullRequestId` and optimistically set the row's `taskId` so the badge appears instantly. The `pull_request:updated` handler now patches `taskId`.
+- **Tests.** 4 new `attachTaskToPullRequestRow` cases (set+emit, overwrite, unknown-id no-op, cross-workspace refusal). prCache suite green (32 tests); typecheck + lint clean across shared/backend/desktop.
+
 ## Session 31 — Instant PR panel switching (seed-from-cache) + Esc to close
 
 Switching PRs felt laggy because `PRDetailSheet` blocked on a full `GET /pull-requests/:id` round-trip every time. Now the list passes the already-loaded row (`seedRow`) into the panel; the panel renders that cached summary **instantly** (title, branch, status pill, check rollup) and refreshes the live detail (reviews/files/check rows/body) in place.
