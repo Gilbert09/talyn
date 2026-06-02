@@ -69,6 +69,12 @@ export function pullRequestRoutes(): Router {
       conditions.push(eq(pullRequestsTable.reviewRequested, false));
     } else if (relationship === 'review_requested') {
       conditions.push(eq(pullRequestsTable.reviewRequested, true));
+      // An approved PR drops off the Review list unless the user was
+      // explicitly (individually) asked to review it — a team-only request
+      // the user has already de facto satisfied is no longer actionable.
+      conditions.push(
+        sql`(${pullRequestsTable.explicitlyReviewRequested} = true OR coalesce(${pullRequestsTable.lastSummary} ->> 'reviewDecision', '') <> 'APPROVED')`
+      );
     }
 
     const rows = await db
@@ -432,6 +438,7 @@ interface PullRequestRow {
   number: number;
   state: string;
   reviewRequested: boolean;
+  explicitlyReviewRequested: boolean;
   mergedAt: Date | null;
   lastPolledAt: Date;
   lastSummary: unknown;
@@ -498,6 +505,7 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
     number: row.number,
     state: row.state,
     reviewRequested: row.reviewRequested,
+    explicitlyReviewRequested: row.explicitlyReviewRequested,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
     lastPolledAt: row.lastPolledAt.toISOString(),
     summary: row.lastSummary,

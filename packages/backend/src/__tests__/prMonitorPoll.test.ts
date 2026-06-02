@@ -78,13 +78,21 @@ function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
   };
 }
 
-// Mock the search-driven discovery: authored PR numbers + the subset
-// the user is a requested reviewer on. The monitor distinguishes the two
-// searches by the `author:` / `review-requested:` qualifier in the query.
-function mockSearch(authored: number[], reviewRequested: number[] = []) {
+// Mock the search-driven discovery: authored PR numbers, the subset the
+// user is a requested reviewer on (incl. via team), and the subset where
+// they're named individually. The monitor distinguishes the searches by
+// the `author:` / `review-requested:` / `user-review-requested:`
+// qualifier — order matters since `user-review-requested:` contains
+// `review-requested:` as a substring.
+function mockSearch(
+  authored: number[],
+  reviewRequested: number[] = [],
+  explicitlyReviewRequested: number[] = []
+) {
   return vi
     .spyOn(githubService, 'searchPullRequestNumbers')
     .mockImplementation(async (_ws: string, q: string) => {
+      if (q.includes('user-review-requested:')) return explicitlyReviewRequested;
       if (q.includes('review-requested:')) return reviewRequested;
       if (q.includes('author:')) return authored;
       return [];
@@ -183,6 +191,28 @@ describe('prMonitor — poll orchestration', () => {
     expect(Object.keys(byNumber).map(Number).sort()).toEqual([1, 2]);
     expect(byNumber[1]).toBe(false);
     expect(byNumber[2]).toBe(true);
+  });
+
+  it('flags individually-requested reviews separately from team-only ones', async () => {
+    // #2 and #3 both await my review (team + individual), but only #3
+    // names me directly via `user-review-requested:`.
+    mockSearch([], [2, 3], [3]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b', author: 'someone-else' }) },
+      { number: 3, pr: fakeSummary({ number: 3, headBranch: 'feature/c', author: 'someone-else' }) },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db.select().from(pullRequestsTable);
+    const byNumber = Object.fromEntries(
+      rows.map((r) => [r.number, r.explicitlyReviewRequested])
+    );
+    // Both are review-requested…
+    expect(rows.every((r) => r.reviewRequested)).toBe(true);
+    // …but only #3 is the user's *individual* request.
+    expect(byNumber[2]).toBe(false);
+    expect(byNumber[3]).toBe(true);
   });
 
   it('skips the GraphQL call entirely when every cached row is still fresh', async () => {

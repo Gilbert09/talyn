@@ -414,6 +414,16 @@ export const pullRequests = pgTable(
      * GitHub page separate "my PRs" from "PRs awaiting my review".
      */
     reviewRequested: boolean('review_requested').notNull().default(false),
+    /**
+     * True when the user is *individually* named as a requested reviewer
+     * (GitHub `user-review-requested:`), not merely pulled in via a team
+     * request. The GitHub page keeps an approved PR on the "Review" list
+     * only when this is set — otherwise an approved, team-requested PR
+     * (which the user has no direct obligation to review) drops off.
+     */
+    explicitlyReviewRequested: boolean('explicitly_review_requested')
+      .notNull()
+      .default(false),
     mergedAt: timestamp('merged_at', { withTimezone: true }),
     /**
      * Drives the TTL: prCache returns this row if `last_polled_at` is

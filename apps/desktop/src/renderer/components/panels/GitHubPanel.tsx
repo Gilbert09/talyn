@@ -64,6 +64,19 @@ function prNeedsFollowup(s: PRSummaryShape): boolean {
   );
 }
 
+/**
+ * Whether a PR belongs on the "Review" list — i.e. it's genuinely
+ * awaiting the user's review. A PR the user was requested on stays here
+ * until it's approved; once approved it drops off UNLESS the user was
+ * named as a reviewer individually (not merely via a team request), in
+ * which case GitHub is still explicitly asking them to weigh in.
+ */
+function isAwaitingMyReview(r: PRRow): boolean {
+  if (!r.reviewRequested) return false;
+  if (r.explicitlyReviewRequested) return true;
+  return r.summary.reviewDecision !== 'APPROVED';
+}
+
 /** Bulleted list of the issues we detected, for the agent prompt. */
 function buildIssuesSummary(s: PRSummaryShape): string {
   const lines: string[] = [];
@@ -343,7 +356,7 @@ export function GitHubPanel() {
     () => ({
       all: rows.length,
       authored: rows.filter((r) => !r.reviewRequested).length,
-      review_requested: rows.filter((r) => r.reviewRequested).length,
+      review_requested: rows.filter(isAwaitingMyReview).length,
     }),
     [rows]
   );
@@ -362,7 +375,7 @@ export function GitHubPanel() {
     if (relationship === 'authored') {
       out = out.filter((r) => !r.reviewRequested);
     } else if (relationship === 'review_requested') {
-      out = out.filter((r) => r.reviewRequested);
+      out = out.filter(isAwaitingMyReview);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();

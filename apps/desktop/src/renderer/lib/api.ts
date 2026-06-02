@@ -415,6 +415,12 @@ export interface PRRow {
   state: PRState;
   /** True when the user is a requested reviewer (not the author). */
   reviewRequested: boolean;
+  /**
+   * True when the user is *individually* named as a requested reviewer
+   * (not pulled in only via a team request). Drives whether an approved
+   * PR stays on the "Review" list.
+   */
+  explicitlyReviewRequested: boolean;
   mergedAt: string | null;
   lastPolledAt: string;
   summary: PRSummaryShape;

@@ -653,7 +653,11 @@ describe('routes/pullRequests', () => {
   });
 
   describe('GET /pull-requests relationship filter', () => {
-    async function insertWithRelationship(id: string, reviewRequested: boolean) {
+    async function insertWithRelationship(
+      id: string,
+      reviewRequested: boolean,
+      opts: { explicitlyReviewRequested?: boolean; reviewDecision?: string | null } = {}
+    ) {
       await db.insert(pullRequestsTable).values({
         id,
         workspaceId: 'ws-mine',
@@ -663,8 +667,15 @@ describe('routes/pullRequests', () => {
         number: ++prNumberCounter,
         state: 'open',
         reviewRequested,
+        explicitlyReviewRequested: opts.explicitlyReviewRequested ?? false,
         lastPolledAt: new Date(),
-        lastSummary: { title: 't', headBranch: 'h', author: 'a', url: `u-${id}` },
+        lastSummary: {
+          title: 't',
+          headBranch: 'h',
+          author: 'a',
+          url: `u-${id}`,
+          reviewDecision: opts.reviewDecision ?? null,
+        },
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -699,6 +710,33 @@ describe('routes/pullRequests', () => {
       });
       const allBody = (await all.json()) as { data: Array<{ id: string }> };
       expect(allBody.data.map((r) => r.id).sort()).toEqual(['p-mine', 'p-review']);
+    });
+
+    it('drops an APPROVED review_requested PR unless the user was named individually', async () => {
+      // Pending review → stays. Approved + only team-requested → drops.
+      // Approved but the user is individually requested → stays.
+      await insertWithRelationship('p-pending', true, { reviewDecision: null });
+      await insertWithRelationship('p-approved-team', true, { reviewDecision: 'APPROVED' });
+      await insertWithRelationship('p-approved-explicit', true, {
+        reviewDecision: 'APPROVED',
+        explicitlyReviewRequested: true,
+      });
+
+      const review = await fetch(
+        `${serverUrl}/pull-requests?workspaceId=ws-mine&relationship=review_requested`,
+        { headers: authMine }
+      );
+      const body = (await review.json()) as {
+        data: Array<{ id: string; explicitlyReviewRequested: boolean }>;
+      };
+      expect(body.data.map((r) => r.id).sort()).toEqual([
+        'p-approved-explicit',
+        'p-pending',
+      ]);
+      // The flag round-trips on the public shape.
+      expect(
+        body.data.find((r) => r.id === 'p-approved-explicit')?.explicitlyReviewRequested
+      ).toBe(true);
     });
   });
 

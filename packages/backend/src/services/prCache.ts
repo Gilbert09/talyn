@@ -302,6 +302,7 @@ export async function upsertFromBatchResult(opts: {
   taskId?: string | null;
   summary: PRSummary;
   reviewRequested?: boolean;
+  explicitlyReviewRequested?: boolean;
 }): Promise<UpsertResult> {
   const db = getDbClient();
   const existing = await readRow(
@@ -325,6 +326,7 @@ export async function upsertFromBatchResult(opts: {
     taskId: opts.taskId ?? null,
     summary: opts.summary,
     reviewRequested: opts.reviewRequested,
+    explicitlyReviewRequested: opts.explicitlyReviewRequested,
     existingId: existing?.id,
   });
   await emitDeltaInboxItems(opts.workspaceId, opts.summary, delta);
@@ -490,6 +492,7 @@ async function upsertRow(
     taskId: string | null;
     summary: PRSummary;
     reviewRequested?: boolean;
+    explicitlyReviewRequested?: boolean;
     existingId?: string;
   }
 ): Promise<string> {
@@ -517,6 +520,9 @@ async function upsertRow(
         ...(opts.reviewRequested === undefined
           ? {}
           : { reviewRequested: opts.reviewRequested }),
+        ...(opts.explicitlyReviewRequested === undefined
+          ? {}
+          : { explicitlyReviewRequested: opts.explicitlyReviewRequested }),
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, opts.existingId));
@@ -531,6 +537,7 @@ async function upsertRow(
       number: opts.summary.number,
       state: opts.summary.state,
       reviewRequested: opts.reviewRequested ?? false,
+      explicitlyReviewRequested: opts.explicitlyReviewRequested ?? false,
       mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
       lastPolledAt: now,
       lastSummary,

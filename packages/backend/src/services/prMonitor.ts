@@ -229,7 +229,14 @@ class PRMonitorService extends EventEmitter {
     // review. Each returns exactly the matches regardless of how many
     // open PRs the repo has overall.
     const full = `${repo.owner}/${repo.repo}`;
-    const [authored, reviewRequested] = await Promise.all([
+    // Three scoped searches:
+    //   - authored: PRs the user opened.
+    //   - review-requested: PRs awaiting the user's review, INCLUDING ones
+    //     where only a team they're on was asked.
+    //   - user-review-requested: the subset where the user is named
+    //     *individually*. Lets the GitHub page keep an approved PR on the
+    //     Review list only when the user was explicitly asked.
+    const [authored, reviewRequested, explicitlyReviewRequested] = await Promise.all([
       githubService.searchPullRequestNumbers(
         workspaceId,
         `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -238,6 +245,10 @@ class PRMonitorService extends EventEmitter {
         workspaceId,
         `repo:${full} is:pr is:open review-requested:${currentUserLogin}`
       ),
+      githubService.searchPullRequestNumbers(
+        workspaceId,
+        `repo:${full} is:pr is:open user-review-requested:${currentUserLogin}`
+      ),
     ]);
     // number → "the user is a requested reviewer (not the author)".
     const reviewRequestedByNumber = new Map<number, boolean>();
@@ -245,6 +256,7 @@ class PRMonitorService extends EventEmitter {
     for (const n of reviewRequested) {
       if (!reviewRequestedByNumber.has(n)) reviewRequestedByNumber.set(n, true);
     }
+    const explicitlyRequestedNumbers = new Set(explicitlyReviewRequested);
     const watchedNumbers = Array.from(reviewRequestedByNumber.keys());
 
     if (watchedNumbers.length === 0) {
@@ -280,6 +292,7 @@ class PRMonitorService extends EventEmitter {
         repositoryId: repo.id,
         summary: result.pr,
         reviewRequested: reviewRequestedByNumber.get(result.pr.number) ?? false,
+        explicitlyReviewRequested: explicitlyRequestedNumbers.has(result.pr.number),
       });
     }
 
