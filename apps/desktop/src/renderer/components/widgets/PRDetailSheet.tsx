@@ -208,11 +208,15 @@ export function PRDetailSheet({
 
   if (!pullRequestId) return null;
 
-  // Show the merge affordance only for an open PR GitHub reports as
-  // mergeable (no conflicts, checks/reviews satisfied). Anything else
-  // routes the user to GitHub to resolve the blocker.
+  // Show the merge affordance for an open PR GitHub reports as mergeable
+  // (no conflicts, required checks/reviews satisfied). This includes
+  // 'checks_failed_optional' — mergeable despite failing *non-required*
+  // checks. Anything else routes the user to GitHub to resolve the blocker.
   const canMerge =
-    !!view && view.row.state === 'open' && view.row.summary.blockingReason === 'mergeable';
+    !!view &&
+    view.row.state === 'open' &&
+    (view.row.summary.blockingReason === 'mergeable' ||
+      view.row.summary.blockingReason === 'checks_failed_optional');
 
   return (
     <div

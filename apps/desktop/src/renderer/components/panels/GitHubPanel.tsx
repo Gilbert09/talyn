@@ -849,7 +849,12 @@ function PRTableRow({
   // Brief confirmation flash after a PostHog Code run is kicked off — we
   // stay on the GitHub page, so this is the only signal it started.
   const [posthogStarted, setPosthogStarted] = useState(false);
-  const canMerge = row.state === 'open' && summary.blockingReason === 'mergeable';
+  // Mergeable covers the clean case AND "mergeable, but only non-required
+  // checks are failing" — GitHub lets you merge both.
+  const canMerge =
+    row.state === 'open' &&
+    (summary.blockingReason === 'mergeable' ||
+      summary.blockingReason === 'checks_failed_optional');
   const unresolved = summary.unresolvedReviewThreads ?? 0;
 
   // A linked task is "active" while it's running or awaiting your review —
