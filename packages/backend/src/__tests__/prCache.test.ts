@@ -42,6 +42,7 @@ function makeSummary(over: Partial<PRSummary> = {}): PRSummary {
     headBranch: 'feature/x',
     baseBranch: 'main',
     headSha: 'sha1',
+    createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',

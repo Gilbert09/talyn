@@ -376,8 +376,11 @@ export function GitHubPanel() {
       out = out.filter(isNeedsAttention);
     }
     const sorted = out.slice().sort((a, b) => {
-      const ta = new Date(a.summary.updatedAt || a.lastPolledAt).getTime();
-      const tb = new Date(b.summary.updatedAt || b.lastPolledAt).getTime();
+      // Order by when the PR was opened on GitHub. Fall back to the DB
+      // row's createdAt for rows cached before we tracked the PR's own
+      // creation time.
+      const ta = new Date(a.summary.createdAt || a.createdAt).getTime();
+      const tb = new Date(b.summary.createdAt || b.createdAt).getTime();
       return sortDir === 'desc' ? tb - ta : ta - tb;
     });
     return sorted;
@@ -523,6 +526,8 @@ export function GitHubPanel() {
         stateCount={rows.length}
         attentionCount={attentionCount}
         relationshipCounts={relationshipCounts}
+        sortDir={sortDir}
+        onToggleSort={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
       />
 
       {/* Split row: the list keeps its own width (flex-1) and the detail
@@ -561,10 +566,6 @@ export function GitHubPanel() {
               rows={filtered}
               selectedId={selectedId}
               onSelect={handleSelect}
-              sortDir={sortDir}
-              onToggleSort={() =>
-                setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))
-              }
               onOpenTask={(taskId) => {
                 selectTask(taskId);
                 setActivePanel('queue');
@@ -616,6 +617,9 @@ interface FilterBarProps {
   stateCount: number;
   attentionCount: number;
   relationshipCounts: Record<RelationshipFilter, number>;
+  /** Sort direction for the created-at ordering. */
+  sortDir: SortDir;
+  onToggleSort: () => void;
 }
 
 function FilterBar({
@@ -634,6 +638,8 @@ function FilterBar({
   stateCount,
   attentionCount,
   relationshipCounts,
+  sortDir,
+  onToggleSort,
 }: FilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs">
@@ -721,6 +727,17 @@ function FilterBar({
         {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
       </button>
 
+      {/* Created-at sort toggle. */}
+      <button
+        type="button"
+        onClick={onToggleSort}
+        className="flex items-center gap-1 rounded-md border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+        title={`Sorted by created date — ${sortDir === 'desc' ? 'newest first' : 'oldest first'}. Click to flip.`}
+      >
+        <ArrowUpDown className="h-3 w-3" />
+        {sortDir === 'desc' ? 'Newest' : 'Oldest'}
+      </button>
+
       {/* Search input — flex-1 so it grows. */}
       <div className="relative ml-auto flex-1 min-w-[160px] max-w-md">
         <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -750,8 +767,6 @@ interface PRTableProps {
   rows: PRRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  sortDir: SortDir;
-  onToggleSort: () => void;
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
   onCreateTask: (row: PRRow) => Promise<void>;
@@ -766,8 +781,6 @@ function PRTable({
   rows,
   selectedId,
   onSelect,
-  sortDir,
-  onToggleSort,
   onOpenTask,
   onMerge,
   onCreateTask,
@@ -781,17 +794,6 @@ function PRTable({
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
           <th className="px-2 py-2 text-left font-medium">Status</th>
-          <th className="px-2 py-2 text-left font-medium">
-            <button
-              type="button"
-              onClick={onToggleSort}
-              className="flex items-center gap-1 uppercase tracking-wide hover:text-foreground"
-              title={`Sort by updated (${sortDir === 'desc' ? 'newest first' : 'oldest first'})`}
-            >
-              Updated
-              <ArrowUpDown className="h-3 w-3" />
-            </button>
-          </th>
           <th className="w-8 px-2 py-2"></th>
         </tr>
       </thead>
@@ -838,7 +840,6 @@ function PRTableRow({
   taskStatus?: TaskStatus;
 }) {
   const summary = row.summary;
-  const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [busy, setBusy] = useState<null | 'merge' | 'task' | 'posthog'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
@@ -943,6 +944,12 @@ function PRTableRow({
           </span>
           <span className="text-xs text-muted-foreground">
             {row.owner}/{row.repo}#{row.number} · @{summary.author || 'unknown'}
+            {(summary.createdAt || row.createdAt) && (
+              <span title={`Opened ${new Date(summary.createdAt || row.createdAt).toLocaleString()}`}>
+                {' · opened '}
+                {formatRelative(summary.createdAt || row.createdAt)}
+              </span>
+            )}
             {summary.draft && (
               <span className="ml-2 rounded bg-zinc-200 px-1 py-0.5 text-[10px] uppercase text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
                 Draft
@@ -1023,9 +1030,6 @@ function PRTableRow({
             </span>
           )}
         </div>
-      </td>
-      <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
-        {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>
       <td className="px-2 py-2" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">

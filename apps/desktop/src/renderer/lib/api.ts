@@ -389,6 +389,9 @@ export interface PRSummaryShape {
   headBranch: string;
   baseBranch: string;
   headSha: string;
+  /** When the PR was opened on GitHub. Optional for rows cached before
+   *  this field was tracked. */
+  createdAt?: string;
   updatedAt: string;
   url: string;
   mergeable: PRMergeable;

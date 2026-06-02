@@ -72,6 +72,7 @@ export interface PRSummary {
   headBranch: string;
   baseBranch: string;
   headSha: string;
+  createdAt: string;
   updatedAt: string;
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
@@ -548,6 +549,7 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
   state
   mergedAt
   closedAt
+  createdAt
   updatedAt
   mergeable
   mergeStateStatus
@@ -675,6 +677,7 @@ interface RawPullRequest {
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   mergedAt: string | null;
   closedAt: string | null;
+  createdAt: string;
   updatedAt: string;
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
@@ -821,6 +824,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     headBranch: raw.headRefName,
     baseBranch: raw.baseRefName,
     headSha: raw.headRefOid,
+    createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     mergeable: raw.mergeable,
     mergeStateStatus: raw.mergeStateStatus,

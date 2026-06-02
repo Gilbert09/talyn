@@ -361,6 +361,7 @@ describe('decodeBatchResponse', () => {
       state: 'OPEN',
       mergedAt: null,
       closedAt: null,
+      createdAt: '2025-12-30T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
       mergeable: 'MERGEABLE',
       mergeStateStatus: 'CLEAN',
@@ -466,6 +467,7 @@ describe('decodeBatchResponse', () => {
     expect(pr.headBranch).toBe('feature/x');
     expect(pr.baseBranch).toBe('main');
     expect(pr.headSha).toBe('abcdef1');
+    expect(pr.createdAt).toBe('2025-12-30T00:00:00Z');
     expect(pr.checks).toEqual({
       total: 3,
       passed: 1,
