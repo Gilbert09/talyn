@@ -13,6 +13,7 @@ import {
   environments as environmentsTable,
   repositories as repositoriesTable,
   tasks as tasksTable,
+  pullRequests as pullRequestsTable,
 } from '../../db/schema.js';
 
 const OTHER_USER_ID = 'user-other';
@@ -200,6 +201,96 @@ describe('POST /tasks — auth + validation', () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toMatch(/repositoryId is required/);
+  });
+
+  it('links the task to the PR it was started from and stamps PR metadata up front', async () => {
+    // The PR the user clicked "Get mergeable" on already lives in the cache.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-row-1',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 42,
+      state: 'open',
+      reviewRequested: false,
+      lastPolledAt: new Date(),
+      lastSummary: { title: 'fix me', url: 'https://github.com/acme/widgets/pull/42' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await fetch(`${serverUrl}/tasks`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        workspaceId: 'ws1',
+        type: 'pr_response',
+        title: 'Get acme/widgets#42 mergeable',
+        description: 'fix it',
+        prompt: 'fix the PR',
+        repositoryId: 'repo1',
+        pullRequestId: 'pr-row-1',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // The PR pointer is on metadata immediately — so the task screen's PR
+    // status pill renders while the task is still running.
+    expect(body.data.metadata.pullRequest).toMatchObject({
+      id: 'pr-row-1',
+      number: 42,
+      url: 'https://github.com/acme/widgets/pull/42',
+    });
+
+    // The reverse link (PR row → taskId) is set too, for the GitHub page.
+    // It happens after the response, so poll the row until it lands.
+    let linkedTaskId: string | null = null;
+    for (let i = 0; i < 20 && !linkedTaskId; i++) {
+      const rows = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, 'pr-row-1'))
+        .limit(1);
+      linkedTaskId = rows[0]?.taskId ?? null;
+      if (!linkedTaskId) await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(linkedTaskId).toBe(body.data.id);
+  });
+
+  it('ignores a cross-workspace pullRequestId without stamping metadata', async () => {
+    // PR belongs to a workspace the caller doesn't own — must not leak onto
+    // the task they create in their own workspace.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-row-other',
+      workspaceId: 'ws2',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 7,
+      state: 'open',
+      reviewRequested: false,
+      lastPolledAt: new Date(),
+      lastSummary: { url: 'https://github.com/acme/widgets/pull/7' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const res = await fetch(`${serverUrl}/tasks`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        workspaceId: 'ws1',
+        type: 'pr_response',
+        title: 'sneaky',
+        description: 'x',
+        repositoryId: 'repo1',
+        pullRequestId: 'pr-row-other',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data.metadata?.pullRequest).toBeUndefined();
   });
 
   it('allows manual tasks without a repositoryId', async () => {

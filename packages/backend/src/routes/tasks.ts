@@ -6,6 +6,7 @@ import {
   tasks as tasksTable,
   workspaces as workspacesTable,
   environments as environmentsTableRef,
+  pullRequests as pullRequestsTable,
 } from '../db/schema.js';
 import { agentService } from '../services/agent.js';
 import { environmentService } from '../services/environment.js';
@@ -194,6 +195,29 @@ export function taskRoutes(): Router {
     const initialMetadata: Record<string, unknown> = {};
     if (body.runtimeAdapter) initialMetadata.runtimeAdapter = body.runtimeAdapter;
     if (body.model) initialMetadata.model = body.model;
+
+    // When a task is started FROM a PR (e.g. "Get PR mergeable"), stash a
+    // pullRequest pointer on metadata up front. The task screen renders its
+    // PR status pill off `metadata.pullRequest`, so without this the pill
+    // wouldn't appear until the poller links a PR on completion. The
+    // reverse link (PR row → taskId, for the GitHub page's "Working" badge)
+    // is still set below via attachTaskToPullRequestRow.
+    if (body.pullRequestId) {
+      const prRows = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, body.pullRequestId))
+        .limit(1);
+      const prRow = prRows[0];
+      if (prRow && prRow.workspaceId === body.workspaceId) {
+        initialMetadata.pullRequest = {
+          id: prRow.id,
+          number: prRow.number,
+          url: (prRow.lastSummary as { url?: string } | null)?.url ?? '',
+          createdAt: now.toISOString(),
+        };
+      }
+    }
 
     await db.insert(tasksTable).values({
       id,

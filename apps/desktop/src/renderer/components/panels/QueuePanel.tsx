@@ -666,10 +666,14 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               </div>
             </div>
             {/*
-              Intentionally no action buttons here — TaskTerminal's
-              header renders the per-task controls (Finish / Stop)
-              contextually beside the terminal it manages.
+              No task-control buttons here — TaskTerminal's header renders
+              the per-task controls (Finish / Stop) contextually beside the
+              terminal it manages. We do surface the linked-PR status pill so
+              a PR-fix run shows the PR's CI/merge state while it works.
             */}
+            <div className="flex items-center gap-2 shrink-0">
+              <TaskPRControls task={task} onOpen={setPRSheetId} />
+            </div>
           </div>
         </div>
 
@@ -868,37 +872,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                 Unqueue
               </Button>
             )}
-            {(() => {
-              // Show the PR pill + open-on-GitHub button on any task
-              // that has a PR linked (typically `completed` or
-              // `awaiting_review` after the approve flow opened one).
-              const pr = (task.metadata as
-                | { pullRequest?: { number: number; url: string; id?: string } }
-                | undefined)?.pullRequest;
-              if (!pr) return null;
-              return (
-                <>
-                  {pr.id && (
-                    // key on the PR id so switching tasks remounts the pill,
-                    // letting it re-seed synchronously from the PR status
-                    // cache instead of carrying the prior task's state.
-                    <PRStatusPillForTask
-                      key={pr.id}
-                      pullRequestId={pr.id}
-                      onOpen={() => setPRSheetId(pr.id ?? null)}
-                    />
-                  )}
-                  <Button
-                    size="sm"
-                    onClick={() => window.open(pr.url, '_blank', 'noopener,noreferrer')}
-                    title={pr.url}
-                  >
-                    <GitPullRequest className="w-4 h-4 mr-1" />
-                    View PR #{pr.number}
-                  </Button>
-                </>
-              );
-            })()}
+            {/* PR pill + open-on-GitHub link on any task with a PR linked
+                (started-from-a-PR, or `completed`/`awaiting_review` after the
+                approve flow opened one). */}
+            <TaskPRControls task={task} onOpen={setPRSheetId} />
             {task.status === 'failed' && (
               <>
                 <Button size="sm" onClick={handleRetryTask} disabled={actionInFlight}>
@@ -1268,6 +1245,46 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         </>
       )}
       <PRDetailSheet pullRequestId={prSheetId} onClose={() => setPRSheetId(null)} />
+    </>
+  );
+}
+
+/**
+ * The linked-PR controls for a task header: the live status pill plus a
+ * "View PR" deep link. Renders off `metadata.pullRequest`, which is set
+ * both when a task opens a PR (poller) and when a task is started FROM a
+ * PR (creation time) — so the pill shows while the task is still running.
+ */
+function TaskPRControls({
+  task,
+  onOpen,
+}: {
+  task: Task;
+  onOpen: (prId: string) => void;
+}) {
+  const pr = (
+    task.metadata as
+      | { pullRequest?: { number: number; url: string; id?: string } }
+      | undefined
+  )?.pullRequest;
+  if (!pr) return null;
+  return (
+    <>
+      {pr.id && (
+        // key on the PR id so switching tasks remounts the pill, letting it
+        // re-seed synchronously from the PR status cache instead of carrying
+        // the prior task's state.
+        <PRStatusPillForTask key={pr.id} pullRequestId={pr.id} onOpen={() => onOpen(pr.id!)} />
+      )}
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => window.open(pr.url, '_blank', 'noopener,noreferrer')}
+        title={pr.url}
+      >
+        <GitPullRequest className="w-4 h-4 mr-1" />
+        View PR #{pr.number}
+      </Button>
     </>
   );
 }
