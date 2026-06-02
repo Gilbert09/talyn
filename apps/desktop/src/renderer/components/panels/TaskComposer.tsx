@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Loader2, ChevronDown, Cpu, Brain } from 'lucide-react';
+import { ArrowUp, Loader2, ChevronDown, Cpu, Brain, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 /**
@@ -106,33 +106,50 @@ export function TaskComposer({
   );
 
   const efforts = model ? EFFORTS_BY_MODEL[model] ?? [] : [];
+  const hasControls =
+    showModelControls &&
+    ((!!model && !!onModelChange) ||
+      (!!effort && !!onEffortChange && efforts.length > 0));
 
   return (
-    <div className="p-3 border-t bg-card">
+    <div className="px-3 pt-2.5 pb-3 border-t bg-card">
       <div
         className={cn(
-          'rounded-xl border bg-background px-3 pt-2.5 pb-2 transition-colors',
-          'focus-within:ring-1 focus-within:ring-ring focus-within:border-ring/60',
-          attention && 'border-yellow-500/40 bg-yellow-500/[0.03]'
+          'group/composer relative rounded-md border bg-background transition-colors',
+          attention && 'border-yellow-500/50 bg-yellow-500/[0.04]'
         )}
       >
-        <textarea
-          ref={textareaRef}
-          value={value}
-          placeholder={placeholder}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          disabled={disabled}
-          autoFocus={autoFocus}
-          className={cn(
-            'w-full resize-none bg-transparent text-sm leading-relaxed',
-            'placeholder:text-muted-foreground/70 focus:outline-none',
-            'min-h-[24px] max-h-[200px] disabled:opacity-60'
-          )}
-        />
+        {/* Subtle attention marker along the leading edge. */}
+        {attention && (
+          <span className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-yellow-500/70" />
+        )}
 
-        <div className="mt-1.5 flex items-center gap-1.5">
+        <div className="px-3 pt-2.5 pb-2">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            placeholder={placeholder}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            disabled={disabled}
+            autoFocus={autoFocus}
+            className={cn(
+              'w-full resize-none bg-transparent text-sm leading-relaxed',
+              'placeholder:text-muted-foreground/60 focus:outline-none',
+              'min-h-[24px] max-h-[200px] disabled:opacity-60'
+            )}
+          />
+        </div>
+
+        {/* Control row — sits flush at the bottom of the card with a faint
+            divider so the pickers read as a toolbar, not floating text. */}
+        <div
+          className={cn(
+            'flex items-center gap-1.5 px-2 pb-2 pt-0.5',
+            hasControls && 'border-t border-border/60 pt-2'
+          )}
+        >
           {showModelControls && model && onModelChange && (
             <Picker
               icon={<Cpu className="h-3.5 w-3.5" />}
@@ -154,6 +171,23 @@ export function TaskComposer({
             />
           )}
 
+          {/* Keyboard hint — fades in once there's something to send, so the
+              affordance is discoverable without cluttering the empty state.
+              The `ml-auto` here is what pushes the toolbar's trailing cluster
+              to the right edge. */}
+          <span
+            className={cn(
+              'ml-auto mr-1 select-none items-center gap-1 text-[11px] text-muted-foreground/60 transition-opacity',
+              'hidden sm:inline-flex',
+              canSend ? 'opacity-100' : 'opacity-0'
+            )}
+          >
+            <kbd className="rounded border border-border/70 bg-muted px-1 py-px font-sans text-[10px] font-medium leading-none">
+              ↵
+            </kbd>
+            to send
+          </span>
+
           <button
             type="button"
             onClick={() => canSend && onSend()}
@@ -161,10 +195,13 @@ export function TaskComposer({
             title="Send message  (Enter)"
             aria-label="Send message"
             className={cn(
-              'ml-auto inline-flex h-7 w-7 items-center justify-center rounded-lg transition-colors',
+              'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors',
+              // On narrow widths the hint is hidden, so the button itself owns
+              // the right-alignment.
+              'ml-auto sm:ml-0',
               canSend
-                ? 'bg-primary text-primary-foreground hover:opacity-90'
-                : 'bg-muted text-muted-foreground/50 cursor-not-allowed'
+                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'bg-muted text-muted-foreground/40 cursor-not-allowed'
             )}
           >
             {sending ? (
@@ -207,37 +244,44 @@ function Picker({
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground',
+          'inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-xs font-medium text-muted-foreground',
           'transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50',
           open && 'bg-muted text-foreground'
         )}
       >
-        {icon}
+        <span className="text-muted-foreground/80">{icon}</span>
         <span>{label}</span>
-        <ChevronDown className="h-3 w-3 opacity-60" />
+        <ChevronDown
+          className={cn('h-3 w-3 opacity-50 transition-transform', open && 'rotate-180')}
+        />
       </button>
       {open && (
         <>
           {/* Backdrop swallows the outside click that closes the menu. */}
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-0 z-50 mb-1 min-w-[140px] overflow-hidden rounded-lg border bg-popover py-1 shadow-md">
-            {options.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => {
-                  onSelect(opt.value);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between px-2.5 py-1.5 text-xs hover:bg-muted',
-                  opt.value === value ? 'font-medium text-foreground' : 'text-muted-foreground'
-                )}
-              >
-                {opt.label}
-                {opt.value === value && <span className="text-primary">✓</span>}
-              </button>
-            ))}
+          <div className="absolute bottom-full left-0 z-50 mb-1 min-w-[150px] overflow-hidden rounded-md border bg-popover py-1 shadow-md">
+            {options.map((opt) => {
+              const selected = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    onSelect(opt.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-xs transition-colors',
+                    selected
+                      ? 'font-medium text-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {opt.label}
+                  {selected && <Check className="h-3.5 w-3.5 text-primary" />}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
