@@ -7,7 +7,6 @@ import {
   workspaces as workspacesTable,
   tasks as tasksTable,
   environments as environmentsTable,
-  agents as agentsTable,
 } from '../db/schema.js';
 
 async function seedWorkspace(db: Database, id = 'ws1', name = 'Default') {
@@ -29,7 +28,6 @@ async function seedTask(
     priority: string;
     title: string;
     description: string;
-    assignedAgentId: string | null;
     createdAt: Date;
   }> = {}
 ) {
@@ -42,7 +40,6 @@ async function seedTask(
     priority: overrides.priority ?? 'medium',
     title: overrides.title ?? 'A task',
     description: overrides.description ?? 'desc',
-    assignedAgentId: overrides.assignedAgentId ?? null,
     createdAt,
     updatedAt: createdAt,
   };

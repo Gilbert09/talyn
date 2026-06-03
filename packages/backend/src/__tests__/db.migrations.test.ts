@@ -27,14 +27,16 @@ describe('Drizzle migration', () => {
       'integrations',
       'environments',
       'tasks',
-      'agents',
       'inbox_items',
       'settings',
-      'backlog_sources',
-      'backlog_items',
       'pull_requests',
     ]) {
       expect(tables).toContain(expected);
+    }
+
+    // The local-execution tables are dropped in the cloud-only refactor.
+    for (const gone of ['agents', 'backlog_sources', 'backlog_items']) {
+      expect(tables).not.toContain(gone);
     }
   });
 
@@ -98,7 +100,7 @@ describe('Drizzle migration', () => {
     }
   });
 
-  it('gives tasks the expected columns (repository_id, branch, terminal_output, metadata)', async () => {
+  it('gives tasks the cloud-only columns and drops the local-exec ones', async () => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;
 
@@ -110,23 +112,39 @@ describe('Drizzle migration', () => {
 
     expect(cols).toContain('repository_id');
     expect(cols).toContain('branch');
-    expect(cols).toContain('terminal_output');
+    expect(cols).toContain('assigned_environment_id');
+    expect(cols).toContain('transcript');
     expect(cols).toContain('metadata');
+    // Local-execution columns are gone.
+    expect(cols).not.toContain('terminal_output');
+    expect(cols).not.toContain('assigned_agent_id');
   });
 
-  it('backlog_sources has a repository_id column', async () => {
+  it('slims environments to a secret-free marker (no daemon columns)', async () => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;
 
     const result = await testDb.pglite.query<{ column_name: string }>(`
       SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'backlog_sources'
+      WHERE table_schema = 'public' AND table_name = 'environments'
     `);
     const cols = result.rows.map((r) => r.column_name);
-    expect(cols).toContain('repository_id');
+    expect(cols).toContain('type');
+    expect(cols).toContain('config');
+    for (const gone of [
+      'device_token_hash',
+      'last_seen_at',
+      'autonomous_bypass_permissions',
+      'renderer',
+      'tool_allowlist',
+      'daemon_version',
+      'auto_update_daemon',
+    ]) {
+      expect(cols).not.toContain(gone);
+    }
   });
 
-  it('enables RLS on every user-scoped table (settings stays global)', async () => {
+  it('enables RLS on every surviving user-scoped table (settings stays global)', async () => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;
 
@@ -143,10 +161,7 @@ describe('Drizzle migration', () => {
       'repositories',
       'integrations',
       'tasks',
-      'agents',
       'inbox_items',
-      'backlog_sources',
-      'backlog_items',
       'pull_requests',
     ]) {
       expect(map.get(table)).toBe(true);

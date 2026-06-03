@@ -11,10 +11,8 @@ import {
   requireWorkspaceAccess,
   requireEnvironmentAccess,
   requireTaskAccess,
-  requireAgentAccess,
   requireInboxAccess,
   requireRepositoryAccess,
-  requireBacklogSourceAccess,
   assertUser,
   internalProxyHeaders,
 } from '../middleware/auth.js';
@@ -24,10 +22,8 @@ import {
   workspaces as workspacesTable,
   environments as environmentsTable,
   tasks as tasksTable,
-  agents as agentsTable,
   inboxItems as inboxItemsTable,
   repositories as repositoriesTable,
-  backlogSources as backlogSourcesTable,
 } from '../db/schema.js';
 
 const OTHER_USER_ID = 'user-other';
@@ -282,28 +278,6 @@ describe('ownership helpers', () => {
     ).rejects.toThrow(AccessError);
   });
 
-  it('requireAgentAccess walks via workspaces.owner_id', async () => {
-    const now = new Date();
-    await db.insert(environmentsTable).values({
-      id: 'env', ownerId: TEST_USER_ID, name: 'e', type: 'local',
-      status: 'connected', config: {},
-    });
-    await db.insert(agentsTable).values([
-      {
-        id: 'a-mine', environmentId: 'env', workspaceId: 'ws-mine', status: 'idle',
-        attention: 'none', terminalOutput: '', lastActivity: now, createdAt: now,
-      },
-      {
-        id: 'a-theirs', environmentId: 'env', workspaceId: 'ws-theirs', status: 'idle',
-        attention: 'none', terminalOutput: '', lastActivity: now, createdAt: now,
-      },
-    ]);
-    await expect(requireAgentAccess(makeReq(TEST_USER_ID), 'a-mine')).resolves.toBe('ws-mine');
-    await expect(
-      requireAgentAccess(makeReq(TEST_USER_ID), 'a-theirs')
-    ).rejects.toThrow(AccessError);
-  });
-
   it('requireInboxAccess and requireRepositoryAccess honour workspace ownership', async () => {
     const now = new Date();
     await db.insert(inboxItemsTable).values([
@@ -338,28 +312,6 @@ describe('ownership helpers', () => {
     ).resolves.toBe('ws-mine');
     await expect(
       requireRepositoryAccess(makeReq(TEST_USER_ID), 'rp-theirs')
-    ).rejects.toThrow(AccessError);
-  });
-
-  it('requireBacklogSourceAccess honours workspace ownership', async () => {
-    const now = new Date();
-    await db.insert(backlogSourcesTable).values([
-      {
-        id: 's-mine', workspaceId: 'ws-mine', type: 'markdown_file',
-        enabled: true, config: { type: 'markdown_file', path: '/b.md' },
-        createdAt: now, updatedAt: now,
-      },
-      {
-        id: 's-theirs', workspaceId: 'ws-theirs', type: 'markdown_file',
-        enabled: true, config: { type: 'markdown_file', path: '/b.md' },
-        createdAt: now, updatedAt: now,
-      },
-    ]);
-    await expect(
-      requireBacklogSourceAccess(makeReq(TEST_USER_ID), 's-mine')
-    ).resolves.toBe('ws-mine');
-    await expect(
-      requireBacklogSourceAccess(makeReq(TEST_USER_ID), 's-theirs')
     ).rejects.toThrow(AccessError);
   });
 });

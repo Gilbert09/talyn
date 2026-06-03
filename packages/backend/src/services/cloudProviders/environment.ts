@@ -40,8 +40,6 @@ export async function ensureCloudEnvironment(
     type,
     status: 'connected' as const,
     config: { type },
-    autonomousBypassPermissions: false,
-    renderer: 'structured' as const,
     createdAt: now,
     updatedAt: now,
   };

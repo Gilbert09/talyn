@@ -104,6 +104,10 @@ export const integrations = pgTable(
 
 // ---------- Environments ----------
 
+// A cloud-only environment is a secret-free marker, one per connected
+// cloud provider (auto-provisioned on integration connect). It carries no
+// daemon state — the `type` (a CloudProviderType) is all a task needs to
+// resolve its provider; per-workspace credentials live on `integrations`.
 export const environments = pgTable(
   'environments',
   {
@@ -112,72 +116,18 @@ export const environments = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    // Execution always happens inside a `@fastowl/daemon` process that
-    // dials into the backend. 'local' means the daemon runs on the
-    // user's own desktop machine (bundled with the Electron app);
-    // 'remote' means the daemon runs on a separate machine paired via
-    // an explicit token. See docs/DAEMON_EVERYWHERE.md.
-    type: text('type').notNull(), // 'local' | 'remote'
-    status: text('status').notNull().default('disconnected'),
+    // CloudProviderType: 'posthog_code' (today), 'codex_cloud',
+    // 'claude_routine' (planned). See docs/CLOUD_PROVIDERS.md.
+    type: text('type').notNull(),
+    status: text('status').notNull().default('connected'),
     config: jsonb('config').notNull(),
-    // Long-lived token the daemon presents on every reconnect. We store
-    // a SHA-256 hash only — raw token is handed to the daemon once at
-    // pairing time and never leaves its disk.
-    deviceTokenHash: text('device_token_hash'),
-    // Updated whenever a daemon sends any WS traffic. Drives the
-    // "connected" status in the desktop and scheduler gating.
-    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     lastConnected: timestamp('last_connected', { withTimezone: true }),
     error: text('error'),
-    /**
-     * When true, FastOwl spawns autonomous Claude tasks on this env with
-     * `--dangerously-skip-permissions`, which lets Claude run bash / file
-     * edits / MCP calls without prompting. Appropriate for throwaway
-     * daemon VMs where the blast radius is bounded. Dangerous for
-     * `local` envs (your own machine) — defaults off; toggle from
-     * Settings → Environments if you know what you're doing.
-     *
-     * `false` falls back to `--permission-mode acceptEdits`, which will
-     * still block on bash prompts the scheduler can't answer, so
-     * autonomous runs on a strict env are best-effort.
-     */
-    autonomousBypassPermissions: boolean('autonomous_bypass_permissions')
-      .notNull()
-      .default(false),
-    /**
-     * Historically toggled between PTY and structured rendering.
-     * Slice 4c collapsed the two paths — structured is now the only
-     * runtime. Column is kept for rollback safety; always `'structured'`.
-     */
-    renderer: text('renderer').notNull().default('structured'),
-    /**
-     * Tool names the user has pre-approved for this env — hook checks
-     * this list before surfacing a permission prompt. Scoped per-env
-     * (not per-task) so repeated "always allow Read" clicks stick
-     * across the env's whole task history. Populated by the desktop
-     * "Allow always" button. Example: `["Read", "Grep", "Bash(git *)"]`.
-     */
-    toolAllowlist: jsonb('tool_allowlist').notNull().default([]),
-    /**
-     * Version string reported by the daemon on its most recent hello.
-     * Format `<pkgVersion>+<shortSha>` (e.g. `0.1.0+a1b2c3d`). Null
-     * when no daemon has ever paired. Compared against the backend's
-     * own build SHA to surface "stale daemon" warnings in the desktop.
-     */
-    daemonVersion: text('daemon_version'),
-    /**
-     * When true, the backend auto-triggers this env's daemon self-
-     * update whenever it detects a stale daemon (on reconnect or on
-     * the periodic scheduler tick). Opt-in per env so a bad release
-     * can only take down the envs you explicitly marked auto.
-     */
-    autoUpdateDaemon: boolean('auto_update_daemon').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     ownerIdx: index('idx_environments_owner').on(t.ownerId),
-    deviceTokenIdx: index('idx_environments_device_token').on(t.deviceTokenHash),
   })
 );
 
@@ -190,13 +140,14 @@ export const tasks = pgTable(
     workspaceId: text('workspace_id')
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
-    type: text('type').notNull(), // 'code_writing' | 'pr_response' | 'pr_review' | 'manual'
+    type: text('type').notNull(), // 'code_writing' | 'pr_response' | 'pr_review'
     status: text('status').notNull().default('pending'),
     priority: text('priority').notNull().default('medium'),
     title: text('title').notNull(),
     description: text('description').notNull(),
     prompt: text('prompt'),
-    assignedAgentId: text('assigned_agent_id'),
+    // The cloud-marker env this task is delegated to (resolves its
+    // provider). `set null` if the marker is removed.
     assignedEnvironmentId: text('assigned_environment_id').references(
       () => environments.id,
       { onDelete: 'set null' }
@@ -205,11 +156,9 @@ export const tasks = pgTable(
       onDelete: 'set null',
     }),
     branch: text('branch'),
-    terminalOutput: text('terminal_output').notNull().default(''),
     /**
-     * JSONL event log for structured-renderer tasks. Array of
-     * `AgentEvent` objects (from @fastowl/shared). Null for PTY tasks.
-     * Bounded by agentStructured.ts (last N events / size cap).
+     * JSONL event log of `AgentEvent` objects (from @fastowl/shared) —
+     * the cloud run's transcript, ingested by the provider's streamer.
      */
     transcript: jsonb('transcript'),
     result: jsonb('result'),
@@ -222,43 +171,6 @@ export const tasks = pgTable(
     workspaceIdx: index('idx_tasks_workspace').on(t.workspaceId),
     statusIdx: index('idx_tasks_status').on(t.status),
     repositoryIdx: index('idx_tasks_repository').on(t.repositoryId),
-  })
-);
-
-// ---------- Agents ----------
-
-export const agents = pgTable(
-  'agents',
-  {
-    id: text('id').primaryKey(),
-    environmentId: text('environment_id')
-      .notNull()
-      .references(() => environments.id, { onDelete: 'cascade' }),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    status: text('status').notNull().default('idle'),
-    attention: text('attention').notNull().default('none'),
-    currentTaskId: text('current_task_id').references(() => tasks.id, {
-      onDelete: 'set null',
-    }),
-    /**
-     * Per-run token handed to the child via FASTOWL_PERMISSION_TOKEN
-     * (strict mode only). Persisted so agents surviving a backend
-     * restart can re-register the same token in permissionService on
-     * resume — otherwise the child's in-flight PreToolUse hooks would
-     * 401 with a "token not recognised" error.
-     */
-    permissionToken: text('permission_token'),
-    terminalOutput: text('terminal_output').notNull().default(''),
-    lastActivity: timestamp('last_activity', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => ({
-    environmentIdx: index('idx_agents_environment').on(t.environmentId),
-    workspaceIdx: index('idx_agents_workspace').on(t.workspaceId),
   })
 );
 
@@ -297,74 +209,6 @@ export const settings = pgTable('settings', {
   value: jsonb('value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
-
-// ---------- Backlog (Continuous Build) ----------
-
-export const backlogSources = pgTable(
-  'backlog_sources',
-  {
-    id: text('id').primaryKey(),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    type: text('type').notNull(), // currently only 'markdown_file'
-    enabled: boolean('enabled').notNull().default(true),
-    environmentId: text('environment_id').references(() => environments.id, {
-      onDelete: 'set null',
-    }),
-    repositoryId: text('repository_id').references(() => repositories.id, {
-      onDelete: 'set null',
-    }),
-    config: jsonb('config').notNull().default({}),
-    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => ({
-    workspaceIdx: index('idx_backlog_sources_workspace').on(t.workspaceId),
-  })
-);
-
-export const backlogItems = pgTable(
-  'backlog_items',
-  {
-    id: text('id').primaryKey(),
-    sourceId: text('source_id')
-      .notNull()
-      .references(() => backlogSources.id, { onDelete: 'cascade' }),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    externalId: text('external_id').notNull(),
-    text: text('text').notNull(),
-    parentExternalId: text('parent_external_id'),
-    completed: boolean('completed').notNull().default(false),
-    blocked: boolean('blocked').notNull().default(false),
-    claimedTaskId: text('claimed_task_id').references(() => tasks.id, {
-      onDelete: 'set null',
-    }),
-    orderIndex: integer('order_index').notNull().default(0),
-    /**
-     * Count of consecutive task failures for this item. Reset to 0 on
-     * success. The scheduler uses this for backoff + eventual blocking
-     * so a deterministically broken TODO doesn't infinite-loop the queue.
-     */
-    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
-    /** Timestamp of the last failed task on this item — drives backoff. */
-    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => ({
-    sourceExternalUq: uniqueIndex('uq_backlog_items_source_external').on(
-      t.sourceId,
-      t.externalId
-    ),
-    sourceIdx: index('idx_backlog_items_source').on(t.sourceId),
-    workspaceIdx: index('idx_backlog_items_workspace').on(t.workspaceId),
-    claimedIdx: index('idx_backlog_items_claimed').on(t.claimedTaskId),
-  })
-);
 
 // ---------- Pull requests (DB-as-cache) ----------
 

@@ -63,6 +63,9 @@ export function environmentRoutes(): Router {
 }
 
 export function rowToEnvironment(row: typeof environmentsTable.$inferSelect): Environment {
+  // Cloud env markers carry no daemon state. The daemon-era fields on the
+  // Environment type are synthesised with inert defaults for back-compat
+  // with any UI that still reads them.
   return {
     id: row.id,
     name: row.name,
@@ -71,10 +74,9 @@ export function rowToEnvironment(row: typeof environmentsTable.$inferSelect): En
     config: row.config as EnvironmentConfig,
     lastConnected: row.lastConnected ? row.lastConnected.toISOString() : undefined,
     error: row.error ?? undefined,
-    autonomousBypassPermissions: row.autonomousBypassPermissions,
-    renderer: (row.renderer as EnvironmentRenderer) ?? 'structured',
-    toolAllowlist: (row.toolAllowlist as string[]) ?? [],
-    daemonVersion: row.daemonVersion ?? undefined,
-    autoUpdateDaemon: row.autoUpdateDaemon,
+    autonomousBypassPermissions: false,
+    renderer: 'structured' as EnvironmentRenderer,
+    toolAllowlist: [],
+    autoUpdateDaemon: false,
   };
 }

@@ -7,10 +7,8 @@ import {
   workspaces as workspacesTable,
   environments as environmentsTable,
   tasks as tasksTable,
-  agents as agentsTable,
   inboxItems as inboxItemsTable,
   repositories as repositoriesTable,
-  backlogSources as backlogSourcesTable,
 } from '../db/schema.js';
 import { getSupabaseServiceClient } from '../services/supabase.js';
 
@@ -292,19 +290,6 @@ export async function requireTaskAccess(req: Request, taskId: string): Promise<s
   return rows[0].workspaceId;
 }
 
-/** Same as requireTaskAccess but for agents. Returns the agent's workspaceId. */
-export async function requireAgentAccess(req: Request, agentId: string): Promise<string> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ workspaceId: agentsTable.workspaceId })
-    .from(agentsTable)
-    .where(eq(agentsTable.id, agentId))
-    .limit(1);
-  if (!rows[0]) throw new AccessError('agent not found');
-  await requireWorkspaceAccess(req, rows[0].workspaceId);
-  return rows[0].workspaceId;
-}
-
 /** Inbox items are workspace-scoped. */
 export async function requireInboxAccess(req: Request, itemId: string): Promise<string> {
   const db = getDbClient();
@@ -327,19 +312,6 @@ export async function requireRepositoryAccess(req: Request, repoId: string): Pro
     .where(eq(repositoriesTable.id, repoId))
     .limit(1);
   if (!rows[0]) throw new AccessError('repository not found');
-  await requireWorkspaceAccess(req, rows[0].workspaceId);
-  return rows[0].workspaceId;
-}
-
-/** Backlog sources belong to a workspace. */
-export async function requireBacklogSourceAccess(req: Request, sourceId: string): Promise<string> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ workspaceId: backlogSourcesTable.workspaceId })
-    .from(backlogSourcesTable)
-    .where(eq(backlogSourcesTable.id, sourceId))
-    .limit(1);
-  if (!rows[0]) throw new AccessError('source not found');
   await requireWorkspaceAccess(req, rows[0].workspaceId);
   return rows[0].workspaceId;
 }

@@ -263,7 +263,6 @@ function rowToTask(row: typeof tasksTable.$inferSelect): Task {
     prompt: row.prompt ?? undefined,
     repositoryId: row.repositoryId ?? undefined,
     branch: row.branch ?? undefined,
-    assignedAgentId: row.assignedAgentId ?? undefined,
     assignedEnvironmentId: row.assignedEnvironmentId ?? undefined,
     result: (row.result as Task['result']) ?? undefined,
     metadata: (row.metadata as Task['metadata']) ?? undefined,
