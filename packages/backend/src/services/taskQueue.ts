@@ -248,7 +248,7 @@ function rowToCloudEnv(row: typeof environmentsTable.$inferSelect): Environment 
     status: row.status as Environment['status'],
     config: (row.config as EnvironmentConfig) ?? { type: row.type as never },
     renderer: 'structured',
-  } as Environment;
+  } as unknown as Environment;
 }
 
 function rowToTask(row: typeof tasksTable.$inferSelect): Task {

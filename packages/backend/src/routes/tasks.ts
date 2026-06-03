@@ -5,33 +5,20 @@ import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,
   workspaces as workspacesTable,
-  environments as environmentsTableRef,
   pullRequests as pullRequestsTable,
 } from '../db/schema.js';
-import { agentService } from '../services/agent.js';
-import { environmentService } from '../services/environment.js';
-import { gitService } from '../services/git.js';
-import { resolveTaskGitContext } from '../services/gitContext.js';
-import { enterTaskGitLog, getGitLog } from '../services/gitLogService.js';
-import { autoCommitAndSnapshot, writeFinalFilesSnapshot } from '../services/taskCommitSnapshot.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { attachTaskToPullRequestRow } from '../services/prCache.js';
-import { findTaskHoldingEnvRepoSlot } from '../services/taskQueue.js';
+import { taskQueueService } from '../services/taskQueue.js';
 import {
   emitTaskStatus,
-  emitTaskUpdate,
   emitTaskDeleted,
   emitTaskEvent,
 } from '../services/websocket.js';
 import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
+import { getCloudProvider } from '../services/cloudProviders/registry.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
 import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
-import {
-  generateTaskMetadata,
-  generateTaskTitle,
-  isConfigured as isAIConfigured,
-  looksLikePlaceholderTitle,
-} from '../services/ai.js';
 import {
   assertUser,
   handleAccessError,
@@ -39,56 +26,41 @@ import {
   requireTaskAccess,
   requireWorkspaceAccess,
 } from '../middleware/auth.js';
-import type {
-  Task,
-  TaskPriority,
-  TaskStatus,
-  TaskType,
-  CreateTaskRequest,
-  ApiResponse,
-  GenerateTaskMetadataRequest,
-  GenerateTaskMetadataResponse,
-  AgentEvent,
-  PostHogCodeRuntimeAdapter,
+import {
+  readCloudTaskProvider,
+  type Task,
+  type TaskPriority,
+  type TaskStatus,
+  type TaskType,
+  type CreateTaskRequest,
+  type ApiResponse,
+  type GenerateTaskMetadataRequest,
+  type GenerateTaskMetadataResponse,
+  type AgentEvent,
+  type PostHogCodeRuntimeAdapter,
 } from '@fastowl/shared';
-import { isAgentTask } from '@fastowl/shared';
 
+/**
+ * Cloud-only task routes. Every task is delegated to a cloud provider
+ * (PostHog Code today). There is no local agent, working tree, or
+ * approve/reject flow — review happens on the provider's PR. The handlers
+ * here create/list/inspect tasks, enqueue them, and proxy cloud follow-up
+ * actions (refresh logs, send a message) to the provider.
+ */
 export function taskRoutes(): Router {
   const router = Router();
 
-  // Generate task metadata from a prompt using AI
+  // Derive lightweight task metadata from a prompt. No LLM call — a clean
+  // slug is enough; the cloud provider refines the title on its own run.
   router.post('/generate-metadata', async (req, res) => {
     const body = req.body as GenerateTaskMetadataRequest;
-
     if (!body.prompt) {
       return res.status(400).json({ success: false, error: 'Prompt is required' });
     }
-
-    if (!isAIConfigured()) {
-      return res.json({
-        success: true,
-        data: {
-          title: body.prompt.slice(0, 60).trim() || 'New Task',
-          description: body.prompt.slice(0, 200).trim(),
-          suggestedPriority: 'medium',
-        },
-      } as ApiResponse<GenerateTaskMetadataResponse>);
-    }
-
-    try {
-      const metadata = await generateTaskMetadata(body.prompt, body.assignedEnvironmentId);
-      res.json({ success: true, data: metadata } as ApiResponse<GenerateTaskMetadataResponse>);
-    } catch (err) {
-      console.error('Failed to generate task metadata:', err);
-      res.json({
-        success: true,
-        data: {
-          title: body.prompt.slice(0, 60).trim() || 'New Task',
-          description: body.prompt.slice(0, 200).trim(),
-          suggestedPriority: 'medium',
-        },
-      } as ApiResponse<GenerateTaskMetadataResponse>);
-    }
+    res.json({
+      success: true,
+      data: deriveTaskMetadata(body.prompt),
+    } as ApiResponse<GenerateTaskMetadataResponse>);
   });
 
   // List tasks (with optional filters). Always scoped to the caller's
@@ -132,7 +104,7 @@ export function taskRoutes(): Router {
     } as ApiResponse<Task[]>);
   });
 
-  // Get single task (includes agent status if running)
+  // Get single task (includes the transcript).
   router.get('/:id', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -148,21 +120,13 @@ export function taskRoutes(): Router {
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
-
-    const task = rowToTask(rows[0], { includeTerminalOutput: true });
-
-    if (task.status === 'in_progress') {
-      const activeAgent = agentService.getAgentByTaskId(task.id);
-      if (activeAgent) {
-        task.agentStatus = activeAgent.status;
-        task.agentAttention = activeAgent.attention;
-      }
-    }
-
-    res.json({ success: true, data: task } as ApiResponse<Task>);
+    res.json({
+      success: true,
+      data: rowToTask(rows[0], { includeTranscript: true }),
+    } as ApiResponse<Task>);
   });
 
-  // Create task
+  // Create task — queued immediately for the cloud scheduler to dispatch.
   router.post('/', async (req, res) => {
     const body = req.body as CreateTaskRequest;
     try {
@@ -174,15 +138,13 @@ export function taskRoutes(): Router {
       return handleAccessError(err, res);
     }
 
-    // Agent tasks must declare a repository — tasks branch + commit
-    // against it, and a task without a repo has nowhere for
-    // prepareTaskBranch / /approve / /reject to operate. Manual tasks
-    // don't need one.
-    if (isAgentTask(body.type) && !body.repositoryId) {
+    // Cloud tasks run against a repository (the provider clones it and
+    // opens a PR), so a repo is required.
+    if (!body.repositoryId) {
       return res.status(400).json({
         success: false,
         error:
-          'repositoryId is required for agent tasks. Add a repository (with a local path) in Settings first.',
+          'repositoryId is required. Add a repository in Settings, then pick it when creating the task.',
       });
     }
 
@@ -190,18 +152,15 @@ export function taskRoutes(): Router {
     const id = uuid();
     const now = new Date();
 
-    // Stash cloud (PostHog Code) overrides on metadata — the executor
-    // reads them at dispatch. Harmless for non-cloud tasks.
+    // Stash cloud overrides (model / runtime adapter) on metadata — the
+    // provider reads them at dispatch.
     const initialMetadata: Record<string, unknown> = {};
     if (body.runtimeAdapter) initialMetadata.runtimeAdapter = body.runtimeAdapter;
     if (body.model) initialMetadata.model = body.model;
 
     // When a task is started FROM a PR (e.g. "Get PR mergeable"), stash a
-    // pullRequest pointer on metadata up front. The task screen renders its
-    // PR status pill off `metadata.pullRequest`, so without this the pill
-    // wouldn't appear until the poller links a PR on completion. The
-    // reverse link (PR row → taskId, for the GitHub page's "Working" badge)
-    // is still set below via attachTaskToPullRequestRow.
+    // pullRequest pointer on metadata up front so the task screen renders
+    // its PR pill immediately.
     if (body.pullRequestId) {
       const prRows = await db
         .select()
@@ -223,11 +182,8 @@ export function taskRoutes(): Router {
       id,
       workspaceId: body.workspaceId,
       type: body.type,
-      // Auto-enqueue on create. The scheduler already treats `pending`
-      // and `queued` identically for picking work; going straight to
-      // `queued` makes the UI reflect the scheduler's intent without
-      // a 5s poll-lag. Users who want to create a task without queuing
-      // it can PATCH the status afterward.
+      // Auto-enqueue on create — the cloud scheduler picks up `queued`
+      // tasks on its next tick (or immediately via runProcessQueue).
       status: 'queued',
       title: body.title,
       description: body.description,
@@ -249,7 +205,6 @@ export function taskRoutes(): Router {
 
     // Link the task to the PR it was started from, so the GitHub screen
     // can show a live in-progress indicator that deep-links back here.
-    // Best-effort — a stale/cross-workspace id just no-ops.
     if (body.pullRequestId) {
       void attachTaskToPullRequestRow({
         workspaceId: body.workspaceId,
@@ -258,31 +213,6 @@ export function taskRoutes(): Router {
       }).catch((err) => {
         console.error('[tasks] failed to link task to PR:', err);
       });
-    }
-
-    // Fire-and-forget title refinement. The modal sends a placeholder
-    // title (typically the prompt's first 60 chars); the fast Haiku
-    // model produces something friendlier in ~500ms. Result is
-    // patched into the task row and pushed to every client via
-    // `task:update` so the desktop replaces the placeholder without
-    // a manual refresh.
-    if (body.prompt && isAIConfigured()) {
-      void generateTaskTitle(body.prompt, body.assignedEnvironmentId)
-        .then(async (generatedTitle) => {
-          if (!generatedTitle || generatedTitle === body.title) return;
-          const updatedAt = new Date();
-          await db
-            .update(tasksTable)
-            .set({ title: generatedTitle, updatedAt })
-            .where(eq(tasksTable.id, id));
-          emitTaskUpdate(body.workspaceId, id, {
-            title: generatedTitle,
-            updatedAt: updatedAt.toISOString(),
-          });
-        })
-        .catch((err) => {
-          console.error('[tasks] async title generation failed:', err);
-        });
     }
   });
 
@@ -300,7 +230,6 @@ export function taskRoutes(): Router {
       title?: string;
       description?: string;
       prompt?: string;
-      assignedAgentId?: string;
       assignedEnvironmentId?: string;
       result?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
@@ -321,7 +250,6 @@ export function taskRoutes(): Router {
     if (body.title !== undefined) updates.title = body.title;
     if (body.description !== undefined) updates.description = body.description;
     if (body.prompt !== undefined) updates.prompt = body.prompt;
-    if (body.assignedAgentId !== undefined) updates.assignedAgentId = body.assignedAgentId;
     if (body.assignedEnvironmentId !== undefined)
       updates.assignedEnvironmentId = body.assignedEnvironmentId;
     if (body.result !== undefined) updates.result = body.result;
@@ -352,7 +280,7 @@ export function taskRoutes(): Router {
     res.json({ success: true, data: rowToTask(rows[0]) } as ApiResponse<Task>);
   });
 
-  // Retry/reset a task back to queued
+  // Retry/reset a task back to queued for re-dispatch.
   router.post('/:id/retry', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -369,16 +297,21 @@ export function taskRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
+    // Clear the prior cloud run so dispatch starts a fresh one rather than
+    // treating the task as already dispatched (idempotency short-circuit).
+    await patchTaskMetadata(req.params.id, (meta) => {
+      const next = { ...meta };
+      delete next.posthogTaskId;
+      delete next.posthogRunId;
+      delete next.posthogStatus;
+      delete next.cloudTask;
+      return next;
+    });
     await db
       .update(tasksTable)
-      .set({
-        status: 'queued',
-        assignedAgentId: null,
-        result: null,
-        completedAt: null,
-        updatedAt: new Date(),
-      })
+      .set({ status: 'queued', result: null, completedAt: null, updatedAt: new Date() })
       .where(eq(tasksTable.id, req.params.id));
+    void taskQueueService.processQueue();
 
     const rows = await db
       .select()
@@ -388,7 +321,8 @@ export function taskRoutes(): Router {
     res.json({ success: true, data: rowToTask(rows[0]) } as ApiResponse<Task>);
   });
 
-  // Start executing a task (spawns an agent)
+  // Enqueue a task for dispatch (idempotent — already-running tasks are
+  // left alone). The old local `/start` semantics collapse to "queue it".
   router.post('/:id/start', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -404,642 +338,19 @@ export function taskRoutes(): Router {
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
-
-    const task = rowToTask(rows[0]);
-
-    // Idempotent: if the task is already running (e.g. the scheduler
-    // picked it up in the ~5s window between user's "retry" and
-    // their "start now" click), return the current task state rather
-    // than an error. Users don't care whether *they* started it —
-    // only that it's running.
-    if (task.status === 'in_progress') {
-      const existing = agentService.getAgentByTaskId(task.id);
-      if (existing) {
-        return res.json({ success: true, data: task } as ApiResponse<Task>);
-      }
-      // Status says in_progress but no live agent — the agent died
-      // and something missed the cleanup. Let the flow below reset +
-      // re-spawn. We'll reset status to `queued` on the way through
-      // so the agent insert's task update is clean.
-      await db
-        .update(tasksTable)
-        .set({ status: 'queued', assignedAgentId: null, updatedAt: new Date() })
-        .where(eq(tasksTable.id, task.id));
-      task.status = 'queued';
-      task.assignedAgentId = undefined;
-    }
-    if (!isAgentTask(task.type)) {
-      return res.status(400).json({ success: false, error: 'Only agent tasks can be started' });
-    }
-
-    let environmentId = task.assignedEnvironmentId;
-    if (!environmentId) {
-      const connected = await findConnectedEnvironmentForUser(req);
-      if (!connected) {
-        return res
-          .status(400)
-          .json({ success: false, error: 'No connected environments available' });
-      }
-      environmentId = connected;
-    } else {
-      try {
-        await requireEnvironmentAccess(req, environmentId);
-      } catch (err) {
-        return handleAccessError(err, res);
-      }
-    }
-
-    const envStatus = await environmentService.getStatus(environmentId);
-    if (envStatus !== 'connected') {
-      try {
-        await environmentService.connect(environmentId);
-      } catch {
-        return res
-          .status(400)
-          .json({ success: false, error: 'Failed to connect to environment' });
-      }
-    }
-
-    // Same idempotency guard as above, but covering the narrow window
-    // where the scheduler populated activeAgents but hasn't yet
-    // flipped the task row to `in_progress`.
-    const existingAgent = agentService.getAgentByTaskId(task.id);
-    if (existingAgent) {
-      return res.json({ success: true, data: task } as ApiResponse<Task>);
-    }
-
-    // (env, repo) single-slot: refuse to start if a different task is
-    // already holding the working tree on this pair.
-    if (task.repositoryId) {
-      const holder = await findTaskHoldingEnvRepoSlot(
-        db,
-        environmentId,
-        task.repositoryId,
-        task.id
-      );
-      if (holder) {
-        return res.status(409).json({
-          success: false,
-          error: `Repository is busy on this environment — task "${holder.title}" is ${holder.status}. Approve or reject it before starting another.`,
-        });
-      }
-    }
-
-    // Flip the task to `in_progress` BEFORE we do the slow git prep
-    // (fetch + pull + checkout -b) — otherwise the task sits in
-    // `queued` for 10-60s from the UI's perspective. Git activity is
-    // already visible via the Git tab (enterTaskGitLog).
-    {
-      const now = new Date();
-      await db
-        .update(tasksTable)
-        .set({
-          status: 'in_progress',
-          assignedEnvironmentId: environmentId,
-          updatedAt: now,
-        })
-        .where(eq(tasksTable.id, task.id));
-      emitTaskStatus(task.workspaceId, task.id, 'in_progress');
-    }
-
-    // Branch slug derives from task.title. If the title is still the
-    // raw-prompt placeholder (LLM refinement hasn't landed yet because
-    // the user clicked Start within ~2s of Create), refine it inline
-    // here so the branch comes out clean — `fastowl/<id>-<slug>` looks
-    // bad with 30 chars of arbitrary prompt text.
-    if (task.prompt && looksLikePlaceholderTitle(task.title, task.prompt)) {
-      try {
-        const refined = await generateTaskTitle(task.prompt, environmentId);
-        if (refined && refined !== task.title) {
-          await db
-            .update(tasksTable)
-            .set({ title: refined, updatedAt: new Date() })
-            .where(eq(tasksTable.id, task.id));
-          task.title = refined;
-          emitTaskUpdate(task.workspaceId, task.id, {
-            title: refined,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      } catch (err) {
-        // Non-fatal — branch will fall back to the placeholder slug.
-        console.warn('[tasks] inline title refinement failed, branch slug may be ugly:', err);
-      }
-    }
-
-    let workingDirectory: string | undefined;
-    let taskBranch: string | undefined;
-
-    // Helper: any git-prep / agent-start failure below has to roll
-    // the task back out of in_progress, since we flipped it early.
-    const rollbackToFailed = async (error: string): Promise<void> => {
-      const now = new Date();
-      await db
-        .update(tasksTable)
-        .set({
-          status: 'failed',
-          result: { success: false, error },
-          completedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(tasksTable.id, task.id));
-      emitTaskStatus(task.workspaceId, task.id, 'failed', {
-        success: false,
-        error,
-      });
-    };
-
-    const gitContext = await resolveTaskGitContext(task, environmentId);
-    if (!gitContext && isAgentTask(task.type) && task.repositoryId) {
-      // Agent task tied to a repo, but the repo has no localPath.
-      // Refuse rather than silently running on whatever branch is
-      // checked out in the env's default working directory.
-      const msg =
-        "This task's repository has no local path configured. Set a local path for the repository in Settings before starting the task.";
-      await rollbackToFailed(msg);
-      return res.status(400).json({ success: false, error: msg });
-    }
-    if (gitContext) {
-      workingDirectory = gitContext.workingDirectory;
-      enterTaskGitLog(task.id);
-
-      if (task.branch) {
-        // Resume: checkout the existing task branch. Skip base sync —
-        // we don't want to rewrite history on work already in flight.
-        try {
-          await gitService.checkoutBranch(environmentId, task.branch, workingDirectory);
-          taskBranch = task.branch;
-        } catch (err) {
-          console.warn('Failed to checkout existing branch, will create fresh:', err);
-        }
-      }
-
-      if (!taskBranch) {
-        try {
-          taskBranch = await gitService.prepareTaskBranch({
-            environmentId,
-            taskId: task.id,
-            taskTitle: task.title,
-            workingDirectory,
-            baseBranch: gitContext.baseBranch,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          await rollbackToFailed(msg);
-          return res.status(400).json({ success: false, error: msg });
-        }
-      }
-    }
-
-    try {
-      const agent = await agentService.startAgent({
-        environmentId,
-        workspaceId: task.workspaceId,
-        taskId: task.id,
-        prompt: task.prompt || task.description,
-        workingDirectory,
-      });
-
-      // Task status was already flipped to in_progress up-front; just
-      // fill in the agent + branch references now that they exist.
-      const updateValues: Record<string, unknown> = {
-        assignedAgentId: agent.id,
-        updatedAt: new Date(),
-      };
-      if (taskBranch) updateValues.branch = taskBranch;
-
-      await db
-        .update(tasksTable)
-        .set(updateValues)
-        .where(eq(tasksTable.id, task.id));
-
-      const updatedRows = await db
-        .select()
-        .from(tasksTable)
-        .where(eq(tasksTable.id, task.id))
-        .limit(1);
-      const updatedTask = rowToTask(updatedRows[0]);
-      updatedTask.agentStatus = 'working';
-      updatedTask.agentAttention = 'none';
-      updatedTask.terminalOutput = '';
-
-      res.json({ success: true, data: updatedTask } as ApiResponse<Task>);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to start task';
-      console.error('Failed to start task:', err);
-      await rollbackToFailed(msg);
-      res.status(500).json({ success: false, error: msg });
-    }
-  });
-
-  // Continue an exited conversation with a new prompt. Spawns a
-  // fresh CLI child with `--resume <claudeSessionId>` and the prompt.
-  // Task flips back from awaiting_review/completed/failed → in_progress.
-  router.post('/:id/continue', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const { prompt } = req.body as { prompt?: string };
-    if (!prompt || !prompt.trim()) {
-      return res.status(400).json({ success: false, error: 'prompt is required' });
-    }
-
-    const db = getDbClient();
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-    const task = rowToTask(rows[0]);
-
-    // Idempotent: if the task has come back to in_progress (e.g. the
-    // scheduler beat us), treat the call as accepted — the user's
-    // next input action will go through the live input pipe.
-    if (task.status === 'in_progress') {
-      return res.json({ success: true, data: task } as ApiResponse<Task>);
-    }
-
-    try {
-      await agentService.continueTask({
-        taskId: task.id,
-        workspaceId: task.workspaceId,
-        prompt,
-      });
-      const updatedRows = await db
-        .select()
-        .from(tasksTable)
-        .where(eq(tasksTable.id, task.id))
-        .limit(1);
-      res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to continue task';
-      res.status(400).json({ success: false, error: msg });
-    }
-  });
-
-  // Send input to a running task
-  router.post('/:id/input', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const { input } = req.body as { input: string };
-    if (!input) {
-      return res.status(400).json({ success: false, error: 'Input is required' });
-    }
-
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
     const task = rowToTask(rows[0]);
     if (task.status !== 'in_progress') {
-      return res.status(400).json({ success: false, error: 'Task is not running' });
+      await taskQueueService.queueTask(task.id);
     }
-
-    const activeAgent = agentService.getAgentByTaskId(task.id);
-    if (!activeAgent) {
-      return res.status(400).json({ success: false, error: 'No active agent for this task' });
-    }
-
-    try {
-      agentService.sendInput(activeAgent.id, input);
-      res.json({ success: true } as ApiResponse<void>);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to send input';
-      res.status(500).json({ success: false, error: msg });
-    }
-  });
-
-  // Mark a running task as ready for review.
-  router.post('/:id/ready-for-review', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
-    const task = rowToTask(rows[0]);
-    if (task.status !== 'in_progress') {
-      return res.status(400).json({ success: false, error: 'Task is not running' });
-    }
-    if (!isAgentTask(task.type)) {
-      return res
-        .status(400)
-        .json({ success: false, error: 'Only agent tasks can be marked ready for review' });
-    }
-
-    const activeAgent = agentService.getAgentByTaskId(task.id);
-    if (activeAgent) agentService.stopAgent(activeAgent.id);
-
-    // Auto-commit the branch's pending work + snapshot the file
-    // diffs onto metadata before flipping status. autoCommit returns
-    // advanceOk=false on hard failures (dirty working tree after
-    // commit, no work landed at all) — when that happens we DO NOT
-    // flip to awaiting_review. Pre-hardening, this path silently
-    // advanced and the user arrived at awaiting_review with
-    // uncommitted files; the Reject button would then discard them.
-    const result = await autoCommitAndSnapshot(task.id);
-    if (!result.advanceOk) {
-      const reason =
-        result.committed === false
-          ? `${result.reason}${result.error ? ` — ${result.error}` : ''}`
-          : 'unknown';
-      return res.status(409).json({
-        success: false,
-        error: `Auto-commit refused to advance: ${reason}. Task left in_progress; see metadata.autoCommit for details.`,
-      });
-    }
-
-    await db
-      .update(tasksTable)
-      .set({ status: 'awaiting_review', updatedAt: new Date() })
-      .where(eq(tasksTable.id, task.id));
-
-    emitTaskStatus(task.workspaceId, task.id, 'awaiting_review');
-
-    const updatedRows = await db
+    const updated = await db
       .select()
       .from(tasksTable)
       .where(eq(tasksTable.id, task.id))
       .limit(1);
-    res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
+    res.json({ success: true, data: rowToTask(updated[0]) } as ApiResponse<Task>);
   });
 
-  // Approve an awaiting_review task → push branch → open PR → completed.
-  //
-  // The actual commit + file-diff snapshot already happened on the
-  // `in_progress → awaiting_review` transition (see
-  // autoCommitAndSnapshot). This handler is the "ship it" button:
-  // push the branch, open the PR, mark the task completed, clean up
-  // the local branch.
-  //
-  // Defensive: we still call autoCommitAndSnapshot on entry. Covers
-  // three cases:
-  //   1. Pre-refactor tasks that landed in awaiting_review before
-  //      this flow existed.
-  //   2. The env was offline at transition time, so autoCommit
-  //      returned an error — a retry now (env back up) commits.
-  //   3. The user made small manual tweaks in awaiting_review and
-  //      wants them shipped with the same task.
-  router.post('/:id/approve', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-    if (rows[0].status !== 'awaiting_review') {
-      return res.status(400).json({ success: false, error: 'Task is not awaiting review' });
-    }
-
-    const task = rowToTask(rows[0]);
-
-    // Non-agent tasks (manual) — just flip to completed.
-    if (isAgentTask(task.type)) {
-      if (!task.branch) {
-        return res.status(400).json({
-          success: false,
-          error:
-            'Task has no branch. It was likely started before branch-per-task was wired up. Reject and re-queue, then approve the new run.',
-        });
-      }
-      // Tasks are supposed to pick up an env on /start, but a task can
-      // reach awaiting_review without one (scheduler rolled back, env
-      // got deleted mid-flight, task created via a code path that
-      // didn't persist it). Rather than refuse the approve, mirror
-      // /start's behaviour and attach any connected env we can find,
-      // then keep going. Log it so we can track down the upstream
-      // anomaly — the UI would otherwise leave the user dead in the
-      // water with no way to ship their work.
-      if (!task.assignedEnvironmentId) {
-        const fallbackEnv = await findConnectedEnvironmentForUser(req);
-        if (!fallbackEnv) {
-          return res.status(400).json({
-            success: false,
-            error:
-              'Task has no assigned environment and no connected environment is available. Connect an environment in Settings.',
-          });
-        }
-        console.warn(
-          `[tasks] approve ${task.id.slice(0, 8)}: task lacked assignedEnvironmentId; attaching ${fallbackEnv}`
-        );
-        await db
-          .update(tasksTable)
-          .set({ assignedEnvironmentId: fallbackEnv, updatedAt: new Date() })
-          .where(eq(tasksTable.id, task.id));
-        task.assignedEnvironmentId = fallbackEnv;
-      }
-
-      const gitContext = await resolveTaskGitContext(task, task.assignedEnvironmentId);
-      if (!gitContext) {
-        return res.status(400).json({
-          success: false,
-          error:
-            "Task's repository has no local path configured. Set one in Settings → Repositories before approving.",
-        });
-      }
-
-      const workingDirectory = gitContext.workingDirectory;
-      const envId = task.assignedEnvironmentId;
-      const baseBranch = gitContext.baseBranch;
-      const tag = `[tasks] approve ${task.id.slice(0, 8)}`;
-      console.log(
-        `${tag}: starting · env=${envId} wd=${workingDirectory} branch=${task.branch}`
-      );
-      enterTaskGitLog(task.id);
-
-      // Safety net: commit anything still pending (see block comment
-      // above for why). Returns non-fatally on empty-changeset.
-      await autoCommitAndSnapshot(task.id);
-
-      try {
-        console.log(`${tag}: pushing branch ${task.branch} to origin`);
-        await gitService.pushBranch(envId, task.branch, workingDirectory);
-        console.log(`${tag}: push done`);
-
-        // Open the PR synchronously. Used to be fire-and-forget, but
-        // the task was flipping to `completed` before the PR existed,
-        // which read to the user as "approve finished, nothing got
-        // published." Awaiting keeps the task in `awaiting_review`
-        // until the PR is up (or openPullRequestForTask has written a
-        // pullRequestError onto metadata for the retry button). All
-        // failure modes are internalised — the call never throws.
-        await openPullRequestForTask(task.id);
-
-        // Final guard: working tree must be clean before we call this
-        // task done. Catches anything subtle that left modifications
-        // behind after the safety-net commit.
-        const stillDirty = await gitService.hasUncommittedChanges(envId, workingDirectory);
-        if (stillDirty) {
-          return res.status(500).json({
-            success: false,
-            error:
-              'Push completed but working tree still has uncommitted changes. Task left in awaiting_review.',
-          });
-        }
-
-        // Pass the task branch explicitly — the snapshot reflects
-        // `<base>..<branch>` (committed range), not the working tree.
-        // This is the one called before branch cleanup; if we relied
-        // on the working tree and anything earlier had checked out
-        // base, the saved snapshot would be empty and the completed
-        // task's Files tab would go blank (the "PR made, no files
-        // visible" regression). The mutex inside writeFinalFilesSnapshot
-        // re-reads metadata fresh, so no race with the PR writer.
-        await writeFinalFilesSnapshot(
-          task.id,
-          envId,
-          baseBranch,
-          workingDirectory,
-          tag,
-          task.branch
-        );
-
-        // Cleanup: return to base branch + drop the local task branch
-        // so the env+repo slot is free.
-        try {
-          await gitService.checkoutBranch(envId, baseBranch, workingDirectory);
-          await gitService.forceDeleteBranch(envId, task.branch, workingDirectory);
-          console.log(`${tag}: cleanup done · checked out ${baseBranch}, deleted ${task.branch}`);
-        } catch (cleanupErr) {
-          console.warn(`${tag}: local branch cleanup failed (non-fatal):`, cleanupErr);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`${tag}: push/PR failed:`, err);
-        return res.status(500).json({
-          success: false,
-          error: `Push/PR failed: ${msg}. Task left in awaiting_review.`,
-        });
-      }
-    }
-
-    const now = new Date();
-    await db
-      .update(tasksTable)
-      .set({ status: 'completed', completedAt: now, updatedAt: now })
-      .where(eq(tasksTable.id, req.params.id));
-
-    emitTaskStatus(task.workspaceId, req.params.id, 'completed');
-
-    const updatedRows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
-  });
-
-  // Reject an awaiting_review task → stash rejected work to a backup
-  // ref → reset working tree to base → re-queue so the env+repo slot
-  // is usable again. The backup ref lets the user recover rejected
-  // work with `git checkout -b <name> refs/fastowl/rejected/<taskId>`.
-  router.post('/:id/reject', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-    if (rows[0].status !== 'awaiting_review') {
-      return res.status(400).json({ success: false, error: 'Task is not awaiting review' });
-    }
-
-    const task = rowToTask(rows[0]);
-
-    if (task.branch && task.assignedEnvironmentId) {
-      const gitContext = await resolveTaskGitContext(task, task.assignedEnvironmentId);
-      if (gitContext) {
-        const envId = task.assignedEnvironmentId;
-        const workingDirectory = gitContext.workingDirectory;
-        const baseBranch = gitContext.baseBranch;
-        // Audit every git command into the task's gitLog.
-        enterTaskGitLog(task.id);
-
-        try {
-          await gitService.stashToBackupRef(envId, 'rejected', task.id, workingDirectory);
-          await gitService.resetToBase(envId, baseBranch, workingDirectory);
-          // Delete the branch so a re-queue + retry gets a fresh
-          // prepareTaskBranch off the synced base.
-          try {
-            await gitService.forceDeleteBranch(envId, task.branch, workingDirectory);
-          } catch (err) {
-            console.warn('[tasks] reject: failed to delete rejected branch (continuing):', err);
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error('[tasks] reject: working-tree reset failed:', err);
-          return res.status(500).json({
-            success: false,
-            error: `Reset failed: ${msg}. Task left in awaiting_review.`,
-          });
-        }
-      }
-    }
-
-    await db
-      .update(tasksTable)
-      .set({
-        status: 'queued',
-        assignedAgentId: null,
-        // Clear branch so the re-queued task gets a fresh
-        // prepareTaskBranch run. The rejected work lives under
-        // refs/fastowl/rejected/<taskId> if the user wants it back.
-        branch: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(tasksTable.id, req.params.id));
-
-    emitTaskStatus(task.workspaceId, req.params.id, 'queued');
-
-    const updatedRows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
-  });
-
-  // Stop a running task
+  // Stop a running cloud task — drop its transcript stream and mark failed.
   router.post('/:id/stop', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -1055,14 +366,13 @@ export function taskRoutes(): Router {
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
-
     const task = rowToTask(rows[0]);
     if (task.status !== 'in_progress') {
       return res.status(400).json({ success: false, error: 'Task is not running' });
     }
 
-    const activeAgent = agentService.getAgentByTaskId(task.id);
-    if (activeAgent) agentService.stopAgent(activeAgent.id);
+    const provider = getCloudProvider(readCloudTaskProvider(task));
+    provider?.stopStreaming(task.id);
 
     const now = new Date();
     await db
@@ -1074,7 +384,6 @@ export function taskRoutes(): Router {
         updatedAt: now,
       })
       .where(eq(tasksTable.id, task.id));
-
     emitTaskStatus(task.workspaceId, task.id, 'failed', {
       success: false,
       error: 'Stopped by user',
@@ -1088,51 +397,8 @@ export function taskRoutes(): Router {
     res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
   });
 
-  // Get the diff of a task's work against the base branch
-  router.get('/:id/diff', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const rows = await db
-      .select({ branch: tasksTable.branch })
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-    const branch = rows[0].branch;
-    if (!branch) {
-      return res.status(400).json({ success: false, error: 'Task has no branch to diff' });
-    }
-
-    const context = await resolveTaskDiffContext(req);
-    if (!context.ok) {
-      return res.status(context.status).json({ success: false, error: context.error });
-    }
-
-    try {
-      const diff = await gitService.getDiff(
-        context.environmentId,
-        branch,
-        context.baseBranch,
-        context.workingDirectory
-      );
-      res.json({ success: true, data: { diff } } as ApiResponse<{ diff: string }>);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to get diff';
-      console.error('Failed to get diff:', err);
-      res.status(500).json({ success: false, error: msg });
-    }
-  });
-
-  // Retry creating a PR for a task whose first attempt errored
-  // (usually a missing GH integration, a pre-existing PR, or a
-  // transient GH API failure). Re-runs openPullRequestForTask,
-  // which overwrites task.metadata.pullRequest or ...Error.
+  // Retry opening a PR for a task. Dormant for cloud providers that open
+  // their own PR (PostHog Code); kept for a future branch-only provider.
   router.post('/:id/retry-pr', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -1149,16 +415,6 @@ export function taskRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
     const task = rowToTask(rows[0]);
-    if (!task.branch) {
-      return res.status(400).json({
-        success: false,
-        error: 'Task has no branch — cannot create a PR.',
-      });
-    }
-
-    // Run synchronously so the desktop gets a meaningful response
-    // (success → new PR URL, failure → the error the user saw before
-    // but now also persisted on metadata).
     await openPullRequestForTask(task.id);
 
     const updated = await db
@@ -1174,24 +430,19 @@ export function taskRoutes(): Router {
       } | undefined) ?? {};
 
     if (prState.pullRequest) {
-      return res.json({
-        success: true,
-        data: { pullRequest: prState.pullRequest },
-      });
+      return res.json({ success: true, data: { pullRequest: prState.pullRequest } });
     }
     return res.status(502).json({
       success: false,
-      error: prState.pullRequestError || 'PR creation failed',
+      error: prState.pullRequestError || 'PR creation is not available for this provider',
     });
   });
 
   // On-demand log fetch for a PostHog Code (cloud) task. The poller only
-  // streams `in_progress` tasks, so opening a finished task — or a
-  // running one before the first poll tick — would otherwise show a blank
-  // transcript. This resolves the real run id (older tasks mis-stored the
-  // task id), then kicks the streamer: a live SSE tail for running runs,
-  // or a one-shot durable S3 backfill for terminal ones. Events flow back
-  // over the existing `task:event` WS, so we just return ok.
+  // streams `in_progress` tasks, so opening a finished task — or a running
+  // one before the first poll tick — would otherwise show a blank
+  // transcript. Resolves the real run id, then kicks the streamer (live
+  // SSE tail or one-shot S3 backfill). Events flow over `task:event`.
   router.post('/:id/refresh-logs', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -1211,9 +462,7 @@ export function taskRoutes(): Router {
     const meta = (task.metadata ?? {}) as Record<string, unknown>;
     const posthogTaskId = meta.posthogTaskId as string | undefined;
     if (!posthogTaskId) {
-      return res
-        .status(400)
-        .json({ success: false, error: 'Not a PostHog Code task.' });
+      return res.status(400).json({ success: false, error: 'Not a PostHog Code task.' });
     }
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) {
@@ -1237,17 +486,12 @@ export function taskRoutes(): Router {
       });
     }
     if (!runId) {
-      return res
-        .status(409)
-        .json({ success: false, error: 'The run has not started yet.' });
+      return res.status(409).json({ success: false, error: 'The run has not started yet.' });
     }
 
     if (runId !== meta.posthogRunId) {
       await patchTaskMetadata(task.id, (existing) => ({ ...existing, posthogRunId: runId }));
     }
-    console.log(
-      `[posthogCode] refresh-logs: task ${task.id.slice(0, 8)} → run ${runId.slice(0, 8)} (terminal=${terminal})`,
-    );
     postHogCodeStreamer.ensure({
       taskId: task.id,
       workspaceId: task.workspaceId,
@@ -1255,20 +499,13 @@ export function taskRoutes(): Router {
       posthogRunId: runId,
       backfillOnly: terminal,
     });
-    // If a stream is already live (poller-owned), it may have replayed the
-    // run before this client opened the task — those events were broadcast
-    // and missed. Persist the in-memory transcript so the client's
-    // follow-up GET /:id hydrates the full history.
     await postHogCodeStreamer.flushNow(task.id);
     return res.json({ success: true });
   });
 
-  // Send a follow-up message to a PostHog Code (cloud) task. If the latest
-  // run is still in_progress we inject the message into the live agent
-  // session (`runs/:id/command`); if it has finished we start a fresh run
-  // that resumes the prior session with the message (`run/` +
-  // resume_from_run_id). The task flips back to in_progress and its
-  // transcript keeps the prior history with the message appended.
+  // Send a follow-up message to a PostHog Code (cloud) task. Live run →
+  // inject into the running session; finished run → resume into a fresh
+  // run carrying the message. Task flips back to in_progress.
   router.post('/:id/message', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -1293,7 +530,7 @@ export function taskRoutes(): Router {
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
-    const task = rowToTask(rows[0], { includeTerminalOutput: true });
+    const task = rowToTask(rows[0], { includeTranscript: true });
     const meta = (task.metadata ?? {}) as Record<string, unknown>;
     const posthogTaskId = meta.posthogTaskId as string | undefined;
     if (!posthogTaskId) {
@@ -1328,8 +565,6 @@ export function taskRoutes(): Router {
 
     try {
       if (runStatus === 'in_progress') {
-        // Live run — inject the message into the running agent. The active
-        // stream surfaces the agent's reaction; leave status as-is.
         await client.sendRunCommand(posthogTaskId, runId, {
           method: 'user_message',
           params: { content: message },
@@ -1342,7 +577,6 @@ export function taskRoutes(): Router {
         return res.json({ success: true });
       }
 
-      // Finished run — resume into a fresh run carrying the message.
       const resumed = await client.resumeRun(posthogTaskId, {
         resumeFromRunId: runId,
         message,
@@ -1352,9 +586,6 @@ export function taskRoutes(): Router {
       });
       const newRunId = resumed.latest_run?.id ?? runId;
 
-      // Echo the user's message into the transcript (continuing seqs) and
-      // flip the task back to in_progress; the streamer appends the new
-      // run's events onto this seed so prior history stays visible.
       const existing = Array.isArray(task.transcript)
         ? (task.transcript as AgentEvent[])
         : [];
@@ -1402,200 +633,6 @@ export function taskRoutes(): Router {
     }
   });
 
-  // Read the audit log of every git command FastOwl ran on this
-  // task's behalf — drives the desktop Git tab.
-  router.get('/:id/git-log', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const entries = await getGitLog(req.params.id);
-    res.json({ success: true, data: { entries } } as ApiResponse<{
-      entries: Awaited<ReturnType<typeof getGitLog>>;
-    }>);
-  });
-
-  // List files changed on this task's branch vs base, one entry per path.
-  // Drives the desktop Files tab.
-  //
-  // Read policy (depends on task state):
-  //   - completed: snapshot only (branch + worktree are gone).
-  //   - awaiting_review: try live git, fall back to snapshot if the
-  //     env's offline or git fails. Autocommit populates the snapshot
-  //     on the transition, so fallback is always fresh.
-  //   - everything else (in_progress etc.): live git only. We don't
-  //     fall back to a stale snapshot from a prior round — showing
-  //     old files would be more confusing than showing none.
-  //
-  // `source` in the response is `'live' | 'cache'`, so the UI can
-  // surface a "showing cached diffs — env offline" banner when it
-  // matters.
-  router.get('/:id/diff/files', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-
-    const taskState = await readTaskDiffState(req.params.id);
-    if (!taskState) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
-    if (taskState.status === 'completed') {
-      const files = snapshotAsFileList(taskState.snapshot);
-      return res.json({
-        success: true,
-        data: { files, source: 'cache' as const },
-      } as ApiResponse<{ files: typeof files; source: 'live' | 'cache' }>);
-    }
-
-    const context = await resolveTaskDiffContext(req);
-    if (context.ok) {
-      try {
-        const files = await gitService.getChangedFiles(
-          context.environmentId,
-          context.baseBranch,
-          context.workingDirectory
-        );
-        return res.json({
-          success: true,
-          data: { files, source: 'live' as const },
-        } as ApiResponse<{ files: typeof files; source: 'live' | 'cache' }>);
-      } catch (err) {
-        console.warn(
-          `[tasks] diff/files live query failed for ${req.params.id}, trying cache:`,
-          err
-        );
-      }
-    }
-
-    // Live path unavailable. Fall back to snapshot only for awaiting_review —
-    // in_progress tasks shouldn't read a stale snapshot from a previous round.
-    if (taskState.status === 'awaiting_review' && taskState.snapshot) {
-      const files = snapshotAsFileList(taskState.snapshot);
-      return res.json({
-        success: true,
-        data: { files, source: 'cache' as const },
-      } as ApiResponse<{ files: typeof files; source: 'live' | 'cache' }>);
-    }
-
-    if (!context.ok) {
-      return res.status(context.status).json({ success: false, error: context.error });
-    }
-    return res.status(500).json({ success: false, error: 'Failed to list changed files' });
-  });
-
-  // Unified diff for a single file on this task's branch vs base.
-  // Same state-aware policy as /diff/files.
-  router.get('/:id/diff/file', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const pathParam = req.query.path;
-    if (typeof pathParam !== 'string' || !pathParam) {
-      return res.status(400).json({ success: false, error: 'path query param is required' });
-    }
-
-    const taskState = await readTaskDiffState(req.params.id);
-    if (!taskState) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
-    const cacheDiff = (): string => {
-      const hit = taskState.snapshot?.find((f) => f.path === pathParam);
-      return hit?.diff ?? '';
-    };
-
-    if (taskState.status === 'completed') {
-      return res.json({
-        success: true,
-        data: { diff: cacheDiff(), source: 'cache' as const },
-      } as ApiResponse<{ diff: string; source: 'live' | 'cache' }>);
-    }
-
-    const context = await resolveTaskDiffContext(req);
-    if (context.ok) {
-      try {
-        const diff = await gitService.getFileDiff(
-          context.environmentId,
-          context.baseBranch,
-          pathParam,
-          context.workingDirectory
-        );
-        return res.json({
-          success: true,
-          data: { diff, source: 'live' as const },
-        } as ApiResponse<{ diff: string; source: 'live' | 'cache' }>);
-      } catch (err) {
-        console.warn(
-          `[tasks] diff/file live query failed for ${req.params.id}:${pathParam}, trying cache:`,
-          err
-        );
-      }
-    }
-
-    if (taskState.status === 'awaiting_review' && taskState.snapshot) {
-      return res.json({
-        success: true,
-        data: { diff: cacheDiff(), source: 'cache' as const },
-      } as ApiResponse<{ diff: string; source: 'live' | 'cache' }>);
-    }
-
-    if (!context.ok) {
-      return res.status(context.status).json({ success: false, error: context.error });
-    }
-    return res.status(500).json({ success: false, error: 'Failed to get file diff' });
-  });
-
-  // Get terminal output for a task. Returns the PTY transcript (bytes)
-  // and the structured transcript (JSONL events) — caller decides which
-  // to render based on `metadata.runtime`.
-  router.get('/:id/terminal', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const rows = await db
-      .select({
-        status: tasksTable.status,
-        terminalOutput: tasksTable.terminalOutput,
-        transcript: tasksTable.transcript,
-        metadata: tasksTable.metadata,
-      })
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-
-    // Slice 4c: legacy terminal_output column kept for historical PTY
-    // rows only. Live tasks write to `transcript` via the structured
-    // renderer; nothing updates terminal_output anymore.
-    const terminalOutput = rows[0].terminalOutput || '';
-
-    res.json({
-      success: true,
-      data: {
-        terminalOutput,
-        transcript: (rows[0].transcript as Task['transcript']) ?? undefined,
-        runtime:
-          (rows[0].metadata as { runtime?: string } | null | undefined)?.runtime ??
-          'pty',
-      },
-    } as ApiResponse<{
-      terminalOutput: string;
-      transcript?: Task['transcript'];
-      runtime: string;
-    }>);
-  });
-
   // Delete task
   router.delete('/:id', async (req, res) => {
     try {
@@ -1612,8 +649,8 @@ export function taskRoutes(): Router {
         .limit(1);
       const task = rows[0] ? rowToTask(rows[0]) : null;
       if (task && task.status === 'in_progress') {
-        const activeAgent = agentService.getAgentByTaskId(task.id);
-        if (activeAgent) agentService.stopAgent(activeAgent.id);
+        const provider = getCloudProvider(readCloudTaskProvider(task));
+        provider?.stopStreaming(task.id);
       }
 
       const result = await db
@@ -1623,16 +660,9 @@ export function taskRoutes(): Router {
       if (result.length === 0) {
         return res.status(404).json({ success: false, error: 'Task not found' });
       }
-      // Broadcast so other connected clients (and as defense in depth,
-      // the originating client) drop the row from their local state.
-      if (task) {
-        emitTaskDeleted(task.workspaceId, task.id);
-      }
+      if (task) emitTaskDeleted(task.workspaceId, task.id);
       res.json({ success: true } as ApiResponse<void>);
     } catch (err) {
-      // Surface DB errors (FK violations, RLS denials, etc.) — the old
-      // handler swallowed them as a generic 500 with no body, which made
-      // "delete silently fails" reports very hard to debug.
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[tasks] delete failed for ${req.params.id}:`, err);
       res.status(500).json({ success: false, error: `Delete failed: ${message}` });
@@ -1642,143 +672,20 @@ export function taskRoutes(): Router {
   return router;
 }
 
-/**
- * Pick an auto-assignable environment for the current user. Returns the
- * environment id of the first connected env, or null when they have none.
- * Kept here rather than on `environmentService` because the service is
- * stateless re: users and we want the scoping explicit at the call site.
- */
-/**
- * Resolve the env + repo working directory + base branch for a task —
- * the stuff every per-file diff route needs before it can shell out.
- * Returns a discriminated union so call sites can surface the right
- * HTTP status without duplicating the lookup dance.
- */
-async function resolveTaskDiffContext(
-  req: import('express').Request
-): Promise<
-  | { ok: true; environmentId: string; workingDirectory: string; baseBranch: string }
-  | { ok: false; status: number; error: string }
-> {
-  const db = getDbClient();
-  const rows = await db
-    .select()
-    .from(tasksTable)
-    .where(eq(tasksTable.id, req.params.id))
-    .limit(1);
-  if (!rows[0]) return { ok: false, status: 404, error: 'Task not found' };
-  const task = rowToTask(rows[0]);
-  if (!task.branch) {
-    return { ok: false, status: 400, error: 'Task has no branch to diff' };
-  }
-
-  let environmentId = task.assignedEnvironmentId;
-  if (!environmentId) {
-    const connected = await findConnectedEnvironmentForUser(req);
-    if (!connected) {
-      return { ok: false, status: 400, error: 'No connected environment to compute diff' };
-    }
-    environmentId = connected;
-  } else {
-    try {
-      await requireEnvironmentAccess(req, environmentId);
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Forbidden') {
-        return { ok: false, status: 403, error: 'Forbidden' };
-      }
-      return { ok: false, status: 500, error: err instanceof Error ? err.message : 'Access check failed' };
-    }
-  }
-
-  const gitContext = await resolveTaskGitContext(task, environmentId);
-  if (!gitContext) {
-    return {
-      ok: false,
-      status: 400,
-      error:
-        'Could not resolve a git working directory for this task. ' +
-        'Either register a repository with a local path, or configure the environment with a workingDirectory that points at a git checkout.',
-    };
-  }
-
+/** Derive a friendly-ish title/description/priority from a prompt. */
+function deriveTaskMetadata(prompt: string): GenerateTaskMetadataResponse {
+  const firstLine = prompt.split('\n')[0]?.trim() ?? '';
+  const title = (firstLine || prompt).slice(0, 60).trim() || 'New Task';
   return {
-    ok: true,
-    environmentId,
-    workingDirectory: gitContext.workingDirectory,
-    baseBranch: gitContext.baseBranch,
+    title,
+    description: prompt.slice(0, 200).trim(),
+    suggestedPriority: 'medium',
   };
-}
-
-async function findConnectedEnvironmentForUser(req: import('express').Request): Promise<string | null> {
-  const user = assertUser(req);
-  const db = getDbClient();
-  const rows = await db
-    .select({ id: environmentsTableRef.id })
-    .from(environmentsTableRef)
-    .where(
-      and(
-        eq(environmentsTableRef.ownerId, user.id),
-        eq(environmentsTableRef.status, 'connected')
-      )
-    )
-    .limit(1);
-  return rows[0]?.id ?? null;
-}
-
-interface FinalFileEntry {
-  path: string;
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
-  added: number;
-  removed: number;
-  binary: boolean;
-  diff?: string;
-}
-
-/**
- * Read the task's status and file-diff snapshot in one query — both
- * are needed on every Files-tab request to pick between the live-git
- * path and the cached snapshot.
- */
-async function readTaskDiffState(
-  taskId: string
-): Promise<{ status: TaskStatus; snapshot: FinalFileEntry[] | null } | null> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ status: tasksTable.status, metadata: tasksTable.metadata })
-    .from(tasksTable)
-    .where(eq(tasksTable.id, taskId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  const metadata = row.metadata as Record<string, unknown> | undefined;
-  const finalFiles = metadata?.finalFiles;
-  return {
-    status: row.status as TaskStatus,
-    snapshot: Array.isArray(finalFiles) ? (finalFiles as FinalFileEntry[]) : null,
-  };
-}
-
-/**
- * Strip the per-file unified diff off each snapshot entry — the list
- * endpoint only returns metadata, the per-file endpoint is where the
- * diff text is served.
- */
-function snapshotAsFileList(
-  snapshot: FinalFileEntry[] | null
-): Array<Omit<FinalFileEntry, 'diff'>> {
-  if (!snapshot) return [];
-  return snapshot.map((f) => ({
-    path: f.path,
-    status: f.status,
-    added: f.added,
-    removed: f.removed,
-    binary: f.binary,
-  }));
 }
 
 function rowToTask(
   row: typeof tasksTable.$inferSelect,
-  opts: { includeTerminalOutput?: boolean } = {}
+  opts: { includeTranscript?: boolean } = {}
 ): Task {
   return {
     id: row.id,
@@ -1791,15 +698,13 @@ function rowToTask(
     prompt: row.prompt ?? undefined,
     repositoryId: row.repositoryId ?? undefined,
     branch: row.branch ?? undefined,
-    assignedAgentId: row.assignedAgentId ?? undefined,
     assignedEnvironmentId: row.assignedEnvironmentId ?? undefined,
     result: (row.result as Task['result']) ?? undefined,
     metadata: (row.metadata as Task['metadata']) ?? undefined,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : undefined,
-    terminalOutput: opts.includeTerminalOutput ? row.terminalOutput || undefined : undefined,
-    transcript: opts.includeTerminalOutput
+    transcript: opts.includeTranscript
       ? ((row.transcript as Task['transcript']) ?? undefined)
       : undefined,
   };
