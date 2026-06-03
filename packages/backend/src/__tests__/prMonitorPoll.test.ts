@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { prMonitorService } from '../services/prMonitor.js';
 import { githubService } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
+import * as websocketModule from '../services/websocket.js';
 import {
   setFocused,
   markRefreshed,
@@ -355,6 +356,39 @@ describe('prMonitor — poll orchestration', () => {
       .where(eq(pullRequestsTable.id, 'pr-2'));
     expect(rows[0].state).toBe('merged');
     expect(rows[0].mergedAt?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('emits pull_request:updated when a PR leaves open, so the list drops it live', async () => {
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-2',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 2,
+      state: 'open',
+      lastPolledAt: new Date(),
+      lastSummary: { headBranch: 'feature/b' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    // #2 auto-merged upstream — gone from the search, GitHub reports merged.
+    mockSearch([]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
+      state: 'closed',
+      merged: true,
+      merged_at: '2026-01-02T00:00:00Z',
+    } as never);
+    const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+    await prMonitorService.forcePoll();
+
+    const merged = emitSpy.mock.calls.find(
+      ([, payload]) => payload.id === 'pr-2' && payload.state === 'merged'
+    );
+    expect(merged).toBeDefined();
   });
 
   it('marks tracked rows as closed when GitHub reports closed (not merged)', async () => {

@@ -494,7 +494,14 @@ class PRMonitorService extends EventEmitter {
     seenNumbers: number[]
   ): Promise<void> {
     const rows = await this.db
-      .select({ number: pullRequestsTable.number, id: pullRequestsTable.id })
+      .select({
+        number: pullRequestsTable.number,
+        id: pullRequestsTable.id,
+        taskId: pullRequestsTable.taskId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        lastSummary: pullRequestsTable.lastSummary,
+      })
       .from(pullRequestsTable)
       .where(
         and(
@@ -536,6 +543,19 @@ class PRMonitorService extends EventEmitter {
         .update(pullRequestsTable)
         .set({ state: nextState, mergedAt, updatedAt: new Date() })
         .where(eq(pullRequestsTable.id, row.id));
+      // Tell the desktop the PR left "open" (merged/closed upstream, incl.
+      // auto-merge) so the open-only GitHub list drops the row live, instead
+      // of waiting for the user to open or refresh it.
+      emitPullRequestUpdated(workspaceId, {
+        id: row.id,
+        taskId: row.taskId,
+        repositoryId: repo.id,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+        state: nextState,
+        lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+      });
     }
   }
 

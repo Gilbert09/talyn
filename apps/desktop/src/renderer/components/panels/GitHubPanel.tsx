@@ -313,10 +313,11 @@ export function GitHubPanel() {
       setRows((prev) => {
         const idx = prev.findIndex((r) => r.id === p.id);
         if (idx === -1) {
-          // New PR — refetch the whole list rather than hand-merging
-          // (we'd need workspaceId/repositoryId to insert, and the
-          // backend already enforces ordering by lastPolledAt).
-          if (currentWorkspaceId) {
+          // The list only holds open PRs, so a non-open echo for a row we
+          // don't have is a no-op. A new *open* PR triggers a refetch
+          // rather than a hand-merge (we'd need workspaceId/repositoryId
+          // to insert, and the backend already orders by lastPolledAt).
+          if (p.state === 'open' && currentWorkspaceId) {
             api.pullRequests
               .list({
                 workspaceId: currentWorkspaceId,
@@ -327,6 +328,11 @@ export function GitHubPanel() {
               .catch(() => {});
           }
           return prev;
+        }
+        // A row that left "open" (merged/closed upstream, incl. auto-merge)
+        // no longer belongs in this open-only list — drop it.
+        if (p.state !== 'open') {
+          return prev.filter((r) => r.id !== p.id);
         }
         const next = prev.slice();
         next[idx] = {
