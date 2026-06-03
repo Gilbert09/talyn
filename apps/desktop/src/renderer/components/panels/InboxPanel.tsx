@@ -28,7 +28,6 @@ const typeIcons: Record<InboxItemType, React.ElementType> = {
   pr_comment: MessageSquare,
   ci_failure: AlertCircle,
   pr_ready: GitPullRequest,
-  slack_mention: MessageSquare,
   posthog_alert: AlertCircle,
   custom: Clock,
 };

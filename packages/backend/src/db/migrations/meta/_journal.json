@@ -127,6 +127,13 @@
 			"when": 1784160000001,
 			"tag": "0017_cloud_only",
 			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "7",
+			"when": 1784160000002,
+			"tag": "0018_drop_repo_local_path",
+			"breakpoints": true
 		}
 	]
 }

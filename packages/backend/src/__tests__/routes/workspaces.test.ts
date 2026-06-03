@@ -75,10 +75,7 @@ describe('routes/workspaces', () => {
       const body = await res.json();
       expect(body.data.name).toBe('My Workspace');
       expect(body.data.description).toBe('desc');
-      expect(body.data.settings).toEqual({
-        autoAssignTasks: true,
-        maxConcurrentAgents: 3,
-      });
+      expect(body.data.settings).toEqual({});
       expect(body.data.repos).toEqual([]);
       expect(body.data.integrations).toEqual({});
     });
@@ -159,18 +156,19 @@ describe('routes/workspaces', () => {
         id: 'a',
         ownerId: TEST_USER_ID,
         name: 'Alpha',
-        settings: { autoAssignTasks: true, maxConcurrentAgents: 3 },
+        settings: { keep: 'a', replace: 'old' },
       });
       const res = await fetch(`${serverUrl}/workspaces/a`, {
         method: 'PATCH',
         headers: authHeaders,
-        body: JSON.stringify({ settings: { maxConcurrentAgents: 5 } }),
+        body: JSON.stringify({ settings: { replace: 'new' } }),
       });
       expect(res.status).toBe(200);
       const body = await res.json();
+      // Partial settings PATCH merges into the existing blob.
       expect(body.data.settings).toEqual({
-        autoAssignTasks: true, // preserved
-        maxConcurrentAgents: 5, // overridden
+        keep: 'a', // preserved
+        replace: 'new', // overridden
       });
     });
 

@@ -1,8 +1,10 @@
 # FastOwl — Claude Context
 
-FastOwl is a desktop "mission control" app for AI-assisted software engineering. It orchestrates multiple Claude agents across environments (local, SSH VMs, dev containers), automates routine work, and provides a prioritized inbox of items needing human attention.
+FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs, surfaces the ones needing attention in a prioritized inbox, and delegates fix/respond/review work to cloud providers (PostHog Code today; Codex Cloud / Claude Routines planned) that run the agent loop on their own sandbox and open a PR.
 
-**Target user**: engineers who use Claude heavily across multiple machines simultaneously.
+**As of the cloud-only refactor (June 2026)** the app no longer runs anything locally: the bundled daemon, local/remote environments, in-process Claude agents, permission gates, backlog/continuous-build, and the per-task git working tree are all gone. Every task is a cloud task. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
+
+**Target user**: engineers who live in GitHub PRs and want to hand routine PR work to cloud agents.
 
 ## Git Workflow
 
@@ -32,13 +34,11 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 ## Core Concepts (at a glance)
 
 - **Workspace** — groups related repos + integrations (e.g., "PostHog" = `posthog/posthog` + `posthog/posthog.com` + `posthog/charts`)
-- **Environment** — a machine where work runs. Two types, both daemon-backed over WS: `local` (bundled daemon on your Mac/Linux box) and `remote` (paired VM / workstation). Legacy `ssh`/`coder` and in-process `local`-spawn are gone.
-- **Daemon** — a `@fastowl/daemon` process that owns child-process pipes; dials the backend over WebSocket. Local daemon ships bundled with the desktop app and runs as a launchd/systemd user service (survives app quit).
-- **Task** — the unit of work. Types: `code_writing`, `pr_response`, `pr_review`, `manual`. Lifecycle: `pending` → `queued` → `in_progress` → `awaiting_review` → `completed`
-- **Tasks own agents** — users manage tasks; agents are internal, spawned per task
-- **Approval gates** — agent tasks land in `awaiting_review` on clean exit; user approves/rejects before anything pushes to the world
-- **Git branch per task** — `fastowl/<id>-<slug>`; isolation + resume via stash/checkout
-- **Inbox** — prioritized queue of items needing human attention
+- **Cloud provider** — a vendor that runs the whole agent loop on its own sandbox and opens a PR. Pluggable behind `CloudTaskProvider` (`packages/backend/src/services/cloudProviders/`): a registry + per-provider `dispatch`/`reconcile`/credentials. PostHog Code is the only live provider; Codex Cloud / Claude Routines are drop-in (see [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)).
+- **Environment** — now just a **secret-free marker**, one auto-provisioned row per connected cloud provider. Its `type` (a `CloudProviderType`) is how a task resolves its provider; per-workspace credentials live on the `integrations` row. No daemon, no pairing.
+- **Task** — the unit of work, always delegated to a cloud provider. Types: `code_writing` (freeform prompt on a repo), `pr_response`, `pr_review`. Lifecycle: `queued` → `in_progress` → `completed`/`failed`. The cloud poller (`cloudProviders/poller.ts`) drives status + ingests the transcript; review happens on the provider's PR (no local `awaiting_review` gate).
+- **Inbox** — prioritized queue of PR items needing human attention (new reviews, comments, CI failures, merge-ready).
+- **GitHub/PR core** — `services/{github,githubGraphql,prMonitor,prCache,prFocus}.ts` + `routes/{github,pullRequests,repositories,inbox}.ts` + the desktop GitHub panel / PR pills / detail sheet. This is the heart of the app.
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
 
@@ -46,13 +46,14 @@ See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
 
 > Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Definition of done for "production ready" is in [`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md).
 
-1. **Phase 18.5 — Daemon everywhere** (ACTIVE) — see [`docs/DAEMON_EVERYWHERE.md`](./docs/DAEMON_EVERYWHERE.md). One execution path for all envs: daemon runs as a long-lived OS user service bundled with the desktop app. Fixes backend-restart session loss, collapses env types to `local | remote`, rips out SSH.
+> **Superseded (June 2026):** the daemon-everywhere / continuous-build / local-execution roadmap is retired. FastOwl is now a cloud-only PR-management app. The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
-2. **Phase 18.2 polish** — proper `fastowl login` PKCE flow (replace copy-paste), CLI refresh-token rotation, cross-user HTTP-layer integration test, invite flow. See Session 13 in `docs/SESSIONS.md`.
-
-3. **Phase 17.3 polish** — per-task-type notification toggles, digest mode (batch notifications), click-through opens the task. Basic awaiting_review notification shipped in Session 17.
+1. **Cloud provider abstraction** — Phases 1–2 (registry + interface, PostHog Code under it, generic credentials/routes) are **done**. Phase 0 spikes + Phases 3–4 (Codex Cloud, Claude Routines) are next. Each new provider is a self-contained `client + credentials + converter + transcriptSource + provider` module — no core changes.
+2. **Desktop polish** — generalise the Settings card + composer to render per-provider once a 2nd provider lands; tidy the dead local-task UI left behind (TaskFilesPanel/TaskGitPanel never render now).
+3. **Phase 18.2 polish** — proper `fastowl login` PKCE flow, CLI refresh-token rotation, invite flow.
 
 **Recently landed**:
+- Cloud-only refactor (June 2026): stripped the daemon, local/remote envs, in-process agents, permissions, backlog/continuous-build, and per-task git working tree. Built the pluggable `CloudTaskProvider` seam; made the task queue + poller cloud-only; collapsed the DB schema (dropped agents/backlog tables, slimmed environments to a marker, wiped tasks); removed the `@fastowl/daemon` package. The app is now: PR dashboard + cloud task delegation.
 - Session 17 (Phase 17.3 — notifications quick win): desktop OS notification fires when a task transitions into `awaiting_review`. Toggle + permission hint in Settings → Appearance → Notifications. Uses renderer `Notification` API — Electron bridges to the native OS surface.
 - Session 17 (Phase 18.3.B): SSH auto-install. Desktop "Add Environment → Remote VM (FastOwl daemon)" with two modes (auto-install over SSH, manual one-liner). Backend dials the target via ssh2, pipes `curl /daemon/install.sh | bash`, the script builds `@fastowl/daemon` + writes a systemd/launchd unit, daemon pairs + dials back, modal polls for `connected`.
 - Session 16 (Phase 18.3.B foundation): daemon relay layer + daemon envs first-class in scheduling + CI hygiene. Daemon runs a local HTTP proxy; child processes' REST calls tunnel over its WS. Backend accepts internal-auth headers in parallel with JWT. No user JWT on the VM. Scheduler/backlog fall back to any connected daemon when no env is pinned.
@@ -74,6 +75,7 @@ fastowl/
 │   ├── cli/                      # @fastowl/cli — `fastowl` binary
 │   ├── mcp-server/               # @fastowl/mcp-server — stdio MCP for child Claudes
 │   └── shared/                   # Shared TS types
+│   # (packages/daemon removed in the cloud-only refactor)
 ├── docs/                         # ARCHITECTURE, ROADMAP, SESSIONS, CONTINUOUS_BUILD*, SETUP, etc.
 ├── scripts/
 │   └── bootstrap-vm.sh           # One-command SSH VM install
@@ -81,6 +83,6 @@ fastowl/
 └── package.json                  # npm workspace root
 ```
 
-Inside `packages/backend/src/`: `db/` (migrations + Drizzle schema/client), `routes/` (REST), `services/` (agent, taskQueue, environment, github, prMonitor, continuousBuild, backlog/, events), `__tests__/` (Vitest + `helpers/fakeEnvironment.ts`).
+Inside `packages/backend/src/`: `db/` (migrations + Drizzle schema/client), `routes/` (REST), `services/` (`taskQueue`, `cloudProviders/` (registry + poller + posthog provider), `posthogCode/` (client/executor/streamer/converter), `github`, `prMonitor`, `prCache`, `taskPullRequest`, `events`, `websocket`), `__tests__/` (Vitest).
 
 Inside `apps/desktop/src/renderer/components/`: `layout/`, `modals/`, `panels/`, `terminal/`, `widgets/`, `ui/` (shadcn).

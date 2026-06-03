@@ -6,9 +6,8 @@
  * When running `npm run build` or `npm run build:main`, this file is compiled to
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
-import os from 'os';
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain, safeStorage, dialog } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, safeStorage } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
@@ -99,25 +98,6 @@ if (!gotLock) {
 ipcMain.handle('auth:open-external', async (_event, url: string) => {
   await shell.openExternal(url);
 });
-
-// Native folder picker for choosing a repo's local checkout path.
-// Returns the selected absolute path, or null if the user cancelled.
-ipcMain.handle(
-  'dialog:select-directory',
-  async (event, opts?: { defaultPath?: string; title?: string }) => {
-    const parent = BrowserWindow.fromWebContents(event.sender);
-    const dialogOpts: Electron.OpenDialogOptions = {
-      properties: ['openDirectory', 'createDirectory'],
-      title: opts?.title ?? 'Select repository folder',
-      defaultPath: opts?.defaultPath || os.homedir(),
-    };
-    const result = parent
-      ? await dialog.showOpenDialog(parent, dialogOpts)
-      : await dialog.showOpenDialog(dialogOpts);
-    if (result.canceled || result.filePaths.length === 0) return null;
-    return result.filePaths[0];
-  }
-);
 
 // Renderer asks on mount for any deep-link that arrived before it was ready.
 ipcMain.handle('auth:drain-pending', async () => {

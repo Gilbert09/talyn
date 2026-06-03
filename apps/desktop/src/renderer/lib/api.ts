@@ -336,7 +336,6 @@ export interface WatchedRepo {
   owner: string;
   repo: string;
   fullName: string;
-  localPath?: string;
   defaultBranch: string;
 }
 
@@ -575,10 +574,8 @@ export const pullRequests = {
 export const repositories = {
   list: (workspaceId: string) =>
     request<WatchedRepo[]>('GET', `/repositories?workspaceId=${workspaceId}`),
-  add: (workspaceId: string, owner: string, repo: string, localPath?: string) =>
-    request<WatchedRepo>('POST', '/repositories', { workspaceId, owner, repo, localPath }),
-  update: (id: string, updates: { localPath?: string | null }) =>
-    request<null>('PATCH', `/repositories/${id}`, updates),
+  add: (workspaceId: string, owner: string, repo: string) =>
+    request<WatchedRepo>('POST', '/repositories', { workspaceId, owner, repo }),
   remove: (id: string) =>
     request<void>('DELETE', `/repositories/${id}`),
   forcePoll: () =>

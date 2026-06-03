@@ -3,11 +3,9 @@ import {
   Settings,
   FolderKanban,
   Github,
-  MessageSquare,
   BarChart3,
   Plus,
   Trash2,
-  ExternalLink,
   Check,
   AlertCircle,
   Loader2,
@@ -21,7 +19,6 @@ import {
   Copy,
   LogOut,
   Pencil,
-  X,
 } from 'lucide-react';
 import {
   api,
@@ -43,7 +40,6 @@ import {
   getAwaitingReviewNotifyEnabled,
   setAwaitingReviewNotifyEnabled,
 } from '../../hooks/useApi';
-import { Select } from '../ui/select';
 import { useAuth } from '../auth/AuthProvider';
 import { getSupabase } from '../../lib/supabase';
 
@@ -142,8 +138,7 @@ export function SettingsPanel() {
 
 function WorkspaceSettings() {
   const { workspaces, currentWorkspaceId } = useWorkspaceStore();
-  const { updateCurrentWorkspaceSettings, refreshWorkspaces } = useWorkspaceActions();
-  const [isUpdating, setIsUpdating] = useState(false);
+  const { refreshWorkspaces } = useWorkspaceActions();
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
   // Repository state
@@ -157,12 +152,6 @@ function WorkspaceSettings() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
-  // Two-step add: user picks a repo, then supplies the local path.
-  const [pendingAddRepo, setPendingAddRepo] = useState<GitHubRepo | null>(null);
-  const [pendingLocalPath, setPendingLocalPath] = useState('');
-  // Inline local-path edit for already-added repos.
-  const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
-  const [editingPath, setEditingPath] = useState('');
 
   // Fetch the full repo set from GitHub (user + all orgs) and cache it.
   // This is the expensive call, so it only runs on a cache miss/stale or
@@ -218,102 +207,22 @@ function WorkspaceSettings() {
     loadRepos();
   }, [loadRepos]);
 
-  const handleToggleAutoAssign = async () => {
-    if (!currentWorkspace) return;
-    setIsUpdating(true);
-    try {
-      await updateCurrentWorkspaceSettings({
-        autoAssignTasks: !currentWorkspace.settings.autoAssignTasks,
-      });
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  const handleMaxAgentsChange = async (value: string) => {
-    const maxAgents = parseInt(value, 10);
-    if (isNaN(maxAgents) || maxAgents < 1) return;
-    setIsUpdating(true);
-    try {
-      await updateCurrentWorkspaceSettings({
-        maxConcurrentAgents: maxAgents,
-      });
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  const handlePickRepo = (repo: GitHubRepo) => {
-    setPendingAddRepo(repo);
-    setPendingLocalPath('');
-  };
-
-  const handleConfirmAddRepo = async () => {
-    if (!currentWorkspaceId || !pendingAddRepo) return;
-    const localPath = pendingLocalPath.trim() || undefined;
+  const handleAddRepo = async (repo: GitHubRepo) => {
+    if (!currentWorkspaceId) return;
     setLoadingRepos(true);
     try {
       const watched = await api.repositories.add(
         currentWorkspaceId,
-        pendingAddRepo.owner.login,
-        pendingAddRepo.name,
-        localPath
+        repo.owner.login,
+        repo.name
       );
       setWatchedRepos((prev) => [...prev, watched]);
       void refreshWorkspaces();
       setShowRepoSelector(false);
       setRepoSearch('');
-      setPendingAddRepo(null);
-      setPendingLocalPath('');
     } finally {
       setLoadingRepos(false);
     }
-  };
-
-  const handleCancelAddRepo = () => {
-    setPendingAddRepo(null);
-    setPendingLocalPath('');
-  };
-
-  const handleStartEditPath = (repo: WatchedRepo) => {
-    setEditingRepoId(repo.id);
-    setEditingPath(repo.localPath ?? '');
-  };
-
-  // Open the native folder picker, seeding it from the current value;
-  // applies the chosen path if the user didn't cancel.
-  const pickDirectory = async (current: string, apply: (p: string) => void) => {
-    const picked = await window.electron?.dialog?.selectDirectory({
-      defaultPath: current.trim() || undefined,
-    });
-    if (picked) apply(picked);
-  };
-
-  const handleSaveEditPath = async () => {
-    if (!editingRepoId) return;
-    const trimmed = editingPath.trim();
-    setLoadingRepos(true);
-    try {
-      await api.repositories.update(editingRepoId, {
-        localPath: trimmed.length > 0 ? trimmed : null,
-      });
-      setWatchedRepos((prev) =>
-        prev.map((r) =>
-          r.id === editingRepoId
-            ? { ...r, localPath: trimmed.length > 0 ? trimmed : undefined }
-            : r
-        )
-      );
-      setEditingRepoId(null);
-      setEditingPath('');
-    } finally {
-      setLoadingRepos(false);
-    }
-  };
-
-  const handleCancelEditPath = () => {
-    setEditingRepoId(null);
-    setEditingPath('');
   };
 
   const handleRemoveRepo = async (repoId: string) => {
@@ -389,46 +298,6 @@ function WorkspaceSettings() {
           </Card>
 
           <Card className="p-4">
-            <h4 className="font-medium mb-3">Automation Settings</h4>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">Auto-assign tasks</p>
-                  <p className="text-xs text-muted-foreground">
-                    Automatically assign queued tasks to idle agents
-                  </p>
-                </div>
-                <Button
-                  variant={currentWorkspace.settings.autoAssignTasks ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={handleToggleAutoAssign}
-                  disabled={isUpdating}
-                >
-                  {currentWorkspace.settings.autoAssignTasks ? 'Enabled' : 'Disabled'}
-                </Button>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">Max concurrent agents</p>
-                  <p className="text-xs text-muted-foreground">
-                    Maximum number of agents running simultaneously
-                  </p>
-                </div>
-                <Select
-                  value={String(currentWorkspace.settings.maxConcurrentAgents)}
-                  onChange={(e) => handleMaxAgentsChange(e.target.value)}
-                  disabled={isUpdating}
-                  className="w-20"
-                >
-                  {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="p-4">
             <div className="flex items-center justify-between mb-3">
               <h4 className="font-medium">Watched Repositories</h4>
               <Button
@@ -452,16 +321,11 @@ function WorkspaceSettings() {
             ) : (
               <div className="space-y-2 mb-3">
                 {watchedRepos.map((repo) => (
-                  <div key={repo.id} className="p-2 rounded bg-secondary space-y-2">
+                  <div key={repo.id} className="p-2 rounded bg-secondary">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
                         <Github className="w-4 h-4 text-muted-foreground shrink-0" />
                         <span className="text-sm truncate">{repo.fullName}</span>
-                        {!repo.localPath && (
-                          <Badge variant="outline" className="text-xs text-amber-500 border-amber-500/50">
-                            No local path
-                          </Badge>
-                        )}
                       </div>
                       <Button
                         variant="ghost"
@@ -473,63 +337,6 @@ function WorkspaceSettings() {
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>
-                    {editingRepoId === repo.id ? (
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <Input
-                            value={editingPath}
-                            onChange={(e) => setEditingPath(e.target.value)}
-                            placeholder="/absolute/path/to/repo"
-                            className="h-8 text-xs font-mono"
-                            autoFocus
-                          />
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8"
-                          onClick={() => pickDirectory(editingPath, setEditingPath)}
-                          disabled={loadingRepos}
-                          title="Choose folder…"
-                        >
-                          <FolderKanban className="w-3.5 h-3.5" />
-                        </Button>
-                        <Button
-                          variant="default"
-                          size="sm"
-                          className="h-8"
-                          onClick={handleSaveEditPath}
-                          disabled={loadingRepos}
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={handleCancelEditPath}
-                          disabled={loadingRepos}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="font-mono truncate">
-                          {repo.localPath || '— no path set, tasks will be blocked'}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 ml-auto shrink-0"
-                          onClick={() => handleStartEditPath(repo)}
-                          disabled={loadingRepos}
-                          title="Edit local path"
-                        >
-                          <Pencil className="w-3 h-3" />
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -537,131 +344,76 @@ function WorkspaceSettings() {
 
             {showRepoSelector ? (
               <div className="space-y-2">
-                {pendingAddRepo ? (
-                  <div className="space-y-2 border rounded-md p-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <Github className="w-4 h-4 text-muted-foreground" />
-                      <span className="font-medium">{pendingAddRepo.full_name}</span>
-                    </div>
-                    <label className="text-xs text-muted-foreground">
-                      Local path on the environment where this repo is checked out
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1">
-                        <Input
-                          value={pendingLocalPath}
-                          onChange={(e) => setPendingLocalPath(e.target.value)}
-                          placeholder="/Users/you/dev/owner/repo"
-                          className="font-mono text-xs"
-                          autoFocus
-                        />
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0"
-                        onClick={() => pickDirectory(pendingLocalPath, setPendingLocalPath)}
-                        title="Choose folder…"
-                      >
-                        <FolderKanban className="w-4 h-4 mr-1" />
-                        Browse
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Required for agent tasks to branch + commit here. You can set it later from the list.
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        onClick={handleConfirmAddRepo}
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Search all your repositories…"
+                    value={repoSearch}
+                    onChange={(e) => setRepoSearch(e.target.value)}
+                    autoFocus
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={refreshRepos}
+                    disabled={reposLoading}
+                    title="Re-fetch your repos + all your orgs' repos from GitHub"
+                  >
+                    <RefreshCw className={cn('w-4 h-4', reposLoading && 'animate-spin')} />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Your repos + every org you belong to.{' '}
+                  {reposLoading
+                    ? 'Refreshing…'
+                    : reposFetchedAt
+                      ? `Updated ${formatAge(reposFetchedAt)}.`
+                      : ''}
+                </p>
+
+                {reposLoading && availableRepos.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-2 flex items-center gap-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    Loading repositories…
+                  </p>
+                ) : filteredRepos.length > 0 ? (
+                  <div className="border rounded-md max-h-48 overflow-y-auto">
+                    {filteredRepos.map((repo) => (
+                      <button
+                        key={repo.id}
+                        className="w-full flex items-center gap-2 p-2 hover:bg-secondary text-left text-sm"
+                        onClick={() => handleAddRepo(repo)}
                         disabled={loadingRepos}
                       >
-                        Add
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleCancelAddRepo}
-                        disabled={loadingRepos}
-                      >
-                        Back
-                      </Button>
-                    </div>
+                        <Github className="w-4 h-4 text-muted-foreground" />
+                        <span>{repo.full_name}</span>
+                        {repo.private && (
+                          <Badge variant="outline" className="ml-auto text-xs">Private</Badge>
+                        )}
+                      </button>
+                    ))}
                   </div>
                 ) : (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        placeholder="Search all your repositories…"
-                        value={repoSearch}
-                        onChange={(e) => setRepoSearch(e.target.value)}
-                        autoFocus
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={refreshRepos}
-                        disabled={reposLoading}
-                        title="Re-fetch your repos + all your orgs' repos from GitHub"
-                      >
-                        <RefreshCw className={cn('w-4 h-4', reposLoading && 'animate-spin')} />
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Your repos + every org you belong to.{' '}
-                      {reposLoading
-                        ? 'Refreshing…'
-                        : reposFetchedAt
-                          ? `Updated ${formatAge(reposFetchedAt)}.`
-                          : ''}
-                    </p>
-
-                    {reposLoading && availableRepos.length === 0 ? (
-                      <p className="text-sm text-muted-foreground p-2 flex items-center gap-2">
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Loading repositories…
-                      </p>
-                    ) : filteredRepos.length > 0 ? (
-                      <div className="border rounded-md max-h-48 overflow-y-auto">
-                        {filteredRepos.map((repo) => (
-                          <button
-                            key={repo.id}
-                            className="w-full flex items-center gap-2 p-2 hover:bg-secondary text-left text-sm"
-                            onClick={() => handlePickRepo(repo)}
-                            disabled={loadingRepos}
-                          >
-                            <Github className="w-4 h-4 text-muted-foreground" />
-                            <span>{repo.full_name}</span>
-                            {repo.private && (
-                              <Badge variant="outline" className="ml-auto text-xs">Private</Badge>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground p-2">
-                        {repoSearch
-                          ? 'No matching repositories. Try Refresh if a repo is missing.'
-                          : 'No repositories found. Try Refresh.'}
-                      </p>
-                    )}
-                    {reposTruncated && (
-                      <p className="text-xs text-muted-foreground">
-                        Showing first {REPO_LIST_CAP} of {matchedRepos.length}. Type to narrow.
-                      </p>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setShowRepoSelector(false);
-                        setRepoSearch('');
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </>
+                  <p className="text-sm text-muted-foreground p-2">
+                    {repoSearch
+                      ? 'No matching repositories. Try Refresh if a repo is missing.'
+                      : 'No repositories found. Try Refresh.'}
+                  </p>
                 )}
+                {reposTruncated && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing first {REPO_LIST_CAP} of {matchedRepos.length}. Type to narrow.
+                  </p>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowRepoSelector(false);
+                    setRepoSearch('');
+                  }}
+                >
+                  Cancel
+                </Button>
               </div>
             ) : (
               <Button
@@ -780,17 +532,6 @@ function IntegrationsSettings() {
     }
   };
 
-  const integrations = [
-    {
-      id: 'slack',
-      name: 'Slack',
-      icon: MessageSquare,
-      description: 'Monitor Slack channels and respond to mentions',
-      connected: false,
-      comingSoon: true,
-    },
-  ];
-
   return (
     <div className="space-y-6">
       <div>
@@ -872,47 +613,6 @@ function IntegrationsSettings() {
 
         {/* PostHog Code (cloud tasks) */}
         <PostHogCodeCard />
-
-        {/* Other Integrations */}
-        {integrations.map((integration) => (
-          <Card key={integration.id} className="p-4">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
-                <integration.icon className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h4 className="font-medium">{integration.name}</h4>
-                  {integration.comingSoon && (
-                    <Badge variant="secondary">Coming Soon</Badge>
-                  )}
-                  {integration.connected && (
-                    <Badge variant="default" className="bg-green-600">
-                      <Check className="w-3 h-3 mr-1" />
-                      Connected
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {integration.description}
-                </p>
-              </div>
-              <Button
-                variant={integration.connected ? 'outline' : 'default'}
-                disabled={integration.comingSoon}
-              >
-                {integration.connected ? (
-                  <>
-                    <ExternalLink className="w-4 h-4 mr-1" />
-                    Configure
-                  </>
-                ) : (
-                  'Connect'
-                )}
-              </Button>
-            </div>
-          </Card>
-        ))}
       </div>
     </div>
   );

@@ -14,7 +14,7 @@ async function seedWorkspace(db: Database, id = 'ws1', name = 'Default') {
     id,
     ownerId: TEST_USER_ID,
     name,
-    settings: { autoAssignTasks: true, maxConcurrentAgents: 3 },
+    settings: {},
   });
 }
 

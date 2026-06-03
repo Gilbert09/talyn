@@ -73,7 +73,6 @@ export const repositories = pgTable(
       .references(() => workspaces.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     url: text('url').notNull(),
-    localPath: text('local_path'),
     defaultBranch: text('default_branch').notNull().default('main'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

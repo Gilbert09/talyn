@@ -58,18 +58,6 @@ const electronHandler = {
       },
     },
   },
-  dialog: {
-    /**
-     * Open the native folder picker. Resolves to the chosen absolute
-     * path, or null if the user cancelled.
-     */
-    selectDirectory(opts?: {
-      defaultPath?: string;
-      title?: string;
-    }): Promise<string | null> {
-      return ipcRenderer.invoke('dialog:select-directory', opts);
-    },
-  },
 };
 
 contextBridge.exposeInMainWorld('electron', electronHandler);

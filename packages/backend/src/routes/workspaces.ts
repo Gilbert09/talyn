@@ -65,7 +65,7 @@ export function workspaceRoutes(): Router {
       ownerId: user.id,
       name: body.name,
       description: body.description ?? null,
-      settings: { autoAssignTasks: true, maxConcurrentAgents: 3 },
+      settings: {},
       createdAt: now,
       updatedAt: now,
     });
@@ -172,7 +172,6 @@ async function loadWorkspaceRelations(
       id: row.id,
       name: row.name,
       url: row.url,
-      localPath: row.localPath ?? undefined,
       defaultBranch: row.defaultBranch,
     });
     reposByWorkspace.set(row.workspaceId, arr);
@@ -190,8 +189,6 @@ async function loadWorkspaceRelations(
     // `/github` (etc.) endpoints when it needs more detail.
     if (row.type === 'github') {
       existing.github = { enabled: row.enabled, watchedRepos: [] };
-    } else if (row.type === 'slack') {
-      existing.slack = { enabled: row.enabled, watchedChannels: [] };
     } else if (row.type === 'posthog') {
       existing.posthog = { enabled: row.enabled };
     }
@@ -211,10 +208,7 @@ function rowToWorkspace(
     description: row.description ?? undefined,
     repos: relations.reposByWorkspace.get(row.id) ?? [],
     integrations: relations.integrationsByWorkspace.get(row.id) ?? {},
-    settings: (row.settings as Workspace['settings']) ?? {
-      autoAssignTasks: true,
-      maxConcurrentAgents: 3,
-    },
+    settings: (row.settings as Workspace['settings']) ?? {},
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

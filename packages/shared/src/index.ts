@@ -19,13 +19,11 @@ export interface Repository {
   id: string;
   name: string; // e.g., "posthog/posthog"
   url: string;
-  localPath?: string; // Path on environments
   defaultBranch: string;
 }
 
 export interface WorkspaceIntegrations {
   github?: GitHubIntegration;
-  slack?: SlackIntegration;
   posthog?: PostHogIntegration;
 }
 
@@ -36,13 +34,6 @@ export interface GitHubIntegration {
   watchedRepos: string[];
 }
 
-export interface SlackIntegration {
-  enabled: boolean;
-  accessToken?: string;
-  workspaceId?: string;
-  watchedChannels: string[];
-}
-
 export interface PostHogIntegration {
   enabled: boolean;
   apiKey?: string;
@@ -51,8 +42,6 @@ export interface PostHogIntegration {
 }
 
 export interface WorkspaceSettings {
-  autoAssignTasks: boolean;
-  maxConcurrentAgents: number;
   continuousBuild?: ContinuousBuildSettings;
 }
 
@@ -374,7 +363,6 @@ export type InboxItemType =
   | 'pr_comment'
   | 'ci_failure'
   | 'pr_ready'
-  | 'slack_mention'
   | 'posthog_alert'
   | 'custom';
 
@@ -398,7 +386,7 @@ export interface InboxItem {
 }
 
 export interface InboxItemSource {
-  type: 'agent' | 'github' | 'slack' | 'posthog' | 'system';
+  type: 'agent' | 'github' | 'posthog' | 'system';
   id?: string;
   name?: string;
   url?: string;

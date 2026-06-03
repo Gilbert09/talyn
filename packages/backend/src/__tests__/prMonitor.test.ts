@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
 import { prMonitorService } from '../services/prMonitor.js';
 import { githubService } from '../services/github.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -42,16 +41,13 @@ describe('prMonitorService — repo CRUD', () => {
       expect(rows[0].name).toBe('acme/widgets');
     });
 
-    it('honours an explicit url + localPath', async () => {
-      const watched = await prMonitorService.addWatchedRepo(
+    it('honours an explicit url', async () => {
+      await prMonitorService.addWatchedRepo(
         'ws1', 'acme', 'widgets',
-        'git@github.com:acme/widgets.git',
-        '/Users/me/code/widgets'
+        'git@github.com:acme/widgets.git'
       );
-      expect(watched.localPath).toBe('/Users/me/code/widgets');
       const rows = await db.select().from(repositoriesTable);
       expect(rows[0].url).toBe('git@github.com:acme/widgets.git');
-      expect(rows[0].localPath).toBe('/Users/me/code/widgets');
     });
   });
 
@@ -113,54 +109,6 @@ describe('prMonitorService — repo CRUD', () => {
     });
   });
 
-  describe('updateWatchedRepo', () => {
-    it('patches localPath and leaves other fields alone', async () => {
-      await db.insert(repositoriesTable).values({
-        id: 'r1', workspaceId: 'ws1', name: 'acme/a',
-        url: 'https://github.com/acme/a', localPath: '/old', defaultBranch: 'main',
-      });
-
-      await prMonitorService.updateWatchedRepo('r1', { localPath: '/new' });
-
-      const rows = await db
-        .select({
-          url: repositoriesTable.url,
-          localPath: repositoriesTable.localPath,
-          defaultBranch: repositoriesTable.defaultBranch,
-        })
-        .from(repositoriesTable)
-        .where(eq(repositoriesTable.id, 'r1'));
-      expect(rows[0].localPath).toBe('/new');
-      expect(rows[0].url).toBe('https://github.com/acme/a');
-      expect(rows[0].defaultBranch).toBe('main');
-    });
-
-    it('clears localPath when passed null', async () => {
-      await db.insert(repositoriesTable).values({
-        id: 'r1', workspaceId: 'ws1', name: 'a/b',
-        url: 'https://github.com/a/b', localPath: '/prev', defaultBranch: 'main',
-      });
-      await prMonitorService.updateWatchedRepo('r1', { localPath: null });
-      const rows = await db
-        .select({ localPath: repositoriesTable.localPath })
-        .from(repositoriesTable)
-        .where(eq(repositoriesTable.id, 'r1'));
-      expect(rows[0].localPath).toBeNull();
-    });
-
-    it('is a no-op when no patch fields are supplied', async () => {
-      await db.insert(repositoriesTable).values({
-        id: 'r1', workspaceId: 'ws1', name: 'a/b',
-        url: 'https://github.com/a/b', localPath: '/orig', defaultBranch: 'main',
-      });
-      await prMonitorService.updateWatchedRepo('r1', {});
-      const rows = await db
-        .select({ localPath: repositoriesTable.localPath })
-        .from(repositoriesTable)
-        .where(eq(repositoriesTable.id, 'r1'));
-      expect(rows[0].localPath).toBe('/orig');
-    });
-  });
 
   describe('removeWatchedRepo', () => {
     it('deletes the row from the DB', async () => {

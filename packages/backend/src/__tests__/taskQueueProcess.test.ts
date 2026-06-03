@@ -42,7 +42,7 @@ async function seed(db: Database): Promise<void> {
     id: 'ws1',
     ownerId: TEST_USER_ID,
     name: 'ws',
-    settings: { autoAssignTasks: true },
+    settings: {},
   });
   await db.insert(environmentsTable).values({
     id: 'cloud1',
@@ -57,7 +57,6 @@ async function seed(db: Database): Promise<void> {
     workspaceId: 'ws1',
     name: 'a/b',
     url: 'https://github.com/a/b',
-    localPath: '/tmp/b',
     defaultBranch: 'main',
   });
 }

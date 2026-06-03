@@ -171,13 +171,9 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
     }
   }, [isLoading, onOpenChange]);
 
-  // Agent tasks need a repo so the task can branch + commit + push.
-  // Only repos with a `localPath` set can actually host a task —
-  // others are shown but disabled.
-  const reposWithLocalPath = repositories.filter((r) => Boolean(r.localPath));
-  const selectedRepoHasPath = reposWithLocalPath.some((r) => r.id === repositoryId);
+  // Agent tasks need a repo to run against (the cloud provider clones it).
   const isValid = isAgent
-    ? prompt.length > 0 && selectedRepoHasPath
+    ? prompt.length > 0 && Boolean(repositoryId)
     : title && description;
 
   return (
@@ -233,24 +229,14 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
               >
                 <option value="">Select a repository...</option>
                 {repositories.map((repo) => (
-                  <option
-                    key={repo.id}
-                    value={repo.id}
-                    disabled={!repo.localPath}
-                  >
+                  <option key={repo.id} value={repo.id}>
                     {repo.fullName}
-                    {!repo.localPath && ' — no local path'}
                   </option>
                 ))}
               </Select>
               {repositories.length === 0 && (
                 <p className="text-xs text-amber-500">
                   No repositories registered. Add one in Settings → Repositories.
-                </p>
-              )}
-              {repositories.length > 0 && reposWithLocalPath.length === 0 && (
-                <p className="text-xs text-amber-500">
-                  None of your repositories have a local path set. Configure one in Settings → Repositories before starting a task.
                 </p>
               )}
 
