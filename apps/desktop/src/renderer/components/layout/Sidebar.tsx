@@ -248,7 +248,12 @@ function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
   if (providers.length === 0) return null;
 
   return (
-    <div className={cn('mb-1 flex flex-col gap-0.5', collapsed && 'items-center')}>
+    <div
+      className={cn(
+        'mb-2 flex flex-col gap-0.5 border-b pb-2',
+        collapsed && 'items-center',
+      )}
+    >
       {providers.map((p) => (
         <div
           key={p.type}
