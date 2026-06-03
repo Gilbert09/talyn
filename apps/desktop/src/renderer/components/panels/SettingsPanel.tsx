@@ -4,7 +4,6 @@ import {
   FolderKanban,
   Github,
   BarChart3,
-  Cloud,
   Plus,
   Trash2,
   Check,
@@ -28,7 +27,6 @@ import {
   GitHubRepo,
   WatchedRepo,
   type PostHogCodeStatus,
-  type CloudProviderInfo,
 } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -84,7 +82,6 @@ function formatAge(ts: number): string {
 
 type SettingsSection =
   | 'workspace'
-  | 'environments'
   | 'integrations'
   | 'account'
   | 'appearance';
@@ -94,7 +91,6 @@ export function SettingsPanel() {
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
-    { id: 'environments' as const, icon: Cloud, label: 'Environments' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
@@ -130,7 +126,6 @@ export function SettingsPanel() {
         <ScrollArea className="h-full">
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
-            {activeSection === 'environments' && <EnvironmentsSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
@@ -451,91 +446,6 @@ function WorkspaceSettings() {
             Create Workspace
           </Button>
         </Card>
-      )}
-    </div>
-  );
-}
-
-/**
- * Cloud environments: the registered cloud task providers + whether each is
- * connected (has credentials) for the current workspace. Read-only — connect
- * a provider from the Integrations tab.
- */
-function EnvironmentsSettings() {
-  const { currentWorkspaceId } = useWorkspaceStore();
-  const [providers, setProviders] = useState<CloudProviderInfo[] | null>(null);
-
-  useEffect(() => {
-    if (!currentWorkspaceId) {
-      setProviders([]);
-      return;
-    }
-    let cancelled = false;
-    setProviders(null);
-    api.cloudProviders
-      .list(currentWorkspaceId)
-      .then((p) => {
-        if (!cancelled) setProviders(p);
-      })
-      .catch(() => {
-        if (!cancelled) setProviders([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWorkspaceId]);
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium mb-1">Environments</h3>
-        <p className="text-sm text-muted-foreground">
-          Cloud providers that run your tasks on their own sandbox. Connect one from
-          the Integrations tab.
-        </p>
-      </div>
-
-      {providers === null ? (
-        <p className="text-sm text-muted-foreground flex items-center gap-2 py-2">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Loading environments…
-        </p>
-      ) : providers.length === 0 ? (
-        <Card className="p-6 text-center">
-          <Cloud className="w-10 h-10 mx-auto text-muted-foreground/50 mb-3" />
-          <h4 className="font-medium mb-1">No cloud providers</h4>
-          <p className="text-sm text-muted-foreground">
-            None are available for this workspace yet.
-          </p>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {providers.map((p) => (
-            <Card key={p.type} className="p-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center flex-shrink-0">
-                    <Cloud className="w-5 h-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-medium truncate">{p.displayName}</p>
-                    <p className="text-xs text-muted-foreground">Cloud provider</p>
-                  </div>
-                </div>
-                {p.connected ? (
-                  <Badge variant="default" className="bg-green-600 flex-shrink-0">
-                    <Check className="w-3 h-3 mr-1" />
-                    Connected
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="flex-shrink-0 text-muted-foreground">
-                    Not connected
-                  </Badge>
-                )}
-              </div>
-            </Card>
-          ))}
-        </div>
       )}
     </div>
   );

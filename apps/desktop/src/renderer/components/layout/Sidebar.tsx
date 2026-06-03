@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Inbox,
   ListTodo,
@@ -14,6 +14,7 @@ import type { User } from '@supabase/supabase-js';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
+import { api, type CloudProviderInfo } from '../../lib/api';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -170,6 +171,7 @@ export function Sidebar({ className }: SidebarProps) {
 
       {/* Footer */}
       <div className="border-t p-2">
+        <CloudProviderStatus collapsed={sidebarCollapsed} />
         <div
           className={cn(
             'flex items-center gap-1',
@@ -207,6 +209,64 @@ export function Sidebar({ className }: SidebarProps) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Cloud-provider connection status, shown just above the user chip. One row
+ * per registered cloud provider with a dot: green = connected (credentials
+ * configured for this workspace), grey = not connected.
+ */
+function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
+  const { currentWorkspaceId } = useWorkspaceStore();
+  const [providers, setProviders] = useState<CloudProviderInfo[]>([]);
+
+  const refresh = useCallback(() => {
+    if (!currentWorkspaceId) {
+      setProviders([]);
+      return;
+    }
+    api.cloudProviders
+      .list(currentWorkspaceId)
+      .then(setProviders)
+      .catch(() => setProviders([]));
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    refresh();
+    // Re-check when a provider's env marker is (re)provisioned or its status
+    // changes — e.g. right after the user connects credentials in Settings.
+    const offCreated = api.ws.on('environment:created', refresh);
+    const offStatus = api.ws.on('environment:status', refresh);
+    return () => {
+      offCreated();
+      offStatus();
+    };
+  }, [refresh]);
+
+  if (providers.length === 0) return null;
+
+  return (
+    <div className={cn('mb-1 flex flex-col gap-0.5', collapsed && 'items-center')}>
+      {providers.map((p) => (
+        <div
+          key={p.type}
+          title={`${p.displayName} — ${p.connected ? 'connected' : 'not connected'}`}
+          className={cn(
+            'flex items-center gap-2 rounded-md text-xs text-muted-foreground',
+            collapsed ? 'h-6 w-6 justify-center' : 'px-2 py-1',
+          )}
+        >
+          <span
+            className={cn(
+              'h-2 w-2 shrink-0 rounded-full',
+              p.connected ? 'bg-green-500' : 'bg-muted-foreground/40',
+            )}
+          />
+          {!collapsed && <span className="min-w-0 flex-1 truncate">{p.displayName}</span>}
+        </div>
+      ))}
     </div>
   );
 }
