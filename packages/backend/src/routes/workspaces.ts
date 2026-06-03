@@ -19,9 +19,9 @@ import type {
 } from '@fastowl/shared';
 
 // Uploaded logos are stored inline as data URLs on the workspace row, so cap
-// them. The desktop downscales to ~128px before sending, which lands well
-// under this; the cap just guards against an oversized/abusive payload.
-const MAX_LOGO_DATA_URL_BYTES = 256 * 1024;
+// them. The desktop downscales before sending, which lands well under this;
+// the cap just guards against an oversized/abusive payload.
+const MAX_LOGO_DATA_URL_BYTES = 512 * 1024;
 
 /**
  * Validate + normalise an untrusted logo from the request body. Throws on a

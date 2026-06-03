@@ -17,7 +17,7 @@ const OTHER_USER_ID = 'user-other';
 
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json({ limit: '1mb' })); // mirror production (logo uploads)
+  app.use(express.json({ limit: '2mb' })); // mirror production (logo uploads)
   app.use('/workspaces', requireAuth, workspaceRoutes());
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -94,7 +94,7 @@ describe('routes/workspaces', () => {
     });
 
     it('rejects an oversized uploaded logo image', async () => {
-      const huge = 'data:image/png;base64,' + 'A'.repeat(300 * 1024);
+      const huge = 'data:image/png;base64,' + 'A'.repeat(600 * 1024);
       const res = await fetch(`${serverUrl}/workspaces`, {
         method: 'POST',
         headers: authHeaders,

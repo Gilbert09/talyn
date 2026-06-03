@@ -70,9 +70,10 @@ async function main() {
       credentials: true,
     })
   );
-  // 1mb (vs the 100kb default) leaves room for inline workspace-logo image
-  // uploads; the per-logo cap in the workspaces route is the real guard.
-  app.use(express.json({ limit: '1mb' }));
+  // 2mb (vs the 100kb default) leaves comfortable room for inline
+  // workspace-logo image uploads; the per-logo cap in the workspaces route is
+  // the real guard.
+  app.use(express.json({ limit: '2mb' }));
 
   app.get('/health', (_req, res) => {
     res.json({
