@@ -606,17 +606,38 @@ export const backlog = {
 
 type EventHandler<T = unknown> = (payload: T) => void;
 
+// How often the client pings the server to prove the socket is alive.
+// The backend replies to `{type:'ping'}` with `connection:status {pong}`.
+const HEARTBEAT_INTERVAL_MS = 25_000;
+// Backoff cap. We retry forever (a dev backend restart shouldn't leave the
+// list permanently frozen until app relaunch) but never wait longer than this.
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
 class WebSocketClient {
   private ws: WebSocket | null = null;
   private handlers: Map<string, Set<EventHandler>> = new Map();
   private reconnectTimer: number | null = null;
+  // Drives only the backoff curve, not a give-up threshold — reset to 0 on
+  // every successful open so the next outage starts fast again.
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
+  private heartbeatTimer: number | null = null;
+  // True once a ping has been sent and we're still waiting for its pong. If
+  // the next heartbeat tick fires while still awaiting, the socket is a
+  // zombie (half-open after sleep / killed backend) and we force a reconnect.
+  private awaitingPong = false;
+  private lifecycleBound = false;
   private subscribedWorkspaces: Set<string> = new Set();
   private authenticated = false;
 
   async connect(): Promise<void> {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    this.bindLifecycle();
+    // Bail if a socket is already open or mid-handshake — re-entry from a
+    // focus/online wake would otherwise orphan the in-flight socket.
+    if (
+      this.ws?.readyState === WebSocket.OPEN ||
+      this.ws?.readyState === WebSocket.CONNECTING
+    )
+      return;
 
     const token = await getAuthToken();
     if (!token) {
@@ -636,16 +657,25 @@ class WebSocketClient {
       console.log('WebSocket opened; authenticating…');
       this.reconnectAttempts = 0;
       this.ws?.send(JSON.stringify({ type: 'auth', token }));
+      this.startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as WSEvent;
+        const payload = data.payload as
+          | { connected?: boolean; pong?: boolean }
+          | undefined;
+        // Any pong clears the in-flight heartbeat — the socket is alive.
+        if (data.type === 'connection:status' && payload?.pong) {
+          this.awaitingPong = false;
+          return;
+        }
         // The server emits connection:status {connected:true} only
         // after auth succeeds. That's our signal to resubscribe.
         if (
           data.type === 'connection:status' &&
-          (data.payload as { connected?: boolean })?.connected &&
+          payload?.connected &&
           !this.authenticated
         ) {
           this.authenticated = true;
@@ -662,6 +692,7 @@ class WebSocketClient {
     this.ws.onclose = () => {
       console.log('WebSocket disconnected');
       this.authenticated = false;
+      this.stopHeartbeat();
       this.emit('connection:status', { connected: false });
       this.scheduleReconnect();
     };
@@ -676,6 +707,7 @@ class WebSocketClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
   }
@@ -726,19 +758,74 @@ class WebSocketClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('Max reconnect attempts reached');
-      return;
-    }
+    // Already a reconnect queued — don't stack timers (focus/online events
+    // and an onclose can all fire near-simultaneously).
+    if (this.reconnectTimer) return;
 
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    const delay = Math.min(
+      1000 * Math.pow(2, this.reconnectAttempts),
+      MAX_RECONNECT_DELAY_MS
+    );
     this.reconnectAttempts++;
 
     console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
     this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
       void this.connect();
     }, delay);
+  }
+
+  /**
+   * Heartbeat: ping the server every interval. If a tick fires while the
+   * previous ping is still unanswered, the socket is half-open (laptop slept,
+   * backend was killed without a clean close) — terminate it so onclose runs
+   * and the backoff loop reconnects.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.awaitingPong = false;
+    this.heartbeatTimer = window.setInterval(() => {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      if (this.awaitingPong) {
+        console.warn('WebSocket heartbeat missed; reconnecting');
+        this.awaitingPong = false;
+        this.ws.close();
+        return;
+      }
+      this.awaitingPong = true;
+      this.send({ type: 'ping' });
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.awaitingPong = false;
+  }
+
+  /**
+   * Reconnect immediately when the window regains focus or the network comes
+   * back, instead of waiting out the backoff. Bound once, lazily, the first
+   * time we connect.
+   */
+  private bindLifecycle(): void {
+    if (this.lifecycleBound || typeof window === 'undefined') return;
+    this.lifecycleBound = true;
+    const wake = () => {
+      if (this.ws?.readyState === WebSocket.OPEN) return;
+      // Cancel any pending backoff timer and retry now from a clean slate.
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.reconnectAttempts = 0;
+      void this.connect();
+    };
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
   }
 }
 
