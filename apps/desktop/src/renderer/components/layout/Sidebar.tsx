@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
-  FolderKanban,
   Github,
   Archive,
   CircleDot,
@@ -18,6 +17,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { api, type CloudProviderInfo } from '../../lib/api';
+import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -239,9 +239,12 @@ function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
           collapsed && 'justify-center',
         )}
       >
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
-          <FolderKanban className="h-4 w-4 text-primary" />
-        </div>
+        <WorkspaceLogo
+          logo={current?.logo}
+          fallbackSeed={current?.id ?? 'fastowl'}
+          size={32}
+          className="flex-shrink-0"
+        />
         {!collapsed && (
           <>
             <div className="min-w-0 flex-1">
@@ -276,6 +279,7 @@ function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
                   w.id === currentWorkspaceId ? 'opacity-100' : 'opacity-0',
                 )}
               />
+              <WorkspaceLogo logo={w.logo} fallbackSeed={w.id} size={20} className="flex-shrink-0" />
               <span className="min-w-0 flex-1 truncate">{w.name}</span>
               <span className="text-xs text-muted-foreground">{w.repos.length}</span>
             </button>

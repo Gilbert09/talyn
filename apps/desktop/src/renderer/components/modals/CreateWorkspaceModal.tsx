@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Loader2, FolderKanban } from 'lucide-react';
+import { Loader2, FolderKanban, Shuffle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -11,8 +11,13 @@ import {
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
+import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { api } from '../../lib/api';
 import { useWorkspaceStore } from '../../stores/workspace';
+
+function randomSeed(): string {
+  return crypto.randomUUID();
+}
 
 interface CreateWorkspaceModalProps {
   open: boolean;
@@ -27,12 +32,14 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
   const { addWorkspace, setCurrentWorkspace } = useWorkspaceStore();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [seed, setSeed] = useState(randomSeed);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function reset() {
     setName('');
     setDescription('');
+    setSeed(randomSeed());
     setError(null);
   }
 
@@ -51,6 +58,7 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
       const workspace = await api.workspaces.create({
         name: trimmed,
         description: description.trim() || undefined,
+        logo: { kind: 'identicon', seed },
       });
       addWorkspace(workspace);
       setCurrentWorkspace(workspace.id);
@@ -78,6 +86,19 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
         </DialogHeader>
 
         <div className="space-y-4 py-2">
+          <div className="flex items-center gap-3">
+            <WorkspaceLogo logo={{ kind: 'identicon', seed }} fallbackSeed={seed} size={48} />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setSeed(randomSeed())}
+              disabled={saving}
+            >
+              <Shuffle className="mr-1 h-4 w-4" />
+              Shuffle logo
+            </Button>
+          </div>
           <div>
             <label className="text-sm font-medium">Name</label>
             <Input
