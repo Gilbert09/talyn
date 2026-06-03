@@ -12,6 +12,7 @@ import { environments as environmentsTable } from './db/schema.js';
 import { taskQueueService } from './services/taskQueue.js';
 import { githubService } from './services/github.js';
 import { prMonitorService } from './services/prMonitor.js';
+import { notificationsPoller } from './services/notificationsPoller.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
@@ -37,6 +38,7 @@ async function main() {
   await taskQueueService.init();
   await githubService.init();
   await prMonitorService.init();
+  notificationsPoller.init();
   cloudTaskPoller.init();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
@@ -112,6 +114,7 @@ async function main() {
     console.log('Shutting down...');
     cloudTaskPoller.shutdown();
     postHogCodeStreamer.shutdownAll();
+    notificationsPoller.shutdown();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
 

@@ -699,6 +699,39 @@ class PRMonitorService extends EventEmitter {
   }
 
   /**
+   * Refetch a single PR's summary now — the trigger the notifications poller
+   * fires on activity. GraphQL-only, no relationship-flag changes (those stay
+   * on the search ticks). No-op if the repo isn't watched in this workspace.
+   */
+  async refreshPr(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number
+  ): Promise<void> {
+    const watched = (await this.getWatchedRepos(workspaceId)).find(
+      (r) =>
+        r.owner.toLowerCase() === owner.toLowerCase() &&
+        r.repo.toLowerCase() === repo.toLowerCase()
+    );
+    if (!watched) return;
+    const results = await batchPullRequestsByNumber({
+      workspaceId,
+      owner: watched.owner,
+      repo: watched.repo,
+      numbers: [number],
+    });
+    for (const result of results) {
+      if (!result.pr) continue;
+      await upsertFromBatchResult({
+        workspaceId,
+        repositoryId: watched.id,
+        summary: result.pr,
+      });
+    }
+  }
+
+  /**
    * Drop a cached login — called when a workspace's GitHub OAuth token
    * is removed (revoked / disconnected). Without this, the next poll
    * would still try to use the previous user's login as a filter.
