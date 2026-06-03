@@ -717,6 +717,82 @@ export interface PostHogCodeTaskMetadata {
   posthogStatus?: string;
 }
 
+/**
+ * Cloud task providers FastOwl can delegate a task to. A provider runs the
+ * whole agent loop on its own sandbox and opens a PR; FastOwl kicks off the
+ * run and reconciles status/transcript back. `posthog_code` is live today;
+ * the other two are planned drop-ins (see docs/CLOUD_PROVIDERS.md).
+ */
+export type CloudProviderType = 'posthog_code' | 'codex_cloud' | 'claude_routine';
+
+/**
+ * Neutral, provider-agnostic cloud-run metadata stored on
+ * `task.metadata.cloudTask`. Supersedes the legacy `posthog*` fields; a
+ * read-through helper ({@link readCloudTaskMeta}) maps old tasks forward.
+ */
+export interface CloudTaskMetadata {
+  /** Which provider owns this task. */
+  provider: CloudProviderType;
+  /** Remote task id on the provider. */
+  remoteTaskId: string;
+  /** Remote run id, once a run has started. */
+  remoteRunId?: string;
+  /** Last remote status observed. */
+  status?: string;
+  /** Deep link to the run's log/console in the provider's UI. */
+  logUrl?: string;
+  /** PR URL once the run opens one. */
+  prUrl?: string;
+  /** Provider-specific extras. */
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Resolve which cloud provider owns a task from its `provider` column
+ * (preferred) or its metadata, falling back to the legacy `posthog*`
+ * fields. Returns null for a task with no cloud association.
+ */
+export function readCloudTaskProvider(task: {
+  provider?: string;
+  metadata?: Record<string, unknown> | null;
+}): CloudProviderType | null {
+  const KNOWN: CloudProviderType[] = ['posthog_code', 'codex_cloud', 'claude_routine'];
+  if (task.provider && KNOWN.includes(task.provider as CloudProviderType)) {
+    return task.provider as CloudProviderType;
+  }
+  const meta = task.metadata ?? {};
+  const cloud = meta.cloudTask as CloudTaskMetadata | undefined;
+  if (cloud?.provider && KNOWN.includes(cloud.provider)) return cloud.provider;
+  if (typeof meta.posthogTaskId === 'string' && meta.posthogTaskId) {
+    return 'posthog_code';
+  }
+  return null;
+}
+
+/**
+ * Read the neutral cloud metadata for a task, mapping legacy `posthog*`
+ * fields forward when `metadata.cloudTask` isn't present. Returns null if
+ * the task carries no cloud run.
+ */
+export function readCloudTaskMeta(task: {
+  metadata?: Record<string, unknown> | null;
+}): CloudTaskMetadata | null {
+  const meta = task.metadata ?? {};
+  const cloud = meta.cloudTask as CloudTaskMetadata | undefined;
+  if (cloud && cloud.remoteTaskId) return cloud;
+  if (typeof meta.posthogTaskId === 'string' && meta.posthogTaskId) {
+    return {
+      provider: 'posthog_code',
+      remoteTaskId: meta.posthogTaskId,
+      remoteRunId: meta.posthogRunId as string | undefined,
+      status: meta.posthogStatus as string | undefined,
+      logUrl: meta.posthogLogUrl as string | undefined,
+      prUrl: meta.posthogPrUrl as string | undefined,
+    };
+  }
+  return null;
+}
+
 export interface GenerateTaskMetadataRequest {
   prompt: string;
   /**

@@ -1,22 +1,20 @@
 import { EventEmitter } from 'events';
-import { and, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
-import type { Task, TaskPriority, Agent, TaskStatus, TaskType } from '@fastowl/shared';
-import { isAgentTask } from '@fastowl/shared';
-import { agentService } from './agent.js';
-import { environmentService } from './environment.js';
-import { dispatchTaskToPostHogCode } from './posthogCode/executor.js';
-import { gitService } from './git.js';
-import { resolveTaskGitContext } from './gitContext.js';
-import { withTaskGitLog } from './gitLogService.js';
-import { generateTaskTitle, looksLikePlaceholderTitle } from './ai.js';
-import { permissionService } from './permissionService.js';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import type {
+  Environment,
+  EnvironmentConfig,
+  Task,
+  TaskPriority,
+  TaskStatus,
+  TaskType,
+} from '@fastowl/shared';
+import { getCloudProvider } from './cloudProviders/registry.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
-import { emitTaskStatus, emitTaskUpdate } from './websocket.js';
+import { emitTaskStatus } from './websocket.js';
 import { getDbClient, type Database } from '../db/client.js';
 import {
   tasks as tasksTable,
-  agents as agentsTable,
-  workspaces as workspacesTable,
+  environments as environmentsTable,
 } from '../db/schema.js';
 
 // Priority weights; referenced by the SQL CASE expressions below.
@@ -29,19 +27,17 @@ const PRIORITY_WEIGHTS: Record<TaskPriority, number> = {
 // Silence unused warning: kept as canonical source of the priority order.
 void PRIORITY_WEIGHTS;
 
-/** How often recoverStuckTasks runs outside of init(). */
-const STUCK_TASK_CHECK_MS = 2 * 60 * 1000;
 /**
- * A task that's been `in_progress` for longer than this — without any
- * updated_at activity from the agent service — is considered stuck even
- * if its agent still exists. Typically means the agent session died
- * abnormally or the daemon connection dropped.
+ * Cloud-only task scheduler. Every task is delegated to a cloud provider
+ * (PostHog Code today). The queue's whole job is: pick up pending/queued
+ * tasks, resolve the provider from the task's assigned cloud-marker env,
+ * and call `provider.dispatch`. The provider flips the task to
+ * `in_progress` and the cloud poller (cloudProviders/poller.ts) drives it
+ * to a terminal state. There is no local agent loop, no working tree, and
+ * no concurrency slots — the vendor hosts all of that.
  */
-const IN_PROGRESS_STALE_AFTER_MS = 20 * 60 * 1000;
-
 class TaskQueueService extends EventEmitter {
   private processingInterval: NodeJS.Timeout | null = null;
-  private stuckTaskInterval: NodeJS.Timeout | null = null;
   private isProcessing = false;
   private shuttingDown = false;
 
@@ -62,119 +58,9 @@ class TaskQueueService extends EventEmitter {
   }
 
   async init(): Promise<void> {
-    await this.recoverStuckTasks();
-
-    agentService.on('status', (_agentId, status) => {
-      if (status === 'idle' || status === 'completed') {
-        this.runProcessQueue();
-      }
-    });
-
     this.processingInterval = setInterval(() => {
       this.runProcessQueue();
     }, 5000);
-
-    // Periodically recover stuck tasks — not just at boot. Agents can
-    // die mid-task (daemon disconnect, process crash) during normal
-    // operation; without this, a failed in_progress task would languish
-    // until the next service restart.
-    this.stuckTaskInterval = setInterval(() => {
-      if (this.shuttingDown) return;
-      this.recoverStuckTasks().catch((err) => {
-        if (this.shuttingDown) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('DATABASE_URL is not set')) return;
-        console.error('[TaskQueue] recoverStuckTasks error:', err);
-      });
-    }, STUCK_TASK_CHECK_MS);
-  }
-
-  /**
-   * Reset tasks that are `in_progress` but have no live agent driving
-   * them. Two criteria:
-   *   1. The assigned agent doesn't exist or is in a terminal status
-   *      (completed/error/idle) — agent process died.
-   *   2. The task has been in_progress for >= IN_PROGRESS_STALE_AFTER_MS
-   *      without `updated_at` moving — the agent might still exist but
-   *      is silent (daemon disconnect, hung process, etc).
-   *
-   * Matched tasks go back to `queued`, their assigned_agent_id cleared,
-   * so they're pickable on the next tick.
-   */
-  private async recoverStuckTasks(): Promise<void> {
-    const staleCutoff = new Date(Date.now() - IN_PROGRESS_STALE_AFTER_MS);
-
-    const stuckTasks = await this.db
-      .select({
-        id: tasksTable.id,
-        workspaceId: tasksTable.workspaceId,
-        title: tasksTable.title,
-        metadata: tasksTable.metadata,
-      })
-      .from(tasksTable)
-      .leftJoin(agentsTable, eq(tasksTable.assignedAgentId, agentsTable.id))
-      .where(
-        and(
-          eq(tasksTable.status, 'in_progress'),
-          or(
-            isNull(tasksTable.assignedAgentId),
-            isNull(agentsTable.id),
-            // `idle` deliberately NOT here: interactive structured runs
-            // sit in `idle` between turns while the child waits on
-            // stdin. That's the intended steady state, not stuck.
-            inArray(agentsTable.status, ['completed', 'error']),
-            lt(tasksTable.updatedAt, staleCutoff)
-          )
-        )
-      );
-
-    if (stuckTasks.length === 0) return;
-
-    // Two extra filters on top of the SQL match:
-    //  1. Permission-pending: hook is blocked on a user click, so
-    //     stdout is silent and `updated_at` won't budge. Legitimate.
-    //  2. Live agent in memory: `cleanupStaleAgents` removes dead
-    //     agent rows at boot, but between boots a task may match the
-    //     `updated_at < cutoff` clause despite having a healthy
-    //     in-memory agent (e.g. the user left the task idle in
-    //     interactive mode for 20+ min). Don't reset those — we'd
-    //     kill a live session and re-spawn the seed prompt, which is
-    //     a very bad surprise.
-    const actionable = stuckTasks.filter((t) => {
-      // Cloud (PostHog Code) tasks legitimately have no FastOwl agent —
-      // the run lives on PostHog's sandbox and the poller owns its
-      // lifecycle. Don't yank them back to queued (that would re-dispatch
-      // a duplicate remote run).
-      const meta = (t.metadata as Record<string, unknown> | null) ?? {};
-      if (meta.posthogRunId) {
-        return false;
-      }
-      if (permissionService.hasPendingForTask(t.id)) {
-        console.log(
-          `[TaskQueue] Task "${t.title}" looks stuck but has pending permission prompts — leaving alone`
-        );
-        return false;
-      }
-      if (agentService.getAgentByTaskId(t.id)) {
-        console.log(
-          `[TaskQueue] Task "${t.title}" looks stuck but has a live in-memory agent — leaving alone`
-        );
-        return false;
-      }
-      return true;
-    });
-    if (actionable.length === 0) return;
-
-    console.log(`Found ${actionable.length} stuck task(s), resetting to queued...`);
-    const now = new Date();
-    for (const task of actionable) {
-      await this.db
-        .update(tasksTable)
-        .set({ status: 'queued', assignedAgentId: null, updatedAt: now })
-        .where(eq(tasksTable.id, task.id));
-      console.log(`  Reset task: ${task.title}`);
-      emitTaskStatus(task.workspaceId, task.id, 'queued');
-    }
   }
 
   shutdown(): void {
@@ -182,10 +68,6 @@ class TaskQueueService extends EventEmitter {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
       this.processingInterval = null;
-    }
-    if (this.stuckTaskInterval) {
-      clearInterval(this.stuckTaskInterval);
-      this.stuckTaskInterval = null;
     }
   }
 
@@ -253,245 +135,65 @@ class TaskQueueService extends EventEmitter {
       if (queuedTasks.length === 0) return;
 
       console.log(`[TaskQueue] Processing ${queuedTasks.length} queued task(s)`);
-      const idleAgents = await agentService.getIdleAgents();
-      console.log(`[TaskQueue] Found ${idleAgents.length} idle agent(s)`);
-
-      const connectedEnvironments = (await environmentService.getAllEnvironments())
-        .filter((env) => env.status === 'connected');
-      console.log(`[TaskQueue] Found ${connectedEnvironments.length} connected environment(s)`);
 
       for (const task of queuedTasks) {
-        if (!isAgentTask(task.type)) {
-          console.log(
-            `[TaskQueue] Skipping task "${task.title}" - type is ${task.type}, not an agent task`
+        const env = await this.resolveCloudEnv(task);
+        if (!env) {
+          // No cloud-marker env assigned — nothing can run it. The
+          // composer always assigns a provider, so this only happens
+          // for malformed rows. Leave it queued (visible, not lost).
+          console.warn(
+            `[TaskQueue] task "${task.title}" has no cloud provider env; skipping`
           );
           continue;
         }
 
-        console.log(`[TaskQueue] Processing task: "${task.title}"`);
-
-        const targetEnvironmentId = task.assignedEnvironmentId;
-
-        // PostHog Code (cloud) delegation. These envs have no daemon and
-        // no FastOwl agent — the whole agent loop runs on PostHog's
-        // sandbox — so they bypass the idle-agent / (env,repo) slot /
-        // concurrency machinery entirely. The poller drives the task to
-        // awaiting_review / failed once the remote run finishes.
-        if (targetEnvironmentId) {
-          const targetEnv = connectedEnvironments.find(
-            (e) => e.id === targetEnvironmentId
+        const provider = getCloudProvider(env.type);
+        if (!provider) {
+          console.warn(
+            `[TaskQueue] no provider registered for env type "${env.type}"; skipping "${task.title}"`
           );
-          if (targetEnv?.type === 'posthog_code') {
-            const result = await dispatchTaskToPostHogCode(task, targetEnv);
-            if (!result.ok) {
-              console.error(
-                `[TaskQueue] PostHog Code dispatch failed for "${task.title}": ${result.error}`
-              );
-              await patchTaskMetadata(task.id, (existing) => ({
-                ...existing,
-                lastScheduleError: {
-                  at: new Date().toISOString(),
-                  reason: result.error,
-                },
-              }));
-              await this.db
-                .update(tasksTable)
-                .set({ status: 'queued', updatedAt: new Date() })
-                .where(eq(tasksTable.id, task.id));
-              emitTaskStatus(task.workspaceId, task.id, 'queued');
-            }
-            continue;
-          }
+          continue;
         }
 
-        let agentToUse: Agent | null = null;
-
-        for (const agent of idleAgents) {
-          if (agent.workspaceId !== task.workspaceId) continue;
-          if (targetEnvironmentId && agent.environmentId !== targetEnvironmentId) continue;
-
-          // Same (env, repo) slot guard as the new-agent path below.
-          if (task.repositoryId) {
-            const holder = await findTaskHoldingEnvRepoSlot(
-              this.db,
-              agent.environmentId,
-              task.repositoryId,
-              task.id
-            );
-            if (holder) {
-              console.log(
-                `[TaskQueue] Idle agent ${agent.id} on env ${agent.environmentId} blocked: (env, repo) slot held by task "${holder.title}" (${holder.status})`
-              );
-              continue;
-            }
-          }
-
-          agentToUse = agent;
-          console.log(`[TaskQueue] Found idle agent: ${agent.id}`);
-          break;
-        }
-
-        if (!agentToUse) {
-          console.log(`[TaskQueue] No idle agent found, checking for available environments...`);
-          const workspace = await this.getWorkspaceSettings(task.workspaceId);
-          const maxAgents = workspace?.maxConcurrentAgents ?? 3;
-          const activeAgentCount = await this.getActiveAgentCount(task.workspaceId);
-          console.log(`[TaskQueue] Active agents: ${activeAgentCount}/${maxAgents}`);
-
-          if (activeAgentCount < maxAgents) {
-            for (const env of connectedEnvironments) {
-              console.log(
-                `[TaskQueue] Checking environment: ${env.name} (${env.type}, status: ${env.status})`
-              );
-              const agentsInWorkspace = await agentService.getAgentsByWorkspace(task.workspaceId);
-              const envHasActiveAgent = agentsInWorkspace.some(
-                (a) => a.environmentId === env.id && agentService.isAgentActive(a.id)
-              );
-
-              if (envHasActiveAgent) {
-                console.log(
-                  `[TaskQueue] Environment ${env.name} already has an active agent, skipping`
-                );
-                continue;
-              }
-
-              // (env, repo) single-slot: an in_progress OR awaiting_review
-              // task already owns the working tree for this repo on this
-              // env. Starting a second one would stomp on its branch.
-              if (task.repositoryId) {
-                const holder = await findTaskHoldingEnvRepoSlot(
-                  this.db,
-                  env.id,
-                  task.repositoryId,
-                  task.id
-                );
-                if (holder) {
-                  console.log(
-                    `[TaskQueue] (env, repo) slot busy on ${env.name}: task "${holder.title}" is ${holder.status}; skipping`
-                  );
-                  continue;
-                }
-              }
-
-              if (!targetEnvironmentId || env.id === targetEnvironmentId) {
-                console.log(`[TaskQueue] Starting new agent on ${env.name}...`);
-
-                // Flip the task to in_progress up-front so the UI
-                // doesn't see the 10-60s git-prep window as a stall
-                // in `queued`. Pin the env on the row too so the
-                // approve/reject/git-tab endpoints can find it.
-                await this.db
-                  .update(tasksTable)
-                  .set({
-                    status: 'in_progress',
-                    assignedEnvironmentId: env.id,
-                    updatedAt: new Date(),
-                  })
-                  .where(eq(tasksTable.id, task.id));
-                emitTaskStatus(task.workspaceId, task.id, 'in_progress');
-
-                // Roll the task back to queued on any prep/start
-                // failure below so the scheduler will re-pick it on
-                // the next tick (different env, different moment).
-                // Persist the reason on task.metadata.lastScheduleError
-                // so the desktop can show WHY a task that keeps going
-                // in_progress → queued isn't actually running.
-                const rollback = async (reason: string): Promise<void> => {
-                  console.error(
-                    `[TaskQueue] rolling ${task.title} back to queued: ${reason}`
-                  );
-                  // Metadata patch through the shared mutex so a
-                  // concurrent gitLog append (still in flight from
-                  // prepareRepoForTask) can't clobber lastScheduleError.
-                  await patchTaskMetadata(task.id, (existing) => ({
-                    ...existing,
-                    lastScheduleError: {
-                      at: new Date().toISOString(),
-                      reason,
-                    },
-                  }));
-                  await this.db
-                    .update(tasksTable)
-                    .set({
-                      status: 'queued',
-                      assignedEnvironmentId: null,
-                      updatedAt: new Date(),
-                    })
-                    .where(eq(tasksTable.id, task.id));
-                  emitTaskStatus(task.workspaceId, task.id, 'queued');
-                };
-
-                // Prep the task branch on a synced base.
-                let workingDirectory: string | undefined;
-                let taskBranch: string | undefined = task.branch;
-                if (task.repositoryId) {
-                  const prep = await this.prepareRepoForTask(task, env.id);
-                  if (!prep.ok) {
-                    await rollback(`Failed to prepare repo: ${prep.error}`);
-                    continue;
-                  }
-                  workingDirectory = prep.workingDirectory;
-                  if (prep.branch) taskBranch = prep.branch;
-                }
-
-                try {
-                  const newAgent = await agentService.startAgent({
-                    environmentId: env.id,
-                    workspaceId: task.workspaceId,
-                    taskId: task.id,
-                    prompt: task.prompt || task.description,
-                    workingDirectory,
-                  });
-                  console.log(`[TaskQueue] Agent started: ${newAgent.id}`);
-
-                  const updateValues: Record<string, unknown> = {
-                    assignedAgentId: newAgent.id,
-                    updatedAt: new Date(),
-                  };
-                  if (taskBranch) updateValues.branch = taskBranch;
-
-                  await this.db
-                    .update(tasksTable)
-                    .set(updateValues)
-                    .where(eq(tasksTable.id, task.id));
-
-                  break;
-                } catch (err) {
-                  await rollback(
-                    err instanceof Error ? err.message : String(err)
-                  );
-                }
-              }
-            }
-          } else {
-            console.log(`[TaskQueue] Max concurrent agents reached (${activeAgentCount}/${maxAgents})`);
-          }
-        } else {
-          console.log(`[TaskQueue] Sending task to idle agent ${agentToUse.id}...`);
-          try {
-            const prompt = task.prompt || task.description;
-            agentService.sendInput(agentToUse.id, prompt);
-
-            const now = new Date();
-            await this.db
-              .update(tasksTable)
-              .set({ status: 'in_progress', assignedAgentId: agentToUse.id, updatedAt: now })
-              .where(eq(tasksTable.id, task.id));
-            await this.db
-              .update(agentsTable)
-              .set({ currentTaskId: task.id, status: 'working', lastActivity: now })
-              .where(eq(agentsTable.id, agentToUse.id));
-
-            emitTaskStatus(task.workspaceId, task.id, 'in_progress');
-            idleAgents.splice(idleAgents.indexOf(agentToUse), 1);
-          } catch (err) {
-            console.error(`Failed to assign task to agent:`, err);
-          }
+        console.log(
+          `[TaskQueue] Dispatching task "${task.title}" to ${provider.displayName}`
+        );
+        const result = await provider.dispatch(task, env);
+        if (!result.ok) {
+          console.error(
+            `[TaskQueue] dispatch failed for "${task.title}": ${result.error}`
+          );
+          await patchTaskMetadata(task.id, (existing) => ({
+            ...existing,
+            lastScheduleError: {
+              at: new Date().toISOString(),
+              reason: result.error,
+            },
+          }));
+          await this.db
+            .update(tasksTable)
+            .set({ status: 'queued', updatedAt: new Date() })
+            .where(eq(tasksTable.id, task.id));
+          emitTaskStatus(task.workspaceId, task.id, 'queued');
         }
       }
     } finally {
       this.isProcessing = false;
     }
+  }
+
+  /** Resolve the cloud-marker env a task is assigned to, or null. */
+  private async resolveCloudEnv(task: Task): Promise<Environment | null> {
+    if (!task.assignedEnvironmentId) return null;
+    const rows = await this.db
+      .select()
+      .from(environmentsTable)
+      .where(eq(environmentsTable.id, task.assignedEnvironmentId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return rowToCloudEnv(row);
   }
 
   async getTask(taskId: string): Promise<Task | null> {
@@ -502,120 +204,14 @@ class TaskQueueService extends EventEmitter {
       .limit(1);
     return rows[0] ? rowToTask(rows[0]) : null;
   }
-
-  private async getWorkspaceSettings(
-    workspaceId: string
-  ): Promise<{ maxConcurrentAgents?: number } | null> {
-    const rows = await this.db
-      .select({ settings: workspacesTable.settings })
-      .from(workspacesTable)
-      .where(eq(workspacesTable.id, workspaceId))
-      .limit(1);
-    if (!rows[0]) return null;
-    return (rows[0].settings as { maxConcurrentAgents?: number } | null) ?? {};
-  }
-
-  private async getActiveAgentCount(workspaceId: string): Promise<number> {
-    const rows = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(agentsTable)
-      .where(
-        and(
-          eq(agentsTable.workspaceId, workspaceId),
-          inArray(agentsTable.status, ['working', 'tool_use', 'awaiting_input'])
-        )
-      );
-    return rows[0]?.count ?? 0;
-  }
-
-  /**
-   * Resolve the repo's local path + sync the base branch + create the
-   * task branch — the scheduler's equivalent of the block in
-   * `routes/tasks.ts:/start`. Returns an error-typed result rather
-   * than throwing so the caller can log + skip without aborting the
-   * whole queue tick.
-   */
-  private async prepareRepoForTask(
-    task: Task,
-    environmentId: string
-  ): Promise<
-    | { ok: true; workingDirectory?: string; branch?: string }
-    | { ok: false; error: string }
-  > {
-    const gitContext = await resolveTaskGitContext(task, environmentId);
-    if (!gitContext) return { ok: true };
-
-    // Refine the title inline if it's still the prompt placeholder —
-    // mirrors the same step in /start so scheduler-launched tasks
-    // also get clean branch slugs. The title patch is broadcast so
-    // the desktop replaces the placeholder live.
-    if (task.prompt && looksLikePlaceholderTitle(task.title, task.prompt)) {
-      try {
-        const refined = await generateTaskTitle(task.prompt, environmentId);
-        if (refined && refined !== task.title) {
-          await this.db
-            .update(tasksTable)
-            .set({ title: refined, updatedAt: new Date() })
-            .where(eq(tasksTable.id, task.id));
-          task.title = refined;
-          emitTaskUpdate(task.workspaceId, task.id, {
-            title: refined,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-      } catch (err) {
-        console.warn(
-          `[TaskQueue] inline title refinement failed for ${task.id}, branch slug may be ugly:`,
-          err
-        );
-      }
-    }
-
-    const { workingDirectory, baseBranch } = gitContext;
-
-    // Wrap the git work in a task-scoped context so every command
-    // shows up in the desktop Git tab.
-    return withTaskGitLog(task.id, async () => {
-      if (task.branch) {
-        try {
-          await gitService.checkoutBranch(environmentId, task.branch, workingDirectory);
-          return { ok: true, workingDirectory, branch: task.branch } as const;
-        } catch (err) {
-          console.warn(
-            `[TaskQueue] Failed to checkout existing branch ${task.branch}, will create fresh:`,
-            err
-          );
-        }
-      }
-
-      try {
-        const branch = await gitService.prepareTaskBranch({
-          environmentId,
-          taskId: task.id,
-          taskTitle: task.title,
-          workingDirectory,
-          baseBranch,
-        });
-        return { ok: true, workingDirectory, branch } as const;
-      } catch (err) {
-        return {
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        } as const;
-      }
-    });
-  }
 }
 
 /**
- * Find the task currently holding the (env, repo) single-slot, or null
- * if the slot is free. `in_progress` holds it (agent is actively
- * writing); `awaiting_review` holds it too because the working tree is
- * still dirty with that task's work until approve/reject commits or
- * resets it.
- *
- * Used by both the scheduler and `/start` to refuse to launch a second
- * task that would stomp on the first's branch.
+ * Legacy single-slot guard, retained so `routes/tasks.ts` keeps compiling
+ * until it's pruned (Phase 3 of the cloud-only refactor). Cloud tasks have
+ * no working tree, so this no longer gates dispatch — it just answers
+ * "does another task already claim this (env, repo)?" for the old `/start`
+ * endpoint.
  */
 export async function findTaskHoldingEnvRepoSlot(
   db: Database,
@@ -641,6 +237,18 @@ export async function findTaskHoldingEnvRepoSlot(
     .limit(1);
 
   return rows[0] ?? null;
+}
+
+/** Build a minimal Environment from a marker row for provider dispatch. */
+function rowToCloudEnv(row: typeof environmentsTable.$inferSelect): Environment {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type as Environment['type'],
+    status: row.status as Environment['status'],
+    config: (row.config as EnvironmentConfig) ?? { type: row.type as never },
+    renderer: 'structured',
+  } as Environment;
 }
 
 function rowToTask(row: typeof tasksTable.$inferSelect): Task {

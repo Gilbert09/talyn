@@ -21,8 +21,10 @@ import { continuousBuildScheduler } from './services/continuousBuild.js';
 import { permissionInboxService } from './services/permissionInbox.js';
 import { taskFileWatcher } from './services/taskFileWatcher.js';
 import { daemonAutoUpdate } from './services/daemonAutoUpdate.js';
-import { postHogCodePoller } from './services/posthogCode/poller.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
+import { registerCloudProvider } from './services/cloudProviders/registry.js';
+import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
+import { cloudTaskPoller } from './services/cloudProviders/poller.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -33,6 +35,11 @@ async function main() {
   // read any state.
   console.log('Initializing database...');
   await initDatabase();
+
+  // Register cloud task providers before any service that dispatches or
+  // polls them. One provider today (PostHog Code); Codex/Claude slot in
+  // here with no other changes (see docs/CLOUD_PROVIDERS.md).
+  registerCloudProvider(postHogCodeProvider);
 
   // Initialize services. Each init is idempotent and DB-aware.
   console.log('Initializing services...');
@@ -47,7 +54,7 @@ async function main() {
   permissionInboxService.init();
   taskFileWatcher.init();
   daemonAutoUpdate.init();
-  postHogCodePoller.init();
+  cloudTaskPoller.init();
 
   const app = express();
   // Only real browser origins need CORS. Desktop/CLI/MCP clients send no
@@ -133,7 +140,7 @@ async function main() {
   const shutdown = async () => {
     console.log('Shutting down...');
     continuousBuildScheduler.shutdown();
-    postHogCodePoller.shutdown();
+    cloudTaskPoller.shutdown();
     postHogCodeStreamer.shutdownAll();
     prMonitorService.shutdown();
     taskQueueService.shutdown();

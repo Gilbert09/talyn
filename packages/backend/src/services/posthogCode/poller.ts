@@ -12,6 +12,7 @@ import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
 import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.js';
 import type { AcpLogEntry } from './acpConverter.js';
+import type { CloudTaskRow } from '../cloudProviders/types.js';
 
 const POLL_INTERVAL_MS = 10_000;
 const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
@@ -106,6 +107,27 @@ class PostHogCodePoller {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * Reconcile one cloud task row — the entry point the generic cloud
+   * poller (cloudProviders/poller.ts) calls via the provider wrapper.
+   * Extracts the PostHog ids from metadata and delegates to the existing
+   * per-task reconcile. No-op for a row that isn't a started PostHog run.
+   */
+  async reconcileTask(row: CloudTaskRow): Promise<void> {
+    const posthogTaskId = row.metadata.posthogTaskId as string | undefined;
+    const posthogRunId = row.metadata.posthogRunId as string | undefined;
+    if (!posthogTaskId || !posthogRunId) return;
+    await this.reconcile({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      title: row.title,
+      repositoryId: row.repositoryId,
+      posthogTaskId,
+      lastStatus: row.metadata.posthogStatus as string | undefined,
+      transcriptEmpty: row.transcriptEmpty,
+    });
   }
 
   private async reconcile(task: {

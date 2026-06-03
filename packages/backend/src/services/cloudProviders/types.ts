@@ -1,0 +1,67 @@
+import type { CloudProviderType, Environment, Task } from '@fastowl/shared';
+
+/**
+ * A cloud task provider delegates a FastOwl task to a vendor that runs the
+ * whole agent loop on its own sandbox and (usually) opens a PR. FastOwl
+ * kicks off the remote run, ingests its transcript, and reconciles its
+ * status back onto the local task. PostHog Code is the first (and currently
+ * only) provider; Codex Cloud and Claude Routines are the planned drop-ins.
+ *
+ * See docs/CLOUD_PROVIDERS.md for the full design.
+ */
+export interface CloudTaskProvider {
+  /** Stable id; matches the env-marker `type` and `task.provider`. */
+  readonly type: CloudProviderType;
+  /** Human label for Settings / composer UI. */
+  readonly displayName: string;
+  /** UI capability hints (which controls the composer should render). */
+  readonly capabilities?: CloudProviderCapabilities;
+
+  /** Validate + persist credentials from the Settings → Integrations form. */
+  validateCredentials(
+    workspaceId: string,
+    input: unknown,
+  ): Promise<{ ok: boolean; error?: string }>;
+  /** True if this workspace has usable credentials stored. */
+  hasCredentials(workspaceId: string): Promise<boolean>;
+  /** Remove this workspace's credentials. */
+  removeCredentials(workspaceId: string): Promise<void>;
+
+  /**
+   * Kick off a remote run for `task`. Stamps `metadata.cloudTask` (and the
+   * legacy `posthog*` fields for back-compat), flips the task to
+   * `in_progress`, and starts streaming the transcript. The poller owns the
+   * task from here. Idempotent: a task that already carries a remote id is a
+   * no-op. `env` is the secret-free cloud marker the task is assigned to.
+   */
+  dispatch(task: Task, env: Environment): Promise<DispatchResult>;
+
+  /**
+   * Reconcile one in-progress task against its remote run: refresh status,
+   * keep the transcript stream alive, link the PR, and finalize the task
+   * when the remote run reaches a terminal state. Called every poll tick.
+   */
+  reconcile(taskRow: CloudTaskRow): Promise<void>;
+
+  /** Tear down any live transcript stream for a task (on stop/delete). */
+  stopStreaming(taskId: string): void;
+}
+
+export type DispatchResult = { ok: true } | { ok: false; error: string };
+
+export interface CloudProviderCapabilities {
+  /** Show a model picker in the composer. */
+  model?: boolean;
+  /** Show a runtime-adapter picker (e.g. claude vs codex). */
+  runtimeAdapter?: boolean;
+}
+
+/** The minimal task row the poller hands to `reconcile`. */
+export interface CloudTaskRow {
+  id: string;
+  workspaceId: string;
+  title: string;
+  repositoryId: string | null;
+  metadata: Record<string, unknown>;
+  transcriptEmpty: boolean;
+}
