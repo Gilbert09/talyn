@@ -10,12 +10,49 @@ import {
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import type {
   Workspace,
+  WorkspaceLogo,
   Repository,
   WorkspaceIntegrations,
   CreateWorkspaceRequest,
   UpdateWorkspaceRequest,
   ApiResponse,
 } from '@fastowl/shared';
+
+// Uploaded logos are stored inline as data URLs on the workspace row, so cap
+// them. The desktop downscales to ~128px before sending, which lands well
+// under this; the cap just guards against an oversized/abusive payload.
+const MAX_LOGO_DATA_URL_BYTES = 256 * 1024;
+
+/**
+ * Validate + normalise an untrusted logo from the request body. Throws on a
+ * bad shape so the route can 400. `identicon` carries a small seed string;
+ * `image` carries a `data:image/...` URL within the size cap.
+ */
+function validateLogo(raw: unknown): WorkspaceLogo {
+  if (!raw || typeof raw !== 'object') throw new Error('logo must be an object');
+  const l = raw as { kind?: unknown; seed?: unknown; dataUrl?: unknown };
+  if (l.kind === 'identicon') {
+    if (typeof l.seed !== 'string' || l.seed.length === 0 || l.seed.length > 200) {
+      throw new Error('logo seed must be a non-empty string under 200 chars');
+    }
+    return { kind: 'identicon', seed: l.seed };
+  }
+  if (l.kind === 'image') {
+    if (typeof l.dataUrl !== 'string' || !l.dataUrl.startsWith('data:image/')) {
+      throw new Error('logo image must be a data:image/ URL');
+    }
+    if (l.dataUrl.length > MAX_LOGO_DATA_URL_BYTES) {
+      throw new Error('logo image is too large');
+    }
+    return { kind: 'image', dataUrl: l.dataUrl };
+  }
+  throw new Error('logo kind must be "identicon" or "image"');
+}
+
+/** A fresh auto-generated identicon logo. */
+function generatedLogo(): WorkspaceLogo {
+  return { kind: 'identicon', seed: uuid() };
+}
 
 export function workspaceRoutes(): Router {
   const router = Router();
@@ -60,11 +97,21 @@ export function workspaceRoutes(): Router {
     const id = uuid();
     const now = new Date();
 
+    // Auto-generate an identicon logo unless the client supplied one.
+    let logo: WorkspaceLogo;
+    try {
+      logo = body.logo ? validateLogo(body.logo) : generatedLogo();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'invalid logo';
+      return res.status(400).json({ success: false, error: msg });
+    }
+
     await db.insert(workspacesTable).values({
       id,
       ownerId: user.id,
       name: body.name,
       description: body.description ?? null,
+      logo,
       settings: {},
       createdAt: now,
       updatedAt: now,
@@ -102,6 +149,14 @@ export function workspaceRoutes(): Router {
     const updates: Record<string, unknown> = {};
     if (body.name !== undefined) updates.name = body.name;
     if (body.description !== undefined) updates.description = body.description;
+    if (body.logo !== undefined) {
+      try {
+        updates.logo = validateLogo(body.logo);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'invalid logo';
+        return res.status(400).json({ success: false, error: msg });
+      }
+    }
     if (body.settings !== undefined) {
       const currentSettings = (existing[0].settings as Record<string, unknown>) ?? {};
       updates.settings = { ...currentSettings, ...body.settings };
@@ -206,6 +261,7 @@ function rowToWorkspace(
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
+    logo: (row.logo as WorkspaceLogo | null) ?? undefined,
     repos: relations.reposByWorkspace.get(row.id) ?? [],
     integrations: relations.integrationsByWorkspace.get(row.id) ?? {},
     settings: (row.settings as Workspace['settings']) ?? {},

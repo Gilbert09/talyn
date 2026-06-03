@@ -4,10 +4,20 @@
 // Workspace
 // ============================================================================
 
+/**
+ * A workspace's logo. Either an auto-generated identicon (rendered
+ * deterministically from `seed`) or a user-uploaded image (a downscaled
+ * `data:image/...` URL).
+ */
+export type WorkspaceLogo =
+  | { kind: 'identicon'; seed: string }
+  | { kind: 'image'; dataUrl: string };
+
 export interface Workspace {
   id: string;
   name: string;
   description?: string;
+  logo?: WorkspaceLogo;
   repos: Repository[];
   integrations: WorkspaceIntegrations;
   settings: WorkspaceSettings;
@@ -608,11 +618,13 @@ export interface PaginatedResponse<T> {
 export interface CreateWorkspaceRequest {
   name: string;
   description?: string;
+  logo?: WorkspaceLogo;
 }
 
 export interface UpdateWorkspaceRequest {
   name?: string;
   description?: string;
+  logo?: WorkspaceLogo;
   settings?: Partial<WorkspaceSettings>;
 }
 

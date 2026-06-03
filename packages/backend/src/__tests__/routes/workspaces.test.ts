@@ -17,7 +17,7 @@ const OTHER_USER_ID = 'user-other';
 
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '1mb' })); // mirror production (logo uploads)
   app.use('/workspaces', requireAuth, workspaceRoutes());
   const server: Server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -78,6 +78,31 @@ describe('routes/workspaces', () => {
       expect(body.data.settings).toEqual({});
       expect(body.data.repos).toEqual([]);
       expect(body.data.integrations).toEqual({});
+    });
+
+    it('auto-generates an identicon logo when none is provided', async () => {
+      const res = await fetch(`${serverUrl}/workspaces`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ name: 'Logo WS' }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.data.logo.kind).toBe('identicon');
+      expect(typeof body.data.logo.seed).toBe('string');
+      expect(body.data.logo.seed.length).toBeGreaterThan(0);
+    });
+
+    it('rejects an oversized uploaded logo image', async () => {
+      const huge = 'data:image/png;base64,' + 'A'.repeat(300 * 1024);
+      const res = await fetch(`${serverUrl}/workspaces`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ name: 'Big', logo: { kind: 'image', dataUrl: huge } }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/too large/i);
     });
   });
 
@@ -151,6 +176,39 @@ describe('routes/workspaces', () => {
   });
 
   describe('PATCH /workspaces/:id', () => {
+    it('updates the logo to a new identicon seed', async () => {
+      await db.insert(workspacesTable).values({
+        id: 'a',
+        ownerId: TEST_USER_ID,
+        name: 'Alpha',
+        logo: { kind: 'identicon', seed: 'old-seed' },
+        settings: {},
+      });
+      const res = await fetch(`${serverUrl}/workspaces/a`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ logo: { kind: 'identicon', seed: 'new-seed' } }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.data.logo).toEqual({ kind: 'identicon', seed: 'new-seed' });
+    });
+
+    it('rejects a logo with an unknown kind', async () => {
+      await db.insert(workspacesTable).values({
+        id: 'a',
+        ownerId: TEST_USER_ID,
+        name: 'Alpha',
+        settings: {},
+      });
+      const res = await fetch(`${serverUrl}/workspaces/a`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ logo: { kind: 'svg', data: 'x' } }),
+      });
+      expect(res.status).toBe(400);
+    });
+
     it('merges settings with existing values rather than replacing', async () => {
       await db.insert(workspacesTable).values({
         id: 'a',

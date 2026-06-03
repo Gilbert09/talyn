@@ -134,6 +134,13 @@
 			"when": 1784160000002,
 			"tag": "0018_drop_repo_local_path",
 			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "7",
+			"when": 1784160000003,
+			"tag": "0019_workspace_logo",
+			"breakpoints": true
 		}
 	]
 }
