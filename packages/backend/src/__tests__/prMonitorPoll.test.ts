@@ -806,6 +806,36 @@ describe('prMonitor — poll orchestration', () => {
     expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
   });
 
+  it('derives reviewRequestVia (direct + my team, excluding others) on upsert', async () => {
+    mockSearch([], [5]); // #5 awaiting my review
+    vi.spyOn(githubService, 'getViewerTeamSlugs').mockResolvedValue(
+      new Set(['acme/frontend'])
+    );
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      {
+        number: 5,
+        pr: fakeSummary({
+          number: 5,
+          author: 'someone-else',
+          reviewRequests: {
+            users: ['me'],
+            teams: [
+              { slug: 'frontend', name: 'Frontend', combinedSlug: 'acme/frontend' },
+              { slug: 'platform', name: 'Platform', combinedSlug: 'acme/platform' },
+            ],
+          },
+        }),
+      },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    const row = (await db.select().from(pullRequestsTable)).find((r) => r.number === 5);
+    const via = (row?.lastSummary as { reviewRequestVia?: unknown }).reviewRequestVia;
+    // Directly requested (I'm 'me'), and only my own team is kept.
+    expect(via).toEqual({ direct: true, teams: ['acme/frontend'] });
+  });
+
   // ---------- active-CI fast loop ----------
 
   function seedOpen(over: {

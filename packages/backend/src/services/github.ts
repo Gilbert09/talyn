@@ -174,6 +174,10 @@ class GitHubService extends EventEmitter {
   // and reused — the inbox filter checks it on every comment, so we
   // can't afford an API round-trip each time.
   private viewerLoginCache: Map<string, string> = new Map();
+  // Authenticated user's team slugs (`org/team`) per workspace, with a fetch
+  // timestamp. Teams change rarely, so we cache for an hour to avoid a
+  // /user/teams round-trip on every poll's review-request derivation.
+  private viewerTeamsCache: Map<string, { slugs: Set<string>; at: number }> = new Map();
 
   private get db(): Database {
     return getDbClient();
@@ -316,6 +320,7 @@ class GitHubService extends EventEmitter {
       );
     this.tokens.delete(workspaceId);
     this.viewerLoginCache.delete(workspaceId);
+    this.viewerTeamsCache.delete(workspaceId);
     this.emit('disconnected', workspaceId);
   }
 
@@ -395,6 +400,33 @@ class GitHubService extends EventEmitter {
 
   async getUser(workspaceId: string): Promise<GitHubUser> {
     return this.apiRequest<GitHubUser>(workspaceId, '/user');
+  }
+
+  /**
+   * The authenticated user's team slugs as `org/team` (combinedSlug form),
+   * across every org. Cached for an hour — teams change rarely and the poll's
+   * review-request derivation asks for them constantly. Returns an empty set
+   * on failure so derivation degrades to "no team requests" rather than
+   * throwing the whole poll.
+   */
+  async getViewerTeamSlugs(workspaceId: string): Promise<Set<string>> {
+    const cached = this.viewerTeamsCache.get(workspaceId);
+    if (cached && Date.now() - cached.at < 60 * 60_000) return cached.slugs;
+    try {
+      const teams = await this.apiRequest<
+        Array<{ slug: string; organization: { login: string } }>
+      >(workspaceId, '/user/teams?per_page=100');
+      const slugs = new Set(
+        teams
+          .filter((t) => t.organization?.login && t.slug)
+          .map((t) => `${t.organization.login}/${t.slug}`.toLowerCase())
+      );
+      this.viewerTeamsCache.set(workspaceId, { slugs, at: Date.now() });
+      return slugs;
+    } catch {
+      // Don't cache a failure — retry next time, meanwhile degrade gracefully.
+      return cached?.slugs ?? new Set();
+    }
   }
 
   /**

@@ -82,6 +82,23 @@ export interface PRSummary {
   /** Count of unresolved review threads (capped at the first 100 threads). */
   unresolvedReviewThreads: number;
   /**
+   * Currently-requested reviewers, split into users and teams. Transient
+   * (not persisted) — the monitor uses it to derive `reviewRequestVia`
+   * against the viewer's identity + teams before storing.
+   */
+  reviewRequests?: {
+    users: string[];
+    teams: Array<{ slug: string; name: string; combinedSlug: string }>;
+  };
+  /**
+   * Whether the *viewer* was asked to review directly, via a team, or both.
+   * `direct` true when the viewer is an individually-requested reviewer;
+   * `teams` lists the viewer's own teams (combinedSlug `org/team`) that were
+   * requested. Derived + persisted by the monitor; drives the Review tab's
+   * "Requested" column.
+   */
+  reviewRequestVia?: { direct: boolean; teams: string[] };
+  /**
    * Per-check rows behind the `checks` rollup — name, normalized state,
    * and a link to the run/target. Not persisted (summaryToJsonb keeps
    * only the counts); flows through the live detail fetch so the
@@ -555,6 +572,15 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
   mergeStateStatus
   reviewDecision
   author { login }
+  reviewRequests(first: 50) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { login }
+        ... on Team { slug name combinedSlug }
+      }
+    }
+  }
   headRefName
   baseRefName
   headRefOid
@@ -683,6 +709,15 @@ interface RawPullRequest {
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
   author: { login: string } | null;
+  reviewRequests: {
+    nodes: Array<{
+      requestedReviewer:
+        | { __typename: 'User'; login: string }
+        | { __typename: 'Team'; slug: string; name: string; combinedSlug: string }
+        | { __typename: string }
+        | null;
+    }>;
+  };
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
@@ -808,6 +843,20 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
   const unresolvedReviewThreads = (raw.unresolvedThreads?.nodes ?? []).filter(
     (t) => !t.isResolved
   ).length;
+  const reviewRequests = {
+    users: [] as string[],
+    teams: [] as Array<{ slug: string; name: string; combinedSlug: string }>,
+  };
+  for (const node of raw.reviewRequests?.nodes ?? []) {
+    const rr = node.requestedReviewer;
+    if (!rr) continue;
+    if (rr.__typename === 'User') {
+      reviewRequests.users.push((rr as { login: string }).login);
+    } else if (rr.__typename === 'Team') {
+      const t = rr as { slug: string; name: string; combinedSlug: string };
+      reviewRequests.teams.push({ slug: t.slug, name: t.name, combinedSlug: t.combinedSlug });
+    }
+  }
   const state: PRState = raw.state === 'MERGED' ? 'merged' : raw.state === 'CLOSED' ? 'closed' : 'open';
   return {
     owner,
@@ -832,6 +881,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     blockingReason,
     checks,
     unresolvedReviewThreads,
+    reviewRequests,
     checkContexts: normalizedContexts,
     checkDigest: computeCheckDigest(raw.headRefOid, normalizedContexts),
     recentReviews: raw.reviews.nodes

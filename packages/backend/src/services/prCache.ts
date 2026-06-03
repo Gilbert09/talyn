@@ -609,6 +609,7 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     blockingReason: s.blockingReason,
     checks: s.checks,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
+    reviewRequestVia: s.reviewRequestVia ?? null,
   };
 }
 
@@ -643,6 +644,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
       skipped: 0,
     },
     unresolvedReviewThreads: (meta.unresolvedReviewThreads as number) ?? 0,
+    reviewRequestVia: meta.reviewRequestVia as PRSummary['reviewRequestVia'],
     checkContexts: [], // not cached — only the live detail fetch carries per-check rows
     checkDigest: row.lastCheckDigest ?? '',
     recentReviews: [],

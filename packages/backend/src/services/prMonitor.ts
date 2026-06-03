@@ -10,6 +10,7 @@ import { githubService } from './github.js';
 import {
   batchPullRequestsByNumber,
   type BatchPRByNumberResult,
+  type PRSummary,
 } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
@@ -313,6 +314,7 @@ class PRMonitorService extends EventEmitter {
 
       for (const result of results) {
         if (!result.pr) continue;
+        await this.annotateReviewRequest(workspaceId, result.pr);
         await upsertFromBatchResult({
           workspaceId,
           repositoryId: repo.id,
@@ -574,6 +576,26 @@ class PRMonitorService extends EventEmitter {
     }
   }
 
+  /**
+   * Derive `reviewRequestVia` (was I asked directly, via a team, or both?)
+   * from the summary's raw `reviewRequests` and the viewer's identity +
+   * teams (both cached). Mutates the summary in place; no-op when there's no
+   * request data. Cheap — login + teams are cache hits on the hot path.
+   */
+  private async annotateReviewRequest(workspaceId: string, summary: PRSummary): Promise<void> {
+    const raw = summary.reviewRequests;
+    if (!raw) return;
+    const login = await this.resolveCurrentUser(workspaceId);
+    const myTeams = await githubService.getViewerTeamSlugs(workspaceId);
+    const direct = login
+      ? raw.users.some((u) => u.toLowerCase() === login.toLowerCase())
+      : false;
+    const teams = raw.teams
+      .filter((t) => myTeams.has(t.combinedSlug.toLowerCase()))
+      .map((t) => t.combinedSlug);
+    summary.reviewRequestVia = { direct, teams };
+  }
+
   private async resolveCurrentUser(workspaceId: string): Promise<string | null> {
     const cached = this.userLoginCache.get(workspaceId);
     if (cached) return cached;
@@ -675,6 +697,7 @@ class PRMonitorService extends EventEmitter {
         });
         for (const result of results) {
           if (!result.pr) continue;
+          await this.annotateReviewRequest(workspaceId, result.pr);
           // No flag changes — relationship reconcile stays on the search
           // ticks; this loop only refreshes the summary (CI, mergeable).
           await upsertFromBatchResult({
@@ -723,6 +746,7 @@ class PRMonitorService extends EventEmitter {
     });
     for (const result of results) {
       if (!result.pr) continue;
+      await this.annotateReviewRequest(workspaceId, result.pr);
       await upsertFromBatchResult({
         workspaceId,
         repositoryId: watched.id,

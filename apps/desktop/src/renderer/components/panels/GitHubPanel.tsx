@@ -15,6 +15,8 @@ import {
   X,
   Bot,
   MessageSquare,
+  Users,
+  AtSign,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -181,6 +183,9 @@ export function GitHubPanel() {
   // Whether PostHog Code (cloud tasks) is configured for this workspace.
   // Gates the "Get PR mergeable" follow-up button.
   const [posthogConnected, setPosthogConnected] = useState(false);
+  // The viewer's GitHub login — used to label "requested directly" rows on
+  // the Review tab with your @handle.
+  const [viewerLogin, setViewerLogin] = useState<string | null>(null);
 
   // The auto-provisioned cloud env a follow-up task gets assigned to.
   const posthogEnvId = useMemo(
@@ -196,7 +201,16 @@ export function GitHubPanel() {
     api.github
       .getStatus(currentWorkspaceId)
       .then((s) => {
-        if (!cancelled) setConnected(s.connected);
+        if (cancelled) return;
+        setConnected(s.connected);
+        if (s.connected) {
+          api.github
+            .getUser(currentWorkspaceId)
+            .then((u) => {
+              if (!cancelled) setViewerLogin(u.login);
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {
         if (!cancelled) setConnected(false);
@@ -396,7 +410,12 @@ export function GitHubPanel() {
       out = out.filter((r) => {
         const title = r.summary.title?.toLowerCase() ?? '';
         const repo = `${r.owner}/${r.repo}`.toLowerCase();
-        return title.includes(q) || repo.includes(q);
+        if (title.includes(q) || repo.includes(q)) return true;
+        // On the Review tab, also match the requester (team name / your handle).
+        return (
+          relationship === 'review_requested' &&
+          reviewRequestSearchText(r.summary, viewerLogin).includes(q)
+        );
       });
     }
     // Needs-attention only applies to My PRs (it gates on blocking issues you
@@ -413,7 +432,7 @@ export function GitHubPanel() {
       return sortDir === 'desc' ? tb - ta : ta - tb;
     });
     return sorted;
-  }, [rows, relationship, search, needsAttention, sortDir]);
+  }, [rows, relationship, search, needsAttention, sortDir, viewerLogin]);
 
   // Refresh = a real GitHub force-poll, then re-read the freshly-updated
   // cache. The poll also emits WS deltas, but re-listing guarantees the
@@ -607,6 +626,8 @@ export function GitHubPanel() {
           {filtered.length > 0 && (
             <PRTable
               rows={filtered}
+              variant={relationship === 'review_requested' ? 'review' : 'mine'}
+              viewerLogin={viewerLogin}
               selectedId={selectedId}
               onSelect={handleSelect}
               onOpenTask={(taskId) => {
@@ -632,6 +653,37 @@ export function GitHubPanel() {
       </div>
     </div>
   );
+}
+
+/**
+ * How the viewer was asked to review, for the Review tab's "Requested"
+ * column. A direct request wins over a team one. Returns the primary label
+ * (your @handle, or the first team's `@org/team`) plus the count of any
+ * additional teams, or null when we have no request info (older cached rows).
+ */
+function reviewRequestLabel(
+  summary: PRSummaryShape,
+  viewerLogin: string | null
+): { label: string; extra: number; direct: boolean } | null {
+  const via = summary.reviewRequestVia;
+  if (!via) return null;
+  if (via.direct) return { label: `@${viewerLogin ?? 'you'}`, extra: 0, direct: true };
+  if (via.teams.length > 0)
+    return { label: `@${via.teams[0]}`, extra: via.teams.length - 1, direct: false };
+  return null;
+}
+
+/**
+ * Searchable text for a row's review request, so the search box can filter
+ * the Review tab by team name or "direct"/your handle.
+ */
+function reviewRequestSearchText(summary: PRSummaryShape, viewerLogin: string | null): string {
+  const via = summary.reviewRequestVia;
+  if (!via) return '';
+  const parts: string[] = [];
+  if (via.direct) parts.push('direct', 'you', viewerLogin ?? '');
+  parts.push(...via.teams);
+  return parts.join(' ').toLowerCase();
 }
 
 /** A PR has a blocking issue the user should act on. */
@@ -786,6 +838,10 @@ interface PRTableProps {
   posthogEnabled: boolean;
   /** Live status of each linked task, keyed by task id. */
   taskStatusById: Map<string, TaskStatus>;
+  /** 'mine' shows the CI status column; 'review' swaps it for who requested
+   *  the review (you directly vs a team you're on). */
+  variant: 'mine' | 'review';
+  viewerLogin: string | null;
 }
 
 function PRTable({
@@ -798,13 +854,17 @@ function PRTable({
   onCreatePostHogTask,
   posthogEnabled,
   taskStatusById,
+  variant,
+  viewerLogin,
 }: PRTableProps) {
   return (
     <table className="w-full text-sm">
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
-          <th className="px-2 py-2 text-left font-medium">Status</th>
+          <th className="px-2 py-2 text-left font-medium">
+            {variant === 'review' ? 'Requested' : 'Status'}
+          </th>
           <th className="px-2 py-2 text-left font-medium">Updated</th>
           <th className="w-8 px-2 py-2"></th>
         </tr>
@@ -814,6 +874,8 @@ function PRTable({
           <PRTableRow
             key={row.id}
             row={row}
+            variant={variant}
+            viewerLogin={viewerLogin}
             isSelected={row.id === selectedId}
             onSelect={() => onSelect(row.id)}
             onOpenTask={onOpenTask}
@@ -831,6 +893,8 @@ function PRTable({
 
 function PRTableRow({
   row,
+  variant,
+  viewerLogin,
   isSelected,
   onSelect,
   onOpenTask,
@@ -841,6 +905,8 @@ function PRTableRow({
   taskStatus,
 }: {
   row: PRRow;
+  variant: 'mine' | 'review';
+  viewerLogin: string | null;
   isSelected: boolean;
   onSelect: () => void;
   onOpenTask: (taskId: string) => void;
@@ -867,6 +933,7 @@ function PRTableRow({
     (summary.blockingReason === 'mergeable' ||
       summary.blockingReason === 'checks_failed_optional');
   const unresolved = summary.unresolvedReviewThreads ?? 0;
+  const requested = variant === 'review' ? reviewRequestLabel(summary, viewerLogin) : null;
 
   // A linked task is "active" while it's running or awaiting your review —
   // i.e. not yet fully done. Drives the row's in-progress indicator and
@@ -1032,31 +1099,58 @@ function PRTableRow({
           </span>
         </div>
       </td>
-      <td className="px-2 py-2">
-        <div className="flex items-center gap-1.5">
-          <PRReviewPill
-            reviewDecision={summary.reviewDecision}
-            state={row.state}
-            minimal
-          />
-          <PRStatusPill
-            blockingReason={summary.blockingReason}
-            checks={summary.checks}
-            mergeStateStatus={summary.mergeStateStatus}
-            state={row.state}
-            hideReviewState
-          />
-          {row.state === 'open' && unresolved > 0 && (
+      {variant === 'review' ? (
+        <td className="px-2 py-2 text-xs">
+          {requested ? (
             <span
-              className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-400"
-              title={`${unresolved} unresolved review ${unresolved === 1 ? 'comment' : 'comments'}`}
+              className="inline-flex items-center gap-1 text-muted-foreground"
+              title={
+                requested.direct
+                  ? 'You were asked to review directly'
+                  : `Requested via team ${requested.label.slice(1)}${
+                      requested.extra > 0 ? ` (+${requested.extra} more)` : ''
+                    }`
+              }
             >
-              <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-              {unresolved}
+              {requested.direct ? (
+                <AtSign className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <Users className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span className="truncate">{requested.label}</span>
+              {requested.extra > 0 && <span className="opacity-70">+{requested.extra}</span>}
             </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
           )}
-        </div>
-      </td>
+        </td>
+      ) : (
+        <td className="px-2 py-2">
+          <div className="flex items-center gap-1.5">
+            <PRReviewPill
+              reviewDecision={summary.reviewDecision}
+              state={row.state}
+              minimal
+            />
+            <PRStatusPill
+              blockingReason={summary.blockingReason}
+              checks={summary.checks}
+              mergeStateStatus={summary.mergeStateStatus}
+              state={row.state}
+              hideReviewState
+            />
+            {row.state === 'open' && unresolved > 0 && (
+              <span
+                className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-400"
+                title={`${unresolved} unresolved review ${unresolved === 1 ? 'comment' : 'comments'}`}
+              >
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                {unresolved}
+              </span>
+            )}
+          </div>
+        </td>
+      )}
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>

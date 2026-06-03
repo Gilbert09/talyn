@@ -402,6 +402,10 @@ export interface PRSummaryShape {
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;
+  /** Whether the viewer was asked to review directly, via a team, or both.
+   *  `teams` lists the viewer's own requested teams (`org/team`). Drives the
+   *  Review tab's "Requested" column. Absent on older cached rows. */
+  reviewRequestVia?: { direct: boolean; teams: string[] };
 }
 
 export interface PRRow {
