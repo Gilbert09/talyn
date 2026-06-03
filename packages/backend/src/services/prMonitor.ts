@@ -12,7 +12,7 @@ import {
   type BatchPRByNumberResult,
 } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
-import { ttlFor, isCohortActive } from './prFocus.js';
+import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
 
 interface WatchedRepo {
@@ -44,9 +44,19 @@ const POLL_INTERVAL_MS = 30_000;
 const UNKNOWN_MERGEABLE_RETRIES = 3;
 const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 
+// Active-CI fast loop: authored PRs whose checks are still running change
+// state fast (CI settling, mergeability flipping), so they get a dedicated
+// ~10 s loop that hits GraphQL directly — no Search calls, so it sidesteps
+// the 30/min Search limit entirely. Self-draining: a PR leaves the set the
+// moment its checks settle. Capped so a burst of building PRs can't blow up.
+const ACTIVE_CI_INTERVAL_MS = 10_000;
+const ACTIVE_CI_MAX_PER_WORKSPACE = 15;
+
 class PRMonitorService extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
+  private fastTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
+  private isFastPolling = false;
   /** Cached current-user logins keyed by workspaceId — saves a round-trip
    *  per poll. Cleared when the OAuth token rotates (via removeToken). */
   private userLoginCache: Map<string, string> = new Map();
@@ -73,6 +83,7 @@ class PRMonitorService extends EventEmitter {
     if (this.pollTimer) return;
     console.log('Starting PR monitor polling...');
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    this.fastTimer = setInterval(() => this.fastPoll(), ACTIVE_CI_INTERVAL_MS);
     setTimeout(() => this.poll(), 5_000);
   }
 
@@ -80,6 +91,10 @@ class PRMonitorService extends EventEmitter {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.fastTimer) {
+      clearInterval(this.fastTimer);
+      this.fastTimer = null;
     }
   }
 
@@ -583,6 +598,106 @@ class PRMonitorService extends EventEmitter {
     await this.poll();
   }
 
+  // ---------- Active-CI fast loop ----------
+
+  /**
+   * Refetch only authored PRs with in-flight CI, GraphQL-only, on a tight
+   * cadence. Skips Search entirely (the numbers come from the cache), so it
+   * never touches the rate-limited Search budget.
+   */
+  private async fastPoll(): Promise<void> {
+    if (this.isFastPolling) return;
+    this.isFastPolling = true;
+    try {
+      for (const workspaceId of githubService.getConnectedWorkspaces()) {
+        try {
+          await this.fastPollWorkspace(workspaceId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          console.error(`PR fast-poll: workspace ${workspaceId.slice(0, 8)} failed:`, msg);
+        }
+      }
+    } finally {
+      this.isFastPolling = false;
+    }
+  }
+
+  private async fastPollWorkspace(workspaceId: string): Promise<void> {
+    const rows = await this.db
+      .select({
+        id: pullRequestsTable.id,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+        repositoryId: pullRequestsTable.repositoryId,
+        lastSummary: pullRequestsTable.lastSummary,
+        authored: pullRequestsTable.authored,
+        reviewRequested: pullRequestsTable.reviewRequested,
+      })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.state, 'open'),
+          eq(pullRequestsTable.authored, true)
+        )
+      );
+
+    // Authored PRs with checks still running, whose cohort is the one being
+    // viewed (CI matters on "My PRs", not while reviewing others'), skipping
+    // any in post-refresh cooldown. Capped.
+    const due = rows
+      .filter(
+        (r) =>
+          inProgressChecks(r.lastSummary) > 0 &&
+          isCohortActive(workspaceId, r) &&
+          !isInCooldown(workspaceId, r.id)
+      )
+      .slice(0, ACTIVE_CI_MAX_PER_WORKSPACE);
+    if (due.length === 0) return;
+
+    // Group by repo so each repo is one batched GraphQL round-trip.
+    const byRepo = new Map<string, { owner: string; repo: string; repositoryId: string; numbers: number[] }>();
+    for (const r of due) {
+      const key = `${r.owner}/${r.repo}`;
+      const g = byRepo.get(key) ?? { owner: r.owner, repo: r.repo, repositoryId: r.repositoryId, numbers: [] };
+      g.numbers.push(r.number);
+      byRepo.set(key, g);
+    }
+
+    for (const g of byRepo.values()) {
+      try {
+        const results = await batchPullRequestsByNumber({
+          workspaceId,
+          owner: g.owner,
+          repo: g.repo,
+          numbers: g.numbers,
+        });
+        for (const result of results) {
+          if (!result.pr) continue;
+          // No flag changes — relationship reconcile stays on the search
+          // ticks; this loop only refreshes the summary (CI, mergeable).
+          await upsertFromBatchResult({
+            workspaceId,
+            repositoryId: g.repositoryId,
+            summary: result.pr,
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        console.error(`PR fast-poll: ${g.owner}/${g.repo} failed:`, msg);
+      }
+    }
+  }
+
+  /** Test/admin entry point for the fast loop — see `forcePoll`. */
+  async forceFastPoll(): Promise<void> {
+    while (this.isFastPolling) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await this.fastPoll();
+  }
+
   /**
    * Drop a cached login — called when a workspace's GitHub OAuth token
    * is removed (revoked / disconnected). Without this, the next poll
@@ -595,6 +710,12 @@ class PRMonitorService extends EventEmitter {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Number of in-flight check runs on a cached PR summary (0 if unknown). */
+function inProgressChecks(lastSummary: unknown): number {
+  const checks = (lastSummary as { checks?: { inProgress?: number } } | null)?.checks;
+  return checks?.inProgress ?? 0;
 }
 
 export const prMonitorService = new PRMonitorService();

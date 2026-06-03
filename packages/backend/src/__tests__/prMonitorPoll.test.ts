@@ -806,6 +806,74 @@ describe('prMonitor — poll orchestration', () => {
     expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
   });
 
+  // ---------- active-CI fast loop ----------
+
+  function seedOpen(over: {
+    id: string;
+    number: number;
+    authored?: boolean;
+    reviewRequested?: boolean;
+    inProgress?: number;
+  }) {
+    return db.insert(pullRequestsTable).values({
+      id: over.id,
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: over.number,
+      state: 'open',
+      authored: over.authored ?? false,
+      reviewRequested: over.reviewRequested ?? false,
+      lastPolledAt: new Date(),
+      lastSummary: { headBranch: 'feature/x', checks: { inProgress: over.inProgress ?? 0 } },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  }
+
+  it('fast loop refetches an authored PR with in-flight CI', async () => {
+    await seedOpen({ id: 'pr-ci', number: 7, authored: true, inProgress: 2 });
+    const spy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([{ number: 7, pr: fakeSummary({ number: 7 }) }]);
+
+    await prMonitorService.forceFastPoll();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0].numbers).toEqual([7]);
+  });
+
+  it('fast loop ignores an authored PR whose CI has settled', async () => {
+    await seedOpen({ id: 'pr-done', number: 7, authored: true, inProgress: 0 });
+    const spy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
+    await prMonitorService.forceFastPoll();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('fast loop ignores a review-requested PR even with in-flight CI', async () => {
+    await seedOpen({ id: 'pr-rev', number: 7, reviewRequested: true, inProgress: 3 });
+    const spy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
+    await prMonitorService.forceFastPoll();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('fast loop skips an authored active-CI PR when the view is "review"', async () => {
+    await seedOpen({ id: 'pr-ci', number: 7, authored: true, inProgress: 1 });
+    setActiveView('ws1', 'review'); // authored cohort is now background
+    const spy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
+    await prMonitorService.forceFastPoll();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('fast loop skips a PR inside its post-refresh cooldown', async () => {
+    await seedOpen({ id: 'pr-ci', number: 7, authored: true, inProgress: 1 });
+    markRefreshed('ws1', 'pr-ci');
+    const spy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
+    await prMonitorService.forceFastPoll();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   // ---------- lazy mergeability (UNKNOWN) re-poll ----------
 
   it('re-queries an open PR with mergeable UNKNOWN until it resolves', async () => {

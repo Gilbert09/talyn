@@ -134,6 +134,15 @@ export function ttlFor(
 }
 
 /**
+ * Whether `prId` is inside its post-refresh cooldown — the active-CI fast
+ * loop checks this so it doesn't stomp a just-manual-refreshed PR.
+ */
+export function isInCooldown(workspaceId: string, prId: string): boolean {
+  const cd = cooldownUntil.get(key(workspaceId, prId));
+  return cd !== undefined && cd > Date.now();
+}
+
+/**
  * Test/admin helper. Empties every map.
  */
 export function _resetPrFocus(): void {
