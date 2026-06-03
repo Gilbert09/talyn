@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Settings,
   FolderKanban,
@@ -6,6 +6,8 @@ import {
   BarChart3,
   Plus,
   Trash2,
+  Shuffle,
+  Upload,
   Check,
   AlertCircle,
   Loader2,
@@ -34,6 +36,8 @@ import { Input } from '../ui/input';
 import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
+import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
+import type { WorkspaceLogo as WorkspaceLogoData } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import { useWorkspaceActions } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
@@ -132,6 +136,35 @@ export function SettingsPanel() {
   );
 }
 
+/**
+ * Load an image file, downscale it to fit within `maxDim` px (preserving
+ * aspect ratio), and return a PNG data URL. Keeps inline-stored logos small.
+ */
+function downscaleImage(file: File, maxDim: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      URL.revokeObjectURL(url);
+      if (!ctx) return reject(new Error('no canvas context'));
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('could not load image'));
+    };
+    img.src = url;
+  });
+}
+
 function WorkspaceSettings() {
   const { workspaces, currentWorkspaceId, setCreateWorkspaceOpen, setCurrentWorkspace } =
     useWorkspaceStore();
@@ -184,6 +217,39 @@ function WorkspaceSettings() {
     } finally {
       setDeleting(false);
       setConfirmDelete(false);
+    }
+  }
+
+  // ---------- Logo ----------
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [savingLogo, setSavingLogo] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+
+  async function saveLogo(logo: WorkspaceLogoData) {
+    if (!currentWorkspaceId) return;
+    setSavingLogo(true);
+    setLogoError(null);
+    try {
+      await api.workspaces.update(currentWorkspaceId, { logo });
+      await refreshWorkspaces();
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : 'Could not update logo');
+    } finally {
+      setSavingLogo(false);
+    }
+  }
+
+  async function handleUploadLogo(file: File) {
+    setLogoError(null);
+    try {
+      const dataUrl = await downscaleImage(file, 256);
+      if (dataUrl.length > 512 * 1024) {
+        setLogoError('That image is too detailed — try a smaller or simpler one.');
+        return;
+      }
+      await saveLogo({ kind: 'image', dataUrl });
+    } catch {
+      setLogoError('Could not read that image.');
     }
   }
 
@@ -350,6 +416,54 @@ function WorkspaceSettings() {
                 {savingMeta ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save changes'}
               </Button>
             </div>
+          </Card>
+
+          <Card className="p-4">
+            <h4 className="font-medium mb-3">Logo</h4>
+            <div className="flex items-center gap-4">
+              <WorkspaceLogo
+                logo={currentWorkspace.logo}
+                fallbackSeed={currentWorkspace.id}
+                size={64}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void saveLogo({ kind: 'identicon', seed: crypto.randomUUID() })}
+                  disabled={savingLogo}
+                  title="Generate a new identicon"
+                >
+                  <Shuffle className="w-4 h-4 mr-1" />
+                  Shuffle
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={savingLogo}
+                >
+                  <Upload className="w-4 h-4 mr-1" />
+                  Upload image
+                </Button>
+                {savingLogo && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleUploadLogo(file);
+                    e.target.value = ''; // allow re-picking the same file
+                  }}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Uploads are downscaled to 256px. Shuffle to go back to a generated logo.
+            </p>
+            {logoError && <p className="text-xs text-destructive mt-1">{logoError}</p>}
           </Card>
 
           <Card className="p-4">
