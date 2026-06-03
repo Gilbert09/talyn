@@ -148,21 +148,15 @@ Loop discipline:
 Start by checking out the PR branch (${ref}), fetching the current state of review threads and CI, and then work the loop until done.`;
 }
 
-type StateFilter = 'open' | 'closed' | 'merged' | 'all';
-type RelationshipFilter = 'all' | 'authored' | 'review_requested';
+// The GitHub screen shows two views of your OPEN PRs: ones you authored
+// ("My PRs") and ones awaiting your review ("Review"). Merged/closed PRs
+// stay in the DB for task linking but aren't browsable here.
+type RelationshipFilter = 'authored' | 'review_requested';
 type SortDir = 'asc' | 'desc';
 
 const RELATIONSHIP_OPTIONS: Array<{ value: RelationshipFilter; label: string }> = [
-  { value: 'all', label: 'All' },
-  { value: 'authored', label: 'Mine' },
+  { value: 'authored', label: 'My PRs' },
   { value: 'review_requested', label: 'Review' },
-];
-
-const STATE_OPTIONS: Array<{ value: StateFilter; label: string }> = [
-  { value: 'open', label: 'Open' },
-  { value: 'merged', label: 'Merged' },
-  { value: 'closed', label: 'Closed' },
-  { value: 'all', label: 'All' },
 ];
 
 export function GitHubPanel() {
@@ -172,9 +166,8 @@ export function GitHubPanel() {
   const [rows, setRows] = useState<PRRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [stateFilter, setStateFilter] = useState<StateFilter>('open');
-  // Relationship is filtered client-side off each row's `reviewRequested`
-  // flag (no refetch), so the All/Mine/Review pills can all show counts.
+  // Relationship is filtered client-side off each row's `authored` /
+  // `reviewRequested` flag (no refetch), so both pills can show counts.
   const [relationship, setRelationship] = useState<RelationshipFilter>('authored');
   const [repoFilter, setRepoFilter] = useState<string>('all');
   const [needsAttention, setNeedsAttention] = useState(false);
@@ -253,7 +246,7 @@ export function GitHubPanel() {
     api.pullRequests
       .list({
         workspaceId: currentWorkspaceId,
-        state: stateFilter,
+        state: 'open',
         repo: repoFilter === 'all' ? undefined : repoFilter,
       })
       .then((data) => {
@@ -270,7 +263,7 @@ export function GitHubPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentWorkspaceId, stateFilter, repoFilter]);
+  }, [currentWorkspaceId, repoFilter]);
 
   // Live updates from the prMonitor.
   useEffect(() => {
@@ -293,7 +286,7 @@ export function GitHubPanel() {
             api.pullRequests
               .list({
                 workspaceId: currentWorkspaceId,
-                state: stateFilter,
+                state: 'open',
                 repo: repoFilter === 'all' ? undefined : repoFilter,
               })
               .then(setRows)
@@ -319,7 +312,7 @@ export function GitHubPanel() {
       });
     });
     return unsubscribe;
-  }, [currentWorkspaceId, stateFilter, repoFilter]);
+  }, [currentWorkspaceId, repoFilter]);
 
   // A new inbox item (review/comment/CI) for a watched PR — bump its
   // unread dot live without a refetch. Matched on the PR URL, the same
@@ -348,13 +341,17 @@ export function GitHubPanel() {
     void api.pullRequests.markSeen(id).catch(() => {});
   }
 
-  const attentionCount = useMemo(() => rows.filter(isNeedsAttention).length, [rows]);
+  // "Needs attention" is a My-PRs-only concept (blocking issues on PRs you
+  // own), so its count is scoped to authored rows.
+  const attentionCount = useMemo(
+    () => rows.filter((r) => r.authored && isNeedsAttention(r)).length,
+    [rows]
+  );
 
-  // Relationship buckets for the current state+repo set — drive the
-  // always-on counts on the All/Mine/Review pills.
+  // Relationship buckets for the current repo set — drive the always-on
+  // counts on the My PRs / Review pills.
   const relationshipCounts = useMemo(
     () => ({
-      all: rows.length,
       authored: rows.filter((r) => r.authored).length,
       review_requested: rows.filter((r) => r.reviewRequested).length,
     }),
@@ -371,12 +368,10 @@ export function GitHubPanel() {
   }, [tasks]);
 
   const filtered = useMemo(() => {
-    let out = rows;
-    if (relationship === 'authored') {
-      out = out.filter((r) => r.authored);
-    } else if (relationship === 'review_requested') {
-      out = out.filter((r) => r.reviewRequested);
-    }
+    let out =
+      relationship === 'authored'
+        ? rows.filter((r) => r.authored)
+        : rows.filter((r) => r.reviewRequested);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((r) => {
@@ -385,7 +380,9 @@ export function GitHubPanel() {
         return title.includes(q) || repo.includes(q);
       });
     }
-    if (needsAttention) {
+    // Needs-attention only applies to My PRs (it gates on blocking issues you
+    // own); on the Review tab the toggle isn't shown.
+    if (needsAttention && relationship === 'authored') {
       out = out.filter(isNeedsAttention);
     }
     const sorted = out.slice().sort((a, b) => {
@@ -410,7 +407,7 @@ export function GitHubPanel() {
       await api.repositories.forcePoll();
       const data = await api.pullRequests.list({
         workspaceId: currentWorkspaceId,
-        state: stateFilter,
+        state: 'open',
         repo: repoFilter === 'all' ? undefined : repoFilter,
       });
       setRows(data);
@@ -453,7 +450,7 @@ export function GitHubPanel() {
     try {
       const data = await api.pullRequests.list({
         workspaceId: currentWorkspaceId,
-        state: stateFilter,
+        state: 'open',
         repo: repoFilter === 'all' ? undefined : repoFilter,
       });
       setRows(data);
@@ -541,8 +538,6 @@ export function GitHubPanel() {
       </header>
 
       <FilterBar
-        stateFilter={stateFilter}
-        onStateFilter={setStateFilter}
         relationship={relationship}
         onRelationship={setRelationship}
         repoFilter={repoFilter}
@@ -553,7 +548,6 @@ export function GitHubPanel() {
         searchRef={searchInputRef}
         needsAttention={needsAttention}
         onNeedsAttention={setNeedsAttention}
-        stateCount={rows.length}
         attentionCount={attentionCount}
         relationshipCounts={relationshipCounts}
         sortDir={sortDir}
@@ -631,8 +625,6 @@ function isNeedsAttention(r: PRRow): boolean {
 }
 
 interface FilterBarProps {
-  stateFilter: StateFilter;
-  onStateFilter: (v: StateFilter) => void;
   relationship: RelationshipFilter;
   onRelationship: (v: RelationshipFilter) => void;
   repoFilter: string;
@@ -643,8 +635,6 @@ interface FilterBarProps {
   searchRef?: React.Ref<HTMLInputElement>;
   needsAttention: boolean;
   onNeedsAttention: (v: boolean) => void;
-  /** Count of loaded rows for the active state (the only state we hold data for). */
-  stateCount: number;
   attentionCount: number;
   relationshipCounts: Record<RelationshipFilter, number>;
   /** Sort direction for the created-at ordering. */
@@ -653,8 +643,6 @@ interface FilterBarProps {
 }
 
 function FilterBar({
-  stateFilter,
-  onStateFilter,
   relationship,
   onRelationship,
   repoFilter,
@@ -665,7 +653,6 @@ function FilterBar({
   searchRef,
   needsAttention,
   onNeedsAttention,
-  stateCount,
   attentionCount,
   relationshipCounts,
   sortDir,
@@ -673,32 +660,7 @@ function FilterBar({
 }: FilterBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs">
-      {/* State pills — the active one shows its loaded count. */}
-      <div className="flex rounded-md border bg-muted/40 p-0.5">
-        {STATE_OPTIONS.map((opt) => {
-          const active = stateFilter === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onStateFilter(opt.value)}
-              className={cn(
-                'rounded px-2 py-1 transition-colors',
-                active
-                  ? 'bg-background shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {opt.label}
-              {active && (
-                <span className="ml-1 text-muted-foreground">{stateCount}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Relationship pills — authored vs awaiting-my-review. */}
+      {/* Relationship tabs — your PRs vs awaiting-your-review. */}
       <div className="flex rounded-md border bg-muted/40 p-0.5">
         {RELATIONSHIP_OPTIONS.map((opt) => (
           <button
@@ -714,9 +676,7 @@ function FilterBar({
             title={
               opt.value === 'review_requested'
                 ? 'PRs awaiting your review'
-                : opt.value === 'authored'
-                  ? 'PRs you authored'
-                  : 'All watched PRs'
+                : 'PRs you authored'
             }
           >
             {opt.label}
@@ -741,21 +701,23 @@ function FilterBar({
         ))}
       </select>
 
-      {/* Needs attention toggle. */}
-      <button
-        type="button"
-        onClick={() => onNeedsAttention(!needsAttention)}
-        className={cn(
-          'rounded-md border px-2 py-1 transition-colors',
-          needsAttention
-            ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-            : 'text-muted-foreground hover:text-foreground'
-        )}
-        title="Only show PRs with blocking issues (conflicts, changes requested, failing checks)"
-      >
-        Needs attention
-        {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
-      </button>
+      {/* Needs attention toggle — only meaningful for your own PRs. */}
+      {relationship === 'authored' && (
+        <button
+          type="button"
+          onClick={() => onNeedsAttention(!needsAttention)}
+          className={cn(
+            'rounded-md border px-2 py-1 transition-colors',
+            needsAttention
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+              : 'text-muted-foreground hover:text-foreground'
+          )}
+          title="Only show PRs with blocking issues (conflicts, changes requested, failing checks)"
+        >
+          Needs attention
+          {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
+        </button>
+      )}
 
       {/* Created-at sort toggle. */}
       <button
