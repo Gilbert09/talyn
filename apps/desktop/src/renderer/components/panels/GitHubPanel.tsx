@@ -104,6 +104,12 @@ Repository: ${row.owner}/${row.repo}
 PR number: #${row.number}
 Branch: ${s.headBranch}
 
+NON-NEGOTIABLE GIT RULES — read these first, they apply to EVERYTHING below:
+  - NEVER force-push. Not \`git push --force\`, not \`--force-with-lease\`, not \`push -f\`. Every single push in this task is a plain \`git push\`. There is no scenario in this task that legitimately needs a force-push.
+  - NEVER rewrite this branch's history: no rebase, no reset, no cherry-pick, no squash, no commit --amend, no filter-branch. Your work only ever ADDS new commits on top of the current branch tip.
+  - To incorporate changes from the base branch (${s.baseBranch}), MERGE it in — never rebase onto it. A merge appends a merge commit on top of your branch, so a normal \`git push\` always fast-forwards the remote and a force-push is never required.
+  - If a \`git push\` is ever rejected as non-fast-forward (i.e. it would need a force), STOP. Do not reach for \`--force\`. It means history got rewritten or you're on the wrong branch — undo that with a fresh commit/merge and push normally instead.
+
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
 ${buildIssuesSummary(s)}
 
@@ -125,14 +131,13 @@ Your job is to keep iterating on this PR until ALL of the following are true and
 
 3. The branch merges cleanly into its base branch (no merge conflicts).
    - Check mergeability via \`gh pr view ${row.number} --json mergeable,mergeStateStatus\`.
-   - If the branch is CONFLICTING / DIRTY, update it by MERGING the base branch IN. Do NOT rebase:
+   - If the branch is CONFLICTING / DIRTY, update it by MERGING the base branch IN (per the git rules above — never rebase):
        git fetch origin ${s.baseBranch}
        git merge origin/${s.baseBranch}
-     Then resolve each conflict by hand and commit the merge.
-   - CRITICAL — do NOT rebase, reset, cherry-pick, squash, amend existing commits, or force-push this branch. Rebasing rewrites the PR's history and is what drags unrelated/duplicate commits and changes into the PR. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch.
+     Then resolve each conflict by hand and commit the merge. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch. Rebasing would rewrite history (forcing a force-push) and drag unrelated/duplicate commits into the PR — that's exactly why it's forbidden.
    - Resolve ONLY the genuine conflicts. Preserve the intent of both sides; never blindly discard the PR's changes or the base's. The update must add nothing beyond (a) one merge commit and (b) your conflict resolutions — no unrelated files, commits, or edits.
-   - Before pushing, verify you didn't pull in stray changes: \`git diff origin/${s.baseBranch}...HEAD\` should show ONLY this PR's intended changes (plus conflict resolutions). If you see unrelated changes, abort the merge (\`git merge --abort\` / reset to \`origin/${s.headBranch}\`) and redo it cleanly.
-   - After resolving, re-run the build/tests locally where feasible, then push (a normal \`git push\`, no \`--force\`). Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
+   - Before pushing, verify you didn't pull in stray changes: \`git diff origin/${s.baseBranch}...HEAD\` should show ONLY this PR's intended changes (plus conflict resolutions). If you see unrelated changes, abort the in-progress merge with \`git merge --abort\` and redo it cleanly (this is a local, not-yet-pushed operation — never a force-push to the remote).
+   - After resolving, re-run the build/tests locally where feasible, then push with a plain \`git push\` (never \`--force\` — the merge commit means a normal push fast-forwards). Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
 
 Loop discipline:
   - After every push, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
