@@ -642,6 +642,115 @@ describe('prMonitor — poll orchestration', () => {
     expect((await db.select().from(inboxItemsTable)).length).toBe(0);
   });
 
+  // ---------- tracked-open rows that fell out of the search ----------
+
+  it('refreshes a fallen-out tracked-open row once it ages past the untracked TTL', async () => {
+    // #9: open, no current relationship (not in any search), last polled
+    // 6 min ago — past the 5 min untracked TTL.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-untracked',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 9,
+      state: 'open',
+      reviewRequested: false,
+      authored: false,
+      lastPolledAt: new Date(Date.now() - 6 * 60_000),
+      lastSummary: { headBranch: 'feature/i', title: 'Old title' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockSearch([]); // dropped out of authored/review-requested/reviewed-by
+    const graphqlSpy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([
+        { number: 9, pr: fakeSummary({ number: 9, headBranch: 'feature/i', title: 'New title' }) },
+      ]);
+    // Still open on GitHub, so sweepClosed leaves the row alone.
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
+      state: 'open',
+      merged: false,
+      merged_at: null,
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
+    const row = (await db.select().from(pullRequestsTable)).find((r) => r.number === 9);
+    expect(row?.state).toBe('open');
+    expect((row?.lastSummary as { title: string }).title).toBe('New title');
+  });
+
+  it('does not refetch a fallen-out tracked-open row still within the untracked TTL', async () => {
+    // 2 min old: a watched PR would refetch (unfocused TTL is 60 s), but an
+    // untracked one waits the full 5 min.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-untracked-fresh',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 9,
+      state: 'open',
+      lastPolledAt: new Date(Date.now() - 2 * 60_000),
+      lastSummary: { headBranch: 'feature/i' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    mockSearch([]);
+    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
+      state: 'open',
+      merged: false,
+      merged_at: null,
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    expect(graphqlSpy).not.toHaveBeenCalled();
+  });
+
+  it('refetches a fallen-out tracked-open row early when the user focuses it', async () => {
+    // 90 s old: past the focused TTL (30 s) but well within the untracked
+    // TTL (5 min). Focus must win so the open detail sheet stays live.
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-untracked-focus',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 9,
+      state: 'open',
+      lastPolledAt: new Date(Date.now() - 90_000),
+      lastSummary: { headBranch: 'feature/i' },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    setFocused('ws1', 'pr-untracked-focus');
+    mockSearch([]);
+    const graphqlSpy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([
+        { number: 9, pr: fakeSummary({ number: 9, headBranch: 'feature/i' }) },
+      ]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
+      state: 'open',
+      merged: false,
+      merged_at: null,
+    } as never);
+
+    await prMonitorService.forcePoll();
+
+    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
+  });
+
   // ---------- lazy mergeability (UNKNOWN) re-poll ----------
 
   it('re-queries an open PR with mergeable UNKNOWN until it resolves', async () => {

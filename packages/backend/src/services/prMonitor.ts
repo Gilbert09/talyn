@@ -265,10 +265,23 @@ class PRMonitorService extends EventEmitter {
     // pass below sees them — but only pendingSet drives the review flag.
     const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums]));
 
+    // Tracked-open rows that have fallen out of all three searches (e.g. a PR
+    // we were review-requested on, then reviewed, that's still open on
+    // GitHub). They never reappear in the search, so without folding them in
+    // here their summary — CI, mergeable, title — would freeze forever while
+    // the row stays visible on the GitHub page. Refresh them too, on the
+    // slacker UNTRACKED TTL (focus still overrides via `filterStale`).
+    const watchedSet = new Set(watchedNumbers);
+    const untrackedOpen = (await this.getTrackedOpenNumbers(workspaceId, repo.id)).filter(
+      (n) => !watchedSet.has(n)
+    );
+    const untrackedSet = new Set(untrackedOpen);
+    const candidateNumbers = [...watchedNumbers, ...untrackedOpen];
+
     // Determine which PRs are actually stale enough to need a refetch
     // (saves the GraphQL call when nothing has aged past the TTL).
-    const staleNumbers = watchedNumbers.length
-      ? await this.filterStale(workspaceId, repo.id, watchedNumbers)
+    const staleNumbers = candidateNumbers.length
+      ? await this.filterStale(workspaceId, repo.id, candidateNumbers, untrackedSet)
       : [];
 
     if (staleNumbers.length > 0) {
@@ -406,10 +419,33 @@ class PRMonitorService extends EventEmitter {
     return results.map((r) => byNumber.get(r.number) ?? r);
   }
 
+  /**
+   * Open PR numbers we're already tracking in the DB for this repo. Used to
+   * keep refreshing rows that have dropped out of the live search but remain
+   * open on GitHub.
+   */
+  private async getTrackedOpenNumbers(
+    workspaceId: string,
+    repositoryId: string
+  ): Promise<number[]> {
+    const rows = await this.db
+      .select({ number: pullRequestsTable.number })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.state, 'open')
+        )
+      );
+    return rows.map((r) => r.number);
+  }
+
   private async filterStale(
     workspaceId: string,
     repositoryId: string,
-    numbers: number[]
+    numbers: number[],
+    untracked?: Set<number>
   ): Promise<number[]> {
     if (numbers.length === 0) return [];
     const rows = await this.db
@@ -438,10 +474,10 @@ class PRMonitorService extends EventEmitter {
     return numbers.filter((number) => {
       const entry = cached.get(number);
       if (!entry) return true; // never seen; always stale
-      // Per-PR TTL: focused = 30 s, unfocused = 60 s, cooldown =
-      // effectively infinite. The poll tick fires every 30 s so a
+      // Per-PR TTL: focused = 30 s, unfocused = 60 s, untracked = 5 min,
+      // cooldown = effectively infinite. The poll tick fires every 30 s so a
       // focused PR can refetch the moment it ages out.
-      const ttl = ttlFor(workspaceId, entry.id);
+      const ttl = ttlFor(workspaceId, entry.id, untracked?.has(number) ?? false);
       return now - entry.lastPolledAt.getTime() >= ttl;
     });
   }

@@ -21,6 +21,11 @@
 
 const FOCUSED_TTL_MS = 30_000;
 const UNFOCUSED_TTL_MS = 60_000;
+// Tracked-open PRs that have fallen out of the user's authored/
+// review-requested searches still need their summary kept current, but
+// they're not the PRs the user is actively working — refresh them on a
+// much slacker cadence so they don't add per-tick GraphQL load.
+const UNTRACKED_TTL_MS = 300_000;
 const COOLDOWN_MS = 5_000;
 
 // We key by `${workspaceId}:${prId}` so a single Map fits both the
@@ -61,17 +66,20 @@ export function markRefreshed(workspaceId: string, prId: string): void {
  *     until the cooldown expires); we surface that as a very large
  *     number rather than a sentinel so the caller's math stays
  *     monotonic.
- *   - Focused → FOCUSED_TTL_MS.
+ *   - Focused → FOCUSED_TTL_MS (wins even when `untracked`, so opening the
+ *     detail sheet on a fallen-out PR still refreshes it promptly).
+ *   - Untracked (dropped out of the search) → UNTRACKED_TTL_MS.
  *   - Otherwise → UNFOCUSED_TTL_MS.
  */
-export function ttlFor(workspaceId: string, prId: string): number {
+export function ttlFor(workspaceId: string, prId: string, untracked = false): number {
   const k = key(workspaceId, prId);
   const cd = cooldownUntil.get(k);
   if (cd !== undefined) {
     if (cd > Date.now()) return Number.MAX_SAFE_INTEGER;
     cooldownUntil.delete(k); // cleanup expired entries on read
   }
-  return focused.has(k) ? FOCUSED_TTL_MS : UNFOCUSED_TTL_MS;
+  if (focused.has(k)) return FOCUSED_TTL_MS;
+  return untracked ? UNTRACKED_TTL_MS : UNFOCUSED_TTL_MS;
 }
 
 /**
@@ -85,5 +93,6 @@ export function _resetPrFocus(): void {
 export const PR_FOCUS_CONSTANTS = {
   FOCUSED_TTL_MS,
   UNFOCUSED_TTL_MS,
+  UNTRACKED_TTL_MS,
   COOLDOWN_MS,
 };

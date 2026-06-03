@@ -63,4 +63,22 @@ describe('prFocus', () => {
     clearFocused('ws1', 'pr1');
     expect(ttlFor('ws1', 'pr1')).toBe(PR_FOCUS_CONSTANTS.UNFOCUSED_TTL_MS);
   });
+
+  it('returns the slacker untracked TTL when the untracked flag is set', () => {
+    expect(ttlFor('ws1', 'pr1', true)).toBe(PR_FOCUS_CONSTANTS.UNTRACKED_TTL_MS);
+    // ...and the untracked TTL really is slacker than the unfocused one.
+    expect(PR_FOCUS_CONSTANTS.UNTRACKED_TTL_MS).toBeGreaterThan(
+      PR_FOCUS_CONSTANTS.UNFOCUSED_TTL_MS
+    );
+  });
+
+  it('focus overrides the untracked flag (a focused fallen-out PR still refreshes fast)', () => {
+    setFocused('ws1', 'pr1');
+    expect(ttlFor('ws1', 'pr1', true)).toBe(PR_FOCUS_CONSTANTS.FOCUSED_TTL_MS);
+  });
+
+  it('cooldown overrides the untracked flag', () => {
+    markRefreshed('ws1', 'pr1');
+    expect(ttlFor('ws1', 'pr1', true)).toBe(Number.MAX_SAFE_INTEGER);
+  });
 });
