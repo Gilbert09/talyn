@@ -329,6 +329,21 @@ export const posthog = {
     request<void>('DELETE', `/posthog/config?workspaceId=${workspaceId}`),
 };
 
+// Cloud task providers — the registered providers + their per-workspace
+// connection status. Generic surface so a new provider shows up without a
+// desktop change.
+export interface CloudProviderInfo {
+  type: string;
+  displayName: string;
+  capabilities?: { model?: boolean; runtimeAdapter?: boolean };
+  connected: boolean;
+}
+
+export const cloudProviders = {
+  list: (workspaceId: string) =>
+    request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
+};
+
 // Watched Repositories
 export interface WatchedRepo {
   id: string;
@@ -866,6 +881,7 @@ export const api = {
   inbox,
   github,
   posthog,
+  cloudProviders,
   repositories,
   pullRequests,
   backlog,
