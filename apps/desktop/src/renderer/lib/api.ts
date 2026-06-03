@@ -550,6 +550,10 @@ export const pullRequests = {
     request<PRRow>('POST', `/pull-requests/${id}/refresh`),
   focus: (id: string, focused = true) =>
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
+  // Tell the backend which list is on screen so it can hard-poll that cohort
+  // and slack-poll the other. 'none' = the GitHub panel isn't visible.
+  setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>
+    request<null>('POST', `/pull-requests/view`, { workspaceId, view }),
   markSeen: (id: string) =>
     request<null>('POST', `/pull-requests/${id}/seen`),
   files: (id: string) =>

@@ -6,6 +6,7 @@ import * as graphqlModule from '../services/githubGraphql.js';
 import {
   setFocused,
   markRefreshed,
+  setActiveView,
   _resetPrFocus,
   PR_FOCUS_CONSTANTS,
 } from '../services/prFocus.js';
@@ -589,6 +590,60 @@ describe('prMonitor — poll orchestration', () => {
 
     // Only the focused PR was batched — unfocused row is still inside
     // its TTL.
+    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([1]);
+  });
+
+  it('slack-polls the cohort the user is NOT viewing (review PR while on "mine")', async () => {
+    // #1 authored, #2 review-requested. Both polled 90 s ago — past the
+    // active-cohort TTL (60 s) but inside the slack TTL (5 min). With the
+    // view on "mine", only the authored PR should refetch.
+    const polledAt = new Date(Date.now() - 90_000);
+    await db.insert(pullRequestsTable).values([
+      {
+        id: 'pr-mine',
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        owner: 'acme',
+        repo: 'widgets',
+        number: 1,
+        state: 'open',
+        authored: true,
+        reviewRequested: false,
+        lastPolledAt: polledAt,
+        lastSummary: { headBranch: 'feature/a' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'pr-review',
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        owner: 'acme',
+        repo: 'widgets',
+        number: 2,
+        state: 'open',
+        authored: false,
+        reviewRequested: true,
+        lastPolledAt: polledAt,
+        lastSummary: { headBranch: 'feature/b' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+    setActiveView('ws1', 'mine');
+    // #1 authored, #2 awaiting my review.
+    mockSearch([1], [2]);
+    const graphqlSpy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([
+        { number: 1, pr: fakeSummary({ number: 1, headBranch: 'feature/a' }) },
+      ]);
+
+    await prMonitorService.forcePoll();
+
+    // Only the authored PR (active cohort) was refetched; the review PR sits
+    // inside its 5-min slack TTL.
     expect(graphqlSpy).toHaveBeenCalledTimes(1);
     expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([1]);
   });

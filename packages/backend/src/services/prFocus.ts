@@ -24,14 +24,26 @@ const UNFOCUSED_TTL_MS = 60_000;
 // Tracked-open PRs that have fallen out of the user's authored/
 // review-requested searches still need their summary kept current, but
 // they're not the PRs the user is actively working — refresh them on a
-// much slacker cadence so they don't add per-tick GraphQL load.
+// much slacker cadence so they don't add per-tick GraphQL load. The same
+// slack TTL covers the cohort the user isn't currently looking at (e.g.
+// review-requested PRs while they're on the "My PRs" tab).
 const UNTRACKED_TTL_MS = 300_000;
 const COOLDOWN_MS = 5_000;
+
+// Which list the desktop is currently showing, per workspace. Drives
+// "poll the cohort you're looking at hard, the other one slackly".
+//   - 'mine'   → authored PRs are active, review-requested are background
+//   - 'review' → vice versa
+//   - 'all'    → both active (also the default before a client reports, so
+//                a freshly-connected app isn't starved)
+//   - 'none'   → GitHub panel not visible → both background
+export type ActiveView = 'mine' | 'review' | 'all' | 'none';
 
 // We key by `${workspaceId}:${prId}` so a single Map fits both the
 // focus and cooldown signals without nested structures.
 const focused = new Set<string>();
 const cooldownUntil = new Map<string, number>();
+const activeView = new Map<string, ActiveView>();
 
 function key(workspaceId: string, prId: string): string {
   return `${workspaceId}:${prId}`;
@@ -61,17 +73,55 @@ export function markRefreshed(workspaceId: string, prId: string): void {
 }
 
 /**
+ * Record which list the desktop is showing for a workspace. Idempotent.
+ */
+export function setActiveView(workspaceId: string, view: ActiveView): void {
+  activeView.set(workspaceId, view);
+}
+
+/**
+ * The workspace's current view. Defaults to `'all'` when no client has
+ * reported — we'd rather fully poll a workspace we know nothing about than
+ * starve a freshly-connected app before its first report lands.
+ */
+export function getActiveView(workspaceId: string): ActiveView {
+  return activeView.get(workspaceId) ?? 'all';
+}
+
+/**
+ * Is this PR's cohort the one the user is currently looking at? An authored
+ * PR is "active" under 'mine'/'all', a review-requested one under
+ * 'review'/'all'. Under 'none' neither is active. A PR can be both authored
+ * and review-requested (rare); either match counts.
+ */
+export function isCohortActive(
+  workspaceId: string,
+  pr: { authored: boolean; reviewRequested: boolean }
+): boolean {
+  const view = getActiveView(workspaceId);
+  if (view === 'all') return true;
+  if (view === 'none') return false;
+  if (view === 'mine') return pr.authored;
+  return pr.reviewRequested; // 'review'
+}
+
+/**
  * Returns the TTL `prMonitor.filterStale` should use for this PR.
  *   - Inside cooldown → effectively infinite (poll skips this PR
  *     until the cooldown expires); we surface that as a very large
  *     number rather than a sentinel so the caller's math stays
  *     monotonic.
- *   - Focused → FOCUSED_TTL_MS (wins even when `untracked`, so opening the
- *     detail sheet on a fallen-out PR still refreshes it promptly).
- *   - Untracked (dropped out of the search) → UNTRACKED_TTL_MS.
- *   - Otherwise → UNFOCUSED_TTL_MS.
+ *   - Focused → FOCUSED_TTL_MS (wins over everything below, so opening the
+ *     detail sheet refreshes promptly regardless of cohort/view).
+ *   - Untracked (dropped out of the search) OR the cohort the user isn't
+ *     currently viewing → UNTRACKED_TTL_MS (slack).
+ *   - Otherwise (the active cohort, settled) → UNFOCUSED_TTL_MS.
  */
-export function ttlFor(workspaceId: string, prId: string, untracked = false): number {
+export function ttlFor(
+  workspaceId: string,
+  prId: string,
+  opts: { cohortActive?: boolean; untracked?: boolean } = {}
+): number {
   const k = key(workspaceId, prId);
   const cd = cooldownUntil.get(k);
   if (cd !== undefined) {
@@ -79,7 +129,8 @@ export function ttlFor(workspaceId: string, prId: string, untracked = false): nu
     cooldownUntil.delete(k); // cleanup expired entries on read
   }
   if (focused.has(k)) return FOCUSED_TTL_MS;
-  return untracked ? UNTRACKED_TTL_MS : UNFOCUSED_TTL_MS;
+  if (opts.untracked || opts.cohortActive === false) return UNTRACKED_TTL_MS;
+  return UNFOCUSED_TTL_MS;
 }
 
 /**
@@ -88,6 +139,7 @@ export function ttlFor(workspaceId: string, prId: string, untracked = false): nu
 export function _resetPrFocus(): void {
   focused.clear();
   cooldownUntil.clear();
+  activeView.clear();
 }
 
 export const PR_FOCUS_CONSTANTS = {

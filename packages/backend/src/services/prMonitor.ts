@@ -12,7 +12,7 @@ import {
   type BatchPRByNumberResult,
 } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
-import { ttlFor } from './prFocus.js';
+import { ttlFor, isCohortActive } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
 
 interface WatchedRepo {
@@ -453,6 +453,8 @@ class PRMonitorService extends EventEmitter {
         id: pullRequestsTable.id,
         number: pullRequestsTable.number,
         lastPolledAt: pullRequestsTable.lastPolledAt,
+        authored: pullRequestsTable.authored,
+        reviewRequested: pullRequestsTable.reviewRequested,
       })
       .from(pullRequestsTable)
       .where(
@@ -461,23 +463,34 @@ class PRMonitorService extends EventEmitter {
           eq(pullRequestsTable.repositoryId, repositoryId)
         )
       );
-    // Build (number → { id, lastPolledAt }) so we can ask prFocus
-    // whether each PR is focused/in-cooldown. The id matches the
-    // `pull_requests.id` we hand out in /pull-requests/:id/focus.
-    const cached = new Map<number, { id: string; lastPolledAt: Date }>();
+    // Build (number → row) so we can ask prFocus whether each PR is
+    // focused/in-cooldown and whether its cohort is the one being viewed.
+    // The id matches the `pull_requests.id` we hand out in /focus.
+    const cached = new Map<
+      number,
+      { id: string; lastPolledAt: Date; authored: boolean; reviewRequested: boolean }
+    >();
     for (const row of rows) {
       if (numbers.includes(row.number)) {
-        cached.set(row.number, { id: row.id, lastPolledAt: row.lastPolledAt });
+        cached.set(row.number, {
+          id: row.id,
+          lastPolledAt: row.lastPolledAt,
+          authored: row.authored,
+          reviewRequested: row.reviewRequested,
+        });
       }
     }
     const now = Date.now();
     return numbers.filter((number) => {
       const entry = cached.get(number);
       if (!entry) return true; // never seen; always stale
-      // Per-PR TTL: focused = 30 s, unfocused = 60 s, untracked = 5 min,
-      // cooldown = effectively infinite. The poll tick fires every 30 s so a
-      // focused PR can refetch the moment it ages out.
-      const ttl = ttlFor(workspaceId, entry.id, untracked?.has(number) ?? false);
+      // Per-PR TTL: focused = 30 s, active-cohort settled = 60 s, untracked
+      // or inactive-cohort = 5 min, cooldown = effectively infinite. The poll
+      // tick fires every 30 s so a focused PR can refetch the moment it ages.
+      const ttl = ttlFor(workspaceId, entry.id, {
+        cohortActive: isCohortActive(workspaceId, entry),
+        untracked: untracked?.has(number) ?? false,
+      });
       return now - entry.lastPolledAt.getTime() >= ttl;
     });
   }

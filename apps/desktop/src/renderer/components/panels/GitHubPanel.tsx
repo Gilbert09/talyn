@@ -237,6 +237,25 @@ export function GitHubPanel() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Tell the backend which cohort is on screen so it polls that one hard and
+  // the other slackly. Re-announce on WS reconnect (the registry is in-memory
+  // and a backend restart forgets it), and signal 'none' on unmount so a
+  // backgrounded GitHub panel drops to slack polling for both cohorts.
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    const view = relationship === 'authored' ? 'mine' : 'review';
+    const announce = () =>
+      void api.pullRequests.setView(currentWorkspaceId, view).catch(() => {});
+    announce();
+    const off = api.ws.on('connection:status', (p) => {
+      if ((p as { connected?: boolean })?.connected) announce();
+    });
+    return () => {
+      off();
+      void api.pullRequests.setView(currentWorkspaceId, 'none').catch(() => {});
+    };
+  }, [currentWorkspaceId, relationship]);
+
   // Initial fetch + refetch on filter change.
   useEffect(() => {
     if (!currentWorkspaceId) return;

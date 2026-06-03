@@ -12,6 +12,8 @@ import {
   setFocused,
   clearFocused,
   markRefreshed,
+  setActiveView,
+  type ActiveView,
 } from '../services/prFocus.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import type { ApiResponse } from '@fastowl/shared';
@@ -330,6 +332,29 @@ export function pullRequestRoutes(): Router {
     } else {
       clearFocused(row.workspaceId, req.params.id);
     }
+    res.status(204).send();
+  });
+
+  // Active-view signal. Body `{ workspaceId, view }` records which list the
+  // desktop is showing ('mine' | 'review' | 'all' | 'none') so the poller can
+  // hard-poll the cohort you're looking at and slack-poll the other one.
+  // In-memory + idempotent, same spirit as /focus.
+  const ALLOWED_VIEWS: ActiveView[] = ['mine', 'review', 'all', 'none'];
+  router.post('/view', async (req, res) => {
+    const body = req.body as { workspaceId?: string; view?: string } | undefined;
+    const workspaceId = body?.workspaceId;
+    const view = body?.view;
+    if (!workspaceId || !view || !ALLOWED_VIEWS.includes(view as ActiveView)) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'workspaceId and a valid view are required' });
+    }
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    setActiveView(workspaceId, view as ActiveView);
     res.status(204).send();
   });
 

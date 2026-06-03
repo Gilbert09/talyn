@@ -622,6 +622,37 @@ describe('routes/pullRequests', () => {
     });
   });
 
+  describe('POST /pull-requests/view', () => {
+    it('accepts a valid view for an owned workspace', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/view`, {
+        method: 'POST',
+        headers: authMine,
+        body: JSON.stringify({ workspaceId: 'ws-mine', view: 'review' }),
+      });
+      expect(res.status).toBe(204);
+    });
+
+    it('rejects an unknown view value', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/view`, {
+        method: 'POST',
+        headers: authMine,
+        body: JSON.stringify({ workspaceId: 'ws-mine', view: 'everything' }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('refuses a workspace the caller does not own', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/view`, {
+        method: 'POST',
+        headers: authMine,
+        body: JSON.stringify({ workspaceId: 'ws-other', view: 'mine' }),
+      });
+      // requireWorkspaceAccess returns 404 (not 403) so it can't be used to
+      // probe which workspaces exist.
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('terminal-state reconciliation', () => {
     it('refresh recovers a stuck closed row that is actually merged', async () => {
       // Row mis-classified as closed (e.g. a transient sweep failure).
