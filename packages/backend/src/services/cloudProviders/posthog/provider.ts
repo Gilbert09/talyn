@@ -57,6 +57,17 @@ export const postHogCodeProvider: CloudTaskProvider = {
     return Boolean(await getPostHogCodeCredentials(workspaceId));
   },
 
+  async testConnection(workspaceId) {
+    const creds = await getPostHogCodeCredentials(workspaceId);
+    if (!creds) return { connected: false, error: 'Not configured' };
+    try {
+      await new PostHogCodeClient(creds.apiKey, creds.projectId, creds.host).ping();
+      return { connected: true };
+    } catch (err) {
+      return { connected: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+
   async removeCredentials(workspaceId) {
     await removePostHogCodeCredentials(workspaceId);
   },

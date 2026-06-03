@@ -1,8 +1,4 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
-import { getDbClient } from '../db/client.js';
-import { environments as environmentsTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   getPostHogCodeCredentials,
@@ -10,8 +6,7 @@ import {
   removePostHogCodeCredentials,
 } from '../services/posthogCode/credentials.js';
 import { PostHogCodeClient } from '../services/posthogCode/client.js';
-import { rowToEnvironment } from './environments.js';
-import { emitEnvironmentCreated } from '../services/websocket.js';
+import { ensureCloudEnvironment } from '../services/cloudProviders/environment.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
@@ -92,7 +87,7 @@ export function posthogRoutes(): Router {
     // (users don't add it manually). One per user is enough — it's a
     // secret-free marker; the per-workspace credentials above are what
     // actually authorise a run.
-    await ensurePostHogCodeEnvironment(assertUser(req).id);
+    await ensureCloudEnvironment(assertUser(req).id, 'posthog_code');
 
     res.json({
       success: true,
@@ -140,42 +135,4 @@ export function posthogRoutes(): Router {
   });
 
   return router;
-}
-
-/**
- * Ensure the user has a `posthog_code` environment. Created on first
- * integration connect, marked `connected` immediately (no daemon to
- * pair). Idempotent — at most one cloud env per user.
- */
-async function ensurePostHogCodeEnvironment(userId: string): Promise<void> {
-  const db = getDbClient();
-  const existing = await db
-    .select({ id: environmentsTable.id })
-    .from(environmentsTable)
-    .where(
-      and(
-        eq(environmentsTable.ownerId, userId),
-        eq(environmentsTable.type, 'posthog_code'),
-      ),
-    )
-    .limit(1);
-  if (existing[0]) return;
-
-  const now = new Date();
-  const row = {
-    id: uuid(),
-    ownerId: userId,
-    name: 'PostHog Code',
-    type: 'posthog_code' as const,
-    status: 'connected' as const,
-    config: { type: 'posthog_code' as const },
-    autonomousBypassPermissions: false,
-    renderer: 'structured' as const,
-    createdAt: now,
-    updatedAt: now,
-  };
-  const [inserted] = await db.insert(environmentsTable).values(row).returning();
-
-  // Tell connected clients live so the env appears without an app restart.
-  emitEnvironmentCreated(rowToEnvironment(inserted ?? (row as typeof inserted)));
 }

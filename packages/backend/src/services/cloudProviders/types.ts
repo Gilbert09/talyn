@@ -24,6 +24,8 @@ export interface CloudTaskProvider {
   ): Promise<{ ok: boolean; error?: string }>;
   /** True if this workspace has usable credentials stored. */
   hasCredentials(workspaceId: string): Promise<boolean>;
+  /** Live check that the stored credentials still authenticate. */
+  testConnection?(workspaceId: string): Promise<{ connected: boolean; error?: string }>;
   /** Remove this workspace's credentials. */
   removeCredentials(workspaceId: string): Promise<void>;
 

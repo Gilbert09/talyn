@@ -6,6 +6,7 @@ import { agentRoutes } from './agents.js';
 import { inboxRoutes } from './inbox.js';
 import { githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes } from './posthog.js';
+import { cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { backlogRoutes } from './backlog.js';
@@ -43,6 +44,10 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/agents`, agentRoutes());
   app.use(`${api}/inbox`, inboxRoutes());
   app.use(`${api}/github`, githubRoutes());
+  // Generic cloud-provider surface (list + credential CRUD). The
+  // `/posthog` routes below remain as a back-compat alias for the
+  // existing desktop Settings card.
+  app.use(`${api}/cloud-providers`, cloudProviderRoutes());
   app.use(`${api}/posthog`, posthogRoutes());
   app.use(`${api}/repositories`, repositoryRoutes());
   app.use(`${api}/pull-requests`, pullRequestRoutes());
