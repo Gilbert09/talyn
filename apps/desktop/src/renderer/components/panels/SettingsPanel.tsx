@@ -133,9 +133,59 @@ export function SettingsPanel() {
 }
 
 function WorkspaceSettings() {
-  const { workspaces, currentWorkspaceId, setCreateWorkspaceOpen } = useWorkspaceStore();
+  const { workspaces, currentWorkspaceId, setCreateWorkspaceOpen, setCurrentWorkspace } =
+    useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
+
+  // Editable name/description, re-seeded whenever the active workspace changes.
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    setName(currentWorkspace?.name ?? '');
+    setDescription(currentWorkspace?.description ?? '');
+    setConfirmDelete(false);
+  }, [currentWorkspaceId, currentWorkspace?.name, currentWorkspace?.description]);
+
+  const metaDirty =
+    !!currentWorkspace &&
+    (name.trim() !== currentWorkspace.name ||
+      description.trim() !== (currentWorkspace.description ?? ''));
+  const isOnlyWorkspace = workspaces.length <= 1;
+
+  async function handleSaveMeta() {
+    if (!currentWorkspaceId || !name.trim() || !metaDirty) return;
+    setSavingMeta(true);
+    try {
+      await api.workspaces.update(currentWorkspaceId, {
+        name: name.trim(),
+        description: description.trim(),
+      });
+      await refreshWorkspaces();
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!currentWorkspaceId || isOnlyWorkspace) return;
+    setDeleting(true);
+    try {
+      await api.workspaces.delete(currentWorkspaceId);
+      // Switch to another workspace before the list refreshes so the UI never
+      // sits on a deleted id.
+      const next = workspaces.find((w) => w.id !== currentWorkspaceId);
+      setCurrentWorkspace(next?.id ?? null);
+      await refreshWorkspaces();
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }
 
   // Repository state
   const [watchedRepos, setWatchedRepos] = useState<WatchedRepo[]>([]);
@@ -273,23 +323,32 @@ function WorkspaceSettings() {
             <div>
               <label className="text-sm font-medium">Workspace Name</label>
               <Input
-                value={currentWorkspace.name}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
                 className="mt-1"
-                disabled
+                disabled={savingMeta}
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Workspace renaming coming soon
-              </p>
             </div>
 
             <div>
               <label className="text-sm font-medium">Description</label>
               <Input
-                value={currentWorkspace.description || ''}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
                 placeholder="Add a description..."
                 className="mt-1"
-                disabled
+                disabled={savingMeta}
               />
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={handleSaveMeta}
+                disabled={!metaDirty || !name.trim() || savingMeta}
+              >
+                {savingMeta ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save changes'}
+              </Button>
             </div>
           </Card>
 
@@ -427,6 +486,54 @@ function WorkspaceSettings() {
               <p className="text-xs text-muted-foreground mt-2">
                 Connect GitHub in Integrations to add repositories
               </p>
+            )}
+          </Card>
+
+          <Card className="p-4 border-destructive/30">
+            <h4 className="font-medium mb-1">Delete workspace</h4>
+            <p className="text-sm text-muted-foreground mb-3">
+              Permanently removes this workspace and its watched repos, tasks, and
+              integration credentials. This cannot be undone.
+            </p>
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                >
+                  {deleting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    `Delete "${currentWorkspace.name}"`
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmDelete(false)}
+                  disabled={deleting}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setConfirmDelete(true)}
+                disabled={isOnlyWorkspace}
+                title={
+                  isOnlyWorkspace
+                    ? 'You need at least one workspace'
+                    : 'Delete this workspace'
+                }
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                Delete workspace
+              </Button>
             )}
           </Card>
         </>
