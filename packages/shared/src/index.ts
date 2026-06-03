@@ -820,9 +820,3 @@ export interface StartAgentRequest {
 export interface SendAgentInputRequest {
   input: string;
 }
-
-// ============================================================================
-// Daemon wire protocol
-// ============================================================================
-
-export * from './daemonProtocol.js';
