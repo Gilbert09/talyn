@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 33 — Cloud-only pivot: strip local execution, build the CloudTaskProvider seam
+
+Refocused FastOwl as a **PR-management app that delegates to cloud coding agents**. Ripped out the entire local-execution layer and folded PostHog Code into a pluggable provider abstraction. Landed as a series of small commits:
+
+1. **Provider seam + cloud-only task queue.** New `services/cloudProviders/` (`types`, `registry`, generic `poller`). PostHog Code wrapped as `cloudProviders/posthog/provider.ts` (delegates to the existing `posthogCode/*` executor/streamer/poller — no rewrite). `taskQueue` lost the idle-agent/(env,repo)-slot/git-prep machinery; it now resolves a task's cloud-marker env → provider → `dispatch`. Neutral `CloudTaskMetadata` + `readCloudTaskMeta`/`readCloudTaskProvider` helpers in shared (legacy `posthog*` fields read through them).
+2. **Generic `/api/v1/cloud-providers` route** + reusable `ensureCloudEnvironment` helper. `/posthog` kept as a back-compat alias for the existing Settings card.
+3. **Strip.** Deleted the daemon services (registry/ws/proxy/auto-update) + `/daemon-ws`, agent/agentStructured/claudeCli/ai (local Claude spawning), permission service/hook/inbox, backlog + continuousBuild, git/gitContext/gitLogService/taskCommitSnapshot/taskFileWatcher, and the agents/permission/backlog/daemon routes. Slimmed `routes/tasks.ts` to the cloud surface and `routes/environments.ts` to list+delete. `taskPullRequest` → dormant stub. Deleted `packages/daemon`, the shared `daemonProtocol`, and the daemon CI. Desktop: removed the local-daemon lifecycle (main IPC/menu/preload), `useLocalDaemon`, `AddEnvironmentModal`, and the Settings Environments/Continuous-Build sections.
+4. **Schema collapse** (migration `0017_cloud_only`): wiped tasks, dropped `agents`/`backlog_*` tables, slimmed `environments` to a secret-free marker, dropped `tasks.assigned_agent_id`/`terminal_output`.
+5. **CLI/MCP**: dropped backlog commands/tools + `mark_ready_for_review`.
+
+Full workspace typechecks; 365 backend tests pass. Design + remaining work (Codex Cloud, Claude Routines) in [`CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md). Note: the daemon-everywhere / continuous-build roadmaps are now superseded.
+
 ## Session 32 — Link PR-fix tasks to their PR row + live in-progress indicator
 
 Starting a task from a PR row ("Get PR mergeable" / "Address PR") now **associates the task with that `pull_requests` row**, and the GitHub list shows a status-aware badge on the row that deep-links to the task.

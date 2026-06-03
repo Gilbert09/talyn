@@ -1,8 +1,25 @@
 # Cloud Task Providers — Pluggable Delegation (PostHog Code, Codex Cloud, Claude Routines)
 
-> Status: **proposed plan**. Goal: turn the one-off PostHog Code integration into a
-> pluggable "cloud task provider" abstraction, then add **OpenAI Codex Cloud** and
-> **Claude Code Routines** as two more delegators behind the same machinery.
+> Status: **Phases 1–2 shipped** (June 2026, the cloud-only refactor). Goal: turn the
+> one-off PostHog Code integration into a pluggable "cloud task provider" abstraction,
+> then add **OpenAI Codex Cloud** and **Claude Code Routines** as two more delegators
+> behind the same machinery.
+>
+> **What's done:** the `CloudTaskProvider` interface + registry
+> (`services/cloudProviders/{types,registry,poller,environment}.ts`), PostHog Code
+> wrapped as the first provider (`cloudProviders/posthog/provider.ts`, delegating to the
+> existing `posthogCode/*` executor/streamer/poller), the cloud-only task queue + generic
+> poller, the neutral `CloudTaskMetadata` + `readCloudTaskMeta` helpers, and the generic
+> `/api/v1/cloud-providers` route. The whole local-execution layer (daemon, envs, agents,
+> permissions, backlog) was removed in the same pass.
+>
+> **Deviations from the plan below:** (1) `dispatch(task, env)` keeps its `env` param —
+> it's now the secret-free cloud-marker env (we chose to keep a thin env marker rather
+> than move `provider` onto the task). (2) The deep streamer/poller generalisation into
+> `TranscriptSource`/`TranscriptConverter` was **deferred** — with one provider, the
+> PostHog poller/streamer are wrapped as-is; generalise them when Codex/Claude land.
+> (3) The Settings/composer UI stays PostHog-specific until a 2nd provider exists.
+> Phase 0 spikes + Phases 3–4 (Codex, Claude) are the remaining work.
 
 ## Background
 
