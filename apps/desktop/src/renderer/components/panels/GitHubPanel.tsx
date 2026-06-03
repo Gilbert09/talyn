@@ -7,7 +7,6 @@ import {
   ExternalLink,
   GitPullRequest,
   GitMerge,
-  ListPlus,
   Loader2,
   ArrowUpDown,
   Copy,
@@ -498,28 +497,6 @@ export function GitHubPanel() {
     }
   }
 
-  // Spin up a pr_response task to address a PR, then jump to it.
-  async function handleCreateTaskFromPR(row: PRRow) {
-    if (!currentWorkspaceId) return;
-    const ref = `${row.owner}/${row.repo}#${row.number}`;
-    const created = await createTask({
-      workspaceId: currentWorkspaceId,
-      type: 'pr_response',
-      title: `Address ${ref}: ${row.summary.title}`,
-      description: `Respond to review feedback / failing checks on ${ref}.`,
-      prompt: `Address the open review feedback and any failing checks on PR ${row.summary.url} (${ref}: "${row.summary.title}").`,
-      repositoryId: row.repositoryId,
-      pullRequestId: row.id,
-    });
-    // Optimistically link the row so the in-progress indicator shows
-    // instantly, ahead of the backend's pull_request:updated echo.
-    setRows((prev) =>
-      prev.map((r) => (r.id === row.id ? { ...r, taskId: created.id } : r))
-    );
-    selectTask(created.id);
-    setActivePanel('queue');
-  }
-
   // Kick off a PostHog Code cloud run to take the PR to a clean,
   // mergeable state (resolve comments, fix CI, resolve conflicts).
   // Assigns the task to the cloud env so the scheduler dispatches it
@@ -635,7 +612,6 @@ export function GitHubPanel() {
                 setActivePanel('queue');
               }}
               onMerge={handleMergeRow}
-              onCreateTask={handleCreateTaskFromPR}
               onCreatePostHogTask={handleCreatePostHogTask}
               posthogEnabled={posthogEnabled}
               taskStatusById={taskStatusById}
@@ -832,7 +808,6 @@ interface PRTableProps {
   onSelect: (id: string) => void;
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
-  onCreateTask: (row: PRRow) => Promise<void>;
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   /** PostHog Code is configured + a cloud env exists to dispatch to. */
   posthogEnabled: boolean;
@@ -850,7 +825,6 @@ function PRTable({
   onSelect,
   onOpenTask,
   onMerge,
-  onCreateTask,
   onCreatePostHogTask,
   posthogEnabled,
   taskStatusById,
@@ -880,7 +854,6 @@ function PRTable({
             onSelect={() => onSelect(row.id)}
             onOpenTask={onOpenTask}
             onMerge={onMerge}
-            onCreateTask={onCreateTask}
             onCreatePostHogTask={onCreatePostHogTask}
             posthogEnabled={posthogEnabled}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
@@ -899,7 +872,6 @@ function PRTableRow({
   onSelect,
   onOpenTask,
   onMerge,
-  onCreateTask,
   onCreatePostHogTask,
   posthogEnabled,
   taskStatus,
@@ -911,7 +883,6 @@ function PRTableRow({
   onSelect: () => void;
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
-  onCreateTask: (row: PRRow) => Promise<void>;
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   posthogEnabled: boolean;
   /** Live status of the row's linked task, if any is loaded. */
@@ -920,7 +891,7 @@ function PRTableRow({
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const [confirmMerge, setConfirmMerge] = useState(false);
-  const [busy, setBusy] = useState<null | 'merge' | 'task' | 'posthog'>(null);
+  const [busy, setBusy] = useState<null | 'merge' | 'posthog'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Brief confirmation flash after a PostHog Code run is kicked off — we
@@ -975,19 +946,6 @@ function PRTableRow({
         friendlyMergeError(message)
       );
       setConfirmMerge(false);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function runCreateTask(e: React.MouseEvent) {
-    e.stopPropagation();
-    setBusy('task');
-    setRowError(null);
-    try {
-      await onCreateTask(row);
-    } catch (err) {
-      setRowError(err instanceof Error ? err.message : 'Could not create task');
     } finally {
       setBusy(null);
     }
@@ -1185,21 +1143,6 @@ function PRTableRow({
                 <GitMerge className="h-3.5 w-3.5" />
               </button>
             ))}
-          {!taskActive && (
-            <button
-              type="button"
-              onClick={runCreateTask}
-              disabled={busy !== null}
-              className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-              title="Create a task to address this PR"
-            >
-              {busy === 'task' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ListPlus className="h-3.5 w-3.5" />
-              )}
-            </button>
-          )}
           {posthogEnabled && row.state === 'open' && (
             <button
               type="button"
