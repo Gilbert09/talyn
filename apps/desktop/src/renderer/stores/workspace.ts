@@ -94,11 +94,15 @@ interface WorkspaceState {
   inboxView: 'active' | 'archive';
   selectedTaskId: string | null;
   theme: Theme;
+  // Whether the create-workspace modal is open (triggered from the sidebar
+  // switcher and the Settings empty state).
+  createWorkspaceOpen: boolean;
 
   // Actions
   setCurrentWorkspace: (id: string | null) => void;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (workspace: Workspace) => void;
+  setCreateWorkspaceOpen: (open: boolean) => void;
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
@@ -146,6 +150,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   inboxView: 'active',
   selectedTaskId: null,
   theme: getInitialTheme(),
+  createWorkspaceOpen: false,
 
   // Actions
   setCurrentWorkspace: (id) => {
@@ -157,6 +162,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   addWorkspace: (workspace) =>
     set((state) => ({ workspaces: [...state.workspaces, workspace] })),
+
+  setCreateWorkspaceOpen: (createWorkspaceOpen) => set({ createWorkspaceOpen }),
 
   setEnvironments: (environments) => set({ environments }),
 

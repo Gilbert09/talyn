@@ -11,6 +11,7 @@ import {
   Archive,
   CircleDot,
   Check,
+  Plus,
 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { cn } from '../../lib/utils';
@@ -201,8 +202,13 @@ export function Sidebar({ className }: SidebarProps) {
  * Workspace settings (where create / rename / delete live).
  */
 function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
-  const { workspaces, currentWorkspaceId, setCurrentWorkspace, setActivePanel } =
-    useWorkspaceStore();
+  const {
+    workspaces,
+    currentWorkspaceId,
+    setCurrentWorkspace,
+    setActivePanel,
+    setCreateWorkspaceOpen,
+  } = useWorkspaceStore();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = workspaces.find((w) => w.id === currentWorkspaceId);
@@ -275,6 +281,17 @@ function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
             </button>
           ))}
           <div className="my-1 border-t" />
+          <button
+            type="button"
+            onClick={() => {
+              setCreateWorkspaceOpen(true);
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+          >
+            <Plus className="h-4 w-4 flex-shrink-0" />
+            New workspace…
+          </button>
           <button
             type="button"
             onClick={() => {

@@ -133,7 +133,7 @@ export function SettingsPanel() {
 }
 
 function WorkspaceSettings() {
-  const { workspaces, currentWorkspaceId } = useWorkspaceStore();
+  const { workspaces, currentWorkspaceId, setCreateWorkspaceOpen } = useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
@@ -437,7 +437,7 @@ function WorkspaceSettings() {
           <p className="text-sm text-muted-foreground mb-4">
             Create or select a workspace to configure settings
           </p>
-          <Button disabled>
+          <Button onClick={() => setCreateWorkspaceOpen(true)}>
             <Plus className="w-4 h-4 mr-1" />
             Create Workspace
           </Button>

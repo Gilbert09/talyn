@@ -4,10 +4,11 @@ import { InboxPanel } from '../panels/InboxPanel';
 import { QueuePanel } from '../panels/QueuePanel';
 import { GitHubPanel } from '../panels/GitHubPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
+import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { useWorkspaceStore } from '../../stores/workspace';
 
 export function MainLayout() {
-  const { activePanel } = useWorkspaceStore();
+  const { activePanel, createWorkspaceOpen, setCreateWorkspaceOpen } = useWorkspaceStore();
 
   return (
     <div className="flex h-screen bg-background">
@@ -20,6 +21,10 @@ export function MainLayout() {
           {activePanel === 'settings' && <SettingsPanel />}
         </div>
       </main>
+      <CreateWorkspaceModal
+        open={createWorkspaceOpen}
+        onOpenChange={setCreateWorkspaceOpen}
+      />
     </div>
   );
 }
