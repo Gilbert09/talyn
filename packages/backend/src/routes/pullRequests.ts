@@ -406,6 +406,15 @@ export function pullRequestRoutes(): Router {
         row.number,
         { merge_method: mergeMethod }
       );
+      // GitHub can return 200 with `merged: false` (it accepted the request
+      // but didn't merge). Don't flip the row to merged or report success in
+      // that case — surface its message so the UI can explain why.
+      if (!result.merged) {
+        return res.status(400).json({
+          success: false,
+          error: result.message || 'GitHub did not merge the pull request',
+        });
+      }
       // Mark the row merged directly. We can't rely on a GraphQL refetch
       // here — `batchPullRequests` filters to `states: [OPEN]`, so a
       // just-merged PR comes back empty and the row would stay stuck on

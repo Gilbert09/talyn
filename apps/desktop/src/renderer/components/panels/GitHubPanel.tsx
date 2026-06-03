@@ -27,6 +27,7 @@ import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRReviewPill } from '../widgets/PRReviewPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import { cn } from '../../lib/utils';
+import { toast } from '../../stores/toast';
 
 /**
  * The GitHub page — every user-authored PR across watched repos at a
@@ -432,17 +433,34 @@ export function GitHubPanel() {
     }
   }
 
-  // Squash-merge a PR straight from its row. Re-list afterwards so the
-  // merged PR drops out of the Open view.
+  // Squash-merge a PR straight from its row. Throws (with GitHub's reason)
+  // if the merge is rejected so the caller can toast it; on success it
+  // removes the row optimistically and reconciles via a re-list.
   async function handleMergeRow(row: PRRow) {
-    await api.pullRequests.merge(row.id);
+    const ref = `${row.owner}/${row.repo}#${row.number}`;
+    const result = await api.pullRequests.merge(row.id);
+    // GitHub can 200 with `merged: false` (e.g. it accepted the request but
+    // declined to merge). Treat that as a failure so we don't claim success
+    // and wrongly drop the row.
+    if (!result.merged) {
+      throw new Error(result.message || 'GitHub did not merge the pull request');
+    }
+    toast.success(`Merged ${ref}`, row.summary.title);
+    // Drop the row immediately — the merged PR no longer belongs in the
+    // Open view. The re-list below reconciles counts/other rows.
+    setRows((prev) => prev.filter((r) => r.id !== row.id));
     if (!currentWorkspaceId) return;
-    const data = await api.pullRequests.list({
-      workspaceId: currentWorkspaceId,
-      state: stateFilter,
-      repo: repoFilter === 'all' ? undefined : repoFilter,
-    });
-    setRows(data);
+    try {
+      const data = await api.pullRequests.list({
+        workspaceId: currentWorkspaceId,
+        state: stateFilter,
+        repo: repoFilter === 'all' ? undefined : repoFilter,
+      });
+      setRows(data);
+    } catch {
+      // Re-list is best-effort; the optimistic removal already happened and
+      // the next poll tick will reconcile.
+    }
   }
 
   // Spin up a pr_response task to address a PR, then jump to it.
@@ -899,7 +917,15 @@ function PRTableRow({
     try {
       await onMerge(row);
     } catch (err) {
-      setRowError(err instanceof Error ? err.message : 'Merge failed');
+      const message = err instanceof Error ? err.message : 'Merge failed';
+      setRowError(message);
+      // Surface *why* it failed — GitHub's message (e.g. "Pull Request is
+      // not mergeable", "At least 1 approving review is required") is the
+      // useful part. Previously this only lived in a hover tooltip.
+      toast.error(
+        `Couldn't merge ${row.owner}/${row.repo}#${row.number}`,
+        friendlyMergeError(message)
+      );
       setConfirmMerge(false);
     } finally {
       setBusy(null);
@@ -1150,6 +1176,19 @@ function PRTableRow({
       </td>
     </tr>
   );
+}
+
+/**
+ * Make a GitHub merge error readable in a toast. Strips the noisy
+ * "GitHub API error 405 Method Not Allowed:" prefix the backend prepends,
+ * and adds a nudge for the most common (and most cryptic) case.
+ */
+function friendlyMergeError(message: string): string {
+  const cleaned = message.replace(/^GitHub API error \d+[^:]*:\s*/i, '').trim() || message;
+  if (/not mergeable/i.test(cleaned)) {
+    return `${cleaned}. The PR may have new conflicts, failing required checks, or pending required reviews — refresh and check its status.`;
+  }
+  return cleaned;
 }
 
 /** Small relative-time helper; no dependency on date-fns. */
