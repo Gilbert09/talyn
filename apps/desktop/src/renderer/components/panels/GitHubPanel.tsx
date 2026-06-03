@@ -171,6 +171,8 @@ export function GitHubPanel() {
   // `reviewRequested` flag (no refetch), so both pills can show counts.
   const [relationship, setRelationship] = useState<RelationshipFilter>('authored');
   const [repoFilter, setRepoFilter] = useState<string>('all');
+  // Review-tab "Requested" filter: 'all' | 'direct' | `team:<org/team>`.
+  const [requestedFilter, setRequestedFilter] = useState<string>('all');
   const [needsAttention, setNeedsAttention] = useState(false);
   const [search, setSearch] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -390,6 +392,38 @@ export function GitHubPanel() {
     [rows]
   );
 
+  // The distinct "requested via" options present in the review-requested
+  // rows — drives the Review-tab Requested filter dropdown.
+  const requestedOptions = useMemo(() => {
+    const teams = new Set<string>();
+    let hasDirect = false;
+    for (const r of rows) {
+      if (!r.reviewRequested) continue;
+      const via = r.summary.reviewRequestVia;
+      if (!via) continue;
+      if (via.direct) hasDirect = true;
+      for (const t of via.teams) teams.add(t);
+    }
+    const opts: Array<{ value: string; label: string }> = [];
+    if (hasDirect) {
+      opts.push({ value: 'direct', label: `Directly${viewerLogin ? ` (@${viewerLogin})` : ''}` });
+    }
+    for (const t of [...teams].sort()) opts.push({ value: `team:${t}`, label: `@${t}` });
+    return opts;
+  }, [rows, viewerLogin]);
+
+  // Drop a stale Requested selection when the tab changes or the option
+  // disappears from the list, so it can't silently filter to nothing.
+  useEffect(() => {
+    if (relationship !== 'review_requested') {
+      if (requestedFilter !== 'all') setRequestedFilter('all');
+      return;
+    }
+    if (requestedFilter !== 'all' && !requestedOptions.some((o) => o.value === requestedFilter)) {
+      setRequestedFilter('all');
+    }
+  }, [relationship, requestedOptions, requestedFilter]);
+
   // Live status of each linked task, so a row can show whether its fix
   // task is still running. Driven by the workspace store, which the WS
   // task:status handler keeps current.
@@ -422,6 +456,16 @@ export function GitHubPanel() {
     if (needsAttention && relationship === 'authored') {
       out = out.filter(isNeedsAttention);
     }
+    // Review-tab Requested filter: directly to me, or via a specific team.
+    if (relationship === 'review_requested' && requestedFilter !== 'all') {
+      out = out.filter((r) => {
+        const via = r.summary.reviewRequestVia;
+        if (!via) return false;
+        if (requestedFilter === 'direct') return via.direct;
+        if (requestedFilter.startsWith('team:')) return via.teams.includes(requestedFilter.slice(5));
+        return true;
+      });
+    }
     const sorted = out.slice().sort((a, b) => {
       // Order by when the PR was opened on GitHub. Fall back to the DB
       // row's createdAt for rows cached before we tracked the PR's own
@@ -431,7 +475,7 @@ export function GitHubPanel() {
       return sortDir === 'desc' ? tb - ta : ta - tb;
     });
     return sorted;
-  }, [rows, relationship, search, needsAttention, sortDir, viewerLogin]);
+  }, [rows, relationship, search, needsAttention, sortDir, viewerLogin, requestedFilter]);
 
   // Refresh = a real GitHub force-poll, then re-read the freshly-updated
   // cache. The poll also emits WS deltas, but re-listing guarantees the
@@ -558,6 +602,9 @@ export function GitHubPanel() {
         repoFilter={repoFilter}
         onRepoFilter={setRepoFilter}
         repos={repositories.map((r) => ({ id: r.id, name: r.fullName }))}
+        requestedFilter={requestedFilter}
+        onRequestedFilter={setRequestedFilter}
+        requestedOptions={requestedOptions}
         search={search}
         onSearch={setSearch}
         searchRef={searchInputRef}
@@ -677,6 +724,10 @@ interface FilterBarProps {
   repoFilter: string;
   onRepoFilter: (v: string) => void;
   repos: Array<{ id: string; name: string }>;
+  /** Review-tab "Requested" filter + its available options. */
+  requestedFilter: string;
+  onRequestedFilter: (v: string) => void;
+  requestedOptions: Array<{ value: string; label: string }>;
   search: string;
   onSearch: (v: string) => void;
   searchRef?: React.Ref<HTMLInputElement>;
@@ -695,6 +746,9 @@ function FilterBar({
   repoFilter,
   onRepoFilter,
   repos,
+  requestedFilter,
+  onRequestedFilter,
+  requestedOptions,
   search,
   onSearch,
   searchRef,
@@ -747,6 +801,24 @@ function FilterBar({
           </option>
         ))}
       </select>
+
+      {/* Requested filter — Review tab only, populated from the options
+          actually present (directly to you, or via one of your teams). */}
+      {relationship === 'review_requested' && requestedOptions.length > 0 && (
+        <select
+          value={requestedFilter}
+          onChange={(e) => onRequestedFilter(e.target.value)}
+          className="h-7 rounded-md border bg-background px-2 py-0 text-xs leading-7"
+          title="Filter by who requested your review"
+        >
+          <option value="all">Any requester</option>
+          {requestedOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      )}
 
       {/* Needs attention toggle — only meaningful for your own PRs. */}
       {relationship === 'authored' && (
