@@ -1,14 +1,16 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Inbox,
   ListTodo,
   Settings,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   FolderKanban,
   Github,
   Archive,
   CircleDot,
+  Check,
 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { cn } from '../../lib/utils';
@@ -31,14 +33,10 @@ export function Sidebar({ className }: SidebarProps) {
     unreadCount,
     inboxView,
     setInboxView,
-    workspaces,
-    currentWorkspaceId,
     tasks,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
-
-  const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
   // Count tasks that need attention (running with high/medium attention)
   const tasksNeedingAttention = tasks.filter(
@@ -83,23 +81,7 @@ export function Sidebar({ className }: SidebarProps) {
     >
       {/* Header / Workspace Selector */}
       <div className="p-3 border-b">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-            <FolderKanban className="w-4 h-4 text-primary" />
-          </div>
-          {!sidebarCollapsed && (
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">
-                {currentWorkspace?.name || 'No Workspace'}
-              </p>
-              <p className="text-xs text-muted-foreground truncate">
-                {currentWorkspace
-                  ? `${currentWorkspace.repos.length} repos`
-                  : 'Select a workspace'}
-              </p>
-            </div>
-          )}
-        </div>
+        <WorkspaceSwitcher collapsed={sidebarCollapsed} />
       </div>
 
       {/* Navigation */}
@@ -209,6 +191,103 @@ export function Sidebar({ className }: SidebarProps) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Top-of-sidebar workspace switcher. Shows the active workspace and opens a
+ * dropdown to switch between the user's workspaces, plus a shortcut into the
+ * Workspace settings (where create / rename / delete live).
+ */
+function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
+  const { workspaces, currentWorkspaceId, setCurrentWorkspace, setActivePanel } =
+    useWorkspaceStore();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = workspaces.find((w) => w.id === currentWorkspaceId);
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const select = (id: string) => {
+    if (id !== currentWorkspaceId) setCurrentWorkspace(id);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title={collapsed ? current?.name ?? 'No workspace' : 'Switch workspace'}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md p-1 text-left transition-colors hover:bg-accent',
+          collapsed && 'justify-center',
+        )}
+      >
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <FolderKanban className="h-4 w-4 text-primary" />
+        </div>
+        {!collapsed && (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{current?.name || 'No Workspace'}</p>
+              <p className="truncate text-xs text-muted-foreground">
+                {current ? `${current.repos.length} repos` : 'Select a workspace'}
+              </p>
+            </div>
+            <ChevronsUpDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+          </>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className={cn(
+            'absolute z-50 mt-1 max-h-80 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md',
+            collapsed ? 'left-0 w-56' : 'inset-x-0',
+          )}
+        >
+          <div className="px-2 py-1 text-xs font-medium text-muted-foreground">Workspaces</div>
+          {workspaces.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              onClick={() => select(w.id)}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+            >
+              <Check
+                className={cn(
+                  'h-4 w-4 flex-shrink-0',
+                  w.id === currentWorkspaceId ? 'opacity-100' : 'opacity-0',
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate">{w.name}</span>
+              <span className="text-xs text-muted-foreground">{w.repos.length}</span>
+            </button>
+          ))}
+          <div className="my-1 border-t" />
+          <button
+            type="button"
+            onClick={() => {
+              setActivePanel('settings');
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent"
+          >
+            <Settings className="h-4 w-4 flex-shrink-0" />
+            Workspace settings
+          </button>
+        </div>
+      )}
     </div>
   );
 }

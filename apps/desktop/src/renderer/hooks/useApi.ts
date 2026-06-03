@@ -307,12 +307,15 @@ export function useInitialDataLoad() {
       setWorkspaces(workspaces);
       setEnvironments(environments);
 
-      // Auto-select first workspace if none selected
+      // Honor the persisted selection if it still exists; otherwise fall
+      // back to the first workspace (e.g. the stored one was deleted).
       let activeWorkspaceId = currentWorkspaceId;
-      if (!activeWorkspaceId && workspaces.length > 0) {
+      const stillExists =
+        !!activeWorkspaceId && workspaces.some((w) => w.id === activeWorkspaceId);
+      if (!stillExists && workspaces.length > 0) {
         activeWorkspaceId = workspaces[0].id;
         setCurrentWorkspace(activeWorkspaceId);
-        console.log('Auto-selected workspace:', workspaces[0].name);
+        console.log('Selected workspace:', workspaces[0].name);
       }
 
       // Load workspace-specific data

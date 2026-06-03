@@ -23,6 +23,29 @@ function getInitialTheme(): Theme {
   return 'light';
 }
 
+const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';
+
+// Last-selected workspace id, so a switch survives an app restart instead of
+// snapping back to the first workspace. Validated against the fetched list on
+// load (the id may have been deleted elsewhere).
+function getInitialWorkspaceId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(WORKSPACE_PREF_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function persistWorkspaceId(id: string | null) {
+  try {
+    if (id) localStorage.setItem(WORKSPACE_PREF_KEY, id);
+    else localStorage.removeItem(WORKSPACE_PREF_KEY);
+  } catch {
+    // ignore quota / privacy-mode issues
+  }
+}
+
 // Apply theme to document
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return;
@@ -110,7 +133,7 @@ interface WorkspaceState {
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   // Initial state
-  currentWorkspaceId: null,
+  currentWorkspaceId: getInitialWorkspaceId(),
   workspaces: [],
   environments: [],
   agents: [],
@@ -125,7 +148,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   theme: getInitialTheme(),
 
   // Actions
-  setCurrentWorkspace: (id) => set({ currentWorkspaceId: id }),
+  setCurrentWorkspace: (id) => {
+    persistWorkspaceId(id);
+    set({ currentWorkspaceId: id });
+  },
 
   setWorkspaces: (workspaces) => set({ workspaces }),
 
