@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { registerTaskCommands } from './commands/task.js';
-import { registerBacklogCommands } from './commands/backlog.js';
 import { registerTokenCommands } from './commands/token.js';
 import { baseUrl } from './client.js';
 
@@ -14,7 +13,6 @@ program
   .option('-v, --verbose', 'Print additional diagnostics to stderr');
 
 registerTaskCommands(program);
-registerBacklogCommands(program);
 registerTokenCommands(program);
 
 program
