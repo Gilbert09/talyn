@@ -70,48 +70,6 @@ const electronHandler = {
       return ipcRenderer.invoke('dialog:select-directory', opts);
     },
   },
-  daemon: {
-    /** Whether the daemon config on disk already has a device token (=paired). */
-    isPaired(): Promise<boolean> {
-      return ipcRenderer.invoke('daemon:is-paired');
-    },
-    /** Hostname we'd label the env with in the backend — e.g. "Tom's MacBook Pro". */
-    getHostLabel(): Promise<string> {
-      return ipcRenderer.invoke('daemon:host-label');
-    },
-    /**
-     * Write the given backendUrl + pairingToken into the daemon config
-     * file and start the daemon (dev child or OS service depending on
-     * packaged state). Renderer calls this after it has created a
-     * daemon env via REST and minted a pairing token.
-     */
-    configureAndStart(args: {
-      backendUrl: string;
-      pairingToken: string;
-    }): Promise<{ started: boolean }> {
-      return ipcRenderer.invoke('daemon:configure-and-start', args);
-    },
-    /** Already-paired path: bring the daemon up without re-pairing. */
-    ensureRunning(args: {
-      backendUrl: string;
-    }): Promise<{ started: boolean; reason?: string }> {
-      return ipcRenderer.invoke('daemon:ensure-running', args);
-    },
-    /** Status of the local daemon on this machine — PID, installed, running. */
-    localInfo(): Promise<{
-      mode: 'dev' | 'prod';
-      installed: boolean;
-      running: boolean;
-      pid?: number;
-      platform: NodeJS.Platform;
-    }> {
-      return ipcRenderer.invoke('daemon:local-info');
-    },
-    /** Restart the daemon in place (debug utility; rarely needed). */
-    restart(args?: { backendUrl?: string }): Promise<{ restarted: boolean; reason?: string }> {
-      return ipcRenderer.invoke('daemon:restart', args);
-    },
-  },
 };
 
 contextBridge.exposeInMainWorld('electron', electronHandler);

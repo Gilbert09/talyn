@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Inbox,
   ListTodo,
@@ -6,9 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderKanban,
-  Plus,
-  Server,
-  WifiOff,
   Github,
   Archive,
   CircleDot,
@@ -19,7 +16,6 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useAuth } from '../auth/AuthProvider';
-import { AddEnvironmentModal } from '../modals/AddEnvironmentModal';
 
 interface SidebarProps {
   className?: string;
@@ -37,10 +33,8 @@ export function Sidebar({ className }: SidebarProps) {
     workspaces,
     currentWorkspaceId,
     tasks,
-    environments,
   } = useWorkspaceStore();
 
-  const [showAddEnvModal, setShowAddEnvModal] = useState(false);
   const { user } = useAuth();
 
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
@@ -173,57 +167,6 @@ export function Sidebar({ className }: SidebarProps) {
           );
         })}
       </nav>
-
-      {/* Environments Status */}
-      {!sidebarCollapsed && (
-        <div className="p-3 border-t">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-muted-foreground">
-              Environments
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setShowAddEnvModal(true)}
-              title="Add Environment"
-            >
-              <Plus className="w-3 h-3" />
-            </Button>
-          </div>
-          <div className="space-y-1">
-            {environments.length === 0 ? (
-              <button
-                onClick={() => setShowAddEnvModal(true)}
-                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
-              >
-                <Server className="w-3 h-3" />
-                <span>Add environment...</span>
-              </button>
-            ) : (
-              environments.map((env) => (
-                <div key={env.id} className="flex items-center gap-2 text-xs">
-                  <div
-                    className={cn(
-                      'w-2 h-2 rounded-full',
-                      env.status === 'connected' && 'bg-green-500',
-                      env.status === 'connecting' && 'bg-yellow-500 animate-pulse',
-                      env.status === 'disconnected' && 'bg-slate-500',
-                      env.status === 'error' && 'bg-red-500'
-                    )}
-                  />
-                  <span className="truncate flex-1">{env.name}</span>
-                  {env.status === 'error' && (
-                    <WifiOff className="w-3 h-3 text-red-500" />
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      <AddEnvironmentModal open={showAddEnvModal} onOpenChange={setShowAddEnvModal} />
 
       {/* Footer */}
       <div className="border-t p-2">

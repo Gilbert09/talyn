@@ -6,7 +6,6 @@
  * When running `npm run build` or `npm run build:main`, this file is compiled to
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { app, BrowserWindow, shell, ipcMain, safeStorage, dialog } from 'electron';
@@ -14,16 +13,6 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
-import {
-  installDaemon,
-  startDaemon,
-  startDevDaemon,
-  stopDevDaemon,
-  writeDaemonConfig,
-  daemonStatus,
-  restartDaemon,
-  uninstallDaemon,
-} from './localDaemon';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
 
 class AppUpdater {
@@ -163,118 +152,6 @@ ipcMain.handle('auth:storage:remove', async (_event, key: string) => {
 });
 
 registerDeepLinkProtocol();
-
-// ============================================================================
-// Local daemon pairing + lifecycle
-// ============================================================================
-//
-// The renderer owns the Supabase JWT, so it creates the daemon env + mints
-// the pairing token via REST, then hands the token back to us so we can
-// write the daemon config and bring the daemon up. Works in both dev
-// (Electron-child tsx run) and prod (launchd/systemd user service).
-//
-// See docs/DAEMON_EVERYWHERE.md Slice 4.
-
-const daemonConfigPath = path.join(os.homedir(), '.fastowl/daemon.json');
-
-function readDaemonConfig(): { backendUrl?: string; deviceToken?: string } | null {
-  try {
-    const raw = fs.readFileSync(daemonConfigPath, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-ipcMain.handle('daemon:is-paired', async () => {
-  const cfg = readDaemonConfig();
-  return !!cfg?.deviceToken;
-});
-
-ipcMain.handle('daemon:host-label', async () => {
-  return os.hostname();
-});
-
-ipcMain.handle(
-  'daemon:configure-and-start',
-  async (_event, args: { backendUrl: string; pairingToken: string }) => {
-    writeDaemonConfig({ backendUrl: args.backendUrl, pairingToken: args.pairingToken });
-    if (app.isPackaged) {
-      await installDaemon({ backendUrl: args.backendUrl });
-      startDaemon();
-    } else {
-      startDevDaemon(args.backendUrl);
-    }
-    return { started: true };
-  },
-);
-
-// Already-paired path: renderer calls this after login if
-// `daemon:is-paired` returned true, so we don't start a fresh pairing.
-ipcMain.handle('daemon:ensure-running', async (_event, args: { backendUrl: string }) => {
-  const cfg = readDaemonConfig();
-  if (!cfg?.deviceToken) return { started: false, reason: 'not-paired' };
-  if (app.isPackaged) {
-    await installDaemon({ backendUrl: args.backendUrl });
-    startDaemon();
-  } else {
-    startDevDaemon(args.backendUrl);
-  }
-  return { started: true };
-});
-
-// Settings panel uses this to surface PID + install status on the
-// "This Mac" env card. Dev mode returns a synthetic status since
-// there's no OS service in dev.
-ipcMain.handle('daemon:local-info', async () => {
-  if (!app.isPackaged) {
-    return {
-      mode: 'dev' as const,
-      installed: false,
-      running: true, // Electron child; alive by construction.
-      platform: process.platform,
-    };
-  }
-  return {
-    mode: 'prod' as const,
-    ...daemonStatus(),
-    platform: process.platform,
-  };
-});
-
-ipcMain.handle('daemon:restart', async (_event, args?: { backendUrl?: string }) => {
-  if (app.isPackaged) {
-    restartDaemon();
-    return { restarted: true };
-  }
-  stopDevDaemon();
-  const cfg = readDaemonConfig();
-  const backendUrl = args?.backendUrl ?? cfg?.backendUrl;
-  if (!backendUrl) return { restarted: false, reason: 'no-backend-url' };
-  startDevDaemon(backendUrl);
-  return { restarted: true };
-});
-
-// Full wipe + quit. Used from the "Uninstall FastOwl daemon and
-// quit" menu item — gives the user a clean path to delete the app
-// afterward without leaving a zombie launchd agent behind.
-ipcMain.handle('daemon:uninstall-and-quit', async () => {
-  try {
-    stopDevDaemon();
-    uninstallDaemon({ fullWipe: true });
-  } catch (err) {
-    log.error('[daemon:uninstall-and-quit] failed:', err);
-  }
-  app.quit();
-});
-
-app.on('before-quit', () => {
-  // Dev daemon is a child of Electron — shut it down cleanly.
-  // The prod launchd/systemd daemon deliberately survives.
-  stopDevDaemon();
-});
-
-// ============================================================================
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');

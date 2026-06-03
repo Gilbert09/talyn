@@ -311,16 +311,9 @@ export function useInitialDataLoad() {
         workspaces = [defaultWorkspace];
       }
 
-      // If no environments exist, create a local environment
-      if (environments.length === 0) {
-        console.log('No environments found, creating local environment...');
-        const localEnv = await api.environments.create({
-          name: 'Local Machine',
-          type: 'local',
-          config: { type: 'local' },
-        });
-        environments = [localEnv];
-      }
+      // Cloud-provider env markers are auto-provisioned by the backend
+      // when a provider is connected (Settings → Integrations) — the
+      // desktop never creates one.
 
       setWorkspaces(workspaces);
       setEnvironments(environments);
@@ -335,14 +328,12 @@ export function useInitialDataLoad() {
 
       // Load workspace-specific data
       if (activeWorkspaceId) {
-        const [agents, tasks, inboxItems, repositories] = await Promise.all([
-          api.agents.list({ workspaceId: activeWorkspaceId }),
+        const [tasks, inboxItems, repositories] = await Promise.all([
           api.tasks.list({ workspaceId: activeWorkspaceId }),
           api.inbox.list({ workspaceId: activeWorkspaceId }),
           api.repositories.list(activeWorkspaceId).catch(() => []), // May not exist
         ]);
 
-        setAgents(agents);
         setTasks(tasks);
         setInboxItems(inboxItems);
         setRepositories(repositories);
