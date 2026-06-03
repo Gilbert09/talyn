@@ -35,11 +35,7 @@ import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
-import {
-  useWorkspaceActions,
-  getAwaitingReviewNotifyEnabled,
-  setAwaitingReviewNotifyEnabled,
-} from '../../hooks/useApi';
+import { useWorkspaceActions } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
 import { getSupabase } from '../../lib/supabase';
 
@@ -793,28 +789,6 @@ function PostHogCodeCard() {
 
 function AppearanceSettings() {
   const { theme, setTheme } = useWorkspaceStore();
-  const [notifyAwaitingReview, setNotifyAwaitingReview] = useState(
-    getAwaitingReviewNotifyEnabled()
-  );
-  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
-  );
-
-  const toggleAwaitingReview = async (next: boolean) => {
-    setAwaitingReviewNotifyEnabled(next);
-    setNotifyAwaitingReview(next);
-    // When enabling for the first time, request permission eagerly so the
-    // first actual awaiting_review event doesn't race with the browser
-    // permission prompt.
-    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      try {
-        const perm = await Notification.requestPermission();
-        setNotifyPermission(perm);
-      } catch {
-        // ignore
-      }
-    }
-  };
 
   const themeOptions: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
     {
@@ -875,33 +849,6 @@ function AppearanceSettings() {
         <p className="text-sm text-muted-foreground mt-4">
           {themeOptions.find((o) => o.value === theme)?.description}
         </p>
-      </Card>
-
-      <Card className="p-4">
-        <h4 className="font-medium mb-3">Notifications</h4>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={notifyAwaitingReview}
-            onChange={(e) => void toggleAwaitingReview(e.target.checked)}
-            className="mt-1"
-          />
-          <div className="flex-1">
-            <div className="font-medium text-sm">
-              Notify me when a task is ready for review
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Shows a desktop notification whenever a Continuous Build task lands in
-              "awaiting review". Click to bring FastOwl to the front.
-            </p>
-            {notifyPermission === 'denied' && (
-              <p className="text-xs text-yellow-500 mt-1">
-                Notifications are blocked at the OS level. Grant FastOwl permission in
-                your system settings to receive them.
-              </p>
-            )}
-          </div>
-        </label>
       </Card>
     </div>
   );
