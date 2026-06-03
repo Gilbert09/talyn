@@ -1,55 +1,59 @@
 # FastOwl
 
-**Mission control for AI-assisted software engineering.**
+**Mission control for your GitHub PRs, powered by cloud coding agents.**
 
-FastOwl is a desktop app that orchestrates Claude agents across your machines, turns incoming signals (PR comments, CI failures, Slack mentions) into a prioritized inbox, and keeps you in the loop with an approval gate before anything lands in the world.
+FastOwl is a desktop app that tracks your open and review-requested pull requests, turns incoming signals (new reviews, comments, CI failures, merge-ready PRs) into a prioritized inbox, and lets you hand the routine work — fixing failing CI, addressing review comments, drafting a review — to **cloud coding agents** that run on their own sandbox and open a PR for you.
 
-If you work across several VMs or dev containers and find yourself flipping between terminals just to check on a handful of Claude sessions, FastOwl is for you.
+If you live in GitHub PRs and want to delegate the rote drudgery without babysitting a local agent, FastOwl is for you.
 
 ---
 
 ## Why FastOwl
 
-Running Claude across multiple machines today means:
+Keeping on top of your PRs today means:
 
-- SSH'ing into each box to kick off a session
-- Tabbing through terminals to see which ones need input
-- Manually creating tasks out of PR comments, CI failures, and Slack pings
-- Trusting that a long-running agent hasn't silently gone off the rails
+- Refreshing GitHub to see which PRs got a review, a comment, or a red check
+- Context-switching back into a branch just to push a one-line CI fix
+- Manually kicking off an agent, then watching it, then opening the PR yourself
 
-FastOwl consolidates all of that into one place:
+FastOwl consolidates that:
 
-- **One view of every agent, everywhere.** Spin Claude up on your laptop, your dev VM, or a Coder workspace — FastOwl treats them all as environments.
-- **Tasks, not terminals.** You describe what you want. FastOwl creates a task, allocates an environment, spawns Claude in the right repo directory, and gives the work its own git branch.
-- **Approval gates.** When an agent finishes, the task pauses at `awaiting_review`. You see the diff + the full terminal transcript, then click Approve or Reject. Nothing gets pushed without you.
-- **Prioritized inbox.** New PR comments on your work, CI failures, agent questions, Slack mentions — all funneled into a priority-ordered list so you always know what needs attention next.
+- **One prioritized inbox.** New reviews, review comments, CI failures, and merge-ready transitions on your PRs — all funneled into a priority-ordered list so you always know what needs attention next.
+- **A live PR dashboard.** Every watched repo's PRs with a check-rollup status pill, review status, and a detail sheet (summary / checks / files / conversation). Merge straight from the app.
+- **Delegate to a cloud agent.** From a PR row ("fix this PR") or as a freeform task on a repo, FastOwl hands the prompt to a cloud provider. The provider runs the whole agent loop on its own sandbox and opens a PR; FastOwl streams the transcript back and links the resulting PR.
+
+There is **no local execution** — no daemon, no SSH, no `claude` CLI to install, nothing running on your machine. The agent runs in the cloud.
 
 ---
 
 ## Expected workflow
 
-A typical session looks like this:
-
-1. **Open FastOwl.** You see the inbox with anything that came in overnight — a PR review on one of your PRs, a failing check on another, two agent completions awaiting review.
-2. **Approve the overnight work.** Click through the awaiting-review tasks. Each one shows the full `git diff` and the terminal transcript. Approve the good ones → they move to completed. Reject a shaky one → it's requeued with a note for the agent to try again.
-3. **Create new tasks.** Hit "Add Task", pick a type (Code / PR Response / PR Review / Manual), paste the prompt. Claude picks up a free environment, auto-generates a task title and description, and starts working on a dedicated `fastowl/<id>-<slug>` branch.
-4. **Jump into an in-flight task.** Click on an in-progress task to see its live terminal. If Claude asked a question, the inbox surfaces it and the input box is front-and-center. If you want to redirect, type into the terminal like you would in a normal Claude CLI session.
-5. **Mark a task ready.** When the agent has landed the changes, click "Ready for Review" — the agent stops and the task waits for your approval + push decision.
-
-You stay in the loop for the decisions that matter (approve / reject / push) and let the agents handle the rote drudgery.
+1. **Open FastOwl.** The inbox shows anything that came in — a review on one of your PRs, a failing check on another, a PR that's now mergeable.
+2. **Triage the dashboard.** The GitHub panel lists your PRs with live status pills. Open one to see checks, the diff, and the conversation. Merge the ready ones.
+3. **Delegate the rest.** On a PR that needs work, kick off a cloud task (fix CI / address review). Or compose a freeform task: pick a repo, write a prompt. The task is delegated to a cloud provider.
+4. **Watch it run.** Click an in-progress task to see the streamed transcript. When the provider opens a PR, FastOwl links it onto the task and the GitHub dashboard.
+5. **Review on GitHub.** The agent's work lands as a normal PR — review and merge it like any other.
 
 ---
 
 ## Task types
 
-| Type          | Who does the work | Typical use                                              |
-| ------------- | ----------------- | -------------------------------------------------------- |
-| `code_writing`| Claude            | Features, bug fixes, refactors. Each task gets a branch. |
-| `pr_response` | Claude            | Respond to review comments on one of your open PRs.      |
-| `pr_review`   | Claude            | Draft review comments on someone else's PR.              |
-| `manual`      | You               | Things only a human can do (merging, replying on Slack). |
+Every task is delegated to a cloud provider.
 
-All agent types run through the same approval gate before their work is considered done.
+| Type           | Typical use                                                        |
+| -------------- | ------------------------------------------------------------------ |
+| `code_writing` | Freeform: pick a repo, write a prompt. The agent opens a PR.       |
+| `pr_response`  | Fix failing CI / address review comments on one of your open PRs.  |
+| `pr_review`    | Draft review comments on a PR.                                     |
+
+---
+
+## Cloud providers
+
+FastOwl delegates work through a pluggable **cloud task provider** interface (`packages/backend/src/services/cloudProviders/`). A provider runs the agent loop on its own sandbox and opens a PR; FastOwl creates the remote run, polls its status, and ingests the transcript.
+
+- **PostHog Code** — the live provider today. Connect a personal API key + project id in **Settings → Integrations**.
+- **OpenAI Codex Cloud**, **Claude Code Routines** — planned drop-ins behind the same interface. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
 ---
 
@@ -69,31 +73,31 @@ Run the app (starts the backend and the Electron desktop shell in parallel):
 npm run dev
 ```
 
-The backend listens on `localhost:4747`. On first run FastOwl creates a local SQLite database at `~/.fastowl/fastowl.db` and seeds a default workspace + a local environment pointing at your own machine.
+The backend listens on `localhost:4747`. See [`docs/SETUP.md`](./docs/SETUP.md) for environment/account setup (Supabase auth, hosted backend, database).
 
 ### Requirements
 
 - Node.js ≥ 18 (22 recommended)
-- `claude` CLI installed and authenticated on any environment where FastOwl should run agents
-- Git configured with your GitHub identity on each environment
+- A GitHub account (connected via OAuth from Settings)
+- A cloud provider account (e.g. PostHog Code) to actually run tasks
 
-### Optional integrations
+### Integrations
 
 Configured from **Settings → Integrations** inside the app:
 
-- **GitHub**: OAuth flow — enables PR monitoring, PR review/response workflows, and the GitHub panel.
-- **Anthropic API** (env var `ANTHROPIC_API_KEY`): enables auto-generation of task titles/descriptions from prompts.
-- *(Planned)* Slack, PostHog — tracked in [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+- **GitHub**: OAuth flow — enables PR monitoring, the PR dashboard, and PR review/response tasks.
+- **PostHog Code**: a personal API key + project id — enables cloud task delegation.
 
 ---
 
 ## Architecture at a glance
 
-- **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui + xterm.js. Talks to the backend over HTTP + WebSocket.
-- **`packages/backend/`** — TypeScript + Express + SQLite (better-sqlite3) + ssh2 + node-pty. Manages environments, spawns Claude, tracks tasks, polls GitHub.
-- **`packages/shared/`** — Shared TypeScript types consumed by both.
+- **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui. Talks to the backend over HTTP + WebSocket; renders the inbox, PR dashboard, and cloud task transcripts.
+- **`packages/backend/`** — TypeScript + Express + Postgres (Drizzle). Monitors GitHub, caches PRs, and delegates tasks to cloud providers via the `CloudTaskProvider` registry + poller.
+- **`packages/cli/`**, **`packages/mcp-server/`** — thin `fastowl` CLI + stdio MCP surface for tasks.
+- **`packages/shared/`** — shared TypeScript types.
 
-Data is local-first. The backend is architected to be deployable as a shared service later, but today it lives alongside the Electron app.
+See [`CLAUDE.md`](./CLAUDE.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
 
 ---
 
@@ -114,11 +118,11 @@ Data is local-first. The backend is architected to be deployable as a shared ser
 
 ## Project status
 
-FastOwl is under active development. See [`CLAUDE.md`](./CLAUDE.md) for project orientation and active priorities, [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the phase-by-phase TODO list, [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for architectural decisions, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
+FastOwl is under active development. As of June 2026 it pivoted to a **cloud-only PR-management** app — the previous local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates) was removed. See [`CLAUDE.md`](./CLAUDE.md) for orientation and active priorities, [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) for the provider abstraction + roadmap, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
 
-Shipped so far: environment management (local + SSH), task queue with live terminal + xterm.js, GitHub OAuth + PR monitoring + PR actions, task branches, approval gates with diff preview + terminal history, typed task system (code/pr_response/pr_review/manual).
+Shipped: GitHub OAuth + PR monitoring + PR dashboard (status pills, detail sheet, merge), prioritized inbox, cloud task delegation via the `CloudTaskProvider` abstraction (PostHog Code), live transcript streaming, PR linking.
 
-In flight: PR response automation, native UI overlays on the Claude terminal, session resume, Slack integration.
+In flight: additional providers (Codex Cloud, Claude Routines), per-provider Settings/composer UI.
 
 ---
 
