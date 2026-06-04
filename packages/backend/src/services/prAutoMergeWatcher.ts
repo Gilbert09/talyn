@@ -1,24 +1,18 @@
 import { and, eq } from 'drizzle-orm';
 import { prNeedsFollowup, buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
 import { getDbClient } from '../db/client.js';
-import {
-  pullRequests as pullRequestsTable,
-  tasks as tasksTable,
-  workspaces as workspacesTable,
-  environments as environmentsTable,
-} from '../db/schema.js';
+import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { debugBus } from './debugBus.js';
+import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 60_000;
 /** Re-poll a watched PR if its cached summary is older than this. */
 const FRESHNESS_MS = 90_000;
 /** Pause auto-firing after this many consecutive un-mergeable auto-runs. */
 const MAX_ATTEMPTS = 3;
-
-/** Task statuses that mean a run is still working the PR. */
-const ACTIVE_STATUSES = new Set(['pending', 'queued', 'in_progress']);
 
 interface AutoMergeState {
   attempts: number;
@@ -68,6 +62,7 @@ class PRAutoMergeWatcher {
 
   init(): void {
     if (this.interval) return;
+    debugBus.registerPoller('auto_merge', POLL_INTERVAL_MS);
     this.interval = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);
@@ -88,6 +83,10 @@ class PRAutoMergeWatcher {
   private async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    const startedAt = Date.now();
+    let watched = 0;
+    let tickError: string | undefined;
+    let skipRecord = false;
     try {
       const db = getDbClient();
       const rows = await db
@@ -99,6 +98,7 @@ class PRAutoMergeWatcher {
             eq(pullRequestsTable.state, 'open')
           )
         );
+      watched = rows.length;
 
       for (const row of rows) {
         try {
@@ -113,10 +113,24 @@ class PRAutoMergeWatcher {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('DATABASE_URL is not set')) return;
+      if (msg.includes('DATABASE_URL is not set')) {
+        skipRecord = true;
+        return;
+      }
+      tickError = msg;
       console.error('[prAutoMergeWatcher] tick error:', err);
     } finally {
       this.ticking = false;
+      if (!skipRecord) {
+        debugBus.pollerTick('auto_merge', {
+          durationMs: Date.now() - startedAt,
+          ok: !tickError,
+          summary: tickError
+            ? `auto_merge tick failed: ${tickError}`
+            : `auto_merge tick — ${watched} watched`,
+          error: tickError,
+        });
+      }
     }
   }
 
@@ -145,7 +159,7 @@ class PRAutoMergeWatcher {
     const state = readState(row);
 
     // 2. Active-task guard — if the linked task is still running, leave it.
-    const linkedStatus = await this.linkedTaskStatus(row.taskId);
+    const linkedStatus = await linkedTaskStatus(row.taskId);
     if (linkedStatus && ACTIVE_STATUSES.has(linkedStatus)) return;
 
     // 3. Account the last auto-run now that it's terminal.
@@ -175,7 +189,7 @@ class PRAutoMergeWatcher {
     // 5. Fire — blocker present, nothing running, not paused.
     if (state.pausedAt || state.attempts >= MAX_ATTEMPTS) return;
 
-    const envId = await this.resolvePostHogEnvId(row.workspaceId);
+    const envId = await resolvePostHogEnvId(row.workspaceId);
     if (!envId) return; // No connected PostHog Code env — can't dispatch.
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
@@ -199,36 +213,6 @@ class PRAutoMergeWatcher {
     state.lastAutoTaskId = created.id;
     state.accounted = false;
     await this.persist(row, state);
-  }
-
-  /** Current status of the PR's most-recently-linked task, or null. */
-  private async linkedTaskStatus(taskId: string | null): Promise<string | null> {
-    if (!taskId) return null;
-    const db = getDbClient();
-    const rows = await db
-      .select({ status: tasksTable.status })
-      .from(tasksTable)
-      .where(eq(tasksTable.id, taskId))
-      .limit(1);
-    return rows[0]?.status ?? null;
-  }
-
-  /** The workspace owner's PostHog Code env marker, or null if none. */
-  private async resolvePostHogEnvId(workspaceId: string): Promise<string | null> {
-    const db = getDbClient();
-    const rows = await db
-      .select({ envId: environmentsTable.id })
-      .from(workspacesTable)
-      .innerJoin(
-        environmentsTable,
-        and(
-          eq(environmentsTable.ownerId, workspacesTable.ownerId),
-          eq(environmentsTable.type, 'posthog_code')
-        )
-      )
-      .where(eq(workspacesTable.id, workspaceId))
-      .limit(1);
-    return rows[0]?.envId ?? null;
   }
 
   private async persist(row: PRRow, state: AutoMergeState): Promise<void> {

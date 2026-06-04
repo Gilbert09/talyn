@@ -11,6 +11,7 @@ import {
   CircleDot,
   Check,
   Plus,
+  Bug,
 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import { cn } from '../../lib/utils';
@@ -35,6 +36,7 @@ export function Sidebar({ className }: SidebarProps) {
     inboxView,
     setInboxView,
     tasks,
+    debugMode,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -70,6 +72,16 @@ export function Sidebar({ className }: SidebarProps) {
       icon: Github,
       label: 'GitHub',
     },
+    // Developer-only — surfaced via Settings → Developer → Debug tools.
+    ...(debugMode
+      ? [
+          {
+            id: 'debug' as const,
+            icon: Bug,
+            label: 'Debug',
+          },
+        ]
+      : []),
   ];
 
   return (

@@ -18,6 +18,7 @@ import {
   AtSign,
   Eye,
   AlertTriangle,
+  ListChecks,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -211,6 +212,12 @@ export function GitHubPanel() {
         authored?: boolean;
         autoKeepMergeable?: boolean;
         autoMergeState?: { attempts: number; paused: boolean } | null;
+        mergeQueued?: boolean;
+        mergeQueueState?: {
+          status: 'waiting' | 'fixing' | 'merging' | 'blocked';
+          attempts: number;
+          position: number;
+        } | null;
       };
       setRows((prev) => {
         const idx = prev.findIndex((r) => r.id === p.id);
@@ -253,6 +260,10 @@ export function GitHubPanel() {
           autoKeepMergeable: p.autoKeepMergeable ?? next[idx].autoKeepMergeable,
           autoMergeState:
             p.autoMergeState !== undefined ? p.autoMergeState : next[idx].autoMergeState,
+          // Merge-queue state only rides along when it changed; otherwise keep ours.
+          mergeQueued: p.mergeQueued ?? next[idx].mergeQueued,
+          mergeQueueState:
+            p.mergeQueueState !== undefined ? p.mergeQueueState : next[idx].mergeQueueState,
         };
         return next;
       });
@@ -453,6 +464,36 @@ export function GitHubPanel() {
     }
   }
 
+  // Add/remove a PR from the FastOwl merge queue. Optimistically patches the
+  // row so the badge flips instantly; the backend echoes the authoritative
+  // state (incl. queue position) over WS. Rolls back on error.
+  async function handleSetMergeQueue(row: PRRow, enabled: boolean) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === row.id
+          ? {
+              ...r,
+              mergeQueued: enabled,
+              mergeQueueState: enabled
+                ? { status: 'waiting', attempts: 0, position: r.mergeQueueState?.position ?? 0 }
+                : null,
+            }
+          : r
+      )
+    );
+    try {
+      await api.pullRequests.setMergeQueue(row.id, enabled);
+    } catch (err) {
+      setRows((prev) =>
+        prev.map((r) => (r.id === row.id ? { ...r, mergeQueued: !enabled } : r))
+      );
+      toast.error(
+        `Couldn't ${enabled ? 'queue' : 'dequeue'} ${row.owner}/${row.repo}#${row.number}`,
+        err instanceof Error ? err.message : undefined
+      );
+    }
+  }
+
   // Kick off a PostHog Code cloud run to take the PR to a clean,
   // mergeable state (resolve comments, fix CI, resolve conflicts).
   // Assigns the task to the cloud env so the scheduler dispatches it
@@ -576,6 +617,7 @@ export function GitHubPanel() {
                 setActivePanel('queue');
               }}
               onMerge={handleMergeRow}
+              onSetMergeQueue={handleSetMergeQueue}
               onCreatePostHogTask={handleCreatePostHogTask}
               posthogEnabled={posthogEnabled}
               taskStatusById={taskStatusById}
@@ -797,6 +839,7 @@ interface PRTableProps {
   onSelect: (id: string) => void;
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
+  onSetMergeQueue: (row: PRRow, enabled: boolean) => Promise<void>;
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   /** PostHog Code is configured + a cloud env exists to dispatch to. */
   posthogEnabled: boolean;
@@ -814,6 +857,7 @@ function PRTable({
   onSelect,
   onOpenTask,
   onMerge,
+  onSetMergeQueue,
   onCreatePostHogTask,
   posthogEnabled,
   taskStatusById,
@@ -843,6 +887,7 @@ function PRTable({
             onSelect={() => onSelect(row.id)}
             onOpenTask={onOpenTask}
             onMerge={onMerge}
+            onSetMergeQueue={onSetMergeQueue}
             onCreatePostHogTask={onCreatePostHogTask}
             posthogEnabled={posthogEnabled}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
@@ -861,6 +906,7 @@ function PRTableRow({
   onSelect,
   onOpenTask,
   onMerge,
+  onSetMergeQueue,
   onCreatePostHogTask,
   posthogEnabled,
   taskStatus,
@@ -872,6 +918,7 @@ function PRTableRow({
   onSelect: () => void;
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
+  onSetMergeQueue: (row: PRRow, enabled: boolean) => Promise<void>;
   onCreatePostHogTask: (row: PRRow) => Promise<void>;
   posthogEnabled: boolean;
   /** Live status of the row's linked task, if any is loaded. */
@@ -880,7 +927,7 @@ function PRTableRow({
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const [confirmMerge, setConfirmMerge] = useState(false);
-  const [busy, setBusy] = useState<null | 'merge' | 'posthog'>(null);
+  const [busy, setBusy] = useState<null | 'merge' | 'posthog' | 'queue'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Brief confirmation flash after a PostHog Code run is kicked off — we
@@ -935,6 +982,19 @@ function PRTableRow({
         friendlyMergeError(message)
       );
       setConfirmMerge(false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runToggleQueue(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy('queue');
+    setRowError(null);
+    try {
+      await onSetMergeQueue(row, !row.mergeQueued);
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : 'Could not update merge queue');
     } finally {
       setBusy(null);
     }
@@ -1063,6 +1123,49 @@ function PRTableRow({
                   Watching
                 </span>
               ))}
+            {/* Merge-queue indicator. Status drives the label: queued (waiting),
+                merging, fixing (a cloud run is clearing blockers), or blocked
+                (gave up after 3 attempts — needs attention). */}
+            {row.mergeQueued &&
+              (() => {
+                const qs = row.mergeQueueState?.status ?? 'waiting';
+                const pos = row.mergeQueueState?.position ?? 0;
+                if (qs === 'blocked') {
+                  return (
+                    <span
+                      className="ml-2 inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                      title="Merge queue paused after 3 attempts — needs attention"
+                    >
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      Blocked
+                    </span>
+                  );
+                }
+                if (qs === 'merging' || qs === 'fixing') {
+                  return (
+                    <span
+                      className="ml-2 inline-flex items-center gap-1 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                      title={
+                        qs === 'merging'
+                          ? 'Merging this PR now'
+                          : 'A cloud run is clearing this PR’s blockers, then it merges'
+                      }
+                    >
+                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      {qs === 'merging' ? 'Merging' : 'Fixing'}
+                    </span>
+                  );
+                }
+                return (
+                  <span
+                    className="ml-2 inline-flex items-center gap-1 rounded bg-indigo-200 px-1 py-0.5 text-[10px] uppercase text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+                    title="In the merge queue — merges automatically when it's its turn and clean"
+                  >
+                    <GitMerge className="h-2.5 w-2.5" />
+                    {pos > 0 ? `Queued #${pos}` : 'Queued'}
+                  </span>
+                );
+              })()}
           </span>
         </div>
       </td>
@@ -1124,6 +1227,30 @@ function PRTableRow({
       <td className="px-2 py-2" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
           {/* Row actions reveal on hover/focus to keep the table calm. */}
+          {row.state === 'open' && (
+            <button
+              type="button"
+              onClick={runToggleQueue}
+              disabled={busy !== null}
+              className={cn(
+                'rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                row.mergeQueued
+                  ? 'text-indigo-600 hover:bg-indigo-500/10 dark:text-indigo-400'
+                  : 'text-muted-foreground opacity-0 hover:bg-indigo-500/10 hover:text-indigo-600 focus:opacity-100 group-hover:opacity-100 dark:hover:text-indigo-400'
+              )}
+              title={
+                row.mergeQueued
+                  ? 'Remove from the merge queue'
+                  : 'Add to the merge queue — merges automatically when clean, auto-fixing conflicts'
+              }
+            >
+              {busy === 'queue' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ListChecks className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
           {canMerge &&
             (confirmMerge ? (
               <button

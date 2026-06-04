@@ -11,6 +11,7 @@ import type {
   WSEvent,
 } from '@fastowl/shared';
 import { domainEvents } from './events.js';
+import { debugBus } from './debugBus.js';
 import { verifyTokenAndGetUser, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
@@ -23,6 +24,17 @@ const subscriptions = new Map<WebSocket, Set<string>>();
 const connectionUsers = new Map<WebSocket, AuthUser>();
 
 export function setupWebSocket(wss: WebSocketServer): void {
+  // Wire the debug bus to the live client fan-out + connection count. Kept
+  // here (not in debugBus) so debugBus stays dependency-free.
+  debugBus.setClientCounter(() => clients.size);
+  debugBus.setLiveSink((event) => {
+    broadcast({
+      type: 'debug:event',
+      payload: event,
+      timestamp: event.timestamp,
+    });
+  });
+
   wss.on('connection', async (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
     // `{type:'auth', token}` message within the handshake window
@@ -62,6 +74,11 @@ export function setupWebSocket(wss: WebSocketServer): void {
         clients.add(ws);
         subscriptions.set(ws, new Set());
         connectionUsers.set(ws, user);
+        debugBus.recordWs({
+          action: 'connect',
+          summary: `client connected (${clients.size} total)`,
+          meta: { userId: user.id, clients: clients.size },
+        });
         console.log(`WebSocket client connected (user=${user.id})`);
         sendToClient(ws, {
           type: 'connection:status',
@@ -78,6 +95,10 @@ export function setupWebSocket(wss: WebSocketServer): void {
       clearTimeout(handshakeTimer);
       if (authenticated) {
         console.log('WebSocket client disconnected');
+        debugBus.recordWs({
+          action: 'disconnect',
+          summary: `client disconnected (${Math.max(0, clients.size - 1)} left)`,
+        });
       }
       clients.delete(ws);
       subscriptions.delete(ws);
@@ -95,6 +116,15 @@ export function setupWebSocket(wss: WebSocketServer): void {
 }
 
 async function handleMessage(ws: WebSocket, message: any): Promise<void> {
+  // Inbound message trace. Skip `ping` — it fires every 25s per client and
+  // would drown out the signal.
+  if (message?.type && message.type !== 'ping') {
+    debugBus.recordWs({
+      action: 'recv',
+      summary: `recv ${message.type}${message.workspaceId ? ` ${String(message.workspaceId).slice(0, 8)}` : ''}`,
+      meta: { type: message.type },
+    });
+  }
   switch (message.type) {
     case 'subscribe': {
       // Only allow subscribing to a workspace the connected user owns.
@@ -146,20 +176,40 @@ function sendToClient(ws: WebSocket, event: WSEvent): void {
 // Broadcast to all clients
 export function broadcast(event: WSEvent): void {
   const message = JSON.stringify(event);
+  let sent = 0;
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
+      sent++;
     }
+  }
+  // CRITICAL loop-guard: recording a debug:event broadcast would feed the
+  // live sink, which broadcasts another debug:event → infinite recursion.
+  if (event.type !== 'debug:event') {
+    debugBus.recordWs({
+      action: 'broadcast',
+      summary: `broadcast ${event.type} → ${sent} client${sent === 1 ? '' : 's'}`,
+      meta: { type: event.type, recipients: sent },
+    });
   }
 }
 
 // Broadcast to clients subscribed to a specific workspace
 export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void {
   const message = JSON.stringify(event);
+  let sent = 0;
   for (const [client, workspaces] of subscriptions) {
     if (workspaces.has(workspaceId) && client.readyState === WebSocket.OPEN) {
       client.send(message);
+      sent++;
     }
+  }
+  if (event.type !== 'debug:event') {
+    debugBus.recordWs({
+      action: 'broadcast',
+      summary: `broadcast ${event.type} → ws:${workspaceId.slice(0, 8)} (${sent})`,
+      meta: { type: event.type, workspaceId, recipients: sent },
+    });
   }
 }
 
@@ -359,6 +409,14 @@ export function emitPullRequestUpdated(
     // Optional: emitters that don't change them omit them.
     autoKeepMergeable?: boolean;
     autoMergeState?: { attempts: number; paused: boolean } | null;
+    // Merge queue state, so the queue toggle + row badge update live.
+    // Optional: emitters that don't change them omit them.
+    mergeQueued?: boolean;
+    mergeQueueState?: {
+      status: 'waiting' | 'fixing' | 'merging' | 'blocked';
+      attempts: number;
+      position: number;
+    } | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {

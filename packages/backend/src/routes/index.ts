@@ -8,6 +8,7 @@ import { posthogRoutes } from './posthog.js';
 import { cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
 import { pullRequestRoutes } from './pullRequests.js';
+import { debugRoutes } from './debug.js';
 import { requireAuth } from '../middleware/auth.js';
 
 export function setupRoutes(app: Express): void {
@@ -34,6 +35,9 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/posthog`, posthogRoutes());
   app.use(`${api}/repositories`, repositoryRoutes());
   app.use(`${api}/pull-requests`, pullRequestRoutes());
+  // Developer-only internals view (requests, polling, WebSocket). Global,
+  // not workspace-scoped — see routes/debug.ts.
+  app.use(`${api}/debug`, debugRoutes());
 
   app.use((req, res) => {
     res.status(404).json({ success: false, error: 'Not found' });

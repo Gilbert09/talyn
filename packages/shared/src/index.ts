@@ -480,12 +480,76 @@ export type WSEventType =
   | 'pull_request:updated'
   | 'environment:status'
   | 'environment:created'
-  | 'connection:status';
+  | 'connection:status'
+  // Developer debug stream — one event per observed internal activity
+  // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
+  // the desktop Debug panel tails it. See DebugEvent below.
+  | 'debug:event';
 
 export interface WSEvent<T = unknown> {
   type: WSEventType;
   payload: T;
   timestamp: string;
+}
+
+// ============================================================================
+// Debug Tooling
+// ============================================================================
+
+/**
+ * Buckets a {@link DebugEvent} into one of the app's internal activity
+ * channels. Drives the filter chips in the desktop Debug panel.
+ */
+export type DebugCategory =
+  | 'http' // outbound request to an external service (GitHub, PostHog Code)
+  | 'polling' // a poll loop tick
+  | 'websocket' // client connect/disconnect, inbound message, outbound broadcast
+  | 'event' // in-process domain event (e.g. task:status)
+  | 'error'; // an unexpected failure worth surfacing on its own
+
+/**
+ * A single observed internal activity. Metadata only — never request/response
+ * bodies, auth headers, or tokens (URLs are stripped of their query string at
+ * the recording site). Safe to surface in the UI and leave recording on.
+ */
+export interface DebugEvent {
+  /** Monotonic per-process id; also used as a stable React key. */
+  id: number;
+  timestamp: string;
+  category: DebugCategory;
+  /** Originating subsystem, e.g. 'github', 'posthog_code', 'pr_monitor', 'ws'. */
+  service: string;
+  /** What happened, e.g. 'request', 'tick', 'connect', 'broadcast'. */
+  action: string;
+  /** Whether the activity succeeded (false for a failed request / errored tick). */
+  ok: boolean;
+  /** Human-readable one-liner for the stream row. */
+  summary: string;
+  durationMs?: number;
+  /** Extra redacted context shown when a row is expanded. */
+  meta?: Record<string, unknown>;
+}
+
+/** Live state of one poll loop, surfaced in the Debug panel snapshot bar. */
+export interface DebugPollerState {
+  name: string;
+  intervalMs: number;
+  tickCount: number;
+  lastTickAt: string | null;
+  lastDurationMs: number | null;
+  lastOk: boolean | null;
+  lastError: string | null;
+}
+
+/** Point-in-time view of the backend's internals for the Debug panel. */
+export interface DebugSnapshot {
+  pollers: DebugPollerState[];
+  /** Lifetime event counts keyed by {@link DebugCategory}. */
+  counters: Record<string, number>;
+  /** Current number of buffered events. */
+  bufferSize: number;
+  /** Currently-connected WebSocket clients. */
+  wsClients: number;
 }
 
 export interface AgentStatusEvent {

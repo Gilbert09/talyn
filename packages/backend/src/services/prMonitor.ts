@@ -15,6 +15,7 @@ import {
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { debugBus } from './debugBus.js';
 
 interface WatchedRepo {
   id: string;
@@ -77,6 +78,8 @@ class PRMonitorService extends EventEmitter {
   private startPolling(): void {
     if (this.pollTimer) return;
     console.log('Starting PR monitor polling...');
+    debugBus.registerPoller('pr_monitor', POLL_INTERVAL_MS);
+    debugBus.registerPoller('pr_monitor_fast_ci', ACTIVE_CI_INTERVAL_MS);
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
     this.fastTimer = setInterval(() => this.fastPoll(), ACTIVE_CI_INTERVAL_MS);
     setTimeout(() => this.poll(), 5_000);
@@ -155,8 +158,11 @@ class PRMonitorService extends EventEmitter {
   private async poll(): Promise<void> {
     if (this.isPolling) return;
     this.isPolling = true;
+    const startedAt = Date.now();
+    let count = 0;
     try {
       const connectedWorkspaces = githubService.getConnectedWorkspaces();
+      count = connectedWorkspaces.length;
       for (const workspaceId of connectedWorkspaces) {
         try {
           await this.pollWorkspace(workspaceId);
@@ -167,6 +173,11 @@ class PRMonitorService extends EventEmitter {
       }
     } finally {
       this.isPolling = false;
+      debugBus.pollerTick('pr_monitor', {
+        durationMs: Date.now() - startedAt,
+        ok: true,
+        summary: `pr_monitor tick — ${count} workspace${count === 1 ? '' : 's'}`,
+      });
     }
   }
 
@@ -613,8 +624,11 @@ class PRMonitorService extends EventEmitter {
   private async fastPoll(): Promise<void> {
     if (this.isFastPolling) return;
     this.isFastPolling = true;
+    const startedAt = Date.now();
+    let count = 0;
     try {
       for (const workspaceId of githubService.getConnectedWorkspaces()) {
+        count++;
         try {
           await this.fastPollWorkspace(workspaceId);
         } catch (err) {
@@ -624,6 +638,11 @@ class PRMonitorService extends EventEmitter {
       }
     } finally {
       this.isFastPolling = false;
+      debugBus.pollerTick('pr_monitor_fast_ci', {
+        durationMs: Date.now() - startedAt,
+        ok: true,
+        summary: `pr_monitor_fast_ci tick — ${count} workspace${count === 1 ? '' : 's'}`,
+      });
     }
   }
 

@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 35 — Merge queue
+
+Added a FastOwl-orchestrated **merge queue**: queue up a stack of PRs and they merge one-by-one, serialized per `(repo, base branch)`, with conflicts/behind-branches auto-fixed by the same cloud run the auto-keep-mergeable watcher uses. Solves the base-branch race — merging from the app no longer means hand-merging one PR, waiting for the base to settle, then merging the next.
+
+- **Shared helpers** (`services/prCloudFix.ts`): extracted `resolvePostHogEnvId` + `linkedTaskStatus` + `ACTIVE_STATUSES` out of `prAutoMergeWatcher` so both background services share one copy.
+- **Processor** (`services/mergeQueueProcessor.ts`): 60 s poller, mirrors the watcher. Each tick loads queued open PRs FIFO by `merge_queued_at`, groups by `(workspace, repo, base)`, and acts only on each group's head — one head per group + the single-threaded `ticking` guard + a synchronous awaited merge means two same-base PRs never both merge in a tick, while distinct bases/repos proceed in parallel. Per head: refresh stale state → merge if clean (`githubService.mergePullRequest`, drop off the queue, promote the next) → else fire the shared `buildPostHogPrompt` cloud run (which merges the base in, curing both conflicts and `BEHIND`), wait via the active-task guard, retry, blocked after 3 attempts. `merged:false` / thrown merge → stay queued and record the error.
+- **The race fix**: `prNeedsFollowup` misses `BEHIND`/`BLOCKED` (exactly the post-merge state of every sibling PR), so a `needsUpdate` check funnels those into the same fix path.
+- **API + DB**: migration `0021_pr_merge_queue` (`merge_queued` bool, `merge_queued_at` for FIFO order, `merge_method`, `merge_queue_state` jsonb, partial index). New `POST /pull-requests/:id/merge-queue` toggle; list endpoint computes 1-based per-group `position`; `reconcileTerminalState` drops closed/merged PRs off the queue. Queue state flows through PR payloads + the `pull_request:updated` WS event.
+- **Desktop**: "Add to merge queue" toggle + status indicator on the PR detail-sheet header and a row action/badge (`Queued #N` / `Merging` / `Fixing` / `Blocked`) on the GitHub list.
+- 13 new parameterised processor tests (real pglite DB, `mergePullRequest` spied) covering clean-merge, conflict→fix, BEHIND→fix, serialization, different-base parallelism, attempt cap, re-arm, `merged:false`, thrown merge, no-env, and ignore-non-queued. Full backend suite green (412 tests). Workspace typechecks + lints clean.
+
 ## Session 34 — Per-PR "auto-keep mergeable" watcher
 
 Added an opt-in, per-PR toggle that keeps a PR mergeable unattended and indefinitely: a background watcher repeatedly fires the existing "take this PR to a clean, mergeable state" cloud run whenever the PR has a blocker (conflicts / failing required CI / changes-requested / unresolved review threads), never two at once, and keeps watching after the PR is clean so a conflict that appears days later is auto-fixed too.

@@ -21,6 +21,7 @@ import {
   Copy,
   LogOut,
   Pencil,
+  Bug,
 } from 'lucide-react';
 import {
   api,
@@ -84,7 +85,8 @@ type SettingsSection =
   | 'workspace'
   | 'integrations'
   | 'account'
-  | 'appearance';
+  | 'appearance'
+  | 'developer';
 
 export function SettingsPanel() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('workspace');
@@ -94,6 +96,7 @@ export function SettingsPanel() {
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
+    { id: 'developer' as const, icon: Bug, label: 'Developer' },
   ];
 
   return (
@@ -129,6 +132,7 @@ export function SettingsPanel() {
             {activeSection === 'integrations' && <IntegrationsSettings />}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
+            {activeSection === 'developer' && <DeveloperSettings />}
           </div>
         </ScrollArea>
       </div>
@@ -1070,6 +1074,54 @@ function AppearanceSettings() {
         <p className="text-sm text-muted-foreground mt-4">
           {themeOptions.find((o) => o.value === theme)?.description}
         </p>
+      </Card>
+    </div>
+  );
+}
+
+function DeveloperSettings() {
+  const { debugMode, setDebugMode } = useWorkspaceStore();
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-medium mb-1">Developer</h3>
+        <p className="text-sm text-muted-foreground">
+          Tools for looking under the hood of FastOwl
+        </p>
+      </div>
+
+      <Card className="p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h4 className="font-medium flex items-center gap-2">
+              <Bug className="w-4 h-4" />
+              Debug tools
+            </h4>
+            <p className="text-sm text-muted-foreground mt-1">
+              Adds a <strong>Debug</strong> panel to the sidebar that surfaces app
+              internals live — external requests, polling cycles, and WebSocket
+              activity. Metadata only; tokens and request bodies are never shown.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={debugMode}
+            onClick={() => setDebugMode(!debugMode)}
+            className={cn(
+              'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+              debugMode ? 'bg-primary' : 'bg-muted'
+            )}
+          >
+            <span
+              className={cn(
+                'inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform',
+                debugMode ? 'translate-x-5' : 'translate-x-0.5'
+              )}
+            />
+          </button>
+        </div>
       </Card>
     </div>
   );

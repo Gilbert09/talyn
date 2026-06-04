@@ -308,6 +308,34 @@ export const pullRequests = pgTable(
      * that appears after a clean state gets a fresh batch of attempts.
      */
     autoMergeState: jsonb('auto_merge_state'),
+    /**
+     * When true, this PR is in the FastOwl merge queue: the merge-queue
+     * processor merges it (per {@link mergeMethod}) as soon as it's clean,
+     * serialized per (repo, base branch). On conflict / behind / blocked it
+     * fires the same cloud "fix every blocker" run the watcher uses, then
+     * merges. The PR drops off the queue once merged.
+     */
+    mergeQueued: boolean('merge_queued').notNull().default(false),
+    /**
+     * FIFO ordering within a (repo, base) group — oldest queued first. NULL
+     * when not queued. A timestamp rather than an explicit position so
+     * add / remove / drop-on-merge never renumbers siblings.
+     */
+    mergeQueuedAt: timestamp('merge_queued_at', { withTimezone: true }),
+    /** Merge method used when this PR's turn comes. */
+    mergeMethod: text('merge_method').notNull().default('squash'),
+    /**
+     * Processor bookkeeping. Shape:
+     *   {
+     *     attempts: number,        // consecutive fix-runs that left it un-mergeable
+     *     lastFixTaskId?: string,  // the run the processor most recently launched
+     *     accounted?: boolean,     // whether lastFixTaskId's result was folded in
+     *     status: 'waiting' | 'fixing' | 'merging' | 'blocked',
+     *     lastError?: string,
+     *     lastErrorAt?: string
+     *   }
+     */
+    mergeQueueState: jsonb('merge_queue_state'),
     // Event cursors — NULL until the first poll has populated them.
     lastReviewId: text('last_review_id'),
     lastReviewCommentId: text('last_review_comment_id'),

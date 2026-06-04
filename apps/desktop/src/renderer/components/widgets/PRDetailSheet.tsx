@@ -19,6 +19,7 @@ import {
   XCircle,
   Eye,
   AlertTriangle,
+  ListChecks,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
@@ -91,6 +92,7 @@ export function PRDetailSheet({
   // auto-keep-mergeable toggle (the watcher dispatches via PostHog Code).
   const [posthogConnected, setPosthogConnected] = useState(false);
   const [togglingAutoKeep, setTogglingAutoKeep] = useState(false);
+  const [togglingQueue, setTogglingQueue] = useState(false);
 
   useEffect(() => {
     if (!pullRequestId) {
@@ -131,6 +133,12 @@ export function PRDetailSheet({
         lastSummary: unknown;
         autoKeepMergeable?: boolean;
         autoMergeState?: { attempts: number; paused: boolean } | null;
+        mergeQueued?: boolean;
+        mergeQueueState?: {
+          status: 'waiting' | 'fixing' | 'merging' | 'blocked';
+          attempts: number;
+          position: number;
+        } | null;
       };
       if (p.id !== pullRequestId) return;
       setData((prev) => {
@@ -144,6 +152,9 @@ export function PRDetailSheet({
             autoKeepMergeable: p.autoKeepMergeable ?? prev.row.autoKeepMergeable,
             autoMergeState:
               p.autoMergeState !== undefined ? p.autoMergeState : prev.row.autoMergeState,
+            mergeQueued: p.mergeQueued ?? prev.row.mergeQueued,
+            mergeQueueState:
+              p.mergeQueueState !== undefined ? p.mergeQueueState : prev.row.mergeQueueState,
           },
         };
       });
@@ -217,6 +228,36 @@ export function PRDetailSheet({
       );
     } finally {
       setTogglingAutoKeep(false);
+    }
+  }
+
+  async function handleToggleQueue(enabled: boolean) {
+    if (!pullRequestId) return;
+    setTogglingQueue(true);
+    // Optimistic — the WS echo confirms with the authoritative position.
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            row: {
+              ...prev.row,
+              mergeQueued: enabled,
+              mergeQueueState: enabled
+                ? { status: 'waiting', attempts: 0, position: prev.row.mergeQueueState?.position ?? 0 }
+                : null,
+            },
+          }
+        : prev
+    );
+    try {
+      await api.pullRequests.setMergeQueue(pullRequestId, enabled);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update merge queue');
+      setData((prev) =>
+        prev ? { ...prev, row: { ...prev.row, mergeQueued: !enabled } } : prev
+      );
+    } finally {
+      setTogglingQueue(false);
     }
   }
 
@@ -363,6 +404,40 @@ export function PRDetailSheet({
                   ? 'Auto-fix paused'
                   : 'Auto-keeping'
                 : 'Auto-keep mergeable'}
+            </Button>
+          )}
+          {view && view.row.state === 'open' && (
+            <Button
+              size="sm"
+              variant={view.row.mergeQueued ? 'default' : 'outline'}
+              onClick={() => handleToggleQueue(!view.row.mergeQueued)}
+              disabled={togglingQueue}
+              title={
+                view.row.mergeQueued
+                  ? view.row.mergeQueueState?.status === 'blocked'
+                    ? 'Merge queue paused after 3 attempts — click to remove'
+                    : 'In the merge queue — click to remove'
+                  : 'Add to the merge queue: merges automatically when clean, serialized per base branch, auto-fixing conflicts'
+              }
+            >
+              {togglingQueue ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : view.row.mergeQueued && view.row.mergeQueueState?.status === 'blocked' ? (
+                <AlertTriangle className="mr-1 h-4 w-4" />
+              ) : (
+                <ListChecks className="mr-1 h-4 w-4" />
+              )}
+              {view.row.mergeQueued
+                ? view.row.mergeQueueState?.status === 'blocked'
+                  ? 'Queue blocked'
+                  : view.row.mergeQueueState?.status === 'merging'
+                  ? 'Merging…'
+                  : view.row.mergeQueueState?.status === 'fixing'
+                  ? 'Fixing…'
+                  : view.row.mergeQueueState?.position
+                  ? `Queued #${view.row.mergeQueueState.position}`
+                  : 'Queued'
+                : 'Add to merge queue'}
             </Button>
           )}
           {canMerge &&

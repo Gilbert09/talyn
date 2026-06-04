@@ -148,6 +148,13 @@
 			"when": 1784160000004,
 			"tag": "0020_pr_auto_keep_mergeable",
 			"breakpoints": true
+		},
+		{
+			"idx": 21,
+			"version": "7",
+			"when": 1784160000005,
+			"tag": "0021_pr_merge_queue",
+			"breakpoints": true
 		}
 	]
 }

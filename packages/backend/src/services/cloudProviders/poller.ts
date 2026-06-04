@@ -3,6 +3,7 @@ import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { readCloudTaskProvider } from '@fastowl/shared';
 import { getCloudProvider } from './registry.js';
+import { debugBus } from '../debugBus.js';
 import type { CloudTaskRow } from './types.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -21,6 +22,7 @@ class CloudTaskPoller {
 
   init(): void {
     if (this.interval) return;
+    debugBus.registerPoller('cloud_task', POLL_INTERVAL_MS);
     this.interval = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);
@@ -36,12 +38,17 @@ class CloudTaskPoller {
   private async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    const startedAt = Date.now();
+    let reconciled = 0;
+    let tickError: string | undefined;
+    let skipRecord = false;
     try {
       const db = getDbClient();
       const rows = await db
         .select()
         .from(tasksTable)
         .where(eq(tasksTable.status, 'in_progress'));
+      reconciled = rows.length;
 
       for (const row of rows) {
         const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
@@ -75,10 +82,24 @@ class CloudTaskPoller {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('DATABASE_URL is not set')) return;
+      if (msg.includes('DATABASE_URL is not set')) {
+        skipRecord = true;
+        return;
+      }
+      tickError = msg;
       console.error('[cloudPoller] tick error:', err);
     } finally {
       this.ticking = false;
+      if (!skipRecord) {
+        debugBus.pollerTick('cloud_task', {
+          durationMs: Date.now() - startedAt,
+          ok: !tickError,
+          summary: tickError
+            ? `cloud_task tick failed: ${tickError}`
+            : `cloud_task tick — ${reconciled} in-flight`,
+          error: tickError,
+        });
+      }
     }
   }
 }

@@ -17,6 +17,7 @@ import {
 } from '../services/prFocus.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
+import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
@@ -29,6 +30,7 @@ import type { ApiResponse } from '@fastowl/shared';
  *   GET   /pull-requests/:id/files        file-by-file diff (live REST)
  *   POST  /pull-requests/:id/refresh      force fetch + upsert
  *   POST  /pull-requests/:id/auto-keep-mergeable  toggle the watcher
+ *   POST  /pull-requests/:id/merge-queue  add/remove from the merge queue
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
  *   POST  /pull-requests/:id/seen         mark linked inbox items read
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
@@ -118,11 +120,15 @@ export function pullRequestRoutes(): Router {
       if (u.prUrl) unreadByUrl.set(u.prUrl, Number(u.cnt));
     }
 
+    // 1-based merge-queue position per (repo, base branch) group, FIFO by
+    // `mergeQueuedAt`. Computed locally over the rows we already have.
+    const queuePositionById = computeQueuePositions(filtered as PullRequestRow[]);
+
     res.json({
       success: true,
       data: filtered.map((r) => {
         const url = (r.lastSummary as { url?: string } | null)?.url ?? '';
-        return rowToPublicShape(r, unreadByUrl.get(url) ?? 0);
+        return rowToPublicShape(r, unreadByUrl.get(url) ?? 0, queuePositionById.get(r.id) ?? 0);
       }),
     } as ApiResponse<ReturnType<typeof rowToPublicShape>[]>);
   });
@@ -359,6 +365,69 @@ export function pullRequestRoutes(): Router {
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
 
+  // Merge-queue toggle. Body `{ enabled: boolean, method?: 'merge'|'squash'|'rebase' }`.
+  // When on, the PR joins the FastOwl merge queue: the background processor
+  // merges it (per `method`, default squash) as soon as it's clean, serialized
+  // per (repo, base branch). On conflict / behind / blocked it fires the same
+  // cloud "fix every blocker" run the watcher uses, then merges. The PR drops
+  // off the queue once merged.
+  router.post('/:id/merge-queue', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+
+    const body = req.body as { enabled?: boolean; method?: string } | undefined;
+    const enabled = body?.enabled === true;
+    const method =
+      body?.method === 'merge' || body?.method === 'rebase' || body?.method === 'squash'
+        ? body.method
+        : row.mergeMethod; // keep the existing method when omitted
+    // Enabling: arm a fresh guard so the next processor tick acts immediately,
+    // and preserve the queue place on a fast off/on toggle. Disabling: clear
+    // all queue bookkeeping.
+    const nextState = enabled ? { status: 'waiting' as const, attempts: 0, accounted: true } : null;
+    await db
+      .update(pullRequestsTable)
+      .set({
+        mergeQueued: enabled,
+        mergeQueuedAt: enabled ? (row.mergeQueuedAt ?? new Date()) : null,
+        mergeMethod: method,
+        mergeQueueState: nextState,
+        updatedAt: new Date(),
+      })
+      .where(eq(pullRequestsTable.id, row.id));
+
+    emitPullRequestUpdated(row.workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId: row.repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: row.state,
+      lastSummary: row.lastSummary as Record<string, unknown>,
+      mergeQueued: enabled,
+      mergeQueueState: publicMergeQueueState(nextState, 0),
+    });
+
+    // Kick a tick so an already-clean PR merges without waiting up to 60s.
+    if (enabled) void mergeQueueProcessor.runOnce();
+
+    res.json({ success: true, data: null } as ApiResponse<null>);
+  });
+
   // Focus signal. Body `{ focused: true }` (default) tightens this
   // PR's poll TTL to 30 s; `{ focused: false }` reverts to 60 s.
   // Idempotent — duplicate calls are no-ops.
@@ -526,6 +595,10 @@ interface PullRequestRow {
   lastSummary: unknown;
   autoKeepMergeable: boolean;
   autoMergeState: unknown;
+  mergeQueued: boolean;
+  mergeQueuedAt: Date | null;
+  mergeMethod: string;
+  mergeQueueState: unknown;
   lastReviewId: string | null;
   lastReviewCommentId: string | null;
   lastCommentId: string | null;
@@ -566,9 +639,15 @@ async function reconcileTerminalState(
   if (nextState === row.state) return null;
 
   const db = getDbClient();
+  // A PR that left 'open' can't be merged by the queue — drop it off so it
+  // never blocks its (repo, base) group.
+  const queueReset =
+    nextState !== 'open' && row.mergeQueued
+      ? { mergeQueued: false, mergeQueuedAt: null, mergeQueueState: null }
+      : {};
   await db
     .update(pullRequestsTable)
-    .set({ state: nextState, mergedAt, updatedAt: new Date() })
+    .set({ state: nextState, mergedAt, updatedAt: new Date(), ...queueReset })
     .where(eq(pullRequestsTable.id, row.id));
   const fresh = await db
     .select()
@@ -587,7 +666,48 @@ function publicAutoMergeState(
   return { attempts: s.attempts ?? 0, paused: !!s.pausedAt };
 }
 
-function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
+/** The compact merge-queue state the desktop renders (toggle + badge). */
+function publicMergeQueueState(
+  raw: unknown,
+  position: number
+): {
+  status: 'waiting' | 'fixing' | 'merging' | 'blocked';
+  attempts: number;
+  position: number;
+} | null {
+  const s = raw as
+    | { status?: 'waiting' | 'fixing' | 'merging' | 'blocked'; attempts?: number }
+    | null;
+  if (!s) return null;
+  return { status: s.status ?? 'waiting', attempts: s.attempts ?? 0, position };
+}
+
+/**
+ * 1-based merge-queue position per (repo, base branch) group, FIFO ordered by
+ * `mergeQueuedAt`. PRs not in the queue map to nothing. Mirrors the processor's
+ * grouping so the badge's "#N" matches the order they'll actually merge.
+ */
+function computeQueuePositions(rows: PullRequestRow[]): Map<string, number> {
+  const byGroup = new Map<string, PullRequestRow[]>();
+  for (const r of rows) {
+    if (!r.mergeQueued) continue;
+    const base = (r.lastSummary as { baseBranch?: string } | null)?.baseBranch ?? '';
+    const key = `${r.repositoryId}|${base}`;
+    (byGroup.get(key) ?? byGroup.set(key, []).get(key)!).push(r);
+  }
+  const positions = new Map<string, number>();
+  for (const group of byGroup.values()) {
+    group.sort((a, b) => {
+      const ta = a.mergeQueuedAt ? a.mergeQueuedAt.getTime() : 0;
+      const tb = b.mergeQueuedAt ? b.mergeQueuedAt.getTime() : 0;
+      return ta - tb;
+    });
+    group.forEach((r, i) => positions.set(r.id, i + 1));
+  }
+  return positions;
+}
+
+function rowToPublicShape(row: PullRequestRow, unreadCount = 0, queuePosition = 0) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -604,6 +724,9 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
     summary: row.lastSummary,
     autoKeepMergeable: row.autoKeepMergeable,
     autoMergeState: publicAutoMergeState(row.autoMergeState),
+    mergeQueued: row.mergeQueued,
+    mergeMethod: row.mergeMethod,
+    mergeQueueState: publicMergeQueueState(row.mergeQueueState, queuePosition),
     unreadCount,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

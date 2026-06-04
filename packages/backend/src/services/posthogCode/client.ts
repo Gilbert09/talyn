@@ -1,5 +1,6 @@
 import type { PostHogCodeRuntimeAdapter } from '@fastowl/shared';
 import type { AcpLogEntry } from './acpConverter.js';
+import { debugBus } from '../debugBus.js';
 
 /**
  * Thin typed wrapper over the PostHog Code (tasks) REST API.
@@ -170,15 +171,39 @@ export class PostHogCodeClient {
     body?: unknown,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const startedAt = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      debugBus.recordHttp({
+        service: 'posthog_code',
+        method,
+        url,
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     const text = await res.text();
+    debugBus.recordHttp({
+      service: 'posthog_code',
+      method,
+      url,
+      status: res.status,
+      durationMs: Date.now() - startedAt,
+      ok: res.ok,
+      bytes: text.length,
+      ...(res.ok ? {} : { error: text.slice(0, 500) }),
+    });
     if (!res.ok) {
       throw new Error(
         `PostHog Code ${method} ${path} failed (${res.status}): ${text.slice(0, 500)}`,

@@ -1,5 +1,6 @@
 import { githubService } from './github.js';
 import { prMonitorService } from './prMonitor.js';
+import { debugBus } from './debugBus.js';
 
 /**
  * GitHub Notifications poller — the low-latency live channel.
@@ -39,6 +40,7 @@ class NotificationsPoller {
   init(): void {
     if (this.timer) return;
     console.log('Starting GitHub notifications poller...');
+    debugBus.registerPoller('notifications', BASE_TICK_MS);
     this.timer = setInterval(() => void this.tick(), BASE_TICK_MS);
   }
 
@@ -52,11 +54,14 @@ class NotificationsPoller {
   private async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const startedAt = Date.now();
+    let polled = 0;
     try {
       const now = Date.now();
       for (const workspaceId of githubService.getConnectedWorkspaces()) {
         const state = this.states.get(workspaceId);
         if (state && state.nextPollAt > now) continue;
+        polled++;
         await this.pollWorkspace(workspaceId).catch((err) => {
           const msg = err instanceof Error ? err.message : 'unknown error';
           console.error(`notifications: workspace ${workspaceId.slice(0, 8)} failed:`, msg);
@@ -64,6 +69,11 @@ class NotificationsPoller {
       }
     } finally {
       this.running = false;
+      debugBus.pollerTick('notifications', {
+        durationMs: Date.now() - startedAt,
+        ok: true,
+        summary: `notifications tick — ${polled} workspace${polled === 1 ? '' : 's'} due`,
+      });
     }
   }
 

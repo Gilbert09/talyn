@@ -18,6 +18,7 @@ import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
+import { mergeQueueProcessor } from './services/mergeQueueProcessor.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -42,6 +43,7 @@ async function main() {
   notificationsPoller.init();
   cloudTaskPoller.init();
   prAutoMergeWatcher.init();
+  mergeQueueProcessor.init();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
@@ -119,6 +121,7 @@ async function main() {
     console.log('Shutting down...');
     cloudTaskPoller.shutdown();
     prAutoMergeWatcher.shutdown();
+    mergeQueueProcessor.shutdown();
     postHogCodeStreamer.shutdownAll();
     notificationsPoller.shutdown();
     prMonitorService.shutdown();

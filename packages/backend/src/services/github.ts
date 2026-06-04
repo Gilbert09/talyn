@@ -9,6 +9,7 @@ import {
   isEncryptedEnvelope,
   type EncryptedEnvelope,
 } from './tokenCrypto.js';
+import { debugBus } from './debugBus.js';
 
 // GitHub OAuth configuration. Set via environment variables in production.
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
@@ -234,6 +235,7 @@ class GitHubService extends EventEmitter {
     token_type: string;
     scope: string;
   }> {
+    const startedAt = Date.now();
     const response = await fetch(GITHUB_TOKEN_URL, {
       method: 'POST',
       headers: {
@@ -246,6 +248,16 @@ class GitHubService extends EventEmitter {
         code,
         redirect_uri: GITHUB_REDIRECT_URI,
       }),
+    });
+
+    debugBus.recordHttp({
+      service: 'github',
+      method: 'POST',
+      url: GITHUB_TOKEN_URL,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: response.ok,
+      ...(response.ok ? {} : { error: `token exchange: ${response.statusText}` }),
     });
 
     if (!response.ok) {
@@ -348,24 +360,61 @@ class GitHubService extends EventEmitter {
       throw new Error('GitHub not connected for this workspace');
     }
 
-    const response = await fetch(`${GITHUB_API_URL}${endpoint}`, {
-      ...options,
-      headers: {
-        Accept: 'application/vnd.github.v3+json',
-        Authorization: `${token.tokenType} ${token.accessToken}`,
-        'User-Agent': 'FastOwl',
-        ...options.headers,
-      },
-    });
+    const method = (options.method ?? 'GET').toUpperCase();
+    const url = `${GITHUB_API_URL}${endpoint}`;
+    const startedAt = Date.now();
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        await this.removeToken(workspaceId);
-        throw new Error('GitHub token expired or revoked');
-      }
-      throw new Error(await this.describeApiError(response));
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers: {
+          Accept: 'application/vnd.github.v3+json',
+          Authorization: `${token.tokenType} ${token.accessToken}`,
+          'User-Agent': 'FastOwl',
+          ...options.headers,
+        },
+      });
+    } catch (err) {
+      debugBus.recordHttp({
+        service: 'github',
+        method,
+        url,
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
 
+    if (!response.ok) {
+      const error =
+        response.status === 401
+          ? 'GitHub token expired or revoked'
+          : await this.describeApiError(response);
+      debugBus.recordHttp({
+        service: 'github',
+        method,
+        url,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        ok: false,
+        error,
+      });
+      if (response.status === 401) {
+        await this.removeToken(workspaceId);
+      }
+      throw new Error(error);
+    }
+
+    debugBus.recordHttp({
+      service: 'github',
+      method,
+      url,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: true,
+    });
     return response.json();
   }
 
@@ -883,8 +932,10 @@ class GitHubService extends EventEmitter {
     // queries (the statusCheckRollup is expensive to resolve). These are
     // transient — retry a couple of times with backoff before giving up.
     const maxAttempts = 3;
+    const gqlUrl = `${GITHUB_API_URL}/graphql`;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = await fetch(`${GITHUB_API_URL}/graphql`, {
+      const startedAt = Date.now();
+      const response = await fetch(gqlUrl, {
         method: 'POST',
         headers: {
           Accept: 'application/vnd.github+json',
@@ -894,6 +945,16 @@ class GitHubService extends EventEmitter {
         },
         body: JSON.stringify({ query, variables }),
       });
+      const recordGql = (ok: boolean, error?: string) =>
+        debugBus.recordHttp({
+          service: 'github',
+          method: 'POST',
+          url: gqlUrl,
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          ok,
+          ...(error ? { error } : {}),
+        });
       if (response.ok) {
         const payload = (await response.json()) as {
           data?: T;
@@ -903,18 +964,23 @@ class GitHubService extends EventEmitter {
           // Surface the first GraphQL error verbatim — callers want to see
           // "Resource not accessible" or "Could not resolve to a Repository"
           // rather than a generic 200-but-failed.
+          recordGql(false, `GraphQL: ${payload.errors[0].message}`);
           throw new Error(`GitHub GraphQL: ${payload.errors[0].message}`);
         }
         if (!payload.data) {
+          recordGql(false, 'response missing data');
           throw new Error('GitHub GraphQL response missing data');
         }
+        recordGql(true);
         return payload.data;
       }
       if (response.status === 401) {
+        recordGql(false, 'token expired or revoked');
         await this.removeToken(workspaceId);
         throw new Error('GitHub token expired or revoked');
       }
       const retryable = response.status === 502 || response.status === 503 || response.status === 504;
+      recordGql(false, response.statusText);
       if (retryable && attempt < maxAttempts) {
         await new Promise((r) => setTimeout(r, 500 * attempt));
         continue;

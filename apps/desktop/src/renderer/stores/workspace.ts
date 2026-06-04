@@ -23,6 +23,20 @@ function getInitialTheme(): Theme {
   return 'light';
 }
 
+const DEBUG_MODE_KEY = 'fastowl-debug-mode';
+
+// Developer-only Debug panel toggle. Persisted like the theme so it survives
+// restarts. Off by default — it surfaces app internals (requests, polling,
+// WebSocket) and is meant to be opt-in.
+function getInitialDebugMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(DEBUG_MODE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';
 
 // Last-selected workspace id, so a switch survives an app restart instead of
@@ -87,7 +101,9 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'inbox' | 'queue' | 'github' | 'settings';
+  activePanel: 'inbox' | 'queue' | 'github' | 'settings' | 'debug';
+  // Developer-only Debug panel visibility (sidebar entry + reachable view).
+  debugMode: boolean;
   // Which bucket of the inbox is visible when activePanel === 'inbox'.
   // 'active' = items that still want attention (unread + read-but-not-actioned);
   // 'archive' = actioned items, kept around for history/audit.
@@ -129,7 +145,8 @@ interface WorkspaceState {
   markAllInboxRead: () => void;
 
   toggleSidebar: () => void;
-  setActivePanel: (panel: 'inbox' | 'queue' | 'github' | 'settings') => void;
+  setActivePanel: (panel: 'inbox' | 'queue' | 'github' | 'settings' | 'debug') => void;
+  setDebugMode: (on: boolean) => void;
   setInboxView: (view: 'active' | 'archive') => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -147,6 +164,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   unreadCount: 0,
   sidebarCollapsed: false,
   activePanel: 'inbox',
+  debugMode: getInitialDebugMode(),
   inboxView: 'active',
   selectedTaskId: null,
   theme: getInitialTheme(),
@@ -292,6 +310,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
   setActivePanel: (panel) => set({ activePanel: panel }),
+
+  setDebugMode: (on) => {
+    try {
+      localStorage.setItem(DEBUG_MODE_KEY, on ? 'true' : 'false');
+    } catch {
+      // ignore quota / privacy-mode issues
+    }
+    // Leaving debug mode while sitting on the Debug panel would strand the
+    // user on a now-hidden view — bounce them back to the inbox.
+    set((state) => ({
+      debugMode: on,
+      activePanel: !on && state.activePanel === 'debug' ? 'inbox' : state.activePanel,
+    }));
+  },
 
   setInboxView: (view) => set({ inboxView: view }),
 

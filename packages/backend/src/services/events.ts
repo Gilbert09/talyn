@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { TaskStatus } from '@fastowl/shared';
+import { debugBus } from './debugBus.js';
 
 export interface DomainTaskStatusEvent {
   workspaceId: string;
@@ -22,3 +23,13 @@ class DomainEventEmitter extends EventEmitter implements DomainEvents {}
  * scheduler reacts to tasks hitting terminal states).
  */
 export const domainEvents = new DomainEventEmitter();
+
+// Mirror domain events into the developer Debug stream.
+domainEvents.on('task:status', (evt) => {
+  debugBus.recordEvent({
+    service: 'tasks',
+    action: 'task:status',
+    summary: `task ${evt.taskId.slice(0, 8)} → ${evt.status}`,
+    meta: { taskId: evt.taskId, status: evt.status, workspaceId: evt.workspaceId },
+  });
+});

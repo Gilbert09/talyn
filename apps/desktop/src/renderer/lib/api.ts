@@ -15,6 +15,9 @@ import type {
   StartAgentRequest,
   ApiResponse,
   WSEvent,
+  DebugEvent,
+  DebugCategory,
+  DebugSnapshot,
 } from '@fastowl/shared';
 
 // Resolve the backend URL from the build-time env (see webpack configs).
@@ -448,6 +451,18 @@ export interface PRRow {
   /** Watcher guard state: consecutive failed auto-runs + whether it's paused
    *  (3 failures with no progress). Null when the watcher is off. */
   autoMergeState?: { attempts: number; paused: boolean } | null;
+  /** True when this PR is in the FastOwl merge queue (merges one-by-one per
+   *  repo+base, auto-fixing conflicts via a cloud run). */
+  mergeQueued: boolean;
+  /** Merge method used when this PR's turn comes. */
+  mergeMethod: 'merge' | 'squash' | 'rebase';
+  /** Queue state: coarse status + 1-based position within its (repo, base)
+   *  group. Null when the PR isn't queued. */
+  mergeQueueState?: {
+    status: 'waiting' | 'fixing' | 'merging' | 'blocked';
+    attempts: number;
+    position: number;
+  } | null;
   /** Unread inbox items linked to this PR (new reviews/comments/CI). */
   unreadCount: number;
   createdAt: string;
@@ -578,6 +593,14 @@ export const pullRequests = {
   // "get this PR mergeable" cloud run until it's clean, then keeps watching).
   setAutoKeepMergeable: (id: string, enabled: boolean) =>
     request<null>('POST', `/pull-requests/${id}/auto-keep-mergeable`, { enabled }),
+  // Add/remove a PR from the FastOwl merge queue. When enabled, the backend
+  // merges it (per `method`, default squash) as soon as it's clean, serialized
+  // per repo+base, auto-firing a cloud run to fix conflicts/behind branches.
+  setMergeQueue: (
+    id: string,
+    enabled: boolean,
+    method?: 'merge' | 'squash' | 'rebase'
+  ) => request<null>('POST', `/pull-requests/${id}/merge-queue`, { enabled, method }),
   // Tell the backend which list is on screen so it can hard-poll that cohort
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
   setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>
@@ -628,6 +651,20 @@ export const backlog = {
     request<BacklogItem[]>('GET', `/backlog/items?workspaceId=${workspaceId}`),
   schedule: (workspaceId: string) =>
     request<void>('POST', '/backlog/schedule', { workspaceId }),
+};
+
+// Debug tooling (developer-only internals view)
+export const debug = {
+  getEvents: (params?: { category?: DebugCategory; service?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.category) qs.set('category', params.category);
+    if (params?.service) qs.set('service', params.service);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<DebugEvent[]>('GET', `/debug/events${suffix}`);
+  },
+  getSnapshot: () => request<DebugSnapshot>('GET', '/debug/snapshot'),
+  clearEvents: () => request<{ cleared: boolean }>('DELETE', '/debug/events'),
 };
 
 // ============================================================================
@@ -895,5 +932,6 @@ export const api = {
   repositories,
   pullRequests,
   backlog,
+  debug,
   ws: wsClient,
 };

@@ -4,6 +4,7 @@ import { InboxPanel } from '../panels/InboxPanel';
 import { QueuePanel } from '../panels/QueuePanel';
 import { GitHubPanel } from '../panels/GitHubPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
+import { DebugPanel } from '../panels/DebugPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { useWorkspaceStore } from '../../stores/workspace';
 
@@ -19,6 +20,7 @@ export function MainLayout() {
           {activePanel === 'queue' && <QueuePanel />}
           {activePanel === 'github' && <GitHubPanel />}
           {activePanel === 'settings' && <SettingsPanel />}
+          {activePanel === 'debug' && <DebugPanel />}
         </div>
       </main>
       <CreateWorkspaceModal
