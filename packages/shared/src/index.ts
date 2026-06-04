@@ -528,6 +528,21 @@ export interface DebugEvent {
   durationMs?: number;
   /** Extra redacted context shown when a row is expanded. */
   meta?: Record<string, unknown>;
+  /**
+   * The FastOwl account this activity belongs to, when it can be attributed to
+   * one (e.g. a GitHub call for a workspace that account owns). null for
+   * backend-internal activity not tied to a single account. Used by the
+   * admin-only Debug panel to filter by user.
+   */
+  ownerId?: string | null;
+  /** Display label for {@link ownerId} (email or GitHub username). */
+  ownerLabel?: string | null;
+}
+
+/** A FastOwl account that has debug activity attributed to it. */
+export interface DebugOwner {
+  ownerId: string;
+  label: string;
 }
 
 /** Live state of one poll loop, surfaced in the Debug panel snapshot bar. */
@@ -566,6 +581,10 @@ export interface DebugRateLimitState {
   resource: string | null;
   /** When this snapshot was last observed (ISO). */
   observedAt: string;
+  /** The FastOwl account this account's budget belongs to, when attributable. */
+  ownerId?: string | null;
+  /** Display label for {@link ownerId} (email or GitHub username). */
+  ownerLabel?: string | null;
 }
 
 /** Point-in-time view of the backend's internals for the Debug panel. */
@@ -579,6 +598,8 @@ export interface DebugSnapshot {
   wsClients: number;
   /** Last-seen API rate-limit budgets, keyed by bucket name. */
   rateLimits: DebugRateLimitState[];
+  /** Accounts with attributed debug activity, for the per-user filter. */
+  owners: DebugOwner[];
 }
 
 export interface AgentStatusEvent {

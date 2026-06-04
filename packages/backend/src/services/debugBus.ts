@@ -1,10 +1,28 @@
 import type {
   DebugCategory,
   DebugEvent,
+  DebugOwner,
   DebugPollerState,
   DebugRateLimitState,
   DebugSnapshot,
 } from '@fastowl/shared';
+
+/**
+ * Owner filter for the admin Debug panel. A FastOwl account id shows only that
+ * account's attributed activity; 'system' shows backend-internal activity not
+ * tied to one account; undefined / 'all' shows everything.
+ */
+export type DebugOwnerFilter = string | 'all' | 'system' | undefined;
+
+/** Does an event/card with `ownerId` match the given filter? */
+export function matchesOwnerFilter(
+  ownerId: string | null | undefined,
+  filter: DebugOwnerFilter,
+): boolean {
+  if (!filter || filter === 'all') return true;
+  if (filter === 'system') return !ownerId;
+  return ownerId === filter;
+}
 
 /**
  * In-process observability bus for the developer Debug panel.
@@ -53,6 +71,12 @@ class DebugBus {
   private counters: Record<string, number> = {};
   private pollers = new Map<string, DebugPollerState>();
   private rateLimits = new Map<string, DebugRateLimitState>();
+  // Attribution: which FastOwl account owns a workspace's activity, so events
+  // and rate-limit cards can be filtered by user in the admin panel. Populated
+  // by the github service as it loads/connects tokens.
+  private workspaceOwners = new Map<string, { ownerId: string; label: string }>();
+  // Distinct accounts seen, for the panel's user-filter dropdown.
+  private owners = new Map<string, string>();
 
   // Rate-limit cards are refreshed by their poller every ~30s. Drop any not
   // observed within this window so a dead poller or a disconnected account
@@ -75,6 +99,25 @@ class DebugBus {
   /** Registered by websocket.ts so the snapshot can report live client count. */
   setClientCounter(fn: ClientCounter | null): void {
     this.clientCounter = fn;
+  }
+
+  /**
+   * Map a workspace to the FastOwl account that owns it, so activity tagged
+   * with that workspace can be attributed to (and filtered by) the account.
+   * `label` is a human-readable handle (email or GitHub username).
+   */
+  registerOwner(workspaceId: string, ownerId: string, label: string): void {
+    this.workspaceOwners.set(workspaceId, { ownerId, label });
+    this.owners.set(ownerId, label);
+  }
+
+  private resolveOwner(workspaceId?: string): {
+    ownerId: string | null;
+    ownerLabel: string | null;
+  } {
+    if (!workspaceId) return { ownerId: null, ownerLabel: null };
+    const o = this.workspaceOwners.get(workspaceId);
+    return o ? { ownerId: o.ownerId, ownerLabel: o.label } : { ownerId: null, ownerLabel: null };
   }
 
   record(input: Omit<DebugEvent, 'id' | 'timestamp'>): void {
@@ -108,6 +151,8 @@ class DebugBus {
     ok: boolean;
     bytes?: number;
     error?: string;
+    /** Workspace the call was made for, so it can be attributed to an owner. */
+    workspaceId?: string;
   }): void {
     const path = redactUrl(input.url);
     const status = input.status ?? (input.ok ? 200 : 'ERR');
@@ -118,6 +163,7 @@ class DebugBus {
       ok: input.ok,
       summary: `${input.method} ${path} → ${status} ${Math.round(input.durationMs)}ms`,
       durationMs: input.durationMs,
+      ...this.resolveOwner(input.workspaceId),
       meta: {
         status: input.status,
         ...(input.bytes !== undefined ? { bytes: input.bytes } : {}),
@@ -148,6 +194,7 @@ class DebugBus {
     summary: string;
     ok?: boolean;
     meta?: Record<string, unknown>;
+    workspaceId?: string;
   }): void {
     this.record({
       category: 'event',
@@ -155,6 +202,7 @@ class DebugBus {
       action: input.action,
       ok: input.ok ?? true,
       summary: input.summary,
+      ...this.resolveOwner(input.workspaceId),
       meta: input.meta,
     });
   }
@@ -221,6 +269,8 @@ class DebugBus {
     used: number;
     resetAt: string;
     resource?: string | null;
+    /** Workspace this account is connected through, for owner attribution. */
+    workspaceId?: string;
   }): void {
     if (!this.enabled) return;
     if (!Number.isFinite(input.limit) || input.limit <= 0) return;
@@ -233,6 +283,7 @@ class DebugBus {
       resetAt: input.resetAt,
       resource: input.resource ?? null,
       observedAt: new Date().toISOString(),
+      ...this.resolveOwner(input.workspaceId),
     });
   }
 
@@ -242,24 +293,36 @@ class DebugBus {
     category?: DebugCategory;
     service?: string;
     limit?: number;
+    owner?: DebugOwnerFilter;
   }): DebugEvent[] {
     let events = this.buffer;
     if (filter?.category) events = events.filter((e) => e.category === filter.category);
     if (filter?.service) events = events.filter((e) => e.service === filter.service);
+    if (filter?.owner) {
+      events = events.filter((e) => matchesOwnerFilter(e.ownerId, filter.owner));
+    }
     if (filter?.limit && filter.limit > 0 && events.length > filter.limit) {
       events = events.slice(events.length - filter.limit);
     }
     return events;
   }
 
-  snapshot(): DebugSnapshot {
+  snapshot(owner?: DebugOwnerFilter): DebugSnapshot {
     this.pruneStaleRateLimits();
+    const rateLimits = [...this.rateLimits.values()].filter((rl) =>
+      matchesOwnerFilter(rl.ownerId, owner),
+    );
+    const owners: DebugOwner[] = [...this.owners.entries()].map(([ownerId, label]) => ({
+      ownerId,
+      label,
+    }));
     return {
       pollers: [...this.pollers.values()],
       counters: { ...this.counters },
       bufferSize: this.buffer.length,
       wsClients: this.clientCounter?.() ?? 0,
-      rateLimits: [...this.rateLimits.values()],
+      rateLimits,
+      owners,
     };
   }
 
@@ -281,6 +344,8 @@ class DebugBus {
     this.clear();
     this.pollers.clear();
     this.rateLimits.clear();
+    this.workspaceOwners.clear();
+    this.owners.clear();
     this.seq = 0;
   }
 }

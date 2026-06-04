@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { debugBus, redactUrl } from '../services/debugBus.js';
+import { debugBus, redactUrl, matchesOwnerFilter } from '../services/debugBus.js';
 import type { DebugCategory } from '@fastowl/shared';
 
 /**
@@ -268,5 +268,82 @@ describe('snapshot client count', () => {
   it('reports the injected WS client counter', () => {
     debugBus.setClientCounter(() => 3);
     expect(debugBus.snapshot().wsClients).toBe(3);
+  });
+});
+
+describe('matchesOwnerFilter', () => {
+  it('treats undefined / "all" as match-everything', () => {
+    expect(matchesOwnerFilter('o1', undefined)).toBe(true);
+    expect(matchesOwnerFilter(null, 'all')).toBe(true);
+  });
+  it('matches a specific owner id', () => {
+    expect(matchesOwnerFilter('o1', 'o1')).toBe(true);
+    expect(matchesOwnerFilter('o1', 'o2')).toBe(false);
+  });
+  it('"system" matches only unattributed activity', () => {
+    expect(matchesOwnerFilter(null, 'system')).toBe(true);
+    expect(matchesOwnerFilter(undefined, 'system')).toBe(true);
+    expect(matchesOwnerFilter('o1', 'system')).toBe(false);
+  });
+});
+
+describe('owner attribution + filtering', () => {
+  it('stamps ownerId/label on an event for a registered workspace', () => {
+    debugBus.registerOwner('ws1', 'owner-1', '@tom');
+    debugBus.recordHttp({
+      service: 'github', method: 'GET', url: 'https://api.github.com/repos/a/b',
+      durationMs: 5, ok: true, workspaceId: 'ws1',
+    });
+    const [e] = debugBus.getEvents({ category: 'http' });
+    expect(e.ownerId).toBe('owner-1');
+    expect(e.ownerLabel).toBe('@tom');
+  });
+
+  it('leaves an event unattributed when the workspace is unknown', () => {
+    debugBus.recordHttp({
+      service: 'github', method: 'GET', url: 'https://api.github.com/x',
+      durationMs: 5, ok: true, workspaceId: 'nope',
+    });
+    const [e] = debugBus.getEvents({ category: 'http' });
+    expect(e.ownerId ?? null).toBeNull();
+  });
+
+  it('filters getEvents by owner / system / all', () => {
+    debugBus.registerOwner('ws1', 'owner-1', '@a');
+    debugBus.registerOwner('ws2', 'owner-2', '@b');
+    debugBus.recordHttp({ service: 'github', method: 'GET', url: 'u1', durationMs: 1, ok: true, workspaceId: 'ws1' });
+    debugBus.recordHttp({ service: 'github', method: 'GET', url: 'u2', durationMs: 1, ok: true, workspaceId: 'ws2' });
+    debugBus.recordEvent({ service: 'sys', action: 'x', summary: 'untagged' });
+
+    expect(debugBus.getEvents({ owner: 'owner-1' })).toHaveLength(1);
+    expect(debugBus.getEvents({ owner: 'owner-1' })[0].ownerId).toBe('owner-1');
+    expect(debugBus.getEvents({ owner: 'system' }).every((e) => !e.ownerId)).toBe(true);
+    expect(debugBus.getEvents({ owner: 'system' })).toHaveLength(1);
+    expect(debugBus.getEvents({ owner: 'all' })).toHaveLength(3);
+    expect(debugBus.getEvents()).toHaveLength(3);
+  });
+
+  it('lists owners and filters rate-limit cards in the snapshot', () => {
+    debugBus.registerOwner('ws1', 'owner-1', '@a');
+    debugBus.recordRateLimit({
+      name: '@a · core', description: 'd', limit: 5000, remaining: 4000, used: 1000,
+      resetAt: '2026-06-04T12:00:00.000Z', resource: 'core', workspaceId: 'ws1',
+    });
+    debugBus.recordRateLimit({
+      name: 'sys-bucket', description: 'd', limit: 10, remaining: 10, used: 0,
+      resetAt: '2026-06-04T12:00:00.000Z',
+    });
+
+    const all = debugBus.snapshot();
+    expect(all.owners).toContainEqual({ ownerId: 'owner-1', label: '@a' });
+    expect(all.rateLimits).toHaveLength(2);
+    expect(debugBus.snapshot('owner-1').rateLimits.map((r) => r.name)).toEqual(['@a · core']);
+    expect(debugBus.snapshot('system').rateLimits.map((r) => r.name)).toEqual(['sys-bucket']);
+  });
+
+  it('_reset() drops the owner directory', () => {
+    debugBus.registerOwner('ws1', 'owner-1', '@a');
+    debugBus._reset();
+    expect(debugBus.snapshot().owners).toHaveLength(0);
   });
 });

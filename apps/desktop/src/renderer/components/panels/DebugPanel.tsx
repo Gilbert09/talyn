@@ -230,6 +230,9 @@ export function DebugPanel() {
   const [serviceFilter, setServiceFilter] = useState<string>('');
   const [paused, setPaused] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  // Admin gate (null = checking) and per-user owner filter ('' = all accounts).
+  const [admin, setAdmin] = useState<boolean | null>(null);
+  const [ownerFilter, setOwnerFilter] = useState<string>('');
 
   // Incoming live events are buffered in a ref and flushed once per animation
   // frame, so a burst of activity can't trigger a render per event.
@@ -250,24 +253,56 @@ export function DebugPanel() {
     });
   }, []);
 
+  const owner = ownerFilter || undefined;
+
   const refreshSnapshot = useCallback(() => {
-    api.debug.getSnapshot().then(setSnapshot).catch(() => {});
+    api.debug.getSnapshot(owner).then(setSnapshot).catch(() => {});
+  }, [owner]);
+
+  // Is this user allowed to see the debug surface? (Admin-gated server-side.)
+  useEffect(() => {
+    api.debug
+      .getAccess()
+      .then((r) => setAdmin(r.admin))
+      .catch(() => setAdmin(false));
   }, []);
 
-  // Backfill + live subscription. The backend pushes every debug event over
-  // the existing WebSocket as `debug:event`.
+  // Backfill + periodic snapshot, re-fetched whenever the owner filter changes
+  // so the buffer + rate-limit cards reflect the selected account.
   useEffect(() => {
+    if (admin !== true) return;
     let cancelled = false;
     api.debug
-      .getEvents({ limit: MAX_RENDERED })
+      .getEvents({ limit: MAX_RENDERED, owner })
       .then((backfill) => {
         if (cancelled) return;
         // getEvents returns chronological order — show newest first.
         setEvents([...backfill].reverse());
+        pendingRef.current = [];
       })
       .catch(() => {});
     refreshSnapshot();
+    const snapTimer = window.setInterval(refreshSnapshot, SNAPSHOT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(snapTimer);
+    };
+  }, [admin, owner, refreshSnapshot]);
 
+  // Push the owner filter to the server so it only streams matching events to
+  // us — a single-user filter never pulls everyone's traffic over the wire.
+  useEffect(() => {
+    if (admin !== true) return;
+    api.ws.setDebugFilter(owner);
+    return () => {
+      // Reset to "all" when the panel unmounts so we don't pin a stale filter.
+      api.ws.setDebugFilter(undefined);
+    };
+  }, [admin, owner]);
+
+  // Live subscription. The backend pushes matching debug events as `debug:event`.
+  useEffect(() => {
+    if (admin !== true) return;
     const off = api.ws.on<DebugEvent>('debug:event', (event) => {
       if (pausedRef.current) return;
       pendingRef.current.push(event);
@@ -275,16 +310,11 @@ export function DebugPanel() {
         rafRef.current = requestAnimationFrame(flush);
       }
     });
-
-    const snapTimer = window.setInterval(refreshSnapshot, SNAPSHOT_INTERVAL_MS);
-
     return () => {
-      cancelled = true;
       off();
-      window.clearInterval(snapTimer);
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [flush, refreshSnapshot]);
+  }, [admin, flush]);
 
   const handleClear = useCallback(() => {
     api.debug.clearEvents().catch(() => {});
@@ -298,9 +328,26 @@ export function DebugPanel() {
     return events.filter((e) => {
       if (filter !== 'all' && e.category !== filter) return false;
       if (svc && !e.service.toLowerCase().includes(svc)) return false;
+      // Defensive: the server already filters by owner, but a straggler from a
+      // just-changed filter shouldn't leak into the rendered list.
+      if (ownerFilter === 'system' && e.ownerId) return false;
+      if (ownerFilter && ownerFilter !== 'system' && e.ownerId !== ownerFilter) return false;
       return true;
     });
-  }, [events, filter, serviceFilter]);
+  }, [events, filter, serviceFilter, ownerFilter]);
+
+  if (admin === false) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 bg-[#0f0f10] text-center text-zinc-300">
+        <Bug className="h-8 w-8 text-zinc-600" />
+        <p className="text-sm">Debug tools are admin-only.</p>
+        <p className="max-w-sm text-xs text-zinc-500">
+          This view exposes backend internals across every account, so it's limited to
+          operators.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col bg-[#0f0f10] text-zinc-100">
@@ -328,6 +375,20 @@ export function DebugPanel() {
           </Tip>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={ownerFilter}
+            onChange={(e) => setOwnerFilter(e.target.value)}
+            title="Filter debug activity by user"
+            className="h-8 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+          >
+            <option value="">All users</option>
+            <option value="system">System (untagged)</option>
+            {(snapshot?.owners ?? []).map((o) => (
+              <option key={o.ownerId} value={o.ownerId}>
+                {o.label}
+              </option>
+            ))}
+          </select>
           <Button
             variant="ghost"
             size="sm"

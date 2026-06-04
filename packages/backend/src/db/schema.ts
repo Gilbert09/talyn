@@ -38,6 +38,9 @@ export const users = pgTable('users', {
   id: text('id').primaryKey(), // == auth.users.id (uuid)
   email: text('email').notNull(),
   githubUsername: text('github_username'),
+  // Gates the developer Debug panel + its WS stream, which expose backend
+  // internals across all accounts. Off by default.
+  isAdmin: boolean('is_admin').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

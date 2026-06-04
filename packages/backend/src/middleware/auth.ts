@@ -16,6 +16,7 @@ export interface AuthUser {
   id: string;
   email: string;
   githubUsername?: string;
+  isAdmin: boolean;
 }
 
 declare global {
@@ -59,14 +60,21 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
 
   await enforceAllowList(email);
 
+  // Bootstrap admins from an env allow-list so the is_admin column can be
+  // granted without manual SQL on a hosted DB. The column stays the source of
+  // truth for gating; this just promotes (never demotes — a manual grant or a
+  // later env removal won't be clobbered).
+  const bootstrapAdmin = isBootstrapAdminEmail(email);
+
   const db = getDbClient();
   const now = new Date();
-  await db
+  const [row] = await db
     .insert(usersTable)
     .values({
       id: data.user.id,
       email,
       githubUsername: githubUsername ?? null,
+      isAdmin: bootstrapAdmin,
       createdAt: now,
       updatedAt: now,
     })
@@ -76,10 +84,29 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
         email,
         githubUsername: githubUsername ?? null,
         updatedAt: now,
+        // Only ever promote via the env bootstrap; preserve an existing grant.
+        ...(bootstrapAdmin ? { isAdmin: true } : {}),
       },
-    });
+    })
+    .returning({ isAdmin: usersTable.isAdmin });
 
-  return { id: data.user.id, email, githubUsername };
+  return {
+    id: data.user.id,
+    email,
+    githubUsername,
+    isAdmin: row?.isAdmin ?? bootstrapAdmin,
+  };
+}
+
+/** Emails in FASTOWL_ADMIN_EMAILS (comma-separated) are bootstrapped to admin. */
+function isBootstrapAdminEmail(email: string): boolean {
+  const raw = process.env.FASTOWL_ADMIN_EMAILS;
+  if (!raw || !email) return false;
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(email.toLowerCase());
 }
 
 /**
@@ -172,6 +199,9 @@ async function checkInternalAuth(req: Request): Promise<AuthUser | null> {
     id: rows[0].id,
     email: rows[0].email,
     githubUsername: rows[0].githubUsername ?? undefined,
+    // The daemon proxy impersonates a user for data access but never gets the
+    // operator-only debug surface.
+    isAdmin: false,
   };
 }
 
@@ -221,6 +251,19 @@ export async function requireAuth(
     console.error('Auth middleware failed:', err);
     res.status(500).json({ success: false, error: 'Auth check failed' });
   }
+}
+
+/**
+ * Gate a route to admin users only. Runs after `requireAuth` (which sets
+ * `req.user`). Returns 403 for non-admins — used for the developer Debug
+ * surface, which exposes backend internals across every account.
+ */
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user?.isAdmin) {
+    res.status(403).json({ success: false, error: 'Admin access required' });
+    return;
+  }
+  next();
 }
 
 // ---------- Ownership helpers ----------

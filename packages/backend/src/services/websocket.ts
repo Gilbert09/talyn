@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import type {
   AgentEvent,
+  DebugEvent,
   Environment,
   InboxItem,
   PermissionRequest,
@@ -11,7 +12,7 @@ import type {
   WSEvent,
 } from '@fastowl/shared';
 import { domainEvents } from './events.js';
-import { debugBus } from './debugBus.js';
+import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
 import { verifyTokenAndGetUser, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
@@ -22,18 +23,37 @@ const clients = new Set<WebSocket>();
 // Store subscriptions (client -> workspaceIds) and identities.
 const subscriptions = new Map<WebSocket, Set<string>>();
 const connectionUsers = new Map<WebSocket, AuthUser>();
+// Per-client owner filter for the admin Debug stream. Absent = all owners.
+const debugFilters = new Map<WebSocket, DebugOwnerFilter>();
+
+/**
+ * Fan a debug event out only to ADMIN clients, and only to those whose current
+ * owner filter matches — so a non-admin never receives debug data and an admin
+ * watching a single user isn't fed everyone else's traffic over the wire.
+ * Bypasses `broadcast()` (which would hit every client) for exactly this reason.
+ */
+function fanOutDebugEvent(event: DebugEvent): void {
+  let message: string | null = null;
+  for (const client of clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (!connectionUsers.get(client)?.isAdmin) continue;
+    if (!matchesOwnerFilter(event.ownerId, debugFilters.get(client))) continue;
+    if (message === null) {
+      message = JSON.stringify({
+        type: 'debug:event',
+        payload: event,
+        timestamp: event.timestamp,
+      });
+    }
+    client.send(message);
+  }
+}
 
 export function setupWebSocket(wss: WebSocketServer): void {
   // Wire the debug bus to the live client fan-out + connection count. Kept
   // here (not in debugBus) so debugBus stays dependency-free.
   debugBus.setClientCounter(() => clients.size);
-  debugBus.setLiveSink((event) => {
-    broadcast({
-      type: 'debug:event',
-      payload: event,
-      timestamp: event.timestamp,
-    });
-  });
+  debugBus.setLiveSink(fanOutDebugEvent);
 
   wss.on('connection', async (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
@@ -103,6 +123,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
       clients.delete(ws);
       subscriptions.delete(ws);
       connectionUsers.delete(ws);
+      debugFilters.delete(ws);
     });
 
     ws.on('error', (err) => {
@@ -111,6 +132,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
       clients.delete(ws);
       subscriptions.delete(ws);
       connectionUsers.delete(ws);
+      debugFilters.delete(ws);
     });
   });
 }
@@ -143,6 +165,16 @@ async function handleMessage(ws: WebSocket, message: any): Promise<void> {
         subscriptions.get(ws)?.delete(message.workspaceId);
       }
       break;
+
+    case 'debug:filter': {
+      // Admin-only: set which owner's debug events this client receives live.
+      // `owner` is an account id, 'system', 'all', or null. Non-admins are
+      // ignored (they never receive debug events regardless).
+      if (!connectionUsers.get(ws)?.isAdmin) break;
+      const owner = message.owner;
+      debugFilters.set(ws, typeof owner === 'string' ? (owner as DebugOwnerFilter) : undefined);
+      break;
+    }
 
     case 'ping':
       sendToClient(ws, {

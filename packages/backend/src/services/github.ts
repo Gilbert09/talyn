@@ -1,8 +1,12 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
-import { integrations as integrationsTable } from '../db/schema.js';
+import {
+  integrations as integrationsTable,
+  workspaces as workspacesTable,
+  users as usersTable,
+} from '../db/schema.js';
 import {
   encryptString,
   decryptString,
@@ -248,6 +252,7 @@ class GitHubService extends EventEmitter {
         ok: failed === 0,
         meta: { loaded: this.tokens.size, failed, rows: rows.length },
       });
+      void this.registerWorkspaceOwners([...this.tokens.keys()]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error('Failed to load GitHub tokens:', err);
@@ -366,7 +371,35 @@ class GitHubService extends EventEmitter {
       scope,
       createdAt,
     });
+    void this.registerWorkspaceOwners([workspaceId]);
     this.emit('connected', workspaceId);
+  }
+
+  /**
+   * Tell the debug bus which FastOwl account owns each workspace, so the admin
+   * Debug panel can attribute and filter activity by user. Best-effort — a
+   * failed lookup just leaves that workspace's events unattributed ("system").
+   */
+  private async registerWorkspaceOwners(workspaceIds: string[]): Promise<void> {
+    if (workspaceIds.length === 0) return;
+    try {
+      const rows = await this.db
+        .select({
+          workspaceId: workspacesTable.id,
+          ownerId: workspacesTable.ownerId,
+          email: usersTable.email,
+          githubUsername: usersTable.githubUsername,
+        })
+        .from(workspacesTable)
+        .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
+        .where(inArray(workspacesTable.id, workspaceIds));
+      for (const r of rows) {
+        const label = r.githubUsername ? `@${r.githubUsername}` : r.email;
+        debugBus.registerOwner(r.workspaceId, r.ownerId, label);
+      }
+    } catch (err) {
+      console.error('Failed to register workspace owners for debug attribution:', err);
+    }
   }
 
   async removeToken(workspaceId: string): Promise<void> {
@@ -428,6 +461,7 @@ class GitHubService extends EventEmitter {
         durationMs: Date.now() - startedAt,
         ok: false,
         error: err instanceof Error ? err.message : String(err),
+        workspaceId,
       });
       throw err;
     }
@@ -445,6 +479,7 @@ class GitHubService extends EventEmitter {
         durationMs: Date.now() - startedAt,
         ok: false,
         error,
+        workspaceId,
       });
       if (response.status === 401) {
         await this.removeToken(workspaceId);
@@ -459,6 +494,7 @@ class GitHubService extends EventEmitter {
       status: response.status,
       durationMs: Date.now() - startedAt,
       ok: true,
+      workspaceId,
     });
     return response.json();
   }
@@ -1009,6 +1045,7 @@ class GitHubService extends EventEmitter {
           status: response.status,
           durationMs: Date.now() - startedAt,
           ok,
+          workspaceId,
           ...(error ? { error } : {}),
         });
       if (response.ok) {

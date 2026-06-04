@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 42 — Admin-only, per-user debug panel
+
+The debug bus exposed ALL backend traffic to any authenticated user (Session-question finding: a single global ring buffer, unscoped `/debug` routes, and a `broadcast()`-to-everyone `debug:event` sink). Locked it down and made it multi-tenant-aware so it can run in production limited to operators.
+
+- **Admin gate**: new `users.is_admin` column (migration `0022`), surfaced on `AuthUser.isAdmin`. Granted via a `FASTOWL_ADMIN_EMAILS` bootstrap at login (promotes on token verify; never demotes) so no manual SQL is needed. New `requireAdmin` middleware guards every `/debug` route except `GET /debug/access` (which just reports `{admin}` so the desktop can hide the panel). The daemon internal-proxy identity is always non-admin.
+- **Per-user attribution**: `DebugEvent` / `DebugRateLimitState` gain `ownerId`/`ownerLabel`. The github service registers `workspaceId → {ownerId, label}` (email or `@github`) at token load/connect; `recordHttp` / `recordRateLimit` pass `workspaceId` and the bus stamps the owner. `snapshot()` returns the `owners` list for the filter dropdown.
+- **Filtering**: `getEvents`/`snapshot` take an owner filter (`<id>` | `system` | all); `/debug/events|snapshot?owner=` plumb it.
+- **Optimised live stream**: the `debug:event` sink no longer `broadcast()`s to everyone — a dedicated fan-out sends only to **admin** clients, and only those whose per-client `debug:filter` matches the event's owner. So a non-admin gets nothing and an admin watching one user isn't fed everyone else's traffic over the wire. New `debug:filter` WS message + `ws.setDebugFilter()` (re-sent on reconnect).
+- **Desktop**: DebugPanel gains a user-filter dropdown (All / System / per-account), re-fetches backfill + snapshot on change, pushes the WS filter, and shows an "admin-only" state when `/debug/access` says no.
+- **To enable for yourself**: set `FASTOWL_ADMIN_EMAILS=<your login email>` in the backend `.env` and re-login.
+- 14 new tests (debug bus attribution/filter + `matchesOwnerFilter`; WS admin-gating + owner-filter streaming). Full backend suite green (472), desktop (34).
+
 ## Session 41 — Global "core functionality missing" banner
 
 Added an app-wide warning banner (full-width, top of `MainLayout`, above the sidebar) that surfaces when core functionality is unavailable — currently a disconnected GitHub, which silently pauses PR tracking, reviews, and the merge queue. Follows the silent-failure theme of Sessions 39–40: make the broken state loud instead of leaving the user to discover dead pollers.

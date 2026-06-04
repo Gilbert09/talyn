@@ -661,16 +661,25 @@ export const backlog = {
 
 // Debug tooling (developer-only internals view)
 export const debug = {
-  getEvents: (params?: { category?: DebugCategory; service?: string; limit?: number }) => {
+  getEvents: (params?: {
+    category?: DebugCategory;
+    service?: string;
+    limit?: number;
+    owner?: string;
+  }) => {
     const qs = new URLSearchParams();
     if (params?.category) qs.set('category', params.category);
     if (params?.service) qs.set('service', params.service);
     if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.owner) qs.set('owner', params.owner);
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
     return request<DebugEvent[]>('GET', `/debug/events${suffix}`);
   },
-  getSnapshot: () => request<DebugSnapshot>('GET', '/debug/snapshot'),
+  getSnapshot: (owner?: string) =>
+    request<DebugSnapshot>('GET', `/debug/snapshot${owner ? `?owner=${encodeURIComponent(owner)}` : ''}`),
   clearEvents: () => request<{ cleared: boolean }>('DELETE', '/debug/events'),
+  // Whether the current user may see the debug surface (admin-gated server-side).
+  getAccess: () => request<{ admin: boolean }>('GET', '/debug/access'),
 };
 
 // ============================================================================
@@ -700,6 +709,9 @@ class WebSocketClient {
   private awaitingPong = false;
   private lifecycleBound = false;
   private subscribedWorkspaces: Set<string> = new Set();
+  // Admin Debug-panel owner filter, re-sent on (re)connect so the server keeps
+  // streaming only the selected account's events. undefined = all.
+  private debugFilter: string | undefined;
   private authenticated = false;
 
   async connect(): Promise<void> {
@@ -755,6 +767,9 @@ class WebSocketClient {
           for (const workspaceId of this.subscribedWorkspaces) {
             this.send({ type: 'subscribe', workspaceId });
           }
+          if (this.debugFilter !== undefined) {
+            this.send({ type: 'debug:filter', owner: this.debugFilter });
+          }
         }
         this.emit(data.type, data.payload);
       } catch (err) {
@@ -796,6 +811,19 @@ class WebSocketClient {
     this.subscribedWorkspaces.delete(workspaceId);
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.send({ type: 'unsubscribe', workspaceId });
+    }
+  }
+
+  /**
+   * Admin Debug panel: tell the server which account's debug events to stream
+   * to this client (account id, 'system', 'all', or undefined for all). The
+   * server only fans matching events to us, so a single-user filter doesn't
+   * pull everyone's traffic over the wire.
+   */
+  setDebugFilter(owner: string | undefined): void {
+    this.debugFilter = owner;
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.send({ type: 'debug:filter', owner: owner ?? null });
     }
   }
 

@@ -123,7 +123,8 @@ class RateLimitPoller {
         if (seenLabels.has(label)) continue;
         try {
           const rl = await githubService.getRateLimit(workspaceId);
-          for (const bucket of bucketsFor(label, rl)) debugBus.recordRateLimit(bucket);
+          for (const bucket of bucketsFor(label, rl))
+            debugBus.recordRateLimit({ ...bucket, workspaceId });
           seenLabels.add(label);
           accounts++;
         } catch (err) {

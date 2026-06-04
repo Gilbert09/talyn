@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { DebugCategory } from '@fastowl/shared';
-import { debugBus } from '../services/debugBus.js';
+import { debugBus, type DebugOwnerFilter } from '../services/debugBus.js';
+import { requireAdmin } from '../middleware/auth.js';
 
 const CATEGORIES: ReadonlySet<string> = new Set([
   'http',
@@ -10,14 +11,31 @@ const CATEGORIES: ReadonlySet<string> = new Set([
   'error',
 ]);
 
+/** Parse the `owner` query param into a filter (account id | 'system' | undefined). */
+function ownerFilter(raw: unknown): DebugOwnerFilter {
+  if (typeof raw !== 'string' || raw === '' || raw === 'all') return undefined;
+  return raw as DebugOwnerFilter;
+}
+
 /**
- * Developer-only debug surface. Not workspace-scoped — it exposes the
- * backend's own internals (requests, poll ticks, WS traffic), which are a
- * single global view. Auth is applied by the parent `requireAuth` middleware;
- * the desktop Debug panel is additionally gated behind a Settings toggle.
+ * Developer-only debug surface — exposes the backend's internals (requests,
+ * poll ticks, WS traffic) across every account, so it's gated to admins.
+ * `requireAuth` is applied by the parent router; `requireAdmin` (below) limits
+ * everything except `/access` to operators. The desktop Debug panel is also
+ * gated behind a Settings toggle. Events/cards can be filtered to one account
+ * via `?owner=<id>` (or `system`).
  */
 export function debugRoutes(): Router {
   const router = Router();
+
+  // Whether the *current* user may see the debug surface — used by the desktop
+  // to decide whether to show the panel at all. Auth-only, not admin-gated.
+  router.get('/access', (req, res) => {
+    res.json({ success: true, data: { admin: !!req.user?.isAdmin } });
+  });
+
+  // Everything below is operator-only.
+  router.use(requireAdmin);
 
   // Buffered events — backfill for a panel that opens after activity started.
   router.get('/events', (req, res) => {
@@ -30,13 +48,13 @@ export function debugRoutes(): Router {
     const limitRaw = Number(req.query.limit);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : undefined;
 
-    const events = debugBus.getEvents({ category, service, limit });
+    const events = debugBus.getEvents({ category, service, limit, owner: ownerFilter(req.query.owner) });
     res.json({ success: true, data: events });
   });
 
-  // Point-in-time view: poller states, counters, WS client count.
-  router.get('/snapshot', (_req, res) => {
-    res.json({ success: true, data: debugBus.snapshot() });
+  // Point-in-time view: poller states, counters, WS client count, rate limits.
+  router.get('/snapshot', (req, res) => {
+    res.json({ success: true, data: debugBus.snapshot(ownerFilter(req.query.owner)) });
   });
 
   // Drop the buffer (and lifetime counters) for a clean view.

@@ -10,6 +10,7 @@ import {
 } from '../services/websocket.js';
 import type { Environment } from '@fastowl/shared';
 import * as authModule from '../middleware/auth.js';
+import { debugBus } from '../services/debugBus.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
@@ -111,10 +112,13 @@ describe('websocket service', () => {
     // string itself so tests can drive which user they connect as.
     vi.spyOn(authModule, 'verifyTokenAndGetUser').mockImplementation(async (token) => {
       if (token === 'token-mine') {
-        return { id: TEST_USER_ID, email: 'mine@test' };
+        return { id: TEST_USER_ID, email: 'mine@test', isAdmin: false };
       }
       if (token === 'token-theirs') {
-        return { id: OTHER_USER_ID, email: 'theirs@test' };
+        return { id: OTHER_USER_ID, email: 'theirs@test', isAdmin: false };
+      }
+      if (token === 'token-admin') {
+        return { id: 'user-admin', email: 'admin@test', isAdmin: true };
       }
       return null;
     });
@@ -321,5 +325,54 @@ describe('websocket service', () => {
     expect(msg.payload.environment.type).toBe('posthog_code');
 
     await closeClient(client);
+  });
+
+  describe('debug stream gating', () => {
+    type DebugMsg = { type?: string; payload?: { summary?: string; ownerId?: string | null } };
+    /** Debug events the client has received matching a predicate. */
+    function debugEvents(c: AuthedClient, pred: (p: NonNullable<DebugMsg['payload']>) => boolean) {
+      return c.messages.filter(
+        (m) => (m as DebugMsg).type === 'debug:event' && pred((m as DebugMsg).payload!),
+      );
+    }
+    const settle = () => new Promise((r) => setTimeout(r, 120));
+
+    it('streams debug:event to an admin client', async () => {
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'hello-admin' });
+      await settle();
+      expect(debugEvents(admin, (p) => p.summary === 'hello-admin')).toHaveLength(1);
+      await closeClient(admin);
+    });
+
+    it('withholds debug:event from a non-admin client', async () => {
+      const user = await authed(serverUrl, 'token-mine');
+      await user.waitFor('connection:status');
+      debugBus.recordEvent({ service: 'test', action: 'x', summary: 'secret' });
+      await settle();
+      // A non-admin must receive NO debug events at all — not even its own
+      // connection's websocket activity.
+      expect(debugEvents(user, () => true)).toHaveLength(0);
+      await closeClient(user);
+    });
+
+    it('an owner filter limits the admin stream to that account', async () => {
+      debugBus.registerOwner('ws-mine', TEST_USER_ID, '@mine');
+      debugBus.registerOwner('ws-theirs', OTHER_USER_ID, '@theirs');
+      const admin = await authed(serverUrl, 'token-admin');
+      await admin.waitFor('connection:status');
+      admin.ws.send(JSON.stringify({ type: 'debug:filter', owner: OTHER_USER_ID }));
+      await settle();
+
+      debugBus.recordHttp({ service: 'github', method: 'GET', url: 'https://api.github.com/a', durationMs: 1, ok: true, workspaceId: 'ws-mine' });
+      debugBus.recordHttp({ service: 'github', method: 'GET', url: 'https://api.github.com/b', durationMs: 1, ok: true, workspaceId: 'ws-theirs' });
+      await settle();
+
+      // Only the selected account's event arrives; the other is filtered out.
+      expect(debugEvents(admin, (p) => p.ownerId === TEST_USER_ID)).toHaveLength(0);
+      expect(debugEvents(admin, (p) => p.ownerId === OTHER_USER_ID)).toHaveLength(1);
+      await closeClient(admin);
+    });
   });
 });
