@@ -27,15 +27,15 @@ describe('Drizzle migration', () => {
       'integrations',
       'environments',
       'tasks',
-      'inbox_items',
       'settings',
       'pull_requests',
     ]) {
       expect(tables).toContain(expected);
     }
 
-    // The local-execution tables are dropped in the cloud-only refactor.
-    for (const gone of ['agents', 'backlog_sources', 'backlog_items']) {
+    // The local-execution tables are dropped in the cloud-only refactor;
+    // inbox_items is dropped with the inbox feature removal.
+    for (const gone of ['agents', 'backlog_sources', 'backlog_items', 'inbox_items']) {
       expect(tables).not.toContain(gone);
     }
   });
@@ -161,7 +161,6 @@ describe('Drizzle migration', () => {
       'repositories',
       'integrations',
       'tasks',
-      'inbox_items',
       'pull_requests',
     ]) {
       expect(map.get(table)).toBe(true);

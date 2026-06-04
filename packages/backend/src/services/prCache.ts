@@ -1,12 +1,8 @@
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
-import {
-  pullRequests as pullRequestsTable,
-  inboxItems as inboxItemsTable,
-} from '../db/schema.js';
-import { broadcastToWorkspace, emitPullRequestUpdated } from './websocket.js';
-import { githubService } from './github.js';
+import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { emitPullRequestUpdated } from './websocket.js';
 import {
   batchPullRequests,
   type CheckBreakdown,
@@ -25,10 +21,9 @@ import {
  * Two responsibilities:
  *   1. Cache: TTL-based "fresh row → use it / stale → fetch + upsert".
  *   2. Cursors: diff the previous row's cursor columns against the
- *      freshly-fetched summary, emit inbox items for any new
- *      review / review-comment / issue-comment / CI-failure /
- *      ready-to-merge events, then persist the new cursors so the
- *      next poll knows where to pick up.
+ *      freshly-fetched summary to detect new review / review-comment /
+ *      issue-comment / CI-failure / ready-to-merge events, then persist
+ *      the new cursors so the next poll knows where to pick up.
  *
  * Pure delta-detection logic lives in `computePRDeltas` so it can be
  * unit-tested without touching DB or network.
@@ -289,15 +284,13 @@ export async function forceFetchAndUpsert(opts: {
     summary,
     existingId: existing?.id,
   });
-  await emitDeltaInboxItems(opts.workspaceId, summary, delta);
   return { summary, delta, cacheMiss: true, rowId };
 }
 
 /**
- * Upsert a PR row from a freshly-fetched summary AND emit any inbox
- * items the cursor diff produces. This is the path the bulk-poll
- * loop uses — `batchPullRequests` already returned a summary, no
- * point fetching it again.
+ * Upsert a PR row from a freshly-fetched summary. This is the path the
+ * bulk-poll loop uses — `batchPullRequests` already returned a summary,
+ * no point fetching it again.
  */
 export async function upsertFromBatchResult(opts: {
   workspaceId: string;
@@ -332,7 +325,6 @@ export async function upsertFromBatchResult(opts: {
     authored: opts.authored,
     existingId: existing?.id,
   });
-  await emitDeltaInboxItems(opts.workspaceId, opts.summary, delta);
   return { summary: opts.summary, delta, cacheMiss: true, rowId };
 }
 
@@ -340,17 +332,17 @@ export async function upsertFromBatchResult(opts: {
 
 /**
  * Compare a fresh `summary` against the previous cursor state. Returns
- * a per-event-type delta the caller turns into inbox items.
+ * a per-event-type delta describing what changed since the last poll.
  *
  * Edge cases:
  *   - `previous == null` (first time we've seen the PR): no deltas
- *     emitted; the cursors are just baselined. The user already
- *     knows about historical reviews/comments — emitting them on
- *     first sight would be noise.
+ *     emitted; the cursors are just baselined. Historical
+ *     reviews/comments aren't new, so surfacing them on first sight
+ *     would be noise.
  *   - The recent* arrays are bounded at 5 by the GraphQL query, so
  *     we may miss events when more than 5 fire between polls. That's
- *     acceptable for the user-facing inbox; the cursor still moves
- *     forward to whichever id is freshest.
+ *     acceptable; the cursor still moves forward to whichever id is
+ *     freshest.
  */
 export function computePRDeltas(
   previous: CursorState | null,
@@ -398,8 +390,8 @@ function takeUntilCursor<T extends { id: string }>(
  */
 function detectCiJustFailed(previous: CursorState, summary: PRSummary): boolean {
   if (summary.checks.failed === 0) return false;
-  // Non-required checks failing don't block the merge — don't ping the
-  // inbox about them (matches the de-emphasised UI treatment).
+  // Non-required checks failing don't block the merge — don't flag them
+  // as a CI failure (matches the de-emphasised UI treatment).
   if (summary.blockingReason === 'checks_failed_optional') return false;
   if (previous.lastCheckDigest === summary.checkDigest) return false;
   if (!previous.lastCheckDigest) {
@@ -658,199 +650,4 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     recentReviewComments: [],
     recentComments: [],
   };
-}
-
-// ---------- Inbox event emission ----------
-
-/**
- * Suppress a bot-authored PR comment unless it @-mentions the viewer.
- * Human comments always pass. When we don't know the viewer's login
- * (GitHub not connected / lookup failed), a bot comment is dropped —
- * we can't confirm a mention, and the whole point is to cut bot noise.
- */
-function suppressBotComment(
-  comment: { authorIsBot: boolean; bodyText: string },
-  viewerLogin: string | null
-): boolean {
-  if (!comment.authorIsBot) return false;
-  if (viewerLogin && mentionsUser(comment.bodyText, viewerLogin)) return false;
-  return true;
-}
-
-function mentionsUser(body: string, login: string): boolean {
-  if (!body) return false;
-  // `@login` not immediately followed by another login char, so `@tom`
-  // doesn't match `@tomato`. GitHub logins are alphanumeric + hyphen.
-  const re = new RegExp(`@${escapeRegExp(login)}(?![A-Za-z0-9-])`, 'i');
-  return re.test(body);
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-async function emitDeltaInboxItems(
-  workspaceId: string,
-  summary: PRSummary,
-  delta: PRDelta
-): Promise<void> {
-  // Bot-authored PR comments (CI bots, coverage, changelog, etc.) are
-  // mostly noise. Drop them from the inbox unless they directly
-  // @-mention the connected user — that's a deliberate ping worth
-  // surfacing. Reviews and CI/ready items are unaffected.
-  const viewerLogin = await githubService.getViewerLogin(workspaceId);
-
-  for (const review of delta.newReviews) {
-    if (review.state === 'PENDING') continue;
-    await createInboxItem(workspaceId, summary, {
-      type: 'pr_review',
-      priority: review.state === 'CHANGES_REQUESTED' ? 'high' : 'medium',
-      title: `${reviewTitleVerb(review.state)}: ${summary.title}`,
-      summaryText: `@${review.author} ${review.state.toLowerCase().replace('_', ' ')} on ${summary.owner}/${summary.repo}#${summary.number}`,
-      actions: [
-        { label: 'View Review', action: 'open_url', data: review.url },
-        { label: 'View PR', action: 'open_url', data: summary.url },
-      ],
-      data: {
-        reviewId: review.id,
-        reviewState: review.state,
-        reviewer: review.author,
-      },
-    });
-  }
-  for (const comment of delta.newReviewComments) {
-    if (suppressBotComment(comment, viewerLogin)) continue;
-    await createInboxItem(workspaceId, summary, {
-      type: 'pr_comment',
-      priority: 'medium',
-      title: `New review comment on ${summary.title}`,
-      summaryText: `@${comment.author} commented on ${summary.owner}/${summary.repo}#${summary.number}`,
-      actions: [
-        { label: 'View Comment', action: 'open_url', data: comment.url },
-        { label: 'View PR', action: 'open_url', data: summary.url },
-      ],
-      data: {
-        commentId: comment.id,
-        commenter: comment.author,
-        kind: 'review_comment',
-      },
-    });
-  }
-  for (const comment of delta.newComments) {
-    if (suppressBotComment(comment, viewerLogin)) continue;
-    await createInboxItem(workspaceId, summary, {
-      type: 'pr_comment',
-      priority: 'low',
-      title: `New comment on ${summary.title}`,
-      summaryText: `@${comment.author} commented on ${summary.owner}/${summary.repo}#${summary.number}`,
-      actions: [
-        { label: 'View Comment', action: 'open_url', data: comment.url },
-        { label: 'View PR', action: 'open_url', data: summary.url },
-      ],
-      data: {
-        commentId: comment.id,
-        commenter: comment.author,
-        kind: 'issue_comment',
-      },
-    });
-  }
-  if (delta.ciJustFailed) {
-    await createInboxItem(workspaceId, summary, {
-      type: 'ci_failure',
-      priority: 'high',
-      title: `CI failed: ${summary.title}`,
-      summaryText: `${summary.checks.failed}/${summary.checks.total} checks failed on ${summary.owner}/${summary.repo}#${summary.number}`,
-      actions: [
-        { label: 'View Checks', action: 'open_url', data: `${summary.url}/checks` },
-        { label: 'View PR', action: 'open_url', data: summary.url },
-      ],
-      data: {
-        checks: summary.checks,
-      },
-    });
-  }
-  if (delta.becameMergeReady) {
-    await createInboxItem(workspaceId, summary, {
-      type: 'pr_ready',
-      priority: 'medium',
-      title: `Ready to merge: ${summary.title}`,
-      summaryText: `${summary.owner}/${summary.repo}#${summary.number} has all checks passing and is ready to merge`,
-      actions: [{ label: 'View PR', action: 'open_url', data: summary.url }],
-      data: {},
-    });
-  }
-}
-
-function reviewTitleVerb(state: string): string {
-  switch (state) {
-    case 'APPROVED':
-      return 'Approved';
-    case 'CHANGES_REQUESTED':
-      return 'Changes requested';
-    case 'COMMENTED':
-      return 'Review comment';
-    default:
-      return 'Review';
-  }
-}
-
-async function createInboxItem(
-  workspaceId: string,
-  summary: PRSummary,
-  spec: {
-    type: 'pr_review' | 'pr_comment' | 'ci_failure' | 'pr_ready';
-    priority: 'high' | 'medium' | 'low';
-    title: string;
-    summaryText: string;
-    actions: Array<{ label: string; action: string; data: string }>;
-    data: Record<string, unknown>;
-  }
-): Promise<void> {
-  const db = getDbClient();
-  const id = uuid();
-  const now = new Date();
-  const source = {
-    type: 'github',
-    id: summary.url,
-    name: `${summary.owner}/${summary.repo}#${summary.number}`,
-  };
-  const data = {
-    repo: `${summary.owner}/${summary.repo}`,
-    prNumber: summary.number,
-    prTitle: summary.title,
-    prUrl: summary.url,
-    ...spec.data,
-  };
-  await db.insert(inboxItemsTable).values({
-    id,
-    workspaceId,
-    type: spec.type,
-    status: 'unread',
-    priority: spec.priority,
-    title: spec.title,
-    summary: spec.summaryText,
-    source,
-    actions: spec.actions,
-    data,
-    createdAt: now,
-  });
-  broadcastToWorkspace(workspaceId, {
-    type: 'inbox:new',
-    payload: {
-      item: {
-        id,
-        workspaceId,
-        type: spec.type,
-        status: 'unread',
-        priority: spec.priority,
-        title: spec.title,
-        summary: spec.summaryText,
-        source,
-        actions: spec.actions,
-        data,
-        createdAt: now.toISOString(),
-      },
-    },
-    timestamp: now.toISOString(),
-  });
 }

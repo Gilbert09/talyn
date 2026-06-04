@@ -4,7 +4,6 @@ import type {
   AgentEvent,
   DebugEvent,
   Environment,
-  InboxItem,
   PermissionRequest,
   PermissionResponse,
   Task,
@@ -400,14 +399,6 @@ export function emitAgentPermissionResponse(
   });
 }
 
-export function emitInboxNew(workspaceId: string, item: any): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'inbox:new',
-    payload: { item },
-    timestamp: new Date().toISOString(),
-  });
-}
-
 /**
  * Fired after every prCache upsert. The payload carries enough for the
  * GitHub page table + the task screen pill to patch in place without a
@@ -454,18 +445,6 @@ export function emitPullRequestUpdated(
   broadcastToWorkspace(workspaceId, {
     type: 'pull_request:updated',
     payload,
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitInboxUpdate(
-  workspaceId: string,
-  itemId: string,
-  updates: Partial<InboxItem>
-): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'inbox:update',
-    payload: { itemId, updates },
     timestamp: new Date().toISOString(),
   });
 }

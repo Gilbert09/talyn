@@ -18,11 +18,9 @@ import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
-  inboxItems as inboxItemsTable,
   tasks as tasksTable,
 } from '../db/schema.js';
 import * as websocketModule from '../services/websocket.js';
-import { githubService } from '../services/github.js';
 
 // ---------- Helpers ----------
 
@@ -243,7 +241,7 @@ describe('computePRDeltas', () => {
 
   it('does NOT emit ciJustFailed for non-required (optional) check failures', () => {
     // A mergeable PR whose only failing checks aren't required shouldn't
-    // ping the inbox — it isn't blocked.
+    // be flagged as a CI failure — it isn't blocked.
     const summary = makeSummary({
       blockingReason: 'checks_failed_optional',
       checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 },
@@ -357,13 +355,7 @@ describe('prCache — DB integration', () => {
     return (rows[0] as never) ?? null;
   }
 
-  async function inboxCount(type?: string): Promise<number> {
-    const rows = await db.select().from(inboxItemsTable);
-    if (!type) return rows.length;
-    return rows.filter((r) => r.type === type).length;
-  }
-
-  it('upserts a fresh PR row + does NOT emit inbox items on first sight', async () => {
+  it('upserts a fresh PR row + baselines cursors on first sight', async () => {
     const summary = makeSummary({
       recentReviews: [review('r1', 'APPROVED')],
       checks: { total: 1, passed: 0, failed: 1, inProgress: 0, skipped: 0 },
@@ -380,177 +372,6 @@ describe('prCache — DB integration', () => {
     expect(row).not.toBeNull();
     expect(row?.lastReviewId).toBe('r1');
     expect(row?.lastCheckDigest).toBe('sha1:test=failure');
-    // First sight: cursors get baselined, no inbox spam.
-    expect(await inboxCount()).toBe(0);
-  });
-
-  it('emits one pr_review inbox item when a new review arrives between polls', async () => {
-    // First poll baselines on r1.
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviews: [review('r1', 'COMMENTED', 'alice')],
-      }),
-    });
-    expect(await inboxCount('pr_review')).toBe(0);
-
-    // Second poll: r2 lands. Should emit ONE pr_review inbox item.
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviews: [review('r2', 'CHANGES_REQUESTED', 'bob'), review('r1', 'COMMENTED', 'alice')],
-      }),
-    });
-    expect(await inboxCount('pr_review')).toBe(1);
-
-    const inbox = await db.select().from(inboxItemsTable);
-    expect(inbox[0].priority).toBe('high');
-    expect((inbox[0].data as { reviewer: string }).reviewer).toBe('bob');
-  });
-
-  it('skips PENDING reviews (in-progress drafts) — not user-visible yet', async () => {
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({ recentReviews: [review('r1')] }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviews: [review('r2', 'PENDING'), review('r1')],
-      }),
-    });
-    expect(await inboxCount('pr_review')).toBe(0);
-  });
-
-  it('emits pr_comment items for both review-thread and top-level comments', async () => {
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviewComments: [reviewComment('rc1')],
-        recentComments: [comment('c1')],
-      }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviewComments: [reviewComment('rc2'), reviewComment('rc1')],
-        recentComments: [comment('c2'), comment('c1')],
-      }),
-    });
-    expect(await inboxCount('pr_comment')).toBe(2);
-  });
-
-  it('suppresses bot-authored comments that do not mention the viewer', async () => {
-    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviewComments: [reviewComment('rc1')],
-        recentComments: [comment('c1')],
-      }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentReviewComments: [
-          reviewComment('rc2', 'coverage[bot]', { authorIsBot: true, bodyText: 'coverage went up' }),
-          reviewComment('rc1'),
-        ],
-        recentComments: [
-          comment('c2', 'dependabot[bot]', { authorIsBot: true, bodyText: 'bumped a dep' }),
-          comment('c1'),
-        ],
-      }),
-    });
-    expect(await inboxCount('pr_comment')).toBe(0);
-  });
-
-  it('keeps a bot comment that @-mentions the viewer', async () => {
-    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({ recentComments: [comment('c1')] }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentComments: [
-          comment('c2', 'sentry[bot]', { authorIsBot: true, bodyText: 'hey @me this regressed' }),
-          comment('c1'),
-        ],
-      }),
-    });
-    expect(await inboxCount('pr_comment')).toBe(1);
-  });
-
-  it('still emits comments from real people regardless of viewer login', async () => {
-    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('me');
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({ recentComments: [comment('c1')] }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        recentComments: [comment('c2', 'alice'), comment('c1')],
-      }),
-    });
-    expect(await inboxCount('pr_comment')).toBe(1);
-  });
-
-  it('emits ci_failure when checks transition into failure between polls', async () => {
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        checks: { total: 2, passed: 1, failed: 0, inProgress: 1, skipped: 0 },
-        checkDigest: 'sha1:lint=success|test=in_progress',
-      }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 },
-        checkDigest: 'sha1:lint=success|test=failure',
-      }),
-    });
-    expect(await inboxCount('ci_failure')).toBe(1);
-  });
-
-  it('emits pr_ready when blockingReason flips to mergeable on a digest change', async () => {
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        blockingReason: 'checks_failed',
-        checks: { total: 1, passed: 0, failed: 1, inProgress: 0, skipped: 0 },
-        checkDigest: 'sha1:test=failure',
-      }),
-    });
-    await upsertFromBatchResult({
-      workspaceId: 'ws1',
-      repositoryId: 'repo1',
-      summary: makeSummary({
-        headSha: 'sha2',
-        blockingReason: 'mergeable',
-        checks: { total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 },
-        checkDigest: 'sha2:test=success',
-      }),
-    });
-    expect(await inboxCount('pr_ready')).toBe(1);
   });
 
   it('updates an existing row instead of inserting a duplicate', async () => {
@@ -802,14 +623,18 @@ describe('prCache — DB integration', () => {
 
     // "Restart" — the prCache holds no in-memory state, but the
     // pull_requests row persists. Now r2 lands.
-    await upsertFromBatchResult({
+    const result = await upsertFromBatchResult({
       workspaceId: 'ws1',
       repositoryId: 'repo1',
       summary: makeSummary({
         recentReviews: [review('r2', 'CHANGES_REQUESTED'), review('r1')],
       }),
     });
-    expect(await inboxCount('pr_review')).toBe(1);
+    // The cursor diffed against the persisted row (not in-memory state),
+    // so r2 is detected as new and the cursor advances on disk.
+    expect(result.delta.newReviews.map((r) => r.id)).toEqual(['r2']);
+    const row = await readPRRow();
+    expect(row?.lastReviewId).toBe('r2');
   });
 });
 

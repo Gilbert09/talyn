@@ -133,7 +133,7 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
       });
       // Jump straight to the new task's detail pane — user wants to
       // watch it run. Also force the Tasks panel visible in case the
-      // user was on Inbox / GitHub when they hit Add.
+      // user was on the GitHub panel when they hit Add.
       if (created?.id) {
         selectTask(created.id);
         setActivePanel('queue');

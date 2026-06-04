@@ -14,7 +14,7 @@ import { debugBus } from './debugBus.js';
  * We use each notification as a *trigger* — "PR #N had activity, refetch it
  * now" — and hand off to `prMonitorService.refreshPr`, which reuses the same
  * GraphQL + upsert pipeline as the poll loop (so it emits pull_request:updated
- * and ingests inbox deltas). Conflicts are NOT signalled by notifications, so
+ * and advances the PR-event cursors). Conflicts are NOT signalled by notifications, so
  * the baseline poll remains the conflict catcher + reliability backstop.
  */
 

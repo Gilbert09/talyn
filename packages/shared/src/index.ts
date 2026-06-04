@@ -365,55 +365,6 @@ export interface UpdateBacklogSourceRequest {
 }
 
 // ============================================================================
-// Inbox
-// ============================================================================
-
-export type InboxItemType =
-  | 'agent_question'
-  | 'agent_completed'
-  | 'agent_error'
-  | 'pr_review'
-  | 'pr_comment'
-  | 'ci_failure'
-  | 'pr_ready'
-  | 'posthog_alert'
-  | 'custom';
-
-export type InboxItemStatus = 'unread' | 'read' | 'actioned' | 'snoozed';
-
-export interface InboxItem {
-  id: string;
-  workspaceId: string;
-  type: InboxItemType;
-  status: InboxItemStatus;
-  priority: TaskPriority;
-  title: string;
-  summary: string;
-  source: InboxItemSource;
-  actions: InboxAction[];
-  data?: Record<string, unknown>;
-  snoozedUntil?: string;
-  createdAt: string;
-  readAt?: string;
-  actionedAt?: string;
-}
-
-export interface InboxItemSource {
-  type: 'agent' | 'github' | 'posthog' | 'system';
-  id?: string;
-  name?: string;
-  url?: string;
-}
-
-export interface InboxAction {
-  id: string;
-  label: string;
-  type: 'primary' | 'secondary' | 'danger';
-  action: string; // Action identifier
-  data?: string; // Action payload (e.g. URL for `open_url`)
-}
-
-// ============================================================================
 // Structured agent events (stream-json renderer)
 // ============================================================================
 
@@ -474,9 +425,6 @@ export type WSEventType =
   | 'task:agent_status'
   | 'task:files_changed'
   | 'task:git_log'
-  | 'inbox:new'
-  | 'inbox:update'
-  | 'inbox:remove'
   | 'pull_request:updated'
   | 'environment:status'
   | 'environment:created'
@@ -639,19 +587,6 @@ export interface TaskAgentStatusEvent {
   taskId: string;
   status: AgentStatus;
   attention: AgentAttention;
-}
-
-export interface InboxNewEvent {
-  item: InboxItem;
-}
-
-export interface InboxUpdateEvent {
-  itemId: string;
-  updates: Partial<InboxItem>;
-}
-
-export interface InboxRemoveEvent {
-  itemId: string;
 }
 
 export interface EnvironmentStatusEvent {

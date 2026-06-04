@@ -91,7 +91,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Pick the repositories you want FastOwl to track. Their PRs, reviews, and CI status
-        show up in your inbox.
+        show up in the GitHub panel.
       </p>
 
       {repositories.length > 0 && (

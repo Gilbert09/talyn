@@ -162,6 +162,13 @@
 			"when": 1784160000006,
 			"tag": "0022_user_is_admin",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1784160000007,
+			"tag": "0023_drop_inbox",
+			"breakpoints": true
 		}
 	]
 }

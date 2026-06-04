@@ -195,8 +195,8 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
 class GitHubService extends EventEmitter {
   private tokens: Map<string, StoredToken> = new Map();
   // Authenticated user's login per workspace. Resolved once via /user
-  // and reused — the inbox filter checks it on every comment, so we
-  // can't afford an API round-trip each time.
+  // and reused — callers (e.g. the rate-limit poller) read it hot, so
+  // we can't afford an API round-trip each time.
   private viewerLoginCache: Map<string, string> = new Map();
   // Authenticated user's team slugs (`org/team`) per workspace, with a fetch
   // timestamp. Teams change rarely, so we cache for an hour to avoid a

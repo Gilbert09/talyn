@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 43 — Remove the Inbox feature
+
+Ripped out the standalone Inbox end-to-end. The prioritized "items needing attention" queue (new reviews/comments/CI failures/merge-ready) and the per-PR "unread updates" badges it powered are gone; PRs needing attention surface directly in the GitHub panel's Needs-attention / Mine / Review buckets.
+
+- **Backend**: deleted `routes/inbox.ts` + its tests; dropped the `inbox_items` table (`schema.ts` + new migration `0023_drop_inbox.sql`); removed `requireInboxAccess` (`middleware/auth.ts`), `emitInboxNew`/`emitInboxUpdate` (`websocket.ts`), and the whole inbox-emission tail of `prCache.ts` (`emitDeltaInboxItems`/`createInboxItem`/bot-comment suppression). `prCache` still computes deltas + advances the PR-event cursors on `pull_requests` — that machinery just no longer materializes inbox rows. `pullRequests.ts` lost the unread-count join, the `unreadCount` field, and `POST /:id/seen`.
+- **Shared**: removed `InboxItem*` / `InboxAction` / `InboxItemSource` types, the `inbox:new|update|remove` WS event types, and their `WSEventType` union members.
+- **Desktop**: deleted `InboxPanel.tsx`; stripped inbox nav (sidebar Inbox entry + Active/Archive sub-views), store state/actions, `api.inbox`, `pullRequests.markSeen`, the `inbox:new`/`inbox:update` WS handlers, `useInboxActions`, and the GitHub-panel unread dots. Default panel is now **GitHub**.
+- Backend suite green (445), desktop (34), tsc + lint clean.
+
 ## Session 42 — Admin-only, per-user debug panel
 
 The debug bus exposed ALL backend traffic to any authenticated user (Session-question finding: a single global ring buffer, unscoped `/debug` routes, and a `broadcast()`-to-everyone `debug:event` sink). Locked it down and made it multi-tenant-aware so it can run in production limited to operators.

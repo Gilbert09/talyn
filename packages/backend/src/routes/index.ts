@@ -2,7 +2,6 @@ import { Express } from 'express';
 import { workspaceRoutes } from './workspaces.js';
 import { environmentRoutes } from './environments.js';
 import { taskRoutes } from './tasks.js';
-import { inboxRoutes } from './inbox.js';
 import { githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes } from './posthog.js';
 import { cloudProviderRoutes } from './cloudProviders.js';
@@ -26,7 +25,6 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/workspaces`, workspaceRoutes());
   app.use(`${api}/environments`, environmentRoutes());
   app.use(`${api}/tasks`, taskRoutes());
-  app.use(`${api}/inbox`, inboxRoutes());
   app.use(`${api}/github`, githubRoutes());
   // Generic cloud-provider surface (list + credential CRUD). The
   // `/posthog` routes remain as a back-compat alias for the existing

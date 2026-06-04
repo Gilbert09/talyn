@@ -1,10 +1,7 @@
 import { Router } from 'express';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
-import {
-  pullRequests as pullRequestsTable,
-  inboxItems as inboxItemsTable,
-} from '../db/schema.js';
+import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { forceFetchAndUpsert } from '../services/prCache.js';
 import { batchPullRequests, fetchPRReviewDetail } from '../services/githubGraphql.js';
 import { githubService } from '../services/github.js';
@@ -36,7 +33,6 @@ import type { ApiResponse } from '@fastowl/shared';
  *   POST  /pull-requests/:id/auto-keep-mergeable  toggle the watcher
  *   POST  /pull-requests/:id/merge-queue  add/remove from the merge queue
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
- *   POST  /pull-requests/:id/seen         mark linked inbox items read
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
  */
 
@@ -102,38 +98,15 @@ export function pullRequestRoutes(): Router {
       });
     }
 
-    // Per-PR unread count = unread inbox items the monitor emitted for
-    // this PR (new reviews/comments/CI). Linked only via the inbox
-    // `data->>'prUrl'` jsonb key (no FK), which equals the PR's
-    // `last_summary->>'url'`. One grouped query, mapped onto the rows.
-    const unreadByUrl = new Map<string, number>();
-    const unreadRows = await db
-      .select({
-        prUrl: sql<string>`${inboxItemsTable.data} ->> 'prUrl'`,
-        cnt: sql<number>`count(*)::int`,
-      })
-      .from(inboxItemsTable)
-      .where(
-        and(
-          eq(inboxItemsTable.workspaceId, workspaceId),
-          eq(inboxItemsTable.status, 'unread')
-        )
-      )
-      .groupBy(sql`${inboxItemsTable.data} ->> 'prUrl'`);
-    for (const u of unreadRows) {
-      if (u.prUrl) unreadByUrl.set(u.prUrl, Number(u.cnt));
-    }
-
     // 1-based merge-queue position per (repo, base branch) group, FIFO by
     // `mergeQueuedAt`. Computed locally over the rows we already have.
     const queuePositionById = computeQueuePositions(filtered as PullRequestRow[]);
 
     res.json({
       success: true,
-      data: filtered.map((r) => {
-        const url = (r.lastSummary as { url?: string } | null)?.url ?? '';
-        return rowToPublicShape(r, unreadByUrl.get(url) ?? 0, queuePositionById.get(r.id) ?? 0);
-      }),
+      data: filtered.map((r) =>
+        rowToPublicShape(r, queuePositionById.get(r.id) ?? 0)
+      ),
     } as ApiResponse<ReturnType<typeof rowToPublicShape>[]>);
   });
 
@@ -490,42 +463,6 @@ export function pullRequestRoutes(): Router {
     res.status(204).send();
   });
 
-  // Mark a PR "seen": flip every unread inbox item linked to this PR to
-  // `read`, clearing the per-row unread dot. Called when the user opens
-  // the PR detail. Matched via the same jsonb `prUrl` key as the list's
-  // unread count — there's no inbox→PR FK.
-  router.post('/:id/seen', async (req, res) => {
-    const db = getDbClient();
-    const rows = await db
-      .select()
-      .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, req.params.id))
-      .limit(1);
-    const row = rows[0];
-    if (!row) {
-      return res.status(404).json({ success: false, error: 'Pull request not found' });
-    }
-    try {
-      await requireWorkspaceAccess(req, row.workspaceId);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const url = (row.lastSummary as { url?: string } | null)?.url ?? '';
-    if (url) {
-      await db
-        .update(inboxItemsTable)
-        .set({ status: 'read', readAt: new Date() })
-        .where(
-          and(
-            eq(inboxItemsTable.workspaceId, row.workspaceId),
-            eq(inboxItemsTable.status, 'unread'),
-            sql`${inboxItemsTable.data} ->> 'prUrl' = ${url}`
-          )
-        );
-    }
-    res.status(204).send();
-  });
-
   // Merge a PR. The only write path in this router — the desktop gates
   // the button to mergeable PRs and shows a confirm first, but we
   // re-validate nothing here beyond ownership: GitHub itself rejects the
@@ -693,7 +630,7 @@ function publicMergeQueueState(
   return { status: s.status ?? 'waiting', attempts: s.attempts ?? 0, position };
 }
 
-function rowToPublicShape(row: PullRequestRow, unreadCount = 0, queuePosition = 0) {
+function rowToPublicShape(row: PullRequestRow, queuePosition = 0) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -713,7 +650,6 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0, queuePosition = 
     mergeQueued: row.mergeQueued,
     mergeMethod: row.mergeMethod,
     mergeQueueState: publicMergeQueueState(row.mergeQueueState, queuePosition),
-    unreadCount,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

@@ -18,7 +18,6 @@ import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
-  inboxItems as inboxItemsTable,
 } from '../db/schema.js';
 
 // ---------- Helpers ----------
@@ -515,69 +514,6 @@ describe('prMonitor — poll orchestration', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('emits inbox items only for deltas (cursor-based, no double-fire)', async () => {
-    mockSearch([1]);
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
-
-    // Tick 1: baseline. No inbox items.
-    graphqlSpy.mockResolvedValueOnce([
-      {
-        number: 1,
-        pr: fakeSummary({
-          number: 1,
-          headBranch: 'feature/a',
-          recentReviews: [
-            {
-              id: 'r1',
-              author: 'alice',
-              state: 'APPROVED',
-              submittedAt: 'now',
-              url: 'x',
-            },
-          ],
-        }),
-      },
-    ]);
-    await prMonitorService.forcePoll();
-    expect((await db.select().from(inboxItemsTable)).length).toBe(0);
-
-    // Backdate so the second tick refetches.
-    await db
-      .update(pullRequestsTable)
-      .set({ lastPolledAt: new Date(Date.now() - 120_000) });
-
-    // Tick 2: r2 lands. Should emit one pr_review item.
-    graphqlSpy.mockResolvedValueOnce([
-      {
-        number: 1,
-        pr: fakeSummary({
-          number: 1,
-          headBranch: 'feature/a',
-          recentReviews: [
-            {
-              id: 'r2',
-              author: 'bob',
-              state: 'CHANGES_REQUESTED',
-              submittedAt: 'now',
-              url: 'x',
-            },
-            {
-              id: 'r1',
-              author: 'alice',
-              state: 'APPROVED',
-              submittedAt: 'now',
-              url: 'x',
-            },
-          ],
-        }),
-      },
-    ]);
-    await prMonitorService.forcePoll();
-    const inbox = await db.select().from(inboxItemsTable);
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0].type).toBe('pr_review');
-  });
-
   it('focused PRs refetch at 30s; unfocused stay quiet for 60s', async () => {
     // Seed a row for #1 (focused) and #2 (unfocused), both polled
     // 45 s ago — focused TTL has expired (30 s) but unfocused (60 s)
@@ -711,24 +647,26 @@ describe('prMonitor — poll orchestration', () => {
     expect(PR_FOCUS_CONSTANTS.COOLDOWN_MS).toBe(5_000);
   });
 
-  it('does not double-fire when forcePoll runs twice with no new state', async () => {
+  it('does not re-fetch when forcePoll runs twice with no new state', async () => {
     mockSearch([1]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
-      {
-        number: 1,
-        pr: fakeSummary({
+    const graphqlSpy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([
+        {
           number: 1,
-          headBranch: 'feature/a',
-          recentReviews: [
-            { id: 'r1', author: 'alice', state: 'APPROVED', submittedAt: 'now', url: 'x' },
-          ],
-        }),
-      },
-    ]);
+          pr: fakeSummary({
+            number: 1,
+            headBranch: 'feature/a',
+            recentReviews: [
+              { id: 'r1', author: 'alice', state: 'APPROVED', submittedAt: 'now', url: 'x' },
+            ],
+          }),
+        },
+      ]);
     await prMonitorService.forcePoll();
-    // Second call — TTL still fresh, GraphQL skipped, no inbox spam.
+    // Second call — TTL still fresh, so the GraphQL summary fetch is skipped.
     await prMonitorService.forcePoll();
-    expect((await db.select().from(inboxItemsTable)).length).toBe(0);
+    expect(graphqlSpy).toHaveBeenCalledTimes(1);
   });
 
   // ---------- tracked-open rows that fell out of the search ----------

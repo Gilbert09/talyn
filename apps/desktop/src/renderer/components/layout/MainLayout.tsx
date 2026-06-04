@@ -1,7 +1,6 @@
 import React from 'react';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
-import { InboxPanel } from '../panels/InboxPanel';
 import { QueuePanel } from '../panels/QueuePanel';
 import { GitHubPanel } from '../panels/GitHubPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
@@ -21,7 +20,6 @@ export function MainLayout() {
         <Sidebar />
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-hidden">
-            {activePanel === 'inbox' && <InboxPanel />}
             {activePanel === 'queue' && <QueuePanel />}
             {activePanel === 'github' && <GitHubPanel />}
             {activePanel === 'settings' && <SettingsPanel />}

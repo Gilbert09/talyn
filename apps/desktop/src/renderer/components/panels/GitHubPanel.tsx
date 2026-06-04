@@ -280,31 +280,9 @@ export function GitHubPanel() {
     return unsubscribe;
   }, [currentWorkspaceId, repoFilter]);
 
-  // A new inbox item (review/comment/CI) for a watched PR — bump its
-  // unread dot live without a refetch. Matched on the PR URL, the same
-  // key the backend's unread count uses.
-  useEffect(() => {
-    const unsubscribe = api.ws.on('inbox:new', (payload) => {
-      const url = (payload as { item?: { data?: { prUrl?: string } } })?.item?.data
-        ?.prUrl;
-      if (!url) return;
-      setRows((prev) =>
-        prev.map((r) =>
-          r.summary.url === url ? { ...r, unreadCount: r.unreadCount + 1 } : r
-        )
-      );
-    });
-    return unsubscribe;
-  }, []);
-
-  // Open the detail sheet and clear the PR's unread dot (optimistically,
-  // plus a backend mark-seen that flips the linked inbox items to read).
+  // Open the detail sheet for the selected PR.
   function handleSelect(id: string) {
     setSelectedId(id);
-    setRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, unreadCount: 0 } : r))
-    );
-    void api.pullRequests.markSeen(id).catch(() => {});
   }
 
   // "Needs attention" is a My-PRs-only concept (blocking issues on PRs you
@@ -1093,15 +1071,7 @@ function PRTableRow({
       <td className="px-4 py-2">
         <div className="flex flex-col gap-0.5">
           <span className="flex items-center gap-1.5 truncate font-medium">
-            {row.unreadCount > 0 && (
-              <span
-                className="h-2 w-2 shrink-0 rounded-full bg-blue-500"
-                title={`${row.unreadCount} new update${row.unreadCount > 1 ? 's' : ''} since you last looked`}
-              />
-            )}
-            <span className={cn('truncate', row.unreadCount > 0 && 'font-semibold')}>
-              {summary.title || '(no title)'}
-            </span>
+            <span className="truncate">{summary.title || '(no title)'}</span>
           </span>
           <span className="text-xs text-muted-foreground">
             {row.owner}/{row.repo}#{row.number} · @{summary.author || 'unknown'}

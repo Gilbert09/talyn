@@ -1,14 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Inbox,
   ListTodo,
   Settings,
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   Github,
-  Archive,
-  CircleDot,
   Check,
   Plus,
   Bug,
@@ -32,9 +29,6 @@ export function Sidebar({ className }: SidebarProps) {
     toggleSidebar,
     activePanel,
     setActivePanel,
-    unreadCount,
-    inboxView,
-    setInboxView,
     tasks,
     debugMode,
   } = useWorkspaceStore();
@@ -49,17 +43,7 @@ export function Sidebar({ className }: SidebarProps) {
   // Count running tasks
   const runningTasksCount = tasks.filter((t) => t.status === 'in_progress').length;
 
-  // Both badges (parent 'Inbox' + 'Active' sub-item) count unread items
-  // so the numbers match. Read-but-not-actioned items remain visible in
-  // the Active pane but don't inflate the attention-count.
-
   const navItems = [
-    {
-      id: 'inbox' as const,
-      icon: Inbox,
-      label: 'Inbox',
-      badge: unreadCount > 0 ? unreadCount : undefined,
-    },
     {
       id: 'queue' as const,
       icon: ListTodo,
@@ -99,69 +83,32 @@ export function Sidebar({ className }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 p-2 space-y-1">
-        {navItems.map((item) => {
-          const isInbox = item.id === 'inbox';
-          const showInboxChildren = isInbox && activePanel === 'inbox' && !sidebarCollapsed;
-          return (
-            <React.Fragment key={item.id}>
-              <Button
-                variant={activePanel === item.id ? 'secondary' : 'ghost'}
-                className={cn(
-                  'w-full justify-start gap-3',
-                  sidebarCollapsed && 'justify-center px-2'
-                )}
-                onClick={() => {
-                  setActivePanel(item.id);
-                  // Default sub-view: clicking Inbox always lands on
-                  // "Active" so the user sees what needs attention.
-                  if (isInbox) setInboxView('active');
-                }}
-              >
-                <item.icon className="w-4 h-4 flex-shrink-0" />
-                {!sidebarCollapsed && (
-                  <>
-                    <span className="flex-1 text-left">{item.label}</span>
-                    {item.badge && (
-                      <Badge
-                        variant={isInbox ? 'default' : (item.badgeVariant as 'warning' | 'secondary') || 'warning'}
-                        className="ml-auto"
-                      >
-                        {item.badge}
-                      </Badge>
-                    )}
-                  </>
-                )}
-              </Button>
-              {showInboxChildren && (
-                <div className="ml-3 border-l pl-2 space-y-1">
-                  <Button
-                    variant={inboxView === 'active' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    className="w-full justify-start gap-2 h-8 text-xs"
-                    onClick={() => setInboxView('active')}
+        {navItems.map((item) => (
+          <Button
+            key={item.id}
+            variant={activePanel === item.id ? 'secondary' : 'ghost'}
+            className={cn(
+              'w-full justify-start gap-3',
+              sidebarCollapsed && 'justify-center px-2'
+            )}
+            onClick={() => setActivePanel(item.id)}
+          >
+            <item.icon className="w-4 h-4 flex-shrink-0" />
+            {!sidebarCollapsed && (
+              <>
+                <span className="flex-1 text-left">{item.label}</span>
+                {item.badge && (
+                  <Badge
+                    variant={(item.badgeVariant as 'warning' | 'secondary') || 'warning'}
+                    className="ml-auto"
                   >
-                    <CircleDot className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="flex-1 text-left">Active</span>
-                    {unreadCount > 0 && (
-                      <Badge variant="default" className="ml-auto h-5">
-                        {unreadCount}
-                      </Badge>
-                    )}
-                  </Button>
-                  <Button
-                    variant={inboxView === 'archive' ? 'secondary' : 'ghost'}
-                    size="sm"
-                    className="w-full justify-start gap-2 h-8 text-xs"
-                    onClick={() => setInboxView('archive')}
-                  >
-                    <Archive className="w-3.5 h-3.5 flex-shrink-0" />
-                    <span className="flex-1 text-left">Archive</span>
-                  </Button>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        })}
+                    {item.badge}
+                  </Badge>
+                )}
+              </>
+            )}
+          </Button>
+        ))}
       </nav>
 
       {/* Footer */}

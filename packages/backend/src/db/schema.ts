@@ -177,34 +177,6 @@ export const tasks = pgTable(
   })
 );
 
-// ---------- Inbox items ----------
-
-export const inboxItems = pgTable(
-  'inbox_items',
-  {
-    id: text('id').primaryKey(),
-    workspaceId: text('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    type: text('type').notNull(),
-    status: text('status').notNull().default('unread'),
-    priority: text('priority').notNull().default('medium'),
-    title: text('title').notNull(),
-    summary: text('summary').notNull(),
-    source: jsonb('source').notNull(),
-    actions: jsonb('actions').notNull().default([]),
-    data: jsonb('data'),
-    snoozedUntil: timestamp('snoozed_until', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    readAt: timestamp('read_at', { withTimezone: true }),
-    actionedAt: timestamp('actioned_at', { withTimezone: true }),
-  },
-  (t) => ({
-    workspaceIdx: index('idx_inbox_workspace').on(t.workspaceId),
-    statusIdx: index('idx_inbox_status').on(t.status),
-  })
-);
-
 // ---------- Global settings (key/value) ----------
 
 export const settings = pgTable('settings', {

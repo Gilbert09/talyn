@@ -81,7 +81,7 @@ class PRMonitorService extends EventEmitter {
     debugBus.registerPoller(
       'pr_monitor',
       POLL_INTERVAL_MS,
-      "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache (emitting inbox deltas), and reconciles closed/merged PRs.",
+      "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache, and reconciles closed/merged PRs.",
     );
     debugBus.registerPoller(
       'pr_monitor_fast_ci',
@@ -198,8 +198,8 @@ class PRMonitorService extends EventEmitter {
    *   2. For the stale ones, call `batchPullRequestsByNumber` for the
    *      GraphQL summary + checks rollup in one round-trip per chunk.
    *   3. For each result, hand off to `prCache.upsertFromBatchResult`
-   *      — that's where the cursor diff runs and inbox items get
-   *      emitted.
+   *      — that's where the cursor diff runs and the row's PR-event
+   *      cursors are advanced.
    *   4. Sweep any tracked PRs we own in the DB but didn't see in the
    *      search and mark them closed/merged so the GitHub page stops
    *      actively polling them.

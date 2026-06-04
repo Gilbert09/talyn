@@ -4,7 +4,6 @@ import type {
   Environment,
   Agent,
   Task,
-  InboxItem,
   BacklogSource,
   BacklogItem,
   CreateBacklogSourceRequest,
@@ -223,28 +222,6 @@ export const tasks = {
     id: string,
     body: { message: string; model?: string; reasoningEffort?: string }
   ) => request<void>('POST', `/tasks/${id}/message`, body),
-};
-
-// Inbox
-export const inbox = {
-  list: (params?: { workspaceId?: string; status?: string; type?: string }) => {
-    const query = new URLSearchParams();
-    if (params?.workspaceId) query.set('workspaceId', params.workspaceId);
-    if (params?.status) query.set('status', params.status);
-    if (params?.type) query.set('type', params.type);
-    const queryStr = query.toString();
-    return request<InboxItem[]>('GET', `/inbox${queryStr ? `?${queryStr}` : ''}`);
-  },
-  get: (id: string) => request<InboxItem>('GET', `/inbox/${id}`),
-  markRead: (id: string) => request<InboxItem>('POST', `/inbox/${id}/read`),
-  markActioned: (id: string) => request<InboxItem>('POST', `/inbox/${id}/action`),
-  snooze: (id: string, until: string) =>
-    request<InboxItem>('POST', `/inbox/${id}/snooze`, { until }),
-  delete: (id: string) => request<void>('DELETE', `/inbox/${id}`),
-  bulkRead: (ids: string[]) =>
-    request<{ updated: number }>('POST', '/inbox/bulk/read', { ids }),
-  bulkAction: (ids: string[]) =>
-    request<{ updated: number }>('POST', '/inbox/bulk/action', { ids }),
 };
 
 // GitHub Integration
@@ -469,8 +446,6 @@ export interface PRRow {
     attempts: number;
     position: number;
   } | null;
-  /** Unread inbox items linked to this PR (new reviews/comments/CI). */
-  unreadCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -611,8 +586,6 @@ export const pullRequests = {
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
   setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>
     request<null>('POST', `/pull-requests/view`, { workspaceId, view }),
-  markSeen: (id: string) =>
-    request<null>('POST', `/pull-requests/${id}/seen`),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
   reviews: (id: string) =>
@@ -959,7 +932,6 @@ export const api = {
   environments,
   agents,
   tasks,
-  inbox,
   github,
   posthog,
   cloudProviders,

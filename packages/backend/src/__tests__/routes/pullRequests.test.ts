@@ -12,7 +12,6 @@ import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
-  inboxItems as inboxItemsTable,
 } from '../../db/schema.js';
 import * as graphqlModule from '../../services/githubGraphql.js';
 import type { PRSummary } from '../../services/githubGraphql.js';
@@ -478,49 +477,6 @@ describe('routes/pullRequests', () => {
     });
   });
 
-  // -------- unread count + /seen --------
-
-  // Insert a PR whose lastSummary carries a url, plus N unread inbox
-  // items linked to it via the same `data.prUrl` jsonb key the route
-  // joins on.
-  async function insertPRWithInbox(
-    prUrl: string,
-    unread: number,
-    opts: { id?: string; workspaceId?: string; repositoryId?: string } = {}
-  ): Promise<string> {
-    const id = opts.id ?? `pr-${Math.random().toString(36).slice(2, 8)}`;
-    const workspaceId = opts.workspaceId ?? 'ws-mine';
-    await db.insert(pullRequestsTable).values({
-      id,
-      workspaceId,
-      repositoryId: opts.repositoryId ?? 'repo-mine',
-      owner: 'acme',
-      repo: 'widgets',
-      number: ++prNumberCounter,
-      state: 'open',
-      lastPolledAt: new Date(),
-      lastSummary: { title: 'Add feature', headBranch: 'feature/x', author: 'me', url: prUrl },
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    for (let i = 0; i < unread; i++) {
-      await db.insert(inboxItemsTable).values({
-        id: `inbox-${id}-${i}`,
-        workspaceId,
-        type: 'pr_review',
-        status: 'unread',
-        priority: 'medium',
-        title: 'New review',
-        summary: 'someone reviewed',
-        source: { type: 'github', id: prUrl, name: 'acme/widgets#1' },
-        actions: [],
-        data: { repo: 'acme/widgets', prNumber: 1, prUrl },
-        createdAt: new Date(),
-      });
-    }
-    return id;
-  }
-
   // GitHub REST single-PR shape for getPullRequest mocks.
   function fakeRESTPR(over: Partial<{ state: string; merged: boolean; mergedAt: string | null }> = {}) {
     return {
@@ -696,45 +652,6 @@ describe('routes/pullRequests', () => {
     });
   });
 
-  describe('GET /pull-requests unreadCount', () => {
-    it('counts unread inbox items linked to each PR by prUrl', async () => {
-      const url = 'https://github.com/acme/widgets/pull/7';
-      await insertPRWithInbox(url, 2, { id: 'p-unread' });
-      await insertPRWithInbox('https://github.com/acme/widgets/pull/8', 0, { id: 'p-clean' });
-      const res = await fetch(`${serverUrl}/pull-requests?workspaceId=ws-mine`, {
-        headers: authMine,
-      });
-      const body = (await res.json()) as { data: Array<{ id: string; unreadCount: number }> };
-      const byId = Object.fromEntries(body.data.map((r) => [r.id, r.unreadCount]));
-      expect(byId['p-unread']).toBe(2);
-      expect(byId['p-clean']).toBe(0);
-    });
-
-    it('ignores already-read inbox items', async () => {
-      const url = 'https://github.com/acme/widgets/pull/9';
-      const id = await insertPRWithInbox(url, 1, { id: 'p-mix' });
-      // Add a read item for the same PR — must not count.
-      await db.insert(inboxItemsTable).values({
-        id: 'inbox-read',
-        workspaceId: 'ws-mine',
-        type: 'pr_comment',
-        status: 'read',
-        priority: 'low',
-        title: 'old',
-        summary: 'old',
-        source: { type: 'github', id: url, name: 'acme/widgets#9' },
-        actions: [],
-        data: { repo: 'acme/widgets', prNumber: 9, prUrl: url },
-        createdAt: new Date(),
-      });
-      const res = await fetch(`${serverUrl}/pull-requests?workspaceId=ws-mine`, {
-        headers: authMine,
-      });
-      const body = (await res.json()) as { data: Array<{ id: string; unreadCount: number }> };
-      expect(body.data.find((r) => r.id === id)?.unreadCount).toBe(1);
-    });
-  });
-
   describe('GET /pull-requests relationship filter', () => {
     async function insertWithRelationship(
       id: string,
@@ -795,39 +712,4 @@ describe('routes/pullRequests', () => {
     });
   });
 
-  describe('POST /pull-requests/:id/seen', () => {
-    it('flips the PR’s unread inbox items to read', async () => {
-      const url = 'https://github.com/acme/widgets/pull/10';
-      const id = await insertPRWithInbox(url, 3, { id: 'p-seen' });
-      const res = await fetch(`${serverUrl}/pull-requests/${id}/seen`, {
-        method: 'POST',
-        headers: authMine,
-      });
-      expect(res.status).toBe(204);
-      const remaining = await db
-        .select()
-        .from(inboxItemsTable)
-        .where(eq(inboxItemsTable.status, 'unread'));
-      expect(remaining).toHaveLength(0);
-      // List now reports zero unread for the PR.
-      const list = await fetch(`${serverUrl}/pull-requests?workspaceId=ws-mine`, {
-        headers: authMine,
-      });
-      const body = (await list.json()) as { data: Array<{ id: string; unreadCount: number }> };
-      expect(body.data.find((r) => r.id === id)?.unreadCount).toBe(0);
-    });
-
-    it('refuses cross-workspace seen', async () => {
-      const id = await insertPRWithInbox('https://github.com/acme/widgets/pull/11', 1, {
-        id: 'p-seen-other',
-        workspaceId: 'ws-other',
-        repositoryId: 'repo-other',
-      });
-      const res = await fetch(`${serverUrl}/pull-requests/${id}/seen`, {
-        method: 'POST',
-        headers: authMine,
-      });
-      expect(res.status).toBe(404);
-    });
-  });
 });

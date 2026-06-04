@@ -10,8 +10,6 @@ import type {
   TaskUpdateEvent,
   TaskAgentStatusEvent,
   TaskEventBroadcast,
-  InboxNewEvent,
-  InboxUpdateEvent,
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
   WorkspaceSettings,
@@ -103,8 +101,6 @@ export function useApiConnection() {
     currentWorkspaceId,
     updateAgent,
     updateTask,
-    addInboxItem,
-    updateInboxItem,
     updateEnvironment,
     addEnvironment,
   } = useWorkspaceStore();
@@ -222,21 +218,6 @@ export function useApiConnection() {
       })
     );
 
-    // New inbox items
-    unsubscribers.push(
-      wsClient.on<InboxNewEvent>('inbox:new', (payload) => {
-        addInboxItem(payload.item);
-      })
-    );
-
-    // Inbox item updates (permissionInbox coalesces pending prompts
-    // into one `agent_question` row and patches it as prompts resolve).
-    unsubscribers.push(
-      wsClient.on<InboxUpdateEvent>('inbox:update', (payload) => {
-        updateInboxItem(payload.itemId, payload.updates);
-      })
-    );
-
     // Environment status updates
     unsubscribers.push(
       wsClient.on<EnvironmentStatusEvent>('environment:status', (payload) => {
@@ -264,7 +245,7 @@ export function useApiConnection() {
         flushTaskEvents();
       }
     };
-  }, [updateAgent, updateTask, addInboxItem, updateInboxItem, updateEnvironment, addEnvironment]);
+  }, [updateAgent, updateTask, updateEnvironment, addEnvironment]);
 }
 
 /**
@@ -279,7 +260,6 @@ export function useInitialDataLoad() {
     setAgents,
     setTasks,
     setRepositories,
-    setInboxItems,
     setOnboardingComplete,
   } = useWorkspaceStore();
   const [loaded, setLoaded] = useState(false);
@@ -330,14 +310,12 @@ export function useInitialDataLoad() {
 
       // Load workspace-specific data
       if (activeWorkspaceId) {
-        const [tasks, inboxItems, repositories] = await Promise.all([
+        const [tasks, repositories] = await Promise.all([
           api.tasks.list({ workspaceId: activeWorkspaceId }),
-          api.inbox.list({ workspaceId: activeWorkspaceId }),
           api.repositories.list(activeWorkspaceId).catch(() => []), // May not exist
         ]);
 
         setTasks(tasks);
-        setInboxItems(inboxItems);
         setRepositories(repositories);
       }
     } catch (err) {
@@ -353,7 +331,6 @@ export function useInitialDataLoad() {
     setAgents,
     setTasks,
     setRepositories,
-    setInboxItems,
     setOnboardingComplete,
   ]);
 
@@ -524,35 +501,6 @@ export function useTaskActions() {
     rejectTask,
     deleteTask,
   };
-}
-
-/**
- * Hook for inbox actions
- */
-export function useInboxActions() {
-  const { markInboxRead, markInboxActioned } = useWorkspaceStore();
-
-  const markRead = useCallback(
-    async (itemId: string) => {
-      await api.inbox.markRead(itemId);
-      markInboxRead(itemId);
-    },
-    [markInboxRead]
-  );
-
-  const markActioned = useCallback(
-    async (itemId: string) => {
-      await api.inbox.markActioned(itemId);
-      markInboxActioned(itemId);
-    },
-    [markInboxActioned]
-  );
-
-  const snooze = useCallback(async (itemId: string, until: Date) => {
-    await api.inbox.snooze(itemId, until.toISOString());
-  }, []);
-
-  return { markRead, markActioned, snooze };
 }
 
 /**

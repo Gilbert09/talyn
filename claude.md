@@ -1,6 +1,6 @@
 # FastOwl — Claude Context
 
-FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs, surfaces the ones needing attention in a prioritized inbox, and delegates fix/respond/review work to cloud providers (PostHog Code today; Codex Cloud / Claude Routines planned) that run the agent loop on their own sandbox and open a PR.
+FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs in a prioritized GitHub panel, and delegates fix/respond/review work to cloud providers (PostHog Code today; Codex Cloud / Claude Routines planned) that run the agent loop on their own sandbox and open a PR.
 
 **As of the cloud-only refactor (June 2026)** the app no longer runs anything locally: the bundled daemon, local/remote environments, in-process Claude agents, permission gates, backlog/continuous-build, and the per-task git working tree are all gone. Every task is a cloud task. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
@@ -37,8 +37,7 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 - **Cloud provider** — a vendor that runs the whole agent loop on its own sandbox and opens a PR. Pluggable behind `CloudTaskProvider` (`packages/backend/src/services/cloudProviders/`): a registry + per-provider `dispatch`/`reconcile`/credentials. PostHog Code is the only live provider; Codex Cloud / Claude Routines are drop-in (see [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)).
 - **Environment** — now just a **secret-free marker**, one auto-provisioned row per connected cloud provider. Its `type` (a `CloudProviderType`) is how a task resolves its provider; per-workspace credentials live on the `integrations` row. No daemon, no pairing.
 - **Task** — the unit of work, always delegated to a cloud provider. Types: `code_writing` (freeform prompt on a repo), `pr_response`, `pr_review`. Lifecycle: `queued` → `in_progress` → `completed`/`failed`. The cloud poller (`cloudProviders/poller.ts`) drives status + ingests the transcript; review happens on the provider's PR (no local `awaiting_review` gate).
-- **Inbox** — prioritized queue of PR items needing human attention (new reviews, comments, CI failures, merge-ready).
-- **GitHub/PR core** — `services/{github,githubGraphql,prMonitor,prCache,prFocus}.ts` + `routes/{github,pullRequests,repositories,inbox}.ts` + the desktop GitHub panel / PR pills / detail sheet. This is the heart of the app.
+- **GitHub/PR core** — `services/{github,githubGraphql,prMonitor,prCache,prFocus}.ts` + `routes/{github,pullRequests,repositories}.ts` + the desktop GitHub panel / PR pills / detail sheet. This is the heart of the app. (The standalone **Inbox** — a prioritized queue of PR items needing attention — was removed; PRs needing attention surface directly in the GitHub panel's "Needs attention" / Mine / Review buckets.)
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
 
@@ -66,6 +65,7 @@ Tests live in `packages/backend/src/__tests__/debugBus.test.ts` — extend them 
 3. **Phase 18.2 polish** — proper `fastowl login` PKCE flow, CLI refresh-token rotation, invite flow.
 
 **Recently landed**:
+- Session 43 (Inbox removal): ripped out the standalone Inbox end-to-end — `inbox_items` table (migration `0023`), `routes/inbox.ts`, `InboxPanel`, sidebar nav, shared `InboxItem*` types + `inbox:*` WS events, and the per-PR "unread updates" badges it powered (incl. `POST /pull-requests/:id/seen`). `prCache` still computes PR-event deltas + advances cursors; it just no longer materializes inbox rows. PRs needing attention now live only in the GitHub panel.
 - Cloud-only refactor (June 2026): stripped the daemon, local/remote envs, in-process agents, permissions, backlog/continuous-build, and per-task git working tree. Built the pluggable `CloudTaskProvider` seam; made the task queue + poller cloud-only; collapsed the DB schema (dropped agents/backlog tables, slimmed environments to a marker, wiped tasks); removed the `@fastowl/daemon` package. The app is now: PR dashboard + cloud task delegation.
 - Session 17 (Phase 17.3 — notifications quick win): desktop OS notification fires when a task transitions into `awaiting_review`. Toggle + permission hint in Settings → Appearance → Notifications. Uses renderer `Notification` API — Electron bridges to the native OS surface.
 - Session 17 (Phase 18.3.B): SSH auto-install. Desktop "Add Environment → Remote VM (FastOwl daemon)" with two modes (auto-install over SSH, manual one-liner). Backend dials the target via ssh2, pipes `curl /daemon/install.sh | bash`, the script builds `@fastowl/daemon` + writes a systemd/launchd unit, daemon pairs + dials back, modal polls for `connected`.

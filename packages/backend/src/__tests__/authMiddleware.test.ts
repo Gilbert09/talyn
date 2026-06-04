@@ -11,7 +11,6 @@ import {
   requireWorkspaceAccess,
   requireEnvironmentAccess,
   requireTaskAccess,
-  requireInboxAccess,
   requireRepositoryAccess,
   assertUser,
   internalProxyHeaders,
@@ -22,7 +21,6 @@ import {
   workspaces as workspacesTable,
   environments as environmentsTable,
   tasks as tasksTable,
-  inboxItems as inboxItemsTable,
   repositories as repositoriesTable,
 } from '../db/schema.js';
 
@@ -278,18 +276,7 @@ describe('ownership helpers', () => {
     ).rejects.toThrow(AccessError);
   });
 
-  it('requireInboxAccess and requireRepositoryAccess honour workspace ownership', async () => {
-    const now = new Date();
-    await db.insert(inboxItemsTable).values([
-      {
-        id: 'in-mine', workspaceId: 'ws-mine', type: 'agent_question', status: 'unread',
-        priority: 'medium', title: 't', summary: 's', source: {}, actions: [], createdAt: now,
-      },
-      {
-        id: 'in-theirs', workspaceId: 'ws-theirs', type: 'agent_question', status: 'unread',
-        priority: 'medium', title: 't', summary: 's', source: {}, actions: [], createdAt: now,
-      },
-    ]);
+  it('requireRepositoryAccess honours workspace ownership', async () => {
     await db.insert(repositoriesTable).values([
       {
         id: 'rp-mine', workspaceId: 'ws-mine', name: 'a',
@@ -301,12 +288,6 @@ describe('ownership helpers', () => {
       },
     ]);
 
-    await expect(
-      requireInboxAccess(makeReq(TEST_USER_ID), 'in-mine')
-    ).resolves.toBe('ws-mine');
-    await expect(
-      requireInboxAccess(makeReq(TEST_USER_ID), 'in-theirs')
-    ).rejects.toThrow(AccessError);
     await expect(
       requireRepositoryAccess(makeReq(TEST_USER_ID), 'rp-mine')
     ).resolves.toBe('ws-mine');

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Workspace, Environment, Agent, Task, InboxItem } from '@fastowl/shared';
+import type { Workspace, Environment, Agent, Task } from '@fastowl/shared';
 import type { GitHubStatus } from '../lib/api';
 
 // Simplified repository type for store (matches API response)
@@ -111,19 +111,11 @@ interface WorkspaceState {
   // Repositories (watched repos)
   repositories: WatchedRepo[];
 
-  // Inbox
-  inboxItems: InboxItem[];
-  unreadCount: number;
-
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'inbox' | 'queue' | 'github' | 'settings' | 'debug';
+  activePanel: 'queue' | 'github' | 'settings' | 'debug';
   // Developer-only Debug panel visibility (sidebar entry + reachable view).
   debugMode: boolean;
-  // Which bucket of the inbox is visible when activePanel === 'inbox'.
-  // 'active' = items that still want attention (unread + read-but-not-actioned);
-  // 'archive' = actioned items, kept around for history/audit.
-  inboxView: 'active' | 'archive';
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -160,18 +152,9 @@ interface WorkspaceState {
 
   setRepositories: (repos: WatchedRepo[]) => void;
 
-  setInboxItems: (items: InboxItem[]) => void;
-  addInboxItem: (item: InboxItem) => void;
-  updateInboxItem: (id: string, updates: Partial<InboxItem>) => void;
-  markInboxRead: (id: string) => void;
-  markInboxActioned: (id: string) => void;
-  removeInboxItem: (id: string) => void;
-  markAllInboxRead: () => void;
-
   toggleSidebar: () => void;
-  setActivePanel: (panel: 'inbox' | 'queue' | 'github' | 'settings' | 'debug') => void;
+  setActivePanel: (panel: 'queue' | 'github' | 'settings' | 'debug') => void;
   setDebugMode: (on: boolean) => void;
-  setInboxView: (view: 'active' | 'archive') => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
 }
@@ -184,12 +167,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   agents: [],
   tasks: [],
   repositories: [],
-  inboxItems: [],
-  unreadCount: 0,
   sidebarCollapsed: false,
-  activePanel: 'inbox',
+  activePanel: 'github',
   debugMode: getInitialDebugMode(),
-  inboxView: 'active',
   selectedTaskId: null,
   theme: getInitialTheme(),
   createWorkspaceOpen: false,
@@ -273,76 +253,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setRepositories: (repos) => set({ repositories: repos }),
 
-  setInboxItems: (items) =>
-    set({
-      inboxItems: items,
-      unreadCount: items.filter((i) => i.status === 'unread').length,
-    }),
-
-  addInboxItem: (item) =>
-    set((state) => ({
-      inboxItems: [item, ...state.inboxItems],
-      unreadCount: state.unreadCount + (item.status === 'unread' ? 1 : 0),
-    })),
-
-  updateInboxItem: (id, updates) =>
-    set((state) => {
-      const existing = state.inboxItems.find((i) => i.id === id);
-      if (!existing) return state;
-      const next = { ...existing, ...updates };
-      // Keep `unreadCount` honest when status transitions involve
-      // unread. Backend's permissionInbox coalesces these.
-      let unreadDelta = 0;
-      if (existing.status === 'unread' && next.status !== 'unread') unreadDelta = -1;
-      else if (existing.status !== 'unread' && next.status === 'unread') unreadDelta = 1;
-      return {
-        inboxItems: state.inboxItems.map((i) => (i.id === id ? next : i)),
-        unreadCount: Math.max(0, state.unreadCount + unreadDelta),
-      };
-    }),
-
-  markInboxRead: (id) =>
-    set((state) => ({
-      inboxItems: state.inboxItems.map((i) =>
-        i.id === id ? { ...i, status: 'read' as const } : i
-      ),
-      unreadCount: Math.max(0, state.unreadCount - 1),
-    })),
-
-  markInboxActioned: (id) =>
-    set((state) => {
-      const existing = state.inboxItems.find((i) => i.id === id);
-      const wasUnread = existing?.status === 'unread';
-      return {
-        inboxItems: state.inboxItems.map((i) =>
-          i.id === id ? { ...i, status: 'actioned' as const } : i
-        ),
-        unreadCount: wasUnread
-          ? Math.max(0, state.unreadCount - 1)
-          : state.unreadCount,
-      };
-    }),
-
-  removeInboxItem: (id) =>
-    set((state) => {
-      const existing = state.inboxItems.find((i) => i.id === id);
-      const wasUnread = existing?.status === 'unread';
-      return {
-        inboxItems: state.inboxItems.filter((i) => i.id !== id),
-        unreadCount: wasUnread
-          ? Math.max(0, state.unreadCount - 1)
-          : state.unreadCount,
-      };
-    }),
-
-  markAllInboxRead: () =>
-    set((state) => ({
-      inboxItems: state.inboxItems.map((i) =>
-        i.status === 'unread' ? { ...i, status: 'read' as const } : i
-      ),
-      unreadCount: 0,
-    })),
-
   toggleSidebar: () =>
     set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
@@ -355,14 +265,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       // ignore quota / privacy-mode issues
     }
     // Leaving debug mode while sitting on the Debug panel would strand the
-    // user on a now-hidden view — bounce them back to the inbox.
+    // user on a now-hidden view — bounce them back to the GitHub panel.
     set((state) => ({
       debugMode: on,
-      activePanel: !on && state.activePanel === 'debug' ? 'inbox' : state.activePanel,
+      activePanel: !on && state.activePanel === 'debug' ? 'github' : state.activePanel,
     }));
   },
-
-  setInboxView: (view) => set({ inboxView: view }),
 
   selectTask: (id) => set({ selectedTaskId: id }),
 

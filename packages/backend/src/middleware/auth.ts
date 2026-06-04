@@ -7,7 +7,6 @@ import {
   workspaces as workspacesTable,
   environments as environmentsTable,
   tasks as tasksTable,
-  inboxItems as inboxItemsTable,
   repositories as repositoriesTable,
 } from '../db/schema.js';
 import { getSupabaseServiceClient } from '../services/supabase.js';
@@ -329,19 +328,6 @@ export async function requireTaskAccess(req: Request, taskId: string): Promise<s
     .where(eq(tasksTable.id, taskId))
     .limit(1);
   if (!rows[0]) throw new AccessError('task not found');
-  await requireWorkspaceAccess(req, rows[0].workspaceId);
-  return rows[0].workspaceId;
-}
-
-/** Inbox items are workspace-scoped. */
-export async function requireInboxAccess(req: Request, itemId: string): Promise<string> {
-  const db = getDbClient();
-  const rows = await db
-    .select({ workspaceId: inboxItemsTable.workspaceId })
-    .from(inboxItemsTable)
-    .where(eq(inboxItemsTable.id, itemId))
-    .limit(1);
-  if (!rows[0]) throw new AccessError('inbox item not found');
   await requireWorkspaceAccess(req, rows[0].workspaceId);
   return rows[0].workspaceId;
 }
