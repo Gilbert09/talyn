@@ -2,6 +2,12 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 40 — Surface GitHub token-load failures
+
+Debugging a "no HTTP requests / no rate-limit tiles / pollers show 0 workspaces" report: the cause class is the backend loading **0 GitHub tokens** at startup, so `getConnectedWorkspaces()` is empty and every GitHub poller no-ops (0ms, no HTTP). The token-load failure was silent (only a `console.error` in `readAccessToken` on a decrypt failure — typically a `FASTOWL_TOKEN_KEY` mismatch vs. when the token was saved). Confirmed it's **not** a regression: no recent commit touched token loading / `getConnectedWorkspaces` / the integrations table (only the `workflow` scope constant changed).
+
+- **`github.ts` `loadStoredTokens`**: now records a `tokens:loaded` debug event with `{loaded, failed, rows}` and an `ok:false` `tokens:load-failed` event on a hard failure, plus a clearer console summary (`Loaded N token(s) from M row(s) — K could not be read (likely a FASTOWL_TOKEN_KEY mismatch; reconnect GitHub to re-save)`). Makes the silent killer visible in the Debug panel's Events/Errors right after a restart, and distinguishes "no integration row" (need to connect) from "row present but undecryptable" (key mismatch → reconnect).
+
 ## Session 39 — Rate-limit tiles survive being rate-limited
 
 Fixed the Debug panel's rate-limit cards vanishing after the account got rate-limited + the backend restarted. Root cause: `rateLimitPoller.tick()` called `getViewerLogin()` (a budgeted `/user` REST call) *first* and skipped the whole account if it failed — so when the account was rate-limited (or a restart wiped the in-memory login cache), the **free** `GET /rate_limit` was never fetched and the cards never repopulated. The cards live in an unpruned in-memory map, so they only clear on restart and then never came back.

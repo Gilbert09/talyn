@@ -214,11 +214,18 @@ class GitHubService extends EventEmitter {
         .from(integrationsTable)
         .where(eq(integrationsTable.type, 'github'));
 
+      let failed = 0;
       for (const row of rows) {
         const config = row.config as GitHubIntegrationConfig | null;
-        if (!config) continue;
-        const accessToken = readAccessToken(config);
-        if (!accessToken) continue;
+        const accessToken = config ? readAccessToken(config) : null;
+        if (!config || !accessToken) {
+          // A row exists but yields no usable token — almost always a decrypt
+          // failure (FASTOWL_TOKEN_KEY differs from when it was saved). This is
+          // the silent killer: 0 loaded tokens → every GitHub poller no-ops with
+          // no HTTP, so the Debug panel goes quiet. Surface it loudly.
+          failed++;
+          continue;
+        }
         this.tokens.set(row.workspaceId, {
           workspaceId: row.workspaceId,
           accessToken,
@@ -228,9 +235,28 @@ class GitHubService extends EventEmitter {
         });
       }
 
-      console.log(`Loaded ${this.tokens.size} GitHub tokens`);
+      const summary =
+        `Loaded ${this.tokens.size} GitHub token(s) from ${rows.length} integration row(s)` +
+        (failed
+          ? ` — ${failed} could not be read (likely a FASTOWL_TOKEN_KEY mismatch; reconnect GitHub to re-save).`
+          : '');
+      console.log(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'tokens:loaded',
+        summary,
+        ok: failed === 0,
+        meta: { loaded: this.tokens.size, failed, rows: rows.length },
+      });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('Failed to load GitHub tokens:', err);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'tokens:load-failed',
+        summary: `Failed to load GitHub tokens: ${message}`,
+        ok: false,
+      });
     }
   }
 
