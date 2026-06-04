@@ -333,173 +333,182 @@ export function PRDetailSheet({
           : 'fixed inset-y-0 right-0 z-40 shadow-2xl'
       )}
     >
-      <header className="flex shrink-0 items-start gap-3 border-b p-4">
-        <div className="min-w-0 flex-1">
-          {!view ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading…
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <h2 className="truncate text-base font-semibold">
-                  {view.row.summary.title}
-                </h2>
-                <span className="shrink-0 text-sm text-muted-foreground">
-                  {view.row.owner}/{view.row.repo}#{view.row.number}
-                </span>
-                {/* Minimal in-place refresh indicator while the fresh
-                    detail loads — the cached summary is already shown. */}
-                {detailPending && (
-                  <Loader2
-                    className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
-                    aria-label="Refreshing"
-                  />
-                )}
+      <header className="flex shrink-0 flex-col gap-3 border-b p-4">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            {!view ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
               </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <span>by @{view.row.summary.author}</span>
-                <span>·</span>
-                <BranchRef
-                  head={view.row.summary.headBranch}
-                  base={view.row.summary.baseBranch}
-                />
-              </div>
-              <div className="mt-2">
-                <PRStatusPill
-                  blockingReason={view.row.summary.blockingReason}
-                  checks={view.row.summary.checks}
-                  mergeStateStatus={view.row.summary.mergeStateStatus}
-                  state={view.row.state}
-                />
-              </div>
-            </>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {view && view.row.state === 'open' && posthogConnected && (
-            <Button
-              size="sm"
-              variant={view.row.autoKeepMergeable ? 'default' : 'outline'}
-              onClick={() => handleToggleAutoKeep(!view.row.autoKeepMergeable)}
-              disabled={togglingAutoKeep}
-              title={
-                view.row.autoKeepMergeable
-                  ? view.row.autoMergeState?.paused
-                    ? 'Auto-keep-mergeable paused after 3 attempts — click to turn off'
-                    : 'Auto-keep-mergeable is on — click to turn off'
-                  : 'Keep this PR mergeable: auto-fix conflicts / CI / review comments until merged, then keep watching'
-              }
-            >
-              {togglingAutoKeep ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : view.row.autoKeepMergeable && view.row.autoMergeState?.paused ? (
-                <AlertTriangle className="mr-1 h-4 w-4" />
-              ) : (
-                <Eye className="mr-1 h-4 w-4" />
-              )}
-              {view.row.autoKeepMergeable
-                ? view.row.autoMergeState?.paused
-                  ? 'Auto-fix paused'
-                  : 'Auto-keeping'
-                : 'Auto-keep mergeable'}
-            </Button>
-          )}
-          {view && view.row.state === 'open' && (
-            <Button
-              size="sm"
-              variant={view.row.mergeQueued ? 'default' : 'outline'}
-              onClick={() => handleToggleQueue(!view.row.mergeQueued)}
-              disabled={togglingQueue}
-              title={
-                view.row.mergeQueued
-                  ? view.row.mergeQueueState?.status === 'blocked'
-                    ? 'Merge queue paused after 3 attempts — click to remove'
-                    : 'In the merge queue — click to remove'
-                  : 'Add to the merge queue: merges automatically when clean, serialized per base branch, auto-fixing conflicts'
-              }
-            >
-              {togglingQueue ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : view.row.mergeQueued && view.row.mergeQueueState?.status === 'blocked' ? (
-                <AlertTriangle className="mr-1 h-4 w-4" />
-              ) : (
-                <ListChecks className="mr-1 h-4 w-4" />
-              )}
-              {view.row.mergeQueued
-                ? view.row.mergeQueueState?.status === 'blocked'
-                  ? 'Queue blocked'
-                  : view.row.mergeQueueState?.status === 'merging'
-                  ? 'Merging…'
-                  : view.row.mergeQueueState?.status === 'fixing'
-                  ? 'Fixing…'
-                  : view.row.mergeQueueState?.position
-                  ? `Queued #${view.row.mergeQueueState.position}`
-                  : 'Queued'
-                : 'Add to merge queue'}
-            </Button>
-          )}
-          {canMerge &&
-            (confirmMerge ? (
-              <>
-                <Button
-                  size="sm"
-                  className="bg-emerald-600 text-white hover:bg-emerald-700"
-                  onClick={handleMerge}
-                  disabled={merging}
-                  title="Squash-merge this PR on GitHub"
-                >
-                  {merging ? (
-                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                  ) : (
-                    <GitMerge className="mr-1 h-4 w-4" />
-                  )}
-                  Confirm merge
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setConfirmMerge(false)}
-                  disabled={merging}
-                >
-                  Cancel
-                </Button>
-              </>
             ) : (
-              <Button
-                size="sm"
-                className="bg-emerald-600 text-white hover:bg-emerald-700"
-                onClick={() => setConfirmMerge(true)}
-                title="Merge this PR"
-              >
-                <GitMerge className="mr-1 h-4 w-4" />
-                Merge
-              </Button>
-            ))}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleRefresh}
-            disabled={loading || refreshing}
-            title="Re-fetch from GitHub"
-          >
-            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
-          </Button>
-          {view && (
+              <>
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-base font-semibold">
+                    {view.row.summary.title}
+                  </h2>
+                  <span className="shrink-0 text-sm text-muted-foreground">
+                    {view.row.owner}/{view.row.repo}#{view.row.number}
+                  </span>
+                  {/* Minimal in-place refresh indicator while the fresh
+                      detail loads — the cached summary is already shown. */}
+                  {detailPending && (
+                    <Loader2
+                      className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                      aria-label="Refreshing"
+                    />
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>by @{view.row.summary.author}</span>
+                  <span>·</span>
+                  <BranchRef
+                    head={view.row.summary.headBranch}
+                    base={view.row.summary.baseBranch}
+                  />
+                </div>
+                <div className="mt-2">
+                  <PRStatusPill
+                    blockingReason={view.row.summary.blockingReason}
+                    checks={view.row.summary.checks}
+                    mergeStateStatus={view.row.summary.mergeStateStatus}
+                    state={view.row.state}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          {/* Always-visible window controls stay pinned top-right; labelled
+              action toggles wrap onto their own row below so they never
+              squeeze or overlap the title/branch column. */}
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               size="sm"
               variant="outline"
-              onClick={() => window.open(view.row.summary.url, '_blank', 'noopener,noreferrer')}
-              title="Open on GitHub"
+              onClick={handleRefresh}
+              disabled={loading || refreshing}
+              title="Re-fetch from GitHub"
             >
-              <ExternalLink className="h-4 w-4" />
+              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
             </Button>
-          )}
-          <Button size="sm" variant="ghost" onClick={onClose} title="Close">
-            <X className="h-4 w-4" />
-          </Button>
+            {view && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => window.open(view.row.summary.url, '_blank', 'noopener,noreferrer')}
+                title="Open on GitHub"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={onClose} title="Close">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
+        {view && (view.row.state === 'open' || canMerge) && (
+          <div className="flex flex-wrap items-center gap-1">
+            {view.row.state === 'open' && posthogConnected && (
+              <Button
+                size="sm"
+                variant={view.row.autoKeepMergeable ? 'default' : 'outline'}
+                onClick={() => handleToggleAutoKeep(!view.row.autoKeepMergeable)}
+                disabled={togglingAutoKeep}
+                title={
+                  view.row.autoKeepMergeable
+                    ? view.row.autoMergeState?.paused
+                      ? 'Auto-keep-mergeable paused after 3 attempts — click to turn off'
+                      : 'Auto-keep-mergeable is on — click to turn off'
+                    : 'Keep this PR mergeable: auto-fix conflicts / CI / review comments until merged, then keep watching'
+                }
+              >
+                {togglingAutoKeep ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : view.row.autoKeepMergeable && view.row.autoMergeState?.paused ? (
+                  <AlertTriangle className="mr-1 h-4 w-4" />
+                ) : (
+                  <Eye className="mr-1 h-4 w-4" />
+                )}
+                {view.row.autoKeepMergeable
+                  ? view.row.autoMergeState?.paused
+                    ? 'Auto-fix paused'
+                    : 'Auto-keeping'
+                  : 'Auto-keep mergeable'}
+              </Button>
+            )}
+            {view.row.state === 'open' && (
+              <Button
+                size="sm"
+                variant={view.row.mergeQueued ? 'default' : 'outline'}
+                onClick={() => handleToggleQueue(!view.row.mergeQueued)}
+                disabled={togglingQueue}
+                title={
+                  view.row.mergeQueued
+                    ? view.row.mergeQueueState?.status === 'blocked'
+                      ? 'Merge queue paused after 3 attempts — click to remove'
+                      : 'In the merge queue — click to remove'
+                    : 'Add to the merge queue: merges automatically when clean, serialized per base branch, auto-fixing conflicts'
+                }
+              >
+                {togglingQueue ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : view.row.mergeQueued && view.row.mergeQueueState?.status === 'blocked' ? (
+                  <AlertTriangle className="mr-1 h-4 w-4" />
+                ) : (
+                  <ListChecks className="mr-1 h-4 w-4" />
+                )}
+                {view.row.mergeQueued
+                  ? view.row.mergeQueueState?.status === 'blocked'
+                    ? 'Queue blocked'
+                    : view.row.mergeQueueState?.status === 'merging'
+                    ? 'Merging…'
+                    : view.row.mergeQueueState?.status === 'fixing'
+                    ? 'Fixing…'
+                    : view.row.mergeQueueState?.position
+                    ? `Queued #${view.row.mergeQueueState.position}`
+                    : 'Queued'
+                  : 'Add to merge queue'}
+              </Button>
+            )}
+            {canMerge &&
+              (confirmMerge ? (
+                <>
+                  <Button
+                    size="sm"
+                    className="bg-emerald-600 text-white hover:bg-emerald-700"
+                    onClick={handleMerge}
+                    disabled={merging}
+                    title="Squash-merge this PR on GitHub"
+                  >
+                    {merging ? (
+                      <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                    ) : (
+                      <GitMerge className="mr-1 h-4 w-4" />
+                    )}
+                    Confirm merge
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmMerge(false)}
+                    disabled={merging}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={() => setConfirmMerge(true)}
+                  title="Merge this PR"
+                >
+                  <GitMerge className="mr-1 h-4 w-4" />
+                  Merge
+                </Button>
+              ))}
+          </div>
+        )}
       </header>
 
       {view && <DetailTabs data={view} error={error} detailPending={detailPending} />}
