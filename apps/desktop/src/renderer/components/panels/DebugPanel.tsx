@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Bug, Trash2, Pause, Play, Wifi, Info } from 'lucide-react';
 import type { DebugCategory, DebugEvent, DebugSnapshot } from '@fastowl/shared';
 import { api } from '../../lib/api';
@@ -50,10 +51,14 @@ const SERVICE_INFO: Record<string, string> = {
   tasks: 'Task lifecycle domain events (queued → in_progress → completed/failed).',
 };
 
+const TIP_WIDTH = 256; // matches w-64
+const TIP_MARGIN = 8; // min gap from the viewport edge
+
 /**
- * Dependency-free hover tooltip. Wraps a trigger and reveals `content` on
- * hover, positioned above. Good enough for an internal debug surface — no
- * portal/positioning library needed.
+ * Dependency-free hover tooltip. Renders into a body portal with fixed
+ * positioning clamped to the viewport, so it can't be clipped by the panel's
+ * overflow container or slide under the sidebar (which a plain absolutely-
+ * positioned tooltip does for left-edge triggers).
  */
 function Tip({
   content,
@@ -66,17 +71,53 @@ function Tip({
   className?: string;
   side?: 'top' | 'bottom';
 }) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+
+  const show = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Centre on the trigger, then clamp so the box stays fully on-screen.
+    const left = Math.max(
+      TIP_MARGIN,
+      Math.min(
+        r.left + r.width / 2 - TIP_WIDTH / 2,
+        window.innerWidth - TIP_WIDTH - TIP_MARGIN
+      )
+    );
+    const top = side === 'top' ? r.top : r.bottom;
+    setCoords({ top, left });
+  }, [side]);
+
+  const hide = useCallback(() => setCoords(null), []);
+
   return (
-    <span className={cn('group/tip relative inline-flex', className)}>
+    <span
+      ref={triggerRef}
+      className={cn('relative inline-flex', className)}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+    >
       {children}
-      <span
-        className={cn(
-          'pointer-events-none absolute left-1/2 z-50 hidden w-64 max-w-[80vw] -translate-x-1/2 whitespace-normal rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-left text-[11px] font-normal normal-case leading-relaxed text-zinc-300 shadow-lg group-hover/tip:block',
-          side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+      {coords &&
+        createPortal(
+          <span
+            style={{
+              position: 'fixed',
+              top: coords.top,
+              left: coords.left,
+              transform:
+                side === 'top'
+                  ? 'translateY(calc(-100% - 6px))'
+                  : 'translateY(6px)',
+            }}
+            className="pointer-events-none z-[100] block w-64 max-w-[80vw] whitespace-normal rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-left text-[11px] font-normal normal-case leading-relaxed text-zinc-300 shadow-lg"
+          >
+            {content}
+          </span>,
+          document.body
         )}
-      >
-        {content}
-      </span>
     </span>
   );
 }
