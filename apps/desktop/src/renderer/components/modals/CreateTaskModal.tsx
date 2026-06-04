@@ -23,7 +23,6 @@ import { Select } from '../ui/select';
 import { Textarea } from '../ui/textarea';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
-import { api, type WatchedRepo } from '../../lib/api';
 import { isAgentTask, type TaskType, type TaskPriority } from '@fastowl/shared';
 
 interface CreateTaskModalProps {
@@ -72,7 +71,7 @@ const typeOptions: {
 ];
 
 export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
-  const { environments, currentWorkspaceId, selectTask, setActivePanel } =
+  const { environments, currentWorkspaceId, repositories, selectTask, setActivePanel } =
     useWorkspaceStore();
   const { createTask } = useTaskActions();
 
@@ -88,7 +87,6 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [repositories, setRepositories] = useState<WatchedRepo[]>([]);
 
   const connectedEnvironments = environments.filter((e) => e.status === 'connected');
   const typeConfig = typeOptions.find((t) => t.value === type)!;
@@ -96,22 +94,15 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
   const selectedEnv = connectedEnvironments.find((e) => e.id === environmentId);
   const isCloudEnv = selectedEnv?.type === 'posthog_code';
 
-  // Load repositories when modal opens. When there's exactly one watched
-  // repo, default the dropdown to it — no point making the user pick
-  // from a list of one.
+  // Repositories come from the shared workspace store, so they stay in sync
+  // with adds/removes made in Settings without the modal refetching. When
+  // there's exactly one watched repo, default the dropdown to it — no point
+  // making the user pick from a list of one.
   useEffect(() => {
-    if (open && currentWorkspaceId) {
-      api.repositories
-        .list(currentWorkspaceId)
-        .then((repos) => {
-          setRepositories(repos);
-          if (repos.length === 1 && !repositoryId) {
-            setRepositoryId(repos[0].id);
-          }
-        })
-        .catch(console.error);
+    if (open && repositories.length === 1 && !repositoryId) {
+      setRepositoryId(repositories[0].id);
     }
-  }, [open, currentWorkspaceId, repositoryId]);
+  }, [open, repositories, repositoryId]);
 
   // No client-side metadata pre-generation. We fire a placeholder
   // title on create; the backend swaps in an LLM-generated title

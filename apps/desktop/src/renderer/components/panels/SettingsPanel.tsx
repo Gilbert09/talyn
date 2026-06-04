@@ -28,7 +28,6 @@ import {
   GitHubStatus,
   GitHubUser,
   GitHubRepo,
-  WatchedRepo,
   type PostHogCodeStatus,
 } from '../../lib/api';
 import { cn } from '../../lib/utils';
@@ -170,8 +169,14 @@ function downscaleImage(file: File, maxDim: number): Promise<string> {
 }
 
 function WorkspaceSettings() {
-  const { workspaces, currentWorkspaceId, setCreateWorkspaceOpen, setCurrentWorkspace } =
-    useWorkspaceStore();
+  const {
+    workspaces,
+    currentWorkspaceId,
+    setCreateWorkspaceOpen,
+    setCurrentWorkspace,
+    repositories: watchedRepos,
+    setRepositories,
+  } = useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
@@ -257,8 +262,10 @@ function WorkspaceSettings() {
     }
   }
 
-  // Repository state
-  const [watchedRepos, setWatchedRepos] = useState<WatchedRepo[]>([]);
+  // Repository state. The watched-repo list lives in the shared workspace
+  // store (not local state) so adds/removes here propagate immediately to
+  // every other repo dropdown in the app — GitHub panel, task composer —
+  // instead of going stale until the next app refresh.
   // The full set of repos the user can watch (own + every org's),
   // hydrated from a localStorage cache and refreshed on demand.
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
@@ -296,7 +303,7 @@ function WorkspaceSettings() {
 
     try {
       const watched = await api.repositories.list(currentWorkspaceId);
-      setWatchedRepos(watched);
+      setRepositories(watched);
     } catch (_e) {
       // Ignore errors
     }
@@ -317,7 +324,7 @@ function WorkspaceSettings() {
     } catch (_e) {
       setGithubConnected(false);
     }
-  }, [currentWorkspaceId, refreshRepos]);
+  }, [currentWorkspaceId, refreshRepos, setRepositories]);
 
   useEffect(() => {
     loadRepos();
@@ -332,7 +339,7 @@ function WorkspaceSettings() {
         repo.owner.login,
         repo.name
       );
-      setWatchedRepos((prev) => [...prev, watched]);
+      setRepositories([...watchedRepos, watched]);
       void refreshWorkspaces();
       setShowRepoSelector(false);
       setRepoSearch('');
@@ -345,7 +352,7 @@ function WorkspaceSettings() {
     setLoadingRepos(true);
     try {
       await api.repositories.remove(repoId);
-      setWatchedRepos((prev) => prev.filter((r) => r.id !== repoId));
+      setRepositories(watchedRepos.filter((r) => r.id !== repoId));
       void refreshWorkspaces();
     } finally {
       setLoadingRepos(false);
