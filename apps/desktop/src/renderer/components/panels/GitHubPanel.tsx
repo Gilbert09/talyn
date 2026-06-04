@@ -61,6 +61,15 @@ const RELATIONSHIP_OPTIONS: Array<{ value: RelationshipFilter; label: string }> 
   { value: 'review_requested', label: 'Review' },
 ];
 
+/** Escape a string for safe interpolation into the copied HTML list. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function GitHubPanel() {
   const { setActivePanel, currentWorkspaceId, repositories, environments, selectTask, tasks } =
     useWorkspaceStore();
@@ -526,6 +535,48 @@ export function GitHubPanel() {
     );
   }
 
+  // Copy the currently filtered PRs as a list for pasting into Slack (etc.)
+  // when requesting approvals. We write both a rich `text/html` bullet list
+  // of hyperlinks (so Slack/Notion/docs paste as clickable links) and a
+  // plain-text markdown fallback (`- [title](url)`) for editors that only
+  // take plain text.
+  async function handleCopyList() {
+    const items = filtered
+      .map((r) => ({ title: r.summary.title || '(no title)', url: r.summary.url }))
+      .filter((i) => i.url);
+    if (items.length === 0) {
+      toast.info('Nothing to copy', 'No pull requests match the current filters.');
+      return;
+    }
+
+    const markdown = items.map((i) => `- [${i.title}](${i.url})`).join('\n');
+    const html = `<ul>${items
+      .map((i) => `<li><a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a></li>`)
+      .join('')}</ul>`;
+
+    const count = `${items.length} PR${items.length === 1 ? '' : 's'}`;
+    try {
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob([markdown], { type: 'text/plain' }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(markdown);
+      }
+      toast.success(`Copied ${count}`, 'Paste into Slack to request approval.');
+    } catch {
+      try {
+        await navigator.clipboard.writeText(markdown);
+        toast.success(`Copied ${count}`, 'Paste into Slack to request approval.');
+      } catch {
+        toast.error('Could not copy to clipboard');
+      }
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b p-4">
@@ -534,6 +585,16 @@ export function GitHubPanel() {
           GitHub
         </h2>
         <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleCopyList}
+            disabled={filtered.length === 0}
+            title="Copy the filtered PRs as a list for Slack"
+          >
+            <Copy className="mr-1 h-4 w-4" />
+            Copy list
+          </Button>
           <Button
             size="sm"
             variant="ghost"

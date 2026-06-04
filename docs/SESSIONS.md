@@ -2,6 +2,10 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 37 — "Copy list" of filtered PRs
+
+Added a **Copy list** button to the GitHub page header that copies the currently filtered PRs to the clipboard for pasting into Slack to request approvals. Writes a rich `text/html` bullet list of hyperlinks (Slack/Notion/docs paste as clickable links) plus a plain-text markdown fallback (`- [title](url)`) via a single `ClipboardItem`; falls back to `writeText(markdown)` where `ClipboardItem` isn't available. Respects every active filter (relationship/repo/search/needs-attention) since it copies off `filtered`. Toast reports the count. `GitHubPanel.tsx` only.
+
 ## Session 36 — First-run onboarding wizard
 
 Replaced the (non-existent) onboarding with a guided, full-screen first-run wizard, fixing the dead first run the cloud-only/PR pivot left behind. Previously the app silently auto-created a "Default Workspace" on first load, dropped the user on the empty Inbox, and buried every real setup step (connect GitHub, watch repos, connect a cloud provider) in Settings.
