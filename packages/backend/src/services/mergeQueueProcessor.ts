@@ -9,7 +9,7 @@ import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
 
-const POLL_INTERVAL_MS = 60_000;
+const POLL_INTERVAL_MS = 10_000;
 /** Re-poll a queued PR if its cached summary is older than this. */
 const FRESHNESS_MS = 90_000;
 /** Stop auto-firing fix runs after this many consecutive un-mergeable runs. */
