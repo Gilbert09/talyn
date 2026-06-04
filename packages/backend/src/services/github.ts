@@ -23,20 +23,18 @@ const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
 const GITHUB_SCOPES = ['repo', 'read:user', 'read:org'];
 
-/**
- * Friendly descriptions for GitHub's `x-ratelimit-resource` buckets, shown as
- * the tooltip on each rate-limit card. GitHub meters these independently, each
- * with its own limit and hourly (or per-minute) window.
- */
-const RATE_LIMIT_RESOURCE_INFO: Record<string, string> = {
-  core: 'GitHub REST API — primary request budget per token (5000/hr, or 15000 for a GitHub App / Enterprise), resets hourly.',
-  graphql: 'GitHub GraphQL API — point budget per token (5000 points/hr), resets hourly.',
-  search: 'GitHub Search API — a much smaller per-minute budget (30/min authenticated).',
-  code_search: 'GitHub Code Search API — a small per-minute budget (10/min).',
-  integration_manifest: 'GitHub App manifest conversion budget.',
-  dependency_snapshots: 'Dependency-graph snapshot submission budget (100/min).',
-  audit_log: 'Audit-log API budget.',
-};
+/** One resource bucket from `GET /rate_limit`. `reset` is a unix epoch (s). */
+export interface GitHubRateLimitResource {
+  limit: number;
+  remaining: number;
+  used: number;
+  reset: number;
+}
+
+/** Parsed `GET /rate_limit` payload, keyed by resource name (core, graphql, …). */
+export interface GitHubRateLimit {
+  resources: Record<string, GitHubRateLimitResource>;
+}
 
 interface GitHubUser {
   id: number;
@@ -402,8 +400,6 @@ class GitHubService extends EventEmitter {
       throw err;
     }
 
-    this.recordRateLimit(response, 'rest');
-
     if (!response.ok) {
       const error =
         response.status === 401
@@ -436,38 +432,14 @@ class GitHubService extends EventEmitter {
   }
 
   /**
-   * Capture GitHub's `x-ratelimit-*` budget off a response into the Debug
-   * bus. GitHub returns these headers on every response (success and error,
-   * including the 403 you get when the budget is exhausted).
-   *
-   * Crucially, REST is NOT a single bucket: GitHub meters several independent
-   * "resources" (`core`, `search`, `code_search`, `graphql`, …), each with
-   * its own limit, and names the one a response counts against in
-   * `x-ratelimit-resource`. We key by that resource so each gets its own
-   * stable card — otherwise a `search` response (limit ~100) and a `core`
-   * response (limit 5000/15000) collapse into one entry that appears to flip.
-   * Silently skips responses without the headers.
+   * The authenticated user's current rate-limit budgets across every resource
+   * bucket (`core`, `graphql`, `search`, …). Hitting `/rate_limit` itself does
+   * NOT count against any budget, so it's the authoritative way to read the
+   * live state without depending on incidental traffic. Drives the Debug
+   * panel's rate-limit cards via {@link rateLimitPoller}.
    */
-  private recordRateLimit(response: Response, transport: 'rest' | 'graphql'): void {
-    const limit = Number(response.headers.get('x-ratelimit-limit'));
-    if (!Number.isFinite(limit) || limit <= 0) return;
-    const remaining = Number(response.headers.get('x-ratelimit-remaining'));
-    const used = Number(response.headers.get('x-ratelimit-used'));
-    const resetEpoch = Number(response.headers.get('x-ratelimit-reset'));
-    const resource =
-      response.headers.get('x-ratelimit-resource') ??
-      (transport === 'graphql' ? 'graphql' : 'core');
-    debugBus.recordRateLimit({
-      name: `github:${resource}`,
-      description: RATE_LIMIT_RESOURCE_INFO[resource] ?? `GitHub '${resource}' API budget, resets hourly`,
-      limit,
-      remaining: Number.isFinite(remaining) ? remaining : limit,
-      used: Number.isFinite(used) ? used : limit - (Number.isFinite(remaining) ? remaining : limit),
-      resetAt: Number.isFinite(resetEpoch)
-        ? new Date(resetEpoch * 1000).toISOString()
-        : new Date().toISOString(),
-      resource,
-    });
+  async getRateLimit(workspaceId: string): Promise<GitHubRateLimit> {
+    return this.apiRequest<GitHubRateLimit>(workspaceId, '/rate_limit');
   }
 
   /**
@@ -997,7 +969,6 @@ class GitHubService extends EventEmitter {
         },
         body: JSON.stringify({ query, variables }),
       });
-      this.recordRateLimit(response, 'graphql');
       const recordGql = (ok: boolean, error?: string) =>
         debugBus.recordHttp({
           service: 'github',
