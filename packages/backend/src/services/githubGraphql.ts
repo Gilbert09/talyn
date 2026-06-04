@@ -77,6 +77,15 @@ export interface PRSummary {
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
+  /**
+   * Review state for the UI's approval badge. Equals {@link reviewDecision}
+   * when GitHub provides it (the base branch enforces required reviews), and
+   * otherwise is derived from the actual review nodes + outstanding review
+   * requests — so repos without branch protection (e.g. posthog.com) still
+   * show "Approved" / "Awaiting review" instead of nothing. Kept separate from
+   * `reviewDecision` so it never feeds merge-gating (`blockingReason`).
+   */
+  effectiveReviewDecision: ReviewDecision;
   blockingReason: BlockingReason;
   checks: CheckBreakdown;
   /** Count of unresolved review threads (capped at the first 100 threads). */
@@ -508,6 +517,48 @@ export function computeBlockingReason(input: {
 }
 
 /**
+ * Review state for the approval badge. When GitHub gives us a `reviewDecision`
+ * (the base branch enforces required reviews) we trust it. Otherwise — repos
+ * without branch protection return `null` — we derive the state ourselves from
+ * the actual reviews and outstanding review requests, mirroring how GitHub's
+ * own PR list reasons:
+ *
+ *   - latest decision-bearing review per author wins (COMMENTED/PENDING/
+ *     DISMISSED reviews don't change a user's standing);
+ *   - any latest CHANGES_REQUESTED → CHANGES_REQUESTED (most actionable);
+ *   - else an outstanding review request → REVIEW_REQUIRED ("Awaiting review"),
+ *     since a (re-)request supersedes a stale approval;
+ *   - else any approval → APPROVED;
+ *   - else null (no reviewers involved — stay blank).
+ */
+export function deriveEffectiveReviewDecision(input: {
+  reviewDecision: ReviewDecision;
+  recentReviews: Array<{ author: string; state: string }>;
+  reviewRequests?: { users: string[]; teams: unknown[] };
+}): ReviewDecision {
+  if (input.reviewDecision) return input.reviewDecision;
+
+  // recentReviews is freshest-first, so the first decision-bearing review we
+  // see per author is their latest standing.
+  const latestByAuthor = new Map<string, 'APPROVED' | 'CHANGES_REQUESTED'>();
+  for (const r of input.recentReviews) {
+    if (!r.author || latestByAuthor.has(r.author)) continue;
+    const st = r.state?.toUpperCase();
+    if (st === 'APPROVED' || st === 'CHANGES_REQUESTED') latestByAuthor.set(r.author, st);
+  }
+  const states = [...latestByAuthor.values()];
+  if (states.includes('CHANGES_REQUESTED')) return 'CHANGES_REQUESTED';
+
+  const hasOutstandingRequest =
+    (input.reviewRequests?.users.length ?? 0) > 0 ||
+    (input.reviewRequests?.teams.length ?? 0) > 0;
+  if (hasOutstandingRequest) return 'REVIEW_REQUIRED';
+
+  if (states.includes('APPROVED')) return 'APPROVED';
+  return null;
+}
+
+/**
  * Hash of `headSha + sorted "name=state" pairs`. Used by the cursor
  * logic to detect "checks changed" without diffing the whole rollup.
  *
@@ -858,6 +909,21 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     }
   }
   const state: PRState = raw.state === 'MERGED' ? 'merged' : raw.state === 'CLOSED' ? 'closed' : 'open';
+  const recentReviews = raw.reviews.nodes
+    .slice()
+    .reverse() // GitHub returns last:N oldest-first; we want freshest first
+    .map((r) => ({
+      id: r.id,
+      author: r.author?.login ?? '',
+      state: r.state,
+      submittedAt: r.submittedAt,
+      url: r.url,
+    }));
+  const effectiveReviewDecision = deriveEffectiveReviewDecision({
+    reviewDecision: raw.reviewDecision,
+    recentReviews,
+    reviewRequests,
+  });
   return {
     owner,
     repo,
@@ -878,22 +944,14 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     mergeable: raw.mergeable,
     mergeStateStatus: raw.mergeStateStatus,
     reviewDecision: raw.reviewDecision,
+    effectiveReviewDecision,
     blockingReason,
     checks,
     unresolvedReviewThreads,
     reviewRequests,
     checkContexts: normalizedContexts,
     checkDigest: computeCheckDigest(raw.headRefOid, normalizedContexts),
-    recentReviews: raw.reviews.nodes
-      .slice()
-      .reverse() // GitHub returns last:N oldest-first; we want freshest first
-      .map((r) => ({
-        id: r.id,
-        author: r.author?.login ?? '',
-        state: r.state,
-        submittedAt: r.submittedAt,
-        url: r.url,
-      })),
+    recentReviews,
     recentReviewComments: raw.reviewThreads.nodes
       .flatMap((thread) => thread.comments.nodes)
       .slice()

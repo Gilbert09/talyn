@@ -1198,7 +1198,7 @@ function PRTableRow({
         <td className="px-2 py-2">
           <div className="flex items-center gap-1.5">
             <PRReviewPill
-              reviewDecision={summary.reviewDecision}
+              reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision}
               state={row.state}
               minimal
             />

@@ -6,7 +6,9 @@ import type { PRReviewDecision, PRState } from '../../lib/api';
 /**
  * Approval/review status for a PR — the "does this still need a human
  * sign-off?" dimension, split out from the conflicts/CI rollup in
- * PRStatusPill. Driven by GitHub's `reviewDecision`.
+ * PRStatusPill. Driven by the PR's *effective* review decision (GitHub's
+ * `reviewDecision` when the base branch enforces required reviews, otherwise
+ * one derived from the actual reviews — see `deriveEffectiveReviewDecision`).
  *
  *   APPROVED          → green, "Approved"
  *   CHANGES_REQUESTED → amber, "Changes requested"

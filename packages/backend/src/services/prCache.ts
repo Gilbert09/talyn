@@ -152,6 +152,7 @@ export async function linkTaskToPullRequest(opts: {
     mergeable: 'UNKNOWN' as const,
     mergeStateStatus: 'UNKNOWN',
     reviewDecision: null,
+    effectiveReviewDecision: null,
     blockingReason: 'unknown' as const,
     checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 },
     unresolvedReviewThreads: 0,
@@ -606,6 +607,7 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     mergeable: s.mergeable,
     mergeStateStatus: s.mergeStateStatus,
     reviewDecision: s.reviewDecision,
+    effectiveReviewDecision: s.effectiveReviewDecision,
     blockingReason: s.blockingReason,
     checks: s.checks,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
@@ -635,6 +637,11 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     mergeable: (meta.mergeable as PRSummary['mergeable']) ?? 'UNKNOWN',
     mergeStateStatus: (meta.mergeStateStatus as string) ?? 'UNKNOWN',
     reviewDecision: (meta.reviewDecision as PRSummary['reviewDecision']) ?? null,
+    // Older cached rows predate this field — fall back to the raw decision.
+    effectiveReviewDecision:
+      (meta.effectiveReviewDecision as PRSummary['effectiveReviewDecision']) ??
+      (meta.reviewDecision as PRSummary['reviewDecision']) ??
+      null,
     blockingReason: (meta.blockingReason as PRSummary['blockingReason']) ?? 'unknown',
     checks: (meta.checks as CheckBreakdown) ?? {
       total: 0,

@@ -4,6 +4,7 @@ import {
   batchPullRequests,
   computeBlockingReason,
   computeCheckDigest,
+  deriveEffectiveReviewDecision,
   decodeBatchResponse,
   decodeBatchByNumberResponse,
   decodeReviewDetail,
@@ -226,6 +227,86 @@ describe('computeBlockingReason', () => {
         checks: { ...baseChecks, total: 3, passed: 1, failed: 2 },
       })
     ).toBe('merge_conflicts');
+  });
+});
+
+describe('deriveEffectiveReviewDecision', () => {
+  const review = (author: string, state: string) => ({ author, state });
+
+  it("trusts GitHub's reviewDecision verbatim when present (branch protection)", () => {
+    for (const d of ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'] as const) {
+      expect(
+        deriveEffectiveReviewDecision({
+          reviewDecision: d,
+          // Even contradictory review nodes don't override the gated decision.
+          recentReviews: [review('alice', 'CHANGES_REQUESTED')],
+          reviewRequests: { users: ['bob'], teams: [] },
+        })
+      ).toBe(d);
+    }
+  });
+
+  it('derives APPROVED from an approval when GitHub gives null and nothing outstanding', () => {
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [review('alice', 'APPROVED')],
+        reviewRequests: { users: [], teams: [] },
+      })
+    ).toBe('APPROVED');
+  });
+
+  it('derives CHANGES_REQUESTED ahead of everything else (most actionable)', () => {
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [review('bob', 'CHANGES_REQUESTED'), review('alice', 'APPROVED')],
+        reviewRequests: { users: ['carol'], teams: [] },
+      })
+    ).toBe('CHANGES_REQUESTED');
+  });
+
+  it('treats an outstanding review request as REVIEW_REQUIRED, superseding a stale approval', () => {
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [review('alice', 'APPROVED')],
+        reviewRequests: { users: ['bob'], teams: [] },
+      })
+    ).toBe('REVIEW_REQUIRED');
+    // Team requests count too.
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [],
+        reviewRequests: { users: [], teams: [{ slug: 'eng' }] },
+      })
+    ).toBe('REVIEW_REQUIRED');
+  });
+
+  it('takes the latest decision-bearing review per author (freshest-first), ignoring COMMENTED', () => {
+    // alice's freshest decision is APPROVED; a later COMMENTED must not erase it.
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [
+          review('alice', 'COMMENTED'),
+          review('alice', 'APPROVED'),
+          review('alice', 'CHANGES_REQUESTED'),
+        ],
+        reviewRequests: { users: [], teams: [] },
+      })
+    ).toBe('APPROVED');
+  });
+
+  it('returns null when no reviewers are involved at all', () => {
+    expect(
+      deriveEffectiveReviewDecision({
+        reviewDecision: null,
+        recentReviews: [review('alice', 'COMMENTED')],
+        reviewRequests: { users: [], teams: [] },
+      })
+    ).toBeNull();
   });
 });
 

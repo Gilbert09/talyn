@@ -414,6 +414,12 @@ export interface PRSummaryShape {
   mergeable: PRMergeable;
   mergeStateStatus: string;
   reviewDecision: PRReviewDecision;
+  /**
+   * Review state for the approval badge: GitHub's `reviewDecision` when the
+   * base branch enforces required reviews, otherwise derived from the actual
+   * reviews + outstanding requests (so repos without branch protection still
+   * show Approved / Awaiting review). Absent on rows cached before this field. */
+  effectiveReviewDecision?: PRReviewDecision;
   blockingReason: PRBlockingReason;
   checks: PRChecks;
   /** Unresolved review threads (capped at the first 100). Optional for

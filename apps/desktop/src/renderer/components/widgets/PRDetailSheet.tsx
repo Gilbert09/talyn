@@ -671,9 +671,11 @@ function OverviewTab({
           </li>
           <li>
             <span className="text-muted-foreground">Review decision:</span>{' '}
-            {data.row.summary.reviewDecision
-              ? data.row.summary.reviewDecision.toLowerCase().replace('_', ' ')
-              : 'pending'}
+            {(() => {
+              const decision =
+                data.row.summary.effectiveReviewDecision ?? data.row.summary.reviewDecision;
+              return decision ? decision.toLowerCase().replace('_', ' ') : 'pending';
+            })()}
           </li>
           <li>
             <span className="text-muted-foreground">Head SHA:</span>{' '}
