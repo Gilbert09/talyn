@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Workspace, Environment, Agent, Task, InboxItem } from '@fastowl/shared';
+import type { GitHubStatus } from '../lib/api';
 
 // Simplified repository type for store (matches API response)
 export interface WatchedRepo {
@@ -131,6 +132,9 @@ interface WorkspaceState {
   // First-run onboarding gate. When false, App renders the OnboardingWizard
   // instead of MainLayout.
   onboardingComplete: boolean;
+  // GitHub connection status for the current workspace, kept in sync so the
+  // global status banner can react app-wide. null = not yet checked.
+  githubStatus: GitHubStatus | null;
 
   // Actions
   setCurrentWorkspace: (id: string | null) => void;
@@ -138,6 +142,7 @@ interface WorkspaceState {
   addWorkspace: (workspace: Workspace) => void;
   setCreateWorkspaceOpen: (open: boolean) => void;
   setOnboardingComplete: (done: boolean) => void;
+  setGitHubStatus: (status: GitHubStatus | null) => void;
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
@@ -189,6 +194,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   theme: getInitialTheme(),
   createWorkspaceOpen: false,
   onboardingComplete: getInitialOnboardingComplete(),
+  githubStatus: null,
 
   // Actions
   setCurrentWorkspace: (id) => {
@@ -211,6 +217,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     }
     set({ onboardingComplete: done });
   },
+
+  setGitHubStatus: (githubStatus) => set({ githubStatus }),
 
   setEnvironments: (environments) => set({ environments }),
 

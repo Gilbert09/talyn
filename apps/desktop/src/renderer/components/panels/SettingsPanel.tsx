@@ -649,7 +649,7 @@ function WorkspaceSettings() {
 }
 
 function IntegrationsSettings() {
-  const { currentWorkspaceId } = useWorkspaceStore();
+  const { currentWorkspaceId, setGitHubStatus } = useWorkspaceStore();
   const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
   const [githubUser, setGithubUser] = useState<GitHubUser | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -662,6 +662,7 @@ function IntegrationsSettings() {
     try {
       const status = await api.github.getStatus(currentWorkspaceId);
       setGithubStatus(status);
+      setGitHubStatus(status); // keep the global banner in sync
 
       // If connected, load user info
       if (status.connected) {
@@ -677,7 +678,7 @@ function IntegrationsSettings() {
     } catch (_e) {
       setGithubStatus({ configured: false, connected: false });
     }
-  }, [currentWorkspaceId]);
+  }, [currentWorkspaceId, setGitHubStatus]);
 
   useEffect(() => {
     loadGitHubStatus();
@@ -721,6 +722,7 @@ function IntegrationsSettings() {
     try {
       await api.github.disconnect(currentWorkspaceId);
       setGithubStatus({ configured: true, connected: false });
+      setGitHubStatus({ configured: true, connected: false }); // surface the banner immediately
       setGithubUser(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to disconnect');

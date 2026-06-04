@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 41 — Global "core functionality missing" banner
+
+Added an app-wide warning banner (full-width, top of `MainLayout`, above the sidebar) that surfaces when core functionality is unavailable — currently a disconnected GitHub, which silently pauses PR tracking, reviews, and the merge queue. Follows the silent-failure theme of Sessions 39–40: make the broken state loud instead of leaving the user to discover dead pollers.
+
+- **`components/layout/SystemStatusBanner.tsx`**: renders a warning row per missing service (extensible array). For GitHub: distinguishes "configured but disconnected" (amber banner + **Connect GitHub** action that opens OAuth, plus a settings shortcut) from "OAuth not configured on the backend" (info, no action). Renders nothing while healthy or before the first status check (no flash).
+- **`stores/workspace.ts`**: new `githubStatus` field + `setGitHubStatus` so the banner reacts app-wide without prop drilling.
+- **`hooks/useSystemStatus.ts`**: mounts once in `MainLayout`, reuses `useGithubConnection` (fetch + on-focus re-check) and mirrors status into the store — so reconnecting via the browser clears the banner automatically.
+- **`SettingsPanel.tsx`**: GitHub connect/disconnect now also writes the store, so an in-app disconnect surfaces the banner instantly (no focus event needed).
+- 5 renderer tests (`SystemStatusBanner.test.tsx`) covering the show/hide matrix. Desktop suite green (34), tsc + lint clean.
+
 ## Session 40 — Surface GitHub token-load failures
 
 Debugging a "no HTTP requests / no rate-limit tiles / pollers show 0 workspaces" report: the cause class is the backend loading **0 GitHub tokens** at startup, so `getConnectedWorkspaces()` is empty and every GitHub poller no-ops (0ms, no HTTP). The token-load failure was silent (only a `console.error` in `readAccessToken` on a decrypt failure — typically a `FASTOWL_TOKEN_KEY` mismatch vs. when the token was saved). Confirmed it's **not** a regression: no recent commit touched token loading / `getConnectedWorkspaces` / the integrations table (only the `workflow` scope constant changed).
