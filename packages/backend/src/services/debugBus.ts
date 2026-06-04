@@ -54,6 +54,14 @@ class DebugBus {
   private pollers = new Map<string, DebugPollerState>();
   private rateLimits = new Map<string, DebugRateLimitState>();
 
+  // Rate-limit cards are refreshed by their poller every ~30s. Drop any not
+  // observed within this window so a dead poller or a disconnected account
+  // ages out instead of showing frozen numbers forever — and so a card set
+  // that was relabelled (e.g. a workspace-label fallback once its GitHub login
+  // resolves) doesn't linger as a stale duplicate. Comfortably longer than the
+  // poll cadence so a healthy poller's cards never flicker out.
+  private static readonly RATE_LIMIT_STALE_MS = 3 * 60_000;
+
   /** Global kill-switch. Recording is a cheap no-op while disabled. */
   setEnabled(on: boolean): void {
     this.enabled = on;
@@ -245,6 +253,7 @@ class DebugBus {
   }
 
   snapshot(): DebugSnapshot {
+    this.pruneStaleRateLimits();
     return {
       pollers: [...this.pollers.values()],
       counters: { ...this.counters },
@@ -252,6 +261,14 @@ class DebugBus {
       wsClients: this.clientCounter?.() ?? 0,
       rateLimits: [...this.rateLimits.values()],
     };
+  }
+
+  /** Evict rate-limit cards whose last observation is older than the TTL. */
+  private pruneStaleRateLimits(): void {
+    const cutoff = Date.now() - DebugBus.RATE_LIMIT_STALE_MS;
+    for (const [name, rl] of this.rateLimits) {
+      if (new Date(rl.observedAt).getTime() < cutoff) this.rateLimits.delete(name);
+    }
   }
 
   clear(): void {

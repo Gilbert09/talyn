@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 39 — Rate-limit tiles survive being rate-limited
+
+Fixed the Debug panel's rate-limit cards vanishing after the account got rate-limited + the backend restarted. Root cause: `rateLimitPoller.tick()` called `getViewerLogin()` (a budgeted `/user` REST call) *first* and skipped the whole account if it failed — so when the account was rate-limited (or a restart wiped the in-memory login cache), the **free** `GET /rate_limit` was never fetched and the cards never repopulated. The cards live in an unpruned in-memory map, so they only clear on restart and then never came back.
+
+- **`rateLimitPoller.ts`**: fetch `/rate_limit` unconditionally; the login is now a best-effort *label* only, falling back to `workspace <id8>` when it can't be resolved, so cards show even mid-rate-limit.
+- **`debugBus.ts`**: prune rate-limit cards not re-observed within 3 min (≫ the 30s poll cadence). Makes cards honest if the poller/account goes away, and stops a relabelled fallback card lingering as a stale duplicate once the real login resolves.
+- Note: cards are delivered via the 3s snapshot re-pull (`recordRateLimit` doesn't emit a live `debug:event`), so after enabling they populate within one poll tick.
+- 4 new tests (2 poller tick label-resolution incl. the rate-limited fallback, 2 debugBus staleness pruning). Full backend suite green (461).
+
 ## Session 38 — Live merge-queue position badges
 
 Fixed the `Queued #N` badge going stale: positions only ever updated on a manual list refresh because the live `pull_request:updated` events carried a placeholder position (the toggle route emitted `position: 0`, the processor `position: 1`), and nothing recomputed the *sibling* PRs' positions when the group's membership changed (enqueue, dequeue, merge).

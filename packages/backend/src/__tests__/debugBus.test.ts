@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { debugBus, redactUrl } from '../services/debugBus.js';
 import type { DebugCategory } from '@fastowl/shared';
 
@@ -180,6 +180,34 @@ describe('rate-limit registry', () => {
     debugBus.recordRateLimit(sample);
     debugBus._reset();
     expect(debugBus.snapshot().rateLimits).toHaveLength(0);
+  });
+
+  it('prunes a bucket not re-observed within the staleness window', () => {
+    vi.useFakeTimers();
+    try {
+      debugBus.recordRateLimit(sample);
+      // Still inside the 3-minute window.
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(debugBus.snapshot().rateLimits).toHaveLength(1);
+      // Past it with no fresh observation → aged out.
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(debugBus.snapshot().rateLimits).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a fresh observation resets the staleness clock', () => {
+    vi.useFakeTimers();
+    try {
+      debugBus.recordRateLimit(sample);
+      vi.advanceTimersByTime(2 * 60_000);
+      debugBus.recordRateLimit(sample); // re-observed
+      vi.advanceTimersByTime(2 * 60_000); // only 2 min since the last observation
+      expect(debugBus.snapshot().rateLimits).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { bucketsFor } from '../services/rateLimitPoller.js';
-import type { GitHubRateLimit } from '../services/github.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { bucketsFor, rateLimitPoller } from '../services/rateLimitPoller.js';
+import { githubService, type GitHubRateLimit } from '../services/github.js';
+import { debugBus } from '../services/debugBus.js';
 
 /**
  * Unit tests for the rate-limit poller's pure `/rate_limit` → card mapping.
@@ -113,5 +114,46 @@ describe('bucketsFor', () => {
 
   it('tolerates a missing resources map', () => {
     expect(bucketsFor('octocat', { resources: undefined as never })).toEqual([]);
+  });
+});
+
+// The whole point of this poller is to publish the FREE /rate_limit endpoint,
+// which works even when the account is rate-limited. The login lookup must not
+// gate it — otherwise the cards vanish exactly when they matter.
+describe('tick label resolution', () => {
+  const tick = () => (rateLimitPoller as unknown as { tick(): Promise<void> }).tick();
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('still cards /rate_limit when getViewerLogin fails, keyed by the workspace', async () => {
+    vi.spyOn(githubService, 'getConnectedWorkspaces').mockReturnValue(['ws-12345678-extra']);
+    vi.spyOn(githubService, 'getViewerLogin').mockRejectedValue(new Error('rate limited'));
+    vi.spyOn(githubService, 'getRateLimit').mockResolvedValue(
+      payload({ core: { limit: 5000, remaining: 4000, used: 1000, reset: RESET } }),
+    );
+    const recorded: string[] = [];
+    vi.spyOn(debugBus, 'recordRateLimit').mockImplementation((b) => {
+      recorded.push(b.name);
+    });
+
+    await tick();
+
+    expect(recorded).toEqual(['workspace ws-12345 · core']);
+  });
+
+  it('keys cards by the GitHub login when it resolves', async () => {
+    vi.spyOn(githubService, 'getConnectedWorkspaces').mockReturnValue(['ws1']);
+    vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('octocat');
+    vi.spyOn(githubService, 'getRateLimit').mockResolvedValue(
+      payload({ core: { limit: 5000, remaining: 4000, used: 1000, reset: RESET } }),
+    );
+    const recorded: string[] = [];
+    vi.spyOn(debugBus, 'recordRateLimit').mockImplementation((b) => {
+      recorded.push(b.name);
+    });
+
+    await tick();
+
+    expect(recorded).toEqual(['octocat · core']);
   });
 });

@@ -103,19 +103,28 @@ class RateLimitPoller {
     if (this.running) return;
     this.running = true;
     const startedAt = Date.now();
-    // Dedupe by login so the same account across multiple workspaces is only
+    // Dedupe by label so the same account across multiple workspaces is only
     // fetched (and carded) once per tick.
-    const seenLogins = new Set<string>();
+    const seenLabels = new Set<string>();
     let accounts = 0;
     let lastError: string | undefined;
     try {
       for (const workspaceId of githubService.getConnectedWorkspaces()) {
+        // Resolve a card label, preferring the GitHub login so same-account
+        // workspaces dedupe to one card set. Crucially, its failure must NOT
+        // skip the account: getViewerLogin costs a budgeted `/user` call that
+        // fails exactly when the account is rate-limited (or right after a
+        // restart drops the in-memory login cache) — which is precisely when
+        // these cards matter most. The `/rate_limit` fetch below is free and
+        // available even when rate-limited, so we always attempt it and fall
+        // back to a workspace label when the login can't be resolved.
         const login = await githubService.getViewerLogin(workspaceId).catch(() => null);
-        if (!login || seenLogins.has(login)) continue;
+        const label = login ?? `workspace ${workspaceId.slice(0, 8)}`;
+        if (seenLabels.has(label)) continue;
         try {
           const rl = await githubService.getRateLimit(workspaceId);
-          for (const bucket of bucketsFor(login, rl)) debugBus.recordRateLimit(bucket);
-          seenLogins.add(login);
+          for (const bucket of bucketsFor(label, rl)) debugBus.recordRateLimit(bucket);
+          seenLabels.add(label);
           accounts++;
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
