@@ -6,6 +6,7 @@ import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { broadcastMergeQueuePositions } from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
 
@@ -301,6 +302,9 @@ class MergeQueueProcessor {
           mergeQueued: false,
           mergeQueueState: null,
         });
+        // The merged PR left its group — reshuffle the survivors' "#N" badges
+        // (e.g. #2 → #1) instead of leaving them stale until a refresh.
+        await broadcastMergeQueuePositions(row.workspaceId);
       } catch (err) {
         // 405 not-actually-mergeable, network, etc. Don't dequeue; record + retry.
         state.status = 'waiting';
@@ -381,6 +385,8 @@ class MergeQueueProcessor {
       mergeQueued: false,
       mergeQueueState: null,
     });
+    // Dropping out of the queue shifts the survivors' positions — rebroadcast.
+    await broadcastMergeQueuePositions(row.workspaceId);
   }
 
   private async persist(row: PRRow, state: MergeQueueState): Promise<void> {

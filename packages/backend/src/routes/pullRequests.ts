@@ -18,6 +18,10 @@ import {
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
+import {
+  computeQueuePositions,
+  broadcastMergeQueuePositions,
+} from '../services/mergeQueueBroadcast.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
@@ -409,20 +413,27 @@ export function pullRequestRoutes(): Router {
       })
       .where(eq(pullRequestsTable.id, row.id));
 
-    emitPullRequestUpdated(row.workspaceId, {
-      id: row.id,
-      taskId: row.taskId,
-      repositoryId: row.repositoryId,
-      owner: row.owner,
-      repo: row.repo,
-      number: row.number,
-      state: row.state,
-      lastSummary: row.lastSummary as Record<string, unknown>,
-      mergeQueued: enabled,
-      mergeQueueState: publicMergeQueueState(nextState, 0),
-    });
+    // When disabling, the row is no longer in the queue so the group rebroadcast
+    // below won't touch it — emit its cleared badge explicitly here.
+    if (!enabled) {
+      emitPullRequestUpdated(row.workspaceId, {
+        id: row.id,
+        taskId: row.taskId,
+        repositoryId: row.repositoryId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+        state: row.state,
+        lastSummary: row.lastSummary as Record<string, unknown>,
+        mergeQueued: false,
+        mergeQueueState: null,
+      });
+    }
+    // Recompute "#N" for the whole queue so the toggled PR gets its real
+    // position and every sibling shifts to match — not just after a refresh.
+    await broadcastMergeQueuePositions(row.workspaceId);
 
-    // Kick a tick so an already-clean PR merges without waiting up to 60s.
+    // Kick a tick so an already-clean PR merges without waiting for the poll.
     if (enabled) void mergeQueueProcessor.runOnce();
 
     res.json({ success: true, data: null } as ApiResponse<null>);
@@ -680,31 +691,6 @@ function publicMergeQueueState(
     | null;
   if (!s) return null;
   return { status: s.status ?? 'waiting', attempts: s.attempts ?? 0, position };
-}
-
-/**
- * 1-based merge-queue position per (repo, base branch) group, FIFO ordered by
- * `mergeQueuedAt`. PRs not in the queue map to nothing. Mirrors the processor's
- * grouping so the badge's "#N" matches the order they'll actually merge.
- */
-function computeQueuePositions(rows: PullRequestRow[]): Map<string, number> {
-  const byGroup = new Map<string, PullRequestRow[]>();
-  for (const r of rows) {
-    if (!r.mergeQueued) continue;
-    const base = (r.lastSummary as { baseBranch?: string } | null)?.baseBranch ?? '';
-    const key = `${r.repositoryId}|${base}`;
-    (byGroup.get(key) ?? byGroup.set(key, []).get(key)!).push(r);
-  }
-  const positions = new Map<string, number>();
-  for (const group of byGroup.values()) {
-    group.sort((a, b) => {
-      const ta = a.mergeQueuedAt ? a.mergeQueuedAt.getTime() : 0;
-      const tb = b.mergeQueuedAt ? b.mergeQueuedAt.getTime() : 0;
-      return ta - tb;
-    });
-    group.forEach((r, i) => positions.set(r.id, i + 1));
-  }
-  return positions;
 }
 
 function rowToPublicShape(row: PullRequestRow, unreadCount = 0, queuePosition = 0) {

@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 38 — Live merge-queue position badges
+
+Fixed the `Queued #N` badge going stale: positions only ever updated on a manual list refresh because the live `pull_request:updated` events carried a placeholder position (the toggle route emitted `position: 0`, the processor `position: 1`), and nothing recomputed the *sibling* PRs' positions when the group's membership changed (enqueue, dequeue, merge).
+
+- **`services/mergeQueueBroadcast.ts`** (new): single source of truth for queue position math — `computeQueuePositions(rows)` (1-based per `(repo, base)` group, FIFO by `mergeQueuedAt`) plus `broadcastMergeQueuePositions(workspaceId)`, which reloads the workspace's queued open PRs, recomputes, and emits a `pull_request:updated` per PR with its real position.
+- **Wired the rebroadcast into every membership change**: the merge-queue toggle route (after enqueue/dequeue — dequeue also emits the toggled PR's cleared badge), the processor's merge-success path (survivors shift #2→#1), and the processor's `dequeue` (PR merged/closed upstream).
+- **De-duped** the position logic: `routes/pullRequests.ts` now imports the shared `computeQueuePositions` for its GET list instead of a local copy, so the badge order can't drift from the order PRs actually merge.
+- Also reduced the merge-queue poll interval 60s → 10s, and added the `workflow` OAuth scope so merges in large repos (PostHog/posthog) stop 403-ing on GitHub's workflow gate-check timeout (requires reconnecting GitHub).
+- 5 new tests (2 broadcast integration via emit-spy, 3 parameterised `computeQueuePositions`). Full backend suite green.
+
 ## Session 37 — "Copy list" of filtered PRs
 
 Added a **Copy list** button to the GitHub page header that copies the currently filtered PRs to the clipboard for pasting into Slack to request approvals. Writes a rich `text/html` bullet list of hyperlinks (Slack/Notion/docs paste as clickable links) plus a plain-text markdown fallback (`- [title](url)`) via a single `ClipboardItem`; falls back to `writeText(markdown)` where `ClipboardItem` isn't available. Respects every active filter (relationship/repo/search/needs-attention) since it copies off `filtered`. Toast reports the count. `GitHubPanel.tsx` only.

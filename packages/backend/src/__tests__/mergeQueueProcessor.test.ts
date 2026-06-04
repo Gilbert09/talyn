@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { githubService } from '../services/github.js';
+import * as websocketModule from '../services/websocket.js';
+import {
+  broadcastMergeQueuePositions,
+  computeQueuePositions,
+} from '../services/mergeQueueBroadcast.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -356,5 +361,105 @@ describe('mergeQueueProcessor', () => {
     await mergeQueueProcessor.runOnce();
 
     expect(mergeSpy).not.toHaveBeenCalled();
+  });
+
+  // The "#N" badge counts only stay correct live if sibling positions are
+  // rebroadcast when the group's membership changes.
+  describe('live position broadcasts', () => {
+    /** Latest position broadcast for a PR id across all emit calls. */
+    function lastPositionFor(
+      spy: ReturnType<typeof vi.spyOn>,
+      prId: string
+    ): { mergeQueued?: boolean; position?: number } | undefined {
+      const calls = spy.mock.calls.filter(
+        (c) => (c[1] as { id: string }).id === prId
+      );
+      if (calls.length === 0) return undefined;
+      const p = calls[calls.length - 1][1] as {
+        mergeQueued?: boolean;
+        mergeQueueState?: { position: number } | null;
+      };
+      return { mergeQueued: p.mergeQueued, position: p.mergeQueueState?.position };
+    }
+
+    it('reshuffles survivors after the head merges (#2 → #1)', async () => {
+      // Three same-base PRs, FIFO by queued-at → positions 1, 2, 3.
+      await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(1000) });
+      const pr2 = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(2000) });
+      const pr3 = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(3000) });
+      const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+      await mergeQueueProcessor.runOnce();
+
+      // Head merged; the two survivors are rebroadcast as #1 and #2.
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(lastPositionFor(emitSpy, pr2)).toEqual({ mergeQueued: true, position: 1 });
+      expect(lastPositionFor(emitSpy, pr3)).toEqual({ mergeQueued: true, position: 2 });
+    });
+
+    it('broadcasts a contiguous 1-based order for the whole queue', async () => {
+      const a = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(3000) });
+      const b = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(1000) });
+      const c = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date(2000) });
+      const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+      await broadcastMergeQueuePositions('ws1');
+
+      // Ordered by queued-at, not insert order.
+      expect(lastPositionFor(emitSpy, b)).toEqual({ mergeQueued: true, position: 1 });
+      expect(lastPositionFor(emitSpy, c)).toEqual({ mergeQueued: true, position: 2 });
+      expect(lastPositionFor(emitSpy, a)).toEqual({ mergeQueued: true, position: 3 });
+    });
+  });
+});
+
+describe('computeQueuePositions', () => {
+  type Row = {
+    id: string;
+    mergeQueued: boolean;
+    mergeQueuedAt: Date | null;
+    repositoryId: string;
+    lastSummary: unknown;
+  };
+  function row(id: string, ms: number, opts: Partial<Row> = {}): Row {
+    return {
+      id,
+      mergeQueued: true,
+      mergeQueuedAt: new Date(ms),
+      repositoryId: 'repo1',
+      lastSummary: { baseBranch: 'main' },
+      ...opts,
+    };
+  }
+
+  it('numbers a single group 1-based in FIFO order', () => {
+    const positions = computeQueuePositions([row('a', 3000), row('b', 1000), row('c', 2000)]);
+    expect(positions.get('b')).toBe(1);
+    expect(positions.get('c')).toBe(2);
+    expect(positions.get('a')).toBe(3);
+  });
+
+  it('numbers each (repo, base) group independently', () => {
+    const positions = computeQueuePositions([
+      row('a', 1000, { repositoryId: 'r1', lastSummary: { baseBranch: 'main' } }),
+      row('b', 2000, { repositoryId: 'r1', lastSummary: { baseBranch: 'main' } }),
+      row('c', 1500, { repositoryId: 'r1', lastSummary: { baseBranch: 'dev' } }),
+      row('d', 1200, { repositoryId: 'r2', lastSummary: { baseBranch: 'main' } }),
+    ]);
+    expect(positions.get('a')).toBe(1);
+    expect(positions.get('b')).toBe(2);
+    expect(positions.get('c')).toBe(1); // different base → its own group
+    expect(positions.get('d')).toBe(1); // different repo → its own group
+  });
+
+  it('excludes PRs that are not queued', () => {
+    const positions = computeQueuePositions([
+      row('a', 1000),
+      row('b', 2000, { mergeQueued: false }),
+      row('c', 3000),
+    ]);
+    expect(positions.has('b')).toBe(false);
+    expect(positions.get('a')).toBe(1);
+    expect(positions.get('c')).toBe(2); // 'b' doesn't consume a slot
   });
 });
