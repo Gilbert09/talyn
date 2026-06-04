@@ -387,6 +387,8 @@ class GitHubService extends EventEmitter {
       throw err;
     }
 
+    this.recordRateLimit(response, 'github');
+
     if (!response.ok) {
       const error =
         response.status === 401
@@ -416,6 +418,34 @@ class GitHubService extends EventEmitter {
       ok: true,
     });
     return response.json();
+  }
+
+  /**
+   * Capture GitHub's `x-ratelimit-*` budget off a response into the Debug
+   * bus. GitHub returns these headers on every response (success and error,
+   * including the 403 you get when the budget is exhausted), and REST vs
+   * GraphQL are separate buckets. Silently skips responses without the headers.
+   */
+  private recordRateLimit(response: Response, bucket: 'github' | 'github_graphql'): void {
+    const limit = Number(response.headers.get('x-ratelimit-limit'));
+    if (!Number.isFinite(limit) || limit <= 0) return;
+    const remaining = Number(response.headers.get('x-ratelimit-remaining'));
+    const used = Number(response.headers.get('x-ratelimit-used'));
+    const resetEpoch = Number(response.headers.get('x-ratelimit-reset'));
+    debugBus.recordRateLimit({
+      name: bucket,
+      description:
+        bucket === 'github_graphql'
+          ? 'GitHub GraphQL API — point budget per token, resets hourly'
+          : 'GitHub REST API — request budget per token, resets hourly',
+      limit,
+      remaining: Number.isFinite(remaining) ? remaining : limit,
+      used: Number.isFinite(used) ? used : limit - (Number.isFinite(remaining) ? remaining : limit),
+      resetAt: Number.isFinite(resetEpoch)
+        ? new Date(resetEpoch * 1000).toISOString()
+        : new Date().toISOString(),
+      resource: response.headers.get('x-ratelimit-resource'),
+    });
   }
 
   /**
@@ -945,6 +975,7 @@ class GitHubService extends EventEmitter {
         },
         body: JSON.stringify({ query, variables }),
       });
+      this.recordRateLimit(response, 'github_graphql');
       const recordGql = (ok: boolean, error?: string) =>
         debugBus.recordHttp({
           service: 'github',

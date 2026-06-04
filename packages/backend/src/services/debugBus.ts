@@ -2,6 +2,7 @@ import type {
   DebugCategory,
   DebugEvent,
   DebugPollerState,
+  DebugRateLimitState,
   DebugSnapshot,
 } from '@fastowl/shared';
 
@@ -51,6 +52,7 @@ class DebugBus {
   private clientCounter: ClientCounter | null = null;
   private counters: Record<string, number> = {};
   private pollers = new Map<string, DebugPollerState>();
+  private rateLimits = new Map<string, DebugRateLimitState>();
 
   /** Global kill-switch. Recording is a cheap no-op while disabled. */
   setEnabled(on: boolean): void {
@@ -196,6 +198,36 @@ class DebugBus {
     });
   }
 
+  // ---- Rate-limit registry ------------------------------------------------
+
+  /**
+   * Record the last-seen rate-limit budget for an API bucket, parsed from a
+   * provider's response headers. Overwrites the previous snapshot for `name`.
+   * A no-op while disabled, and silently ignores partial/garbage header sets.
+   */
+  recordRateLimit(input: {
+    name: string;
+    description: string;
+    limit: number;
+    remaining: number;
+    used: number;
+    resetAt: string;
+    resource?: string | null;
+  }): void {
+    if (!this.enabled) return;
+    if (!Number.isFinite(input.limit) || input.limit <= 0) return;
+    this.rateLimits.set(input.name, {
+      name: input.name,
+      description: input.description,
+      limit: input.limit,
+      remaining: input.remaining,
+      used: input.used,
+      resetAt: input.resetAt,
+      resource: input.resource ?? null,
+      observedAt: new Date().toISOString(),
+    });
+  }
+
   // ---- Read side ----------------------------------------------------------
 
   getEvents(filter?: {
@@ -218,6 +250,7 @@ class DebugBus {
       counters: { ...this.counters },
       bufferSize: this.buffer.length,
       wsClients: this.clientCounter?.() ?? 0,
+      rateLimits: [...this.rateLimits.values()],
     };
   }
 
@@ -230,6 +263,7 @@ class DebugBus {
   _reset(): void {
     this.clear();
     this.pollers.clear();
+    this.rateLimits.clear();
     this.seq = 0;
   }
 }

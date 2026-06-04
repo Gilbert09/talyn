@@ -130,6 +130,59 @@ describe('poller registry', () => {
   });
 });
 
+describe('rate-limit registry', () => {
+  const sample = {
+    name: 'github',
+    description: 'GitHub REST API',
+    limit: 5000,
+    remaining: 4990,
+    used: 10,
+    resetAt: '2026-06-04T12:00:00.000Z',
+    resource: 'core',
+  };
+
+  it('records and exposes a bucket via the snapshot', () => {
+    debugBus.recordRateLimit(sample);
+    const rls = debugBus.snapshot().rateLimits;
+    expect(rls).toHaveLength(1);
+    expect(rls[0]).toMatchObject({ name: 'github', limit: 5000, remaining: 4990, used: 10, resource: 'core' });
+    expect(rls[0].observedAt).toBeTruthy();
+  });
+
+  it('overwrites the previous snapshot for the same bucket', () => {
+    debugBus.recordRateLimit(sample);
+    debugBus.recordRateLimit({ ...sample, remaining: 4000, used: 1000 });
+    const rls = debugBus.snapshot().rateLimits;
+    expect(rls).toHaveLength(1);
+    expect(rls[0].remaining).toBe(4000);
+    expect(rls[0].used).toBe(1000);
+  });
+
+  it('keeps REST and GraphQL as separate buckets', () => {
+    debugBus.recordRateLimit(sample);
+    debugBus.recordRateLimit({ ...sample, name: 'github_graphql', resource: 'graphql' });
+    expect(debugBus.snapshot().rateLimits).toHaveLength(2);
+  });
+
+  it('ignores a garbage/absent limit', () => {
+    debugBus.recordRateLimit({ ...sample, limit: Number.NaN });
+    debugBus.recordRateLimit({ ...sample, name: 'zero', limit: 0 });
+    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
+  });
+
+  it('is a no-op while disabled', () => {
+    debugBus.setEnabled(false);
+    debugBus.recordRateLimit(sample);
+    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
+  });
+
+  it('_reset() drops recorded buckets', () => {
+    debugBus.recordRateLimit(sample);
+    debugBus._reset();
+    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
+  });
+});
+
 describe('getEvents filtering', () => {
   beforeEach(() => {
     debugBus.recordHttp({ service: 'github', method: 'GET', url: 'https://x', status: 200, durationMs: 1, ok: true });
