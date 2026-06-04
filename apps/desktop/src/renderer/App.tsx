@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import { MainLayout } from './components/layout/MainLayout';
+import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { AuthProvider, useAuth } from './components/auth/AuthProvider';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
+import { useWorkspaceStore } from './stores/workspace';
 import { Toaster } from './components/ui/toaster';
 import './App.css';
+
+function StartingSpinner() {
+  return (
+    <div className="flex items-center justify-center h-screen">
+      <div className="text-center">
+        <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4" />
+        <p className="text-sm text-muted-foreground">Starting…</p>
+      </div>
+    </div>
+  );
+}
 
 const API_BASE = process.env.FASTOWL_API_URL || 'http://localhost:4747';
 
@@ -21,10 +34,17 @@ async function checkBackend(): Promise<boolean> {
 
 function AuthedApp() {
   useApiConnection();
-  useInitialDataLoad();
+  const { loaded } = useInitialDataLoad();
+  const onboardingComplete = useWorkspaceStore((s) => s.onboardingComplete);
+
+  // Wait for the first data load to settle before deciding. Otherwise a
+  // returning user on fresh localStorage (flag still false) would briefly
+  // flash the wizard before the migration in useInitialDataLoad flips it.
+  if (!loaded) return <StartingSpinner />;
+
   return (
     <>
-      <MainLayout />
+      {onboardingComplete ? <MainLayout /> : <OnboardingWizard />}
       <Toaster />
     </>
   );
@@ -39,14 +59,7 @@ function AppBody() {
   }, []);
 
   if (authLoading || backendAvailable === null) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-2 border-primary border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-sm text-muted-foreground">Starting…</p>
-        </div>
-      </div>
-    );
+    return <StartingSpinner />;
   }
 
   if (!backendAvailable) {

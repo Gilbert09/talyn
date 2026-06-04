@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { api, wsClient } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import type {
@@ -280,24 +280,34 @@ export function useInitialDataLoad() {
     setTasks,
     setRepositories,
     setInboxItems,
+    setOnboardingComplete,
   } = useWorkspaceStore();
+  const [loaded, setLoaded] = useState(false);
+  // The onboarding migration must reflect whether the user already had
+  // workspaces when this session started — not whether the wizard's step 1
+  // just created one. So we only evaluate it on the very first load
+  // (loadData re-runs when the active workspace changes).
+  const migrationCheckedRef = useRef(false);
 
   const loadData = useCallback(async () => {
     try {
       // Load workspaces and environments (global)
-      let [workspaces, environments] = await Promise.all([
+      const [workspaces, environments] = await Promise.all([
         api.workspaces.list(),
         api.environments.list(),
       ]);
 
-      // If no workspaces exist, create a default one
-      if (workspaces.length === 0) {
-        console.log('No workspaces found, creating default workspace...');
-        const defaultWorkspace = await api.workspaces.create({
-          name: 'Default Workspace',
-          description: 'Your first FastOwl workspace',
-        });
-        workspaces = [defaultWorkspace];
+      // No silent default-workspace creation: a true first run lands on the
+      // onboarding wizard (step 1 creates the first workspace). But a
+      // returning user who already has workspaces must never see the wizard —
+      // this is the only place with the fetched server-side list, so mark
+      // them onboarded here if the persisted flag isn't set yet. Only on the
+      // first load, so the workspace the wizard creates doesn't trip it.
+      if (!migrationCheckedRef.current) {
+        migrationCheckedRef.current = true;
+        if (workspaces.length > 0 && !useWorkspaceStore.getState().onboardingComplete) {
+          setOnboardingComplete(true);
+        }
       }
 
       // Cloud-provider env markers are auto-provisioned by the backend
@@ -332,6 +342,8 @@ export function useInitialDataLoad() {
       }
     } catch (err) {
       console.error('Failed to load initial data:', err);
+    } finally {
+      setLoaded(true);
     }
   }, [
     currentWorkspaceId,
@@ -342,13 +354,14 @@ export function useInitialDataLoad() {
     setTasks,
     setRepositories,
     setInboxItems,
+    setOnboardingComplete,
   ]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  return { reload: loadData };
+  return { reload: loadData, loaded };
 }
 
 /**

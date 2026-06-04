@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 36 — First-run onboarding wizard
+
+Replaced the (non-existent) onboarding with a guided, full-screen first-run wizard, fixing the dead first run the cloud-only/PR pivot left behind. Previously the app silently auto-created a "Default Workspace" on first load, dropped the user on the empty Inbox, and buried every real setup step (connect GitHub, watch repos, connect a cloud provider) in Settings.
+
+- **Wizard** (`apps/desktop/src/renderer/components/onboarding/`): `OnboardingWizard.tsx` owns step state + a step indicator + Back/Next/Skip/Finish footer; four step components — `WorkspaceNameStep` (creates + selects the first workspace, replacing the silent default), `ConnectGitHubStep` (required; OAuth in browser, detected on focus), `WatchReposStep` (skippable-with-hint), `ConnectPostHogStep` (optional cloud agent).
+- **Gate** (`App.tsx`): `AuthedApp` renders `<OnboardingWizard/>` vs `<MainLayout/>` off a new persisted `onboardingComplete` flag, waiting on a `loaded` signal from `useInitialDataLoad` so returning users never flash the wizard.
+- **Store** (`stores/workspace.ts`): `onboardingComplete` flag + `setOnboardingComplete` setter, hand-rolled localStorage (`fastowl-onboarding-complete`) like the theme/debug flags.
+- **Data load** (`hooks/useApi.ts`): removed the silent "Default Workspace" auto-create; added a first-load-only migration (ref-guarded so the wizard's own workspace doesn't trip it) that marks existing users onboarded; exposed `loaded`.
+- **Reuse**: extracted the repo-list cache helpers into `lib/repoCache.ts` (shared key with the Settings card) and the GitHub status/focus-recheck loop into `hooks/useGithubConnection.ts`. Workspace typechecks + lints clean.
+
 ## Session 35 — Merge queue
 
 Added a FastOwl-orchestrated **merge queue**: queue up a stack of PRs and they merge one-by-one, serialized per `(repo, base branch)`, with conflicts/behind-branches auto-fixed by the same cloud run the auto-keep-mergeable watcher uses. Solves the base-branch race — merging from the app no longer means hand-merging one PR, waiting for the base to settle, then merging the next.

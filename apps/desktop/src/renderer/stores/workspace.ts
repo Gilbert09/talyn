@@ -37,6 +37,21 @@ function getInitialDebugMode(): boolean {
   }
 }
 
+const ONBOARDING_KEY = 'fastowl-onboarding-complete';
+
+// First-run onboarding gate. Persisted like the theme/debug flags so it
+// survives restarts. Defaults to false → the wizard shows on a true first
+// run; `useInitialDataLoad` flips it to true for returning users who already
+// have at least one workspace, so they never see the wizard.
+function getInitialOnboardingComplete(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(ONBOARDING_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';
 
 // Last-selected workspace id, so a switch survives an app restart instead of
@@ -113,12 +128,16 @@ interface WorkspaceState {
   // Whether the create-workspace modal is open (triggered from the sidebar
   // switcher and the Settings empty state).
   createWorkspaceOpen: boolean;
+  // First-run onboarding gate. When false, App renders the OnboardingWizard
+  // instead of MainLayout.
+  onboardingComplete: boolean;
 
   // Actions
   setCurrentWorkspace: (id: string | null) => void;
   setWorkspaces: (workspaces: Workspace[]) => void;
   addWorkspace: (workspace: Workspace) => void;
   setCreateWorkspaceOpen: (open: boolean) => void;
+  setOnboardingComplete: (done: boolean) => void;
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
@@ -169,6 +188,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   selectedTaskId: null,
   theme: getInitialTheme(),
   createWorkspaceOpen: false,
+  onboardingComplete: getInitialOnboardingComplete(),
 
   // Actions
   setCurrentWorkspace: (id) => {
@@ -182,6 +202,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     set((state) => ({ workspaces: [...state.workspaces, workspace] })),
 
   setCreateWorkspaceOpen: (createWorkspaceOpen) => set({ createWorkspaceOpen }),
+
+  setOnboardingComplete: (done) => {
+    try {
+      localStorage.setItem(ONBOARDING_KEY, done ? 'true' : 'false');
+    } catch {
+      // ignore quota / privacy-mode issues
+    }
+    set({ onboardingComplete: done });
+  },
 
   setEnvironments: (environments) => set({ environments }),
 
