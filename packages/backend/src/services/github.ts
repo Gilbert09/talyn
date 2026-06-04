@@ -21,7 +21,13 @@ const GITHUB_API_URL = 'https://api.github.com';
 const GITHUB_AUTH_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 
-const GITHUB_SCOPES = ['repo', 'read:user', 'read:org'];
+// `workflow` is needed to merge PRs in large repos: before allowing a merge,
+// GitHub gate-checks whether the PR modifies `.github/workflows/**` and, if the
+// token lacks the `workflow` scope, that check can time out on big diffs —
+// surfacing as "403 … Unable to determine if workflow can be created or updated
+// due to timeout; `workflows` scope may be required" even when no workflow file
+// is touched. Granting the scope removes the gate-check entirely.
+const GITHUB_SCOPES = ['repo', 'workflow', 'read:user', 'read:org'];
 
 /** One resource bucket from `GET /rate_limit`. `reset` is a unix epoch (s). */
 export interface GitHubRateLimitResource {
