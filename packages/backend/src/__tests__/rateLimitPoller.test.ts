@@ -69,6 +69,37 @@ describe('bucketsFor', () => {
     expect(used[0].name).toBe('octocat · code_search');
   });
 
+  it('reconciles an inconsistent snapshot (remaining stale-high after a window reset)', () => {
+    // GitHub returned remaining=limit yet used>0 — the graphql post-reset
+    // quirk. The card must not show a 100% bar next to "2,249 used".
+    const [b] = bucketsFor(
+      'octocat',
+      payload({ graphql: { limit: 5000, remaining: 5000, used: 2249, reset: RESET } }),
+    );
+    expect(b.used).toBe(2249);
+    expect(b.remaining).toBe(2751); // limit - used
+    expect(b.used + b.remaining).toBe(b.limit); // always internally consistent
+  });
+
+  it('reconciles the opposite skew (used stale-low) from the remaining signal', () => {
+    const [b] = bucketsFor(
+      'octocat',
+      payload({ graphql: { limit: 5000, remaining: 2751, used: 0, reset: RESET } }),
+    );
+    expect(b.remaining).toBe(2751);
+    expect(b.used).toBe(2249); // derived from limit - remaining
+    expect(b.used + b.remaining).toBe(b.limit);
+  });
+
+  it('clamps a used value that exceeds the limit', () => {
+    const [b] = bucketsFor(
+      'octocat',
+      payload({ search: { limit: 30, remaining: 0, used: 45, reset: RESET } }),
+    );
+    expect(b.used).toBe(30);
+    expect(b.remaining).toBe(0);
+  });
+
   it('skips zero/garbage-limit buckets', () => {
     const out = bucketsFor(
       'octocat',

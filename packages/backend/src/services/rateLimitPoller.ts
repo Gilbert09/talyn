@@ -49,12 +49,25 @@ export function bucketsFor(
   for (const [resource, r] of Object.entries(rl.resources ?? {})) {
     if (!r || !Number.isFinite(r.limit) || r.limit <= 0) continue;
     if (!PRIMARY_RESOURCES.has(resource) && r.used <= 0) continue;
+    // GitHub's `/rate_limit` snapshot can report `used` and `remaining`
+    // that don't reconcile (`used + remaining != limit`) — most visibly on
+    // the `graphql` bucket just after its point window resets, where
+    // `remaining` snaps back to the full limit while `used` still reflects
+    // the previous window. Showing both raw produces a contradictory card
+    // (a 100% bar next to "2,249 used"). Reconcile to the conservative
+    // reading — the larger of the two consumption signals — so the bar and
+    // the used count always agree and a stale-high `remaining` can't paint a
+    // falsely-full bar.
+    const used = Math.min(
+      r.limit,
+      Math.max(0, Number.isFinite(r.used) ? r.used : 0, r.limit - r.remaining),
+    );
     out.push({
       name: `${login} · ${resource}`,
       description: RESOURCE_INFO[resource] ?? `GitHub '${resource}' API budget, resets hourly.`,
       limit: r.limit,
-      remaining: r.remaining,
-      used: r.used,
+      remaining: r.limit - used,
+      used,
       resetAt: new Date(r.reset * 1000).toISOString(),
       resource,
     });
