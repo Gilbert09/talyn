@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 34 — Per-PR "auto-keep mergeable" watcher
+
+Added an opt-in, per-PR toggle that keeps a PR mergeable unattended and indefinitely: a background watcher repeatedly fires the existing "take this PR to a clean, mergeable state" cloud run whenever the PR has a blocker (conflicts / failing required CI / changes-requested / unresolved review threads), never two at once, and keeps watching after the PR is clean so a conflict that appears days later is auto-fixed too.
+
+- **Shared helpers** (`packages/shared/src/prMergeable.ts`): moved `prNeedsFollowup` / `buildIssuesSummary` / `buildPostHogPrompt` out of `GitHubPanel.tsx` so the manual button and the watcher build the *identical* task. The prompt builder is now parameterised (`{ owner, repo, number, summary }`).
+- **Watcher** (`services/prAutoMergeWatcher.ts`): 60 s poller over `pull_requests WHERE auto_keep_mergeable AND state='open'`. Per PR: refresh stale summaries (`prMonitor.refreshPr`), skip if a linked run is active, fold the last auto-run's outcome into an attempt counter, re-arm on a mergeable observation, then fire via the shared `createCloudTask` helper. Runaway guard: pause after 3 consecutive un-mergeable auto-runs; reaching mergeable resets the counter (chosen over digest-based re-arm because the agent's own pushes change the digest).
+- **Task creation** factored into `services/taskCreate.ts` (`createCloudTask`), shared by `POST /tasks` and the watcher.
+- **API + DB**: migration `0020_pr_auto_keep_mergeable` (boolean `auto_keep_mergeable` + `auto_merge_state` jsonb + partial index). New `POST /pull-requests/:id/auto-keep-mergeable`; flag + compact watcher state flow through PR payloads and the `pull_request:updated` WS event.
+- **Desktop**: toggle in the PR detail-sheet header (gated on PostHog Code connected) + "Watching"/"Paused" badge on the PR list row.
+- 8 new parameterised watcher tests (real pglite DB) covering the decision matrix; full backend suite green (407 tests). Workspace typechecks + lints clean.
+
 ## Session 33 — Cloud-only pivot: strip local execution, build the CloudTaskProvider seam
 
 Refocused FastOwl as a **PR-management app that delegates to cloud coding agents**. Ripped out the entire local-execution layer and folded PostHog Code into a pluggable provider abstraction. Landed as a series of small commits:

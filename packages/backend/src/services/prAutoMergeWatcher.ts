@@ -1,0 +1,255 @@
+import { and, eq } from 'drizzle-orm';
+import { prNeedsFollowup, buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
+import { getDbClient } from '../db/client.js';
+import {
+  pullRequests as pullRequestsTable,
+  tasks as tasksTable,
+  workspaces as workspacesTable,
+  environments as environmentsTable,
+} from '../db/schema.js';
+import { createCloudTask } from './taskCreate.js';
+import { prMonitorService } from './prMonitor.js';
+import { emitPullRequestUpdated } from './websocket.js';
+
+const POLL_INTERVAL_MS = 60_000;
+/** Re-poll a watched PR if its cached summary is older than this. */
+const FRESHNESS_MS = 90_000;
+/** Pause auto-firing after this many consecutive un-mergeable auto-runs. */
+const MAX_ATTEMPTS = 3;
+
+/** Task statuses that mean a run is still working the PR. */
+const ACTIVE_STATUSES = new Set(['pending', 'queued', 'in_progress']);
+
+interface AutoMergeState {
+  attempts: number;
+  lastAutoTaskId?: string;
+  /** Whether `lastAutoTaskId`'s terminal result has been folded into attempts. */
+  accounted?: boolean;
+  pausedAt?: string;
+}
+
+type PRRow = typeof pullRequestsTable.$inferSelect;
+
+function readState(row: PRRow): AutoMergeState {
+  const s = (row.autoMergeState as AutoMergeState | null) ?? null;
+  return {
+    attempts: s?.attempts ?? 0,
+    lastAutoTaskId: s?.lastAutoTaskId,
+    accounted: s?.accounted ?? true,
+    pausedAt: s?.pausedAt,
+  };
+}
+
+/** Compact watcher state for the desktop (toggle + badge). */
+function publicState(s: AutoMergeState): { attempts: number; paused: boolean } {
+  return { attempts: s.attempts, paused: !!s.pausedAt };
+}
+
+/**
+ * Keeps every PR with `auto_keep_mergeable = true` in a mergeable state,
+ * unattended and indefinitely. Each tick, per enabled open PR:
+ *
+ *   1. Refresh stale summaries so blocker detection is current.
+ *   2. Skip if a run is already in flight (never two at once).
+ *   3. Fold the last auto-run's outcome into the attempt counter.
+ *   4. Reset the counter whenever the PR is observed mergeable (re-arm) — so a
+ *      problem that appears after a clean state gets a fresh batch of attempts.
+ *   5. If the PR has a blocker, isn't paused, and nothing's running, fire the
+ *      same "take this PR to a clean, mergeable state" cloud run the manual
+ *      "Get PR mergeable" button fires.
+ *
+ * After {@link MAX_ATTEMPTS} consecutive auto-runs that leave the PR
+ * un-mergeable, the watcher pauses (surfaced in the UI) until the PR is seen
+ * mergeable again or the user toggles it off/on.
+ */
+class PRAutoMergeWatcher {
+  private interval: NodeJS.Timeout | null = null;
+  private ticking = false;
+
+  init(): void {
+    if (this.interval) return;
+    this.interval = setInterval(() => {
+      void this.tick();
+    }, POLL_INTERVAL_MS);
+  }
+
+  shutdown(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+  }
+
+  /** Test entry point — run a single tick synchronously. */
+  async runOnce(): Promise<void> {
+    await this.tick();
+  }
+
+  private async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const db = getDbClient();
+      const rows = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(
+          and(
+            eq(pullRequestsTable.autoKeepMergeable, true),
+            eq(pullRequestsTable.state, 'open')
+          )
+        );
+
+      for (const row of rows) {
+        try {
+          await this.processPr(row);
+        } catch (err) {
+          // One PR failing must never abort the tick — retry next time.
+          console.warn(
+            `[prAutoMergeWatcher] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('DATABASE_URL is not set')) return;
+      console.error('[prAutoMergeWatcher] tick error:', err);
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async processPr(initialRow: PRRow): Promise<void> {
+    const db = getDbClient();
+
+    // 1. Freshness — refetch a stale summary so we don't fire (or pause) off
+    //    outdated blocker state. refreshPr is a no-op if the repo isn't watched.
+    let row = initialRow;
+    if (Date.now() - new Date(row.lastPolledAt).getTime() > FRESHNESS_MS) {
+      await prMonitorService
+        .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
+        .catch(() => {});
+      const reread = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, row.id))
+        .limit(1);
+      if (reread[0]) row = reread[0];
+      // The refresh may have flipped the PR to merged/closed.
+      if (row.state !== 'open' || !row.autoKeepMergeable) return;
+    }
+
+    const summary = row.lastSummary as PRMergeableSummary;
+    const needsFollowup = prNeedsFollowup(summary);
+    const state = readState(row);
+
+    // 2. Active-task guard — if the linked task is still running, leave it.
+    const linkedStatus = await this.linkedTaskStatus(row.taskId);
+    if (linkedStatus && ACTIVE_STATUSES.has(linkedStatus)) return;
+
+    // 3. Account the last auto-run now that it's terminal.
+    if (state.lastAutoTaskId && !state.accounted) {
+      if (needsFollowup) {
+        state.attempts += 1;
+        if (state.attempts >= MAX_ATTEMPTS) state.pausedAt = new Date().toISOString();
+      } else {
+        state.attempts = 0;
+        state.pausedAt = undefined;
+      }
+      state.accounted = true;
+      await this.persist(row, state);
+    }
+
+    // 4. Re-arm on clean — nothing to fix; reset the guard so a later problem
+    //    gets a fresh batch of attempts.
+    if (!needsFollowup) {
+      if (state.attempts !== 0 || state.pausedAt) {
+        state.attempts = 0;
+        state.pausedAt = undefined;
+        await this.persist(row, state);
+      }
+      return;
+    }
+
+    // 5. Fire — blocker present, nothing running, not paused.
+    if (state.pausedAt || state.attempts >= MAX_ATTEMPTS) return;
+
+    const envId = await this.resolvePostHogEnvId(row.workspaceId);
+    if (!envId) return; // No connected PostHog Code env — can't dispatch.
+
+    const ref = `${row.owner}/${row.repo}#${row.number}`;
+    const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
+    const created = await createCloudTask({
+      workspaceId: row.workspaceId,
+      type: 'pr_response',
+      title: `Get ${ref} mergeable`,
+      description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state via PostHog Code.`,
+      prompt: buildPostHogPrompt({
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+        summary,
+      }),
+      repositoryId: row.repositoryId,
+      assignedEnvironmentId: envId,
+      pullRequestId: row.id,
+    });
+
+    state.lastAutoTaskId = created.id;
+    state.accounted = false;
+    await this.persist(row, state);
+  }
+
+  /** Current status of the PR's most-recently-linked task, or null. */
+  private async linkedTaskStatus(taskId: string | null): Promise<string | null> {
+    if (!taskId) return null;
+    const db = getDbClient();
+    const rows = await db
+      .select({ status: tasksTable.status })
+      .from(tasksTable)
+      .where(eq(tasksTable.id, taskId))
+      .limit(1);
+    return rows[0]?.status ?? null;
+  }
+
+  /** The workspace owner's PostHog Code env marker, or null if none. */
+  private async resolvePostHogEnvId(workspaceId: string): Promise<string | null> {
+    const db = getDbClient();
+    const rows = await db
+      .select({ envId: environmentsTable.id })
+      .from(workspacesTable)
+      .innerJoin(
+        environmentsTable,
+        and(
+          eq(environmentsTable.ownerId, workspacesTable.ownerId),
+          eq(environmentsTable.type, 'posthog_code')
+        )
+      )
+      .where(eq(workspacesTable.id, workspaceId))
+      .limit(1);
+    return rows[0]?.envId ?? null;
+  }
+
+  private async persist(row: PRRow, state: AutoMergeState): Promise<void> {
+    const db = getDbClient();
+    await db
+      .update(pullRequestsTable)
+      .set({ autoMergeState: state, updatedAt: new Date() })
+      .where(eq(pullRequestsTable.id, row.id));
+    emitPullRequestUpdated(row.workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId: row.repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: row.state,
+      lastSummary: row.lastSummary as Record<string, unknown>,
+      autoKeepMergeable: row.autoKeepMergeable,
+      autoMergeState: publicState(state),
+    });
+  }
+}
+
+export const prAutoMergeWatcher = new PRAutoMergeWatcher();

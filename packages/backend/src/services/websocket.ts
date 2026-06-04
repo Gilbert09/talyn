@@ -355,6 +355,10 @@ export function emitPullRequestUpdated(
     // reviews it. Optional: emitters that don't change them omit them.
     reviewRequested?: boolean;
     authored?: boolean;
+    // Auto-keep-mergeable watcher state, so the toggle + row badge update live.
+    // Optional: emitters that don't change them omit them.
+    autoKeepMergeable?: boolean;
+    autoMergeState?: { attempts: number; paused: boolean } | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {

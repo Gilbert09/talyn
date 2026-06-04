@@ -17,6 +17,8 @@ import {
   Layers,
   Check,
   XCircle,
+  Eye,
+  AlertTriangle,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
@@ -85,6 +87,10 @@ export function PRDetailSheet({
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether PostHog Code is connected for this PR's workspace — gates the
+  // auto-keep-mergeable toggle (the watcher dispatches via PostHog Code).
+  const [posthogConnected, setPosthogConnected] = useState(false);
+  const [togglingAutoKeep, setTogglingAutoKeep] = useState(false);
 
   useEffect(() => {
     if (!pullRequestId) {
@@ -120,14 +126,25 @@ export function PRDetailSheet({
   useEffect(() => {
     if (!pullRequestId) return;
     const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
-      const p = payload as { id: string; lastSummary: unknown };
+      const p = payload as {
+        id: string;
+        lastSummary: unknown;
+        autoKeepMergeable?: boolean;
+        autoMergeState?: { attempts: number; paused: boolean } | null;
+      };
       if (p.id !== pullRequestId) return;
       setData((prev) => {
         // Guard against patching a stale row mid-switch.
         if (!prev || prev.row.id !== p.id) return prev;
         return {
           ...prev,
-          row: { ...prev.row, summary: p.lastSummary as PRSummaryShape },
+          row: {
+            ...prev.row,
+            summary: p.lastSummary as PRSummaryShape,
+            autoKeepMergeable: p.autoKeepMergeable ?? prev.row.autoKeepMergeable,
+            autoMergeState:
+              p.autoMergeState !== undefined ? p.autoMergeState : prev.row.autoMergeState,
+          },
         };
       });
     });
@@ -154,6 +171,54 @@ export function PRDetailSheet({
       api.pullRequests.focus(pullRequestId, false).catch(() => {});
     };
   }, [pullRequestId]);
+
+  // PostHog Code connection status for this PR's workspace — gates the
+  // auto-keep-mergeable toggle (no provider → nothing to dispatch to).
+  const workspaceId = data?.row.workspaceId ?? seedRow?.workspaceId ?? null;
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    api.posthog
+      .getStatus(workspaceId)
+      .then((s) => {
+        if (!cancelled) setPosthogConnected(s.connected);
+      })
+      .catch(() => {
+        if (!cancelled) setPosthogConnected(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  async function handleToggleAutoKeep(enabled: boolean) {
+    if (!pullRequestId) return;
+    setTogglingAutoKeep(true);
+    // Optimistic — the WS echo will confirm, but the toggle should feel instant.
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            row: {
+              ...prev.row,
+              autoKeepMergeable: enabled,
+              autoMergeState: enabled ? { attempts: 0, paused: false } : null,
+            },
+          }
+        : prev
+    );
+    try {
+      await api.pullRequests.setAutoKeepMergeable(pullRequestId, enabled);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update auto-keep-mergeable');
+      // Roll back the optimistic flip.
+      setData((prev) =>
+        prev ? { ...prev, row: { ...prev.row, autoKeepMergeable: !enabled } } : prev
+      );
+    } finally {
+      setTogglingAutoKeep(false);
+    }
+  }
 
   // What to render: the fetched detail once it matches the current PR,
   // else the list-supplied cached row (instant) while the detail loads.
@@ -272,6 +337,34 @@ export function PRDetailSheet({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {view && view.row.state === 'open' && posthogConnected && (
+            <Button
+              size="sm"
+              variant={view.row.autoKeepMergeable ? 'default' : 'outline'}
+              onClick={() => handleToggleAutoKeep(!view.row.autoKeepMergeable)}
+              disabled={togglingAutoKeep}
+              title={
+                view.row.autoKeepMergeable
+                  ? view.row.autoMergeState?.paused
+                    ? 'Auto-keep-mergeable paused after 3 attempts — click to turn off'
+                    : 'Auto-keep-mergeable is on — click to turn off'
+                  : 'Keep this PR mergeable: auto-fix conflicts / CI / review comments until merged, then keep watching'
+              }
+            >
+              {togglingAutoKeep ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : view.row.autoKeepMergeable && view.row.autoMergeState?.paused ? (
+                <AlertTriangle className="mr-1 h-4 w-4" />
+              ) : (
+                <Eye className="mr-1 h-4 w-4" />
+              )}
+              {view.row.autoKeepMergeable
+                ? view.row.autoMergeState?.paused
+                  ? 'Auto-fix paused'
+                  : 'Auto-keeping'
+                : 'Auto-keep mergeable'}
+            </Button>
+          )}
           {canMerge &&
             (confirmMerge ? (
               <>

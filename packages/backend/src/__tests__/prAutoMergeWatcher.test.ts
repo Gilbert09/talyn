@@ -1,0 +1,296 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { prAutoMergeWatcher } from '../services/prAutoMergeWatcher.js';
+import { createTestDb, seedUser } from './helpers/testDb.js';
+import type { Database } from '../db/client.js';
+import {
+  workspaces as workspacesTable,
+  environments as environmentsTable,
+  repositories as repositoriesTable,
+  pullRequests as pullRequestsTable,
+  tasks as tasksTable,
+} from '../db/schema.js';
+
+/**
+ * Exercises the auto-keep-mergeable watcher's decision matrix against a real
+ * (pglite) DB: it fires the shared "get mergeable" cloud task only when a PR
+ * has a blocker, nothing's already running it, and the 3-attempt guard hasn't
+ * tripped — and re-arms once the PR is observed mergeable again.
+ */
+
+const OWNER = 'user-akm';
+const OWNER2 = 'user-noenv';
+
+/** A summary that trips prNeedsFollowup (merge conflicts). */
+function blockedSummary() {
+  return {
+    title: 'PR title',
+    author: 'me',
+    draft: false,
+    headBranch: 'feat',
+    baseBranch: 'main',
+    headSha: 'abc',
+    url: 'https://github.com/a/b/pull/1',
+    mergeable: 'CONFLICTING',
+    mergeStateStatus: 'DIRTY',
+    reviewDecision: null,
+    blockingReason: 'merge_conflicts',
+    checks: { total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 },
+    unresolvedReviewThreads: 0,
+  };
+}
+
+/** A clean, mergeable summary. */
+function cleanSummary() {
+  return {
+    ...blockedSummary(),
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    blockingReason: 'mergeable',
+  };
+}
+
+async function seedBase(db: Database): Promise<void> {
+  await seedUser(db, { id: OWNER });
+  await db.insert(workspacesTable).values({
+    id: 'ws1',
+    ownerId: OWNER,
+    name: 'ws',
+    settings: {},
+  });
+  await db.insert(environmentsTable).values({
+    id: 'cloud1',
+    ownerId: OWNER,
+    name: 'PostHog Code',
+    type: 'posthog_code',
+    status: 'connected',
+    config: { type: 'posthog_code' },
+  });
+  await db.insert(repositoriesTable).values({
+    id: 'repo1',
+    workspaceId: 'ws1',
+    name: 'a/b',
+    url: 'https://github.com/a/b',
+    defaultBranch: 'main',
+  });
+}
+
+let prCounter = 0;
+async function insertPr(
+  db: Database,
+  overrides: {
+    summary?: Record<string, unknown>;
+    autoKeepMergeable?: boolean;
+    autoMergeState?: unknown;
+    taskId?: string | null;
+    state?: string;
+    workspaceId?: string;
+    repositoryId?: string;
+  } = {}
+): Promise<string> {
+  const id = `pr-${++prCounter}`;
+  await db.insert(pullRequestsTable).values({
+    id,
+    workspaceId: overrides.workspaceId ?? 'ws1',
+    repositoryId: overrides.repositoryId ?? 'repo1',
+    taskId: overrides.taskId ?? null,
+    owner: 'a',
+    repo: 'b',
+    number: prCounter,
+    state: overrides.state ?? 'open',
+    autoKeepMergeable: overrides.autoKeepMergeable ?? true,
+    autoMergeState: overrides.autoMergeState ?? null,
+    // Recent so the watcher's freshness refresh (which would call the live
+    // GitHub poller) is skipped.
+    lastPolledAt: new Date(),
+    lastSummary: overrides.summary ?? blockedSummary(),
+  });
+  return id;
+}
+
+async function insertTask(
+  db: Database,
+  id: string,
+  status: string,
+  prId: string
+): Promise<void> {
+  await db.insert(tasksTable).values({
+    id,
+    workspaceId: 'ws1',
+    type: 'pr_response',
+    status,
+    priority: 'medium',
+    title: 't',
+    description: 'd',
+    repositoryId: 'repo1',
+    assignedEnvironmentId: 'cloud1',
+    metadata: { pullRequest: { id: prId, number: 1, url: '', createdAt: '' } },
+  });
+}
+
+async function countTasks(db: Database): Promise<number> {
+  const rows = await db.select({ id: tasksTable.id }).from(tasksTable);
+  return rows.length;
+}
+
+async function getPr(db: Database, id: string) {
+  const rows = await db
+    .select()
+    .from(pullRequestsTable)
+    .where(eq(pullRequestsTable.id, id))
+    .limit(1);
+  return rows[0];
+}
+
+describe('prAutoMergeWatcher', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    prCounter = 0;
+    await seedBase(db);
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('fires one cloud task for a blocked PR with no run in flight', async () => {
+    const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+
+    await prAutoMergeWatcher.runOnce();
+
+    const tasks = await db.select().from(tasksTable);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].type).toBe('pr_response');
+    expect(tasks[0].repositoryId).toBe('repo1');
+    expect(tasks[0].status).toBe('queued');
+
+    const pr = await getPr(db, prId);
+    const state = pr.autoMergeState as { lastAutoTaskId?: string; accounted?: boolean };
+    expect(state.lastAutoTaskId).toBe(tasks[0].id);
+    expect(state.accounted).toBe(false);
+    // The PR row is reverse-linked to the run.
+    expect(pr.taskId).toBe(tasks[0].id);
+  });
+
+  it('does not fire while a run is already in flight (no double-run)', async () => {
+    const prId = await insertPr(db);
+    await insertTask(db, 'running', 'in_progress', prId);
+    await db
+      .update(pullRequestsTable)
+      .set({ taskId: 'running' })
+      .where(eq(pullRequestsTable.id, prId));
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(1); // only the pre-existing running task
+  });
+
+  it('increments attempts and pauses after 3 un-mergeable auto-runs', async () => {
+    const prId = await insertPr(db, {
+      autoMergeState: { attempts: 2, lastAutoTaskId: 'prev', accounted: false },
+    });
+    await insertTask(db, 'prev', 'completed', prId);
+    await db
+      .update(pullRequestsTable)
+      .set({ taskId: 'prev' })
+      .where(eq(pullRequestsTable.id, prId));
+
+    await prAutoMergeWatcher.runOnce();
+
+    const pr = await getPr(db, prId);
+    const state = pr.autoMergeState as { attempts: number; pausedAt?: string; accounted?: boolean };
+    expect(state.attempts).toBe(3);
+    expect(state.pausedAt).toBeTruthy();
+    expect(state.accounted).toBe(true);
+    // Paused → no new run fired.
+    expect(await countTasks(db)).toBe(1); // only 'prev'
+  });
+
+  it('resets the attempt counter when the PR is observed mergeable', async () => {
+    const prId = await insertPr(db, {
+      summary: cleanSummary(),
+      autoMergeState: { attempts: 2, lastAutoTaskId: 'prev', accounted: false },
+    });
+    await insertTask(db, 'prev', 'completed', prId);
+    await db
+      .update(pullRequestsTable)
+      .set({ taskId: 'prev' })
+      .where(eq(pullRequestsTable.id, prId));
+
+    await prAutoMergeWatcher.runOnce();
+
+    const pr = await getPr(db, prId);
+    const state = pr.autoMergeState as { attempts: number; pausedAt?: string };
+    expect(state.attempts).toBe(0);
+    expect(state.pausedAt).toBeFalsy();
+    // Clean PR → nothing to fix.
+    expect(await countTasks(db)).toBe(1);
+  });
+
+  it('stays paused on a blocked PR until it is seen mergeable', async () => {
+    await insertPr(db, {
+      autoMergeState: { attempts: 3, pausedAt: new Date().toISOString(), accounted: true },
+    });
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(0); // guard holds — no run fired
+  });
+
+  it('re-arms and fires again after a paused PR becomes mergeable then breaks', async () => {
+    // First: clean observation re-arms (clears pause).
+    const prId = await insertPr(db, {
+      summary: cleanSummary(),
+      autoMergeState: { attempts: 3, pausedAt: new Date().toISOString(), accounted: true },
+    });
+    await prAutoMergeWatcher.runOnce();
+    const pr = await getPr(db, prId);
+    expect((pr.autoMergeState as { attempts: number }).attempts).toBe(0);
+    expect((pr.autoMergeState as { pausedAt?: string }).pausedAt).toBeFalsy();
+
+    // Then: the PR develops a new blocker → fires a fresh run.
+    await db
+      .update(pullRequestsTable)
+      .set({ lastSummary: blockedSummary() })
+      .where(eq(pullRequestsTable.id, prId));
+    await prAutoMergeWatcher.runOnce();
+    expect(await countTasks(db)).toBe(1);
+  });
+
+  it('skips a PR whose workspace has no connected PostHog Code env', async () => {
+    await seedUser(db, { id: OWNER2 });
+    await db.insert(workspacesTable).values({
+      id: 'ws2',
+      ownerId: OWNER2,
+      name: 'ws2',
+      settings: {},
+    });
+    await db.insert(repositoriesTable).values({
+      id: 'repo2',
+      workspaceId: 'ws2',
+      name: 'c/d',
+      url: 'https://github.com/c/d',
+      defaultBranch: 'main',
+    });
+    await insertPr(db, { workspaceId: 'ws2', repositoryId: 'repo2' });
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(0);
+  });
+
+  it('ignores PRs that are not open or not enabled', async () => {
+    await insertPr(db, { state: 'merged' });
+    await insertPr(db, { autoKeepMergeable: false });
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(0);
+  });
+});

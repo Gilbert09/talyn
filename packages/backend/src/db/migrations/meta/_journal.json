@@ -141,6 +141,13 @@
 			"when": 1784160000003,
 			"tag": "0019_workspace_logo",
 			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "7",
+			"when": 1784160000004,
+			"tag": "0020_pr_auto_keep_mergeable",
+			"breakpoints": true
 		}
 	]
 }

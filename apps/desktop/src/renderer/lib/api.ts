@@ -442,6 +442,12 @@ export interface PRRow {
   mergedAt: string | null;
   lastPolledAt: string;
   summary: PRSummaryShape;
+  /** When true, the backend watcher keeps this PR mergeable (repeatedly fires
+   *  a "get mergeable" cloud run on any blocker, indefinitely). */
+  autoKeepMergeable: boolean;
+  /** Watcher guard state: consecutive failed auto-runs + whether it's paused
+   *  (3 failures with no progress). Null when the watcher is off. */
+  autoMergeState?: { attempts: number; paused: boolean } | null;
   /** Unread inbox items linked to this PR (new reviews/comments/CI). */
   unreadCount: number;
   createdAt: string;
@@ -568,6 +574,10 @@ export const pullRequests = {
     request<PRRow>('POST', `/pull-requests/${id}/refresh`),
   focus: (id: string, focused = true) =>
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
+  // Toggle the auto-keep-mergeable watcher for a PR (repeatedly fires a
+  // "get this PR mergeable" cloud run until it's clean, then keeps watching).
+  setAutoKeepMergeable: (id: string, enabled: boolean) =>
+    request<null>('POST', `/pull-requests/${id}/auto-keep-mergeable`, { enabled }),
   // Tell the backend which list is on screen so it can hard-poll that cohort
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
   setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>

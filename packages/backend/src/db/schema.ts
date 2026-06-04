@@ -289,6 +289,25 @@ export const pullRequests = pgTable(
      *   }
      */
     lastSummary: jsonb('last_summary').notNull().default({}),
+    /**
+     * When true, a background watcher keeps this PR mergeable: it repeatedly
+     * fires a cloud "fix every blocker" run whenever the PR has a blocker and
+     * no run is in flight, indefinitely — including conflicts that surface days
+     * later. Survives backend restarts (the watch can span days).
+     */
+    autoKeepMergeable: boolean('auto_keep_mergeable').notNull().default(false),
+    /**
+     * Watcher bookkeeping for the runaway guard. Shape:
+     *   {
+     *     attempts: number,        // consecutive auto-runs that left it un-mergeable
+     *     lastAutoTaskId?: string, // the run the watcher most recently launched
+     *     accounted?: boolean,     // whether lastAutoTaskId's result was folded in
+     *     pausedAt?: string        // ISO time we paused after 3 failed attempts
+     *   }
+     * `attempts` resets to 0 once the PR is observed mergeable, so a problem
+     * that appears after a clean state gets a fresh batch of attempts.
+     */
+    autoMergeState: jsonb('auto_merge_state'),
     // Event cursors — NULL until the first poll has populated them.
     lastReviewId: text('last_review_id'),
     lastReviewCommentId: text('last_review_comment_id'),

@@ -1,5 +1,8 @@
 // Core types for FastOwl
 
+// PR mergeable helpers (shared by the desktop button + backend watcher).
+export * from './prMergeable';
+
 // ============================================================================
 // Workspace
 // ============================================================================

@@ -1,14 +1,12 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
 import { and, desc, eq, SQL, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,
   workspaces as workspacesTable,
-  pullRequests as pullRequestsTable,
 } from '../db/schema.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
-import { attachTaskToPullRequestRow } from '../services/prCache.js';
+import { createCloudTask } from '../services/taskCreate.js';
 import { taskQueueService } from '../services/taskQueue.js';
 import {
   emitTaskStatus,
@@ -148,72 +146,20 @@ export function taskRoutes(): Router {
       });
     }
 
-    const db = getDbClient();
-    const id = uuid();
-    const now = new Date();
-
-    // Stash cloud overrides (model / runtime adapter) on metadata — the
-    // provider reads them at dispatch.
-    const initialMetadata: Record<string, unknown> = {};
-    if (body.runtimeAdapter) initialMetadata.runtimeAdapter = body.runtimeAdapter;
-    if (body.model) initialMetadata.model = body.model;
-
-    // When a task is started FROM a PR (e.g. "Get PR mergeable"), stash a
-    // pullRequest pointer on metadata up front so the task screen renders
-    // its PR pill immediately.
-    if (body.pullRequestId) {
-      const prRows = await db
-        .select()
-        .from(pullRequestsTable)
-        .where(eq(pullRequestsTable.id, body.pullRequestId))
-        .limit(1);
-      const prRow = prRows[0];
-      if (prRow && prRow.workspaceId === body.workspaceId) {
-        initialMetadata.pullRequest = {
-          id: prRow.id,
-          number: prRow.number,
-          url: (prRow.lastSummary as { url?: string } | null)?.url ?? '',
-          createdAt: now.toISOString(),
-        };
-      }
-    }
-
-    await db.insert(tasksTable).values({
-      id,
+    const row = await createCloudTask({
       workspaceId: body.workspaceId,
       type: body.type,
-      // Auto-enqueue on create — the cloud scheduler picks up `queued`
-      // tasks on its next tick (or immediately via runProcessQueue).
-      status: 'queued',
       title: body.title,
       description: body.description,
-      prompt: body.prompt ?? null,
-      priority: body.priority || 'medium',
-      repositoryId: body.repositoryId ?? null,
-      assignedEnvironmentId: body.assignedEnvironmentId ?? null,
-      metadata: Object.keys(initialMetadata).length > 0 ? initialMetadata : undefined,
-      createdAt: now,
-      updatedAt: now,
+      prompt: body.prompt,
+      priority: body.priority,
+      repositoryId: body.repositoryId,
+      assignedEnvironmentId: body.assignedEnvironmentId,
+      pullRequestId: body.pullRequestId,
+      runtimeAdapter: body.runtimeAdapter,
+      model: body.model,
     });
-
-    const rows = await db
-      .select()
-      .from(tasksTable)
-      .where(eq(tasksTable.id, id))
-      .limit(1);
-    res.status(201).json({ success: true, data: rowToTask(rows[0]) } as ApiResponse<Task>);
-
-    // Link the task to the PR it was started from, so the GitHub screen
-    // can show a live in-progress indicator that deep-links back here.
-    if (body.pullRequestId) {
-      void attachTaskToPullRequestRow({
-        workspaceId: body.workspaceId,
-        pullRequestId: body.pullRequestId,
-        taskId: id,
-      }).catch((err) => {
-        console.error('[tasks] failed to link task to PR:', err);
-      });
-    }
+    res.status(201).json({ success: true, data: rowToTask(row) } as ApiResponse<Task>);
   });
 
   // Update task

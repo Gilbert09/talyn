@@ -16,6 +16,7 @@ import {
   type ActiveView,
 } from '../services/prFocus.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { emitPullRequestUpdated } from '../services/websocket.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 /**
@@ -27,6 +28,7 @@ import type { ApiResponse } from '@fastowl/shared';
  *   GET   /pull-requests/:id              full detail (always fresh GraphQL)
  *   GET   /pull-requests/:id/files        file-by-file diff (live REST)
  *   POST  /pull-requests/:id/refresh      force fetch + upsert
+ *   POST  /pull-requests/:id/auto-keep-mergeable  toggle the watcher
  *   POST  /pull-requests/:id/focus        mark focused (adaptive-poll TTL)
  *   POST  /pull-requests/:id/seen         mark linked inbox items read
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
@@ -307,6 +309,56 @@ export function pullRequestRoutes(): Router {
     res.json({ success: true, data: rowToPublicShape(fresh[0]) });
   });
 
+  // Auto-keep-mergeable toggle. Body `{ enabled: boolean }`. When on, the
+  // background watcher repeatedly fires a "take this PR to a clean, mergeable
+  // state" cloud run whenever the PR has a blocker and nothing's already
+  // working it — indefinitely, including conflicts that appear days later.
+  router.post('/:id/auto-keep-mergeable', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+
+    const enabled = (req.body as { enabled?: boolean }).enabled === true;
+    // Enabling: arm a fresh guard so the next watcher tick fires immediately if
+    // the PR already needs work. Disabling: clear all watcher bookkeeping.
+    const nextState = enabled ? { attempts: 0, accounted: true } : null;
+    await db
+      .update(pullRequestsTable)
+      .set({
+        autoKeepMergeable: enabled,
+        autoMergeState: nextState,
+        updatedAt: new Date(),
+      })
+      .where(eq(pullRequestsTable.id, row.id));
+
+    emitPullRequestUpdated(row.workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId: row.repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: row.state,
+      lastSummary: row.lastSummary as Record<string, unknown>,
+      autoKeepMergeable: enabled,
+      autoMergeState: publicAutoMergeState(nextState),
+    });
+
+    res.json({ success: true, data: null } as ApiResponse<null>);
+  });
+
   // Focus signal. Body `{ focused: true }` (default) tightens this
   // PR's poll TTL to 30 s; `{ focused: false }` reverts to 60 s.
   // Idempotent — duplicate calls are no-ops.
@@ -472,6 +524,8 @@ interface PullRequestRow {
   mergedAt: Date | null;
   lastPolledAt: Date;
   lastSummary: unknown;
+  autoKeepMergeable: boolean;
+  autoMergeState: unknown;
   lastReviewId: string | null;
   lastReviewCommentId: string | null;
   lastCommentId: string | null;
@@ -524,6 +578,15 @@ async function reconcileTerminalState(
   return (fresh[0] as PullRequestRow | undefined) ?? null;
 }
 
+/** The compact watcher state the desktop renders (toggle + badge). */
+function publicAutoMergeState(
+  raw: unknown
+): { attempts: number; paused: boolean } | null {
+  const s = raw as { attempts?: number; pausedAt?: string } | null;
+  if (!s) return null;
+  return { attempts: s.attempts ?? 0, paused: !!s.pausedAt };
+}
+
 function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
   return {
     id: row.id,
@@ -539,6 +602,8 @@ function rowToPublicShape(row: PullRequestRow, unreadCount = 0) {
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
     lastPolledAt: row.lastPolledAt.toISOString(),
     summary: row.lastSummary,
+    autoKeepMergeable: row.autoKeepMergeable,
+    autoMergeState: publicAutoMergeState(row.autoMergeState),
     unreadCount,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
