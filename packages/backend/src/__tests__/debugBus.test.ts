@@ -105,11 +105,12 @@ describe('recordHttp', () => {
 
 describe('poller registry', () => {
   it('registers and updates tick state', () => {
-    debugBus.registerPoller('pr_monitor', 30_000);
+    debugBus.registerPoller('pr_monitor', 30_000, 'baseline PR poll');
     debugBus.pollerTick('pr_monitor', { durationMs: 12, ok: true, summary: 'tick' });
     debugBus.pollerTick('pr_monitor', { durationMs: 8, ok: true });
     const poller = debugBus.snapshot().pollers.find((p) => p.name === 'pr_monitor');
     expect(poller).toBeDefined();
+    expect(poller!.description).toBe('baseline PR poll');
     expect(poller!.intervalMs).toBe(30_000);
     expect(poller!.tickCount).toBe(2);
     expect(poller!.lastDurationMs).toBe(8);
@@ -118,7 +119,7 @@ describe('poller registry', () => {
   });
 
   it('records a failed tick under the error category with the error message', () => {
-    debugBus.registerPoller('merge_queue', 60_000);
+    debugBus.registerPoller('merge_queue', 60_000, 'serialized merge queue');
     debugBus.pollerTick('merge_queue', { durationMs: 3, ok: false, error: 'boom' });
     const poller = debugBus.snapshot().pollers.find((p) => p.name === 'merge_queue');
     expect(poller!.lastOk).toBe(false);

@@ -151,14 +151,16 @@ class DebugBus {
 
   // ---- Poller registry ----------------------------------------------------
 
-  registerPoller(name: string, intervalMs: number): void {
+  registerPoller(name: string, intervalMs: number, description: string): void {
     const existing = this.pollers.get(name);
     if (existing) {
       existing.intervalMs = intervalMs;
+      existing.description = description;
       return;
     }
     this.pollers.set(name, {
       name,
+      description,
       intervalMs,
       tickCount: 0,
       lastTickAt: null,
@@ -174,7 +176,7 @@ class DebugBus {
   ): void {
     let p = this.pollers.get(name);
     if (!p) {
-      this.registerPoller(name, 0);
+      this.registerPoller(name, 0, '');
       p = this.pollers.get(name)!;
     }
     p.tickCount += 1;

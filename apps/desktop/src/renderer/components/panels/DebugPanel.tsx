@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bug, Trash2, Pause, Play, Wifi } from 'lucide-react';
+import { Bug, Trash2, Pause, Play, Wifi, Info } from 'lucide-react';
 import type { DebugCategory, DebugEvent, DebugSnapshot } from '@fastowl/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
@@ -29,6 +29,57 @@ const FILTERS: { id: CategoryFilter; label: string }[] = [
   { id: 'event', label: 'Events' },
   { id: 'error', label: 'Errors' },
 ];
+
+// What each event category means. Surfaced as tooltips on the counter chips
+// and the legend. Keep this in sync when adding a new DebugCategory.
+const CATEGORY_INFO: Record<DebugCategory, string> = {
+  http: 'Outbound HTTP to external services (GitHub REST/GraphQL, PostHog Code). Metadata only — method, URL with the query stripped, status, and duration.',
+  polling: 'Background poll-loop ticks. Each loop wakes on its own interval to reconcile state — see the cards above for what each does.',
+  websocket: 'The realtime channel to the desktop app: client connect/disconnect, inbound messages, and outbound broadcasts.',
+  event: 'In-process domain events (e.g. a task changing status) that other backend services react to.',
+  error: 'A request or poll tick that failed — expand the row for the error message.',
+};
+
+// What each non-poller service is. Pollers carry their own description from
+// the backend registry; these cover the services that show up in HTTP/event
+// rows. Keep this in sync when a new outbound integration or emitter lands.
+const SERVICE_INFO: Record<string, string> = {
+  github: 'GitHub REST + GraphQL API — PR data, checks, reviews, merges, and OAuth.',
+  posthog_code: 'PostHog Code cloud-task API — creates and runs cloud agent tasks and streams their transcripts.',
+  ws: 'The WebSocket server fanning realtime updates out to connected desktop clients.',
+  tasks: 'Task lifecycle domain events (queued → in_progress → completed/failed).',
+};
+
+/**
+ * Dependency-free hover tooltip. Wraps a trigger and reveals `content` on
+ * hover, positioned above. Good enough for an internal debug surface — no
+ * portal/positioning library needed.
+ */
+function Tip({
+  content,
+  children,
+  className,
+  side = 'top',
+}: {
+  content: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  side?: 'top' | 'bottom';
+}) {
+  return (
+    <span className={cn('group/tip relative inline-flex', className)}>
+      {children}
+      <span
+        className={cn(
+          'pointer-events-none absolute left-1/2 z-50 hidden w-64 max-w-[80vw] -translate-x-1/2 whitespace-normal rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-2 text-left text-[11px] font-normal normal-case leading-relaxed text-zinc-300 shadow-lg group-hover/tip:block',
+          side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+        )}
+      >
+        {content}
+      </span>
+    </span>
+  );
+}
 
 /** Tailwind classes for the per-category badge in the stream. */
 function categoryClasses(category: DebugCategory): string {
@@ -152,6 +203,22 @@ export function DebugPanel() {
           <Bug className="h-5 w-5 text-zinc-400" />
           <h2 className="text-base font-semibold">Debug</h2>
           <span className="text-xs text-zinc-500">app internals, live</span>
+          <Tip
+            side="bottom"
+            content={
+              <span className="block space-y-1.5">
+                {(Object.keys(CATEGORY_INFO) as DebugCategory[]).map((c) => (
+                  <span key={c} className="block">
+                    <span className="font-medium text-zinc-100">{CATEGORY_LABEL[c]}</span>
+                    {' — '}
+                    {CATEGORY_INFO[c]}
+                  </span>
+                ))}
+              </span>
+            }
+          >
+            <Info className="h-3.5 w-3.5 text-zinc-600 hover:text-zinc-400" />
+          </Tip>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -180,21 +247,31 @@ export function DebugPanel() {
       {/* Snapshot bar */}
       <div className="border-b border-zinc-800 px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2.5 py-1 text-xs text-zinc-300">
-            <Wifi className="h-3.5 w-3.5 text-emerald-400" />
-            {snapshot?.wsClients ?? 0} WS client{snapshot?.wsClients === 1 ? '' : 's'}
-          </span>
+          <Tip
+            side="bottom"
+            content="Desktop clients currently connected to the backend's WebSocket. The debug stream you're watching is one of them."
+          >
+            <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2.5 py-1 text-xs text-zinc-300">
+              <Wifi className="h-3.5 w-3.5 text-emerald-400" />
+              {snapshot?.wsClients ?? 0} WS client{snapshot?.wsClients === 1 ? '' : 's'}
+            </span>
+          </Tip>
           {snapshot &&
             Object.entries(snapshot.counters).map(([cat, n]) => (
-              <span
+              <Tip
                 key={cat}
-                className={cn(
-                  'rounded-md px-2.5 py-1 text-xs',
-                  categoryClasses(cat as DebugCategory)
-                )}
+                side="bottom"
+                content={CATEGORY_INFO[cat as DebugCategory] ?? 'Recorded events in this category since the last clear.'}
               >
-                {CATEGORY_LABEL[cat as DebugCategory] ?? cat}: {n}
-              </span>
+                <span
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs',
+                    categoryClasses(cat as DebugCategory)
+                  )}
+                >
+                  {CATEGORY_LABEL[cat as DebugCategory] ?? cat}: {n}
+                </span>
+              </Tip>
             ))}
         </div>
 
@@ -205,9 +282,26 @@ export function DebugPanel() {
               className="rounded-md border border-zinc-800 bg-zinc-900/40 p-2"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate font-mono text-xs text-zinc-200" title={p.name}>
-                  {p.name}
-                </span>
+                <Tip
+                  side="bottom"
+                  className="min-w-0"
+                  content={
+                    <span className="block">
+                      <span className="font-mono font-medium text-zinc-100">{p.name}</span>
+                      <span className="mt-1 block">
+                        {p.description || SERVICE_INFO[p.name] || 'A background poll loop.'}
+                      </span>
+                      <span className="mt-1 block text-zinc-500">
+                        Runs every {Math.round(p.intervalMs / 1000)}s.
+                      </span>
+                    </span>
+                  }
+                >
+                  <span className="flex items-center gap-1 truncate font-mono text-xs text-zinc-200">
+                    {p.name}
+                    <Info className="h-3 w-3 shrink-0 text-zinc-600" />
+                  </span>
+                </Tip>
                 <span
                   className={cn(
                     'h-2 w-2 shrink-0 rounded-full',
@@ -290,7 +384,9 @@ export function DebugPanel() {
                   >
                     {CATEGORY_LABEL[e.category]}
                   </span>
-                  <span className="shrink-0 text-zinc-500">{e.service}</span>
+                  <span className="shrink-0 text-zinc-500" title={SERVICE_INFO[e.service]}>
+                    {e.service}
+                  </span>
                   <span
                     className={cn(
                       'min-w-0 flex-1 truncate',

@@ -42,6 +42,18 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 
 See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
 
+## Debug Tooling — keep it current
+
+There's a developer-only **Debug** panel (Settings → Developer → "Debug tools", then a Debug sidebar entry) that surfaces app internals live: outbound HTTP, poll-loop ticks, WebSocket traffic, and domain events. It's powered by an in-process `debugBus` (`packages/backend/src/services/debugBus.ts`, ring buffer + counters + poller registry) that records metadata only (URLs are query-stripped; no headers/bodies/tokens) and streams over the existing WS as `debug:event`. UI lives in `apps/desktop/src/renderer/components/panels/DebugPanel.tsx`.
+
+**When you add or change a subsystem, wire it into the bus so the panel stays honest:**
+- **New outbound HTTP** (a new external API/integration) → time the call and `debugBus.recordHttp({ service, method, url, status, durationMs, ok, error? })` at the central request funnel (see `github.ts` `apiRequest`/`executeGraphql`, `posthogCode/client.ts` `request`). Add a one-liner to `SERVICE_INFO` in `DebugPanel.tsx`.
+- **New poll loop** → `debugBus.registerPoller(name, intervalMs, description)` in `init()` (the `description` arg is required — that's the tooltip) and `debugBus.pollerTick(name, { durationMs, ok, error? })` in the tick's `finally`.
+- **New WebSocket message/broadcast or domain event** → `debugBus.recordWs(...)` / `debugBus.recordEvent(...)`. If it's a new outbound broadcast type, keep the `event.type !== 'debug:event'` loop-guard in `websocket.ts` intact.
+- **New `DebugCategory`** → extend the shared type, `CATEGORY_INFO`, `CATEGORY_LABEL`, `categoryClasses`, and the filter chips in `DebugPanel.tsx`.
+
+Tests live in `packages/backend/src/__tests__/debugBus.test.ts` — extend them alongside changes.
+
 ## Active Priorities
 
 > Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Definition of done for "production ready" is in [`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md).

@@ -78,8 +78,16 @@ class PRMonitorService extends EventEmitter {
   private startPolling(): void {
     if (this.pollTimer) return;
     console.log('Starting PR monitor polling...');
-    debugBus.registerPoller('pr_monitor', POLL_INTERVAL_MS);
-    debugBus.registerPoller('pr_monitor_fast_ci', ACTIVE_CI_INTERVAL_MS);
+    debugBus.registerPoller(
+      'pr_monitor',
+      POLL_INTERVAL_MS,
+      "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache (emitting inbox deltas), and reconciles closed/merged PRs.",
+    );
+    debugBus.registerPoller(
+      'pr_monitor_fast_ci',
+      ACTIVE_CI_INTERVAL_MS,
+      'Fast loop for authored PRs with in-flight CI — re-queries GraphQL directly (no Search calls) so settling checks and flipping mergeability update quickly. Self-draining once checks settle.',
+    );
     this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
     this.fastTimer = setInterval(() => this.fastPoll(), ACTIVE_CI_INTERVAL_MS);
     setTimeout(() => this.poll(), 5_000);

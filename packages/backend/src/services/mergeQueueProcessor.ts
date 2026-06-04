@@ -102,7 +102,11 @@ class MergeQueueProcessor {
 
   init(): void {
     if (this.interval) return;
-    debugBus.registerPoller('merge_queue', POLL_INTERVAL_MS);
+    debugBus.registerPoller(
+      'merge_queue',
+      POLL_INTERVAL_MS,
+      'Merges queued PRs one-by-one, serialized per (workspace, repo, base branch) — merges the head when clean, or fires a cloud fix run on conflict/behind/blocked, then promotes the next PR.',
+    );
     this.interval = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);

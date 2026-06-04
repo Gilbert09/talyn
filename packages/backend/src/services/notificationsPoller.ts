@@ -40,7 +40,11 @@ class NotificationsPoller {
   init(): void {
     if (this.timer) return;
     console.log('Starting GitHub notifications poller...');
-    debugBus.registerPoller('notifications', BASE_TICK_MS);
+    debugBus.registerPoller(
+      'notifications',
+      BASE_TICK_MS,
+      "The low-latency live channel: polls GitHub's notifications feed per workspace (honouring X-Poll-Interval) and uses each PR notification as a trigger to refetch that PR immediately.",
+    );
     this.timer = setInterval(() => void this.tick(), BASE_TICK_MS);
   }
 

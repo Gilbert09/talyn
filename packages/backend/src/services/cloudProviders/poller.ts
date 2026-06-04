@@ -22,7 +22,11 @@ class CloudTaskPoller {
 
   init(): void {
     if (this.interval) return;
-    debugBus.registerPoller('cloud_task', POLL_INTERVAL_MS);
+    debugBus.registerPoller(
+      'cloud_task',
+      POLL_INTERVAL_MS,
+      'Drives every in-progress cloud task (e.g. PostHog Code) to a terminal state — loads in-progress tasks and asks the owning provider to reconcile status, transcript, and PR linkage.',
+    );
     this.interval = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);

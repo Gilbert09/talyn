@@ -62,7 +62,11 @@ class PRAutoMergeWatcher {
 
   init(): void {
     if (this.interval) return;
-    debugBus.registerPoller('auto_merge', POLL_INTERVAL_MS);
+    debugBus.registerPoller(
+      'auto_merge',
+      POLL_INTERVAL_MS,
+      'Keeps every PR with auto-keep-mergeable enabled in a mergeable state — refreshes blockers and fires a cloud fix run when one is found, pausing after repeated failed attempts.',
+    );
     this.interval = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);

@@ -533,6 +533,8 @@ export interface DebugEvent {
 /** Live state of one poll loop, surfaced in the Debug panel snapshot bar. */
 export interface DebugPollerState {
   name: string;
+  /** Human-readable explanation of what this loop does (shown as a tooltip). */
+  description: string;
   intervalMs: number;
   tickCount: number;
   lastTickAt: string | null;
