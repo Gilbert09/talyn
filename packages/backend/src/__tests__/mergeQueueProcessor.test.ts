@@ -352,6 +352,60 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toBe('merge conflicts with the base branch');
   });
 
+  it('does not reset the attempt counter on a transient clean reading (cap-evasion)', async () => {
+    // Mid-loop: 2 runs already spent, the last one terminal. The cached summary
+    // momentarily reads CLEAN (the post-push UNKNOWN window) but the merge then
+    // bounces — the PR isn't really fixed. The counter must NOT reset to 0, or
+    // the 3-attempt cap would never trip and the queue fires fix runs forever.
+    mergeSpy.mockResolvedValueOnce({ sha: '', merged: false, message: 'still conflicting' });
+    const prId = await insertPr(db, {
+      summary: cleanSummary(),
+      mergeQueueState: { status: 'fixing', attempts: 2, lastFixTaskId: 'prev', accounted: false },
+    });
+    await insertTask(db, 'prev', 'completed', prId);
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState;
+    expect(state.attempts).toBe(2); // held — NOT reset to 0
+  });
+
+  it('never fires past the retry budget, even after a failed-merge flap downgraded the status', async () => {
+    // Budget already spent (attempts == MAX) but status was knocked back to
+    // 'waiting' by an earlier failed merge on a transient clean reading. The
+    // hard cap must re-settle it to 'blocked' and fire nothing.
+    const prId = await insertPr(db, {
+      summary: conflictSummary(),
+      mergeQueueState: { status: 'waiting', attempts: 3, accounted: true },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(await countTasks(db)).toBe(0); // no 4th run
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'blocked' });
+  });
+
+  it('does not fire a duplicate while its own run is active, even if row.taskId was reassigned', async () => {
+    // The queue fired 'qfix' (still in flight). Another flow then reassigned the
+    // PR's row.taskId to a now-completed task 'other'. The guard must recognise
+    // the queue's OWN run (qfix) as active and back off — keying only on
+    // row.taskId would miss it and fire a concurrent duplicate.
+    const prId = await insertPr(db, {
+      summary: conflictSummary(),
+      mergeQueueState: { status: 'fixing', attempts: 1, lastFixTaskId: 'qfix', accounted: false },
+    });
+    await insertTask(db, 'qfix', 'in_progress', prId);
+    await insertTask(db, 'other', 'completed', prId);
+    await db.update(pullRequestsTable).set({ taskId: 'other' }).where(eq(pullRequestsTable.id, prId));
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(await countTasks(db)).toBe(2); // qfix + other — no duplicate fired
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'fixing' });
+  });
+
   it('re-arms a blocked PR once it is observed clean, then merges it', async () => {
     await insertPr(db, {
       summary: cleanSummary(),

@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 45 — Merge queue: stop firing more than MAX_ATTEMPTS fix runs per PR
+
+A queued PR was spawning far more than the 3-attempt budget of cloud fix runs (one PR had 7). Two compounding in-process bugs in `mergeQueueProcessor`:
+
+1. **Counter reset by a transient clean reading.** Right after a fix run pushes commits, GitHub recomputes mergeability async, so the cached summary briefly reads `MERGEABLE`/`UNKNOWN`. Both `attempts = 0` resets (the accounting `else` branch and the step-4 re-arm) fired on that transient lie, so the cap never tripped and the queue fired runs forever. Fix: `attempts` is now monotonic — only ever incremented; a genuinely-fixed PR leaves the queue via a successful merge (the only trustworthy "fixed" signal), so no reset is needed. Added a **hard cap at the fire site** as an absolute backstop (never fire when `attempts >= MAX_ATTEMPTS`, even if a failed-merge flap downgraded the status).
+2. **Active-run guard keyed on `row.taskId`.** `attachTaskToPullRequestRow` (called by *any* task created against the PR — a manual task, the auto-keep watcher) reassigns `pull_requests.taskId`, so the guard could check the wrong task and fire a duplicate while the queue's own run was in flight. Fix: guard on the queue's own `state.lastFixTaskId` (plus any other run still pointed to by `row.taskId`).
+
+- 3 regression tests (no-reset-on-transient-clean / hard-cap-after-flap / no-duplicate-while-own-run-active). Backend green (460), tsc + lint clean.
+- **Known twin:** `prAutoMergeWatcher` shares the same two patterns (transient-clean resets + `row.taskId` guard). It already has a fire-site hard cap so it's less exposed, and its re-arm-on-genuine-clean is intended (long-lived watcher) — so left untouched pending a decision on distinguishing transient vs genuine clean.
+- Deployment note: the in-process serialization + own-run guard make this correct at 1 replica (current). A multi-replica backend would still need a DB-level claim (atomic compare-and-set) before firing.
+
 ## Session 44 — Notify when a merge-queue PR becomes blocked
 
 When the merge queue exhausts its retry budget (3 failed cloud fix runs) a PR flips to `blocked` and waits for a human — good, but silently. Added a notification on that transition, plus the *reason*.

@@ -249,21 +249,39 @@ class MergeQueueProcessor {
     const summary = row.lastSummary as PRMergeableSummary;
     const state = readState(row);
 
-    // 2. Active-task guard — a fix run for this PR is still working; leave it.
-    const linkedStatus = await linkedTaskStatus(row.taskId);
-    if (linkedStatus && ACTIVE_STATUSES.has(linkedStatus)) {
+    // 2. Active-run guard — never fire while a run is already working this PR.
+    //    Check the queue's OWN last fix run by id, not just `row.taskId`:
+    //    `row.taskId` is shared and gets reassigned by other flows (a manual
+    //    task, the auto-keep-mergeable watcher), which would let the queue fire
+    //    a duplicate while its own run is still in flight. Also honour any other
+    //    run pointed to by `row.taskId` so we don't pile on while it works.
+    const ourFix = state.lastFixTaskId
+      ? await linkedTaskStatus(state.lastFixTaskId)
+      : null;
+    const otherFix =
+      row.taskId && row.taskId !== state.lastFixTaskId
+        ? await linkedTaskStatus(row.taskId)
+        : null;
+    if (
+      (ourFix && ACTIVE_STATUSES.has(ourFix)) ||
+      (otherFix && ACTIVE_STATUSES.has(otherFix))
+    ) {
       await this.ensureStatus(row, state, 'fixing');
       return;
     }
 
-    // 3. Account the last fix run now that it's terminal.
+    // 3. Account the last fix run now that it's terminal. We only ever
+    //    INCREMENT `attempts` here — never reset on a momentary non-blocked
+    //    reading. The cached summary briefly reads mergeable/UNKNOWN right
+    //    after a fix run pushes commits (GitHub recomputes mergeability async),
+    //    and resetting on that transient lie is exactly what let the queue blow
+    //    past MAX_ATTEMPTS and fire fix runs forever. A genuinely-fixed PR
+    //    merges in step 5 and leaves the queue, so it never needs a reset.
     if (state.lastFixTaskId && !state.accounted) {
       const wasBlocked = state.status === 'blocked';
       if (queueBlocked(row, summary)) {
         state.attempts += 1;
         if (state.attempts >= MAX_ATTEMPTS) state.status = 'blocked';
-      } else {
-        state.attempts = 0;
       }
       state.accounted = true;
       // Capture the reason at the transition so the badge + notification can
@@ -277,16 +295,13 @@ class MergeQueueProcessor {
       if (justBlocked) this.notifyBlocked(row, state);
     }
 
-    // 4. Gave up after MAX_ATTEMPTS — wait for the user (or a clean observation).
-    if (state.status === 'blocked') {
-      // Re-arm if it's since gone clean.
-      if (!queueBlocked(row, summary)) {
-        state.status = 'waiting';
-        state.attempts = 0;
-        await this.persist(row, state);
-      } else {
-        return;
-      }
+    // 4. Gave up after MAX_ATTEMPTS — wait for a human. We do NOT auto-reset
+    //    `attempts` on a momentary clean reading (same transient-UNKNOWN trap as
+    //    step 3). A genuinely-clean blocked PR falls through to the merge in
+    //    step 5 and leaves the queue; a still-blocked one waits here until the
+    //    user re-toggles the queue (the route resets the state).
+    if (state.status === 'blocked' && queueBlocked(row, summary)) {
+      return;
     }
 
     // 5. Clean path — mergeable AND up-to-date → merge it.
@@ -361,6 +376,16 @@ class MergeQueueProcessor {
     // 6. Blocked path — conflict / changes / failing CI / unresolved threads /
     //    BEHIND / BLOCKED. Funnel all of these into the SAME cloud fix run (it
     //    merges the base in, curing both conflicts and BEHIND in one run).
+
+    // Hard cap — the absolute guard against firing past the retry budget, even
+    // if a transient clean reading + failed merge briefly downgraded `status`
+    // to 'waiting'. `attempts` only ever increments in step 3 (which already
+    // notified at the cap), so just re-settle the badge to 'blocked' silently.
+    if (state.attempts >= MAX_ATTEMPTS) {
+      await this.ensureStatus(row, state, 'blocked');
+      return;
+    }
+
     const envId = await resolvePostHogEnvId(row.workspaceId);
     if (!envId) {
       // No connected PostHog Code env — can't dispatch. Keep waiting; the
