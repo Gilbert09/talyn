@@ -43,4 +43,14 @@ describe('buildPostHogPrompt — base-merge leak guard', () => {
     expect(prompt).toContain('NEVER force-push');
     expect(prompt.toLowerCase()).toContain('never rebase');
   });
+
+  it('forbids squash-merging the base and requires a real two-parent merge', () => {
+    expect(prompt).toContain('git merge --squash');
+    expect(prompt).toContain('TWO parents');
+  });
+
+  it('requires the deterministic post-merge ancestor / behind-by assertion', () => {
+    expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
+    expect(prompt).toContain('git rev-list --count HEAD..origin/main');
+  });
 });

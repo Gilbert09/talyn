@@ -129,8 +129,9 @@ Branch: ${s.headBranch}
 
 NON-NEGOTIABLE GIT RULES — read these first, they apply to EVERYTHING below:
   - NEVER force-push. Not \`git push --force\`, not \`--force-with-lease\`, not \`push -f\`. Every single push in this task is a plain \`git push\`. There is no scenario in this task that legitimately needs a force-push.
-  - NEVER rewrite this branch's history: no rebase, no reset, no cherry-pick, no squash, no commit --amend, no filter-branch. Your work only ever ADDS new commits on top of the current branch tip.
-  - To incorporate changes from the base branch (${s.baseBranch}), MERGE it in — never rebase onto it. A merge appends a merge commit on top of your branch, so a normal \`git push\` always fast-forwards the remote and a force-push is never required.
+  - NEVER rewrite this branch's PUSHED history: no rebase, no cherry-pick, no squash-merge, no commit --amend, no filter-branch on anything you've already pushed. Your work only ever ADDS new commits on top of the current branch tip. (The single exception: undoing a LOCAL commit you just made and have NOT yet pushed — e.g. \`git reset --hard ORIG_HEAD\` to back out a botched merge before it reaches the remote. That never touches pushed history, so it's safe; a reset/amend of an already-pushed commit is not.)
+  - To incorporate changes from the base branch (${s.baseBranch}), do a REAL MERGE — plain \`git merge origin/${s.baseBranch}\`, never rebase onto it. A real merge appends a true merge commit (one with TWO parents: your branch tip AND the base tip), so a normal \`git push\` always fast-forwards the remote and a force-push is never required.
+  - NEVER use \`git merge --squash\` (or any equivalent that brings the base's changes in as a single-parent commit: \`git read-tree\`, \`git checkout ${s.baseBranch} -- .\`, \`git diff base | git apply\`, etc.). A squash-merge produces a one-parent commit that does NOT join the base's history — the base never becomes an ancestor, so the PR diff then attributes EVERY file the base changed to your branch (hundreds of unrelated files leaking into the PR). This has actually happened. The only acceptable way to take the base in is a true two-parent merge commit. Naming a single-parent commit "Merge branch '${s.baseBranch}'" does not make it a merge.
   - If a \`git push\` is ever rejected as non-fast-forward (i.e. it would need a force), STOP. Do not reach for \`--force\`. It means history got rewritten or you're on the wrong branch — undo that with a fresh commit/merge and push normally instead.
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
@@ -154,10 +155,14 @@ Your job is to keep iterating on this PR until ALL of the following are true and
 
 3. The branch merges cleanly into its base branch (no merge conflicts).
    - Check mergeability via \`gh pr view ${number} --json mergeable,mergeStateStatus\`.
-   - If the branch is CONFLICTING / DIRTY, update it by MERGING the base branch IN (per the git rules above — never rebase):
+   - If the branch is CONFLICTING / DIRTY, update it by MERGING the base branch IN (per the git rules above — a real two-parent merge, never rebase, never --squash):
        git fetch origin ${s.baseBranch}
        git merge origin/${s.baseBranch}
-     Then resolve each conflict by hand and commit the merge. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch. Rebasing would rewrite history (forcing a force-push) and drag unrelated/duplicate commits into the PR — that's exactly why it's forbidden.
+     Then resolve each conflict by hand and commit the merge. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch. Rebasing or squash-merging would rewrite history / drag unrelated commits into the PR — that's exactly why they're forbidden.
+   - VERIFY THE MERGE ACTUALLY JOINED THE BASE (this is the #1 cause of mass file leaks — a squash slips through and the base is never truly merged). Immediately after committing the merge, both of these must hold:
+       git merge-base --is-ancestor origin/${s.baseBranch} HEAD   # must exit 0 — the base tip is now an ancestor of your branch
+       git rev-list --count HEAD..origin/${s.baseBranch}          # must print 0 — your branch is NOT behind the base anymore
+     Also confirm the merge commit has two parents: \`git show --no-patch --format=%P HEAD\` must list TWO hashes. If \`--is-ancestor\` fails, the count is non-zero, or there's only one parent, you did NOT do a real merge (most likely a squash). Undo it with \`git reset --hard ORIG_HEAD\` (a LOCAL, not-yet-pushed reset — never a force-push to the remote) and redo with a plain \`git merge origin/${s.baseBranch}\`.
    - Resolve ONLY the genuine conflicts. Preserve the intent of both sides; never blindly discard the PR's changes or the base's. The update must add nothing beyond (a) one merge commit and (b) your conflict resolutions — no unrelated files, commits, or edits.
    - GUARD AGAINST BASE-BRANCH FILES LEAKING INTO THE PR. This is a real, recurring failure: a botched merge resolution drags files that only changed on ${s.baseBranch} into the PR's diff. Catch it explicitly:
        a. BEFORE merging, record the exact set of files this PR owns:
