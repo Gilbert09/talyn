@@ -22,7 +22,26 @@ interface AutoMergeState {
   pausedAt?: string;
 }
 
-type PRRow = typeof pullRequestsTable.$inferSelect;
+// Only the columns this watcher touches — avoids `select()`-ing every PR
+// column (and any large one added to the table later) each tick. The `Pick`
+// makes the compiler enforce completeness: read a column not listed here and
+// tsc fails, so the projection can't silently drift out of sync.
+const WATCH_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  taskId: pullRequestsTable.taskId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  lastPolledAt: pullRequestsTable.lastPolledAt,
+  lastSummary: pullRequestsTable.lastSummary,
+  autoKeepMergeable: pullRequestsTable.autoKeepMergeable,
+  autoMergeState: pullRequestsTable.autoMergeState,
+} as const;
+
+type PRRow = Pick<typeof pullRequestsTable.$inferSelect, keyof typeof WATCH_COLUMNS>;
 
 function readState(row: PRRow): AutoMergeState {
   const s = (row.autoMergeState as AutoMergeState | null) ?? null;
@@ -94,7 +113,7 @@ class PRAutoMergeWatcher {
     try {
       const db = getDbClient();
       const rows = await db
-        .select()
+        .select(WATCH_COLUMNS)
         .from(pullRequestsTable)
         .where(
           and(
@@ -149,7 +168,7 @@ class PRAutoMergeWatcher {
         .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
         .catch(() => {});
       const reread = await db
-        .select()
+        .select(WATCH_COLUMNS)
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, row.id))
         .limit(1);

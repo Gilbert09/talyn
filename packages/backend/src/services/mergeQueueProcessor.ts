@@ -36,7 +36,27 @@ interface MergeQueueState {
   blockReason?: string;
 }
 
-type PRRow = typeof pullRequestsTable.$inferSelect;
+// Only the columns this processor touches — avoids `select()`-ing every PR
+// column (and any large one added to the table later) on each 10s tick. The
+// `Pick` makes the compiler enforce completeness: read a column not listed
+// here and tsc fails, so the projection can't silently drift out of sync.
+const QUEUE_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  taskId: pullRequestsTable.taskId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  lastPolledAt: pullRequestsTable.lastPolledAt,
+  lastSummary: pullRequestsTable.lastSummary,
+  mergeQueued: pullRequestsTable.mergeQueued,
+  mergeQueueState: pullRequestsTable.mergeQueueState,
+  mergeMethod: pullRequestsTable.mergeMethod,
+} as const;
+
+type PRRow = Pick<typeof pullRequestsTable.$inferSelect, keyof typeof QUEUE_COLUMNS>;
 
 function readState(row: PRRow): MergeQueueState {
   const s = (row.mergeQueueState as MergeQueueState | null) ?? null;
@@ -161,7 +181,7 @@ class MergeQueueProcessor {
     try {
       const db = getDbClient();
       const rows = await db
-        .select()
+        .select(QUEUE_COLUMNS)
         .from(pullRequestsTable)
         .where(
           and(
@@ -231,7 +251,7 @@ class MergeQueueProcessor {
         .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
         .catch(() => {});
       const reread = await db
-        .select()
+        .select(QUEUE_COLUMNS)
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, row.id))
         .limit(1);

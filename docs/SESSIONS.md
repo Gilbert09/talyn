@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 48 — Database egress, round 2: list endpoint + PR-loop projections
+
+Follow-up sweep for other wasteful reads after the Session 47 transcript-poller fix. Verified findings (several of an earlier audit's "criticals" didn't hold up — `taskQueue.getQueuedTasks` only selects `pending`/`queued` tasks whose transcript is null, and `prMonitor` is already fully column-projected):
+
+1. **`GET /tasks` list pulled every transcript, then discarded it.** `routes/tasks.ts` selected `{ task: tasksTable }` (all columns incl. the MB-scale `transcript`) but `rowToTask` drops the transcript without `includeTranscript` — so the blob left Postgres only to be thrown away in the serializer. Load-triggered (app launch / workspace switch / WS reconnect), so it never showed as a steady ramp but could be tens of MB per call for transcript-heavy users. Fix: a `taskColumnsNoTranscript` projection in `services/taskSerialize.ts` (co-located with `rowToTask`, which now accepts a transcript-optional row); the list selects that. Single-task `GET /:id` still selects the full row (transcript intentional). New `routes/tasksList.test.ts` pins both behaviours.
+
+2. **`mergeQueueProcessor` (10s) + `prAutoMergeWatcher` (60s) bare `select()` of `pull_requests` rows.** Small today (~2 KB rows; only `lastSummary` is sizable and it's used) — done mainly as defense so a future large column on `pull_requests` can't silently leak. Each now selects a `QUEUE_COLUMNS` / `WATCH_COLUMNS` projection, and `PRRow` is narrowed to `Pick<…, keyof projection>` so the **compiler enforces completeness** — read a column not in the projection and tsc fails. Both the live and the freshness-reread selects are covered.
+
+- Backend green (485), tsc + lint clean. The list fix is the meaningful one; the PR-loop changes are hygiene/defense.
+
 ## Session 47 — Database egress: observability + the transcript-poller fix
 
 A single user's Supabase egress hit ~8 GB in one billing period (5 GB free + 2.92 GB overage), ramping from ~0 to 2.1 GB/day. Two parts:

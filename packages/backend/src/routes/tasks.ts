@@ -7,7 +7,7 @@ import {
 } from '../db/schema.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { createCloudTask } from '../services/taskCreate.js';
-import { rowToTask } from '../services/taskSerialize.js';
+import { rowToTask, taskColumnsNoTranscript } from '../services/taskSerialize.js';
 import { taskQueueService } from '../services/taskQueue.js';
 import {
   emitTaskStatus,
@@ -89,8 +89,10 @@ export function taskRoutes(): Router {
       ELSE 4
     END`;
 
+    // Project away the `transcript` blob — the list never returns it, so
+    // selecting it just pulled MBs out of Postgres to be discarded.
     const rows = await db
-      .select({ task: tasksTable })
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .innerJoin(workspacesTable, eq(tasksTable.workspaceId, workspacesTable.id))
       .where(and(...conditions))
@@ -98,7 +100,7 @@ export function taskRoutes(): Router {
 
     res.json({
       success: true,
-      data: rows.map((r) => rowToTask(r.task)),
+      data: rows.map((r) => rowToTask(r)),
     } as ApiResponse<Task[]>);
   });
 
