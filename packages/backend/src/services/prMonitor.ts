@@ -1,10 +1,11 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
-import { getDbClient, type Database } from '../db/client.js';
+import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
+  workspaces as workspacesTable,
 } from '../db/schema.js';
 import { githubService } from './github.js';
 import {
@@ -58,7 +59,10 @@ class PRMonitorService extends EventEmitter {
   private userLoginCache: Map<string, string> = new Map();
 
   private get db(): Database {
-    return getDbClient();
+    // The monitor is a background, cross-owner service: its global poll
+    // (incl. the admin-triggered forcePoll) must see every workspace, so it
+    // always uses the pool — never an owner-scoped request transaction.
+    return getPoolDbClient();
   }
 
   async init(): Promise<void> {
@@ -620,6 +624,45 @@ class PRMonitorService extends EventEmitter {
       await new Promise((r) => setTimeout(r, 25));
     }
     await this.poll();
+  }
+
+  /**
+   * Refresh just the given workspaces' PRs. Drains any in-flight full tick
+   * first (and holds the same guard) so it can't race the background poll.
+   */
+  async forcePollWorkspaces(workspaceIds: string[]): Promise<void> {
+    if (workspaceIds.length === 0) return;
+    while (this.isPolling) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    this.isPolling = true;
+    try {
+      for (const workspaceId of workspaceIds) {
+        try {
+          await this.pollWorkspace(workspaceId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          console.error(`PR monitor: workspace ${workspaceId.slice(0, 8)} forced poll failed:`, msg);
+        }
+      }
+    } finally {
+      this.isPolling = false;
+    }
+  }
+
+  /**
+   * The user-facing "Refresh" entry point: polls only the caller's own
+   * connected workspaces. A single user must not be able to fan a refresh out
+   * across every tenant's repos (that's what the unscoped {@link forcePoll}
+   * does, which is why it's background/test-only).
+   */
+  async forcePollForOwner(ownerId: string): Promise<void> {
+    const connected = new Set(githubService.getConnectedWorkspaces());
+    const owned = await this.db
+      .select({ id: workspacesTable.id })
+      .from(workspacesTable)
+      .where(eq(workspacesTable.ownerId, ownerId));
+    await this.forcePollWorkspaces(owned.map((r) => r.id).filter((id) => connected.has(id)));
   }
 
   // ---------- Active-CI fast loop ----------

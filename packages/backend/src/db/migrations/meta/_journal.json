@@ -169,6 +169,13 @@
 			"when": 1784160000007,
 			"tag": "0023_drop_inbox",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1784160000008,
+			"tag": "0024_rls_grant_authenticated",
+			"breakpoints": true
 		}
 	]
 }

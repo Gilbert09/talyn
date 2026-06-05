@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prMonitorService } from '../services/prMonitor.js';
 import {
+  assertUser,
   handleAccessError,
   requireRepositoryAccess,
   requireWorkspaceAccess,
@@ -61,12 +62,11 @@ export function repositoryRoutes(): Router {
     }
   });
 
-  // Force-poll is an infrastructure trigger; it refreshes PR state for
-  // every watched repo across all users. No user scoping — but still auth
-  // required (rate-limit + only valid users).
-  router.post('/poll', async (_req, res) => {
+  // The desktop "Refresh" button. Refreshes only the caller's own connected
+  // workspaces — never a fleet-wide poll across every tenant's repos.
+  router.post('/poll', async (req, res) => {
     try {
-      await prMonitorService.forcePoll();
+      await prMonitorService.forcePollForOwner(assertUser(req).id);
       res.json({ success: true, data: { message: 'Poll triggered' } });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'unknown error';

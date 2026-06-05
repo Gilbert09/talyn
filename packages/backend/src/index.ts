@@ -65,12 +65,16 @@ async function main() {
     .map((s) => s.trim())
     .filter(Boolean);
   const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
+  // Single source of truth for "may this origin talk to us", shared by the
+  // REST CORS gate and the WebSocket upgrade. A missing Origin is allowed —
+  // native clients (the desktop app's main process, the CLI) send none; a
+  // present Origin must be loopback (dev renderer) or explicitly allowlisted.
+  const isOriginAllowed = (origin: string | undefined): boolean =>
+    !origin || LOOPBACK_ORIGIN.test(origin) || originAllowlist.includes(origin);
   app.use(
     cors({
       origin(origin, cb) {
-        if (!origin) return cb(null, true);
-        if (LOOPBACK_ORIGIN.test(origin)) return cb(null, true);
-        if (originAllowlist.includes(origin)) return cb(null, true);
+        if (isOriginAllowed(origin)) return cb(null, true);
         return cb(new Error(`Origin not allowed: ${origin}`));
       },
       credentials: true,
@@ -106,6 +110,13 @@ async function main() {
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    // Reject cross-site WebSocket hijacking: a browser page on a foreign
+    // origin can open a WS (no CORS preflight on upgrades), so we apply the
+    // same origin gate as REST. Native clients send no Origin and pass.
+    if (!isOriginAllowed(req.headers.origin)) {
+      socket.destroy();
+      return;
+    }
     if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else {

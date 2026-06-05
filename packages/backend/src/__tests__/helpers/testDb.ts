@@ -37,6 +37,17 @@ export async function createTestDb(): Promise<{
     $$;
   `);
 
+  // Supabase ships an `authenticated` role; pglite doesn't. Migration 0024
+  // GRANTs table access to it (and the RLS-enforcement tests `SET ROLE` to
+  // it), so create it here. NOLOGIN/NOINHERIT mirrors Supabase's definition.
+  await pglite.exec(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
+        CREATE ROLE authenticated NOLOGIN NOINHERIT;
+      END IF;
+    END $$;
+  `);
+
   // Apply every generated migration in order. drizzle-kit names them
   // `NNNN_<slug>.sql` and writes `--> statement-breakpoint` between
   // statements; splitting on that marker gives one call per statement.

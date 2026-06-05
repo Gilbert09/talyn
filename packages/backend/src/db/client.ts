@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.js';
@@ -17,6 +18,22 @@ interface Handle {
 }
 
 let singleton: Handle | null = null;
+
+/**
+ * True once the singleton is a real postgres-js handle (vs a test-injected
+ * pglite client). RLS owner-scoping only activates against real Postgres —
+ * pglite runs as a superuser and has no Supabase `authenticated` role.
+ */
+let backedByRealPostgres = false;
+
+/**
+ * Holds the owner-scoped transaction handle for the duration of a
+ * `withOwnerScope(...)` call (see `db/scope.ts`). When set, `getDbClient()`
+ * returns it so every query in the request — including those buried in shared
+ * services — runs on the same RLS-scoped connection. Empty in background
+ * loops, which therefore keep using the pool.
+ */
+const scopedDbStore = new AsyncLocalStorage<Database>();
 
 /** Pull the operation + target table out of a SQL string for a panel label. */
 export function summarizeSql(raw: string): { operation: string; table: string | null } {
@@ -133,11 +150,8 @@ function createPostgresHandle(connectionString: string): Handle {
   };
 }
 
-/**
- * Get the process-wide Drizzle client, initializing it on first use. Throws
- * if `DATABASE_URL` isn't set — the backend cannot start without Postgres.
- */
-export function getDbClient(): Database {
+/** Initialize (once) and return the underlying pool handle's Drizzle client. */
+function ensureSingleton(): Database {
   if (singleton) return singleton.db;
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -146,7 +160,42 @@ export function getDbClient(): Database {
     );
   }
   singleton = createPostgresHandle(url);
+  backedByRealPostgres = true;
   return singleton.db;
+}
+
+/**
+ * Get the Drizzle client for the current context. Inside a `withOwnerScope`
+ * block this is the RLS-scoped transaction handle; everywhere else it's the
+ * process-wide pool. Throws if `DATABASE_URL` isn't set — the backend cannot
+ * start without Postgres.
+ */
+export function getDbClient(): Database {
+  return scopedDbStore.getStore() ?? ensureSingleton();
+}
+
+/**
+ * The underlying pool client, ignoring any active owner scope. For background
+ * / cross-owner work (pollers, the global PR monitor) that must NOT be
+ * RLS-restricted to a single owner even when reached from a scoped request.
+ */
+export function getPoolDbClient(): Database {
+  return ensureSingleton();
+}
+
+/** Whether the active client is a real Postgres (vs test pglite). */
+export function isRealPostgres(): boolean {
+  return backedByRealPostgres;
+}
+
+/** The owner-scoped handle if a scope is active, else undefined. */
+export function getScopedDb(): Database | undefined {
+  return scopedDbStore.getStore();
+}
+
+/** Run `fn` with `db` installed as the owner-scoped handle for its async tree. */
+export function runInScopedDb<T>(db: Database, fn: () => T): T {
+  return scopedDbStore.run(db, fn);
 }
 
 /**
@@ -166,9 +215,11 @@ export async function closeDbClient(): Promise<void> {
  */
 export function setDbClient(db: Database): void {
   singleton = { db, close: async () => {} };
+  backedByRealPostgres = false;
 }
 
 /** Clear the process-wide client. Tests call this in afterEach/afterAll. */
 export function resetDbClient(): void {
   singleton = null;
+  backedByRealPostgres = false;
 }

@@ -9,6 +9,7 @@ import { repositoryRoutes } from './repositories.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { requireAuth } from '../middleware/auth.js';
+import { ownerScope } from '../middleware/ownerScope.js';
 
 export function setupRoutes(app: Express): void {
   const api = '/api/v1';
@@ -22,6 +23,17 @@ export function setupRoutes(app: Express): void {
   // and refuses requests without a valid Supabase JWT.
   app.use(`${api}`, requireAuth);
 
+  // Developer-only internals view (requests, polling, WebSocket). Global,
+  // not workspace-scoped — see routes/debug.ts. Mounted BEFORE the owner-scope
+  // middleware so it stays a cross-tenant operator surface (and so it never
+  // runs inside an owner-scoped transaction).
+  app.use(`${api}/debug`, debugRoutes());
+
+  // Owner-scoped DB enforcement for the data routers below: runs each request
+  // inside a transaction that drops to the `authenticated` role so Postgres RLS
+  // filters every query to req.user (see db/scope.ts).
+  app.use(`${api}`, ownerScope);
+
   app.use(`${api}/workspaces`, workspaceRoutes());
   app.use(`${api}/environments`, environmentRoutes());
   app.use(`${api}/tasks`, taskRoutes());
@@ -33,9 +45,6 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/posthog`, posthogRoutes());
   app.use(`${api}/repositories`, repositoryRoutes());
   app.use(`${api}/pull-requests`, pullRequestRoutes());
-  // Developer-only internals view (requests, polling, WebSocket). Global,
-  // not workspace-scoped — see routes/debug.ts.
-  app.use(`${api}/debug`, debugRoutes());
 
   app.use((req, res) => {
     res.status(404).json({ success: false, error: 'Not found' });
