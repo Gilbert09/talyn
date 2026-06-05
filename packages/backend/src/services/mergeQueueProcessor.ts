@@ -269,12 +269,18 @@ class MergeQueueProcessor {
     const summary = row.lastSummary as PRMergeableSummary;
     const state = readState(row);
 
-    // 2. Active-run guard — never fire while a run is already working this PR.
-    //    Check the queue's OWN last fix run by id, not just `row.taskId`:
-    //    `row.taskId` is shared and gets reassigned by other flows (a manual
-    //    task, the auto-keep-mergeable watcher), which would let the queue fire
-    //    a duplicate while its own run is still in flight. Also honour any other
-    //    run pointed to by `row.taskId` so we don't pile on while it works.
+    // 2. Active-run guard — never fire a NEW run while one is already working
+    //    this PR. Check the queue's OWN last fix run by id, not just
+    //    `row.taskId`: `row.taskId` is shared and gets reassigned by other flows
+    //    (a manual task, the auto-keep-mergeable watcher), which would let the
+    //    queue fire a duplicate while its own run is still in flight. Also honour
+    //    any other run pointed to by `row.taskId` so we don't pile on.
+    //
+    //    Crucially, an in-flight run only HOLDS BACK a PR that's still blocked.
+    //    A fix run can make the PR mergeable before its own status flips terminal
+    //    (the commits land + checks go green while the task is still "running"),
+    //    and there's no reason to sit on a ready PR waiting for that flip — so a
+    //    clean PR falls through to the merge in step 5 regardless of the run.
     const ourFix = state.lastFixTaskId
       ? await linkedTaskStatus(state.lastFixTaskId)
       : null;
@@ -282,10 +288,10 @@ class MergeQueueProcessor {
       row.taskId && row.taskId !== state.lastFixTaskId
         ? await linkedTaskStatus(row.taskId)
         : null;
-    if (
-      (ourFix && ACTIVE_STATUSES.has(ourFix)) ||
-      (otherFix && ACTIVE_STATUSES.has(otherFix))
-    ) {
+    const runActive =
+      (ourFix !== null && ACTIVE_STATUSES.has(ourFix)) ||
+      (otherFix !== null && ACTIVE_STATUSES.has(otherFix));
+    if (runActive && queueBlocked(row, summary)) {
       await this.ensureStatus(row, state, 'fixing');
       return;
     }
@@ -297,7 +303,7 @@ class MergeQueueProcessor {
     //    and resetting on that transient lie is exactly what let the queue blow
     //    past MAX_ATTEMPTS and fire fix runs forever. A genuinely-fixed PR
     //    merges in step 5 and leaves the queue, so it never needs a reset.
-    if (state.lastFixTaskId && !state.accounted) {
+    if (state.lastFixTaskId && !state.accounted && !runActive) {
       const wasBlocked = state.status === 'blocked';
       if (queueBlocked(row, summary)) {
         state.attempts += 1;

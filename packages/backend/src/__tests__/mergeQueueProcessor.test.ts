@@ -262,6 +262,25 @@ describe('mergeQueueProcessor', () => {
     expect((pr.mergeQueueState as QueueState).status).toBe('fixing');
   });
 
+  it('merges a now-clean PR even while its fix run is still in flight', async () => {
+    // The fix run landed its commits + checks went green, but its task status
+    // hasn't flipped terminal yet. A ready PR shouldn't wait on that flip.
+    const prId = await insertPr(db, {
+      summary: cleanSummary(),
+      mergeQueueState: { status: 'fixing', attempts: 0, lastFixTaskId: 'running', accounted: false },
+    });
+    await insertTask(db, 'running', 'in_progress', prId);
+    await db.update(pullRequestsTable).set({ taskId: 'running' }).where(eq(pullRequestsTable.id, prId));
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    const pr = await getPr(db, prId);
+    expect(pr.state).toBe('merged');
+    expect(pr.mergeQueued).toBe(false);
+    expect(pr.mergeQueueState).toBeNull();
+  });
+
   it('serializes two same-base PRs — only the head merges per tick', async () => {
     const first = await insertPr(db, {
       summary: cleanSummary('main'),
