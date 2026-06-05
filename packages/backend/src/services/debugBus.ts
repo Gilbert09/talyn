@@ -62,6 +62,19 @@ function truncate(s: string): string {
   return s.length > MAX_ERROR_LEN ? `${s.slice(0, MAX_ERROR_LEN)}…` : s;
 }
 
+/** Human-readable byte size for event summaries (e.g. "4.2 KB"). */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 class DebugBus {
   private buffer: DebugEvent[] = [];
   private seq = 0;
@@ -69,6 +82,9 @@ class DebugBus {
   private sink: LiveSink | null = null;
   private clientCounter: ClientCounter | null = null;
   private counters: Record<string, number> = {};
+  // Cumulative Postgres traffic since the last clear, surfaced as panel tiles.
+  private dbRequestCount = 0;
+  private dbEgressBytes = 0;
   private pollers = new Map<string, DebugPollerState>();
   private rateLimits = new Map<string, DebugRateLimitState>();
   // Attribution: which FastOwl account owns a workspace's activity, so events
@@ -89,6 +105,15 @@ class DebugBus {
   /** Global kill-switch. Recording is a cheap no-op while disabled. */
   setEnabled(on: boolean): void {
     this.enabled = on;
+  }
+
+  /**
+   * Whether recording is on. Lets a hot call site (e.g. the DB egress meter)
+   * skip expensive measurement work — serializing a multi-MB result row — when
+   * the panel isn't watching.
+   */
+  isRecording(): boolean {
+    return this.enabled;
   }
 
   /** Registered by websocket.ts to fan each event out to connected clients. */
@@ -167,6 +192,46 @@ class DebugBus {
       meta: {
         status: input.status,
         ...(input.bytes !== undefined ? { bytes: input.bytes } : {}),
+        ...(input.error ? { error: truncate(input.error) } : {}),
+      },
+    });
+  }
+
+  /**
+   * Record one Postgres query and the (estimated) bytes its result pulled
+   * back. Feeds both the `db` event stream and the cumulative egress / request
+   * tiles. `bytes` is the serialized size of the result rows — an estimate of
+   * wire egress, not exact, but enough to spot which queries dominate.
+   */
+  recordDbQuery(input: {
+    operation: string;
+    table?: string | null;
+    durationMs: number;
+    ok: boolean;
+    bytes: number;
+    rows?: number;
+    error?: string;
+  }): void {
+    if (!this.enabled) return;
+    const bytes = Number.isFinite(input.bytes) ? Math.max(0, Math.round(input.bytes)) : 0;
+    this.dbRequestCount += 1;
+    this.dbEgressBytes += bytes;
+    const label = input.table ? `${input.operation} ${input.table}` : input.operation;
+    const rowsPart =
+      input.rows !== undefined ? ` · ${input.rows} row${input.rows === 1 ? '' : 's'}` : '';
+    this.record({
+      category: 'db',
+      service: 'postgres',
+      action: input.operation.toLowerCase(),
+      ok: input.ok,
+      summary: input.ok
+        ? `${label} → ${formatBytes(bytes)}${rowsPart} ${Math.round(input.durationMs)}ms`
+        : `${label} failed`,
+      durationMs: input.durationMs,
+      meta: {
+        bytes,
+        ...(input.rows !== undefined ? { rows: input.rows } : {}),
+        ...(input.table ? { table: input.table } : {}),
         ...(input.error ? { error: truncate(input.error) } : {}),
       },
     });
@@ -323,6 +388,7 @@ class DebugBus {
       wsClients: this.clientCounter?.() ?? 0,
       rateLimits,
       owners,
+      dbStats: { requests: this.dbRequestCount, egressBytes: this.dbEgressBytes },
     };
   }
 
@@ -337,6 +403,8 @@ class DebugBus {
   clear(): void {
     this.buffer = [];
     this.counters = {};
+    this.dbRequestCount = 0;
+    this.dbEgressBytes = 0;
   }
 
   /** Test helper — drop all state including the poller registry. */

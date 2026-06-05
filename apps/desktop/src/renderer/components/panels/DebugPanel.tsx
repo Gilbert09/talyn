@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bug, Trash2, Pause, Play, Wifi, Info, Gauge } from 'lucide-react';
+import { Bug, Trash2, Pause, Play, Wifi, Info, Gauge, Database } from 'lucide-react';
 import type {
   DebugCategory,
   DebugEvent,
@@ -21,6 +21,7 @@ type CategoryFilter = 'all' | DebugCategory;
 
 const CATEGORY_LABEL: Record<DebugCategory, string> = {
   http: 'HTTP',
+  db: 'Database',
   polling: 'Polling',
   websocket: 'WebSocket',
   event: 'Events',
@@ -30,6 +31,7 @@ const CATEGORY_LABEL: Record<DebugCategory, string> = {
 const FILTERS: { id: CategoryFilter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'http', label: 'HTTP' },
+  { id: 'db', label: 'Database' },
   { id: 'polling', label: 'Polling' },
   { id: 'websocket', label: 'WebSocket' },
   { id: 'event', label: 'Events' },
@@ -40,6 +42,7 @@ const FILTERS: { id: CategoryFilter; label: string }[] = [
 // and the legend. Keep this in sync when adding a new DebugCategory.
 const CATEGORY_INFO: Record<DebugCategory, string> = {
   http: 'Outbound HTTP to external services (GitHub REST/GraphQL, PostHog Code). Metadata only — method, URL with the query stripped, status, and duration.',
+  db: 'Postgres queries and the estimated bytes each result pulled back from the database. The size is the serialized result rows — an estimate of egress, not exact wire bytes — but enough to spot which queries dominate database egress.',
   polling: 'Background poll-loop ticks. Each loop wakes on its own interval to reconcile state — see the cards above for what each does.',
   websocket: 'The realtime channel to the desktop app: client connect/disconnect, inbound messages, and outbound broadcasts.',
   event: 'In-process domain events (e.g. a task changing status) that other backend services react to.',
@@ -51,6 +54,7 @@ const CATEGORY_INFO: Record<DebugCategory, string> = {
 // rows. Keep this in sync when a new outbound integration or emitter lands.
 const SERVICE_INFO: Record<string, string> = {
   github: 'GitHub REST + GraphQL API — PR data, checks, reviews, merges, and OAuth.',
+  postgres: 'The Supabase Postgres database — every query funnels through here. Rows show the operation, target table, and estimated result size.',
   posthog_code: 'PostHog Code cloud-task API — creates and runs cloud agent tasks and streams their transcripts.',
   ws: 'The WebSocket server fanning realtime updates out to connected desktop clients.',
   tasks: 'Task lifecycle domain events (queued → in_progress → completed/failed).',
@@ -132,6 +136,8 @@ function categoryClasses(category: DebugCategory): string {
   switch (category) {
     case 'http':
       return 'bg-sky-500/15 text-sky-300';
+    case 'db':
+      return 'bg-indigo-500/15 text-indigo-300';
     case 'polling':
       return 'bg-violet-500/15 text-violet-300';
     case 'websocket':
@@ -151,6 +157,19 @@ function timeOf(ts: string): string {
   const ss = String(d.getSeconds()).padStart(2, '0');
   const ms = String(d.getMilliseconds()).padStart(3, '0');
   return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+/** Human-readable byte size for the DB egress tile (e.g. "4.2 MB"). */
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
 function ago(iso: string | null): string {
@@ -422,6 +441,25 @@ export function DebugPanel() {
             <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2.5 py-1 text-xs text-zinc-300">
               <Wifi className="h-3.5 w-3.5 text-emerald-400" />
               {snapshot?.wsClients ?? 0} WS client{snapshot?.wsClients === 1 ? '' : 's'}
+            </span>
+          </Tip>
+          <Tip
+            side="bottom"
+            content="Estimated total bytes returned by Postgres queries since the last clear — the serialized result size, not exact wire bytes, but directionally accurate for spotting database egress."
+          >
+            <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2.5 py-1 text-xs text-zinc-300">
+              <Database className="h-3.5 w-3.5 text-indigo-400" />
+              {formatBytes(snapshot?.dbStats?.egressBytes ?? 0)} DB egress
+            </span>
+          </Tip>
+          <Tip
+            side="bottom"
+            content="Total Postgres queries issued since the last clear."
+          >
+            <span className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2.5 py-1 text-xs text-zinc-300">
+              <Database className="h-3.5 w-3.5 text-indigo-400" />
+              {(snapshot?.dbStats?.requests ?? 0).toLocaleString()} DB quer
+              {snapshot?.dbStats?.requests === 1 ? 'y' : 'ies'}
             </span>
           </Tip>
           {snapshot &&

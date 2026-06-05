@@ -452,6 +452,7 @@ export interface WSEvent<T = unknown> {
  */
 export type DebugCategory =
   | 'http' // outbound request to an external service (GitHub, PostHog Code)
+  | 'db' // a Postgres query and the (estimated) bytes its result pulled back
   | 'polling' // a poll loop tick
   | 'websocket' // client connect/disconnect, inbound message, outbound broadcast
   | 'event' // in-process domain event (e.g. task:status)
@@ -550,6 +551,21 @@ export interface DebugSnapshot {
   rateLimits: DebugRateLimitState[];
   /** Accounts with attributed debug activity, for the per-user filter. */
   owners: DebugOwner[];
+  /** Cumulative Postgres query stats since the last clear. */
+  dbStats: DebugDbStats;
+}
+
+/**
+ * Running totals for Postgres traffic, surfaced as tiles on the Debug panel.
+ * `egressBytes` is an estimate — the serialized size of each query's result
+ * rows, not exact wire bytes — but directionally accurate for spotting which
+ * queries dominate database egress.
+ */
+export interface DebugDbStats {
+  /** Total queries issued since the last clear. */
+  requests: number;
+  /** Estimated total bytes returned by those queries since the last clear. */
+  egressBytes: number;
 }
 
 export interface AgentStatusEvent {

@@ -103,6 +103,70 @@ describe('recordHttp', () => {
   });
 });
 
+describe('recordDbQuery', () => {
+  it('records a db event with operation, table, rows, and byte meta', () => {
+    debugBus.recordDbQuery({
+      operation: 'SELECT',
+      table: 'tasks',
+      durationMs: 7,
+      ok: true,
+      bytes: 4096,
+      rows: 3,
+    });
+    const [e] = debugBus.getEvents();
+    expect(e.category).toBe('db');
+    expect(e.service).toBe('postgres');
+    expect(e.action).toBe('select');
+    expect(e.summary).toContain('SELECT tasks');
+    expect(e.summary).toContain('3 rows');
+    expect(e.meta).toMatchObject({ bytes: 4096, rows: 3, table: 'tasks' });
+  });
+
+  it('accumulates request count and egress bytes into dbStats', () => {
+    debugBus.recordDbQuery({ operation: 'SELECT', table: 'tasks', durationMs: 1, ok: true, bytes: 1000 });
+    debugBus.recordDbQuery({ operation: 'UPDATE', table: 'tasks', durationMs: 1, ok: true, bytes: 500 });
+    const { dbStats, counters } = debugBus.snapshot();
+    expect(dbStats).toEqual({ requests: 2, egressBytes: 1500 });
+    expect(counters.db).toBe(2);
+  });
+
+  it('counts a failed query but adds no egress, with ok=false', () => {
+    debugBus.recordDbQuery({
+      operation: 'SELECT',
+      table: 'pull_requests',
+      durationMs: 2,
+      ok: false,
+      bytes: 0,
+      error: 'connection reset',
+    });
+    const [e] = debugBus.getEvents();
+    expect(e.ok).toBe(false);
+    expect(e.summary).toContain('failed');
+    expect(e.meta?.error).toBe('connection reset');
+    expect(debugBus.snapshot().dbStats).toEqual({ requests: 1, egressBytes: 0 });
+  });
+
+  it('clamps non-finite / negative byte counts to zero', () => {
+    debugBus.recordDbQuery({ operation: 'SELECT', durationMs: 1, ok: true, bytes: Number.NaN });
+    debugBus.recordDbQuery({ operation: 'SELECT', durationMs: 1, ok: true, bytes: -50 });
+    expect(debugBus.snapshot().dbStats.egressBytes).toBe(0);
+  });
+
+  it('clear() resets dbStats alongside the buffer and counters', () => {
+    debugBus.recordDbQuery({ operation: 'SELECT', table: 'tasks', durationMs: 1, ok: true, bytes: 2048 });
+    debugBus.clear();
+    expect(debugBus.snapshot().dbStats).toEqual({ requests: 0, egressBytes: 0 });
+  });
+
+  it('is a no-op while recording is disabled', () => {
+    debugBus.setEnabled(false);
+    debugBus.recordDbQuery({ operation: 'SELECT', table: 'tasks', durationMs: 1, ok: true, bytes: 9000 });
+    debugBus.setEnabled(true);
+    expect(debugBus.getEvents()).toHaveLength(0);
+    expect(debugBus.snapshot().dbStats).toEqual({ requests: 0, egressBytes: 0 });
+  });
+});
+
 describe('poller registry', () => {
   it('registers and updates tick state', () => {
     debugBus.registerPoller('pr_monitor', 30_000, 'baseline PR poll');
