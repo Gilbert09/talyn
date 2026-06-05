@@ -268,12 +268,15 @@ class MergeQueueProcessor {
         );
         if (!result.merged) {
           // GitHub accepted the request but didn't merge (e.g. it lost a race
-          // and is now behind). Stay queued; next tick's refresh sees BEHIND
-          // and funnels into the fix path.
+          // and is now behind). Our cached summary is stale — refetch now so
+          // the BEHIND/conflict state surfaces immediately and the next tick
+          // funnels into the fix path, instead of re-attempting the merge
+          // against the same stale summary until FRESHNESS_MS elapses.
           state.status = 'waiting';
           state.lastError = result.message || 'GitHub did not merge the pull request';
           state.lastErrorAt = new Date().toISOString();
           await this.persist(row, state);
+          await this.refreshAfterFailedMerge(row);
           return;
         }
         // Success — flip the row terminal (the merge route can't GraphQL-refetch
@@ -306,11 +309,16 @@ class MergeQueueProcessor {
         // (e.g. #2 → #1) instead of leaving them stale until a refresh.
         await broadcastMergeQueuePositions(row.workspaceId);
       } catch (err) {
-        // 405 not-actually-mergeable, network, etc. Don't dequeue; record + retry.
+        // The merge was rejected (e.g. 405 "Pull Request has merge conflicts"),
+        // which means our cached mergeability was stale. Record the error, then
+        // refetch the PR immediately so the real conflicting/behind state hits
+        // the cache + UI now instead of after FRESHNESS_MS — the next tick then
+        // funnels the now-blocked PR into the cloud fix run. Don't dequeue.
         state.status = 'waiting';
         state.lastError = err instanceof Error ? err.message : 'Merge failed';
         state.lastErrorAt = new Date().toISOString();
         await this.persist(row, state);
+        await this.refreshAfterFailedMerge(row);
       }
       return;
     }
@@ -348,6 +356,21 @@ class MergeQueueProcessor {
     state.accounted = false;
     state.status = 'fixing';
     await this.persist(row, state);
+  }
+
+  /**
+   * Force-refetch a PR right after a failed merge attempt. The merge API is
+   * the freshest possible mergeability signal — if it rejected us, the cached
+   * summary that said "mergeable" is stale. Refetching upserts the real state
+   * (CONFLICTING/BEHIND) and emits `pull_request:updated`, so the UI updates
+   * immediately and the next tick's `queueBlocked` check funnels the PR into
+   * the cloud fix run rather than re-attempting a doomed merge for ~90s.
+   * Best-effort: a refetch failure just falls back to the freshness timer.
+   */
+  private async refreshAfterFailedMerge(row: PRRow): Promise<void> {
+    await prMonitorService
+      .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
+      .catch(() => {});
   }
 
   /** Persist `status` only if it changed, emitting a WS echo when it does. */

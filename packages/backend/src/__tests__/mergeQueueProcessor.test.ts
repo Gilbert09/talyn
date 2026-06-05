@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { githubService } from '../services/github.js';
+import { prMonitorService } from '../services/prMonitor.js';
 import * as websocketModule from '../services/websocket.js';
 import {
   broadcastMergeQueuePositions,
@@ -165,6 +166,7 @@ describe('mergeQueueProcessor', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let mergeSpy: ReturnType<typeof vi.spyOn>;
+  let refreshSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const testDb = await createTestDb();
@@ -175,6 +177,9 @@ describe('mergeQueueProcessor', () => {
     mergeSpy = vi
       .spyOn(githubService, 'mergePullRequest')
       .mockResolvedValue({ sha: 'merged-sha', merged: true, message: 'ok' });
+    // Stub the post-failure refetch so it doesn't hit GitHub; tests assert it
+    // fires. The top-of-tick freshness refresh is skipped (fresh lastPolledAt).
+    refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -322,10 +327,15 @@ describe('mergeQueueProcessor', () => {
     const state = pr.mergeQueueState as QueueState;
     expect(state.status).toBe('waiting');
     expect(state.lastError).toContain('Base branch was modified');
+    // Reacted to the failed merge by refetching so the BEHIND/conflict state
+    // surfaces now instead of after FRESHNESS_MS.
+    expect(refreshSpy).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number));
   });
 
-  it('keeps a PR queued and does not crash when the merge throws', async () => {
-    mergeSpy.mockRejectedValueOnce(new Error('Pull Request is not mergeable'));
+  it('keeps a PR queued and refetches when the merge throws (e.g. 405 conflicts)', async () => {
+    mergeSpy.mockRejectedValueOnce(
+      new Error('GitHub API error 405 Method Not Allowed: Pull Request has merge conflicts')
+    );
     const prId = await insertPr(db, { summary: cleanSummary() });
 
     await expect(mergeQueueProcessor.runOnce()).resolves.toBeUndefined();
@@ -333,7 +343,19 @@ describe('mergeQueueProcessor', () => {
     const pr = await getPr(db, prId);
     expect(pr.state).toBe('open');
     expect(pr.mergeQueued).toBe(true);
-    expect((pr.mergeQueueState as QueueState).lastError).toContain('not mergeable');
+    expect((pr.mergeQueueState as QueueState).lastError).toContain('merge conflicts');
+    // The 405 means our cached mergeability was stale — refetch immediately so
+    // the conflict hits the cache + UI and the next tick fires the fix run.
+    expect(refreshSpy).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number));
+  });
+
+  it('does not refetch after a successful merge', async () => {
+    await insertPr(db, { summary: cleanSummary() });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it('does not fire a fix run when the workspace has no connected cloud env', async () => {
