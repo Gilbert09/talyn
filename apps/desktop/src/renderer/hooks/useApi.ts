@@ -10,6 +10,7 @@ import type {
   TaskUpdateEvent,
   TaskAgentStatusEvent,
   TaskEventBroadcast,
+  TaskCreatedEvent,
   MergeQueueBlockedEvent,
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
@@ -163,6 +164,19 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<{ taskId: string }>('task:deleted', (payload) => {
         useWorkspaceStore.getState().removeTask(payload.taskId);
+      })
+    );
+
+    // Newly-created tasks — the authoritative signal for tasks created on the
+    // backend (merge-queue / auto-keep fix runs) that the desktop never created
+    // itself. Deduped by id so the optimistic add from useTaskActions.createTask
+    // doesn't double it.
+    unsubscribers.push(
+      wsClient.on<TaskCreatedEvent>('task:created', (payload) => {
+        const store = useWorkspaceStore.getState();
+        if (!store.tasks.some((t) => t.id === payload.task.id)) {
+          store.addTask(payload.task);
+        }
       })
     );
 

@@ -7,6 +7,7 @@ import {
 } from '../db/schema.js';
 import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { createCloudTask } from '../services/taskCreate.js';
+import { rowToTask } from '../services/taskSerialize.js';
 import { taskQueueService } from '../services/taskQueue.js';
 import {
   emitTaskStatus,
@@ -29,7 +30,6 @@ import {
   type Task,
   type TaskPriority,
   type TaskStatus,
-  type TaskType,
   type CreateTaskRequest,
   type ApiResponse,
   type GenerateTaskMetadataRequest,
@@ -629,29 +629,3 @@ function deriveTaskMetadata(prompt: string): GenerateTaskMetadataResponse {
   };
 }
 
-function rowToTask(
-  row: typeof tasksTable.$inferSelect,
-  opts: { includeTranscript?: boolean } = {}
-): Task {
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    type: row.type as TaskType,
-    status: row.status as TaskStatus,
-    priority: row.priority as TaskPriority,
-    title: row.title,
-    description: row.description,
-    prompt: row.prompt ?? undefined,
-    repositoryId: row.repositoryId ?? undefined,
-    branch: row.branch ?? undefined,
-    assignedEnvironmentId: row.assignedEnvironmentId ?? undefined,
-    result: (row.result as Task['result']) ?? undefined,
-    metadata: (row.metadata as Task['metadata']) ?? undefined,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    completedAt: row.completedAt ? row.completedAt.toISOString() : undefined,
-    transcript: opts.includeTranscript
-      ? ((row.transcript as Task['transcript']) ?? undefined)
-      : undefined,
-  };
-}

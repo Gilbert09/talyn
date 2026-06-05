@@ -243,7 +243,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     })),
 
   addTask: (task) =>
-    set((state) => ({ tasks: [...state.tasks, task] })),
+    set((state) =>
+      // Idempotent: a task can arrive from several sources (optimistic create,
+      // the task:created broadcast, an on-demand fetch). Skip if we already
+      // have it rather than appending a duplicate or clobbering richer local
+      // state (e.g. a loaded transcript) the incoming copy lacks.
+      state.tasks.some((t) => t.id === task.id)
+        ? state
+        : { tasks: [...state.tasks, task] }
+    ),
 
   removeTask: (id) =>
     set((state) => ({

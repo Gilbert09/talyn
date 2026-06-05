@@ -216,6 +216,7 @@ describe('mergeQueueProcessor', () => {
   });
 
   it('fires a cloud fix run for a conflicting PR instead of merging', async () => {
+    const createdSpy = vi.spyOn(websocketModule, 'emitTaskCreated');
     const prId = await insertPr(db, { summary: conflictSummary() });
 
     await mergeQueueProcessor.runOnce();
@@ -230,6 +231,13 @@ describe('mergeQueueProcessor', () => {
     expect(state.lastFixTaskId).toBe(tasks[0].id);
     expect(state.accounted).toBe(false);
     expect(pr.taskId).toBe(tasks[0].id); // reverse-linked
+
+    // Broadcast task:created so the desktop adds this backend-made fix run to
+    // the Tasks list live (and the PR's task badge resolves to it).
+    expect(createdSpy).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({ id: tasks[0].id, type: 'pr_response' })
+    );
   });
 
   it('funnels a BEHIND PR into the same fix path (the post-merge race)', async () => {

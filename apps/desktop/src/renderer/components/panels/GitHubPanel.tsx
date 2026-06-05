@@ -71,8 +71,15 @@ function escapeHtml(s: string): string {
 }
 
 export function GitHubPanel() {
-  const { setActivePanel, currentWorkspaceId, repositories, environments, selectTask, tasks } =
-    useWorkspaceStore();
+  const {
+    setActivePanel,
+    currentWorkspaceId,
+    repositories,
+    environments,
+    selectTask,
+    tasks,
+    addTask,
+  } = useWorkspaceStore();
   const { createTask } = useTaskActions();
   const [rows, setRows] = useState<PRRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -653,8 +660,18 @@ export function GitHubPanel() {
               selectedId={selectedId}
               onSelect={handleSelect}
               onOpenTask={(taskId) => {
-                selectTask(taskId);
                 setActivePanel('queue');
+                selectTask(taskId);
+                // The task may not be in the store yet (e.g. a backend-created
+                // merge-queue fix run on a client that connected after it
+                // started). Fetch it on demand so the Tasks screen resolves it
+                // instead of showing "Task not found".
+                if (!tasks.some((t) => t.id === taskId)) {
+                  api.tasks
+                    .get(taskId)
+                    .then((t) => addTask(t))
+                    .catch(() => {});
+                }
               }}
               onMerge={handleMergeRow}
               onSetMergeQueue={handleSetMergeQueue}
@@ -1155,52 +1172,52 @@ function PRTableRow({
                   Watching
                 </span>
               ))}
-            {/* Merge-queue indicator. Status drives the label: queued (waiting),
-                merging, fixing (a cloud run is clearing blockers), or blocked
-                (gave up after 3 attempts — needs attention). */}
+            {/* Merge-queue indicator. The membership badge ("Queued #N") stays
+                visible the whole time the PR is in the queue; an activity badge
+                (Fixing / Merging / Blocked) sits alongside it so you can see
+                both "it's in the queue at position N" and "what's happening to
+                it right now". */}
             {row.mergeQueued &&
               (() => {
                 const qs = row.mergeQueueState?.status ?? 'waiting';
                 const pos = row.mergeQueueState?.position ?? 0;
-                if (qs === 'blocked') {
-                  const reason = row.mergeQueueState?.reason;
-                  return (
-                    <span
-                      className="ml-2 inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                      title={
-                        reason
-                          ? `Merge queue gave up after 3 attempts — ${reason}. Needs manual intervention.`
-                          : 'Merge queue gave up after 3 attempts — needs manual intervention'
-                      }
-                    >
-                      <AlertTriangle className="h-2.5 w-2.5" />
-                      Blocked
-                    </span>
-                  );
-                }
-                if (qs === 'merging' || qs === 'fixing') {
-                  return (
-                    <span
-                      className="ml-2 inline-flex items-center gap-1 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                      title={
-                        qs === 'merging'
-                          ? 'Merging this PR now'
-                          : 'A cloud run is clearing this PR’s blockers, then it merges'
-                      }
-                    >
-                      <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                      {qs === 'merging' ? 'Merging' : 'Fixing'}
-                    </span>
-                  );
-                }
+                const reason = row.mergeQueueState?.reason;
                 return (
-                  <span
-                    className="ml-2 inline-flex items-center gap-1 rounded bg-indigo-200 px-1 py-0.5 text-[10px] uppercase text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
-                    title="In the merge queue — merges automatically when it's its turn and clean"
-                  >
-                    <GitMerge className="h-2.5 w-2.5" />
-                    {pos > 0 ? `Queued #${pos}` : 'Queued'}
-                  </span>
+                  <>
+                    <span
+                      className="ml-2 inline-flex items-center gap-1 rounded bg-indigo-200 px-1 py-0.5 text-[10px] uppercase text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+                      title="In the merge queue — merges automatically when it's its turn and clean"
+                    >
+                      <GitMerge className="h-2.5 w-2.5" />
+                      {pos > 0 ? `Queued #${pos}` : 'Queued'}
+                    </span>
+                    {(qs === 'merging' || qs === 'fixing') && (
+                      <span
+                        className="ml-1 inline-flex items-center gap-1 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                        title={
+                          qs === 'merging'
+                            ? 'Merging this PR now'
+                            : 'A cloud run is clearing this PR’s blockers, then it merges'
+                        }
+                      >
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        {qs === 'merging' ? 'Merging' : 'Fixing'}
+                      </span>
+                    )}
+                    {qs === 'blocked' && (
+                      <span
+                        className="ml-1 inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                        title={
+                          reason
+                            ? `Merge queue gave up after 3 attempts — ${reason}. Needs manual intervention.`
+                            : 'Merge queue gave up after 3 attempts — needs manual intervention'
+                        }
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        Blocked
+                      </span>
+                    )}
+                  </>
                 );
               })()}
           </span>

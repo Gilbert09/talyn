@@ -420,6 +420,7 @@ export type WSEventType =
   | 'task:status'
   | 'task:output'
   | 'task:event'
+  | 'task:created'
   | 'task:update'
   | 'task:deleted'
   | 'task:agent_status'
@@ -576,6 +577,17 @@ export interface TaskUpdateEvent {
 
 export interface TaskDeletedEvent {
   taskId: string;
+}
+
+/**
+ * Fired when a task is created on the BACKEND (merge-queue / auto-keep-mergeable
+ * fix runs, or any non-desktop creator). Lets the desktop add it to the task
+ * list live, so backend-created tasks show up in the Tasks screen and the PR's
+ * task badge deep-links to a real, present task. The desktop dedupes by id, so
+ * it's harmless when the creating client already added it optimistically.
+ */
+export interface TaskCreatedEvent {
+  task: Task;
 }
 
 export interface TaskOutputEvent {

@@ -295,6 +295,19 @@ export function emitTaskDeleted(workspaceId: string, taskId: string): void {
   });
 }
 
+/**
+ * Fired when a task is created. The desktop adds it to the task list live
+ * (deduped by id), so backend-created tasks — merge-queue / auto-keep fix runs
+ * — show up in the Tasks screen and the PR task badge resolves to a real task.
+ */
+export function emitTaskCreated(workspaceId: string, task: Task): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'task:created',
+    payload: { task },
+    timestamp: new Date().toISOString(),
+  });
+}
+
 export function emitTaskOutput(workspaceId: string, taskId: string, output: string, append: boolean): void {
   broadcastToWorkspace(workspaceId, {
     type: 'task:output',

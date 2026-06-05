@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 46 — Merge-queue badge consistency + backend-created tasks sync to the desktop
+
+Two reported inconsistencies on the GitHub panel:
+
+1. **Badge swap.** The merge-queue indicator was a single if/else, so "Queued #N" was *replaced* by "Fixing"/"Merging"/"Blocked" — you lost the queue-membership info while a run was active. Now the "Queued #N" badge stays visible the whole time the PR is queued, with the activity badge (Fixing / Merging / Blocked) rendered alongside it.
+
+2. **Backend-created tasks were invisible.** Merge-queue (and auto-keep-mergeable) fix runs are created via `createCloudTask` on the backend, which broadcast nothing — so they never entered the desktop task store. Result: they didn't appear in the Tasks screen, and the PR's task badge (rendered off `row.taskId`) deep-linked to a task that wasn't there → "Task not found". Fix:
+   - New `task:created` WS event (`TaskCreatedEvent`) emitted from `createCloudTask` — covers the route, the merge queue, and the watcher in one place. Extracted `rowToTask` into `services/taskSerialize.ts` so the route and `taskCreate` serialize identically without a route↔service cycle.
+   - Desktop `useApiConnection` adds a `task:created` handler that adds the task (deduped by id, so the optimistic add from the desktop's own create is unaffected). `addTask` is now idempotent (skip-if-present) so no source can double it or clobber richer local state.
+   - Deep-link hardening: clicking a PR's task badge for a task not in the store now fetches it on demand (`api.tasks.get`) before navigating, so the link always resolves even if the broadcast was missed (client connected after the run started).
+
+- Tests: merge-queue fire path now asserts `task:created` is broadcast; new desktop `addTask` idempotency suite. Backend green (460), desktop (38), tsc + lint clean.
+
 ## Session 45 — Merge queue: stop firing more than MAX_ATTEMPTS fix runs per PR
 
 A queued PR was spawning far more than the 3-attempt budget of cloud fix runs (one PR had 7). Two compounding in-process bugs in `mergeQueueProcessor`:

@@ -4,6 +4,8 @@ import type { TaskPriority, TaskType, PostHogCodeRuntimeAdapter } from '@fastowl
 import { getDbClient } from '../db/client.js';
 import { tasks as tasksTable, pullRequests as pullRequestsTable } from '../db/schema.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
+import { rowToTask } from './taskSerialize.js';
+import { emitTaskCreated } from './websocket.js';
 
 export interface CreateCloudTaskInput {
   workspaceId: string;
@@ -96,5 +98,12 @@ export async function createCloudTask(
     .from(tasksTable)
     .where(eq(tasksTable.id, id))
     .limit(1);
+
+  // Announce the new task so the desktop adds it to the Tasks list live —
+  // critical for backend-created tasks (merge-queue / auto-keep fix runs) the
+  // desktop never sees otherwise. Deduped by id on the client, so the POST
+  // /tasks caller that already added it optimistically is unaffected.
+  emitTaskCreated(input.workspaceId, rowToTask(rows[0]));
+
   return rows[0];
 }
