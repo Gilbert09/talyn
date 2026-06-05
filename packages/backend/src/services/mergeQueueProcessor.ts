@@ -1,11 +1,16 @@
 import { and, eq } from 'drizzle-orm';
-import { prNeedsFollowup, buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
+import {
+  prNeedsFollowup,
+  mergeBlockerReason,
+  buildPostHogPrompt,
+  type PRMergeableSummary,
+} from '@fastowl/shared';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
-import { emitPullRequestUpdated } from './websocket.js';
+import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
 import { broadcastMergeQueuePositions } from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
@@ -27,6 +32,8 @@ interface MergeQueueState {
   status: QueueStatus;
   lastError?: string;
   lastErrorAt?: string;
+  /** Why the PR is blocked, captured at the transition into `blocked`. */
+  blockReason?: string;
 }
 
 type PRRow = typeof pullRequestsTable.$inferSelect;
@@ -40,6 +47,7 @@ function readState(row: PRRow): MergeQueueState {
     status: s?.status ?? 'waiting',
     lastError: s?.lastError,
     lastErrorAt: s?.lastErrorAt,
+    blockReason: s?.blockReason,
   };
 }
 
@@ -48,8 +56,26 @@ function publicState(s: MergeQueueState, position: number): {
   status: QueueStatus;
   attempts: number;
   position: number;
+  reason?: string;
 } {
-  return { status: s.status, attempts: s.attempts, position };
+  return {
+    status: s.status,
+    attempts: s.attempts,
+    position,
+    // The blocked badge's tooltip explains *why* it gave up.
+    ...(s.status === 'blocked' && s.blockReason ? { reason: s.blockReason } : {}),
+  };
+}
+
+/**
+ * A short, human reason a queued PR is blocked — for the notification + badge.
+ * Conflicts/changes/CI come from the summary; "behind the base" is read off
+ * `mergeStateStatus`, which `mergeBlockerReason` doesn't see, so check it here.
+ */
+function blockerReason(row: PRRow, summary: PRMergeableSummary): string {
+  if (prNeedsFollowup(summary)) return mergeBlockerReason(summary);
+  if (needsUpdate(row)) return 'the branch is behind its base';
+  return 'needs attention';
 }
 
 function baseBranchOf(row: PRRow): string {
@@ -232,6 +258,7 @@ class MergeQueueProcessor {
 
     // 3. Account the last fix run now that it's terminal.
     if (state.lastFixTaskId && !state.accounted) {
+      const wasBlocked = state.status === 'blocked';
       if (queueBlocked(row, summary)) {
         state.attempts += 1;
         if (state.attempts >= MAX_ATTEMPTS) state.status = 'blocked';
@@ -239,7 +266,15 @@ class MergeQueueProcessor {
         state.attempts = 0;
       }
       state.accounted = true;
+      // Capture the reason at the transition so the badge + notification can
+      // explain why the queue gave up.
+      const justBlocked = !wasBlocked && state.status === 'blocked';
+      if (justBlocked) state.blockReason = blockerReason(row, summary);
       await this.persist(row, state);
+      // Fire-once notification: the queue exhausted its retries and now needs a
+      // human. A dedicated event (not the idempotent pull_request:updated) so
+      // the desktop notifies exactly once, never on reconnect/backfill replay.
+      if (justBlocked) this.notifyBlocked(row, state);
     }
 
     // 4. Gave up after MAX_ATTEMPTS — wait for the user (or a clean observation).
@@ -371,6 +406,25 @@ class MergeQueueProcessor {
     await prMonitorService
       .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
       .catch(() => {});
+  }
+
+  /**
+   * Emit the one-time `merge_queue:blocked` signal the desktop turns into an
+   * OS notification + in-app toast. Best-effort: the persisted state + badge
+   * already reflect the block, so a missed broadcast just costs the ping.
+   */
+  private notifyBlocked(row: PRRow, state: MergeQueueState): void {
+    const summary = row.lastSummary as { title?: string; url?: string } | null;
+    emitMergeQueueBlocked(row.workspaceId, {
+      pullRequestId: row.id,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      title: summary?.title ?? '',
+      url: summary?.url ?? '',
+      reason: state.blockReason ?? 'needs attention',
+      attempts: state.attempts,
+    });
   }
 
   /** Persist `status` only if it changed, emitting a WS echo when it does. */

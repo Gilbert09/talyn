@@ -4,6 +4,7 @@ import type {
   AgentEvent,
   DebugEvent,
   Environment,
+  MergeQueueBlockedEvent,
   PermissionRequest,
   PermissionResponse,
   Task,
@@ -439,11 +440,30 @@ export function emitPullRequestUpdated(
       status: 'waiting' | 'fixing' | 'merging' | 'blocked';
       attempts: number;
       position: number;
+      // Short human reason a PR is blocked, e.g. "merge conflicts with the
+      // base branch". Only set when status === 'blocked'; drives the badge
+      // tooltip.
+      reason?: string;
     } | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {
     type: 'pull_request:updated',
+    payload,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/**
+ * Fired once when a merge-queue PR transitions into `blocked` (gave up after
+ * its retry budget). The desktop surfaces it as an OS notification + toast.
+ */
+export function emitMergeQueueBlocked(
+  workspaceId: string,
+  payload: MergeQueueBlockedEvent
+): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'merge_queue:blocked',
     payload,
     timestamp: new Date().toISOString(),
   });

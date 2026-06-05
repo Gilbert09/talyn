@@ -445,6 +445,8 @@ export interface PRRow {
     status: 'waiting' | 'fixing' | 'merging' | 'blocked';
     attempts: number;
     position: number;
+    /** Why the PR is blocked (only set when status === 'blocked'). */
+    reason?: string;
   } | null;
   createdAt: string;
   updatedAt: string;

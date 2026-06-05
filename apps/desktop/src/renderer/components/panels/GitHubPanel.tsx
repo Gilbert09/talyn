@@ -226,6 +226,7 @@ export function GitHubPanel() {
           status: 'waiting' | 'fixing' | 'merging' | 'blocked';
           attempts: number;
           position: number;
+          reason?: string;
         } | null;
       };
       setRows((prev) => {
@@ -1162,10 +1163,15 @@ function PRTableRow({
                 const qs = row.mergeQueueState?.status ?? 'waiting';
                 const pos = row.mergeQueueState?.position ?? 0;
                 if (qs === 'blocked') {
+                  const reason = row.mergeQueueState?.reason;
                   return (
                     <span
                       className="ml-2 inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                      title="Merge queue paused after 3 attempts — needs attention"
+                      title={
+                        reason
+                          ? `Merge queue gave up after 3 attempts — ${reason}. Needs manual intervention.`
+                          : 'Merge queue gave up after 3 attempts — needs manual intervention'
+                      }
                     >
                       <AlertTriangle className="h-2.5 w-2.5" />
                       Blocked

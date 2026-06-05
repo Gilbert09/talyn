@@ -10,10 +10,12 @@ import type {
   TaskUpdateEvent,
   TaskAgentStatusEvent,
   TaskEventBroadcast,
+  MergeQueueBlockedEvent,
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
   WorkspaceSettings,
 } from '@fastowl/shared';
+import { toast } from '../stores/toast';
 
 // ---------------------------------------------------------------------------
 // task:event coalescing
@@ -233,6 +235,16 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<EnvironmentCreatedEvent>('environment:created', (payload) => {
         addEnvironment(payload.environment);
+      })
+    );
+
+    // A merge-queue PR exhausted its auto-fix retries and now needs a human.
+    // This is a top-level (not panel-scoped) listener so the notification
+    // fires regardless of which panel is open. Fire-once on the backend's
+    // transition signal — see notifyMergeQueueBlocked.
+    unsubscribers.push(
+      wsClient.on<MergeQueueBlockedEvent>('merge_queue:blocked', (payload) => {
+        notifyMergeQueueBlocked(payload);
       })
     );
 
@@ -601,4 +613,76 @@ export function useWorkspaceActions() {
     updateCurrentWorkspaceSettings,
     refreshWorkspaces,
   };
+}
+
+// ============================================================================
+// Notifications
+// ============================================================================
+
+const NOTIFY_BLOCKED_KEY = 'fastowl:notify:mergeBlocked';
+
+/** Whether merge-queue-blocked notifications are enabled. Default on. */
+export function getMergeBlockedNotifyEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(NOTIFY_BLOCKED_KEY);
+    return raw === null ? true : raw === 'true';
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the merge-queue-blocked notification preference. */
+export function setMergeBlockedNotifyEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(NOTIFY_BLOCKED_KEY, enabled ? 'true' : 'false');
+  } catch {
+    // ignore quota / privacy-mode issues
+  }
+}
+
+/**
+ * A merge-queue PR gave up after its retry budget. Surface it both as an
+ * in-app toast (seen while the app is open) and an OS notification (seen when
+ * it's backgrounded). Both honour the Settings toggle; the OS path also needs
+ * the user to have granted notification permission, requested lazily on first
+ * fire. Electron bridges the renderer `Notification` API to the native center.
+ */
+function notifyMergeQueueBlocked(p: MergeQueueBlockedEvent): void {
+  if (!getMergeBlockedNotifyEnabled()) return;
+
+  const ref = `${p.owner}/${p.repo}#${p.number}`;
+  const body = `${ref} can't merge — ${p.reason}. Needs manual intervention.`;
+
+  // In-app toast (error variant lingers longer so there's time to read it).
+  toast.error('Merge queue blocked', body);
+
+  // OS notification.
+  if (typeof Notification === 'undefined') return;
+  const fire = () => {
+    try {
+      const n = new Notification('FastOwl — merge queue blocked', { body, silent: false });
+      n.onclick = () => {
+        try {
+          window.focus();
+          // Jump to the GitHub panel, where the blocked PR's amber badge lives.
+          useWorkspaceStore.getState().setActivePanel('github');
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // Permission denied / renderer weirdness — the toast already covered it.
+    }
+  };
+  if (Notification.permission === 'granted') {
+    fire();
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission()
+      .then((perm) => {
+        if (perm === 'granted') fire();
+      })
+      .catch(() => {
+        // ignore
+      });
+  }
 }

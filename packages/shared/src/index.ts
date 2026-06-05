@@ -426,6 +426,7 @@ export type WSEventType =
   | 'task:files_changed'
   | 'task:git_log'
   | 'pull_request:updated'
+  | 'merge_queue:blocked'
   | 'environment:status'
   | 'environment:created'
   | 'connection:status'
@@ -587,6 +588,26 @@ export interface TaskAgentStatusEvent {
   taskId: string;
   status: AgentStatus;
   attention: AgentAttention;
+}
+
+/**
+ * Fired once when a PR in the FastOwl merge queue exhausts its auto-fix retry
+ * budget and transitions into `blocked` — the queue has given up and the PR
+ * now needs a human. The desktop turns this into an OS notification + in-app
+ * toast. Distinct from the idempotent `pull_request:updated` (which is replayed
+ * on reconnect/backfill) so the notification fires exactly once.
+ */
+export interface MergeQueueBlockedEvent {
+  pullRequestId: string;
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** Short human reason, e.g. "merge conflicts with the base branch". */
+  reason: string;
+  /** How many fix runs were attempted before giving up. */
+  attempts: number;
 }
 
 export interface EnvironmentStatusEvent {

@@ -58,6 +58,31 @@ export function prNeedsFollowup(s: PRMergeableSummary): boolean {
   );
 }
 
+/**
+ * A short, human one-liner for *why* a PR can't merge — for blocked-state
+ * notifications and badge tooltips. Most-specific blocker first.
+ *
+ * Note: it does NOT cover "behind the base branch" (that lives on
+ * `mergeStateStatus`, which isn't part of this summary subset). Callers that
+ * track it — e.g. the merge queue — should special-case that reason before
+ * falling back here.
+ */
+export function mergeBlockerReason(s: PRMergeableSummary): string {
+  if (s.blockingReason === 'merge_conflicts' || s.mergeable === 'CONFLICTING') {
+    return 'merge conflicts with the base branch';
+  }
+  if (s.reviewDecision === 'CHANGES_REQUESTED' || s.blockingReason === 'changes_requested') {
+    return 'a reviewer requested changes';
+  }
+  if ((s.unresolvedReviewThreads ?? 0) > 0) {
+    return 'unresolved review threads';
+  }
+  if (s.checks.failed > 0 && s.blockingReason !== 'checks_failed_optional') {
+    return 'failing CI checks';
+  }
+  return 'needs attention';
+}
+
 /** Bulleted list of the issues we detected, for the agent prompt. */
 export function buildIssuesSummary(s: PRMergeableSummary): string {
   const lines: string[] = [];

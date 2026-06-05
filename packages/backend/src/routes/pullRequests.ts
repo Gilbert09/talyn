@@ -622,12 +622,25 @@ function publicMergeQueueState(
   status: 'waiting' | 'fixing' | 'merging' | 'blocked';
   attempts: number;
   position: number;
+  reason?: string;
 } | null {
   const s = raw as
-    | { status?: 'waiting' | 'fixing' | 'merging' | 'blocked'; attempts?: number }
+    | {
+        status?: 'waiting' | 'fixing' | 'merging' | 'blocked';
+        attempts?: number;
+        blockReason?: string;
+      }
     | null;
   if (!s) return null;
-  return { status: s.status ?? 'waiting', attempts: s.attempts ?? 0, position };
+  const status = s.status ?? 'waiting';
+  return {
+    status,
+    attempts: s.attempts ?? 0,
+    position,
+    // Surface the blocked reason so a PR loaded fresh (not via a live echo)
+    // still explains itself in the badge tooltip.
+    ...(status === 'blocked' && s.blockReason ? { reason: s.blockReason } : {}),
+  };
 }
 
 function rowToPublicShape(row: PullRequestRow, queuePosition = 0) {

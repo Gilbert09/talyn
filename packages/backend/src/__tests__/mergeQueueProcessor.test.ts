@@ -167,6 +167,7 @@ describe('mergeQueueProcessor', () => {
   let cleanup: () => Promise<void>;
   let mergeSpy: ReturnType<typeof vi.spyOn>;
   let refreshSpy: ReturnType<typeof vi.spyOn>;
+  let blockedSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const testDb = await createTestDb();
@@ -180,6 +181,9 @@ describe('mergeQueueProcessor', () => {
     // Stub the post-failure refetch so it doesn't hit GitHub; tests assert it
     // fires. The top-of-tick freshness refresh is skipped (fresh lastPolledAt).
     refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
+    // The one-time "PR blocked" broadcast — tests assert it fires once on the
+    // transition and never on a re-tick while already blocked.
+    blockedSpy = vi.spyOn(websocketModule, 'emitMergeQueueBlocked').mockImplementation(() => {});
   });
 
   afterEach(async () => {
@@ -286,7 +290,7 @@ describe('mergeQueueProcessor', () => {
     expect((await getPr(db, b)).state).toBe('merged');
   });
 
-  it('blocks after MAX_ATTEMPTS consecutive failed fix runs', async () => {
+  it('blocks after MAX_ATTEMPTS consecutive failed fix runs and notifies once with the reason', async () => {
     const prId = await insertPr(db, {
       summary: conflictSummary(),
       mergeQueueState: { status: 'fixing', attempts: 2, lastFixTaskId: 'prev', accounted: false },
@@ -302,6 +306,50 @@ describe('mergeQueueProcessor', () => {
     expect(state.status).toBe('blocked');
     expect(mergeSpy).not.toHaveBeenCalled();
     expect(await countTasks(db)).toBe(1); // only 'prev' — no new run
+
+    // Fired the one-time blocked notification with the human reason.
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    expect(blockedSpy).toHaveBeenCalledWith(
+      'ws1',
+      expect.objectContaining({
+        pullRequestId: prId,
+        number: expect.any(Number),
+        reason: 'merge conflicts with the base branch',
+        attempts: 3,
+      })
+    );
+  });
+
+  it('does not re-notify on a re-tick while already blocked', async () => {
+    // Already blocked (the transition happened on a prior tick), still conflicting.
+    const prId = await insertPr(db, {
+      summary: conflictSummary(),
+      mergeQueueState: {
+        status: 'blocked',
+        attempts: 3,
+        accounted: true,
+        blockReason: 'merge conflicts with the base branch',
+      },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'blocked' });
+    expect(blockedSpy).not.toHaveBeenCalled(); // no fresh transition → no ping
+  });
+
+  it('surfaces the blocked reason on the persisted state (for the badge tooltip)', async () => {
+    const prId = await insertPr(db, {
+      summary: conflictSummary(),
+      mergeQueueState: { status: 'fixing', attempts: 2, lastFixTaskId: 'prev', accounted: false },
+    });
+    await insertTask(db, 'prev', 'completed', prId);
+    await db.update(pullRequestsTable).set({ taskId: 'prev' }).where(eq(pullRequestsTable.id, prId));
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & { blockReason?: string };
+    expect(state.blockReason).toBe('merge conflicts with the base branch');
   });
 
   it('re-arms a blocked PR once it is observed clean, then merges it', async () => {

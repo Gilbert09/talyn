@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 44 — Notify when a merge-queue PR becomes blocked
+
+When the merge queue exhausts its retry budget (3 failed cloud fix runs) a PR flips to `blocked` and waits for a human — good, but silently. Added a notification on that transition, plus the *reason*.
+
+- **Backend**: `mergeQueueProcessor` now detects the *transition* into `blocked` (fire-once, not every 10s tick), captures a human reason via a new shared `mergeBlockerReason()` helper (conflicts / changes requested / unresolved threads / failing CI, with "behind its base" special-cased off `mergeStateStatus`), stores it on the queue state, and emits a dedicated `merge_queue:blocked` WS event (`emitMergeQueueBlocked`). A dedicated event — not the idempotent `pull_request:updated`, which replays on reconnect — guarantees exactly-once. The reason also rides the badge state (`publicState` + the list route's `publicMergeQueueState`) so a freshly-loaded blocked PR explains itself.
+- **Desktop**: a top-level (panel-independent) `merge_queue:blocked` handler fires both an OS notification (resurrected the Electron `Notification` bridge) and an in-app `toast.error`, gated by a re-added Settings → Appearance → **Notifications** toggle (`fastowl:notify:mergeBlocked`, default on; OS path also needs granted permission, requested lazily). Clicking the OS notification focuses the app and jumps to the GitHub panel. The blocked badge tooltip now shows the reason.
+- Kept the manual-intervention model (no auto-dequeue; auto-re-arm on a clean observation) unchanged.
+- Tests: 9 `mergeBlockerReason` cases + 3 processor cases (notifies once with reason / no re-notify while blocked / reason persisted) + 2 desktop pref-helper cases. Backend green (457), desktop (36), tsc + lint clean.
+
 ## Session 43 — Remove the Inbox feature
 
 Ripped out the standalone Inbox end-to-end. The prioritized "items needing attention" queue (new reviews/comments/CI failures/merge-ready) and the per-PR "unread updates" badges it powered are gone; PRs needing attention surface directly in the GitHub panel's Needs-attention / Mine / Review buckets.

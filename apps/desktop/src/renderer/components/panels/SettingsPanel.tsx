@@ -39,7 +39,11 @@ import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import type { WorkspaceLogo as WorkspaceLogoData } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
-import { useWorkspaceActions } from '../../hooks/useApi';
+import {
+  useWorkspaceActions,
+  getMergeBlockedNotifyEnabled,
+  setMergeBlockedNotifyEnabled,
+} from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
 import { getSupabase } from '../../lib/supabase';
 import {
@@ -992,6 +996,24 @@ function PostHogCodeCard() {
 
 function AppearanceSettings() {
   const { theme, setTheme } = useWorkspaceStore();
+  const [notifyBlocked, setNotifyBlocked] = useState(getMergeBlockedNotifyEnabled());
+  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+  );
+
+  const toggleNotifyBlocked = async (next: boolean) => {
+    setMergeBlockedNotifyEnabled(next);
+    setNotifyBlocked(next);
+    // Request OS permission eagerly on enable so the first real block doesn't
+    // race the browser permission prompt.
+    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try {
+        setNotifyPermission(await Notification.requestPermission());
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   const themeOptions: { value: Theme; label: string; icon: typeof Sun; description: string }[] = [
     {
@@ -1052,6 +1074,35 @@ function AppearanceSettings() {
         <p className="text-sm text-muted-foreground mt-4">
           {themeOptions.find((o) => o.value === theme)?.description}
         </p>
+      </Card>
+
+      <Card className="p-4">
+        <h4 className="font-medium mb-3">Notifications</h4>
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={notifyBlocked}
+            onChange={(e) => void toggleNotifyBlocked(e.target.checked)}
+            className="mt-1"
+          />
+          <div className="flex-1">
+            <div className="font-medium text-sm">
+              Notify me when a merge-queue PR is blocked
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Shows a desktop notification and an in-app alert when a PR in the merge
+              queue gives up after its retry budget and needs manual intervention.
+              Click the notification to jump to it.
+            </p>
+            {notifyPermission === 'denied' && (
+              <p className="text-xs text-yellow-500 mt-1">
+                Desktop notifications are blocked at the OS level — grant FastOwl
+                permission in your system settings to receive them. (The in-app alert
+                still shows.)
+              </p>
+            )}
+          </div>
+        </label>
       </Card>
     </div>
   );
