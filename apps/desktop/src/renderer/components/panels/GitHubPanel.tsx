@@ -1174,9 +1174,10 @@ function PRTableRow({
               ))}
             {/* Merge-queue indicator. The membership badge ("Queued #N") stays
                 visible the whole time the PR is in the queue; an activity badge
-                (Fixing / Merging / Blocked) sits alongside it so you can see
-                both "it's in the queue at position N" and "what's happening to
-                it right now". */}
+                (Merging / Blocked) sits alongside it. We deliberately DON'T show
+                a "Fixing" badge — when a cloud run is clearing blockers the
+                linked-task "Working" badge above already says so, so a separate
+                Fixing chip would be redundant. */}
             {row.mergeQueued &&
               (() => {
                 const qs = row.mergeQueueState?.status ?? 'waiting';
@@ -1191,17 +1192,13 @@ function PRTableRow({
                       <GitMerge className="h-2.5 w-2.5" />
                       {pos > 0 ? `Queued #${pos}` : 'Queued'}
                     </span>
-                    {(qs === 'merging' || qs === 'fixing') && (
+                    {qs === 'merging' && (
                       <span
                         className="ml-1 inline-flex items-center gap-1 rounded bg-blue-200 px-1 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                        title={
-                          qs === 'merging'
-                            ? 'Merging this PR now'
-                            : 'A cloud run is clearing this PR’s blockers, then it merges'
-                        }
+                        title="Merging this PR now"
                       >
                         <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                        {qs === 'merging' ? 'Merging' : 'Fixing'}
+                        Merging
                       </span>
                     )}
                     {qs === 'blocked' && (
