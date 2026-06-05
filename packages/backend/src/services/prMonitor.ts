@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
@@ -332,6 +332,10 @@ class PRMonitorService extends EventEmitter {
     authoredSet: Set<number>,
     pendingSet: Set<number>
   ): Promise<void> {
+    // Note: `lastSummary` is deliberately NOT selected here — most ticks
+    // change zero rows, so pulling the ~2KB summary jsonb for every open PR
+    // was pure egress waste. The rare changed row re-fetches just its own
+    // summary below before emitting.
     const rows = await this.db
       .select({
         id: pullRequestsTable.id,
@@ -340,7 +344,6 @@ class PRMonitorService extends EventEmitter {
         owner: pullRequestsTable.owner,
         repo: pullRequestsTable.repo,
         state: pullRequestsTable.state,
-        lastSummary: pullRequestsTable.lastSummary,
         reviewRequested: pullRequestsTable.reviewRequested,
         authored: pullRequestsTable.authored,
       })
@@ -363,6 +366,13 @@ class PRMonitorService extends EventEmitter {
         .update(pullRequestsTable)
         .set({ authored, reviewRequested, updatedAt: new Date() })
         .where(eq(pullRequestsTable.id, row.id));
+      // The flag UPDATE above doesn't touch `lastSummary`, so this reads the
+      // current value. Fetched per changed row (usually 0/tick), not in bulk.
+      const [summaryRow] = await this.db
+        .select({ lastSummary: pullRequestsTable.lastSummary })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, row.id))
+        .limit(1);
       emitPullRequestUpdated(workspaceId, {
         id: row.id,
         taskId: row.taskId,
@@ -371,7 +381,7 @@ class PRMonitorService extends EventEmitter {
         repo: row.repo,
         number: row.number,
         state: row.state,
-        lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+        lastSummary: (summaryRow?.lastSummary as Record<string, unknown> | null) ?? {},
         reviewRequested,
         authored,
       });
@@ -705,7 +715,10 @@ class PRMonitorService extends EventEmitter {
         repo: pullRequestsTable.repo,
         number: pullRequestsTable.number,
         repositoryId: pullRequestsTable.repositoryId,
-        lastSummary: pullRequestsTable.lastSummary,
+        // Derive the only bit of `lastSummary` this loop needs — the in-flight
+        // check count — server-side, so the ~2KB summary jsonb never ships for
+        // every authored open PR on the 10s fast tick. Mirrors `inProgressChecks`.
+        inProgressChecks: sql<number>`COALESCE((${pullRequestsTable.lastSummary} -> 'checks' ->> 'inProgress')::int, 0)`,
         authored: pullRequestsTable.authored,
         reviewRequested: pullRequestsTable.reviewRequested,
       })
@@ -724,7 +737,7 @@ class PRMonitorService extends EventEmitter {
     const due = rows
       .filter(
         (r) =>
-          inProgressChecks(r.lastSummary) > 0 &&
+          r.inProgressChecks > 0 &&
           isCohortActive(workspaceId, r) &&
           !isInCooldown(workspaceId, r.id)
       )
@@ -822,8 +835,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Number of in-flight check runs on a cached PR summary (0 if unknown). */
-function inProgressChecks(lastSummary: unknown): number {
+/**
+ * Number of in-flight check runs on a cached PR summary (0 if unknown).
+ * `fastPollWorkspace` now derives this in SQL (see its select) to avoid
+ * shipping `lastSummary`; this stays as the canonical JS definition the
+ * SQL must stay equivalent to (pinned by `prMonitorFastPollEgress.test.ts`).
+ */
+export function inProgressChecks(lastSummary: unknown): number {
   const checks = (lastSummary as { checks?: { inProgress?: number } } | null)?.checks;
   return checks?.inProgress ?? 0;
 }

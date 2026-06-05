@@ -5,10 +5,9 @@ import type {
   EnvironmentConfig,
   Task,
   TaskPriority,
-  TaskStatus,
-  TaskType,
 } from '@fastowl/shared';
 import { getCloudProvider } from './cloudProviders/registry.js';
+import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
 import { emitTaskStatus } from './websocket.js';
 import { getDbClient, type Database } from '../db/client.js';
@@ -118,12 +117,12 @@ class TaskQueueService extends EventEmitter {
       : inArray(tasksTable.status, ['pending', 'queued']);
 
     const rows = await this.db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(whereClause)
       .orderBy(priorityCase, tasksTable.createdAt);
 
-    return rows.map(rowToTask);
+    return rows.map((row) => rowToTask(row));
   }
 
   async processQueue(): Promise<void> {
@@ -187,7 +186,7 @@ class TaskQueueService extends EventEmitter {
   private async resolveCloudEnv(task: Task): Promise<Environment | null> {
     if (!task.assignedEnvironmentId) return null;
     const rows = await this.db
-      .select()
+      .select(CLOUD_ENV_COLUMNS)
       .from(environmentsTable)
       .where(eq(environmentsTable.id, task.assignedEnvironmentId))
       .limit(1);
@@ -198,7 +197,7 @@ class TaskQueueService extends EventEmitter {
 
   async getTask(taskId: string): Promise<Task | null> {
     const rows = await this.db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, taskId))
       .limit(1);
@@ -239,8 +238,27 @@ export async function findTaskHoldingEnvRepoSlot(
   return rows[0] ?? null;
 }
 
+/**
+ * Columns `rowToCloudEnv` actually reads. Projected (rather than `.select()`)
+ * so the marker's `config` jsonb is the only blob shipped — and so a future
+ * column added to `environments` can't silently leak into this hot dispatch
+ * read. The `Pick` type makes `tsc` fail if `rowToCloudEnv` ever reads more.
+ */
+const CLOUD_ENV_COLUMNS = {
+  id: environmentsTable.id,
+  name: environmentsTable.name,
+  type: environmentsTable.type,
+  status: environmentsTable.status,
+  config: environmentsTable.config,
+} as const;
+
+type CloudEnvRow = Pick<
+  typeof environmentsTable.$inferSelect,
+  keyof typeof CLOUD_ENV_COLUMNS
+>;
+
 /** Build a minimal Environment from a marker row for provider dispatch. */
-function rowToCloudEnv(row: typeof environmentsTable.$inferSelect): Environment {
+function rowToCloudEnv(row: CloudEnvRow): Environment {
   return {
     id: row.id,
     name: row.name,
@@ -249,27 +267,6 @@ function rowToCloudEnv(row: typeof environmentsTable.$inferSelect): Environment 
     config: (row.config as EnvironmentConfig) ?? { type: row.type as never },
     renderer: 'structured',
   } as unknown as Environment;
-}
-
-function rowToTask(row: typeof tasksTable.$inferSelect): Task {
-  return {
-    id: row.id,
-    workspaceId: row.workspaceId,
-    type: row.type as TaskType,
-    status: row.status as TaskStatus,
-    priority: row.priority as TaskPriority,
-    title: row.title,
-    description: row.description,
-    prompt: row.prompt ?? undefined,
-    repositoryId: row.repositoryId ?? undefined,
-    branch: row.branch ?? undefined,
-    assignedEnvironmentId: row.assignedEnvironmentId ?? undefined,
-    result: (row.result as Task['result']) ?? undefined,
-    metadata: (row.metadata as Task['metadata']) ?? undefined,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    completedAt: row.completedAt ? row.completedAt.toISOString() : undefined,
-  };
 }
 
 export const taskQueueService = new TaskQueueService();

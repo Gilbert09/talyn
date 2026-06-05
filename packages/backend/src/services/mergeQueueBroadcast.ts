@@ -54,10 +54,29 @@ export function computeQueuePositions<T extends QueueableRow>(rows: T[]): Map<st
  * single PR's `pull_request:updated` event can't move its neighbours, and the
  * counts only correct themselves on a manual list refresh.
  */
+/**
+ * Exactly the columns the position math + emit need. Projected so we don't
+ * ship cursor columns or the `autoMergeState` blob on every queue change.
+ * The `Pick` type makes `tsc` fail if this function reads a column not listed.
+ */
+const BROADCAST_COLUMNS = {
+  id: pullRequestsTable.id,
+  taskId: pullRequestsTable.taskId,
+  repositoryId: pullRequestsTable.repositoryId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  mergeQueued: pullRequestsTable.mergeQueued,
+  mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
+  mergeQueueState: pullRequestsTable.mergeQueueState,
+  lastSummary: pullRequestsTable.lastSummary,
+} as const;
+
 export async function broadcastMergeQueuePositions(workspaceId: string): Promise<void> {
   const db = getDbClient();
   const rows = await db
-    .select()
+    .select(BROADCAST_COLUMNS)
     .from(pullRequestsTable)
     .where(
       and(

@@ -217,7 +217,13 @@ async function loadWorkspaceRelations(
   }
 
   const repoRows = await db
-    .select()
+    .select({
+      id: repositoriesTable.id,
+      workspaceId: repositoriesTable.workspaceId,
+      name: repositoriesTable.name,
+      url: repositoriesTable.url,
+      defaultBranch: repositoriesTable.defaultBranch,
+    })
     .from(repositoriesTable)
     .where(inArray(repositoriesTable.workspaceId, workspaceIds));
   const reposByWorkspace = new Map<string, Repository[]>();
@@ -233,7 +239,11 @@ async function loadWorkspaceRelations(
   }
 
   const integrationRows = await db
-    .select()
+    .select({
+      workspaceId: integrationsTable.workspaceId,
+      type: integrationsTable.type,
+      enabled: integrationsTable.enabled,
+    })
     .from(integrationsTable)
     .where(inArray(integrationsTable.workspaceId, workspaceIds));
   const integrationsByWorkspace = new Map<string, WorkspaceIntegrations>();

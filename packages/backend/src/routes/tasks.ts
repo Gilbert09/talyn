@@ -221,7 +221,7 @@ export function taskRoutes(): Router {
     }
 
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -262,7 +262,7 @@ export function taskRoutes(): Router {
     void taskQueueService.processQueue();
 
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -279,7 +279,7 @@ export function taskRoutes(): Router {
     }
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -291,7 +291,7 @@ export function taskRoutes(): Router {
       await taskQueueService.queueTask(task.id);
     }
     const updated = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, task.id))
       .limit(1);
@@ -307,7 +307,7 @@ export function taskRoutes(): Router {
     }
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -338,7 +338,7 @@ export function taskRoutes(): Router {
     });
 
     const updatedRows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, task.id))
       .limit(1);
@@ -355,7 +355,7 @@ export function taskRoutes(): Router {
     }
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -366,7 +366,7 @@ export function taskRoutes(): Router {
     await openPullRequestForTask(task.id);
 
     const updated = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, task.id))
       .limit(1);
@@ -399,7 +399,7 @@ export function taskRoutes(): Router {
     }
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
@@ -591,7 +591,7 @@ export function taskRoutes(): Router {
     const db = getDbClient();
     try {
       const rows = await db
-        .select()
+        .select(taskColumnsNoTranscript)
         .from(tasksTable)
         .where(eq(tasksTable.id, req.params.id))
         .limit(1);

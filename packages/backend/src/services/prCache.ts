@@ -204,11 +204,11 @@ export async function attachTaskToPullRequestRow(opts: {
 }): Promise<boolean> {
   const db = getDbClient();
   const rows = await db
-    .select()
+    .select(PR_CACHE_COLUMNS)
     .from(pullRequestsTable)
     .where(eq(pullRequestsTable.id, opts.pullRequestId))
     .limit(1);
-  const row = rows[0] as PullRequestRow | undefined;
+  const row = rows[0];
   if (!row || row.workspaceId !== opts.workspaceId) return false;
 
   const now = new Date();
@@ -437,25 +437,37 @@ function emptyDelta(): PRDelta {
 
 // ---------- Persistence ----------
 
-interface PullRequestRow {
-  id: string;
-  workspaceId: string;
-  repositoryId: string;
-  taskId: string | null;
-  owner: string;
-  repo: string;
-  number: number;
-  state: string;
-  reviewRequested: boolean;
-  authored: boolean;
-  mergedAt: Date | null;
-  lastPolledAt: Date;
-  lastSummary: unknown;
-  lastReviewId: string | null;
-  lastReviewCommentId: string | null;
-  lastCommentId: string | null;
-  lastCheckDigest: string | null;
-}
+/**
+ * Exactly the `pull_requests` columns the cache reads/emits. Projected (not
+ * `.select()`) so `readRow` — on the hot upsert/getOrFetch path — never ships
+ * the unread blobs (`autoMergeState`, `mergeQueueState`) or the merge-queue/
+ * auto-merge flag columns. The `Pick` type below makes `tsc` fail if a
+ * consumer ever reads a column not listed here.
+ */
+const PR_CACHE_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  taskId: pullRequestsTable.taskId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  reviewRequested: pullRequestsTable.reviewRequested,
+  authored: pullRequestsTable.authored,
+  mergedAt: pullRequestsTable.mergedAt,
+  lastPolledAt: pullRequestsTable.lastPolledAt,
+  lastSummary: pullRequestsTable.lastSummary,
+  lastReviewId: pullRequestsTable.lastReviewId,
+  lastReviewCommentId: pullRequestsTable.lastReviewCommentId,
+  lastCommentId: pullRequestsTable.lastCommentId,
+  lastCheckDigest: pullRequestsTable.lastCheckDigest,
+} as const;
+
+type PullRequestRow = Pick<
+  typeof pullRequestsTable.$inferSelect,
+  keyof typeof PR_CACHE_COLUMNS
+>;
 
 async function readRow(
   db: Database,
@@ -464,7 +476,7 @@ async function readRow(
   number: number
 ): Promise<PullRequestRow | null> {
   const rows = await db
-    .select()
+    .select(PR_CACHE_COLUMNS)
     .from(pullRequestsTable)
     .where(
       and(
@@ -474,7 +486,7 @@ async function readRow(
       )
     )
     .limit(1);
-  return (rows[0] as PullRequestRow | undefined) ?? null;
+  return rows[0] ?? null;
 }
 
 function isFresh(lastPolledAt: Date, ttlMs: number): boolean {

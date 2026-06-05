@@ -36,6 +36,37 @@ import type { ApiResponse } from '@fastowl/shared';
  *   POST  /pull-requests/:id/merge        merge the PR (merge|squash|rebase)
  */
 
+/**
+ * The four columns the GraphQL/REST detail fetches (`/files`, `/reviews`)
+ * need to address GitHub — they never touch `lastSummary` or any flag/jsonb
+ * column, so we project to avoid shipping the whole row just to read 4 scalars.
+ */
+const PR_LOOKUP_COLUMNS = {
+  workspaceId: pullRequestsTable.workspaceId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+} as const;
+
+/**
+ * Columns the flag-toggle endpoints read + echo back. They emit `lastSummary`
+ * (so it stays), but never read the watcher/queue bookkeeping blobs, cursors,
+ * or timestamps — those are dropped from the read.
+ */
+const PR_FLAG_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  taskId: pullRequestsTable.taskId,
+  repositoryId: pullRequestsTable.repositoryId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  lastSummary: pullRequestsTable.lastSummary,
+  mergeMethod: pullRequestsTable.mergeMethod,
+  mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
+} as const;
+
 export function pullRequestRoutes(): Router {
   const router = Router();
 
@@ -180,7 +211,7 @@ export function pullRequestRoutes(): Router {
   router.get('/:id/files', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(PR_LOOKUP_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -214,7 +245,7 @@ export function pullRequestRoutes(): Router {
   router.get('/:id/reviews', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(PR_LOOKUP_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -299,7 +330,7 @@ export function pullRequestRoutes(): Router {
   router.post('/:id/auto-keep-mergeable', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(PR_FLAG_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -351,7 +382,7 @@ export function pullRequestRoutes(): Router {
   router.post('/:id/merge-queue', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(PR_FLAG_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -472,7 +503,13 @@ export function pullRequestRoutes(): Router {
   router.post('/:id/merge', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select({
+        id: pullRequestsTable.id,
+        workspaceId: pullRequestsTable.workspaceId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+      })
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
