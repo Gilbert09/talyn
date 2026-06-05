@@ -14,7 +14,6 @@ import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.j
 import type { AcpLogEntry } from './acpConverter.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 
-const POLL_INTERVAL_MS = 10_000;
 const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
   'completed',
   'failed',
@@ -46,68 +45,13 @@ const IDLE_TAIL_WINDOW_MS = 5 * 60 * 1000;
  * taught to leave them alone.
  */
 class PostHogCodePoller {
-  private interval: NodeJS.Timeout | null = null;
-  private ticking = false;
   /** Per-task throttle for the idle-confirmation log fetch (taskId → ms). */
   private lastIdleCheck = new Map<string, number>();
 
-  init(): void {
-    if (this.interval) return;
-    this.interval = setInterval(() => {
-      void this.tick();
-    }, POLL_INTERVAL_MS);
-  }
-
-  shutdown(): void {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
-  }
-
-  private async tick(): Promise<void> {
-    if (this.ticking) return;
-    this.ticking = true;
-    try {
-      const db = getDbClient();
-      const rows = await db
-        .select()
-        .from(tasksTable)
-        .where(eq(tasksTable.status, 'in_progress'));
-
-      for (const row of rows) {
-        const meta = (row.metadata as Record<string, unknown> | null) ?? {};
-        const posthogTaskId = meta.posthogTaskId as string | undefined;
-        const posthogRunId = meta.posthogRunId as string | undefined;
-        if (!posthogTaskId || !posthogRunId) continue;
-
-        try {
-          await this.reconcile({
-            id: row.id,
-            workspaceId: row.workspaceId,
-            title: row.title,
-            repositoryId: row.repositoryId,
-            posthogTaskId,
-            lastStatus: meta.posthogStatus as string | undefined,
-            transcriptEmpty: !Array.isArray(row.transcript) || row.transcript.length === 0,
-          });
-        } catch (err) {
-          // Transient API hiccups are fine — we retry next tick. Don't
-          // fail the task on a single failed poll.
-          console.warn(
-            `[posthogCode] poll failed for task ${row.id.slice(0, 8)}:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('DATABASE_URL is not set')) return;
-      console.error('[posthogCode] poller tick error:', err);
-    } finally {
-      this.ticking = false;
-    }
-  }
+  // NOTE: this poller no longer drives its own `setInterval` loop. The generic
+  // cloud-task scheduler (`cloudProviders/poller.ts`) loads in-flight tasks and
+  // calls `reconcileTask` via the provider wrapper. Keeping a second loop here
+  // would re-introduce the `select()`-all transcript egress leak, so it's gone.
 
   /**
    * Reconcile one cloud task row — the entry point the generic cloud

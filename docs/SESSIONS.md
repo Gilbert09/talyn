@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 47 — Database egress: observability + the transcript-poller fix
+
+A single user's Supabase egress hit ~8 GB in one billing period (5 GB free + 2.92 GB overage), ramping from ~0 to 2.1 GB/day. Two parts:
+
+1. **Debug-panel DB metering (observability).** Wrapped the postgres-js client's `unsafe()` — the single choke point every Drizzle query funnels through (see `drizzle-orm/postgres-js` session) — in `db/client.ts` to estimate the bytes each result pulls back and the query count. New `'db'` `DebugCategory`, a `debugBus.recordDbQuery` recorder with cumulative `dbStats` (egressBytes + requests, reset on Clear), and two snapshot-bar tiles ("DB egress" / "DB queries") plus the stream rows. Measurement is skipped while the panel isn't recording, so the serialize cost is only paid when watching. `isRecording()` exposed for that gate. Tests: `dbEgress.test.ts` (proxy mechanics — await vs chained `.values()`, count-once, recording-off-still-executes, rejection, BigInt) + `recordDbQuery` cases in `debugBus.test.ts`.
+
+2. **Root-cause fix.** `cloudProviders/poller.ts` ran `db.select()` (all columns) over every `in_progress` task every 10s **only to compute one boolean** — including `transcript`, the cloud-run conversation log (often MBs). At 8,640 ticks/day a single stuck-in-progress task with a ~250 KB transcript ≈ 2.1 GB/day, matching the ramp. Narrowed the SELECT to the columns the scheduler needs and compute emptiness server-side via `CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) = 0 ELSE true END` (the `CASE` both guards `jsonb_array_length` from throwing on non-arrays and — unlike the first `NOT(... )` draft — never returns `NULL` for a null transcript, which a test caught: `null` would have read falsy and suppressed the terminal-run backfill stream). The streamer keeps its transcript in memory and overwrites on flush, so it never reads the column back — narrowing can't break streaming. Also removed the dead `tick()`/`init()`/`shutdown()` loop in `posthogCode/poller.ts` (never scheduled — only `reconcileTask` is used via the provider) that carried the same `select()`-all leak. Tests: `cloudPollerEgress.test.ts` pins the SQL to the old JS semantics across null / `[]` / populated-array / non-array-object via real pglite.
+
+- Backend green (483), tsc + lint clean. Per-tick payload drops from MBs to bytes; 10s cadence left as-is.
+
 ## Session 46 — Merge-queue badge consistency + backend-created tasks sync to the desktop
 
 Two reported inconsistencies on the GitHub panel:
