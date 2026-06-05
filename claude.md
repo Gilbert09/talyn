@@ -54,6 +54,22 @@ There's a developer-only **Debug** panel (Settings → Developer → "Debug tool
 
 Tests live in `packages/backend/src/__tests__/debugBus.test.ts` — extend them alongside changes.
 
+## Database Egress — keep queries lean
+
+The backend runs against Supabase Postgres and we pay for DB egress (result-row bytes shipped DB→backend). A bare Drizzle `.select()` is `SELECT *` — it ships **every** column, including large jsonb blobs the caller usually doesn't touch. The two expensive columns are **`tasks.transcript`** (the cloud-run conversation log, often MBs) and **`pull_requests.lastSummary`** (~2KB, but multiplied across every tracked PR on the poll loops). The DB-egress tile in the Debug panel (fed by `instrumentEgress` in `db/client.ts`, which records per-query `bytes`/`rows`/`table`) is how you spot regressions — watch it after touching any read.
+
+**Rules of thumb when writing or reviewing a query:**
+
+- **Never `.select()` (= `SELECT *`) unless the caller genuinely uses every column.** Default to an explicit column list. This is most critical on anything that (a) runs in a poll loop or per-request hot path, or (b) reads a table with a large jsonb column (`tasks`, `pull_requests`, `workspaces.logo`, `integrations.config`).
+- **Reuse the established projection helpers — don't invent new shapes:**
+  - `services/taskSerialize.ts` → `taskColumnsNoTranscript` (every `tasks` column except `transcript`) + `rowToTask(row, { includeTranscript? })`. Any task read that doesn't render the transcript should use this. Only `GET /tasks/:id` and `POST /tasks/:id/message` select the full row.
+  - For poll-loop / hot-path reads on `pull_requests`, define an `as const` projection object next to the consumer and type the row as `Pick<typeof table.$inferSelect, keyof typeof PROJECTION>`. Existing examples: `QUEUE_COLUMNS` (`mergeQueueProcessor.ts`), `WATCH_COLUMNS` (`prAutoMergeWatcher.ts`), `PR_CACHE_COLUMNS` (`prCache.ts`), `BROADCAST_COLUMNS` (`mergeQueueBroadcast.ts`), `PR_LOOKUP_COLUMNS`/`PR_FLAG_COLUMNS` (`routes/pullRequests.ts`), `CLOUD_ENV_COLUMNS` (`taskQueue.ts`). The `Pick` type is the regression guard — `tsc` fails if a consumer later reads a column the projection drops, so it can never silently re-bloat.
+- **If you only need a scalar/boolean derived from a big jsonb, compute it in SQL — don't fetch the blob.** Use a `sql<...>` expression so the column never ships. Precedents: `cloudProviders/poller.ts` derives `transcriptEmpty` with a `CASE … jsonb_array_length(transcript) …`; `prMonitor.fastPollWorkspace` derives the in-flight check count with `COALESCE((last_summary -> 'checks' ->> 'inProgress')::int, 0)` instead of selecting `lastSummary`. When you do this, **pin the SQL to the JS semantics it replaces with a pglite test** (see `cloudPollerEgress.test.ts`, `prMonitorFastPollEgress.test.ts`) — keep the JS helper exported as the canonical definition the SQL must match.
+- **Don't fetch a column to read it once for a rare branch.** If a loop reads N rows but only needs an expensive column for the few that hit a condition (e.g. `reconcileRelationshipFlags` only needs `lastSummary` for rows whose flags changed), drop it from the bulk select and re-fetch it per-row inside the branch — N blob fetches/tick become K (usually 0).
+- **The same discipline applies to what leaves the backend.** WS broadcasts and REST responses should serialize a crafted shape, never a raw full row (see `emitPullRequestUpdated` / `rowToPublicShape`). Don't echo `transcript` or unread jsonb to the desktop.
+
+When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toContain('transcript')`) — it proves the projection excludes the blob without a live DB (see `projectionEgress.test.ts`).
+
 ## Active Priorities
 
 > Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Definition of done for "production ready" is in [`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md).
