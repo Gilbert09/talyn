@@ -159,8 +159,15 @@ Your job is to keep iterating on this PR until ALL of the following are true and
        git merge origin/${s.baseBranch}
      Then resolve each conflict by hand and commit the merge. Only ever merge in the PR's own base branch (\`origin/${s.baseBranch}\`) — never any other branch. Rebasing would rewrite history (forcing a force-push) and drag unrelated/duplicate commits into the PR — that's exactly why it's forbidden.
    - Resolve ONLY the genuine conflicts. Preserve the intent of both sides; never blindly discard the PR's changes or the base's. The update must add nothing beyond (a) one merge commit and (b) your conflict resolutions — no unrelated files, commits, or edits.
-   - Before pushing, verify you didn't pull in stray changes: \`git diff origin/${s.baseBranch}...HEAD\` should show ONLY this PR's intended changes (plus conflict resolutions). If you see unrelated changes, abort the in-progress merge with \`git merge --abort\` and redo it cleanly (this is a local, not-yet-pushed operation — never a force-push to the remote).
-   - After resolving, re-run the build/tests locally where feasible, then push with a plain \`git push\` (never \`--force\` — the merge commit means a normal push fast-forwards). Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
+   - GUARD AGAINST BASE-BRANCH FILES LEAKING INTO THE PR. This is a real, recurring failure: a botched merge resolution drags files that only changed on ${s.baseBranch} into the PR's diff. Catch it explicitly:
+       a. BEFORE merging, record the exact set of files this PR owns:
+            git diff --name-only origin/${s.baseBranch}...HEAD   # save this "before" list
+       b. AFTER merging and resolving every conflict, record it again:
+            git diff --name-only origin/${s.baseBranch}...HEAD   # the "after" list
+       c. The two lists MUST be identical. A clean base-merge adds NOTHING to the PR's own diff — files that already live on ${s.baseBranch} must never appear as PR changes. Any file in "after" that wasn't in "before" is a leak (usually a conflict resolved by re-adding base-only content, or a file deleted on one side wrongly kept).
+       d. For every file still in the diff, eyeball it: \`git diff origin/${s.baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${s.baseBranch} is a leak.
+   - If you find ANY leaked file or hunk, do not push. Abort the in-progress merge with \`git merge --abort\` and redo it cleanly, taking the base side for files this PR never meant to touch (this is a local, not-yet-pushed operation — never a force-push to the remote).
+   - Do not push until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and push with a plain \`git push\` (never \`--force\` — the merge commit means a normal push fast-forwards). Resolving conflicts can re-trigger CI and reopen review threads, so re-check conditions (1) and (2) afterwards.
 
 Loop discipline:
   - After every push, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.

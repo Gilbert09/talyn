@@ -2,6 +2,10 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 49 — Fix-prompt: guard against base-branch files leaking into the PR
+
+Reported real-world failure: when a merge-queue / auto-keep-mergeable cloud fix run merges the base branch in to clear conflicts, base-only file changes occasionally leaked into the PR's diff. The "make this PR mergeable" prompt (`buildPostHogPrompt` in `packages/shared/src/prMergeable.ts`) already told the agent to merge (not rebase) the base in and do a one-line stray-change check; strengthened that into an explicit before/after file-set guard: capture `git diff --name-only origin/<base>...HEAD` BEFORE the merge and again AFTER resolving conflicts, require the two sets to be identical, per-file review the remaining hunks, and `git merge --abort` + redo (taking the base side for untouched files) on any leak — never push until the sets match. New `buildPostHogPrompt.test.ts` locks the guard's intent (before/after file-set check, base branch threaded into the commands, no-force-push/no-rebase rules retained) without over-asserting wording. Backend green (488).
+
 ## Session 48 — Database egress, round 2: list endpoint + PR-loop projections
 
 Follow-up sweep for other wasteful reads after the Session 47 transcript-poller fix. Verified findings (several of an earlier audit's "criticals" didn't hold up — `taskQueue.getQueuedTasks` only selects `pending`/`queued` tasks whose transcript is null, and `prMonitor` is already fully column-projected):
