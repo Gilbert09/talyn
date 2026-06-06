@@ -1486,11 +1486,33 @@ function toUnifiedDiff(file: PRFile): string {
 }
 
 function BranchRef({ head, base }: { head: string; base: string }) {
+  // Clicking a branch name selects the whole thing so it's a single click to
+  // copy. `select-all` handles the common case; the explicit range selection
+  // makes a single click reliably highlight the entire name.
+  const selectAll = (e: React.MouseEvent<HTMLSpanElement>) => {
+    const range = document.createRange();
+    range.selectNodeContents(e.currentTarget);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  };
   return (
     <span className="font-mono">
-      <span className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">{head}</span>
+      <span
+        onClick={selectAll}
+        className="cursor-pointer select-all rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800"
+        title={`Click to select the branch name: ${head}`}
+      >
+        {head}
+      </span>
       <span className="px-1 text-muted-foreground">→</span>
-      <span className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">{base}</span>
+      <span
+        onClick={selectAll}
+        className="cursor-pointer select-all rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800"
+        title={`Click to select the branch name: ${base}`}
+      >
+        {base}
+      </span>
     </span>
   );
 }
