@@ -1022,58 +1022,75 @@ function ReviewsTab({
       </div>
     );
   }
-  if (
-    !detail ||
-    (detail.reviews.length === 0 &&
-      detail.threads.length === 0 &&
-      detail.comments.length === 0)
-  ) {
+  // GitHub-style timeline: interleave review submissions, inline-comment
+  // threads, and conversation comments into one stream ordered by timestamp
+  // (oldest first), rather than three stacked sections.
+  const timeline: TimelineItem[] = detail
+    ? [
+        // Skip empty "commented" reviews — GitHub creates those purely as a
+        // container for inline comments, which we already render as threads.
+        ...detail.reviews
+          .filter((r) => r.state !== 'COMMENTED' || r.body.trim())
+          .map(
+            (r): TimelineItem => ({
+              kind: 'review',
+              key: `r:${r.id}`,
+              at: parseTime(r.submittedAt),
+              review: r,
+            })
+          ),
+        ...detail.threads.map(
+          (t): TimelineItem => ({
+            kind: 'thread',
+            key: `t:${t.id}`,
+            // Anchor a thread at its first comment so it sorts where the
+            // conversation started.
+            at: parseTime(t.comments[0]?.createdAt ?? null),
+            thread: t,
+          })
+        ),
+        ...detail.comments.map(
+          (c): TimelineItem => ({
+            kind: 'comment',
+            key: `c:${c.id}`,
+            at: parseTime(c.createdAt),
+            comment: c,
+          })
+        ),
+      ].sort((a, b) => a.at - b.at)
+    : [];
+
+  if (timeline.length === 0) {
     return <p className="text-xs text-muted-foreground">No reviews or comments yet.</p>;
   }
 
-  const unresolvedCount = detail.threads.filter((t) => !t.isResolved).length;
+  const unresolvedCount = detail
+    ? detail.threads.filter((t) => !t.isResolved).length
+    : 0;
 
   return (
-    <div className="space-y-5 text-sm">
-      {detail.reviews.length > 0 && (
-        <section className="space-y-3">
-          <SectionHeading>Reviews</SectionHeading>
-          {detail.reviews.map((r) => (
-            <ReviewCard key={r.id} review={r} />
-          ))}
-        </section>
+    <div className="space-y-3 text-sm">
+      {unresolvedCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {unresolvedCount} unresolved inline {unresolvedCount === 1 ? 'comment' : 'comments'}
+        </p>
       )}
 
-      {detail.threads.length > 0 && (
-        <section className="space-y-3">
-          <SectionHeading>
-            Inline comments
-            {unresolvedCount > 0 && (
-              <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium normal-case text-amber-700 dark:text-amber-400">
-                {unresolvedCount} unresolved
-              </span>
-            )}
-          </SectionHeading>
-          {detail.threads.map((t) => (
-            <ThreadCard key={t.id} thread={t} />
-          ))}
-        </section>
-      )}
-
-      {detail.comments.length > 0 && (
-        <section className="space-y-3">
-          <SectionHeading>Conversation</SectionHeading>
-          {detail.comments.map((c) => (
-            <CommentCard
-              key={c.id}
-              author={c.author}
-              avatarUrl={c.avatarUrl}
-              body={c.body}
-              at={c.createdAt}
-              url={c.url}
-            />
-          ))}
-        </section>
+      {timeline.map((item) =>
+        item.kind === 'review' ? (
+          <ReviewCard key={item.key} review={item.review} />
+        ) : item.kind === 'thread' ? (
+          <ThreadCard key={item.key} thread={item.thread} />
+        ) : (
+          <CommentCard
+            key={item.key}
+            author={item.comment.author}
+            avatarUrl={item.comment.avatarUrl}
+            body={item.comment.body}
+            at={item.comment.createdAt}
+            url={item.comment.url}
+          />
+        )
       )}
 
       <a
@@ -1089,12 +1106,17 @@ function ReviewsTab({
   );
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="flex items-center text-xs font-medium uppercase tracking-wide text-muted-foreground">
-      {children}
-    </h3>
-  );
+/** One entry in the merged Reviews-tab timeline. */
+type TimelineItem =
+  | { kind: 'review'; key: string; at: number; review: PRReviewDetail['reviews'][number] }
+  | { kind: 'thread'; key: string; at: number; thread: PRReviewThread }
+  | { kind: 'comment'; key: string; at: number; comment: PRReviewDetail['comments'][number] };
+
+/** Parse an ISO timestamp to ms, treating missing/invalid as epoch 0 so it
+ *  sorts to the top rather than throwing the order off. */
+function parseTime(iso: string | null): number {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  return Number.isNaN(t) ? 0 : t;
 }
 
 function Avatar({ url, login }: { url: string | null; login: string }) {
