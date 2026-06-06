@@ -46,7 +46,7 @@ export function GitHubPageShell({
   activeView,
   search,
   onSearch,
-  searchPlaceholder = 'Search title or repo… (⌘F)',
+  searchPlaceholder = 'Search title, repo or #number… (⌘F)',
   filters,
   rows,
   emptyIcon,

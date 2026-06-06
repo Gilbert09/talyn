@@ -5,7 +5,7 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus } from '@fastowl/shared';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, reviewRequestSearchText } from './prTableShared';
-import { RepoFilter, SortToggle, compareByCreated, type SortDir } from './filters';
+import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
 import { useGitHubActions } from './useGitHubActions';
 
 /**
@@ -64,13 +64,12 @@ export function ReviewsPanel() {
     if (repoFilter !== 'all') out = out.filter((r) => r.repositoryId === repoFilter);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      out = out.filter((r) => {
-        const title = r.summary.title?.toLowerCase() ?? '';
-        const repo = `${r.owner}/${r.repo}`.toLowerCase();
-        if (title.includes(q) || repo.includes(q)) return true;
-        // Also match the requester (team name / your handle).
-        return reviewRequestSearchText(r.summary, viewerLogin).includes(q);
-      });
+      out = out.filter(
+        (r) =>
+          prMatchesText(r, q) ||
+          // Also match the requester (team name / your handle).
+          reviewRequestSearchText(r.summary, viewerLogin).includes(q)
+      );
     }
     if (requestedFilter !== 'all') {
       out = out.filter((r) => {

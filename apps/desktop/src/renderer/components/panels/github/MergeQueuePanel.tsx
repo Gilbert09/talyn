@@ -6,6 +6,7 @@ import type { TaskStatus } from '@fastowl/shared';
 import type { PRRow } from '../../../lib/api';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable } from './prTableShared';
+import { prMatchesText } from './filters';
 import { useGitHubActions } from './useGitHubActions';
 
 interface QueueGroup {
@@ -41,11 +42,7 @@ export function MergeQueuePanel() {
     let out = rows.filter((r) => r.mergeQueued);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      out = out.filter((r) => {
-        const title = r.summary.title?.toLowerCase() ?? '';
-        const repo = `${r.owner}/${r.repo}`.toLowerCase();
-        return title.includes(q) || repo.includes(q);
-      });
+      out = out.filter((r) => prMatchesText(r, q));
     }
     return out;
   }, [rows, search]);
@@ -85,7 +82,7 @@ export function MergeQueuePanel() {
       activeView="all"
       search={search}
       onSearch={setSearch}
-      searchPlaceholder="Search queued PRs… (⌘F)"
+      searchPlaceholder="Search queued PRs or #number… (⌘F)"
       rows={queued}
       emptyIcon={<GitMerge className="h-8 w-8" />}
       emptyTitle={hasSearch ? 'No queued PRs match your search.' : 'The merge queue is empty.'}

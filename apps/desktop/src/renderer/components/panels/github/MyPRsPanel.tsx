@@ -6,7 +6,7 @@ import type { TaskStatus } from '@fastowl/shared';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, isNeedsAttention } from './prTableShared';
-import { RepoFilter, SortToggle, compareByCreated, type SortDir } from './filters';
+import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
 import { useGitHubActions } from './useGitHubActions';
 
 /**
@@ -42,11 +42,7 @@ export function MyPRsPanel() {
     if (repoFilter !== 'all') out = out.filter((r) => r.repositoryId === repoFilter);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      out = out.filter((r) => {
-        const title = r.summary.title?.toLowerCase() ?? '';
-        const repo = `${r.owner}/${r.repo}`.toLowerCase();
-        return title.includes(q) || repo.includes(q);
-      });
+      out = out.filter((r) => prMatchesText(r, q));
     }
     if (needsAttention) out = out.filter(isNeedsAttention);
     return out.slice().sort((a, b) => compareByCreated(a, b, sortDir));

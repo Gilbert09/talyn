@@ -45,6 +45,26 @@ export function SortToggle({ sortDir, onToggle }: { sortDir: SortDir; onToggle: 
   );
 }
 
+/**
+ * Whether a PR matches a (lowercased, trimmed) search query by its title,
+ * `owner/repo`, `owner/repo#number` ref, or bare PR number. A leading `#` on
+ * the query is ignored so both `#123` and `123` match the number.
+ */
+export function prMatchesText(
+  r: { owner: string; repo: string; number: number; summary: { title?: string } },
+  q: string
+): boolean {
+  const title = r.summary.title?.toLowerCase() ?? '';
+  const repo = `${r.owner}/${r.repo}`.toLowerCase();
+  const ref = `${repo}#${r.number}`;
+  const num = String(r.number);
+  return (
+    title.includes(q) ||
+    ref.includes(q) ||
+    num.includes(q.replace(/^#/, ''))
+  );
+}
+
 /** Order two PRs by when they were opened on GitHub (DB createdAt fallback). */
 export function compareByCreated(
   a: { summary: { createdAt?: string }; createdAt: string },
