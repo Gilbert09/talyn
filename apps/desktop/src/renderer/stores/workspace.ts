@@ -113,7 +113,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue' | 'github' | 'settings' | 'debug';
+  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'settings' | 'debug';
   // Developer-only Debug panel visibility (sidebar entry + reachable view).
   debugMode: boolean;
   selectedTaskId: string | null;
@@ -153,7 +153,9 @@ interface WorkspaceState {
   setRepositories: (repos: WatchedRepo[]) => void;
 
   toggleSidebar: () => void;
-  setActivePanel: (panel: 'queue' | 'github' | 'settings' | 'debug') => void;
+  setActivePanel: (
+    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'settings' | 'debug'
+  ) => void;
   setDebugMode: (on: boolean) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -168,7 +170,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   tasks: [],
   repositories: [],
   sidebarCollapsed: false,
-  activePanel: 'github',
+  activePanel: 'my_prs',
   debugMode: getInitialDebugMode(),
   selectedTaskId: null,
   theme: getInitialTheme(),
@@ -276,7 +278,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     // user on a now-hidden view — bounce them back to the GitHub panel.
     set((state) => ({
       debugMode: on,
-      activePanel: !on && state.activePanel === 'debug' ? 'github' : state.activePanel,
+      activePanel: !on && state.activePanel === 'debug' ? 'my_prs' : state.activePanel,
     }));
   },
 

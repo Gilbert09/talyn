@@ -678,8 +678,8 @@ function notifyMergeQueueBlocked(p: MergeQueueBlockedEvent): void {
       n.onclick = () => {
         try {
           window.focus();
-          // Jump to the GitHub panel, where the blocked PR's amber badge lives.
-          useWorkspaceStore.getState().setActivePanel('github');
+          // Jump to the Merge Queue page, where the blocked PR's amber badge lives.
+          useWorkspaceStore.getState().setActivePanel('merge_queue');
         } catch {
           // ignore
         }

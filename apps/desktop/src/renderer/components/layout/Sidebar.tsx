@@ -5,7 +5,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
-  Github,
+  GitPullRequest,
+  GitMerge,
+  Eye,
   Check,
   Plus,
   Bug,
@@ -17,6 +19,7 @@ import { Badge } from '../ui/badge';
 import { api, type CloudProviderInfo } from '../../lib/api';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { usePullRequestStore } from '../../stores/pullRequests';
 import { useAuth } from '../auth/AuthProvider';
 
 interface SidebarProps {
@@ -43,6 +46,13 @@ export function Sidebar({ className }: SidebarProps) {
   // Count running tasks
   const runningTasksCount = tasks.filter((t) => t.status === 'in_progress').length;
 
+  // Live PR counts for the three GitHub nav badges. The PR store is kept
+  // current by usePullRequestSync, so these re-render on every WS update.
+  const prRows = usePullRequestStore((s) => s.rows);
+  const myPrCount = prRows.filter((r) => r.authored).length;
+  const reviewCount = prRows.filter((r) => r.reviewRequested).length;
+  const queueCount = prRows.filter((r) => r.mergeQueued).length;
+
   const navItems = [
     {
       id: 'queue' as const,
@@ -52,9 +62,25 @@ export function Sidebar({ className }: SidebarProps) {
       badgeVariant: tasksNeedingAttention > 0 ? 'warning' : 'secondary',
     },
     {
-      id: 'github' as const,
-      icon: Github,
-      label: 'GitHub',
+      id: 'my_prs' as const,
+      icon: GitPullRequest,
+      label: 'My PRs',
+      badge: myPrCount > 0 ? myPrCount : undefined,
+      badgeVariant: 'secondary',
+    },
+    {
+      id: 'reviews' as const,
+      icon: Eye,
+      label: 'Reviews',
+      badge: reviewCount > 0 ? reviewCount : undefined,
+      badgeVariant: 'secondary',
+    },
+    {
+      id: 'merge_queue' as const,
+      icon: GitMerge,
+      label: 'Merge Queue',
+      badge: queueCount > 0 ? queueCount : undefined,
+      badgeVariant: 'secondary',
     },
     // Developer-only — surfaced via Settings → Developer → Debug tools.
     ...(debugMode
