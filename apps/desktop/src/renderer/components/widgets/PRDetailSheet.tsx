@@ -20,6 +20,7 @@ import {
   Eye,
   AlertTriangle,
   ListChecks,
+  GitBranch,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
@@ -342,7 +343,7 @@ export function PRDetailSheet({
       )}
     >
       <header className="flex shrink-0 flex-col gap-3 border-b p-4">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             {!view ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -350,58 +351,29 @@ export function PRDetailSheet({
                 Loading…
               </div>
             ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <h2 className="truncate text-base font-semibold">
-                    {view.row.summary.title}
-                  </h2>
-                  <span className="shrink-0 text-sm text-muted-foreground">
-                    {view.row.owner}/{view.row.repo}#{view.row.number}
-                  </span>
-                  {/* Minimal in-place refresh indicator while the fresh
-                      detail loads — the cached summary is already shown. */}
-                  {detailPending && (
-                    <Loader2
-                      className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
-                      aria-label="Refreshing"
-                    />
-                  )}
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>by @{view.row.summary.author}</span>
-                  <span>·</span>
-                  <BranchRef
-                    head={view.row.summary.headBranch}
-                    base={view.row.summary.baseBranch}
+              <div className="flex items-center gap-2">
+                <h2
+                  className="truncate text-base font-semibold leading-snug"
+                  title={view.row.summary.title}
+                >
+                  {view.row.summary.title}
+                </h2>
+                {/* Minimal in-place refresh indicator while the fresh detail
+                    loads — the cached summary is already shown. */}
+                {detailPending && (
+                  <Loader2
+                    className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
+                    aria-label="Refreshing"
                   />
-                </div>
-                <div className="mt-2">
-                  {isOwnPr ? (
-                    <PRStatusPill
-                      blockingReason={view.row.summary.blockingReason}
-                      checks={view.row.summary.checks}
-                      mergeStateStatus={view.row.summary.mergeStateStatus}
-                      state={view.row.state}
-                    />
-                  ) : (
-                    <PRReviewPill
-                      reviewDecision={
-                        view.row.summary.effectiveReviewDecision ?? view.row.summary.reviewDecision
-                      }
-                      state={view.row.state}
-                    />
-                  )}
-                </div>
-              </>
+                )}
+              </div>
             )}
           </div>
-          {/* Always-visible window controls stay pinned top-right; labelled
-              action toggles wrap onto their own row below so they never
-              squeeze or overlap the title/branch column. */}
-          <div className="flex shrink-0 items-center gap-1">
+          {/* Compact window controls pinned top-right. */}
+          <div className="flex shrink-0 items-center gap-0.5">
             <Button
-              size="sm"
-              variant="outline"
+              variant="ghost"
+              className="h-7 w-7 p-0"
               onClick={handleRefresh}
               disabled={loading || refreshing}
               title="Re-fetch from GitHub"
@@ -410,25 +382,58 @@ export function PRDetailSheet({
             </Button>
             {view && (
               <Button
-                size="sm"
-                variant="outline"
+                variant="ghost"
+                className="h-7 w-7 p-0"
                 onClick={() => window.open(view.row.summary.url, '_blank', 'noopener,noreferrer')}
                 title="Open on GitHub"
               >
                 <ExternalLink className="h-4 w-4" />
               </Button>
             )}
-            <Button size="sm" variant="ghost" onClick={onClose} title="Close">
+            <Button variant="ghost" className="h-7 w-7 p-0" onClick={onClose} title="Close">
               <X className="h-4 w-4" />
             </Button>
           </div>
         </div>
-        {view && isOwnPr && (view.row.state === 'open' || canMerge) && (
-          <div className="flex flex-wrap items-center gap-1">
+        {view && (
+          <>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="truncate">
+                {view.row.owner}/{view.row.repo}#{view.row.number} · by @
+                {view.row.summary.author}
+              </span>
+            </div>
+            <BranchRef
+              head={view.row.summary.headBranch}
+              base={view.row.summary.baseBranch}
+            />
+          </>
+        )}
+        {view && (
+          <div className="flex items-center justify-between gap-2 border-t pt-3">
+            {/* Left: the status (own PR) or review-decision (reviewer) pill. */}
+            {isOwnPr ? (
+              <PRStatusPill
+                blockingReason={view.row.summary.blockingReason}
+                checks={view.row.summary.checks}
+                mergeStateStatus={view.row.summary.mergeStateStatus}
+                state={view.row.state}
+              />
+            ) : (
+              <PRReviewPill
+                reviewDecision={
+                  view.row.summary.effectiveReviewDecision ?? view.row.summary.reviewDecision
+                }
+                state={view.row.state}
+              />
+            )}
+            {/* Right: write actions — only for PRs you own. */}
+            {isOwnPr && (view.row.state === 'open' || canMerge) && (
+              <div className="flex flex-wrap items-center justify-end gap-1">
             {view.row.state === 'open' && posthogConnected && (
               <Button
-                size="sm"
                 variant={view.row.autoKeepMergeable ? 'default' : 'outline'}
+                className="h-7 px-2 text-xs"
                 onClick={() => handleToggleAutoKeep(!view.row.autoKeepMergeable)}
                 disabled={togglingAutoKeep}
                 title={
@@ -440,11 +445,11 @@ export function PRDetailSheet({
                 }
               >
                 {togglingAutoKeep ? (
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 ) : view.row.autoKeepMergeable && view.row.autoMergeState?.paused ? (
-                  <AlertTriangle className="mr-1 h-4 w-4" />
+                  <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                 ) : (
-                  <Eye className="mr-1 h-4 w-4" />
+                  <Eye className="mr-1 h-3.5 w-3.5" />
                 )}
                 {view.row.autoKeepMergeable
                   ? view.row.autoMergeState?.paused
@@ -455,8 +460,8 @@ export function PRDetailSheet({
             )}
             {view.row.state === 'open' && (
               <Button
-                size="sm"
                 variant={view.row.mergeQueued ? 'default' : 'outline'}
+                className="h-7 px-2 text-xs"
                 onClick={() => handleToggleQueue(!view.row.mergeQueued)}
                 disabled={togglingQueue}
                 title={
@@ -468,11 +473,11 @@ export function PRDetailSheet({
                 }
               >
                 {togglingQueue ? (
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 ) : view.row.mergeQueued && view.row.mergeQueueState?.status === 'blocked' ? (
-                  <AlertTriangle className="mr-1 h-4 w-4" />
+                  <AlertTriangle className="mr-1 h-3.5 w-3.5" />
                 ) : (
-                  <ListChecks className="mr-1 h-4 w-4" />
+                  <ListChecks className="mr-1 h-3.5 w-3.5" />
                 )}
                 {view.row.mergeQueued
                   ? view.row.mergeQueueState?.status === 'blocked'
@@ -491,22 +496,21 @@ export function PRDetailSheet({
               (confirmMerge ? (
                 <>
                   <Button
-                    size="sm"
-                    className="bg-emerald-600 text-white hover:bg-emerald-700"
+                    className="h-7 bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-700"
                     onClick={handleMerge}
                     disabled={merging}
                     title="Squash-merge this PR on GitHub"
                   >
                     {merging ? (
-                      <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <GitMerge className="mr-1 h-4 w-4" />
+                      <GitMerge className="mr-1 h-3.5 w-3.5" />
                     )}
                     Confirm merge
                   </Button>
                   <Button
-                    size="sm"
                     variant="ghost"
+                    className="h-7 px-2 text-xs"
                     onClick={() => setConfirmMerge(false)}
                     disabled={merging}
                   >
@@ -515,15 +519,16 @@ export function PRDetailSheet({
                 </>
               ) : (
                 <Button
-                  size="sm"
-                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  className="h-7 bg-emerald-600 px-2 text-xs text-white hover:bg-emerald-700"
                   onClick={() => setConfirmMerge(true)}
                   title="Merge this PR"
                 >
-                  <GitMerge className="mr-1 h-4 w-4" />
+                  <GitMerge className="mr-1 h-3.5 w-3.5" />
                   Merge
                 </Button>
               ))}
+              </div>
+            )}
           </div>
         )}
       </header>
@@ -1497,23 +1502,26 @@ function BranchRef({ head, base }: { head: string; base: string }) {
     sel?.addRange(range);
   };
   return (
-    <span className="font-mono">
+    <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
+      <GitBranch className="h-3.5 w-3.5 shrink-0" />
+      {/* Each chip truncates so the row stays one line; select-all still copies
+          the full (hidden-overflow) branch name, and the title shows it. */}
       <span
         onClick={selectAll}
-        className="cursor-pointer select-all rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800"
+        className="inline-block max-w-[55%] cursor-pointer select-all truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
         title={`Click to select the branch name: ${head}`}
       >
         {head}
       </span>
-      <span className="px-1 text-muted-foreground">→</span>
+      <span className="shrink-0 text-muted-foreground/70">→</span>
       <span
         onClick={selectAll}
-        className="cursor-pointer select-all rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800"
+        className="inline-block max-w-[40%] cursor-pointer select-all truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
         title={`Click to select the branch name: ${base}`}
       >
         {base}
       </span>
-    </span>
+    </div>
   );
 }
 
