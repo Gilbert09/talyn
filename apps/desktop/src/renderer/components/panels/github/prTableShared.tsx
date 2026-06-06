@@ -419,8 +419,10 @@ function PRTableRow({
       </td>
       <td className="px-2 py-2" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
-          {/* Row actions reveal on hover/focus to keep the table calm. */}
-          {row.state === 'open' && (
+          {/* Row actions reveal on hover/focus to keep the table calm.
+              Merge + merge-queue are owner actions, so they're hidden on the
+              Reviews page (you're reviewing someone else's PR there). */}
+          {variant !== 'review' && row.state === 'open' && (
             <button
               type="button"
               onClick={runToggleQueue}
@@ -444,7 +446,8 @@ function PRTableRow({
               )}
             </button>
           )}
-          {canMerge &&
+          {variant !== 'review' &&
+            canMerge &&
             (confirmMerge ? (
               <button
                 type="button"
