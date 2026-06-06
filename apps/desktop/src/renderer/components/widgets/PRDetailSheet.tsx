@@ -41,6 +41,7 @@ import {
 import { prime } from '../../lib/prSummaryCache';
 import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
+import { toast } from '../../stores/toast';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -1491,33 +1492,31 @@ function toUnifiedDiff(file: PRFile): string {
 }
 
 function BranchRef({ head, base }: { head: string; base: string }) {
-  // Clicking a branch name selects the whole thing so it's a single click to
-  // copy. `select-all` handles the common case; the explicit range selection
-  // makes a single click reliably highlight the entire name.
-  const selectAll = (e: React.MouseEvent<HTMLSpanElement>) => {
-    const range = document.createRange();
-    range.selectNodeContents(e.currentTarget);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+  // The chips truncate in the UI, so a click copies the full branch name to
+  // the clipboard (with a toast) rather than relying on a manual select.
+  const copyBranch = (branch: string, label: 'Source' | 'Target') => {
+    navigator.clipboard
+      .writeText(branch)
+      .then(() => toast.success(`${label} branch copied`, branch))
+      .catch(() => toast.error('Could not copy to clipboard'));
   };
   return (
     <div className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted-foreground">
       <GitBranch className="h-3.5 w-3.5 shrink-0" />
-      {/* Each chip truncates so the row stays one line; select-all still copies
-          the full (hidden-overflow) branch name, and the title shows it. */}
+      {/* Each chip truncates so the row stays one line; clicking copies the
+          full branch name, with the title showing it on hover. */}
       <span
-        onClick={selectAll}
-        className="inline-block max-w-[55%] cursor-pointer select-all truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
-        title={`Click to select the branch name: ${head}`}
+        onClick={() => copyBranch(head, 'Source')}
+        className="inline-block max-w-[55%] cursor-pointer truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
+        title={`Click to copy the branch name: ${head}`}
       >
         {head}
       </span>
       <span className="shrink-0 text-muted-foreground/70">→</span>
       <span
-        onClick={selectAll}
-        className="inline-block max-w-[40%] cursor-pointer select-all truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
-        title={`Click to select the branch name: ${base}`}
+        onClick={() => copyBranch(base, 'Target')}
+        className="inline-block max-w-[40%] cursor-pointer truncate rounded bg-muted px-1 align-bottom hover:bg-accent"
+        title={`Click to copy the branch name: ${base}`}
       >
         {base}
       </span>
