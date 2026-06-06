@@ -420,8 +420,9 @@ function PRTableRow({
       <td className="px-2 py-2" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
           {/* Row actions reveal on hover/focus to keep the table calm.
-              Merge + merge-queue are owner actions, so they're hidden on the
-              Reviews page (you're reviewing someone else's PR there). */}
+              Merge, merge-queue, and "get mergeable" are owner actions, so
+              they're hidden on the Reviews page (you're reviewing someone
+              else's PR there). */}
           {variant !== 'review' && row.state === 'open' && (
             <button
               type="button"
@@ -475,7 +476,7 @@ function PRTableRow({
                 <GitMerge className="h-3.5 w-3.5" />
               </button>
             ))}
-          {posthogEnabled && row.state === 'open' && (
+          {variant !== 'review' && posthogEnabled && row.state === 'open' && (
             <button
               type="button"
               onClick={runCreatePostHogTask}
