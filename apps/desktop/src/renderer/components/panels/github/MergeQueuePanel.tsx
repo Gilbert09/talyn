@@ -76,6 +76,8 @@ export function MergeQueuePanel() {
     return list;
   }, [queued]);
 
+  const hasSearch = search.trim().length > 0;
+
   return (
     <GitHubPageShell
       title="Merge Queue"
@@ -85,6 +87,13 @@ export function MergeQueuePanel() {
       onSearch={setSearch}
       searchPlaceholder="Search queued PRs… (⌘F)"
       rows={queued}
+      emptyIcon={<GitMerge className="h-8 w-8" />}
+      emptyTitle={hasSearch ? 'No queued PRs match your search.' : 'The merge queue is empty.'}
+      emptyHint={
+        hasSearch
+          ? undefined
+          : 'Queue a PR from My PRs or Reviews (the checklist icon on a row) and it’ll merge automatically when clean — auto-fixing conflicts along the way.'
+      }
     >
       {({ selectedId, onSelect }) => (
         <div className="flex flex-col">

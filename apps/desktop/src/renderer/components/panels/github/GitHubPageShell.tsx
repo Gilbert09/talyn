@@ -32,6 +32,11 @@ interface GitHubPageShellProps {
   filters?: React.ReactNode;
   /** The page's filtered + sorted rows — drives Copy list + empty states. */
   rows: PRRow[];
+  /** Empty-state copy shown when GitHub is connected but the page has no rows.
+   *  Defaults to the generic "no PRs match the current filters" message. */
+  emptyIcon?: React.ReactNode;
+  emptyTitle?: string;
+  emptyHint?: string;
   children: (sel: { selectedId: string | null; onSelect: (id: string) => void }) => React.ReactNode;
 }
 
@@ -44,6 +49,9 @@ export function GitHubPageShell({
   searchPlaceholder = 'Search title or repo… (⌘F)',
   filters,
   rows,
+  emptyIcon,
+  emptyTitle = 'No pull requests match the current filters.',
+  emptyHint,
   children,
 }: GitHubPageShellProps) {
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
@@ -177,8 +185,11 @@ export function GitHubPageShell({
             )}
             {!loading && rows.length === 0 && !error && connected !== false && (
               <div className="flex flex-col items-center justify-center p-10 text-center text-muted-foreground">
-                <GitPullRequest className="mb-2 h-8 w-8 opacity-50" />
-                <p className="text-sm">No pull requests match the current filters.</p>
+                <div className="mb-2 opacity-50">
+                  {emptyIcon ?? <GitPullRequest className="h-8 w-8" />}
+                </div>
+                <p className="text-sm">{emptyTitle}</p>
+                {emptyHint && <p className="mt-1 max-w-xs text-xs">{emptyHint}</p>}
               </div>
             )}
             {rows.length > 0 && children({ selectedId, onSelect: setSelectedId })}
