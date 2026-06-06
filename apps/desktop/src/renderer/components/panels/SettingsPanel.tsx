@@ -153,23 +153,18 @@ function WorkspaceSettings() {
   const { refreshWorkspaces } = useWorkspaceActions();
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId);
 
-  // Editable name/description, re-seeded whenever the active workspace changes.
+  // Editable name, re-seeded whenever the active workspace changes.
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setName(currentWorkspace?.name ?? '');
-    setDescription(currentWorkspace?.description ?? '');
     setConfirmDelete(false);
-  }, [currentWorkspaceId, currentWorkspace?.name, currentWorkspace?.description]);
+  }, [currentWorkspaceId, currentWorkspace?.name]);
 
-  const metaDirty =
-    !!currentWorkspace &&
-    (name.trim() !== currentWorkspace.name ||
-      description.trim() !== (currentWorkspace.description ?? ''));
+  const metaDirty = !!currentWorkspace && name.trim() !== currentWorkspace.name;
   const isOnlyWorkspace = workspaces.length <= 1;
 
   async function handleSaveMeta() {
@@ -178,7 +173,6 @@ function WorkspaceSettings() {
     try {
       await api.workspaces.update(currentWorkspaceId, {
         name: name.trim(),
-        description: description.trim(),
       });
       await refreshWorkspaces();
     } finally {
@@ -375,17 +369,6 @@ function WorkspaceSettings() {
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="mt-1"
-                disabled={savingMeta}
-              />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium">Description</label>
-              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Add a description..."
                 className="mt-1"
                 disabled={savingMeta}
               />
