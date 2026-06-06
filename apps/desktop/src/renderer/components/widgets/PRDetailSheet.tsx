@@ -39,6 +39,7 @@ import {
 } from '../../lib/api';
 import { prime } from '../../lib/prSummaryCache';
 import { PRStatusPill } from './PRStatusPill';
+import { PRReviewPill } from './PRReviewPill';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -324,6 +325,13 @@ export function PRDetailSheet({
     (view.row.summary.blockingReason === 'mergeable' ||
       view.row.summary.blockingReason === 'checks_failed_optional');
 
+  // Owner vs reviewer view. The PR-modifying affordances (merge, merge queue,
+  // auto-keep-mergeable) and the CI status pill only make sense on a PR you
+  // own; on one you're only a requested reviewer, the relevant signal is
+  // whether your review is required, so we show the review-decision pill and
+  // drop every write action.
+  const isOwnPr = !!view && view.row.authored;
+
   return (
     <div
       className={cn(
@@ -368,12 +376,21 @@ export function PRDetailSheet({
                   />
                 </div>
                 <div className="mt-2">
-                  <PRStatusPill
-                    blockingReason={view.row.summary.blockingReason}
-                    checks={view.row.summary.checks}
-                    mergeStateStatus={view.row.summary.mergeStateStatus}
-                    state={view.row.state}
-                  />
+                  {isOwnPr ? (
+                    <PRStatusPill
+                      blockingReason={view.row.summary.blockingReason}
+                      checks={view.row.summary.checks}
+                      mergeStateStatus={view.row.summary.mergeStateStatus}
+                      state={view.row.state}
+                    />
+                  ) : (
+                    <PRReviewPill
+                      reviewDecision={
+                        view.row.summary.effectiveReviewDecision ?? view.row.summary.reviewDecision
+                      }
+                      state={view.row.state}
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -406,7 +423,7 @@ export function PRDetailSheet({
             </Button>
           </div>
         </div>
-        {view && (view.row.state === 'open' || canMerge) && (
+        {view && isOwnPr && (view.row.state === 'open' || canMerge) && (
           <div className="flex flex-wrap items-center gap-1">
             {view.row.state === 'open' && posthogConnected && (
               <Button
