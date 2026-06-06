@@ -1209,55 +1209,94 @@ function ReviewCard({
 }
 
 function ThreadCard({ thread }: { thread: PRReviewThread }) {
+  // Resolved threads collapse by default to keep the timeline focused on what
+  // still needs attention; the header toggles them open. Unresolved threads
+  // are always expanded (their header isn't a toggle).
+  const collapsible = thread.isResolved;
+  const [collapsed, setCollapsed] = useState(thread.isResolved);
+  const isCollapsed = collapsible && collapsed;
+  const count = thread.comments.length;
+
+  const headerInner = (
+    <>
+      {collapsible &&
+        (collapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ))}
+      <span className="min-w-0 flex-1 truncate text-left font-mono" title={thread.path ?? ''}>
+        {thread.path ?? 'comment'}
+        {thread.line != null && <span className="text-muted-foreground">:{thread.line}</span>}
+      </span>
+      {isCollapsed && count > 0 && (
+        <span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
+          <MessageSquare className="h-3 w-3" />
+          {count}
+        </span>
+      )}
+      {thread.isOutdated && (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase tracking-wide text-muted-foreground">
+          outdated
+        </span>
+      )}
+      <span
+        className={cn(
+          'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium',
+          thread.isResolved
+            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+            : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+        )}
+      >
+        {thread.isResolved ? <Check className="h-3 w-3" /> : <CircleDot className="h-3 w-3" />}
+        {thread.isResolved ? 'resolved' : 'unresolved'}
+      </span>
+    </>
+  );
+
   return (
     <div
       className={cn(
         'overflow-hidden rounded-md border',
-        thread.isResolved && 'opacity-70'
+        thread.isResolved && isCollapsed && 'opacity-70'
       )}
     >
-      <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px]">
-        <span className="min-w-0 flex-1 truncate font-mono" title={thread.path ?? ''}>
-          {thread.path ?? 'comment'}
-          {thread.line != null && (
-            <span className="text-muted-foreground">:{thread.line}</span>
-          )}
-        </span>
-        {thread.isOutdated && (
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase tracking-wide text-muted-foreground">
-            outdated
-          </span>
-        )}
-        <span
-          className={cn(
-            'inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium',
-            thread.isResolved
-              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-              : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
-          )}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="flex w-full items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px] hover:bg-muted/60"
+          aria-expanded={!collapsed}
         >
-          {thread.isResolved ? <Check className="h-3 w-3" /> : <CircleDot className="h-3 w-3" />}
-          {thread.isResolved ? 'resolved' : 'unresolved'}
-        </span>
-      </div>
-      {thread.diffHunk && (
-        <pre className="overflow-x-auto border-b bg-card px-3 py-2 font-mono text-[11px] leading-snug text-muted-foreground">
-          {lastHunkLines(thread.diffHunk)}
-        </pre>
+          {headerInner}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[11px]">
+          {headerInner}
+        </div>
       )}
-      <div className="divide-y">
-        {thread.comments.map((c) => (
-          <CommentCard
-            key={c.id}
-            author={c.author}
-            avatarUrl={c.avatarUrl}
-            body={c.body}
-            at={c.createdAt}
-            url={c.url}
-            dense
-          />
-        ))}
-      </div>
+      {!isCollapsed && (
+        <>
+          {thread.diffHunk && (
+            <pre className="overflow-x-auto border-b bg-card px-3 py-2 font-mono text-[11px] leading-snug text-muted-foreground">
+              {lastHunkLines(thread.diffHunk)}
+            </pre>
+          )}
+          <div className="divide-y">
+            {thread.comments.map((c) => (
+              <CommentCard
+                key={c.id}
+                author={c.author}
+                avatarUrl={c.avatarUrl}
+                body={c.body}
+                at={c.createdAt}
+                url={c.url}
+                dense
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
