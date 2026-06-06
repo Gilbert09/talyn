@@ -55,13 +55,6 @@ export function Sidebar({ className }: SidebarProps) {
 
   const navItems = [
     {
-      id: 'queue' as const,
-      icon: ListTodo,
-      label: 'Tasks',
-      badge: tasksNeedingAttention > 0 ? tasksNeedingAttention : runningTasksCount > 0 ? runningTasksCount : undefined,
-      badgeVariant: tasksNeedingAttention > 0 ? 'warning' : 'secondary',
-    },
-    {
       id: 'my_prs' as const,
       icon: GitPullRequest,
       label: 'My PRs',
@@ -81,6 +74,13 @@ export function Sidebar({ className }: SidebarProps) {
       label: 'Merge Queue',
       badge: queueCount > 0 ? queueCount : undefined,
       badgeVariant: 'secondary',
+    },
+    {
+      id: 'queue' as const,
+      icon: ListTodo,
+      label: 'Tasks',
+      badge: tasksNeedingAttention > 0 ? tasksNeedingAttention : runningTasksCount > 0 ? runningTasksCount : undefined,
+      badgeVariant: tasksNeedingAttention > 0 ? 'warning' : 'secondary',
     },
     // Developer-only — surfaced via Settings → Developer → Debug tools.
     ...(debugMode
