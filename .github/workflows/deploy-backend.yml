@@ -25,7 +25,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Railway CLI
-        run: curl -fsSL https://railway.com/install.sh | sh
+        # npm-based install: the curl|sh installer runs under dash and dies on
+        # a bash-only substitution, and never puts the binary on PATH for the
+        # next step. npm's global bin is already on PATH. (Node is preinstalled
+        # on ubuntu-latest.)
+        run: npm i -g @railway/cli
 
       - name: Deploy
         env:
