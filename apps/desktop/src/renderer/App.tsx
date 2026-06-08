@@ -7,6 +7,11 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useWorkspaceStore } from './stores/workspace';
 import { Toaster } from './components/ui/toaster';
+import {
+  identifyAnalyticsUser,
+  resetAnalyticsUser,
+  trackEvent,
+} from './lib/analytics';
 import './App.css';
 
 function StartingSpinner() {
@@ -80,9 +85,36 @@ function AppBody() {
   return <AuthedApp />;
 }
 
+/**
+ * Renderless: syncs PostHog identity with the auth session and tracks panel
+ * navigation as product-analytics events. Mounted inside AuthProvider.
+ */
+function Analytics() {
+  const { user } = useAuth();
+  const activePanel = useWorkspaceStore((s) => s.activePanel);
+  const userId = user?.id;
+  const email = user?.email;
+  const githubLogin = user?.user_metadata?.user_name as string | undefined;
+
+  useEffect(() => {
+    if (userId) {
+      identifyAnalyticsUser(userId, { email, github_login: githubLogin });
+    } else {
+      resetAnalyticsUser();
+    }
+  }, [userId, email, githubLogin]);
+
+  useEffect(() => {
+    if (activePanel) trackEvent('panel_viewed', { panel: activePanel });
+  }, [activePanel]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <AuthProvider>
+      <Analytics />
       <Router>
         <Routes>
           <Route path="/" element={<AppBody />} />

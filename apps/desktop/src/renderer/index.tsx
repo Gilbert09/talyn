@@ -1,5 +1,10 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { initAnalytics } from './lib/analytics';
+
+// Initialise PostHog before first render so session replay + autocapture
+// cover the whole session. No-op unless a key was baked in at build time.
+initAnalytics();
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);

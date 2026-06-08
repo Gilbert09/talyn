@@ -118,6 +118,9 @@ const configuration: webpack.Configuration = {
       FASTOWL_SUPABASE_URL: '',
       FASTOWL_SUPABASE_ANON_KEY: '',
       FASTOWL_API_URL: 'http://localhost:4747',
+      // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
+      FASTOWL_POSTHOG_KEY: '',
+      FASTOWL_POSTHOG_HOST: 'https://us.i.posthog.com',
     }),
 
     new MiniCssExtractPlugin({

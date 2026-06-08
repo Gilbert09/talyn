@@ -74,6 +74,8 @@ jobs:
           FASTOWL_API_URL: https://fastowl-backend-production.up.railway.app
           FASTOWL_SUPABASE_URL: ${{ vars.FASTOWL_SUPABASE_URL }}
           FASTOWL_SUPABASE_ANON_KEY: ${{ vars.FASTOWL_SUPABASE_ANON_KEY }}
+          FASTOWL_POSTHOG_KEY: ${{ vars.FASTOWL_POSTHOG_KEY }}
+          FASTOWL_POSTHOG_HOST: https://us.i.posthog.com
         run: npm run build -w @fastowl/desktop
 
       - name: Publish nightly pre-release
