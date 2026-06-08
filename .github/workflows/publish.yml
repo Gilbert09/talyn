@@ -49,4 +49,10 @@ jobs:
           # GITHUB_TOKEN can upload the assets — no PAT needed.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd apps/desktop && npm exec electron-builder -- --publish always
+          cd apps/desktop
+          # electron is hoisted to the monorepo root node_modules, so
+          # electron-builder can't infer the version from this workspace —
+          # resolve it explicitly and pass it in.
+          ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
+          npm exec electron-builder -- --publish always \
+            -c.electronVersion="$ELECTRON_VERSION"
