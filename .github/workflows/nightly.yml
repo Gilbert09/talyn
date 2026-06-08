@@ -65,6 +65,15 @@ jobs:
         run: npm run build -w @fastowl/shared
 
       - name: Build desktop app
+        # These are baked into the renderer bundle at build time by webpack's
+        # EnvironmentPlugin — they must be set on THIS step, not the publish
+        # step. Without them the app defaults to http://localhost:4747 with no
+        # auth config. The Supabase anon key is publishable (client-embedded
+        # by design), so it lives in repo variables, not secrets.
+        env:
+          FASTOWL_API_URL: https://fastowl-backend-production.up.railway.app
+          FASTOWL_SUPABASE_URL: ${{ vars.FASTOWL_SUPABASE_URL }}
+          FASTOWL_SUPABASE_ANON_KEY: ${{ vars.FASTOWL_SUPABASE_ANON_KEY }}
         run: npm run build -w @fastowl/desktop
 
       - name: Publish nightly pre-release
