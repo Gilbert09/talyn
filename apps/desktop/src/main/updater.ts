@@ -30,6 +30,9 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   log.transports.file.level = 'info';
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  // Releases ship as nightly pre-releases; without this the GitHub feed
+  // only ever resolves the latest *stable* release and clients never update.
+  autoUpdater.allowPrerelease = true;
 
   const send = (event: UpdaterEvent) => {
     const win = getWindow();

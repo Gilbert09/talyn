@@ -165,7 +165,8 @@
     "publish": {
       "provider": "github",
       "owner": "Gilbert09",
-      "repo": "owl"
+      "repo": "owl",
+      "releaseType": "release"
     },
     "protocols": [
       {
