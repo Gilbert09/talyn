@@ -122,6 +122,9 @@ ipcMain.handle('auth:storage:remove', async (_event, key: string) => {
   await authStorage.removeItem(key);
 });
 
+// Current app version, for display in Settings → About.
+ipcMain.handle('app:get-version', () => app.getVersion());
+
 registerDeepLinkProtocol();
 
 if (process.env.NODE_ENV === 'production') {

@@ -11,3 +11,8 @@ export type UpdaterEvent =
   | { kind: 'progress'; percent: number }
   | { kind: 'downloaded'; version: string }
   | { kind: 'error'; message: string };
+
+/** Result of an explicit `updater:check` invocation. */
+export type UpdaterCheckResult =
+  | { started: true }
+  | { started: false; reason: 'not-packaged' };

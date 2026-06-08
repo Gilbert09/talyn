@@ -22,7 +22,10 @@ import {
   LogOut,
   Pencil,
   Bug,
+  Info,
+  Download,
 } from 'lucide-react';
+import type { UpdaterEvent } from '../../../main/updaterEvents';
 import {
   api,
   GitHubStatus,
@@ -58,7 +61,8 @@ type SettingsSection =
   | 'integrations'
   | 'account'
   | 'appearance'
-  | 'developer';
+  | 'developer'
+  | 'about';
 
 export function SettingsPanel() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('workspace');
@@ -69,6 +73,7 @@ export function SettingsPanel() {
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
+    { id: 'about' as const, icon: Info, label: 'About' },
   ];
 
   return (
@@ -105,6 +110,7 @@ export function SettingsPanel() {
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
+            {activeSection === 'about' && <AboutSettings />}
           </div>
         </ScrollArea>
       </div>
@@ -1134,6 +1140,124 @@ function DeveloperSettings() {
             />
           </button>
         </div>
+      </Card>
+    </div>
+  );
+}
+
+function AboutSettings() {
+  const [version, setVersion] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdaterEvent | null>(null);
+  const [checking, setChecking] = useState(false);
+  // Set when a check runs in dev / an unpackaged build, where auto-update
+  // can't operate and no events fire.
+  const [unsupported, setUnsupported] = useState(false);
+
+  useEffect(() => {
+    window.electron?.app
+      ?.getVersion()
+      .then(setVersion)
+      .catch(() => setVersion(null));
+  }, []);
+
+  useEffect(() => {
+    return window.electron?.updater?.onEvent((e) => {
+      setStatus(e);
+      // A terminal event ends the in-flight check spinner.
+      if (e.kind !== 'checking' && e.kind !== 'progress') setChecking(false);
+    });
+  }, []);
+
+  const handleCheck = async () => {
+    setUnsupported(false);
+    setChecking(true);
+    setStatus({ kind: 'checking' });
+    try {
+      const res = await window.electron?.updater?.check();
+      if (res && res.started === false) {
+        setUnsupported(true);
+        setChecking(false);
+        setStatus(null);
+      }
+    } catch {
+      setChecking(false);
+    }
+  };
+
+  const downloaded = status?.kind === 'downloaded';
+  const downloading =
+    status?.kind === 'available' || status?.kind === 'progress';
+
+  let statusText: string | null = null;
+  if (unsupported) {
+    statusText = 'Auto-update only runs in the installed app, not in development.';
+  } else if (status?.kind === 'checking') {
+    statusText = 'Checking for updates…';
+  } else if (status?.kind === 'not-available') {
+    statusText = "You're on the latest version.";
+  } else if (status?.kind === 'available') {
+    statusText = `Update ${status.version} found — downloading…`;
+  } else if (status?.kind === 'progress') {
+    statusText = `Downloading update… ${status.percent}%`;
+  } else if (status?.kind === 'downloaded') {
+    statusText = `Update ${status.version} downloaded and ready to install.`;
+  } else if (status?.kind === 'error') {
+    statusText = `Couldn't check for updates: ${status.message}`;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-medium mb-1">About</h3>
+        <p className="text-sm text-muted-foreground">
+          Version information and software updates
+        </p>
+      </div>
+
+      <Card className="p-4 space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h4 className="font-medium">FastOwl</h4>
+            <p className="text-sm text-muted-foreground mt-1">
+              Version {version ?? '—'}
+            </p>
+          </div>
+          {downloaded ? (
+            <Button
+              size="sm"
+              onClick={() => window.electron?.updater?.quitAndInstall()}
+            >
+              <Download className="w-4 h-4 mr-1.5" />
+              Restart to install
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleCheck}
+              disabled={checking || downloading}
+            >
+              {checking || downloading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                'Check for updates'
+              )}
+            </Button>
+          )}
+        </div>
+
+        {statusText && (
+          <p
+            className={cn(
+              'text-sm',
+              status?.kind === 'error'
+                ? 'text-destructive'
+                : 'text-muted-foreground'
+            )}
+          >
+            {statusText}
+          </p>
+        )}
       </Card>
     </div>
   );

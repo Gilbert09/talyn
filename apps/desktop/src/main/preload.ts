@@ -1,7 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import type { UpdaterEvent } from './updaterEvents';
+import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
 
 export type Channels = 'ipc-example';
 
@@ -70,12 +70,18 @@ const electronHandler = {
       return () => ipcRenderer.removeListener('updater:event', handler);
     },
     /** Trigger a manual check for updates (no-op in dev / unpackaged). */
-    check(): Promise<void> {
+    check(): Promise<UpdaterCheckResult> {
       return ipcRenderer.invoke('updater:check');
     },
     /** Quit and apply a downloaded update. */
     quitAndInstall(): Promise<void> {
       return ipcRenderer.invoke('updater:quit-and-install');
+    },
+  },
+  app: {
+    /** Current app version, e.g. for Settings → About. */
+    getVersion(): Promise<string> {
+      return ipcRenderer.invoke('app:get-version');
     },
   },
 };

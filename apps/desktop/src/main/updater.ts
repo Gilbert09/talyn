@@ -15,7 +15,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
-import type { UpdaterEvent } from './updaterEvents';
+import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
 
 // Re-check this often while the app stays open, so long-running sessions
 // still pick up releases without a restart.
@@ -56,10 +56,13 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
     send({ kind: 'error', message: err?.message ?? String(err) }),
   );
 
-  // Renderer-driven controls.
-  ipcMain.handle('updater:check', async () => {
-    if (!app.isPackaged) return;
+  // Renderer-driven controls. Returns whether a check actually started so the
+  // Settings UI can distinguish "checking…" from "unsupported in dev". The
+  // result (available/not) still arrives via the forwarded events.
+  ipcMain.handle('updater:check', async (): Promise<UpdaterCheckResult> => {
+    if (!app.isPackaged) return { started: false, reason: 'not-packaged' };
     await autoUpdater.checkForUpdates();
+    return { started: true };
   });
   ipcMain.handle('updater:quit-and-install', () => {
     autoUpdater.quitAndInstall();
