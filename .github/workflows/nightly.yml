@@ -51,15 +51,15 @@ jobs:
         run: npm install
 
       - name: Set nightly version
-        # Build-time only — not committed. Produces <next-patch>-nightly.<UTC>
-        # so each nightly sorts strictly newer than the last and above the
-        # current stable base.
+        # Build-time only — not committed. electron-builder packages from
+        # directories.app (release/app), so the app version it bakes in (and
+        # what app.getVersion() returns) comes from release/app/package.json —
+        # NOT apps/desktop/package.json. Bump that one. Produces
+        # <next-patch>-nightly.<UTC> so each nightly sorts strictly newer.
         run: |
-          cd apps/desktop
-          NEXT=$(node -e "const v=require('./package.json').version.split('-')[0].split('.'); v[2]=+v[2]+1; console.log(v.join('.'))")
-          VER="${NEXT}-nightly.$(date -u +%Y%m%d%H%M)"
-          npm version "$VER" --no-git-tag-version
-          echo "Building nightly $VER"
+          cd apps/desktop/release/app
+          STAMP=$(date -u +%Y%m%d%H%M)
+          node -e "const fs=require('fs');const p=require('./package.json');const b=p.version.split('-')[0].split('.');b[2]=+b[2]+1;p.version=\`\${b.join('.')}-nightly.${STAMP}\`;fs.writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n');console.log('Building nightly',p.version)"
 
       - name: Build shared package
         run: npm run build -w @fastowl/shared
