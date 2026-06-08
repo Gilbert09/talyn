@@ -161,8 +161,12 @@
     "productName": "FastOwl",
     "appId": "com.fastowl.app",
     "asar": true,
-    "afterSign": ".erb/scripts/notarize.js",
     "asarUnpack": "**\\*.{node,dll}",
+    "publish": {
+      "provider": "github",
+      "owner": "Gilbert09",
+      "repo": "owl"
+    },
     "protocols": [
       {
         "name": "FastOwl",
@@ -177,7 +181,7 @@
       "package.json"
     ],
     "mac": {
-      "notarize": false,
+      "notarize": true,
       "target": {
         "target": "default",
         "arch": [
@@ -189,13 +193,7 @@
       "hardenedRuntime": true,
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.plist",
-      "gatekeeperAssess": false,
-      "extraResources": [
-        {
-          "from": "../../packages/daemon/dist/fastowl-daemon-darwin-${arch}",
-          "to": "daemon/fastowl-daemon"
-        }
-      ]
+      "gatekeeperAssess": false
     },
     "dmg": {
       "contents": [
@@ -214,25 +212,13 @@
     "win": {
       "target": [
         "nsis"
-      ],
-      "extraResources": [
-        {
-          "from": "../../packages/daemon/dist/fastowl-daemon-windows-${arch}.exe",
-          "to": "daemon/fastowl-daemon.exe"
-        }
       ]
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "category": "Development",
-      "extraResources": [
-        {
-          "from": "../../packages/daemon/dist/fastowl-daemon-linux-${arch}",
-          "to": "daemon/fastowl-daemon"
-        }
-      ]
+      "category": "Development"
     },
     "directories": {
       "app": "release/app",
@@ -240,11 +226,7 @@
       "output": "release/build"
     },
     "extraResources": [
-      "./assets/**",
-      {
-        "from": "../../scripts/fastowl-uninstall.sh",
-        "to": "scripts/fastowl-uninstall.sh"
-      }
+      "./assets/**"
     ]
   },
   "electronmon": {
