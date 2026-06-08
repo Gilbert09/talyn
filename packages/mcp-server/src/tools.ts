@@ -1,12 +1,10 @@
 import type {
-  BacklogItem,
-  BacklogSource,
   CreateTaskRequest,
   Task,
   TaskPriority,
   TaskType,
 } from '@fastowl/shared';
-import { request, workspaceId as envWorkspaceId, taskId as envTaskId } from './client.js';
+import { request, workspaceId as envWorkspaceId } from './client.js';
 
 export interface ToolDefinition {
   name: string;

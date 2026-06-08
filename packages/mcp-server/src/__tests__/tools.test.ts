@@ -31,17 +31,7 @@ describe('fastowl MCP tools', () => {
 
   it('exposes every expected tool with an object inputSchema', () => {
     const names = TOOLS.map((t) => t.name).sort();
-    expect(names).toEqual(
-      [
-        'fastowl_create_task',
-        'fastowl_list_tasks',
-        'fastowl_mark_ready_for_review',
-        'fastowl_list_backlog_items',
-        'fastowl_list_backlog_sources',
-        'fastowl_sync_backlog_source',
-        'fastowl_schedule',
-      ].sort()
-    );
+    expect(names).toEqual(['fastowl_create_task', 'fastowl_list_tasks'].sort());
     for (const t of TOOLS) {
       expect(t.inputSchema).toHaveProperty('type', 'object');
     }
@@ -74,21 +64,6 @@ describe('fastowl MCP tools', () => {
     await expect(tool.handler({ prompt: 'x' })).rejects.toThrow('bad prompt');
   });
 
-  it('fastowl_mark_ready_for_review uses env task id when arg absent', async () => {
-    fetchSpy.mockResolvedValueOnce(okResponse({}));
-    const tool = findTool('fastowl_mark_ready_for_review');
-    const result = await tool.handler({});
-    expect(result).toContain('t-env');
-    const call = fetchSpy.mock.calls[0];
-    expect(call[0]).toContain('/tasks/t-env/ready-for-review');
-  });
-
-  it('fastowl_mark_ready_for_review throws without task id or env', async () => {
-    delete process.env.FASTOWL_TASK_ID;
-    const tool = findTool('fastowl_mark_ready_for_review');
-    await expect(tool.handler({})).rejects.toThrow('task_id is required');
-  });
-
   it('fastowl_list_tasks formats lines predictably', async () => {
     fetchSpy.mockResolvedValueOnce(
       okResponse([
@@ -101,18 +76,6 @@ describe('fastowl MCP tools', () => {
     expect(result).toContain('t1');
     expect(result).toContain('[queued]');
     expect(result).toContain('t2');
-  });
-
-  it('fastowl_schedule hits POST /backlog/schedule', async () => {
-    fetchSpy.mockResolvedValueOnce(okResponse(undefined));
-    const tool = findTool('fastowl_schedule');
-    const result = await tool.handler({});
-    expect(result).toBe('Scheduler evaluated.');
-    const call = fetchSpy.mock.calls[0];
-    expect(call[0]).toContain('/backlog/schedule');
-    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
-      workspaceId: 'ws-env',
-    });
   });
 });
 
