@@ -1,6 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { UpdaterEvent } from './updaterEvents';
 
 export type Channels = 'ipc-example';
 
@@ -56,6 +57,25 @@ const electronHandler = {
       removeItem(key: string): Promise<void> {
         return ipcRenderer.invoke('auth:storage:remove', key);
       },
+    },
+  },
+  updater: {
+    /**
+     * Subscribe to auto-update lifecycle events forwarded by the main
+     * process. Returns an unsubscribe fn.
+     */
+    onEvent(cb: (event: UpdaterEvent) => void): () => void {
+      const handler = (_e: IpcRendererEvent, event: UpdaterEvent) => cb(event);
+      ipcRenderer.on('updater:event', handler);
+      return () => ipcRenderer.removeListener('updater:event', handler);
+    },
+    /** Trigger a manual check for updates (no-op in dev / unpackaged). */
+    check(): Promise<void> {
+      return ipcRenderer.invoke('updater:check');
+    },
+    /** Quit and apply a downloaded update. */
+    quitAndInstall(): Promise<void> {
+      return ipcRenderer.invoke('updater:quit-and-install');
     },
   },
 };

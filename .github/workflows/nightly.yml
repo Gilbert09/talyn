@@ -1,0 +1,82 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC daily
+  workflow_dispatch: {} # manual trigger (always builds)
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    # Cheap gate so scheduled runs don't cut an empty nightly when nothing
+    # has landed. Manual dispatches always build.
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: Checkout git repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git log --since='24 hours ago' --oneline)" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "No commits in the last 24h — skipping nightly."
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout git repo
+        uses: actions/checkout@v4
+
+      - name: Install Node and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set nightly version
+        # Build-time only — not committed. Produces <next-patch>-nightly.<UTC>
+        # so each nightly sorts strictly newer than the last and above the
+        # current stable base.
+        run: |
+          cd apps/desktop
+          NEXT=$(node -e "const v=require('./package.json').version.split('-')[0].split('.'); v[2]=+v[2]+1; console.log(v.join('.'))")
+          VER="${NEXT}-nightly.$(date -u +%Y%m%d%H%M)"
+          npm version "$VER" --no-git-tag-version
+          echo "Building nightly $VER"
+
+      - name: Build shared package
+        run: npm run build -w @fastowl/shared
+
+      - name: Build desktop app
+        run: npm run build -w @fastowl/desktop
+
+      - name: Publish nightly pre-release
+        env:
+          # Code-signing + notarization — required or Squirrel.Mac refuses
+          # to apply the update on the client.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd apps/desktop && npm exec electron-builder -- \
+            --publish always -c.publish.releaseType=prerelease

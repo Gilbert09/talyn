@@ -8,19 +8,10 @@
  */
 import path from 'path';
 import { app, BrowserWindow, shell, ipcMain, safeStorage } from 'electron';
-import { autoUpdater } from 'electron-updater';
-import log from 'electron-log';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
-
-class AppUpdater {
-  constructor() {
-    log.transports.file.level = 'info';
-    autoUpdater.logger = log;
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-}
+import { initAutoUpdater } from './updater';
 
 let mainWindow: BrowserWindow | null = null;
 // Buffer callbacks that arrive before the renderer is ready — macOS
@@ -220,10 +211,6 @@ const createWindow = async () => {
     shell.openExternal(edata.url);
     return { action: 'deny' };
   });
-
-  // Remove this if your app does not use auto updates
-  // eslint-disable-next-line
-  new AppUpdater();
 };
 
 /**
@@ -242,6 +229,9 @@ app
   .whenReady()
   .then(() => {
     createWindow();
+    // Registers updater IPC handlers + background checks once for the app.
+    // Reads the live window lazily so events reach whatever window exists.
+    initAutoUpdater(() => mainWindow);
     app.on('activate', () => {
       // On macOS it's common to re-create a window in the app when the
       // dock icon is clicked and there are no other windows open.
