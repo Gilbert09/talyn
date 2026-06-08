@@ -83,6 +83,9 @@ jobs:
           # electron-builder can't infer the version from this workspace —
           # resolve it explicitly and pass it in.
           ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
-          npm exec electron-builder -- --publish always \
+          # arm64-only: every Mac from 2020+ is Apple Silicon, and a single
+          # notarization submission roughly halves the nightly wait. Intel
+          # (x64) coverage stays on the stable publish.yml release path.
+          npm exec electron-builder -- --publish always --arm64 \
             -c.electronVersion="$ELECTRON_VERSION" \
             -c.publish.releaseType=prerelease
