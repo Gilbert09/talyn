@@ -789,8 +789,10 @@ export interface CreateTaskRequest {
   pullRequestId?: string;
   /**
    * Cloud (PostHog Code) overrides. Only meaningful when the task is
-   * assigned to a `posthog_code` env; ignored otherwise. Fall back to
-   * the env's defaults, then the backend defaults (claude / opus).
+   * assigned to a `posthog_code` env; ignored otherwise. `runtimeAdapter`
+   * falls back to the env's default, then `claude`. `model` is fully
+   * optional — omit it (or pick "Auto" in the UI) to let PostHog Code
+   * select the model; an explicit value overrides that.
    */
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   model?: string;

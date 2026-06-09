@@ -41,12 +41,13 @@ export class PostHogCodeClient {
    */
   async startRun(
     taskId: string,
-    input: { runtimeAdapter: PostHogCodeRuntimeAdapter; model: string },
+    input: { runtimeAdapter: PostHogCodeRuntimeAdapter; model?: string },
   ): Promise<PostHogTask> {
     return this.request<PostHogTask>('POST', `/tasks/${taskId}/run/`, {
       mode: 'background',
       runtime_adapter: input.runtimeAdapter,
-      model: input.model,
+      // Omit `model` to let PostHog Code pick its own default.
+      ...(input.model ? { model: input.model } : {}),
     });
   }
 

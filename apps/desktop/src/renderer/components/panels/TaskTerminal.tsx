@@ -13,7 +13,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
-import { TaskComposer, EFFORTS_BY_MODEL } from './TaskComposer';
+import { TaskComposer, EFFORTS_BY_MODEL, AUTO_MODEL } from './TaskComposer';
 import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
@@ -55,7 +55,8 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   const [isMarkingReady, setIsMarkingReady] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const cloudMeta = task.metadata as { model?: string; reasoningEffort?: string } | undefined;
-  const [model, setModel] = useState(cloudMeta?.model || 'claude-opus-4-7');
+  // Default to Auto (let PostHog Code pick) unless the task was pinned to a model.
+  const [model, setModel] = useState(cloudMeta?.model || AUTO_MODEL);
   const [effort, setEffort] = useState(cloudMeta?.reasoningEffort || 'high');
 
   const agentStatus = task.agentStatus || 'working';
@@ -111,10 +112,12 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
     try {
       if (isCloudTask) {
         // Cloud task — resume a finished run or inject into a live one.
+        // Auto omits both model and effort so PostHog Code picks the model.
+        const isAuto = model === AUTO_MODEL;
         await api.tasks.sendCloudMessage(task.id, {
           message: trimmed,
-          model,
-          reasoningEffort: effort,
+          model: isAuto ? undefined : model,
+          reasoningEffort: isAuto ? undefined : effort,
         });
       } else if (task.status === 'in_progress') {
         await sendTaskInput(task.id, inputValue);

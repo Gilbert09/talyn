@@ -11,7 +11,6 @@ import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.j
 import { postHogCodeStreamer } from './streamer.js';
 
 const DEFAULT_RUNTIME_ADAPTER: PostHogCodeRuntimeAdapter = 'claude';
-const DEFAULT_MODEL = 'claude-opus-4-7';
 
 export type DispatchResult = { ok: true } | { ok: false; error: string };
 
@@ -58,10 +57,11 @@ export async function dispatchTaskToPostHogCode(
     (meta.runtimeAdapter as PostHogCodeRuntimeAdapter | undefined) ??
     runtimeAdapterFromEnv(env) ??
     DEFAULT_RUNTIME_ADAPTER;
+  // No model means "let PostHog Code decide" — the run request omits the
+  // field and PostHog picks its own default. An explicit task-level or env
+  // default still wins when set.
   const model =
-    (typeof meta.model === 'string' && meta.model) ||
-    modelFromEnv(env) ||
-    DEFAULT_MODEL;
+    (typeof meta.model === 'string' && meta.model) || modelFromEnv(env) || undefined;
 
   const description = task.prompt?.trim() || task.description?.trim() || task.title;
 

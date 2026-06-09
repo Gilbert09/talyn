@@ -24,6 +24,7 @@ import { Textarea } from '../ui/textarea';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
 import { isAgentTask, type TaskType, type TaskPriority } from '@fastowl/shared';
+import { MODEL_OPTIONS, AUTO_MODEL } from '../panels/TaskComposer';
 
 interface CreateTaskModalProps {
   open: boolean;
@@ -83,7 +84,7 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
   const [repositoryId, setRepositoryId] = useState('');
   const [environmentId, setEnvironmentId] = useState('');
   const [runtimeAdapter, setRuntimeAdapter] = useState<'claude' | 'codex'>('claude');
-  const [model, setModel] = useState('claude-opus-4-7');
+  const [model, setModel] = useState(AUTO_MODEL);
   const [isLoading, setIsLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,7 +130,8 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
         repositoryId: isAgent && repositoryId ? repositoryId : undefined,
         assignedEnvironmentId: isAgent && environmentId ? environmentId : undefined,
         runtimeAdapter: isAgent && isCloudEnv ? runtimeAdapter : undefined,
-        model: isAgent && isCloudEnv ? model || undefined : undefined,
+        model:
+          isAgent && isCloudEnv && model !== AUTO_MODEL ? model : undefined,
       });
       // Jump straight to the new task's detail pane — user wants to
       // watch it run. Also force the Tasks panel visible in case the
@@ -291,13 +293,20 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
                           <option value="claude">Claude</option>
                           <option value="codex">Codex</option>
                         </Select>
-                        <Input
+                        <Select
                           label="Model"
                           value={model}
                           onChange={(e) => setModel(e.target.value)}
                           disabled={isLoading}
-                          placeholder="claude-opus-4-7"
-                        />
+                        >
+                          {MODEL_OPTIONS.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.id === AUTO_MODEL
+                                ? 'Auto (PostHog Code decides)'
+                                : m.label}
+                            </option>
+                          ))}
+                        </Select>
                       </div>
                     </div>
                   )}
