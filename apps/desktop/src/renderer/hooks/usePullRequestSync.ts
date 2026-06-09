@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import {
@@ -141,4 +141,29 @@ export function usePullRequestSync(): void {
     });
     return unsubscribe;
   }, [currentWorkspaceId, applyPullRequestUpdate, setRows]);
+
+  // Reconnect catch-up: `pull_request:updated` broadcasts (which carry live
+  // merge-queue positions/status) are fire-and-forget to open sockets only, so
+  // any change that lands while we're disconnected is lost — leaving the merge
+  // queue stale until the next change happens to fire. On a genuine *re*connect,
+  // re-list the open PRs to reconcile. Mirrors `reconcileTasksFromServer` for
+  // tasks; the first connect is covered by the initial fetch above.
+  const sawDisconnectRef = useRef(false);
+  useEffect(() => {
+    const unsubscribe = api.ws.on('connection:status', (payload) => {
+      const connected = (payload as { connected?: boolean } | undefined)?.connected;
+      if (connected === false) {
+        sawDisconnectRef.current = true;
+        return;
+      }
+      if (connected && sawDisconnectRef.current && currentWorkspaceId) {
+        sawDisconnectRef.current = false;
+        api.pullRequests
+          .list({ workspaceId: currentWorkspaceId, state: 'open' })
+          .then(setRows)
+          .catch(() => {});
+      }
+    });
+    return unsubscribe;
+  }, [currentWorkspaceId, setRows]);
 }
