@@ -26,13 +26,7 @@ import {
   Download,
 } from 'lucide-react';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
-import {
-  api,
-  GitHubStatus,
-  GitHubUser,
-  GitHubRepo,
-  type PostHogCodeStatus,
-} from '../../lib/api';
+import { api, GitHubRepo } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -642,54 +636,41 @@ function WorkspaceSettings() {
 }
 
 function IntegrationsSettings() {
-  const { currentWorkspaceId, setGitHubStatus } = useWorkspaceStore();
-  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
-  const [githubUser, setGithubUser] = useState<GitHubUser | null>(null);
+  // GitHub status + user are preloaded into the store at startup
+  // (useSystemStatus) and kept fresh there on window focus, so this panel
+  // renders the connection state instantly instead of fetching on open. We
+  // still kick a non-blocking refresh on mount to catch anything that changed
+  // since the last focus; render never waits on it.
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const githubStatus = useWorkspaceStore((s) => s.githubStatus);
+  const githubUser = useWorkspaceStore((s) => s.githubUser);
+  const setGitHubStatus = useWorkspaceStore((s) => s.setGitHubStatus);
+  const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load GitHub status on mount and when workspace changes
-  const loadGitHubStatus = useCallback(async () => {
+  const refreshGitHubStatus = useCallback(async () => {
     if (!currentWorkspaceId) return;
-
     try {
       const status = await api.github.getStatus(currentWorkspaceId);
-      setGithubStatus(status);
-      setGitHubStatus(status); // keep the global banner in sync
-
-      // If connected, load user info
+      setGitHubStatus(status);
       if (status.connected) {
         try {
-          const user = await api.github.getUser(currentWorkspaceId);
-          setGithubUser(user);
+          setGitHubUser(await api.github.getUser(currentWorkspaceId));
         } catch (_e) {
-          // User fetch failed, but connection might still be valid
+          // User fetch failed, but the connection might still be valid.
         }
       } else {
-        setGithubUser(null);
+        setGitHubUser(null);
       }
     } catch (_e) {
-      setGithubStatus({ configured: false, connected: false });
+      setGitHubStatus({ configured: false, connected: false });
     }
-  }, [currentWorkspaceId, setGitHubStatus]);
+  }, [currentWorkspaceId, setGitHubStatus, setGitHubUser]);
 
   useEffect(() => {
-    loadGitHubStatus();
-  }, [loadGitHubStatus]);
-
-  // OAuth happens in the system browser, not the renderer, so we can't
-  // read query params off window.location. Instead, re-check status
-  // whenever the app regains focus — the user will naturally come back
-  // to FastOwl after completing the flow in their browser.
-  useEffect(() => {
-    const onFocus = () => { void loadGitHubStatus(); };
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onFocus);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onFocus);
-    };
-  }, [loadGitHubStatus]);
+    void refreshGitHubStatus();
+  }, [refreshGitHubStatus]);
 
   const handleGitHubConnect = async () => {
     if (!currentWorkspaceId) return;
@@ -714,9 +695,9 @@ function IntegrationsSettings() {
     setIsLoading(true);
     try {
       await api.github.disconnect(currentWorkspaceId);
-      setGithubStatus({ configured: true, connected: false });
-      setGitHubStatus({ configured: true, connected: false }); // surface the banner immediately
-      setGithubUser(null);
+      // Surface the change immediately across the banner + this panel.
+      setGitHubStatus({ configured: true, connected: false });
+      setGitHubUser(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to disconnect');
     } finally {
@@ -816,8 +797,12 @@ function IntegrationsSettings() {
  * connection state + project id and let the user re-enter to rotate.
  */
 function PostHogCodeCard() {
-  const { currentWorkspaceId } = useWorkspaceStore();
-  const [status, setStatus] = useState<PostHogCodeStatus | null>(null);
+  // Status is preloaded into the store at startup (useSystemStatus), so the
+  // card shows the connection state instantly. Mutations below write the fresh
+  // status straight back to the store.
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const status = useWorkspaceStore((s) => s.posthogStatus);
+  const setStatus = useWorkspaceStore((s) => s.setPostHogStatus);
   const [editing, setEditing] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -825,21 +810,13 @@ function PostHogCodeCard() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!currentWorkspaceId) return;
-    try {
-      const s = await api.posthog.getStatus(currentWorkspaceId);
-      setStatus(s);
-      if (s.projectId) setProjectId(s.projectId);
-      if (s.host) setHost(s.host);
-    } catch {
-      setStatus({ connected: false });
-    }
-  }, [currentWorkspaceId]);
-
+  // Seed the edit-form fields from the preloaded status. Deps are the scalar
+  // values, so this won't clobber in-progress edits (status is stable while
+  // editing) — it only fires when the preload lands or after a save.
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (status?.projectId) setProjectId(status.projectId);
+    if (status?.host) setHost(status.host);
+  }, [status?.projectId, status?.host]);
 
   const handleSave = async () => {
     if (!currentWorkspaceId || !apiKey.trim() || !projectId.trim()) return;

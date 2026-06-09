@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Workspace, Environment, Agent, Task } from '@fastowl/shared';
-import type { GitHubStatus } from '../lib/api';
+import type { GitHubStatus, GitHubUser, PostHogCodeStatus } from '../lib/api';
 
 // Simplified repository type for store (matches API response)
 export interface WatchedRepo {
@@ -124,9 +124,12 @@ interface WorkspaceState {
   // First-run onboarding gate. When false, App renders the OnboardingWizard
   // instead of MainLayout.
   onboardingComplete: boolean;
-  // GitHub connection status for the current workspace, kept in sync so the
-  // global status banner can react app-wide. null = not yet checked.
+  // Integration connection state for the current workspace, preloaded at
+  // startup (useSystemStatus) so Settings → Integrations renders instantly
+  // instead of fetching on open. null = not yet checked.
   githubStatus: GitHubStatus | null;
+  githubUser: GitHubUser | null;
+  posthogStatus: PostHogCodeStatus | null;
 
   // Actions
   setCurrentWorkspace: (id: string | null) => void;
@@ -135,6 +138,8 @@ interface WorkspaceState {
   setCreateWorkspaceOpen: (open: boolean) => void;
   setOnboardingComplete: (done: boolean) => void;
   setGitHubStatus: (status: GitHubStatus | null) => void;
+  setGitHubUser: (user: GitHubUser | null) => void;
+  setPostHogStatus: (status: PostHogCodeStatus | null) => void;
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
@@ -182,6 +187,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   createWorkspaceOpen: false,
   onboardingComplete: getInitialOnboardingComplete(),
   githubStatus: null,
+  githubUser: null,
+  posthogStatus: null,
 
   // Actions
   setCurrentWorkspace: (id) => {
@@ -206,6 +213,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   setGitHubStatus: (githubStatus) => set({ githubStatus }),
+
+  setGitHubUser: (githubUser) => set({ githubUser }),
+
+  setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
 
   setEnvironments: (environments) => set({ environments }),
 
