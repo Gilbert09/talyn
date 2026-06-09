@@ -59,13 +59,17 @@ export function PRTable({
   variant,
   viewerLogin,
 }: PRTableProps) {
-  const secondColLabel =
-    variant === 'review' ? 'Requested' : variant === 'queue' ? 'Queue' : 'Status';
+  // The queue tab splits its second column into Queue (position/state) + Status
+  // (PR readiness pill); every other variant keeps a single second column.
+  const secondColLabel = variant === 'review' ? 'Requested' : 'Status';
   return (
     <table className="w-full text-sm">
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
+          {variant === 'queue' && (
+            <th className="px-2 py-2 text-left font-medium">Queue</th>
+          )}
           <th className="px-2 py-2 text-left font-medium">{secondColLabel}</th>
           <th className="px-2 py-2 text-left font-medium">Updated</th>
           <th className="w-8 px-2 py-2"></th>
@@ -386,7 +390,17 @@ function PRTableRow({
           )}
         </td>
       ) : variant === 'queue' ? (
-        <QueueCell row={row} />
+        <>
+          <QueueCell row={row} />
+          <td className="px-2 py-2">
+            <PRStatusPill
+              blockingReason={summary.blockingReason}
+              checks={summary.checks}
+              mergeStateStatus={summary.mergeStateStatus}
+              state={row.state}
+            />
+          </td>
+        </>
       ) : (
         <td className="px-2 py-2">
           <div className="flex items-center gap-1.5">
@@ -534,7 +548,6 @@ function QueueCell({ row }: { row: PRRow }) {
   const qs = row.mergeQueueState?.status ?? 'waiting';
   const pos = row.mergeQueueState?.position ?? 0;
   const reason = row.mergeQueueState?.reason;
-  const summary = row.summary;
   return (
     <td className="px-2 py-2 text-xs">
       <div className="flex items-center gap-1.5">
@@ -564,15 +577,6 @@ function QueueCell({ row }: { row: PRRow }) {
         ) : (
           <span className="text-muted-foreground">Waiting</span>
         )}
-        {/* PR readiness (CI / conflicts / review) — shows *why* a PR is still
-            waiting or blocked. Full rollup (no hideReviewState) since this tab
-            has no separate review column. */}
-        <PRStatusPill
-          blockingReason={summary.blockingReason}
-          checks={summary.checks}
-          mergeStateStatus={summary.mergeStateStatus}
-          state={row.state}
-        />
       </div>
     </td>
   );
