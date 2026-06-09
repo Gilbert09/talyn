@@ -612,6 +612,17 @@ export function isNeedsAttention(r: PRRow): boolean {
 }
 
 /**
+ * A (non-draft) PR you authored that's still waiting on a review from others —
+ * GitHub says a review is required and one hasn't landed yet. Uses the same
+ * effective-vs-raw decision the table badge shows.
+ */
+export function isAwaitingReview(r: PRRow): boolean {
+  if (r.summary.draft) return false;
+  const decision = r.summary.effectiveReviewDecision ?? r.summary.reviewDecision;
+  return decision === 'REVIEW_REQUIRED';
+}
+
+/**
  * Make a GitHub merge error readable in a toast. Strips the noisy
  * "GitHub API error 405 Method Not Allowed:" prefix the backend prepends,
  * and adds a nudge for the most common (and most cryptic) case.

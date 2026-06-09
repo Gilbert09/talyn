@@ -5,14 +5,14 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus } from '@fastowl/shared';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
-import { PRTable, isNeedsAttention } from './prTableShared';
+import { PRTable, isNeedsAttention, isAwaitingReview } from './prTableShared';
 import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
 import { useGitHubActions } from './useGitHubActions';
 
 /**
  * "My PRs" — every open PR you authored, across watched repos. Carries the
- * repo dropdown, the created-at sort, and the "Needs attention" toggle
- * (blocking issues you own).
+ * repo dropdown, the created-at sort, the "Needs attention" toggle (blocking
+ * issues you own), and the "Needs review" toggle (still awaiting a review).
  */
 export function MyPRsPanel() {
   const repositories = useWorkspaceStore((s) => s.repositories);
@@ -23,11 +23,16 @@ export function MyPRsPanel() {
 
   const [repoFilter, setRepoFilter] = useState('all');
   const [needsAttention, setNeedsAttention] = useState(false);
+  const [needsReview, setNeedsReview] = useState(false);
   const [search, setSearch] = useState('');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const attentionCount = useMemo(
     () => rows.filter((r) => r.authored && isNeedsAttention(r)).length,
+    [rows]
+  );
+  const reviewCount = useMemo(
+    () => rows.filter((r) => r.authored && isAwaitingReview(r)).length,
     [rows]
   );
 
@@ -45,8 +50,9 @@ export function MyPRsPanel() {
       out = out.filter((r) => prMatchesText(r, q));
     }
     if (needsAttention) out = out.filter(isNeedsAttention);
+    if (needsReview) out = out.filter(isAwaitingReview);
     return out.slice().sort((a, b) => compareByCreated(a, b, sortDir));
-  }, [rows, repoFilter, search, needsAttention, sortDir]);
+  }, [rows, repoFilter, search, needsAttention, needsReview, sortDir]);
 
   return (
     <GitHubPageShell
@@ -76,6 +82,20 @@ export function MyPRsPanel() {
           >
             Needs attention
             {attentionCount > 0 && <span className="ml-1">{attentionCount}</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setNeedsReview((v) => !v)}
+            className={cn(
+              'rounded-md border px-2 py-1 transition-colors',
+              needsReview
+                ? 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-400'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Only show PRs you opened that are still waiting on a review"
+          >
+            Needs review
+            {reviewCount > 0 && <span className="ml-1">{reviewCount}</span>}
           </button>
           <SortToggle sortDir={sortDir} onToggle={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} />
         </>
