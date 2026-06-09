@@ -165,6 +165,12 @@ const createWindow = async () => {
     return path.join(RESOURCES_PATH, ...paths);
   };
 
+  // In dev the app isn't packaged, so macOS shows Electron's default dock
+  // icon; set ours at runtime (packaged builds get it from icon.icns).
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    app.dock?.setIcon(getAssetPath('icons', '512x512.png'));
+  }
+
   mainWindow = new BrowserWindow({
     show: false,
     width: 1024,
