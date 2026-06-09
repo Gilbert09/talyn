@@ -146,6 +146,11 @@ interface WorkspaceState {
   removeAgent: (id: string) => void;
 
   setTasks: (tasks: Task[]) => void;
+  // Reconcile the task list for one workspace against a fresh server fetch,
+  // used after a WebSocket reconnect to replay status changes whose broadcasts
+  // we missed while offline. Unlike setTasks it preserves locally-loaded rich
+  // fields (transcript/terminalOutput) the list endpoint omits for egress.
+  reconcileTasks: (tasks: Task[], workspaceId: string) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   addTask: (task: Task) => void;
   removeTask: (id: string) => void;
@@ -236,6 +241,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     })),
 
   setTasks: (tasks) => set({ tasks }),
+
+  reconcileTasks: (incoming, workspaceId) =>
+    set((state) => {
+      const localById = new Map(state.tasks.map((t) => [t.id, t]));
+      const incomingIds = new Set(incoming.map((t) => t.id));
+      // Rebuild in the server's order, re-attaching any rich local-only fields
+      // (transcript/terminalOutput) the list endpoint drops for egress reasons.
+      const next: Task[] = incoming.map((fresh) => {
+        const local = localById.get(fresh.id);
+        if (!local) return fresh;
+        return {
+          ...fresh,
+          transcript: local.transcript ?? fresh.transcript,
+          terminalOutput: local.terminalOutput ?? fresh.terminalOutput,
+        };
+      });
+      // Keep local tasks the fetch didn't cover (a different workspace's load);
+      // tasks of *this* workspace absent from the fetch were deleted offline.
+      for (const local of state.tasks) {
+        if (local.workspaceId !== workspaceId && !incomingIds.has(local.id)) {
+          next.push(local);
+        }
+      }
+      return {
+        tasks: next,
+        // Drop the selection if the selected task vanished server-side.
+        selectedTaskId:
+          state.selectedTaskId && !next.some((t) => t.id === state.selectedTaskId)
+            ? null
+            : state.selectedTaskId,
+      };
+    }),
 
   updateTask: (id, updates) =>
     set((state) => ({

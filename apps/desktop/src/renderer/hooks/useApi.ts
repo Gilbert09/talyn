@@ -97,6 +97,23 @@ function scheduleTaskEventFlush() {
 }
 
 /**
+ * Refetch the active workspace's task list and reconcile it into the store.
+ * WS broadcasts are fire-and-forget to currently-open sockets only, so any
+ * status change (e.g. a cloud run auto-finalising) that lands while the app is
+ * asleep / disconnected is lost. Run this on reconnect to catch those up.
+ */
+async function reconcileTasksFromServer(): Promise<void> {
+  const workspaceId = useWorkspaceStore.getState().currentWorkspaceId;
+  if (!workspaceId) return;
+  try {
+    const tasks = await api.tasks.list({ workspaceId });
+    useWorkspaceStore.getState().reconcileTasks(tasks, workspaceId);
+  } catch (err) {
+    console.error('Failed to reconcile tasks after reconnect:', err);
+  }
+}
+
+/**
  * Hook to initialize API connection and real-time updates
  */
 export function useApiConnection() {
@@ -127,9 +144,28 @@ export function useApiConnection() {
     }
   }, [currentWorkspaceId]);
 
+  // Tracks whether the socket has dropped at least once, so we only refetch on
+  // a genuine *re*connect — the first connect is covered by useInitialDataLoad.
+  const sawDisconnectRef = useRef(false);
+
   // Handle WebSocket events
   useEffect(() => {
     const unsubscribers: (() => void)[] = [];
+
+    // Reconnect catch-up: WS broadcasts that fired while we were offline are
+    // gone (fire-and-forget to open sockets only). On reconnect, refetch the
+    // task list to reconcile any status changes we missed.
+    unsubscribers.push(
+      wsClient.on<{ connected?: boolean }>('connection:status', (payload) => {
+        if (payload?.connected === false) {
+          sawDisconnectRef.current = true;
+          return;
+        }
+        if (payload?.connected && sawDisconnectRef.current) {
+          void reconcileTasksFromServer();
+        }
+      })
+    );
 
     // Agent status updates
     unsubscribers.push(
