@@ -18,6 +18,7 @@ import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
 import { getCloudProvider } from '../services/cloudProviders/registry.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
 import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
+import { DEFAULT_POSTHOG_CODE_MODEL } from '../services/posthogCode/client.js';
 import {
   assertUser,
   handleAccessError,
@@ -529,7 +530,12 @@ export function taskRoutes(): Router {
         resumeFromRunId: runId,
         message,
         runtimeAdapter,
-        model,
+        // Resume starts a fresh cloud run, which requires a model — fall back
+        // to the task's pinned model, then the backend default.
+        model:
+          model ||
+          (typeof meta.model === 'string' ? meta.model : undefined) ||
+          DEFAULT_POSTHOG_CODE_MODEL,
         reasoningEffort,
       });
       const newRunId = resumed.latest_run?.id ?? runId;

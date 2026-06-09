@@ -13,13 +13,11 @@ import { cn } from '../../lib/utils';
  * skills) — our task backend doesn't support them, so they'd be dead UI.
  */
 
-// Sentinel for "let PostHog Code pick the model". Selecting it omits both
-// `model` and `reasoning_effort` from the run request (effort is model-specific
-// and can't be validated against a model we haven't chosen).
-export const AUTO_MODEL = 'auto';
+// PostHog Code's API requires a concrete model on every run, so there's no
+// "let it decide" option — the desktop always sends one of these.
+export const DEFAULT_MODEL = 'claude-opus-4-8';
 
 export const MODEL_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: AUTO_MODEL, label: 'Auto' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
   { id: 'claude-opus-4-7', label: 'Opus 4.7' },
   { id: 'claude-opus-4-6', label: 'Opus 4.6' },

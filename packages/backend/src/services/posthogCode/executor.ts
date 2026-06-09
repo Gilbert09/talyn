@@ -9,6 +9,7 @@ import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
 import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
+import { DEFAULT_POSTHOG_CODE_MODEL } from './client.js';
 
 const DEFAULT_RUNTIME_ADAPTER: PostHogCodeRuntimeAdapter = 'claude';
 
@@ -28,7 +29,20 @@ export async function dispatchTaskToPostHogCode(
   env: Environment,
 ): Promise<DispatchResult> {
   const meta = (task.metadata ?? {}) as Record<string, unknown>;
-  if (typeof meta.posthogTaskId === 'string' && meta.posthogTaskId) {
+  const existingTaskId =
+    typeof meta.posthogTaskId === 'string' && meta.posthogTaskId
+      ? meta.posthogTaskId
+      : undefined;
+  const existingRunId =
+    typeof meta.posthogRunId === 'string' && meta.posthogRunId
+      ? meta.posthogRunId
+      : undefined;
+  // Only treat the dispatch as done once a run actually started. A task whose
+  // remote task was created but whose `startRun` then failed (e.g. the model
+  // validation error) has a `posthogTaskId` but no `posthogRunId` — re-running
+  // below reuses that remote task and starts the run rather than wedging
+  // forever on this guard.
+  if (existingTaskId && existingRunId) {
     return { ok: true };
   }
 
@@ -57,35 +71,42 @@ export async function dispatchTaskToPostHogCode(
     (meta.runtimeAdapter as PostHogCodeRuntimeAdapter | undefined) ??
     runtimeAdapterFromEnv(env) ??
     DEFAULT_RUNTIME_ADAPTER;
-  // No model means "let PostHog Code decide" — the run request omits the
-  // field and PostHog picks its own default. An explicit task-level or env
-  // default still wins when set.
+  // The API requires a model on every cloud run, so resolve to a concrete one:
+  // task-level (UI) → env default → the backend default.
   const model =
-    (typeof meta.model === 'string' && meta.model) || modelFromEnv(env) || undefined;
+    (typeof meta.model === 'string' && meta.model) ||
+    modelFromEnv(env) ||
+    DEFAULT_POSTHOG_CODE_MODEL;
 
   const description = task.prompt?.trim() || task.description?.trim() || task.title;
 
   try {
-    const remoteTask = await client.createTask({
-      title: task.title,
-      description,
-      repository,
-    });
+    // Reuse a remote task from a prior attempt that failed before starting a
+    // run (idempotent: avoids orphaning a fresh empty task each retry).
+    let remoteTaskId = existingTaskId;
+    if (!remoteTaskId) {
+      const remoteTask = await client.createTask({
+        title: task.title,
+        description,
+        repository,
+      });
+      remoteTaskId = remoteTask.id;
 
-    // Record the remote task id before starting the run so a failure
-    // mid-flight doesn't strand us into re-creating a duplicate task.
-    await patchTaskMetadata(task.id, (existing) => ({
-      ...existing,
-      posthogTaskId: remoteTask.id,
-      posthogProjectId: creds.projectId,
-      posthogHost: creds.host,
-      posthogStatus: 'not_started',
-    }));
+      // Record the remote task id before starting the run so a failure
+      // mid-flight doesn't strand us into re-creating a duplicate task.
+      await patchTaskMetadata(task.id, (existing) => ({
+        ...existing,
+        posthogTaskId: remoteTask.id,
+        posthogProjectId: creds.projectId,
+        posthogHost: creds.host,
+        posthogStatus: 'not_started',
+      }));
+    }
 
     // `run/` returns the task; the new run is on `latest_run`. Its
     // `latest_run.id` (NOT the returned `id`, which is the task id) is the
     // run id the logs/stream endpoints are keyed on.
-    const startedTask = await client.startRun(remoteTask.id, { runtimeAdapter, model });
+    const startedTask = await client.startRun(remoteTaskId, { runtimeAdapter, model });
     const startedRun = startedTask.latest_run ?? null;
     const runId = startedRun?.id;
 
@@ -116,13 +137,13 @@ export async function dispatchTaskToPostHogCode(
       postHogCodeStreamer.ensure({
         taskId: task.id,
         workspaceId: task.workspaceId,
-        posthogTaskId: remoteTask.id,
+        posthogTaskId: remoteTaskId,
         posthogRunId: runId,
       });
     }
 
     console.log(
-      `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTask.id} run ${runId ?? '(pending)'} (${repository})`,
+      `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTaskId} run ${runId ?? '(pending)'} (${repository})`,
     );
     return { ok: true };
   } catch (err) {

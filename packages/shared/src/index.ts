@@ -790,9 +790,9 @@ export interface CreateTaskRequest {
   /**
    * Cloud (PostHog Code) overrides. Only meaningful when the task is
    * assigned to a `posthog_code` env; ignored otherwise. `runtimeAdapter`
-   * falls back to the env's default, then `claude`. `model` is fully
-   * optional — omit it (or pick "Auto" in the UI) to let PostHog Code
-   * select the model; an explicit value overrides that.
+   * falls back to the env's default, then `claude`. `model` falls back to
+   * the env's default, then the backend default — the PostHog Code API
+   * requires a concrete model on every run, so it's always resolved server-side.
    */
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   model?: string;

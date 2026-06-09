@@ -3,6 +3,14 @@ import type { AcpLogEntry } from './acpConverter.js';
 import { debugBus } from '../debugBus.js';
 
 /**
+ * Default model for PostHog Code runs. The API requires a model on every
+ * cloud run (the `run/` endpoint 400s with `model is required when selecting
+ * a cloud runtime` otherwise), so this is the fallback whenever the task /
+ * env / UI didn't pin one. Kept current with the latest Opus.
+ */
+export const DEFAULT_POSTHOG_CODE_MODEL = 'claude-opus-4-8';
+
+/**
  * Thin typed wrapper over the PostHog Code (tasks) REST API.
  *
  * Auth is a personal API key sent as `Authorization: Bearer …`. Every
@@ -41,13 +49,13 @@ export class PostHogCodeClient {
    */
   async startRun(
     taskId: string,
-    input: { runtimeAdapter: PostHogCodeRuntimeAdapter; model?: string },
+    input: { runtimeAdapter: PostHogCodeRuntimeAdapter; model: string },
   ): Promise<PostHogTask> {
+    // `model` is required by the API for a cloud runtime — always send it.
     return this.request<PostHogTask>('POST', `/tasks/${taskId}/run/`, {
       mode: 'background',
       runtime_adapter: input.runtimeAdapter,
-      // Omit `model` to let PostHog Code pick its own default.
-      ...(input.model ? { model: input.model } : {}),
+      model: input.model,
     });
   }
 
