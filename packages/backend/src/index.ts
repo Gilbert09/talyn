@@ -71,6 +71,12 @@ async function main() {
   // present Origin must be loopback (dev renderer) or explicitly allowlisted.
   const isOriginAllowed = (origin: string | undefined): boolean =>
     !origin || LOOPBACK_ORIGIN.test(origin) || originAllowlist.includes(origin);
+  // The packaged desktop app's renderer loads from file://, so — unlike a
+  // truly native client — its WebSocket handshake DOES carry an Origin, which
+  // Chromium reports as the opaque `null` (or a `file://` URL). Recognise the
+  // first-party desktop client so its WS upgrade isn't rejected as foreign.
+  const isDesktopOrigin = (origin: string | undefined): boolean =>
+    origin === 'null' || (origin?.startsWith('file://') ?? false);
   app.use(
     cors({
       origin(origin, cb) {
@@ -112,8 +118,12 @@ async function main() {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
     // Reject cross-site WebSocket hijacking: a browser page on a foreign
     // origin can open a WS (no CORS preflight on upgrades), so we apply the
-    // same origin gate as REST. Native clients send no Origin and pass.
-    if (!isOriginAllowed(req.headers.origin)) {
+    // same origin gate as REST — plus the desktop app's file:// origin.
+    // This is defence-in-depth only: the connection is useless until it
+    // sends a valid JWT in its first frame (see services/websocket.ts), so
+    // an unrecognised origin that slips through still gets nothing.
+    const origin = req.headers.origin;
+    if (!isOriginAllowed(origin) && !isDesktopOrigin(origin)) {
       socket.destroy();
       return;
     }
