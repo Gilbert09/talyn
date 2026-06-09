@@ -47,7 +47,9 @@
       "^react-markdown$": "<rootDir>/.erb/mocks/reactMarkdownMock.js",
       "^remark-gfm$": "<rootDir>/.erb/mocks/remarkRehypePluginMock.js",
       "^rehype-raw$": "<rootDir>/.erb/mocks/remarkRehypePluginMock.js",
-      "^rehype-sanitize$": "<rootDir>/.erb/mocks/rehypeSanitizeMock.js"
+      "^rehype-sanitize$": "<rootDir>/.erb/mocks/rehypeSanitizeMock.js",
+      "^posthog-js/dist/module.full.no-external$": "<rootDir>/.erb/mocks/posthogJsMock.js",
+      "^posthog-js/dist/posthog-recorder$": "<rootDir>/.erb/mocks/posthogJsMock.js"
     },
     "setupFiles": [
       "./.erb/scripts/check-build-exists.ts"
