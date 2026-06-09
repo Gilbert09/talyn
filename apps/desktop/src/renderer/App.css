@@ -82,3 +82,37 @@
   outline: none;
 }
 
+/* Startup screen — the booting owl. A sweeping "scan" bar and a hard-blinking
+   terminal caret give the loading state a techy, on-brand feel. */
+@keyframes owl-scan {
+  0% {
+    transform: translateX(-160%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}
+
+@keyframes owl-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.owl-scan-bar {
+  animation: owl-scan 1.6s ease-in-out infinite;
+}
+
+.owl-caret {
+  animation: owl-caret 1s steps(1) infinite;
+}
+
+.owl-glow {
+  filter: drop-shadow(0 0 14px hsl(var(--primary) / 0.35));
+}
+
