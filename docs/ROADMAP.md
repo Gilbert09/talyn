@@ -79,6 +79,7 @@ Full phased TODO list. Active priorities live in [`CLAUDE.md`](../CLAUDE.md). Th
 - **Release packaging**: CI `publish.yml` builds desktop only on tag push — doesn't build the backend.
 - **MacOS notarization**: `afterSign: .erb/scripts/notarize.js` is wired up but untested in the fastowl repo specifically.
 - **Multi-step agent state recovery**: A task agent crashing mid-run loses its state (the task does persist, and recovery resets to `queued` via `recoverStuckTasks`, but no partial resume).
+- **Multi-instance safety (advisory locks)**: the task dispatchers (`mergeQueueProcessor`, `prAutoMergeWatcher`) are read-check-dispatch with only an in-process tick guard — two backends on the same DB double-fire cloud fix tasks (observed June 2026 running local + Railway against one Supabase DB; the dispatch HTTP call makes the race window seconds wide, and the loser's task id is overwritten on persist, orphaning it from the active-run guard). Fix before running multiple replicas: `pg_try_advisory_xact_lock(hashtext('merge-queue:' || pr.id))` around `processHead` (and equivalent in the watcher), skipping silently when another instance holds the lock.
 
 ---
 
