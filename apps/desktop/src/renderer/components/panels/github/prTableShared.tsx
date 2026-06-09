@@ -534,6 +534,7 @@ function QueueCell({ row }: { row: PRRow }) {
   const qs = row.mergeQueueState?.status ?? 'waiting';
   const pos = row.mergeQueueState?.position ?? 0;
   const reason = row.mergeQueueState?.reason;
+  const summary = row.summary;
   return (
     <td className="px-2 py-2 text-xs">
       <div className="flex items-center gap-1.5">
@@ -563,6 +564,15 @@ function QueueCell({ row }: { row: PRRow }) {
         ) : (
           <span className="text-muted-foreground">Waiting</span>
         )}
+        {/* PR readiness (CI / conflicts / review) — shows *why* a PR is still
+            waiting or blocked. Full rollup (no hideReviewState) since this tab
+            has no separate review column. */}
+        <PRStatusPill
+          blockingReason={summary.blockingReason}
+          checks={summary.checks}
+          mergeStateStatus={summary.mergeStateStatus}
+          state={row.state}
+        />
       </div>
     </td>
   );
