@@ -482,10 +482,19 @@ export function DebugPanel() {
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {(snapshot?.pollers ?? []).map((p) => (
+          {(snapshot?.pollers ?? []).map((p) => {
+            // The adaptive loops re-register a stretched interval to protect the
+            // GitHub rate-limit budget; flag it when the live cadence has been
+            // slowed past its base (small epsilon to ignore rounding).
+            const throttled = p.baseIntervalMs > 0 && p.intervalMs > p.baseIntervalMs * 1.05;
+            const factor = throttled ? p.intervalMs / p.baseIntervalMs : 1;
+            return (
             <div
               key={p.name}
-              className="rounded-md border border-zinc-800 bg-zinc-900/40 p-2"
+              className={cn(
+                'rounded-md border bg-zinc-900/40 p-2',
+                throttled ? 'border-amber-500/50 bg-amber-500/5' : 'border-zinc-800'
+              )}
             >
               <div className="flex items-center justify-between gap-2">
                 <Tip
@@ -498,7 +507,13 @@ export function DebugPanel() {
                         {p.description || SERVICE_INFO[p.name] || 'A background poll loop.'}
                       </span>
                       <span className="mt-1 block text-zinc-500">
-                        Runs every {Math.round(p.intervalMs / 1000)}s.
+                        {throttled
+                          ? `Throttled ${factor.toFixed(1)}× — every ${Math.round(
+                              p.intervalMs / 1000
+                            )}s (base ${Math.round(
+                              p.baseIntervalMs / 1000
+                            )}s) to stay under the GitHub rate limit.`
+                          : `Runs every ${Math.round(p.intervalMs / 1000)}s.`}
                       </span>
                     </span>
                   }
@@ -508,20 +523,32 @@ export function DebugPanel() {
                     <Info className="h-3 w-3 shrink-0 text-zinc-600" />
                   </span>
                 </Tip>
-                <span
-                  className={cn(
-                    'h-2 w-2 shrink-0 rounded-full',
-                    p.lastOk === false
-                      ? 'bg-red-500'
-                      : p.lastTickAt
-                        ? 'bg-emerald-500'
-                        : 'bg-zinc-600'
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {throttled && (
+                    <span className="rounded bg-amber-500/15 px-1 py-0.5 font-mono text-[10px] font-medium text-amber-400">
+                      throttled {factor.toFixed(1)}×
+                    </span>
                   )}
-                  title={p.lastError ?? (p.lastOk === false ? 'last tick failed' : 'ok')}
-                />
+                  <span
+                    className={cn(
+                      'h-2 w-2 shrink-0 rounded-full',
+                      p.lastOk === false
+                        ? 'bg-red-500'
+                        : p.lastTickAt
+                          ? 'bg-emerald-500'
+                          : 'bg-zinc-600'
+                    )}
+                    title={p.lastError ?? (p.lastOk === false ? 'last tick failed' : 'ok')}
+                  />
+                </div>
               </div>
               <div className="mt-1 flex items-center justify-between text-[11px] text-zinc-500">
-                <span>every {Math.round(p.intervalMs / 1000)}s</span>
+                <span className={throttled ? 'text-amber-400' : undefined}>
+                  every {Math.round(p.intervalMs / 1000)}s
+                  {throttled && (
+                    <span className="text-zinc-600"> (base {Math.round(p.baseIntervalMs / 1000)}s)</span>
+                  )}
+                </span>
                 <span>{ago(p.lastTickAt)}</span>
               </div>
               <div className="mt-0.5 flex items-center justify-between text-[11px] text-zinc-500">
@@ -534,7 +561,8 @@ export function DebugPanel() {
                 </p>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {(snapshot?.rateLimits?.length ?? 0) > 0 && (

@@ -1,6 +1,7 @@
 import type { DebugRateLimitState } from '@fastowl/shared';
 import { githubService, type GitHubRateLimit } from './github.js';
 import { debugBus } from './debugBus.js';
+import { rateBudgetGovernor } from './rateBudgetGovernor.js';
 
 /**
  * GitHub rate-limit poller — keeps the Debug panel's rate-limit cards honest.
@@ -123,6 +124,10 @@ class RateLimitPoller {
         if (seenLabels.has(label)) continue;
         try {
           const rl = await githubService.getRateLimit(workspaceId);
+          // Feed the adaptive-cadence governor, keyed the same way the pollers
+          // read it (accountKeyFor), so it can stretch poll intervals before we
+          // ever exhaust a budget.
+          rateBudgetGovernor.update(githubService.accountKeyFor(workspaceId), rl.resources ?? {});
           for (const bucket of bucketsFor(label, rl))
             debugBus.recordRateLimit({ ...bucket, workspaceId });
           seenLabels.add(label);

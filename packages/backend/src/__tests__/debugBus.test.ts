@@ -182,6 +182,29 @@ describe('poller registry', () => {
     expect(poller!.lastTickAt).toBeTruthy();
   });
 
+  it('defaults baseIntervalMs to the interval for a fixed-cadence loop', () => {
+    debugBus.registerPoller('rate_limit', 30_000, 'free /rate_limit poll');
+    const poller = debugBus.snapshot().pollers.find((p) => p.name === 'rate_limit');
+    expect(poller!.baseIntervalMs).toBe(30_000);
+  });
+
+  it('keeps the base while an adaptive loop re-registers a stretched interval', () => {
+    debugBus.registerPoller('pr_monitor', 30_000, 'baseline', 30_000);
+    // Governor stretches the live cadence; base must stay put so the panel can
+    // tell it's been throttled.
+    debugBus.registerPoller('pr_monitor', 90_000, 'baseline', 30_000);
+    const poller = debugBus.snapshot().pollers.find((p) => p.name === 'pr_monitor');
+    expect(poller!.intervalMs).toBe(90_000);
+    expect(poller!.baseIntervalMs).toBe(30_000);
+  });
+
+  it('leaves the stored base untouched when a re-register omits it', () => {
+    debugBus.registerPoller('pr_monitor', 30_000, 'baseline', 30_000);
+    debugBus.registerPoller('pr_monitor', 60_000, 'baseline'); // no base passed
+    const poller = debugBus.snapshot().pollers.find((p) => p.name === 'pr_monitor');
+    expect(poller!.baseIntervalMs).toBe(30_000);
+  });
+
   it('records a failed tick under the error category with the error message', () => {
     debugBus.registerPoller('merge_queue', 60_000, 'serialized merge queue');
     debugBus.pollerTick('merge_queue', { durationMs: 3, ok: false, error: 'boom' });

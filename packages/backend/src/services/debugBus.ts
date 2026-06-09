@@ -274,17 +274,31 @@ class DebugBus {
 
   // ---- Poller registry ----------------------------------------------------
 
-  registerPoller(name: string, intervalMs: number, description: string): void {
+  /**
+   * Register or update a poll loop's reported cadence. `baseIntervalMs` is the
+   * un-throttled cadence; pass it for an adaptive loop (one that re-registers a
+   * stretched `intervalMs` each tick) so the panel can show it's been slowed.
+   * Omitted, the base tracks `intervalMs` (a fixed-cadence loop is never
+   * "throttled").
+   */
+  registerPoller(
+    name: string,
+    intervalMs: number,
+    description: string,
+    baseIntervalMs?: number,
+  ): void {
     const existing = this.pollers.get(name);
     if (existing) {
       existing.intervalMs = intervalMs;
       existing.description = description;
+      if (baseIntervalMs !== undefined) existing.baseIntervalMs = baseIntervalMs;
       return;
     }
     this.pollers.set(name, {
       name,
       description,
       intervalMs,
+      baseIntervalMs: baseIntervalMs ?? intervalMs,
       tickCount: 0,
       lastTickAt: null,
       lastDurationMs: null,

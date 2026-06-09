@@ -501,7 +501,14 @@ export interface DebugPollerState {
   name: string;
   /** Human-readable explanation of what this loop does (shown as a tooltip). */
   description: string;
+  /** Current cadence — the live interval, which may be stretched from the base. */
   intervalMs: number;
+  /**
+   * The un-throttled base cadence. Equals {@link intervalMs} unless the adaptive
+   * rate-budget governor has slowed the loop to protect the GitHub budget — then
+   * `intervalMs > baseIntervalMs` and the panel flags it as throttled.
+   */
+  baseIntervalMs: number;
   tickCount: number;
   lastTickAt: string | null;
   lastDurationMs: number | null;

@@ -17,6 +17,7 @@ import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
+import { rateBudgetGovernor } from './rateBudgetGovernor.js';
 
 interface WatchedRepo {
   id: string;
@@ -49,6 +50,18 @@ const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 const ACTIVE_CI_INTERVAL_MS = 10_000;
 const ACTIVE_CI_MAX_PER_WORKSPACE = 15;
 
+// Adaptive cadence: when an account is burning its GitHub budget faster than the
+// reset window can replenish it, the rate-budget governor returns a factor > 1
+// and we stretch the poll interval so usage glides under the limit. Cap the
+// stretch so a starved account still gets polled occasionally.
+const MAX_POLL_INTERVAL_MS = 5 * 60_000;
+const MAX_FAST_INTERVAL_MS = 60_000;
+
+const MAIN_POLLER_DESC =
+  "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache, and reconciles closed/merged PRs. Cadence adapts to the account's remaining GitHub rate-limit budget.";
+const FAST_POLLER_DESC =
+  'Fast loop for authored PRs with in-flight CI — re-queries GraphQL directly (no Search calls) so settling checks and flipping mergeability update quickly. Self-draining once checks settle. Cadence adapts to remaining GitHub budget.';
+
 class PRMonitorService extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
   private fastTimer: NodeJS.Timeout | null = null;
@@ -80,30 +93,75 @@ class PRMonitorService extends EventEmitter {
   }
 
   private startPolling(): void {
-    if (this.pollTimer) return;
+    if (this.pollTimer || this.fastTimer) return;
     console.log('Starting PR monitor polling...');
-    debugBus.registerPoller(
-      'pr_monitor',
-      POLL_INTERVAL_MS,
-      "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache, and reconciles closed/merged PRs.",
-    );
+    debugBus.registerPoller('pr_monitor', POLL_INTERVAL_MS, MAIN_POLLER_DESC, POLL_INTERVAL_MS);
     debugBus.registerPoller(
       'pr_monitor_fast_ci',
       ACTIVE_CI_INTERVAL_MS,
-      'Fast loop for authored PRs with in-flight CI — re-queries GraphQL directly (no Search calls) so settling checks and flipping mergeability update quickly. Self-draining once checks settle.',
+      FAST_POLLER_DESC,
+      ACTIVE_CI_INTERVAL_MS,
     );
-    this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
-    this.fastTimer = setInterval(() => this.fastPoll(), ACTIVE_CI_INTERVAL_MS);
-    setTimeout(() => this.poll(), 5_000);
+    // Both loops self-schedule via setTimeout (not setInterval) so each tick can
+    // re-read the adaptive interval. Kick the main poll ~5s after boot.
+    this.pollTimer = setTimeout(() => {
+      void this.poll()
+        .catch(() => {})
+        .finally(() => this.scheduleMain());
+    }, 5_000);
+    this.scheduleFast();
+  }
+
+  /**
+   * Loop-wide slowdown factor: the max governor factor across every connected
+   * account's budget. The loop iterates all workspaces in one tick, so it paces
+   * to the most-constrained account (usually there's just one).
+   */
+  private loopDelayFactor(): number {
+    const keys = new Set<string>();
+    for (const ws of githubService.getConnectedWorkspaces()) {
+      keys.add(githubService.accountKeyFor(ws));
+    }
+    return rateBudgetGovernor.maxDelayFactor(keys);
+  }
+
+  private scheduleMain(): void {
+    const interval = Math.min(POLL_INTERVAL_MS * this.loopDelayFactor(), MAX_POLL_INTERVAL_MS);
+    // Reflect the live (possibly stretched) cadence in the Debug panel, keeping
+    // the base so the panel can flag when we've been throttled.
+    debugBus.registerPoller('pr_monitor', interval, MAIN_POLLER_DESC, POLL_INTERVAL_MS);
+    this.pollTimer = setTimeout(() => {
+      void this.poll()
+        .catch(() => {})
+        .finally(() => this.scheduleMain());
+    }, interval);
+  }
+
+  private scheduleFast(): void {
+    const interval = Math.min(
+      ACTIVE_CI_INTERVAL_MS * this.loopDelayFactor(),
+      MAX_FAST_INTERVAL_MS,
+    );
+    debugBus.registerPoller(
+      'pr_monitor_fast_ci',
+      interval,
+      FAST_POLLER_DESC,
+      ACTIVE_CI_INTERVAL_MS,
+    );
+    this.fastTimer = setTimeout(() => {
+      void this.fastPoll()
+        .catch(() => {})
+        .finally(() => this.scheduleFast());
+    }, interval);
   }
 
   private stopPolling(): void {
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
     if (this.fastTimer) {
-      clearInterval(this.fastTimer);
+      clearTimeout(this.fastTimer);
       this.fastTimer = null;
     }
   }
@@ -242,20 +300,24 @@ class PRMonitorService extends EventEmitter {
     // own PRs). GitHub drops you from a PR's *individual* request once you
     // review it, but leaves a *team* request standing — so subtracting
     // reviewed-by is what actually clears an approved PR off the list.
-    const [authoredNums, requestedNums, reviewedNums] = await Promise.all([
-      githubService.searchPullRequestNumbers(
-        workspaceId,
-        `repo:${full} is:pr is:open author:${currentUserLogin}`
-      ),
-      githubService.searchPullRequestNumbers(
-        workspaceId,
-        `repo:${full} is:pr is:open review-requested:${currentUserLogin}`
-      ),
-      githubService.searchPullRequestNumbers(
-        workspaceId,
-        `repo:${full} is:pr is:open reviewed-by:${currentUserLogin}`
-      ),
-    ]);
+    // Run the three searches SERIALLY, not concurrently. GitHub explicitly asks
+    // for serial requests per user and is most aggressive about secondary rate
+    // limits on the tight `search` budget (30/min) — three concurrent searches
+    // per repo was the main trigger for the "exceeded a secondary rate limit"
+    // 403s. (The github layer also serializes searches per account as a backstop
+    // across repos/workspaces.)
+    const authoredNums = await githubService.searchPullRequestNumbers(
+      workspaceId,
+      `repo:${full} is:pr is:open author:${currentUserLogin}`
+    );
+    const requestedNums = await githubService.searchPullRequestNumbers(
+      workspaceId,
+      `repo:${full} is:pr is:open review-requested:${currentUserLogin}`
+    );
+    const reviewedNums = await githubService.searchPullRequestNumbers(
+      workspaceId,
+      `repo:${full} is:pr is:open reviewed-by:${currentUserLogin}`
+    );
     const authoredSet = new Set(authoredNums);
     const reviewedSet = new Set(reviewedNums);
     const pendingSet = new Set<number>();

@@ -13,7 +13,12 @@ import {
   isEncryptedEnvelope,
   type EncryptedEnvelope,
 } from './tokenCrypto.js';
-import { debugBus } from './debugBus.js';
+import { debugBus, redactUrl } from './debugBus.js';
+import {
+  githubRateGate,
+  GitHubRateLimitError,
+  parseRateLimitResponse,
+} from './githubRateGate.js';
 
 // GitHub OAuth configuration. Set via environment variables in production.
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
@@ -236,6 +241,11 @@ class GitHubService extends EventEmitter {
   // timestamp. Teams change rarely, so we cache for an hour to avoid a
   // /user/teams round-trip on every poll's review-request derivation.
   private viewerTeamsCache: Map<string, { slugs: Set<string>; at: number }> = new Map();
+  // Per-account promise chain that serializes Search API calls. GitHub asks
+  // for serial (non-concurrent) requests per user and is most aggressive about
+  // secondary limits on the tight `search` budget — so even across repos and
+  // same-account workspaces, searches run one-at-a-time. Keyed by account.
+  private searchChains: Map<string, Promise<unknown>> = new Map();
 
   private get db(): Database {
     return getDbClient();
@@ -462,6 +472,41 @@ class GitHubService extends EventEmitter {
     return { connected: true, scopes: token.scope.split(' ').filter(Boolean) };
   }
 
+  /**
+   * The key under which this workspace's GitHub *account* is tracked for
+   * rate-limiting. GitHub budgets (primary and secondary) are per account, but
+   * our state is keyed by workspace — and multiple workspaces can share one
+   * OAuth token. Prefer the cached login (what the rate-limit poller keys on),
+   * fall back to the raw token, then the workspace id. Synchronous, so it's
+   * safe in the hot request path.
+   */
+  accountKeyFor(workspaceId: string): string {
+    return (
+      this.viewerLoginCache.get(workspaceId) ??
+      this.tokens.get(workspaceId)?.accessToken ??
+      workspaceId
+    );
+  }
+
+  /**
+   * Run `fn` after any in-flight work already queued for `accountKey`, so calls
+   * for one account never overlap. Used to serialize Search API requests.
+   */
+  private serializeByAccount<T>(accountKey: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.searchChains.get(accountKey) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // Store a settled marker so the chain links without retaining results or
+    // rejecting the next link on a prior failure.
+    this.searchChains.set(
+      accountKey,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
+  }
+
   private async apiRequest<T>(
     workspaceId: string,
     endpoint: string,
@@ -471,6 +516,11 @@ class GitHubService extends EventEmitter {
     if (!token) {
       throw new Error('GitHub not connected for this workspace');
     }
+
+    const accountKey = this.accountKeyFor(workspaceId);
+    // Pause behind any active secondary-rate-limit backoff for this account
+    // before adding to the load. Throws if the wait would be too long.
+    await githubRateGate.waitIfBlocked(accountKey);
 
     const method = (options.method ?? 'GET').toUpperCase();
     const url = `${GITHUB_API_URL}${endpoint}`;
@@ -501,10 +551,21 @@ class GitHubService extends EventEmitter {
     }
 
     if (!response.ok) {
+      // Read the body once — both the rate-limit check and the error message
+      // need it, and a Response body can only be consumed a single time.
+      const bodyText = await response.text().catch(() => '');
+      const rl = parseRateLimitResponse(response, bodyText);
+      if (rl.isRateLimited) {
+        githubRateGate.block(
+          accountKey,
+          Date.now() + rl.retryAfterMs,
+          `${method} ${redactUrl(url)}`,
+        );
+      }
       const error =
         response.status === 401
           ? 'GitHub token expired or revoked'
-          : await this.describeApiError(response);
+          : this.describeApiErrorFromText(response.status, response.statusText, bodyText);
       debugBus.recordHttp({
         service: 'github',
         method,
@@ -517,6 +578,9 @@ class GitHubService extends EventEmitter {
       });
       if (response.status === 401) {
         await this.removeToken(workspaceId);
+      }
+      if (rl.isRateLimited) {
+        throw new GitHubRateLimitError(error, rl.retryAfterMs);
       }
       throw new Error(error);
     }
@@ -554,9 +618,19 @@ class GitHubService extends EventEmitter {
    * falling back to the status line if it isn't JSON.
    */
   private async describeApiError(response: Response): Promise<string> {
+    const bodyText = await response.text().catch(() => '');
+    return this.describeApiErrorFromText(response.status, response.statusText, bodyText);
+  }
+
+  /**
+   * The pure core of {@link describeApiError}, taking an already-read body so a
+   * caller that must inspect the body for other reasons (rate-limit detection)
+   * can read it once and reuse it — a `Response` body can only be consumed once.
+   */
+  private describeApiErrorFromText(status: number, statusText: string, bodyText: string): string {
     let detail = '';
     try {
-      const body = (await response.json()) as {
+      const body = JSON.parse(bodyText) as {
         message?: string;
         errors?: Array<{ message?: string; code?: string; field?: string }>;
       };
@@ -569,7 +643,7 @@ class GitHubService extends EventEmitter {
     } catch {
       // Non-JSON / empty body — fall back to the status line below.
     }
-    const base = `GitHub API error ${response.status} ${response.statusText}`.trim();
+    const base = `GitHub API error ${status} ${statusText}`.trim();
     return detail ? `${base}: ${detail}` : base;
   }
 
@@ -827,21 +901,25 @@ class GitHubService extends EventEmitter {
    * repo size. Paginated (search caps at 1000 results / 10 pages of 100).
    */
   async searchPullRequestNumbers(workspaceId: string, query: string): Promise<number[]> {
-    const out: number[] = [];
-    for (let page = 1; page <= 10; page++) {
-      const params = new URLSearchParams({
-        q: query,
-        per_page: '100',
-        page: String(page),
-      });
-      const res = await this.apiRequest<{
-        total_count: number;
-        items: Array<{ number: number }>;
-      }>(workspaceId, `/search/issues?${params}`);
-      out.push(...res.items.map((i) => i.number));
-      if (res.items.length < 100) break;
-    }
-    return out;
+    // Serialize per account: the `search` budget is tiny (30/min) and the most
+    // secondary-limit-prone, so searches for one account never run concurrently.
+    return this.serializeByAccount(this.accountKeyFor(workspaceId), async () => {
+      const out: number[] = [];
+      for (let page = 1; page <= 10; page++) {
+        const params = new URLSearchParams({
+          q: query,
+          per_page: '100',
+          page: String(page),
+        });
+        const res = await this.apiRequest<{
+          total_count: number;
+          items: Array<{ number: number }>;
+        }>(workspaceId, `/search/issues?${params}`);
+        out.push(...res.items.map((i) => i.number));
+        if (res.items.length < 100) break;
+      }
+      return out;
+    });
   }
 
   async getCheckRuns(
@@ -1059,7 +1137,10 @@ class GitHubService extends EventEmitter {
     // transient — retry a couple of times with backoff before giving up.
     const maxAttempts = 3;
     const gqlUrl = `${GITHUB_API_URL}/graphql`;
+    const accountKey = this.accountKeyFor(workspaceId);
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Pause behind any active secondary-rate-limit backoff before sending.
+      await githubRateGate.waitIfBlocked(accountKey);
       const startedAt = Date.now();
       let response: Response;
       try {
@@ -1127,6 +1208,16 @@ class GitHubService extends EventEmitter {
         recordGql(false, 'token expired or revoked');
         await this.removeToken(workspaceId);
         throw new Error('GitHub token expired or revoked');
+      }
+      // A secondary-rate-limit 403/429 is NOT retried inline — that would burst
+      // against the very limit we tripped. Record the backoff and bail; the next
+      // gated tick retries once the window clears.
+      const bodyText = await response.text().catch(() => '');
+      const rl = parseRateLimitResponse(response, bodyText);
+      if (rl.isRateLimited) {
+        githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql');
+        recordGql(false, 'secondary rate limit');
+        throw new GitHubRateLimitError('GitHub GraphQL rate-limited', rl.retryAfterMs);
       }
       const retryable = response.status === 502 || response.status === 503 || response.status === 504;
       recordGql(false, response.statusText);
