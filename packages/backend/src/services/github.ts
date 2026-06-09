@@ -33,6 +33,40 @@ const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 // is touched. Granting the scope removes the gate-check entirely.
 const GITHUB_SCOPES = ['repo', 'workflow', 'read:user', 'read:org'];
 
+/**
+ * Hard ceiling on any single GitHub HTTP call. Node's global `fetch` (undici)
+ * has NO default timeout, so a stalled socket leaves the awaiting caller hung
+ * forever — which once wedged the merge-queue tick: its `ticking` guard is only
+ * released in a `finally`, so an indefinitely-pending merge request froze the
+ * whole loop (no merges, no errors). Abort every request after this so a hung
+ * connection surfaces as a throw the caller can record/retry, never a hang.
+ */
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * `fetch` with a hard timeout via `AbortController`. On timeout it throws a
+ * descriptive error (not a bare `AbortError`) so callers log something useful.
+ * The `signal` is applied AFTER the spread so it always wins.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = GITHUB_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`GitHub request timed out after ${timeoutMs}ms: ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** One resource bucket from `GET /rate_limit`. `reset` is a unix epoch (s). */
 export interface GitHubRateLimitResource {
   limit: number;
@@ -444,7 +478,7 @@ class GitHubService extends EventEmitter {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await fetchWithTimeout(url, {
         ...options,
         headers: {
           Accept: 'application/vnd.github.v3+json',
@@ -1027,16 +1061,38 @@ class GitHubService extends EventEmitter {
     const gqlUrl = `${GITHUB_API_URL}/graphql`;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const startedAt = Date.now();
-      const response = await fetch(gqlUrl, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `${token.tokenType} ${token.accessToken}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'FastOwl',
-        },
-        body: JSON.stringify({ query, variables }),
-      });
+      let response: Response;
+      try {
+        response = await fetchWithTimeout(gqlUrl, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `${token.tokenType} ${token.accessToken}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'FastOwl',
+          },
+          body: JSON.stringify({ query, variables }),
+        });
+      } catch (err) {
+        // Network failure or timeout — no `response` to read a status off.
+        // Record it, then retry with backoff (same as a transient 5xx) so a
+        // single stalled socket doesn't abort the whole query.
+        const msg = err instanceof Error ? err.message : String(err);
+        debugBus.recordHttp({
+          service: 'github',
+          method: 'POST',
+          url: gqlUrl,
+          durationMs: Date.now() - startedAt,
+          ok: false,
+          workspaceId,
+          error: msg,
+        });
+        if (attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 500 * attempt));
+          continue;
+        }
+        throw err;
+      }
       const recordGql = (ok: boolean, error?: string) =>
         debugBus.recordHttp({
           service: 'github',

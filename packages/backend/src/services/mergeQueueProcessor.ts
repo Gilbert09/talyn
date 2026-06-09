@@ -143,9 +143,21 @@ function normalizeMethod(raw: unknown): MergeMethod {
  * blocked, wait for it (active-task guard), retry, and drop the PR off the
  * queue once merged — which promotes the next same-base PR to head.
  */
+/**
+ * A single tick should never run longer than this. The per-request GitHub
+ * timeout (`github.ts`) is the primary defense against a hung `await`, but the
+ * tick also awaits the DB and cloud-task dispatch — any of which could stall
+ * indefinitely. Since `ticking` is only cleared in `finally`, one stalled await
+ * would otherwise freeze the loop forever (this actually happened in prod: the
+ * queue went silent mid-drain with 15 mergeable PRs stuck). If `ticking` is
+ * still held past this, force-release it so the loop recovers next tick.
+ */
+const MAX_TICK_MS = 5 * 60_000;
+
 class MergeQueueProcessor {
   private interval: NodeJS.Timeout | null = null;
   private ticking = false;
+  private tickStartedAt = 0;
 
   init(): void {
     if (this.interval) return;
@@ -172,8 +184,18 @@ class MergeQueueProcessor {
   }
 
   private async tick(): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking) {
+      const heldMs = Date.now() - this.tickStartedAt;
+      // A tick still running past MAX_TICK_MS wedged on a stalled await — the
+      // `finally` that clears `ticking` never ran. Force-release so the loop
+      // recovers, rather than no-op'ing forever.
+      if (heldMs <= MAX_TICK_MS) return;
+      console.error(
+        `[mergeQueueProcessor] previous tick wedged for ${heldMs}ms — force-releasing the lock`
+      );
+    }
     this.ticking = true;
+    this.tickStartedAt = Date.now();
     const startedAt = Date.now();
     let headCount = 0;
     let tickError: string | undefined;

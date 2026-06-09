@@ -358,6 +358,46 @@ describe('githubService', () => {
       expect(String(stub.mock.calls[0][0])).toContain('/search/issues?q=');
     });
 
+    it('aborts a hung request after the timeout instead of hanging forever', async () => {
+      vi.useFakeTimers();
+      try {
+        // fetch never resolves on its own — it only settles when the
+        // AbortController fires, mimicking a stalled socket.
+        const stub = vi.fn((_input: FetchInput, init?: RequestInit) => {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError'))
+            );
+          });
+        });
+        vi.stubGlobal('fetch', stub);
+
+        const p = githubService.getUser('ws1');
+        p.catch(() => {}); // avoid an unhandled rejection while time advances
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(p).rejects.toThrow(/timed out after 30000ms/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('executeGraphql retries when a request throws (network error) before succeeding', async () => {
+      let calls = 0;
+      const stub = vi.fn(async () => {
+        calls++;
+        if (calls === 1) throw new Error('socket hang up');
+        return new Response(JSON.stringify({ data: { ok: true } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+      vi.stubGlobal('fetch', stub);
+
+      const data = await githubService.executeGraphql<{ ok: boolean }>('ws1', 'query{}');
+      expect(data.ok).toBe(true);
+      expect(calls).toBe(2);
+    });
+
     it('executeGraphql retries a 504 and succeeds on the next attempt', async () => {
       let calls = 0;
       const stub = vi.fn(async () => {

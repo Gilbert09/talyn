@@ -514,6 +514,48 @@ describe('mergeQueueProcessor', () => {
     expect(mergeSpy).not.toHaveBeenCalled();
   });
 
+  // A hung await once left `ticking` set forever, silently freezing the queue
+  // mid-drain (15 mergeable PRs stuck, no logs). The watchdog must force-release
+  // a tick held past MAX_TICK_MS so the loop recovers on its own.
+  describe('tick watchdog (wedge recovery)', () => {
+    it('force-releases a tick wedged past the max duration so the loop recovers', async () => {
+      vi.useFakeTimers();
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const prId = await insertPr(db, { summary: cleanSummary() });
+
+        // First tick wedges: the merge never resolves (a hung await the
+        // request-level timeout didn't catch, or a stalled DB/dispatch call).
+        // It loads the row + persists status='merging', then hangs — leaving
+        // `ticking` held.
+        mergeSpy.mockImplementationOnce(() => new Promise(() => {}));
+
+        // Fire the wedged tick but never await it — it never returns.
+        void mergeQueueProcessor.runOnce();
+        await vi.advanceTimersByTimeAsync(0); // flush up to the hung merge
+
+        // Before MAX_TICK_MS, a re-tick is a no-op: the lock is still held.
+        await mergeQueueProcessor.runOnce();
+        expect(mergeSpy).toHaveBeenCalledTimes(1);
+
+        // Past MAX_TICK_MS, the next tick force-releases and processes the
+        // still-queued PR, which merges via the default mock.
+        await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+        await mergeQueueProcessor.runOnce();
+
+        expect(mergeSpy).toHaveBeenCalledTimes(2);
+        expect(errSpy).toHaveBeenCalledWith(
+          expect.stringMatching(/previous tick wedged for .* force-releasing/)
+        );
+        const pr = await getPr(db, prId);
+        expect(pr.state).toBe('merged');
+        expect(pr.mergeQueued).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // The "#N" badge counts only stay correct live if sibling positions are
   // rebroadcast when the group's membership changes.
   describe('live position broadcasts', () => {

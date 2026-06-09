@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 50 — Merge queue wedged in prod: a hung GitHub request froze the tick loop
+
+Reported: prod merge queue had 15 mergeable `PostHog/posthog.com` PRs and nothing was merging. Pulled Railway deploy logs + queried the prod DB (Supabase). The queue had drained the group fine from 10:54–11:08, then went **dead silent** — 15 PRs frozen at the pristine `{status:"waiting", attempts:0}` the toggle route writes (no `lastError`, no `fix_task`), all `CLEAN`/`MERGEABLE`, freshly polled by the independent `prMonitor` loop. No `[mergeQueueProcessor]` log lines (log search verified reliable).
+
+**Root cause.** `MergeQueueProcessor.tick()` sets `this.ticking = true` and only clears it in `finally`; every tick first does `if (this.ticking) return;`. Every awaited GitHub call in `processHead` went through `github.ts` `apiRequest`/`executeGraphql`, which used Node's global `fetch` (undici) with **no timeout / AbortController** — so a stalled socket (one merge request ~11:08) hung indefinitely, leaving `ticking === true` forever. Every subsequent 10s tick no-op'd: no merges, no fix dispatches, no errors. Other pollers (`prMonitor`) kept running, which is why the rows looked healthy but never merged.
+
+**Fix (two layers).** (1) `fetchWithTimeout` helper in `github.ts` wraps every GitHub `fetch` in a 30s `AbortController` timeout, surfacing a descriptive throw instead of a hang; `apiRequest` rethrows it (already records to debugBus), `executeGraphql` records + retries it like a transient 5xx. (2) A watchdog in `tick()`: if `ticking` is still held past `MAX_TICK_MS` (5 min) the next tick force-releases the lock (logs `previous tick wedged for …`) so the loop self-recovers even if a non-HTTP await (DB / cloud-dispatch) stalls. New tests: request-timeout abort + graphql network-error retry (`githubService.test.ts`), wedge-recovery (`mergeQueueProcessor.test.ts`). Backend green (114 in the touched suites), tsc + lint clean.
+
+Note: a redeploy of `fastowl-backend` is what clears the *current* in-memory wedge (a fresh process starts with `ticking=false` and drains the 15); the code fix prevents recurrence.
+
 ## Session 49 — Fix-prompt: guard against base-branch files leaking into the PR
 
 Reported real-world failure: when a merge-queue / auto-keep-mergeable cloud fix run merges the base branch in to clear conflicts, base-only file changes occasionally leaked into the PR's diff. The "make this PR mergeable" prompt (`buildPostHogPrompt` in `packages/shared/src/prMergeable.ts`) already told the agent to merge (not rebase) the base in and do a one-line stray-change check; strengthened that into an explicit before/after file-set guard: capture `git diff --name-only origin/<base>...HEAD` BEFORE the merge and again AFTER resolving conflicts, require the two sets to be identical, per-file review the remaining hunks, and `git merge --abort` + redo (taking the base side for untouched files) on any leak — never push until the sets match. New `buildPostHogPrompt.test.ts` locks the guard's intent (before/after file-set check, base branch threaded into the commands, no-force-push/no-rebase rules retained) without over-asserting wording. Backend green (488).
