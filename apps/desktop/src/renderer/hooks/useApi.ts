@@ -497,14 +497,6 @@ export function useTaskActions() {
     [updateTask]
   );
 
-  const sendTaskInput = useCallback(async (taskId: string, input: string) => {
-    await api.tasks.sendInput(taskId, input);
-  }, []);
-
-  const continueTask = useCallback(async (taskId: string, prompt: string) => {
-    await api.tasks.continue(taskId, prompt);
-  }, []);
-
   const stopTask = useCallback(
     async (taskId: string) => {
       const task = await api.tasks.stop(taskId);
@@ -555,8 +547,6 @@ export function useTaskActions() {
     cancelTask,
     retryTask,
     startTask,
-    sendTaskInput,
-    continueTask,
     stopTask,
     readyForReview,
     approveTask,

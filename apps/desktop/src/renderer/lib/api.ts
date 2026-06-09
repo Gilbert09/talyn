@@ -143,10 +143,6 @@ export const tasks = {
   delete: (id: string) => request<void>('DELETE', `/tasks/${id}`),
   // Task execution control
   start: (id: string) => request<Task>('POST', `/tasks/${id}/start`),
-  sendInput: (id: string, input: string) =>
-    request<void>('POST', `/tasks/${id}/input`, { input }),
-  continue: (id: string, prompt: string) =>
-    request<Task>('POST', `/tasks/${id}/continue`, { prompt }),
   stop: (id: string) => request<Task>('POST', `/tasks/${id}/stop`),
   readyForReview: (id: string) =>
     request<Task>('POST', `/tasks/${id}/ready-for-review`),
@@ -215,13 +211,6 @@ export const tasks = {
   // Kick a PostHog Code (cloud) task's log stream/backfill on demand.
   // Transcript events arrive over the WS, so the response is just ok.
   refreshLogs: (id: string) => request<void>('POST', `/tasks/${id}/refresh-logs`),
-  // Send a follow-up message to a PostHog Code (cloud) task — resumes a
-  // finished run or injects into a live one. Transcript updates arrive
-  // over the WS.
-  sendCloudMessage: (
-    id: string,
-    body: { message: string; model?: string; reasoningEffort?: string }
-  ) => request<void>('POST', `/tasks/${id}/message`, body),
 };
 
 // GitHub Integration

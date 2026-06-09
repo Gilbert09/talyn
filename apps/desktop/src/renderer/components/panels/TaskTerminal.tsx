@@ -13,7 +13,6 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
-import { TaskComposer, EFFORTS_BY_MODEL, DEFAULT_MODEL } from './TaskComposer';
 import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
@@ -47,33 +46,16 @@ const attentionColors: Record<AgentAttention, string> = {
 };
 
 export function TaskTerminal({ task }: TaskTerminalProps) {
-  const { sendTaskInput, continueTask, stopTask, readyForReview } = useTaskActions();
+  const { stopTask, readyForReview } = useTaskActions();
   const environments = useWorkspaceStore((s) => s.environments);
-  const updateTask = useWorkspaceStore((s) => s.updateTask);
-  const [inputValue, setInputValue] = useState('');
   const [isStopping, setIsStopping] = useState(false);
   const [isMarkingReady, setIsMarkingReady] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const cloudMeta = task.metadata as { model?: string; reasoningEffort?: string } | undefined;
-  const [model, setModel] = useState(cloudMeta?.model || DEFAULT_MODEL);
-  const [effort, setEffort] = useState(cloudMeta?.reasoningEffort || 'high');
 
   const agentStatus = task.agentStatus || 'working';
   const agentAttention = task.agentAttention || 'none';
   const assignedEnv = environments.find((e) => e.id === task.assignedEnvironmentId);
   const envName = assignedEnv?.name;
   const isCloudTask = assignedEnv?.type === 'posthog_code';
-  // Tasks whose child already exited (awaiting_review / completed /
-  // failed) can still be resumed if we captured a `claudeSessionId`
-  // on their metadata. The input bar routes Send to /continue in that
-  // case, which spawns a fresh CLI child with `--resume <id>` + the
-  // prompt.
-  const claudeSessionId = (task.metadata as { claudeSessionId?: string } | undefined)
-    ?.claudeSessionId;
-  const isResumable =
-    task.status !== 'in_progress' &&
-    task.status !== 'cancelled' &&
-    typeof claudeSessionId === 'string';
 
   const StatusIcon = statusConfig[agentStatus].icon;
 
@@ -104,56 +86,6 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
     };
   }, [task.id, isCloudTask]);
 
-  const handleSendInput = useCallback(async () => {
-    const trimmed = inputValue.trim();
-    if (!trimmed || isSending) return;
-    setIsSending(true);
-    try {
-      if (isCloudTask) {
-        // Cloud task — resume a finished run or inject into a live one.
-        await api.tasks.sendCloudMessage(task.id, {
-          message: trimmed,
-          model,
-          reasoningEffort: effort,
-        });
-      } else if (task.status === 'in_progress') {
-        await sendTaskInput(task.id, inputValue);
-      } else if (isResumable) {
-        await continueTask(task.id, inputValue);
-      } else {
-        return;
-      }
-      setInputValue('');
-    } catch (err) {
-      console.error('Failed to send input:', err);
-      // Local state may be stale — backend might have transitioned
-      // the task without a WS event reaching us (redeploy, dropped
-      // socket, etc). Refetch so the input bar + buttons reflect
-      // reality on the next render.
-      api.tasks.get(task.id).then((fresh) => updateTask(task.id, fresh)).catch(() => {});
-    } finally {
-      setIsSending(false);
-    }
-  }, [
-    task.id,
-    task.status,
-    inputValue,
-    isSending,
-    isCloudTask,
-    model,
-    effort,
-    sendTaskInput,
-    continueTask,
-    isResumable,
-    updateTask,
-  ]);
-
-  // Keep effort valid when the model changes (some models offer fewer levels).
-  const handleModelChange = useCallback((next: string) => {
-    setModel(next);
-    setEffort((cur) => (EFFORTS_BY_MODEL[next]?.includes(cur) ? cur : 'high'));
-  }, []);
-
   const handleStopTask = useCallback(async () => {
     setIsStopping(true);
     try {
@@ -175,35 +107,6 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
       setIsMarkingReady(false);
     }
   }, [task.id, readyForReview]);
-
-  // Composer enable/placeholder policy. Cloud tasks accept follow-ups in
-  // any state once a run exists (resume finished runs / inject into live
-  // ones); local tasks only accept input while in_progress or when an
-  // ended session is resumable.
-  let composerDisabled: boolean;
-  let composerPlaceholder: string;
-  if (isCloudTask) {
-    const started = task.status !== 'pending' && task.status !== 'queued';
-    composerDisabled = isSending || !started;
-    composerPlaceholder = !started
-      ? 'Task hasn’t started yet…'
-      : task.status === 'in_progress'
-        ? 'Message the running agent…'
-        : 'Send a follow-up to continue this task…';
-  } else {
-    const ended = task.status !== 'in_progress';
-    const busy = !ended && (agentStatus === 'working' || agentStatus === 'tool_use');
-    composerDisabled = isSending || busy || (ended && !isResumable);
-    composerPlaceholder = ended
-      ? isResumable
-        ? 'Continue the conversation…'
-        : `Task is ${task.status} — no active session.`
-      : busy
-        ? 'Claude is working…'
-        : agentStatus === 'awaiting_input'
-          ? 'Type your response…'
-          : 'Send a message to Claude…';
-  }
 
   return (
     <div
@@ -283,7 +186,8 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
         </div>
       </div>
 
-      {/* Terminal Content */}
+      {/* Terminal Content — read-only transcript. Users no longer message
+          cloud agents directly (cloud-only PR-management direction). */}
       <div className="flex-1 bg-[#1e1e1e] overflow-hidden">
         <AgentConversation
           taskId={task.id}
@@ -293,24 +197,6 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           interactive
         />
       </div>
-
-      {/* Composer — message the agent (live), continue a finished local
-          session, or send a follow-up to a PostHog Code cloud task. */}
-      <TaskComposer
-        value={inputValue}
-        onChange={setInputValue}
-        onSend={handleSendInput}
-        sending={isSending}
-        disabled={composerDisabled}
-        placeholder={composerPlaceholder}
-        attention={!isCloudTask && agentStatus === 'awaiting_input'}
-        autoFocus={!isCloudTask && agentStatus === 'awaiting_input'}
-        showModelControls={isCloudTask}
-        model={model}
-        onModelChange={handleModelChange}
-        effort={effort}
-        onEffortChange={setEffort}
-      />
     </div>
   );
 }

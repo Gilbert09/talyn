@@ -24,7 +24,7 @@ import { Textarea } from '../ui/textarea';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
 import { isAgentTask, type TaskType, type TaskPriority } from '@fastowl/shared';
-import { MODEL_OPTIONS, DEFAULT_MODEL } from '../panels/TaskComposer';
+import { MODEL_OPTIONS, DEFAULT_MODEL } from '../../lib/models';
 
 interface CreateTaskModalProps {
   open: boolean;
