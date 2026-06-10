@@ -5,6 +5,7 @@ import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
 import { api, type GitHubRepo } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { useWorkspaceActions } from '../../../hooks/useApi';
 import {
   REPO_CACHE_TTL_MS,
   readRepoCache,
@@ -26,6 +27,7 @@ interface WatchReposStepProps {
  */
 export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const { repositories, setRepositories } = useWorkspaceStore();
+  const { refreshWorkspaces } = useWorkspaceActions();
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
@@ -63,6 +65,9 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
     try {
       const watched = await api.repositories.add(workspaceId, repo.owner.login, repo.name);
       setRepositories([...repositories, watched]);
+      // Keep the workspace's embedded repo list (the sidebar's "N repos"
+      // count reads it) in sync — otherwise it stays at its pre-onboarding 0.
+      void refreshWorkspaces();
     } finally {
       setMutating(false);
     }
@@ -73,6 +78,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
     try {
       await api.repositories.remove(id);
       setRepositories(repositories.filter((r) => r.id !== id));
+      void refreshWorkspaces();
     } finally {
       setMutating(false);
     }
