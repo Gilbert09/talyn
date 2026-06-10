@@ -9,6 +9,7 @@ Dropped the native macOS title bar (`titleBarStyle: 'hiddenInset'` on the Browse
 - Preload exposes `platform`; new `isMacDesktop` helper in `lib/utils.ts` + `.app-region-drag`/`.app-region-no-drag` CSS utilities in `App.css`.
 - **MainLayout**: the Sidebar reserves an in-flow 36px drag strip above the workspace switcher (the traffic lights sit in it; double-click-to-zoom works natively). `SystemStatusBanner` moved from above-the-sidebar into the main column so the sidebar always reaches the window top and the banner can't sit under the lights.
 - **Chrome-less screens** (boot spinner, login, onboarding, backend-unreachable) render a fixed full-width `MacDragOverlay` strip instead — safe there because their content is centered; MainLayout deliberately doesn't use it since it would swallow clicks on panel-header controls near the top edge.
+- **Follow-up**: every page's top header bar (GitHubPageShell, Task Queue list + both task-detail headers, Settings, Debug) is itself an `app-region-drag` handle, with buttons/selects/PR controls opting out via `app-region-no-drag` — so the area around the page title drags the window everywhere. Sidebar strip tightened 36px → 24px so the workspace picker hugs the traffic lights.
 
 ## Session 53 — Analytics audit + instrumentation: data-quality fixes, business events, server-side task lifecycle
 
