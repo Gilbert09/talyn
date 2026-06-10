@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { api, GitHubRepo } from '../../lib/api';
+import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -1079,6 +1080,27 @@ function AppearanceSettings() {
 
 function DeveloperSettings() {
   const { debugMode, setDebugMode } = useWorkspaceStore();
+  const [wipeArmed, setWipeArmed] = useState(false);
+  const [wiping, setWiping] = useState(false);
+
+  async function handleWipe() {
+    setWiping(true);
+    try {
+      await api.users.wipeMe();
+    } catch {
+      // The wipe severs our own auth mid-flight, so a late failure here is
+      // expected — proceed with the local reset regardless.
+    }
+    try {
+      localStorage.clear();
+    } catch {
+      // Privacy mode — nothing persisted to clear anyway.
+    }
+    if (isSupabaseConfigured()) {
+      await getSupabase().auth.signOut({ scope: 'local' });
+    }
+    window.location.reload();
+  }
 
   return (
     <div className="space-y-6">
@@ -1119,6 +1141,55 @@ function DeveloperSettings() {
               )}
             />
           </button>
+        </div>
+      </Card>
+
+      <Card className="p-4 border-destructive/50">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h4 className="font-medium flex items-center gap-2 text-destructive">
+              <Trash2 className="w-4 h-4" />
+              Wipe account &amp; start fresh
+            </h4>
+            <p className="text-sm text-muted-foreground mt-1">
+              Deletes your user profile, every workspace it owns (integrations,
+              watched repos, PRs, tasks), and this app's local storage, then
+              signs you out. The next sign-in runs onboarding from scratch.
+            </p>
+          </div>
+          {wipeArmed ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setWipeArmed(false)}
+                disabled={wiping}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleWipe}
+                disabled={wiping}
+              >
+                {wiping ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  'Yes, wipe everything'
+                )}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="shrink-0"
+              onClick={() => setWipeArmed(true)}
+            >
+              Wipe…
+            </Button>
+          )}
         </div>
       </Card>
     </div>

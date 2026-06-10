@@ -891,6 +891,16 @@ export async function fetchLatestDaemonVersion(): Promise<string | null> {
   }
 }
 
+// Account-level self-service.
+export const users = {
+  /**
+   * Wipe the calling account: every owned workspace (and everything under
+   * it), the user row, and the auth user. Developer tool — the caller is
+   * expected to clear local state and reload afterwards.
+   */
+  wipeMe: () => request<void>('DELETE', '/users/me'),
+};
+
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
@@ -910,5 +920,6 @@ export const api = {
   pullRequests,
   backlog,
   debug,
+  users,
   ws: wsClient,
 };

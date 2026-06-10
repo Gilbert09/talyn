@@ -8,6 +8,7 @@ import { cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
+import { userRoutes } from './users.js';
 import { requireAuth } from '../middleware/auth.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 
@@ -28,6 +29,11 @@ export function setupRoutes(app: Express): void {
   // middleware so it stays a cross-tenant operator surface (and so it never
   // runs inside an owner-scoped transaction).
   app.use(`${api}/debug`, debugRoutes());
+
+  // Account-level self-service (wipe). Pre-ownerScope: deletes the caller's
+  // own users row, which RLS blocks from the authenticated role; handlers
+  // hard-scope every query to req.user.id instead. See routes/users.ts.
+  app.use(`${api}/users`, userRoutes());
 
   // Owner-scoped DB enforcement for the data routers below: runs each request
   // inside a transaction that drops to the `authenticated` role so Postgres RLS
