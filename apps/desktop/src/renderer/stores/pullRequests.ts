@@ -67,7 +67,10 @@ interface PullRequestState {
 
 export const usePullRequestStore = create<PullRequestState>((set, get) => ({
   rows: [],
-  loading: false,
+  // Starts true so the pages show their loading state on first paint, before
+  // usePullRequestSync's initial-fetch effect has even run (effects fire after
+  // render — starting false would flash the empty state for a frame).
+  loading: true,
   error: null,
   connected: null,
   viewerLogin: null,

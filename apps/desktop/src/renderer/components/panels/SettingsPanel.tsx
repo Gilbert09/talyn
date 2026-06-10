@@ -18,7 +18,6 @@ import {
   Moon,
   Monitor,
   User,
-  Copy,
   LogOut,
   Pencil,
   Bug,
@@ -42,7 +41,6 @@ import {
   setMergeBlockedNotifyEnabled,
 } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
-import { getSupabase } from '../../lib/supabase';
 import {
   REPO_CACHE_TTL_MS,
   readRepoCache,
@@ -1242,35 +1240,6 @@ function AboutSettings() {
 
 function AccountSettings() {
   const { user, signOut } = useAuth();
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState<string | null>(null);
-  const [tokenExpiry, setTokenExpiry] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Surface token expiry so users know when the CLI copy needs refreshing.
-    getSupabase().auth.getSession().then(({ data }) => {
-      if (data.session?.expires_at) {
-        setTokenExpiry(new Date(data.session.expires_at * 1000).toLocaleString());
-      }
-    });
-  }, []);
-
-  async function copyCliToken() {
-    setCopyError(null);
-    try {
-      const { data } = await getSupabase().auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) {
-        setCopyError('No active session');
-        return;
-      }
-      await navigator.clipboard.writeText(token);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      setCopyError(err instanceof Error ? err.message : 'copy failed');
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -1284,29 +1253,6 @@ function AccountSettings() {
           <Button variant="outline" onClick={signOut} className="gap-2">
             <LogOut className="w-4 h-4" /> Sign out
           </Button>
-        </Card>
-      </div>
-
-      <div>
-        <h3 className="text-lg font-semibold mb-2">CLI / MCP token</h3>
-        <p className="text-sm text-muted-foreground mb-3">
-          Copy your current access token so the <code>fastowl</code> CLI and the MCP server can
-          authenticate. Tokens rotate hourly — if a CLI request starts returning 401, copy again.
-        </p>
-        <Card className="p-4 space-y-3">
-          <Button onClick={copyCliToken} className="gap-2">
-            <Copy className="w-4 h-4" />
-            {copied ? 'Copied!' : 'Copy CLI token'}
-          </Button>
-          {copyError && <p className="text-sm text-destructive">{copyError}</p>}
-          {tokenExpiry && (
-            <p className="text-xs text-muted-foreground">Current token expires: {tokenExpiry}</p>
-          )}
-          <div className="text-xs text-muted-foreground space-y-1">
-            <p>After copying, paste into:</p>
-            <pre className="bg-muted p-2 rounded text-xs overflow-x-auto">fastowl token set</pre>
-            <p>or set <code>FASTOWL_AUTH_TOKEN</code> for MCP / CI use.</p>
-          </div>
         </Card>
       </div>
     </div>

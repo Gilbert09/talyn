@@ -55,6 +55,9 @@ export function usePullRequestSync(): void {
   useEffect(() => {
     if (!currentWorkspaceId) {
       setRows([]);
+      // No workspace means no fetch is coming — clear the initial-true
+      // loading flag so the pages settle on their empty state.
+      setLoading(false);
       return;
     }
     let cancelled = false;

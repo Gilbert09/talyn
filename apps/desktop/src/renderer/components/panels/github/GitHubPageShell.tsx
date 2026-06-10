@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest } from 'lucide-react';
+import { Github, Settings, Search, RefreshCw, Copy, X, GitPullRequest, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { ScrollArea } from '../../ui/scroll-area';
@@ -164,6 +164,14 @@ export function GitHubPageShell({
           row stays visible and clicking another PR switches the open panel. */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 overflow-hidden">
+          {/* First load (no rows yet): a centered spinner instead of flashing
+              the empty state while the initial PR fetch is in flight. */}
+          {loading && rows.length === 0 && !error ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <p className="text-sm">Loading pull requests…</p>
+            </div>
+          ) : (
           <ScrollArea className="h-full">
             {error && (
               <div className="m-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
@@ -194,6 +202,7 @@ export function GitHubPageShell({
             )}
             {rows.length > 0 && children({ selectedId, onSelect: setSelectedId })}
           </ScrollArea>
+          )}
         </div>
 
         <PRDetailSheet
