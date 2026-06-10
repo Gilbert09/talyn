@@ -11,6 +11,8 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:desktop\"",
     "dev:desktop": "npm run start -w @fastowl/desktop",
     "dev:backend": "npm run dev -w @fastowl/backend",
+    "dev:db": "supabase start -x edge-runtime,functions,imgproxy,storage,realtime,vector,analytics,inbucket",
+    "dev:db:stop": "supabase stop",
     "build": "npm run build -w @fastowl/shared && npm run build -w @fastowl/backend && npm run build -w @fastowl/desktop",
     "build:desktop": "npm run build -w @fastowl/desktop",
     "build:backend": "npm run build -w @fastowl/backend",
@@ -29,6 +31,7 @@
     "concurrently": "^9.1.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
+    "supabase": "^2.105.0",
     "typescript": "^5.8.2"
   },
   "engines": {

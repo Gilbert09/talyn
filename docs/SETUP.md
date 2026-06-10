@@ -11,6 +11,48 @@ Legend:
 
 ## ⚡ Required now
 
+### 0. Local dev stack — Supabase local + dev-only GitHub OAuth apps
+
+> **Why this exists (June 2026):** local dev used to point at the **prod** Supabase
+> DB and the **prod** GitHub OAuth app. That cross-talk silently revoked prod's
+> GitHub token: every reconnect (dev or prod) minted a new token against the same
+> OAuth app until GitHub's 10-tokens-per-user/app/scope cap revoked the oldest,
+> and any backend still holding the revoked token in memory would 401 and delete
+> the shared `integrations` row. Dev and prod must never share a DB, an OAuth
+> app, or a `FASTOWL_TOKEN_KEY`.
+
+Local dev runs the full stack on your machine via the Supabase CLI (Docker required):
+
+```bash
+npm run dev:db        # supabase start (db + auth + api; heavyweight services excluded)
+npm run dev           # backend (migrations auto-apply on boot) + desktop
+npm run dev:db:stop   # when you're done
+```
+
+Local endpoints (stable across restarts):
+- API / auth: `http://127.0.0.1:54321`
+- Postgres: `postgresql://postgres:postgres@127.0.0.1:54322/postgres`
+- Studio: `http://127.0.0.1:54323`
+- Keys: `npx supabase status` prints the local anon + service_role keys
+
+Two **dev-only** classic GitHub OAuth apps back this (create once in the browser —
+GitHub has no API for it):
+
+1. **`FastOwl Login (Local Dev)`** — desktop login via local Supabase auth.
+   - Homepage: `http://127.0.0.1:54321`
+   - Callback: `http://127.0.0.1:54321/auth/v1/callback`
+   - Client id + secret go in `supabase/.env` (gitignored) as
+     `SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID` / `…_SECRET`; the provider is wired
+     up in `supabase/config.toml`. The desktop deep link `fastowl://auth-callback`
+     is already in `additional_redirect_urls`.
+2. **`FastOwl (Local Dev)`** — the workspace GitHub integration (PR monitoring etc.).
+   - Homepage: `http://localhost:4747`
+   - Callback: `http://localhost:4747/api/v1/github/callback`
+   - Client id + secret go in `packages/backend/.env` as `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`.
+
+`packages/backend/.env` and `apps/desktop/.env` must point at the local stack —
+never at Railway/prod values (those live only in Railway service variables).
+
 ### 1. Anthropic API key
 
 Used by `packages/backend/src/services/ai.ts` for auto-generating task titles/descriptions from prompts.

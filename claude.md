@@ -107,6 +107,9 @@ fastowl/
 │   └── shared/                   # Shared TS types
 │   # (packages/daemon removed in the cloud-only refactor)
 ├── docs/                         # ARCHITECTURE, ROADMAP, SESSIONS, CONTINUOUS_BUILD*, SETUP, etc.
+├── supabase/                     # Local dev Supabase stack: `npm run dev:db` (config.toml +
+│                                 # gitignored .env). Local dev must NEVER point at the prod
+│                                 # DB / GitHub OAuth app — see docs/SETUP.md §0 for the why.
 ├── scripts/
 │   └── bootstrap-vm.sh           # One-command SSH VM install
 ├── CLAUDE.md                     # This file

@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 55 — Prod GitHub token mystery solved; local dev gets its own Supabase stack
+
+Diagnosed why the prod `integrations` row (GitHub token) kept vanishing, forcing reconnects. The chain: (1) any single GitHub 401 hard-deletes the row — `githubService.removeToken()` is called from `apiRequest`, `listNotifications`, and `executeGraphql`; (2) local dev shared *everything* with prod — same Supabase DB, same `FASTOWL_TOKEN_KEY`, same classic GitHub OAuth app — so a laptop `tsx watch` backend polled GitHub against the shared row; (3) connects never revoke old tokens at GitHub, so they pile up toward GitHub's **10-tokens-per-user/app/scope cap**, after which every reconnect silently revokes the oldest token — whichever running backend still cached it in memory then 401s and deletes the shared row (wiping the *new* token), forcing another reconnect → another minted token → self-sustaining loop. Confirmed in Railway logs: single GraphQL 401 at 15:05:57Z, next tick every repo "not connected".
+
+**Fix landed this session — environment separation:**
+- `supabase init` at repo root + local stack via `npm run dev:db` / `dev:db:stop` (excludes storage/realtime/functions/etc; db on `:54322`, API/auth on `:54321`, Studio on `:54323`). `supabase` CLI added as root devDependency (brew blocked on outdated Xcode CLT).
+- `supabase/config.toml`: GitHub login provider enabled via `env()` from gitignored `supabase/.env`; `fastowl://auth-callback` added to `additional_redirect_urls`.
+- `packages/backend/.env` + `apps/desktop/.env` rewired to the local stack with a freshly generated dev-only `FASTOWL_TOKEN_KEY`; prod credentials removed from the laptop entirely (they live only in Railway variables now). Backend boots clean against local: all 24 migrations apply on startup, 8 tables created.
+- `docs/SETUP.md` §0 documents the new local-dev flow + the two **dev-only** OAuth apps Tom still needs to create in the browser (login app → callback `http://127.0.0.1:54321/auth/v1/callback`; integration app → callback `http://localhost:4747/api/v1/github/callback`).
+
+**Still open (backend hardening, not started):** don't hard-delete the integration on a single 401 — re-read the row first (another process may have rotated the token), mark `invalid` instead of deleting, and revoke the old token at GitHub (`DELETE /applications/{client_id}/token`) on disconnect/reconnect so tokens stop accumulating toward the cap.
+
 ## Session 54 — Frameless macOS window: hidden title bar, inset traffic lights
 
 Dropped the native macOS title bar (`titleBarStyle: 'hiddenInset'` on the BrowserWindow, darwin-only; other platforms keep their frame) so the close/minimize/zoom buttons float flush over the app UI. The renderer reserves drag regions for them:
