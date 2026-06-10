@@ -122,9 +122,9 @@ export function QueuePanel() {
     <div className="flex h-full">
       {/* Task List */}
       <div className="w-80 border-r flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b">
+        <div className="app-region-drag flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Task Queue</h2>
-          <Button size="sm" data-attr="task-add" onClick={() => setIsCreateModalOpen(true)}>
+          <Button size="sm" data-attr="task-add" className="app-region-no-drag" onClick={() => setIsCreateModalOpen(true)}>
             <Plus className="w-4 h-4 mr-1" />
             Add
           </Button>
@@ -475,7 +475,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     return (
       <>
         {/* Header */}
-        <div className="p-4 border-b">
+        <div className="app-region-drag p-4 border-b">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
@@ -522,7 +522,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               We do surface the linked-PR status pill so a PR-fix run shows
               the PR's CI/merge state while it works.
             */}
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="app-region-no-drag flex items-center gap-2 shrink-0">
               <TaskPRControls task={task} onOpen={setPRSheetId} />
             </div>
           </div>
@@ -546,7 +546,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   return (
     <>
       {/* Header */}
-      <div className="p-4 border-b">
+      <div className="app-region-drag p-4 border-b">
         <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
@@ -575,7 +575,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
+          <div className="app-region-no-drag flex items-center gap-2 flex-wrap shrink-0">
             {canStart && (
               <Button size="sm" data-attr="task-start-now" onClick={handleStartTask} disabled={actionInFlight}>
                 {isLoadingFor('start') ? (

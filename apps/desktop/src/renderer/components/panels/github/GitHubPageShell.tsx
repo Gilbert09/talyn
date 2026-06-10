@@ -99,12 +99,14 @@ export function GitHubPageShell({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b p-4">
+      {/* The header doubles as the frameless window's drag region on macOS;
+          interactive controls opt out with app-region-no-drag. */}
+      <header className="app-region-drag flex items-center justify-between border-b p-4">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           {icon ?? <Github className="h-5 w-5" />}
           {title}
         </h2>
-        <div className="flex items-center gap-1">
+        <div className="app-region-no-drag flex items-center gap-1">
           <Button
             size="sm"
             variant="ghost"

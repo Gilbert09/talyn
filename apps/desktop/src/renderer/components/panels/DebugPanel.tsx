@@ -373,7 +373,7 @@ export function DebugPanel() {
   return (
     <div className="flex h-full flex-col bg-[#0f0f10] text-zinc-100">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+      <div className="app-region-drag flex items-center justify-between border-b border-zinc-800 px-4 py-3">
         <div className="flex items-center gap-2">
           <Bug className="h-5 w-5 text-zinc-400" />
           <h2 className="text-base font-semibold">Debug</h2>
@@ -392,10 +392,10 @@ export function DebugPanel() {
               </span>
             }
           >
-            <Info className="h-3.5 w-3.5 text-zinc-600 hover:text-zinc-400" />
+            <Info className="app-region-no-drag h-3.5 w-3.5 text-zinc-600 hover:text-zinc-400" />
           </Tip>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="app-region-no-drag flex items-center gap-2">
           <select
             value={ownerFilter}
             onChange={(e) => setOwnerFilter(e.target.value)}

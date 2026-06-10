@@ -73,7 +73,7 @@ export function SettingsPanel() {
     <div className="flex h-full">
       {/* Settings Navigation */}
       <div className="w-56 border-r flex flex-col">
-        <div className="p-4 border-b">
+        <div className="app-region-drag p-4 border-b">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Settings className="w-5 h-5" />
             Settings

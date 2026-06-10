@@ -106,9 +106,10 @@ export function Sidebar({ className }: SidebarProps) {
       )}
     >
       {/* macOS frameless window: the inset traffic lights float over this
-          strip, which doubles as the window's drag handle. */}
+          strip, which doubles as the window's drag handle. Kept just tall
+          enough to clear the lights so the workspace picker hugs them. */}
       {isMacDesktop && (
-        <div aria-hidden className="app-region-drag h-9 shrink-0" />
+        <div aria-hidden className="app-region-drag h-6 shrink-0" />
       )}
 
       {/* Header / Workspace Selector */}
