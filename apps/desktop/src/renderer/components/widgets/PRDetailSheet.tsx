@@ -39,6 +39,7 @@ import {
   type PRReviewThread,
 } from '../../lib/api';
 import { prime } from '../../lib/prSummaryCache';
+import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
 import { toast } from '../../stores/toast';
@@ -125,6 +126,25 @@ export function PRDetailSheet({
       cancelled = true;
     };
   }, [pullRequestId]);
+
+  // Reconnect catch-up: this panel keeps itself fresh only through its own
+  // `pull_request:updated` subscription below, so updates broadcast while the
+  // socket was down are lost — and the store's reconnect re-list never flows
+  // back into our local `data`. Refetch the whole detail (summary + fresh
+  // timeline/files) on a genuine reconnect.
+  useOnReconnect(() => {
+    if (!pullRequestId) return;
+    api.pullRequests
+      .get(pullRequestId)
+      .then((res) => {
+        // Guard against the user having switched PRs while the fetch ran.
+        setData((prev) => (prev && prev.row.id === res.row.id ? res : prev));
+        prime(res.row.id, { summary: res.row.summary, state: res.row.state });
+      })
+      .catch(() => {
+        // Best-effort — the next monitor broadcast will patch the summary.
+      });
+  });
 
   // Subscribe to pull_request:updated to keep the visible PR fresh
   // when the monitor refetches in the background.

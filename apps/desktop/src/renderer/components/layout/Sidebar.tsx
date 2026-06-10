@@ -22,6 +22,7 @@ import { api, type CloudProviderInfo } from '../../lib/api';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
+import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useAuth } from '../auth/AuthProvider';
 
 interface SidebarProps {
@@ -395,6 +396,9 @@ function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
       offStatus();
     };
   }, [refresh]);
+
+  // Those env events are fire-and-forget — re-check after an outage too.
+  useOnReconnect(refresh);
 
   if (providers.length === 0) return null;
 

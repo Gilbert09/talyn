@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { api, wsClient } from '../lib/api';
+import { useOnReconnect } from './useOnReconnect';
 import { useWorkspaceStore } from '../stores/workspace';
 import type {
   AgentEvent,
@@ -114,6 +115,21 @@ async function reconcileTasksFromServer(): Promise<void> {
 }
 
 /**
+ * Refetch the environment list on reconnect. Environments only change via
+ * `environment:created` / `environment:status` events (e.g. a provider env
+ * auto-provisioned while we were offline), so missed broadcasts otherwise
+ * leave the list stale until a full reload.
+ */
+async function reconcileEnvironmentsFromServer(): Promise<void> {
+  try {
+    const environments = await api.environments.list();
+    useWorkspaceStore.getState().setEnvironments(environments);
+  } catch (err) {
+    console.error('Failed to reconcile environments after reconnect:', err);
+  }
+}
+
+/**
  * Hook to initialize API connection and real-time updates
  */
 export function useApiConnection() {
@@ -144,28 +160,18 @@ export function useApiConnection() {
     }
   }, [currentWorkspaceId]);
 
-  // Tracks whether the socket has dropped at least once, so we only refetch on
-  // a genuine *re*connect — the first connect is covered by useInitialDataLoad.
-  const sawDisconnectRef = useRef(false);
+  // Reconnect catch-up: WS broadcasts that fired while we were offline are
+  // gone (fire-and-forget to open sockets only). On reconnect, refetch the
+  // task + environment lists to reconcile any changes we missed. The first
+  // connect is covered by useInitialDataLoad.
+  useOnReconnect(() => {
+    void reconcileTasksFromServer();
+    void reconcileEnvironmentsFromServer();
+  });
 
   // Handle WebSocket events
   useEffect(() => {
     const unsubscribers: (() => void)[] = [];
-
-    // Reconnect catch-up: WS broadcasts that fired while we were offline are
-    // gone (fire-and-forget to open sockets only). On reconnect, refetch the
-    // task list to reconcile any status changes we missed.
-    unsubscribers.push(
-      wsClient.on<{ connected?: boolean }>('connection:status', (payload) => {
-        if (payload?.connected === false) {
-          sawDisconnectRef.current = true;
-          return;
-        }
-        if (payload?.connected && sawDisconnectRef.current) {
-          void reconcileTasksFromServer();
-        }
-      })
-    );
 
     // Agent status updates
     unsubscribers.push(

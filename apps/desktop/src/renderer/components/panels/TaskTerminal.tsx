@@ -14,6 +14,7 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
 import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
+import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
 import type { Task, AgentStatus, AgentAttention } from '@fastowl/shared';
@@ -61,30 +62,34 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
 
   // PostHog Code tasks run in the cloud and their transcript is NOT included
   // in the task-list payload, so the store opens them with an empty
-  // transcript. On open we (1) kick the backend to start/continue the log
-  // stream and flush any buffered events, then (2) fetch the full task —
-  // GET /:id is the only endpoint that returns `transcript` — and hydrate
-  // the store. Live `task:event`s keep appending afterwards (deduped on
-  // seq). Without this, an in-progress run shows only the placeholder until
-  // it completes, because its events were broadcast before the user opened
-  // it. Keyed on task id so it runs once per open.
-  useEffect(() => {
+  // transcript. Hydration (1) kicks the backend to start/continue the log
+  // stream and flush any buffered events, then (2) fetches the full task —
+  // GET /:id is the only endpoint that returns `transcript` — and merges it
+  // into the store. Live `task:event`s keep appending afterwards (deduped on
+  // seq, so re-running this is idempotent). Merging is keyed by task id into
+  // the global store, so a fetch landing after a task switch is still useful.
+  const hydrateTranscript = useCallback(async () => {
     if (!isCloudTask) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await api.tasks.refreshLogs(task.id);
-        const full = await api.tasks.get(task.id);
-        if (cancelled || !full.transcript?.length) return;
-        mergeTaskTranscript(task.id, full.transcript);
-      } catch {
-        // Best-effort — the live stream still populates the transcript.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    try {
+      await api.tasks.refreshLogs(task.id);
+      const full = await api.tasks.get(task.id);
+      if (full.transcript?.length) mergeTaskTranscript(task.id, full.transcript);
+    } catch {
+      // Best-effort — the live stream still populates the transcript.
+    }
   }, [task.id, isCloudTask]);
+
+  // Once per open: without this, an in-progress run shows only the
+  // placeholder until it completes, because its events were broadcast
+  // before the user opened it.
+  useEffect(() => {
+    void hydrateTranscript();
+  }, [hydrateTranscript]);
+
+  // And again on a genuine reconnect: `task:event`s broadcast while the
+  // socket was down are gone, and the task-list reconcile can't restore
+  // them (the list payload drops `transcript` for egress).
+  useOnReconnect(() => void hydrateTranscript());
 
   const handleStopTask = useCallback(async () => {
     setIsStopping(true);

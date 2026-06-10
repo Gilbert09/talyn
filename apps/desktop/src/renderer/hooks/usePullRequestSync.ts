@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { api } from '../lib/api';
+import { useOnReconnect } from './useOnReconnect';
 import { useWorkspaceStore } from '../stores/workspace';
 import {
   usePullRequestStore,
@@ -151,22 +152,11 @@ export function usePullRequestSync(): void {
   // queue stale until the next change happens to fire. On a genuine *re*connect,
   // re-list the open PRs to reconcile. Mirrors `reconcileTasksFromServer` for
   // tasks; the first connect is covered by the initial fetch above.
-  const sawDisconnectRef = useRef(false);
-  useEffect(() => {
-    const unsubscribe = api.ws.on('connection:status', (payload) => {
-      const connected = (payload as { connected?: boolean } | undefined)?.connected;
-      if (connected === false) {
-        sawDisconnectRef.current = true;
-        return;
-      }
-      if (connected && sawDisconnectRef.current && currentWorkspaceId) {
-        sawDisconnectRef.current = false;
-        api.pullRequests
-          .list({ workspaceId: currentWorkspaceId, state: 'open' })
-          .then(setRows)
-          .catch(() => {});
-      }
-    });
-    return unsubscribe;
-  }, [currentWorkspaceId, setRows]);
+  useOnReconnect(() => {
+    if (!currentWorkspaceId) return;
+    api.pullRequests
+      .list({ workspaceId: currentWorkspaceId, state: 'open' })
+      .then(setRows)
+      .catch(() => {});
+  });
 }
