@@ -142,18 +142,23 @@ function PRTableRow({
   const requested = variant === 'review' ? reviewRequestLabel(summary, viewerLogin) : null;
 
   // A linked task is "active" while it's queued or running — i.e. not yet
-  // fully done. Drives the row's in-progress indicator and suppresses the
-  // start-task buttons so you can't double-launch.
+  // fully done. Drives the spinner/label and suppresses the start-task
+  // buttons so you can't double-launch.
   const taskRunning =
     taskStatus === 'pending' || taskStatus === 'queued' || taskStatus === 'in_progress';
-  // taskStatus is undefined when the task isn't loaded in the store — keep
-  // the link visible (plain badge) rather than guessing it's done.
-  const taskActive = taskRunning || (!!row.taskId && !taskStatus);
+  // A task is failed/cancelled — distinct from a clean completion so the
+  // badge can flag it (and a follow-up run still makes sense).
+  const taskFailed = taskStatus === 'failed' || taskStatus === 'cancelled';
+  // The linked-task badge is shown for ANY PR that has a task, regardless of
+  // status — once you've kicked a run on a PR you want to keep seeing that it
+  // happened, not have the indicator vanish the moment the run finishes.
+  // taskStatus may be undefined when the task isn't loaded in the store; the
+  // badge still shows (plain) because row.taskId is the source of truth.
 
-  // A follow-up run only makes sense on an open PR with something to fix,
-  // and not while one is already working it.
+  // A follow-up run only makes sense on an open PR with something to fix, and
+  // not while one is already working it (a completed/failed task can be re-run).
   const canFollowUp =
-    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary) && !taskActive;
+    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary) && !taskRunning;
 
   function copyBranch(e: React.MouseEvent) {
     e.stopPropagation();
@@ -253,21 +258,29 @@ function PRTableRow({
                 Review
               </span>
             )}
-            {/* Linked-task indicator. Shows while a fix task is running
-                ("Working"); deep-links to the task. Disappears once the
-                task is fully done (completed / failed / cancelled). */}
-            {row.taskId && taskActive && (
+            {/* Linked-task indicator. Persists for the life of the PR row
+                once a task is started — "Working" (spinner) while running,
+                "Failed" if it errored/was cancelled, "Task" once done.
+                Deep-links to the run. */}
+            {row.taskId && (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenTask(row.taskId!);
                 }}
-                className="ml-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase bg-blue-200 text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
+                className={cn(
+                  'ml-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase',
+                  taskFailed
+                    ? 'bg-red-200 text-red-800 hover:bg-red-300 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800'
+                    : 'bg-blue-200 text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800'
+                )}
                 title={
                   taskRunning
                     ? 'A task is working this PR — click to open it'
-                    : 'Open the linked task'
+                    : taskFailed
+                      ? 'The linked task failed — click to open it'
+                      : 'Open the linked task'
                 }
               >
                 {taskRunning ? (
@@ -275,6 +288,8 @@ function PRTableRow({
                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
                     Working
                   </>
+                ) : taskFailed ? (
+                  'Failed'
                 ) : (
                   'Task'
                 )}
@@ -489,8 +504,8 @@ function PRTableRow({
               title={
                 posthogStarted
                   ? 'PostHog Code run started — see the Tasks panel'
-                  : taskActive
-                  ? 'A task is already working this PR — open it from the Working/Review badge'
+                  : taskRunning
+                  ? 'A task is already working this PR — open it from the Working badge'
                   : canFollowUp
                   ? 'Get this PR mergeable with PostHog Code (resolve comments, fix CI, resolve conflicts)'
                   : 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
