@@ -55,7 +55,9 @@ export function BlinkingOwl({ className }: { className?: string }) {
     <pre
       aria-hidden
       className={cn(
-        'owl-glow font-mono text-primary leading-[1.1] text-[15px] sm:text-base',
+        // text-left guards against centered ancestors: text-align inherits
+        // into <pre>, and centering each line independently wrecks the art.
+        'owl-glow text-left font-mono text-primary leading-[1.1] text-[15px] sm:text-base',
         className
       )}
     >
