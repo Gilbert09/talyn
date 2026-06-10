@@ -102,24 +102,6 @@ export function registerTaskCommands(program: Command): void {
       }
     });
 
-  task
-    .command('ready')
-    .description('Mark a task ready for review (stops the agent)')
-    .argument('[id]', 'Task id (default: $FASTOWL_TASK_ID)')
-    .action(async (id?: string) => {
-      const taskId = id || envDefaults().taskId;
-      if (!taskId) {
-        console.error('error: task id required (or set $FASTOWL_TASK_ID)');
-        process.exit(2);
-      }
-      try {
-        await request<Task>('POST', `/tasks/${taskId}/ready-for-review`);
-        console.log(`✓ Task ${taskId} is now awaiting_review`);
-      } catch (err) {
-        console.error(`error: ${(err as Error).message}`);
-        process.exit(1);
-      }
-    });
 }
 
 function deriveTitle(prompt: string | undefined, type: TaskType): string {

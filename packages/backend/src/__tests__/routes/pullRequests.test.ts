@@ -231,7 +231,7 @@ describe('routes/pullRequests', () => {
         id: 'task-1',
         workspaceId: 'ws-mine',
         type: 'code_writing',
-        status: 'awaiting_review',
+        status: 'in_progress',
         priority: 'medium',
         title: 'a',
         description: 'b',

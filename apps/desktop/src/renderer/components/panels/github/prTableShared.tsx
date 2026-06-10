@@ -141,15 +141,14 @@ function PRTableRow({
   const unresolved = summary.unresolvedReviewThreads ?? 0;
   const requested = variant === 'review' ? reviewRequestLabel(summary, viewerLogin) : null;
 
-  // A linked task is "active" while it's running or awaiting your review —
-  // i.e. not yet fully done. Drives the row's in-progress indicator and
-  // suppresses the start-task buttons so you can't double-launch.
+  // A linked task is "active" while it's queued or running — i.e. not yet
+  // fully done. Drives the row's in-progress indicator and suppresses the
+  // start-task buttons so you can't double-launch.
   const taskRunning =
     taskStatus === 'pending' || taskStatus === 'queued' || taskStatus === 'in_progress';
-  const taskAwaitingReview = taskStatus === 'awaiting_review';
   // taskStatus is undefined when the task isn't loaded in the store — keep
   // the link visible (plain badge) rather than guessing it's done.
-  const taskActive = taskRunning || taskAwaitingReview || (!!row.taskId && !taskStatus);
+  const taskActive = taskRunning || (!!row.taskId && !taskStatus);
 
   // A follow-up run only makes sense on an open PR with something to fix,
   // and not while one is already working it.
@@ -255,9 +254,8 @@ function PRTableRow({
               </span>
             )}
             {/* Linked-task indicator. Shows while a fix task is running
-                ("Working") or awaiting your review ("Review"); deep-links
-                to the task. Disappears once the task is fully done
-                (completed / failed / cancelled). */}
+                ("Working"); deep-links to the task. Disappears once the
+                task is fully done (completed / failed / cancelled). */}
             {row.taskId && taskActive && (
               <button
                 type="button"
@@ -265,17 +263,10 @@ function PRTableRow({
                   e.stopPropagation();
                   onOpenTask(row.taskId!);
                 }}
-                className={cn(
-                  'ml-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase',
-                  taskAwaitingReview
-                    ? 'bg-amber-200 text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800'
-                    : 'bg-blue-200 text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800'
-                )}
+                className="ml-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase bg-blue-200 text-blue-800 hover:bg-blue-300 dark:bg-blue-900 dark:text-blue-200 dark:hover:bg-blue-800"
                 title={
                   taskRunning
                     ? 'A task is working this PR — click to open it'
-                    : taskAwaitingReview
-                    ? 'Fix task finished — awaiting your review. Click to open it'
                     : 'Open the linked task'
                 }
               >
@@ -283,11 +274,6 @@ function PRTableRow({
                   <>
                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
                     Working
-                  </>
-                ) : taskAwaitingReview ? (
-                  <>
-                    <Check className="h-2.5 w-2.5" />
-                    Review
                   </>
                 ) : (
                   'Task'

@@ -47,6 +47,14 @@ export interface CloudTaskProvider {
 
   /** Tear down any live transcript stream for a task (on stop/delete). */
   stopStreaming(taskId: string): void;
+
+  /**
+   * Cancel the remote run backing `task`, if the vendor supports it.
+   * Best-effort: resolve credentials + remote ids from the task metadata
+   * and tell the vendor to stop. Throw on hard failure so the caller can
+   * surface it; a task with no remote run yet should be a no-op.
+   */
+  cancel?(task: Task): Promise<void>;
 }
 
 export type DispatchResult = { ok: true } | { ok: false; error: string };

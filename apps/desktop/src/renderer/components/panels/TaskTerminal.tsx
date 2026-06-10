@@ -7,7 +7,6 @@ import {
   AlertCircle,
   Play,
   Terminal,
-  FileCheck,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -17,6 +16,7 @@ import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
+import { readCloudTaskMeta } from '@fastowl/shared';
 import type { Task, AgentStatus, AgentAttention } from '@fastowl/shared';
 
 interface TaskTerminalProps {
@@ -47,29 +47,31 @@ const attentionColors: Record<AgentAttention, string> = {
 };
 
 export function TaskTerminal({ task }: TaskTerminalProps) {
-  const { stopTask, readyForReview } = useTaskActions();
+  const { stopTask } = useTaskActions();
   const environments = useWorkspaceStore((s) => s.environments);
   const [isStopping, setIsStopping] = useState(false);
-  const [isMarkingReady, setIsMarkingReady] = useState(false);
 
   const agentStatus = task.agentStatus || 'working';
   const agentAttention = task.agentAttention || 'none';
   const assignedEnv = environments.find((e) => e.id === task.assignedEnvironmentId);
   const envName = assignedEnv?.name;
-  const isCloudTask = assignedEnv?.type === 'posthog_code';
+  // The task carries a remote cloud run (provider-neutral; covers legacy
+  // posthog* metadata too). Null until dispatch stamps the remote ids.
+  const cloudMeta = readCloudTaskMeta(task);
 
   const StatusIcon = statusConfig[agentStatus].icon;
 
-  // PostHog Code tasks run in the cloud and their transcript is NOT included
-  // in the task-list payload, so the store opens them with an empty
-  // transcript. Hydration (1) kicks the backend to start/continue the log
-  // stream and flush any buffered events, then (2) fetches the full task —
+  // Cloud tasks run remotely and their transcript is NOT included in the
+  // task-list payload, so the store opens them with an empty transcript.
+  // Hydration (1) kicks the backend to start/continue the log stream and
+  // flush any buffered events, then (2) fetches the full task —
   // GET /:id is the only endpoint that returns `transcript` — and merges it
   // into the store. Live `task:event`s keep appending afterwards (deduped on
   // seq, so re-running this is idempotent). Merging is keyed by task id into
   // the global store, so a fetch landing after a task switch is still useful.
+  const hasCloudRun = Boolean(cloudMeta?.remoteTaskId);
   const hydrateTranscript = useCallback(async () => {
-    if (!isCloudTask) return;
+    if (!hasCloudRun) return;
     try {
       await api.tasks.refreshLogs(task.id);
       const full = await api.tasks.get(task.id);
@@ -77,7 +79,7 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
     } catch {
       // Best-effort — the live stream still populates the transcript.
     }
-  }, [task.id, isCloudTask]);
+  }, [task.id, hasCloudRun]);
 
   // Once per open: without this, an in-progress run shows only the
   // placeholder until it completes, because its events were broadcast
@@ -101,17 +103,6 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
       setIsStopping(false);
     }
   }, [task.id, stopTask]);
-
-  const handleReadyForReview = useCallback(async () => {
-    setIsMarkingReady(true);
-    try {
-      await readyForReview(task.id);
-    } catch (err) {
-      console.error('Failed to mark ready for review:', err);
-    } finally {
-      setIsMarkingReady(false);
-    }
-  }, [task.id, readyForReview]);
 
   return (
     <div
@@ -146,47 +137,25 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           </Badge>
         </div>
         <div className="flex items-center gap-1">
-          {/*
-            Header actions only make sense while the child is actually
-            alive (task.status === 'in_progress'). Once the child exits,
-            the task has already transitioned to `awaiting_review` (or
-            `failed` / `cancelled`) — "Stop" has nothing to stop and
-            "Ready for Review" is idempotent. Hide them to avoid the
-            400 the user reported.
-          */}
+          {/* Abort only makes sense while the cloud run is alive
+              (task.status === 'in_progress'); afterwards the task is
+              already terminal and /stop would 400. */}
           {task.status === 'in_progress' && (
-            <>
-              <Button
-                variant="default"
-                size="sm"
-                className="h-8"
-                title="End the session and move this task to Awaiting Review — transcript + any branch changes preserved for you to approve."
-                onClick={handleReadyForReview}
-                disabled={isMarkingReady || isStopping}
-              >
-                {isMarkingReady ? (
-                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                ) : (
-                  <FileCheck className="w-4 h-4 mr-1" />
-                )}
-                Finish
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 text-destructive hover:text-destructive"
-                title="Abort the session and mark the task Failed. Use when the agent went off-track."
-                onClick={handleStopTask}
-                disabled={isStopping || isMarkingReady}
-              >
-                {isStopping ? (
-                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                ) : (
-                  <Square className="w-4 h-4 mr-1" />
-                )}
-                Abort
-              </Button>
-            </>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-destructive hover:text-destructive"
+              title="Cancel the cloud run and mark the task Cancelled. Use when the agent went off-track."
+              onClick={handleStopTask}
+              disabled={isStopping}
+            >
+              {isStopping ? (
+                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+              ) : (
+                <Square className="w-4 h-4 mr-1" />
+              )}
+              Abort
+            </Button>
           )}
         </div>
       </div>
@@ -198,11 +167,10 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           taskId={task.id}
           transcript={task.transcript}
           envName={envName}
-          waitingHint={isCloudTask ? 'Running on PostHog Code — fetching logs…' : undefined}
+          waitingHint={hasCloudRun ? 'Running in the cloud — fetching logs…' : undefined}
           interactive
         />
       </div>
     </div>
   );
 }
-

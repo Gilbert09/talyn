@@ -5,7 +5,6 @@ import {
   tasks as tasksTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
-import { openPullRequestForTask } from '../services/taskPullRequest.js';
 import { createCloudTask } from '../services/taskCreate.js';
 import { rowToTask, taskColumnsNoTranscript } from '../services/taskSerialize.js';
 import { taskQueueService } from '../services/taskQueue.js';
@@ -222,7 +221,13 @@ export function taskRoutes(): Router {
       .from(tasksTable)
       .where(eq(tasksTable.id, req.params.id))
       .limit(1);
-    res.json({ success: true, data: rowToTask(rows[0]) } as ApiResponse<Task>);
+    const updated = rowToTask(rows[0]);
+    // Status changes must reach other connected clients too — the REST
+    // response only updates the caller's store.
+    if (body.status !== undefined) {
+      emitTaskStatus(updated.workspaceId, updated.id, updated.status);
+    }
+    res.json({ success: true, data: updated } as ApiResponse<Task>);
   });
 
   // Retry/reset a task back to queued for re-dispatch.
@@ -295,7 +300,8 @@ export function taskRoutes(): Router {
     res.json({ success: true, data: rowToTask(updated[0]) } as ApiResponse<Task>);
   });
 
-  // Stop a running cloud task — drop its transcript stream and mark failed.
+  // Stop a running cloud task — cancel the remote run (when the provider
+  // supports it), drop the transcript stream, and mark the task cancelled.
   router.post('/:id/stop', async (req, res) => {
     try {
       await requireTaskAccess(req, req.params.id);
@@ -316,23 +322,38 @@ export function taskRoutes(): Router {
       return res.status(400).json({ success: false, error: 'Task is not running' });
     }
 
+    // Best-effort remote cancel — the local task is marked cancelled either
+    // way, but record when the vendor run could not be stopped so the user
+    // knows it may still open a PR.
     const provider = getCloudProvider(readCloudTaskProvider(task));
+    let remoteCancelError: string | undefined;
+    if (provider?.cancel) {
+      try {
+        await provider.cancel(task);
+      } catch (err) {
+        remoteCancelError = err instanceof Error ? err.message : String(err);
+        console.warn(`[tasks] remote cancel failed for ${task.id}:`, err);
+      }
+    }
     provider?.stopStreaming(task.id);
 
+    const result = {
+      success: false,
+      error: remoteCancelError
+        ? `Cancelled by user. The remote run could not be stopped and may still finish: ${remoteCancelError}`
+        : 'Cancelled by user',
+    };
     const now = new Date();
     await db
       .update(tasksTable)
       .set({
-        status: 'failed',
-        result: { success: false, error: 'Stopped by user' },
+        status: 'cancelled',
+        result,
         completedAt: now,
         updatedAt: now,
       })
       .where(eq(tasksTable.id, task.id));
-    emitTaskStatus(task.workspaceId, task.id, 'failed', {
-      success: false,
-      error: 'Stopped by user',
-    });
+    emitTaskStatus(task.workspaceId, task.id, 'cancelled', result);
 
     const updatedRows = await db
       .select(taskColumnsNoTranscript)
@@ -340,47 +361,6 @@ export function taskRoutes(): Router {
       .where(eq(tasksTable.id, task.id))
       .limit(1);
     res.json({ success: true, data: rowToTask(updatedRows[0]) } as ApiResponse<Task>);
-  });
-
-  // Retry opening a PR for a task. Dormant for cloud providers that open
-  // their own PR (PostHog Code); kept for a future branch-only provider.
-  router.post('/:id/retry-pr', async (req, res) => {
-    try {
-      await requireTaskAccess(req, req.params.id);
-    } catch (err) {
-      return handleAccessError(err, res);
-    }
-    const db = getDbClient();
-    const rows = await db
-      .select(taskColumnsNoTranscript)
-      .from(tasksTable)
-      .where(eq(tasksTable.id, req.params.id))
-      .limit(1);
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Task not found' });
-    }
-    const task = rowToTask(rows[0]);
-    await openPullRequestForTask(task.id);
-
-    const updated = await db
-      .select(taskColumnsNoTranscript)
-      .from(tasksTable)
-      .where(eq(tasksTable.id, task.id))
-      .limit(1);
-    const updatedTask = rowToTask(updated[0]);
-    const prState =
-      (updatedTask.metadata as {
-        pullRequest?: { number: number; url: string };
-        pullRequestError?: string;
-      } | undefined) ?? {};
-
-    if (prState.pullRequest) {
-      return res.json({ success: true, data: { pullRequest: prState.pullRequest } });
-    }
-    return res.status(502).json({
-      success: false,
-      error: prState.pullRequestError || 'PR creation is not available for this provider',
-    });
   });
 
   // On-demand log fetch for a PostHog Code (cloud) task. The poller only

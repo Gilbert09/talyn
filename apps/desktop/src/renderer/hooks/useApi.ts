@@ -512,33 +512,6 @@ export function useTaskActions() {
     [updateTask]
   );
 
-  const readyForReview = useCallback(
-    async (taskId: string) => {
-      const task = await api.tasks.readyForReview(taskId);
-      updateTask(taskId, task);
-      return task;
-    },
-    [updateTask]
-  );
-
-  const approveTask = useCallback(
-    async (taskId: string) => {
-      const task = await api.tasks.approve(taskId);
-      updateTask(taskId, task);
-      return task;
-    },
-    [updateTask]
-  );
-
-  const rejectTask = useCallback(
-    async (taskId: string) => {
-      const task = await api.tasks.reject(taskId);
-      updateTask(taskId, task);
-      return task;
-    },
-    [updateTask]
-  );
-
   const deleteTask = useCallback(
     async (taskId: string) => {
       await api.tasks.delete(taskId);
@@ -554,9 +527,6 @@ export function useTaskActions() {
     retryTask,
     startTask,
     stopTask,
-    readyForReview,
-    approveTask,
-    rejectTask,
     deleteTask,
   };
 }

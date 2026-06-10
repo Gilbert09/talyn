@@ -242,7 +242,6 @@ export type TaskStatus =
   | 'pending'
   | 'queued'
   | 'in_progress'
-  | 'awaiting_review'
   | 'completed'
   | 'failed'
   | 'cancelled';

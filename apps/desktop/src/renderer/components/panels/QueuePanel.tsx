@@ -3,7 +3,6 @@ import {
   ListTodo,
   Plus,
   Play,
-  Pause,
   Clock,
   CheckCircle,
   AlertCircle,
@@ -16,7 +15,6 @@ import {
   Eye,
   Hand,
   Trash2,
-  GitCommit,
   ExternalLink,
   GitPullRequest,
   BarChart3,
@@ -28,14 +26,9 @@ import { Card } from '../ui/card';
 import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
-import { useTaskFiles } from '../../hooks/useTaskFiles';
 import { api } from '../../lib/api';
 import { CreateTaskModal } from '../modals/CreateTaskModal';
 import { TaskTerminal } from './TaskTerminal';
-import { TerminalHistory } from './TerminalHistory';
-import { TaskFilesPanel } from './TaskFilesPanel';
-import { TaskGitPanel } from './TaskGitPanel';
-import { useTaskGitLog } from '../../hooks/useTaskGitLog';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
 import type { PRSummaryShape, PRState } from '../../lib/api';
@@ -44,8 +37,8 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask } from '@fastowl/shared';
-import type { Task, TaskStatus, TaskType, TaskPriority, AgentStatus, AgentAttention } from '@fastowl/shared';
+import { isAgentTask, readCloudTaskMeta } from '@fastowl/shared';
+import type { Task, TaskStatus, TaskType, TaskPriority, AgentStatus, AgentAttention, CloudProviderType } from '@fastowl/shared';
 
 const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {
   code_writing: { label: 'Code', icon: Sparkles },
@@ -61,11 +54,6 @@ const statusConfig: Record<
   pending: { icon: Clock, label: 'Pending', color: 'text-slate-400' },
   queued: { icon: ListTodo, label: 'Queued', color: 'text-blue-400' },
   in_progress: { icon: Loader2, label: 'In Progress', color: 'text-purple-400' },
-  awaiting_review: {
-    icon: Clock,
-    label: 'Awaiting Review',
-    color: 'text-yellow-400',
-  },
   completed: { icon: CheckCircle, label: 'Completed', color: 'text-green-400' },
   failed: { icon: AlertCircle, label: 'Failed', color: 'text-red-400' },
   cancelled: { icon: AlertCircle, label: 'Cancelled', color: 'text-slate-400' },
@@ -79,6 +67,13 @@ const priorityConfig: Record<
   medium: { label: 'Medium', color: 'text-blue-400', badge: 'outline' },
   high: { label: 'High', color: 'text-yellow-400', badge: 'warning' },
   urgent: { label: 'Urgent', color: 'text-red-400', badge: 'destructive' },
+};
+
+/** Human label for the provider a cloud run lives on. */
+const providerLabels: Record<CloudProviderType, string> = {
+  posthog_code: 'PostHog Code',
+  codex_cloud: 'Codex Cloud',
+  claude_routine: 'Claude Routines',
 };
 
 /**
@@ -115,10 +110,8 @@ export function QueuePanel() {
   const queuedTasks = tasks.filter((t) =>
     ['pending', 'queued'].includes(t.status)
   );
-  // In-flight: child process actually running.
+  // In-flight: the cloud run is live.
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress');
-  // Exited cleanly; waiting on a human decision (approve / reject).
-  const reviewTasks = tasks.filter((t) => t.status === 'awaiting_review');
   const completedTasks = tasks.filter((t) =>
     ['completed', 'failed', 'cancelled'].includes(t.status)
   );
@@ -152,27 +145,6 @@ export function QueuePanel() {
             </div>
           ) : (
             <div className="p-2">
-              {reviewTasks.length > 0 && (
-                <div className="mb-4">
-                  <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
-                    <span>AWAITING REVIEW</span>
-                    <span className="tabular-nums text-muted-foreground/70">
-                      {reviewTasks.length}
-                    </span>
-                  </h3>
-                  <div className="space-y-1">
-                    {reviewTasks.map((task) => (
-                      <TaskListItem
-                        key={task.id}
-                        task={task}
-                        isSelected={selectedTaskId === task.id}
-                        onSelect={() => selectTask(task.id)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {inProgressTasks.length > 0 && (
                 <div className="mb-4">
                   <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
@@ -299,25 +271,6 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
   const agentStatus = task.agentStatus || 'working';
   const agentAttention = task.agentAttention || 'none';
 
-  // Diff stats (+NN -MM) only make sense once the task has a branch to
-  // diff against, and only for tasks FastOwl runs locally. Cloud (PostHog
-  // Code) tasks have no local checkout to diff, so gate the fetch off for
-  // them too — otherwise every cloud row hits the backend for an empty list.
-  const isCloudTask = Boolean(
-    (task.metadata as { posthogTaskId?: string } | undefined)?.posthogTaskId,
-  );
-  const { files: changedFiles } = useTaskFiles(task.id, {
-    enabled: !!task.branch && !isCloudTask,
-  });
-  const diffStats = changedFiles.reduce(
-    (acc, f) => ({
-      added: acc.added + (f.binary ? 0 : f.added),
-      removed: acc.removed + (f.binary ? 0 : f.removed),
-    }),
-    { added: 0, removed: 0 },
-  );
-  const hasDiff = changedFiles.length > 0;
-
   // Determine which icon to show
   const StatusIcon = isRunning
     ? agentStatusConfig[agentStatus].icon
@@ -393,15 +346,6 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
                 {taskTypeConfig[task.type]?.label ?? task.type}
               </span>
             )}
-            {hasDiff && (
-              <span
-                className="text-xs tabular-nums flex items-center gap-1"
-                title={`${changedFiles.length} file${changedFiles.length === 1 ? '' : 's'} changed`}
-              >
-                <span className="text-green-500">+{diffStats.added}</span>
-                <span className="text-red-500">-{diffStats.removed}</span>
-              </span>
-            )}
           </div>
         </div>
       </div>
@@ -416,45 +360,29 @@ interface TaskDetailProps {
 function TaskDetail({ taskId }: TaskDetailProps) {
   const { tasks, environments, repositories } = useWorkspaceStore();
   const {
-    updateTaskStatus,
     cancelTask,
     retryTask,
     startTask,
-    approveTask,
-    rejectTask,
     deleteTask,
-    readyForReview,
   } = useTaskActions();
   // Track which specific action is in flight, not a shared boolean —
-  // otherwise clicking Create PR puts the Reject button into a
-  // spinner too (and vice versa). We still disable every action
-  // while ANY one is in flight so the user can't double-click around
-  // a slow request.
+  // otherwise clicking Retry puts the Delete button into a spinner too
+  // (and vice versa). We still disable every action while ANY one is in
+  // flight so the user can't double-click around a slow request.
   const [activeAction, setActiveAction] = useState<
-    | 'start'
-    | 'queue'
-    | 'pause'
-    | 'cancel'
-    | 'retry'
-    | 'createPr'
-    | 'reject'
-    | 'delete'
-    | 'readyForReview'
-    | null
+    'start' | 'cancel' | 'retry' | 'delete' | null
   >(null);
   const actionInFlight = activeAction !== null;
   const isLoadingFor = (action: typeof activeAction): boolean => activeAction === action;
   const [actionError, setActionError] = useState<string | null>(null);
   const task = tasks.find((t) => t.id === taskId);
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
-  const assignedEnv = task?.assignedEnvironmentId
-    ? environments.find((e) => e.id === task.assignedEnvironmentId)
-    : null;
-  const cloudMeta = task?.metadata as
-    | { posthogStatus?: string; posthogLogUrl?: string; posthogTaskId?: string }
-    | undefined;
-  const isCloudTask =
-    assignedEnv?.type === 'posthog_code' || Boolean(cloudMeta?.posthogTaskId);
+  const cloudMeta = task ? readCloudTaskMeta(task) : null;
+
+  // PR detail side-sheet — opened by clicking the PR status pill on
+  // the task header. Stays mounted at the TaskDetail root so it
+  // survives task switches.
+  const [prSheetId, setPRSheetId] = useState<string | null>(null);
 
   if (!task) {
     return (
@@ -469,51 +397,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const canStart = isAgent && ['pending', 'queued'].includes(task.status);
   const agentStatus = task.agentStatus || 'working';
 
-  // Live file count for the Files tab badge — subscribed at the
-  // detail-view level so the count is visible even on the Terminal
-  // tab. We pass the result down into TaskFilesPanel instead of
-  // having the panel call the hook itself, so the badge and the
-  // list body never show different counts.
-  // Cloud (PostHog Code) tasks run in PostHog's sandbox — FastOwl has no
-  // local git checkout or command audit for them, so the Files/Git tabs
-  // have nothing to show. Skip those fetches and hide the tabs; the diff
-  // lives on the linked GitHub PR instead (the PR panel's Files tab).
-  const {
-    files: changedFiles,
-    loading: changedFilesLoading,
-    error: changedFilesError,
-  } = useTaskFiles(taskId, { enabled: !isCloudTask });
-  // Same pattern for the Git tab badge — count of recorded commands.
-  // Lifted here (instead of the panel owning it) so the badge number
-  // never drifts from the list the user sees after clicking the tab.
-  const {
-    entries: gitLogEntries,
-    loading: gitLogLoading,
-    error: gitLogError,
-  } = useTaskGitLog(taskId, { enabled: !isCloudTask });
-
   const handleStartTask = async () => {
     setActiveAction('start');
     try {
       await startTask(taskId);
-    } finally {
-      setActiveAction(null);
-    }
-  };
-
-  const handleQueueTask = async () => {
-    setActiveAction('queue');
-    try {
-      await updateTaskStatus(taskId, 'queued');
-    } finally {
-      setActiveAction(null);
-    }
-  };
-
-  const handlePauseTask = async () => {
-    setActiveAction('pause');
-    try {
-      await updateTaskStatus(taskId, 'pending');
     } finally {
       setActiveAction(null);
     }
@@ -537,67 +424,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     }
   };
 
-  // Re-runs autoCommit + advances the task. Wired to the
-  // "Retry auto-commit" button in the failure banner — the same
-  // /ready-for-review endpoint the in-progress UI uses to finish a
-  // task early. If the underlying problem (dirty after commit, no
-  // commits) is fixed, this is what unsticks the task.
-  const handleReadyForReview = async () => {
-    setActiveAction('readyForReview');
-    setActionError(null);
-    try {
-      await readyForReview(taskId);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to retry auto-commit');
-    } finally {
-      setActiveAction(null);
-    }
-  };
-
-  const [activeTab, setActiveTab] = useState<'terminal' | 'files' | 'git'>('terminal');
-  // PR detail side-sheet — opened by clicking the PR status pill on
-  // the task header. Phase 4 ships the skeleton; Phase 5 fleshes the
-  // tabs out. Stays mounted at the TaskDetail root so it survives
-  // tab switches.
-  const [prSheetId, setPRSheetId] = useState<string | null>(null);
-  const [retryingPr, setRetryingPr] = useState(false);
-
-  const handleRetryPr = async () => {
-    setRetryingPr(true);
-    try {
-      await api.tasks.retryPullRequest(taskId);
-      // Result flows in via task:update WS — no need to update local
-      // state explicitly; the metadata.pullRequest change will trigger
-      // a re-render.
-    } catch {
-      // Error is now on task.metadata.pullRequestError and will show
-      // in the info strip via the existing WS update.
-    } finally {
-      setRetryingPr(false);
-    }
-  };
-
-  const handleCreatePr = async () => {
-    setActiveAction('createPr');
-    setActionError(null);
-    try {
-      await approveTask(taskId);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Create PR failed');
-    } finally {
-      setActiveAction(null);
-    }
-  };
-
-  const handleRejectTask = async () => {
-    setActiveAction('reject');
-    try {
-      await rejectTask(taskId);
-    } finally {
-      setActiveAction(null);
-    }
-  };
-
   const handleDeleteTask = async () => {
     if (!window.confirm('Delete this failed task? This cannot be undone.')) return;
     setActiveAction('delete');
@@ -616,6 +442,31 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const StatusIcon = isRunning
     ? agentStatusConfig[agentStatus].icon
     : statusConfig[task.status].icon;
+
+  // The cloud-run banner — provider, remote status, deep link to the run.
+  const cloudBanner = cloudMeta && (
+    <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
+      <BarChart3 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      <span className="text-muted-foreground">
+        Cloud run on {providerLabels[cloudMeta.provider] ?? cloudMeta.provider}
+      </span>
+      {cloudMeta.status && (
+        <Badge variant="secondary" className="text-[10px]">
+          {cloudMeta.status}
+        </Badge>
+      )}
+      {cloudMeta.logUrl && (
+        <button
+          type="button"
+          onClick={() => window.open(cloudMeta.logUrl!, '_blank')}
+          className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+        >
+          <ExternalLink className="w-3 h-3" />
+          View run
+        </button>
+      )}
+    </div>
+  );
 
   // If task is running, show terminal
   if (isRunning) {
@@ -667,9 +518,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             </div>
             {/*
               No task-control buttons here — TaskTerminal's header renders
-              the per-task controls (Finish / Stop) contextually beside the
-              terminal it manages. We do surface the linked-PR status pill so
-              a PR-fix run shows the PR's CI/merge state while it works.
+              the per-task Abort contextually beside the terminal it manages.
+              We do surface the linked-PR status pill so a PR-fix run shows
+              the PR's CI/merge state while it works.
             */}
             <div className="flex items-center gap-2 shrink-0">
               <TaskPRControls task={task} onOpen={setPRSheetId} />
@@ -677,116 +528,16 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
         </div>
 
-        {/* PostHog Code (cloud) run banner */}
-        {isCloudTask && (
-          <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
-            <BarChart3 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span className="text-muted-foreground">Running on PostHog Code</span>
-            {cloudMeta?.posthogStatus && (
-              <Badge variant="secondary" className="text-[10px]">
-                {cloudMeta.posthogStatus}
-              </Badge>
-            )}
-            {cloudMeta?.posthogLogUrl && (
-              <button
-                type="button"
-                onClick={() => window.open(cloudMeta.posthogLogUrl!, '_blank')}
-                className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
-              >
-                <ExternalLink className="w-3 h-3" />
-                View run
-              </button>
-            )}
-          </div>
-        )}
+        {cloudBanner}
 
-        {/* Cloud tasks have no local Files/Git data — show the agent log
-            directly, no tab strip. Everything else keeps the tabs. */}
-        {isCloudTask ? (
-          <div className="flex-1 overflow-hidden p-4">
-            <div className="h-full">
-              <TaskTerminal task={task} />
-            </div>
+        {/* Cloud tasks have no local Files/Git data — the agent log is the
+            whole story. */}
+        <div className="flex-1 overflow-hidden p-4">
+          <div className="h-full">
+            <TaskTerminal task={task} />
           </div>
-        ) : (
-          <>
-            {/* Tabs */}
-            <div className="border-b px-4 flex items-center gap-1">
-              <TabButton
-                active={activeTab === 'terminal'}
-                onClick={() => setActiveTab('terminal')}
-              >
-                <Terminal className="w-3.5 h-3.5 mr-1.5" />
-                Terminal
-              </TabButton>
-              <TabButton
-                active={activeTab === 'files'}
-                onClick={() => setActiveTab('files')}
-              >
-                <GitBranch className="w-3.5 h-3.5 mr-1.5" />
-                Files
-                {changedFiles.length > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                      activeTab !== 'files' && 'bg-primary/15 text-primary'
-                    )}
-                  >
-                    {changedFiles.length}
-                  </Badge>
-                )}
-              </TabButton>
-              <TabButton
-                active={activeTab === 'git'}
-                onClick={() => setActiveTab('git')}
-              >
-                <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-                Git
-                {gitLogEntries.length > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                      activeTab !== 'git' && 'bg-primary/15 text-primary'
-                    )}
-                  >
-                    {gitLogEntries.length}
-                  </Badge>
-                )}
-              </TabButton>
-            </div>
-
-            {/* Body */}
-            <div className="flex-1 overflow-hidden p-4">
-              {activeTab === 'terminal' && (
-                <div className="h-full">
-                  <TaskTerminal task={task} />
-                </div>
-              )}
-              {activeTab === 'files' && (
-                <div className="h-full">
-                  <TaskFilesPanel
-                    taskId={task.id}
-                    files={changedFiles}
-                    loading={changedFilesLoading}
-                    error={changedFilesError}
-                  />
-                </div>
-              )}
-              {activeTab === 'git' && (
-                <div className="h-full">
-                  <TaskGitPanel
-                    taskId={task.id}
-                    entries={gitLogEntries}
-                    loading={gitLogLoading}
-                    error={gitLogError}
-                  />
-                </div>
-              )}
-            </div>
-          </>
-        )}
+        </div>
+        <PRDetailSheet pullRequestId={prSheetId} onClose={() => setPRSheetId(null)} />
       </>
     );
   }
@@ -825,31 +576,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
-            {task.status === 'awaiting_review' && (
-              <>
-                <Button
-                  size="sm"
-                  onClick={handleCreatePr}
-                  disabled={actionInFlight}
-                  title="Push the task branch to origin and open a pull request."
-                >
-                  {isLoadingFor('createPr') ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                  ) : (
-                    <GitPullRequest className="w-4 h-4 mr-1" />
-                  )}
-                  Create PR
-                </Button>
-                <Button size="sm" variant="outline" onClick={handleRejectTask} disabled={actionInFlight}>
-                  {isLoadingFor('reject') ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                  ) : (
-                    <RotateCw className="w-4 h-4 mr-1" />
-                  )}
-                  Reject & Requeue
-                </Button>
-              </>
-            )}
             {canStart && (
               <Button size="sm" onClick={handleStartTask} disabled={actionInFlight}>
                 {isLoadingFor('start') ? (
@@ -860,21 +586,8 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                 Start Now
               </Button>
             )}
-            {task.status === 'pending' && (
-              <Button size="sm" variant="outline" onClick={handleQueueTask} disabled={actionInFlight}>
-                {isLoadingFor('queue') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ListTodo className="w-4 h-4 mr-1" />}
-                Queue
-              </Button>
-            )}
-            {task.status === 'queued' && (
-              <Button size="sm" variant="outline" onClick={handlePauseTask} disabled={actionInFlight}>
-                {isLoadingFor('pause') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Pause className="w-4 h-4 mr-1" />}
-                Unqueue
-              </Button>
-            )}
             {/* PR pill + open-on-GitHub link on any task with a PR linked
-                (started-from-a-PR, or `completed`/`awaiting_review` after the
-                approve flow opened one). */}
+                (started-from-a-PR, or linked once the cloud run opened one). */}
             <TaskPRControls task={task} onOpen={setPRSheetId} />
             {task.status === 'failed' && (
               <>
@@ -908,7 +621,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
       </div>
 
       {/* Compact info strip — replaces the bulky Details card so the
-          tabs below can own the vertical space. */}
+          log below can own the vertical space. */}
       <div className="px-4 py-2 border-b text-xs text-muted-foreground flex items-center gap-4 flex-wrap">
         {repo && (
           <span className="flex items-center gap-1 min-w-0">
@@ -952,21 +665,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             ?.pullRequestError;
           if (prErr) {
             return (
-              <span className="flex items-center gap-1.5">
-                <span
-                  className="text-amber-600 dark:text-amber-500"
-                  title={prErr}
-                >
-                  PR failed
-                </span>
-                <button
-                  type="button"
-                  onClick={handleRetryPr}
-                  disabled={retryingPr}
-                  className="text-primary hover:underline disabled:opacity-60"
-                >
-                  {retryingPr ? 'Retrying…' : 'Retry'}
-                </button>
+              <span
+                className="text-amber-600 dark:text-amber-500"
+                title={prErr}
+              >
+                No PR linked
               </span>
             );
           }
@@ -974,7 +677,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         })()}
       </div>
 
-      {/* Prompt — always shown when present, above tabs. Description
+      {/* Prompt — always shown when present, above the log. Description
           dropped when it just duplicates the prompt (common case). */}
       {(task.prompt ||
         (task.description && task.description.trim() !== (task.prompt ?? '').trim())) && (
@@ -989,117 +692,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         </div>
       )}
 
-      {/* Auto-commit status banner. Three shapes:
-          - Hard fail (in_progress + advanceOk=false): loud red, with a
-            Retry button that re-runs autoCommit via /ready-for-review.
-            This is the surface the user kept missing — without it,
-            "task transitioned to awaiting_review with uncommitted
-            files" was indistinguishable from "everything worked".
-          - Awaiting_review + committed: subtle green confirmation.
-          - Awaiting_review + not committed but advanced (Claude already
-            committed): subtle amber "branch had prior commits". */}
-      {(() => {
-        const meta = task.metadata as
-          | {
-              autoCommit?: {
-                committed: boolean;
-                advanceOk?: boolean;
-                at: string;
-                sha?: string;
-                message?: string;
-                reason?: string;
-                error?: string;
-                porcelain?: string;
-              };
-            }
-          | undefined;
-        const ac = meta?.autoCommit;
-        if (!ac) return null;
-
-        if (task.status === 'in_progress' && ac.advanceOk === false) {
-          const dirtyCount = ac.porcelain
-            ? ac.porcelain.split('\n').filter(Boolean).length
-            : 0;
-          return (
-            <div className="px-4 py-3 border-b bg-red-500/10 text-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                  <div className="min-w-0">
-                    <p className="font-medium text-red-700 dark:text-red-400">
-                      Auto-commit refused to advance: {ac.reason}
-                    </p>
-                    {ac.error && (
-                      <p className="text-xs text-red-700/80 dark:text-red-300/80 mt-1 break-words whitespace-pre-wrap">
-                        {ac.error}
-                      </p>
-                    )}
-                    {dirtyCount > 0 && (
-                      <p className="text-xs text-red-700/80 dark:text-red-300/80 mt-1">
-                        {dirtyCount} file{dirtyCount === 1 ? '' : 's'} still uncommitted
-                        in the working tree.
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={handleReadyForReview}
-                  disabled={actionInFlight}
-                  title="Re-run auto-commit and try to advance to awaiting review."
-                >
-                  {isLoadingFor('readyForReview') ? (
-                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                  ) : (
-                    <RotateCw className="w-3 h-3 mr-1" />
-                  )}
-                  Retry auto-commit
-                </Button>
-              </div>
-            </div>
-          );
-        }
-
-        if (task.status === 'awaiting_review' && ac.committed && ac.sha) {
-          return (
-            <div className="px-4 py-2 border-b bg-emerald-500/10 text-xs">
-              <div className="flex items-start gap-2">
-                <GitCommit className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-500 shrink-0 mt-0.5" />
-                <p className="text-emerald-700 dark:text-emerald-300 break-words font-mono">
-                  Auto-committed {ac.sha.slice(0, 10)}
-                  {ac.message && (
-                    <span className="font-sans"> · {ac.message.split('\n')[0]}</span>
-                  )}
-                </p>
-              </div>
-            </div>
-          );
-        }
-
-        if (
-          task.status === 'awaiting_review' &&
-          !ac.committed &&
-          ac.reason === 'no-changes-prior-commits'
-        ) {
-          return (
-            <div className="px-4 py-2 border-b bg-amber-500/10 text-xs">
-              <div className="flex items-start gap-2">
-                <GitCommit className="w-3.5 h-3.5 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-amber-700 dark:text-amber-300 break-words">
-                  Branch already had commits — nothing new to add. Auto-commit
-                  skipped.
-                </p>
-              </div>
-            </div>
-          );
-        }
-
-        return null;
-      })()}
-
-      {/* Failed/cancelled result banner — loud, above tabs, with the
+      {/* Failed/cancelled result banner — loud, above the log, with the
           full reason + a Retry action. */}
       {task.result && !task.result.success && (
         <div className="px-4 py-3 border-b bg-red-500/10 text-sm">
@@ -1108,7 +701,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
               <div className="min-w-0">
                 <p className="font-medium text-red-700 dark:text-red-400">
-                  Task failed
+                  {task.status === 'cancelled' ? 'Task cancelled' : 'Task failed'}
                 </p>
                 <p className="text-xs text-red-700/80 dark:text-red-300/80 mt-1 break-words whitespace-pre-wrap">
                   {task.result.summary || task.result.error || 'Unknown error.'}
@@ -1136,8 +729,8 @@ function TaskDetail({ taskId }: TaskDetailProps) {
       )}
 
       {/* Scheduler-rollback banner: task is still in queued but the
-          last attempt to pick it up failed (git prep error, agent
-          start threw, etc). Gives the user a clue why they keep
+          last attempt to dispatch it failed (provider error, missing
+          credentials, etc). Gives the user a clue why they keep
           seeing the spinner without progress. */}
       {task.status === 'queued' &&
         (() => {
@@ -1159,91 +752,13 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           );
         })()}
 
-      {/* Cloud tasks: no Files/Git data. Render the full TaskTerminal (log +
-          composer) even when finished, so a completed PostHog Code task can
-          still take a follow-up message. */}
-      {isCloudTask ? (
-        <div className="flex-1 overflow-hidden">
-          <TaskTerminal task={task} />
-        </div>
-      ) : (
-        <>
-          {/* Tabs — same shape as the in_progress view. */}
-          <div className="border-b px-4 flex items-center gap-1 shrink-0">
-            <TabButton
-              active={activeTab === 'terminal'}
-              onClick={() => setActiveTab('terminal')}
-            >
-              <Terminal className="w-3.5 h-3.5 mr-1.5" />
-              Terminal
-            </TabButton>
-            <TabButton
-              active={activeTab === 'files'}
-              onClick={() => setActiveTab('files')}
-            >
-              <GitBranch className="w-3.5 h-3.5 mr-1.5" />
-              Files
-              {changedFiles.length > 0 && (
-                <Badge
-                  variant="secondary"
-                  className={cn(
-                    'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                    activeTab !== 'files' && 'bg-primary/15 text-primary'
-                  )}
-                >
-                  {changedFiles.length}
-                </Badge>
-              )}
-            </TabButton>
-            <TabButton
-              active={activeTab === 'git'}
-              onClick={() => setActiveTab('git')}
-            >
-              <GitCommit className="w-3.5 h-3.5 mr-1.5" />
-              Git
-              {gitLogEntries.length > 0 && (
-                <Badge
-                  variant="secondary"
-                  className={cn(
-                    'ml-1.5 h-5 px-1.5 text-[10px] tabular-nums',
-                    activeTab !== 'git' && 'bg-primary/15 text-primary'
-                  )}
-                >
-                  {gitLogEntries.length}
-                </Badge>
-              )}
-            </TabButton>
-          </div>
+      {cloudBanner}
 
-          <div className="flex-1 overflow-hidden p-4">
-            {activeTab === 'terminal' && (
-              <div className="h-full overflow-auto">
-                <TerminalHistory taskId={task.id} />
-              </div>
-            )}
-            {activeTab === 'files' && (
-              <div className="h-full">
-                <TaskFilesPanel
-                  taskId={task.id}
-                  files={changedFiles}
-                  loading={changedFilesLoading}
-                  error={changedFilesError}
-                />
-              </div>
-            )}
-            {activeTab === 'git' && (
-              <div className="h-full">
-                <TaskGitPanel
-                  taskId={task.id}
-                  entries={gitLogEntries}
-                  loading={gitLogLoading}
-                  error={gitLogError}
-                />
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      {/* The run transcript — read-only, hydrated on demand from the
+          provider's durable logs even for finished tasks. */}
+      <div className="flex-1 overflow-hidden">
+        <TaskTerminal task={task} />
+      </div>
       <PRDetailSheet pullRequestId={prSheetId} onClose={() => setPRSheetId(null)} />
     </>
   );
@@ -1347,28 +862,5 @@ function PRStatusPillForTask({
       state={state}
       onClick={onOpen}
     />
-  );
-}
-
-interface TabButtonProps {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}
-
-function TabButton({ active, onClick, children }: TabButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex items-center text-xs px-3 py-2 border-b-2 -mb-[1px] transition-colors',
-        active
-          ? 'border-primary text-foreground'
-          : 'border-transparent text-muted-foreground hover:text-foreground'
-      )}
-    >
-      {children}
-    </button>
   );
 }

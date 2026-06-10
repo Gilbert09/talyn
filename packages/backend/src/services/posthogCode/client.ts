@@ -75,6 +75,17 @@ export class PostHogCodeClient {
   }
 
   /**
+   * Cancel a run. PostHog has no dedicated cancel action — a PATCH to
+   * `status: cancelled` is the cancellation path (it signals the Temporal
+   * workflow and marks the run completed_at server-side).
+   */
+  async cancelRun(taskId: string, runId: string): Promise<PostHogRun> {
+    return this.request<PostHogRun>('PATCH', `/tasks/${taskId}/runs/${runId}/`, {
+      status: 'cancelled',
+    });
+  }
+
+  /**
    * Fetch a run's parsed JSONL log entries from durable storage (S3).
    * Used as the backfill source for tasks whose live Redis stream is gone
    * (completed runs reopened later, or runs that finished while the

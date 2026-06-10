@@ -1,6 +1,7 @@
-import type { Environment, Task } from '@fastowl/shared';
+import { readCloudTaskMeta, type Environment, type Task } from '@fastowl/shared';
 import { PostHogCodeClient } from '../../posthogCode/client.js';
 import {
+  getPostHogCodeClient,
   getPostHogCodeCredentials,
   storePostHogCodeCredentials,
   removePostHogCodeCredentials,
@@ -82,5 +83,16 @@ export const postHogCodeProvider: CloudTaskProvider = {
 
   stopStreaming(taskId: string): void {
     postHogCodeStreamer.stop(taskId);
+  },
+
+  async cancel(task: Task): Promise<void> {
+    const cloud = readCloudTaskMeta(task);
+    // No remote run was ever started — nothing to cancel.
+    if (!cloud?.remoteTaskId || !cloud.remoteRunId) return;
+    const client = await getPostHogCodeClient(task.workspaceId);
+    if (!client) {
+      throw new Error('PostHog Code is not configured for this workspace.');
+    }
+    await client.cancelRun(cloud.remoteTaskId, cloud.remoteRunId);
   },
 };

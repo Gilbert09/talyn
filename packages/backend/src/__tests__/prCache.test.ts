@@ -420,7 +420,7 @@ describe('prCache — DB integration', () => {
         id,
         workspaceId: 'ws1',
         type: 'code_writing',
-        status: 'awaiting_review',
+        status: 'in_progress',
         priority: 'medium',
         title: 't',
         description: 'd',

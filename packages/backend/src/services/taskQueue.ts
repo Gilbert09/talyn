@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type {
   Environment,
   EnvironmentConfig,
@@ -203,39 +203,6 @@ class TaskQueueService extends EventEmitter {
       .limit(1);
     return rows[0] ? rowToTask(rows[0]) : null;
   }
-}
-
-/**
- * Legacy single-slot guard, retained so `routes/tasks.ts` keeps compiling
- * until it's pruned (Phase 3 of the cloud-only refactor). Cloud tasks have
- * no working tree, so this no longer gates dispatch — it just answers
- * "does another task already claim this (env, repo)?" for the old `/start`
- * endpoint.
- */
-export async function findTaskHoldingEnvRepoSlot(
-  db: Database,
-  envId: string,
-  repoId: string,
-  excludeTaskId?: string
-): Promise<{ id: string; title: string; status: string } | null> {
-  const conditions = [
-    eq(tasksTable.assignedEnvironmentId, envId),
-    eq(tasksTable.repositoryId, repoId),
-    inArray(tasksTable.status, ['in_progress', 'awaiting_review']),
-  ];
-  if (excludeTaskId) conditions.push(ne(tasksTable.id, excludeTaskId));
-
-  const rows = await db
-    .select({
-      id: tasksTable.id,
-      title: tasksTable.title,
-      status: tasksTable.status,
-    })
-    .from(tasksTable)
-    .where(and(...conditions))
-    .limit(1);
-
-  return rows[0] ?? null;
 }
 
 /**

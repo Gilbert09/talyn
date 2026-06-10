@@ -93,7 +93,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'fastowl_list_tasks',
     description:
-      'List tasks in a workspace. Useful for checking what is queued, in-flight, or awaiting review.',
+      'List tasks in a workspace. Useful for checking what is queued, in-flight, or finished.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -104,7 +104,7 @@ export const TOOLS: ToolDefinition[] = [
         status: {
           type: 'string',
           description:
-            'Filter by status: queued, in_progress, awaiting_review, completed, failed, cancelled.',
+            'Filter by status: queued, in_progress, completed, failed, cancelled.',
         },
         type: {
           type: 'string',
