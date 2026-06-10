@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
 
 /**
- * The cloud "make this PR mergeable" prompt must keep its guard against
- * base-branch files leaking into the PR when the agent merges the base in —
- * a recurring real-world failure. We assert the intent (a before/after
- * file-set check), not the exact wording, so the prompt can still evolve.
+ * The cloud "make this PR mergeable" prompt must match the PostHog Code
+ * sandbox's signed-git tool contract (PostHog/code#2574): base updates go
+ * through `git_signed_merge`, conflicts through a local rebase published with
+ * `git_signed_rewrite`, ordinary work through `git_signed_commit` — and the
+ * guard against base-branch files leaking into the PR stays. We assert the
+ * intent, not the exact wording, so the prompt can still evolve.
  */
 
 const summary: PRMergeableSummary = {
@@ -18,17 +20,53 @@ const summary: PRMergeableSummary = {
   checks: { total: 0, failed: 0, inProgress: 0, passed: 0 },
 } as unknown as PRMergeableSummary;
 
+describe('buildPostHogPrompt — signed-git tool contract', () => {
+  const prompt = buildPostHogPrompt({ owner: 'acme', repo: 'widgets', number: 7, summary });
+
+  it('routes all publishing through the signed tools (raw commit/push are blocked)', () => {
+    expect(prompt).toContain('git_signed_commit');
+    expect(prompt).toContain('git_signed_merge');
+    expect(prompt).toContain('git_signed_rewrite');
+    expect(prompt.toLowerCase()).toContain('blocked');
+  });
+
+  it('directs base updates to git_signed_merge first', () => {
+    expect(prompt).toMatch(/ALWAYS call `git_signed_merge` first/);
+  });
+
+  it('forbids the local-merge-then-signed-commit linearization path', () => {
+    expect(prompt).toMatch(/NEVER run a local `git merge origin\/main` and then `git_signed_commit`/);
+    expect(prompt.toUpperCase()).toContain('LINEARIZE');
+  });
+
+  it('scopes rebase to conflict resolution and publishes it via git_signed_rewrite', () => {
+    expect(prompt).toContain('git rebase origin/main');
+    expect(prompt).toContain('git rebase --continue');
+    expect(prompt).toMatch(/rebase[\s\S]*publish[\s\S]*`git_signed_rewrite`/i);
+    expect(prompt.toLowerCase()).toContain('never rebase for any other reason');
+  });
+
+  it('treats signed-tool refusals as authoritative', () => {
+    expect(prompt.toLowerCase()).toContain('refusal is authoritative');
+  });
+
+  it('still forbids single-parent imitations of a merge', () => {
+    expect(prompt).toContain('git merge --squash');
+    expect(prompt.toUpperCase()).toContain('ANCESTOR');
+  });
+});
+
 describe('buildPostHogPrompt — base-merge leak guard', () => {
   const prompt = buildPostHogPrompt({ owner: 'acme', repo: 'widgets', number: 7, summary });
 
-  it('tells the agent to compare the PR file set before and after the base merge', () => {
+  it('tells the agent to compare the PR file set before and after the base update', () => {
     expect(prompt).toContain('git diff --name-only origin/main...HEAD');
     expect(prompt.toLowerCase()).toContain('before');
     expect(prompt.toLowerCase()).toContain('after');
     expect(prompt.toLowerCase()).toContain('leak');
   });
 
-  it('threads the real base branch into the guard commands', () => {
+  it('threads the real base branch into the guard and update commands', () => {
     const custom = buildPostHogPrompt({
       owner: 'acme',
       repo: 'widgets',
@@ -36,20 +74,11 @@ describe('buildPostHogPrompt — base-merge leak guard', () => {
       summary: { ...summary, baseBranch: 'develop' } as PRMergeableSummary,
     });
     expect(custom).toContain('git diff --name-only origin/develop...HEAD');
+    expect(custom).toContain('git rebase origin/develop');
     expect(custom).not.toContain('origin/main...HEAD');
   });
 
-  it('keeps the non-negotiable no-force-push / no-rebase rules', () => {
-    expect(prompt).toContain('NEVER force-push');
-    expect(prompt.toLowerCase()).toContain('never rebase');
-  });
-
-  it('forbids squash-merging the base and requires a real two-parent merge', () => {
-    expect(prompt).toContain('git merge --squash');
-    expect(prompt).toContain('TWO parents');
-  });
-
-  it('requires the deterministic post-merge ancestor / behind-by assertion', () => {
+  it('requires the deterministic post-update ancestor / behind-by assertion', () => {
     expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
     expect(prompt).toContain('git rev-list --count HEAD..origin/main');
   });
