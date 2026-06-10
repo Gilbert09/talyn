@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 54 — Frameless macOS window: hidden title bar, inset traffic lights
+
+Dropped the native macOS title bar (`titleBarStyle: 'hiddenInset'` on the BrowserWindow, darwin-only; other platforms keep their frame) so the close/minimize/zoom buttons float flush over the app UI. The renderer reserves drag regions for them:
+
+- Preload exposes `platform`; new `isMacDesktop` helper in `lib/utils.ts` + `.app-region-drag`/`.app-region-no-drag` CSS utilities in `App.css`.
+- **MainLayout**: the Sidebar reserves an in-flow 36px drag strip above the workspace switcher (the traffic lights sit in it; double-click-to-zoom works natively). `SystemStatusBanner` moved from above-the-sidebar into the main column so the sidebar always reaches the window top and the banner can't sit under the lights.
+- **Chrome-less screens** (boot spinner, login, onboarding, backend-unreachable) render a fixed full-width `MacDragOverlay` strip instead — safe there because their content is centered; MainLayout deliberately doesn't use it since it would swallow clicks on panel-header controls near the top edge.
+
 ## Session 53 — Analytics audit + instrumentation: data-quality fixes, business events, server-side task lifecycle
 
 Audited FastOwl's PostHog project (459813): only `app_opened` + `panel_viewed` existed, the `app_version` super property never landed on any event (registered async after an IPC round-trip, silently failing), all 77 `$exception`s were one string (`WebSocket error: [object Event]` — `capture_console_errors` × the reconnect loop), autocapture had no `data-attr`s to target, and none of the product's real actions emitted events. Fixed all of it:

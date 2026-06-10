@@ -13,7 +13,21 @@ import {
   resetAnalyticsUser,
   trackEvent,
 } from './lib/analytics';
+import { isMacDesktop } from './lib/utils';
 import './App.css';
+
+/**
+ * On macOS the window is frameless, so screens without their own chrome need
+ * an invisible top strip to drag the window by. MainLayout doesn't use this —
+ * its sidebar reserves an in-flow drag region instead (an overlay here would
+ * swallow clicks on panel-header controls near the top edge).
+ */
+function MacDragOverlay() {
+  if (!isMacDesktop) return null;
+  return (
+    <div aria-hidden className="app-region-drag fixed inset-x-0 top-0 z-50 h-9" />
+  );
+}
 
 // Cosmetic techy "boot log" cycled under the owl while the app starts.
 const OWL_BOOT_LINES = [
@@ -91,6 +105,7 @@ function StartingSpinner() {
 
   return (
     <div className="flex items-center justify-center h-screen">
+      <MacDragOverlay />
       <div className="flex flex-col items-center select-none">
         <pre
           aria-hidden
@@ -142,7 +157,14 @@ function AuthedApp() {
 
   return (
     <>
-      {onboardingComplete ? <MainLayout /> : <OnboardingWizard />}
+      {onboardingComplete ? (
+        <MainLayout />
+      ) : (
+        <>
+          <MacDragOverlay />
+          <OnboardingWizard />
+        </>
+      )}
       <Toaster />
     </>
   );
@@ -163,6 +185,7 @@ function AppBody() {
   if (!backendAvailable) {
     return (
       <div className="flex items-center justify-center h-screen">
+        <MacDragOverlay />
         <div className="max-w-md text-center space-y-2">
           <p className="text-sm">Backend is unreachable.</p>
           <p className="text-xs text-muted-foreground">
@@ -174,7 +197,14 @@ function AppBody() {
     );
   }
 
-  if (!session) return <LoginScreen />;
+  if (!session) {
+    return (
+      <>
+        <MacDragOverlay />
+        <LoginScreen />
+      </>
+    );
+  }
   return <AuthedApp />;
 }
 

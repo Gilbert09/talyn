@@ -116,3 +116,13 @@
   filter: drop-shadow(0 0 14px hsl(var(--primary) / 0.35));
 }
 
+/* Frameless-window drag regions (macOS hidden title bar). Interactive
+   elements inside a drag region must opt out with app-region-no-drag. */
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
+

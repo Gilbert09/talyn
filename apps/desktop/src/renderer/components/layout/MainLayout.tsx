@@ -21,10 +21,12 @@ export function MainLayout() {
 
   return (
     <div className="flex h-screen flex-col bg-background">
-      <SystemStatusBanner />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar />
+        {/* Banner lives inside the main column (not above the sidebar) so the
+            sidebar reaches the window top, where the macOS traffic lights sit. */}
         <main className="flex-1 flex flex-col overflow-hidden">
+          <SystemStatusBanner />
           <div className="flex-1 overflow-hidden">
             {activePanel === 'queue' && <QueuePanel />}
             {activePanel === 'my_prs' && <MyPRsPanel />}

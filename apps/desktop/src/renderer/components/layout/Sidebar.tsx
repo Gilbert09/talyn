@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
-import { cn } from '../../lib/utils';
+import { cn, isMacDesktop } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { api, type CloudProviderInfo } from '../../lib/api';
@@ -105,6 +105,12 @@ export function Sidebar({ className }: SidebarProps) {
         className
       )}
     >
+      {/* macOS frameless window: the inset traffic lights float over this
+          strip, which doubles as the window's drag handle. */}
+      {isMacDesktop && (
+        <div aria-hidden className="app-region-drag h-9 shrink-0" />
+      )}
+
       {/* Header / Workspace Selector */}
       <div className="p-3 border-b">
         <WorkspaceSwitcher collapsed={sidebarCollapsed} />

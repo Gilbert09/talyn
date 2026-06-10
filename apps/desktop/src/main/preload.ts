@@ -6,6 +6,8 @@ import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
 export type Channels = 'ipc-example';
 
 const electronHandler = {
+  /** OS platform, for platform-specific window chrome (macOS traffic lights). */
+  platform: process.platform,
   ipcRenderer: {
     sendMessage(channel: Channels, ...args: unknown[]) {
       ipcRenderer.send(channel, ...args);

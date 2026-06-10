@@ -176,6 +176,12 @@ const createWindow = async () => {
     width: 1024,
     height: 728,
     icon: getAssetPath('icon.png'),
+    // macOS: drop the native title bar and float the inset traffic lights
+    // over the renderer, which reserves a drag strip for them (sidebar top
+    // in MainLayout, a fixed overlay on chrome-less screens).
+    ...(process.platform === 'darwin' && {
+      titleBarStyle: 'hiddenInset' as const,
+    }),
     webPreferences: {
       preload: app.isPackaged
         ? path.join(__dirname, 'preload.js')
