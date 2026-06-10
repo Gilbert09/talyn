@@ -23,6 +23,7 @@ import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
+import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { useAuth } from '../auth/AuthProvider';
 
 interface SidebarProps {
@@ -452,6 +453,7 @@ interface UserChipProps {
  * panel, which is where the Sign-out action lives.
  */
 function UserChip({ user, collapsed, onClick }: UserChipProps) {
+  const isDev = useIsDevBuild();
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
   // GitHub's Supabase provider fills `user_name`; fall back to
   // `preferred_username` and finally the email local-part so something
@@ -468,9 +470,18 @@ function UserChip({ user, collapsed, onClick }: UserChipProps) {
     <button
       type="button"
       onClick={onClick}
-      title={`Signed in as @${username} — click for account settings`}
+      title={
+        isDev
+          ? `DEV build — signed in as @${username}. Click for account settings`
+          : `Signed in as @${username} — click for account settings`
+      }
       className={cn(
-        'flex items-center gap-2 text-sm rounded-md hover:bg-accent transition-colors',
+        'flex items-center gap-2 text-sm rounded-md transition-colors',
+        // Dev builds get an amber chip so it's obvious at a glance you're not
+        // looking at production data.
+        isDev
+          ? 'bg-amber-400/25 ring-1 ring-inset ring-amber-500/40 hover:bg-amber-400/35'
+          : 'hover:bg-accent',
         collapsed
           ? 'h-8 w-8 justify-center flex-shrink-0'
           : 'flex-1 min-w-0 px-2 py-1.5',
@@ -495,6 +506,11 @@ function UserChip({ user, collapsed, onClick }: UserChipProps) {
       {!collapsed && (
         <span className="min-w-0 flex-1 truncate text-left">
           @{username}
+        </span>
+      )}
+      {!collapsed && isDev && (
+        <span className="shrink-0 rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wide text-amber-950">
+          Dev
         </span>
       )}
     </button>

@@ -34,13 +34,17 @@ ipcMain.on('ipc-example', async (event, arg) => {
 // i.e. us. We forward it over IPC to the renderer, which feeds the tokens
 // to the Supabase client.
 
+// True only when running via the electron binary + a script path, i.e. a
+// local dev run (never a packaged build). Drives the dev-only deep-link
+// scheme, dock icon, and the renderer's "DEV" badge.
+const IS_DEV_BUILD = !!process.defaultApp;
+
 // Dev builds claim a distinct scheme so a `fastowl://auth-callback` deep link
 // isn't stolen by an installed *production* FastOwl.app (macOS LaunchServices
 // routes a shared scheme to whichever app it prefers — usually the one in
-// /Applications). `process.defaultApp` is true only when running via the
-// electron binary + a script path, i.e. local dev. The renderer reads the
-// matching redirect URL back over IPC so both sides always agree.
-const DEEP_LINK_SCHEME = process.defaultApp ? 'fastowl-dev' : 'fastowl';
+// /Applications). The renderer reads the matching redirect URL back over IPC
+// so both sides always agree.
+const DEEP_LINK_SCHEME = IS_DEV_BUILD ? 'fastowl-dev' : 'fastowl';
 const AUTH_REDIRECT_URL = `${DEEP_LINK_SCHEME}://auth-callback`;
 
 function registerDeepLinkProtocol() {
@@ -137,6 +141,10 @@ ipcMain.handle('auth:storage:remove', async (_event, key: string) => {
 // Current app version, for display in Settings → About.
 ipcMain.handle('app:get-version', () => app.getVersion());
 
+// Whether this is a local dev build — the renderer uses it to flag the UI
+// (e.g. a "DEV" badge on the profile) so a dev build is unmistakable.
+ipcMain.handle('app:is-dev', () => IS_DEV_BUILD);
+
 registerDeepLinkProtocol();
 
 if (process.env.NODE_ENV === 'production') {
@@ -179,8 +187,12 @@ const createWindow = async () => {
 
   // In dev the app isn't packaged, so macOS shows Electron's default dock
   // icon; set ours at runtime (packaged builds get it from icon.icns).
+  // Dev builds use the amber-background variant so the dock icon makes it
+  // obvious at a glance this isn't the production app.
   if (process.platform === 'darwin' && !app.isPackaged) {
-    app.dock?.setIcon(getAssetPath('icons', '512x512.png'));
+    app.dock?.setIcon(
+      getAssetPath('icons', IS_DEV_BUILD ? 'dev-512x512.png' : '512x512.png')
+    );
   }
 
   mainWindow = new BrowserWindow({

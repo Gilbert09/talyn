@@ -1,0 +1,54 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Amber/yellow background so the dev build is unmistakable in the dock. -->
+    <linearGradient id="bg" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6c343"/>
+      <stop offset="0.55" stop-color="#e8a317"/>
+      <stop offset="1" stop-color="#c47e09"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="512" cy="470" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff3c4" stop-opacity="0.45"/>
+      <stop offset="0.6" stop-color="#f6c343" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#e8a317" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="scan" x1="362" y1="0" x2="662" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5a3a00" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#3a2600" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#5a3a00" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- macOS squircle -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#halo)"/>
+  <rect x="102.5" y="102.5" width="819" height="819" rx="182.5" stroke="#3a2600" stroke-opacity="0.18" stroke-width="5"/>
+
+  <!-- vector owl echoing the ASCII boot-screen owl; dark stroke for contrast on amber -->
+  <g filter="url(#glow)" stroke="#2a1c00" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <!-- .-"""-.  head dome -->
+    <path d="M 322 316 C 366 216 658 216 702 316"/>
+    <!-- ( ... ) wings -->
+    <path d="M 302 366 C 234 442 234 642 320 726"/>
+    <path d="M 722 366 C 790 442 790 642 704 726"/>
+    <!-- O   O eyes -->
+    <circle cx="400" cy="446" r="62"/>
+    <circle cx="624" cy="446" r="62"/>
+    <!-- v beak -->
+    <path d="M 464 546 L 512 608 L 560 546"/>
+    <!-- '-' belly -->
+    <path d="M 446 694 Q 512 736 578 694"/>
+    <!-- (_/   \_) feet -->
+    <path d="M 348 806 L 420 806 L 466 750"/>
+    <path d="M 676 806 L 604 806 L 558 750"/>
+  </g>
+
+  <!-- loading-screen scan bar -->
+  <rect x="362" y="864" width="300" height="8" rx="4" fill="url(#scan)" filter="url(#glow)"/>
+</svg>

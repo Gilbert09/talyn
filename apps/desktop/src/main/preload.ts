@@ -93,6 +93,10 @@ const electronHandler = {
     getVersion(): Promise<string> {
       return ipcRenderer.invoke('app:get-version');
     },
+    /** True for a local dev build — the renderer flags the UI with a DEV badge. */
+    isDev(): Promise<boolean> {
+      return ipcRenderer.invoke('app:is-dev');
+    },
   },
 };
 
