@@ -354,8 +354,15 @@ export function useInitialDataLoad() {
       // first load, so the workspace the wizard creates doesn't trip it.
       if (!migrationCheckedRef.current) {
         migrationCheckedRef.current = true;
-        if (workspaces.length > 0 && !useWorkspaceStore.getState().onboardingComplete) {
+        const onboarded = useWorkspaceStore.getState().onboardingComplete;
+        if (workspaces.length > 0 && !onboarded) {
           setOnboardingComplete(true);
+        } else if (workspaces.length === 0 && onboarded) {
+          // The inverse migration: the server has no workspaces (fresh DB or
+          // a backend switch) but a previous session's persisted flag says
+          // "onboarded" — without this the user lands in an empty MainLayout
+          // with no way to create a workspace. Re-run the wizard.
+          setOnboardingComplete(false);
         }
       }
 
@@ -375,6 +382,12 @@ export function useInitialDataLoad() {
         activeWorkspaceId = workspaces[0].id;
         setCurrentWorkspace(activeWorkspaceId);
         console.log('Selected workspace:', workspaces[0].name);
+      } else if (!stillExists && activeWorkspaceId) {
+        // The persisted workspace is gone and there's no fallback — clear it,
+        // or every per-workspace fetch 404s against the stale id ("workspace
+        // not found" everywhere).
+        activeWorkspaceId = null;
+        setCurrentWorkspace(null);
       }
 
       // Load workspace-specific data

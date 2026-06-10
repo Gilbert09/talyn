@@ -663,7 +663,10 @@ function IntegrationsSettings() {
         setGitHubUser(null);
       }
     } catch (_e) {
-      setGitHubStatus({ configured: false, connected: false });
+      // Fetch failure ≠ "OAuth unconfigured" — claiming configured:false here
+      // painted a misleading global banner whenever the request failed for
+      // unrelated reasons (e.g. a stale workspace id 404ing). Status unknown.
+      setGitHubStatus(null);
     }
   }, [currentWorkspaceId, setGitHubStatus, setGitHubUser]);
 
@@ -733,7 +736,7 @@ function IntegrationsSettings() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <h4 className="font-medium">GitHub</h4>
-                {!githubStatus?.configured && (
+                {githubStatus?.configured === false && (
                   <Badge variant="secondary">Not Configured</Badge>
                 )}
                 {githubStatus?.connected && (

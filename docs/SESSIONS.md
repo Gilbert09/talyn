@@ -14,6 +14,8 @@ Diagnosed why the prod `integrations` row (GitHub token) kept vanishing, forcing
 
 **Still open (backend hardening, not started):** don't hard-delete the integration on a single 401 — re-read the row first (another process may have rotated the token), mark `invalid` instead of deleting, and revoke the old token at GitHub (`DELETE /applications/{client_id}/token`) on disconnect/reconnect so tokens stop accumulating toward the cap.
 
+**Follow-up — fresh-DB renderer bugs the switch exposed** (first dev login landed on an empty MainLayout with a misleading "OAuth isn't configured" banner + "workspace not found"): (1) `useInitialDataLoad` now runs the *inverse* onboarding migration — server has zero workspaces but localStorage says onboarded → re-show the wizard (previously the user was stranded with no way to create a workspace); (2) a persisted `currentWorkspaceId` that no longer exists is cleared when there's no fallback workspace, instead of being left to 404 every per-workspace fetch; (3) `SettingsPanel.refreshGitHubStatus` no longer fabricates `{configured: false}` on any fetch error (that's what painted the global "OAuth isn't configured" banner when the stale workspace id 404'd) — failure now leaves status unknown (`null`), and the "Not Configured" badge requires an explicit `configured === false`.
+
 ## Session 54 — Frameless macOS window: hidden title bar, inset traffic lights
 
 Dropped the native macOS title bar (`titleBarStyle: 'hiddenInset'` on the BrowserWindow, darwin-only; other platforms keep their frame) so the close/minimize/zoom buttons float flush over the app UI. The renderer reserves drag regions for them:
