@@ -34,7 +34,14 @@ ipcMain.on('ipc-example', async (event, arg) => {
 // i.e. us. We forward it over IPC to the renderer, which feeds the tokens
 // to the Supabase client.
 
-const DEEP_LINK_SCHEME = 'fastowl';
+// Dev builds claim a distinct scheme so a `fastowl://auth-callback` deep link
+// isn't stolen by an installed *production* FastOwl.app (macOS LaunchServices
+// routes a shared scheme to whichever app it prefers — usually the one in
+// /Applications). `process.defaultApp` is true only when running via the
+// electron binary + a script path, i.e. local dev. The renderer reads the
+// matching redirect URL back over IPC so both sides always agree.
+const DEEP_LINK_SCHEME = process.defaultApp ? 'fastowl-dev' : 'fastowl';
+const AUTH_REDIRECT_URL = `${DEEP_LINK_SCHEME}://auth-callback`;
 
 function registerDeepLinkProtocol() {
   if (process.defaultApp) {
@@ -89,6 +96,11 @@ if (!gotLock) {
 ipcMain.handle('auth:open-external', async (_event, url: string) => {
   await shell.openExternal(url);
 });
+
+// The deep-link redirect URL the renderer should hand to Supabase's OAuth
+// flow — scheme-matched to this build (dev vs prod) so the callback reopens
+// THIS app, not the other one.
+ipcMain.handle('auth:get-redirect-url', async () => AUTH_REDIRECT_URL);
 
 // Renderer asks on mount for any deep-link that arrived before it was ready.
 ipcMain.handle('auth:drain-pending', async () => {

@@ -64,10 +64,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: 'Supabase is not configured' };
     }
     const supabase = getSupabase();
+    // Scheme-matched to this build (fastowl:// prod, fastowl-dev:// dev) so the
+    // OAuth callback reopens THIS app — not a separately-installed one. Falls
+    // back to the prod scheme if the bridge is somehow unavailable.
+    const redirectTo =
+      (await window.electron?.auth?.getRedirectUrl()) ?? 'fastowl://auth-callback';
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'github',
       options: {
-        redirectTo: 'fastowl://auth-callback',
+        redirectTo,
         skipBrowserRedirect: true,
       },
     });

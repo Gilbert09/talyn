@@ -31,6 +31,14 @@ const electronHandler = {
       return ipcRenderer.invoke('auth:open-external', url);
     },
     /**
+     * The deep-link redirect URL to pass to Supabase's OAuth flow. Scheme is
+     * `fastowl://` in prod and `fastowl-dev://` in dev, so the callback always
+     * reopens this build rather than a separately-installed one.
+     */
+    getRedirectUrl(): Promise<string> {
+      return ipcRenderer.invoke('auth:get-redirect-url');
+    },
+    /**
      * Subscribe to `fastowl://auth-callback` deep links. Also flushes any
      * callback that arrived before the renderer subscribed (common on
      * macOS when the app launches from a click in the browser).

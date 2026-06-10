@@ -160,9 +160,11 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-# `fastowl://auth-callback` is the desktop deep link — without it the login
-# flow fails silently with an "invalid redirect URL" error (see docs/SETUP.md).
-additional_redirect_urls = ["fastowl://auth-callback"]
+# Desktop deep links — without these the login flow fails silently with an
+# "invalid redirect URL" error (see docs/SETUP.md). Dev builds use the
+# `fastowl-dev://` scheme so the callback doesn't open an installed prod app;
+# `fastowl://` is kept for running a packaged build against the local stack.
+additional_redirect_urls = ["fastowl-dev://auth-callback", "fastowl://auth-callback"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.

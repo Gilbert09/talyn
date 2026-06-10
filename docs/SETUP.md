@@ -43,8 +43,10 @@ GitHub has no API for it):
    - Callback: `http://127.0.0.1:54321/auth/v1/callback`
    - Client id + secret go in `supabase/.env` (gitignored) as
      `SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID` / `…_SECRET`; the provider is wired
-     up in `supabase/config.toml`. The desktop deep link `fastowl://auth-callback`
-     is already in `additional_redirect_urls`.
+     up in `supabase/config.toml`. The dev desktop deep link
+     `fastowl-dev://auth-callback` is already in `additional_redirect_urls`
+     (dev builds use the `fastowl-dev://` scheme so the OAuth callback reopens
+     your dev build instead of an installed production FastOwl.app).
 2. **`FastOwl (Local Dev)`** — the workspace GitHub integration (PR monitoring etc.).
    - Homepage: `http://localhost:4747`
    - Callback: `http://localhost:4747/api/v1/github/callback`
