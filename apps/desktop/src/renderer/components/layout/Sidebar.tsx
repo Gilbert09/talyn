@@ -115,6 +115,7 @@ export function Sidebar({ className }: SidebarProps) {
         {navItems.map((item) => (
           <Button
             key={item.id}
+            data-attr={`nav-${item.id}`}
             variant={activePanel === item.id ? 'secondary' : 'ghost'}
             className={cn(
               'w-full justify-start gap-3',

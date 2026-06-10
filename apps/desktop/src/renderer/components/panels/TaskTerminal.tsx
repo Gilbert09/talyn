@@ -144,6 +144,7 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
             <Button
               variant="ghost"
               size="sm"
+              data-attr="task-abort"
               className="h-8 text-destructive hover:text-destructive"
               title="Cancel the cloud run and mark the task Cancelled. Use when the agent went off-track."
               onClick={handleStopTask}

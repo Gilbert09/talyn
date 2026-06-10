@@ -18,6 +18,7 @@ import type {
   WorkspaceSettings,
 } from '@fastowl/shared';
 import { toast } from '../stores/toast';
+import { trackEvent } from '../lib/analytics';
 
 // ---------------------------------------------------------------------------
 // task:event coalescing
@@ -460,6 +461,12 @@ export function useTaskActions() {
   const createTask = useCallback(
     async (data: Parameters<typeof api.tasks.create>[0]) => {
       const task = await api.tasks.create(data);
+      trackEvent('task_created', {
+        task_type: data.type,
+        model: data.model,
+        runtime_adapter: data.runtimeAdapter,
+        from_pr: Boolean(data.pullRequestId),
+      });
       addTask(task);
       return task;
     },
@@ -478,6 +485,7 @@ export function useTaskActions() {
   const cancelTask = useCallback(
     async (taskId: string) => {
       const task = await api.tasks.update(taskId, { status: 'cancelled' as any });
+      trackEvent('task_cancelled', { task_type: task.type });
       updateTask(taskId, task);
       return task;
     },
@@ -487,6 +495,7 @@ export function useTaskActions() {
   const retryTask = useCallback(
     async (taskId: string) => {
       const task = await api.tasks.retry(taskId);
+      trackEvent('task_retried', { task_type: task.type });
       updateTask(taskId, task);
       return task;
     },
@@ -497,6 +506,7 @@ export function useTaskActions() {
   const startTask = useCallback(
     async (taskId: string) => {
       const task = await api.tasks.start(taskId);
+      trackEvent('task_started_manually', { task_type: task.type });
       updateTask(taskId, task);
       return task;
     },
@@ -506,6 +516,7 @@ export function useTaskActions() {
   const stopTask = useCallback(
     async (taskId: string) => {
       const task = await api.tasks.stop(taskId);
+      trackEvent('task_aborted', { task_type: task.type });
       updateTask(taskId, task);
       return task;
     },
@@ -515,6 +526,7 @@ export function useTaskActions() {
   const deleteTask = useCallback(
     async (taskId: string) => {
       await api.tasks.delete(taskId);
+      trackEvent('task_deleted');
       removeTask(taskId);
     },
     [removeTask]

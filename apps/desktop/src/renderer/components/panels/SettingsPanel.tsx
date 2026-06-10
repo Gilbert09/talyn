@@ -41,6 +41,7 @@ import {
   setMergeBlockedNotifyEnabled,
 } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
+import { trackEvent } from '../../lib/analytics';
 import {
   REPO_CACHE_TTL_MS,
   readRepoCache,
@@ -826,6 +827,7 @@ function PostHogCodeCard() {
         projectId: projectId.trim(),
         host: host.trim() || undefined,
       });
+      trackEvent('cloud_provider_connected', { provider: 'posthog_code' });
       setStatus(s);
       setApiKey('');
       setEditing(false);

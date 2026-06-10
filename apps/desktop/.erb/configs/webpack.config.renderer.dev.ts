@@ -155,6 +155,10 @@ const configuration: webpack.Configuration = {
       // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
       FASTOWL_POSTHOG_KEY: '',
       FASTOWL_POSTHOG_HOST: 'https://us.i.posthog.com',
+      // Baked app version for analytics — see the prod config note.
+      FASTOWL_APP_VERSION:
+        // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+        require('../../release/app/package.json').version,
     }),
 
     new webpack.LoaderOptionsPlugin({

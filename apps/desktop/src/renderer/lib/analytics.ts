@@ -21,6 +21,10 @@ import 'posthog-js/dist/posthog-recorder';
 const KEY = process.env.FASTOWL_POSTHOG_KEY || '';
 const HOST = process.env.FASTOWL_POSTHOG_HOST || 'https://us.i.posthog.com';
 const IS_DEV = process.env.NODE_ENV !== 'production';
+// Baked at build time from release/app/package.json (see the webpack
+// renderer configs) so it can be registered synchronously — the old IPC
+// getVersion round-trip silently never landed on any event.
+const APP_VERSION = process.env.FASTOWL_APP_VERSION || '';
 
 let initialized = false;
 
@@ -60,14 +64,33 @@ export function initAnalytics(): void {
     },
   });
 
-  // Tag every event with the app version (mirrors PostHog Code's super
-  // property). Resolved async from the main process.
-  window.electron?.app
-    ?.getVersion()
-    .then((version) => posthog.register({ app_version: version }))
-    .catch(() => {});
+  // Super properties on every event. Registered synchronously BEFORE the
+  // first capture — app_version segments by release, environment separates
+  // dev-server sessions from packaged usage in the same project.
+  posthog.register({
+    ...(APP_VERSION ? { app_version: APP_VERSION } : {}),
+    environment: IS_DEV ? 'development' : 'production',
+  });
+  // Fallback when no version was baked (e.g. a config drift): best-effort
+  // async resolve from the main process.
+  if (!APP_VERSION) {
+    window.electron?.app
+      ?.getVersion()
+      .then((version) => posthog.register({ app_version: version }))
+      .catch(() => {});
+  }
 
   trackEvent('app_opened');
+}
+
+/**
+ * Register additional super properties (attached to every subsequent
+ * event). Used for slow-changing app context like the active workspace.
+ */
+export function registerSuperProperties(
+  properties: Record<string, unknown>,
+): void {
+  if (initialized) posthog.register(properties);
 }
 
 /** Link subsequent events to a known user. */

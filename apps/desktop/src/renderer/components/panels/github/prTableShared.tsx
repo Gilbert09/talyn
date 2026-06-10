@@ -426,6 +426,7 @@ function PRTableRow({
           {variant !== 'review' && row.state === 'open' && (
             <button
               type="button"
+              data-attr="pr-row-merge-queue-toggle"
               onClick={runToggleQueue}
               disabled={busy !== null}
               className={cn(
@@ -452,6 +453,7 @@ function PRTableRow({
             (confirmMerge ? (
               <button
                 type="button"
+                data-attr="pr-row-merge-confirm"
                 onClick={runMerge}
                 disabled={busy !== null}
                 className="rounded px-1.5 py-0.5 text-[10px] font-medium uppercase text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-400"
@@ -466,6 +468,7 @@ function PRTableRow({
             ) : (
               <button
                 type="button"
+                data-attr="pr-row-merge"
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirmMerge(true);
@@ -479,6 +482,7 @@ function PRTableRow({
           {variant !== 'review' && posthogEnabled && row.state === 'open' && (
             <button
               type="button"
+              data-attr="pr-row-fix-with-posthog"
               onClick={runCreatePostHogTask}
               disabled={!canFollowUp || busy !== null}
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
@@ -503,6 +507,7 @@ function PRTableRow({
           )}
           <button
             type="button"
+            data-attr="pr-row-copy-branch"
             onClick={copyBranch}
             className="rounded p-1 text-muted-foreground hover:text-foreground"
             title={copied ? 'Copied!' : `Copy branch: ${summary.headBranch}`}

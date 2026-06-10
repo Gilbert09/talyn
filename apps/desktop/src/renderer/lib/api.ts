@@ -632,6 +632,8 @@ class WebSocketClient {
   // streaming only the selected account's events. undefined = all.
   private debugFilter: string | undefined;
   private authenticated = false;
+  /** One console.error per outage; later attempts only warn (see onerror). */
+  private errorLoggedSinceOpen = false;
 
   async connect(): Promise<void> {
     this.bindLifecycle();
@@ -660,6 +662,7 @@ class WebSocketClient {
     this.ws.onopen = () => {
       console.log('WebSocket opened; authenticating…');
       this.reconnectAttempts = 0;
+      this.errorLoggedSinceOpen = false;
       this.ws?.send(JSON.stringify({ type: 'auth', token }));
       this.startHeartbeat();
     };
@@ -704,8 +707,20 @@ class WebSocketClient {
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
+    this.ws.onerror = () => {
+      // The browser Event carries no diagnostics ("[object Event]") —
+      // describe the socket state instead. Only the FIRST failure of an
+      // outage goes to console.error (PostHog exception autocapture turns
+      // console.error into $exception events; a backend outage used to
+      // flood the project with one identical event per reconnect attempt).
+      // Subsequent attempts downgrade to console.warn.
+      const detail = `WebSocket error on ${WS_URL} (readyState=${this.ws?.readyState}, reconnectAttempts=${this.reconnectAttempts})`;
+      if (this.errorLoggedSinceOpen) {
+        console.warn(detail);
+      } else {
+        this.errorLoggedSinceOpen = true;
+        console.error(detail);
+      }
     };
   }
 

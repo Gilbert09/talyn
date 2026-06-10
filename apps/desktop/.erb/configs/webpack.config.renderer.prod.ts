@@ -121,6 +121,14 @@ const configuration: webpack.Configuration = {
       // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
       FASTOWL_POSTHOG_KEY: '',
       FASTOWL_POSTHOG_HOST: 'https://us.i.posthog.com',
+      // App version baked at build time so analytics can register it as a
+      // super property synchronously (the IPC getVersion round-trip raced
+      // event capture and the property never landed). CI stamps
+      // release/app/package.json before building, so this matches
+      // app.getVersion().
+      FASTOWL_APP_VERSION:
+        // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+        require('../../release/app/package.json').version,
     }),
 
     new MiniCssExtractPlugin({

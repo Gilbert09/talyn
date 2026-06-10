@@ -154,6 +154,11 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 3. In the project, enable **Error tracking** and **Session replay** features
 4. Create a feature flag called `fastowl_debug` (off by default) that we can flip for verbose logging per user
 
+**Where the write key goes (both use the same project key):**
+
+- **Desktop** — `FASTOWL_POSTHOG_KEY` / `FASTOWL_POSTHOG_HOST`, baked in at webpack build time (CI secret). The renderer also bakes `FASTOWL_APP_VERSION` from `release/app/package.json` automatically so every event carries `app_version`.
+- **Backend** (Railway env) — `FASTOWL_POSTHOG_KEY` / `FASTOWL_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`).
+
 ---
 
 ## 🧰 Nice-to-have: MCP servers for Claude Code

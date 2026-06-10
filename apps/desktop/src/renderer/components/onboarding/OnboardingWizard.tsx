@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGithubConnection } from '../../hooks/useGithubConnection';
+import { trackEvent } from '../../lib/analytics';
 import { WorkspaceNameStep } from './steps/WorkspaceNameStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
@@ -40,6 +41,10 @@ export function OnboardingWizard() {
 
   function handlePrimary() {
     if (isLast) {
+      trackEvent('onboarding_completed', {
+        github_connected: githubConnected,
+        repos_watched: repositories.length,
+      });
       setOnboardingComplete(true);
       return;
     }

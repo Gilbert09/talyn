@@ -43,6 +43,7 @@ import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
 import { toast } from '../../stores/toast';
+import { trackEvent } from '../../lib/analytics';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -103,6 +104,7 @@ export function PRDetailSheet({
       setData(null);
       return;
     }
+    trackEvent('pr_detail_opened');
     let cancelled = false;
     setLoading(true);
     setError(null);

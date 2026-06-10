@@ -6,6 +6,7 @@ import type {
   Task,
   TaskPriority,
 } from '@fastowl/shared';
+import { captureWorkspaceEvent } from './analytics.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
 import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
@@ -163,6 +164,12 @@ class TaskQueueService extends EventEmitter {
           console.error(
             `[TaskQueue] dispatch failed for "${task.title}": ${result.error}`
           );
+          captureWorkspaceEvent(task.workspaceId, 'task_dispatch_failed', {
+            task_id: task.id,
+            task_type: task.type,
+            provider: env.type,
+            reason: result.error,
+          });
           await patchTaskMetadata(task.id, (existing) => ({
             ...existing,
             lastScheduleError: {
@@ -175,6 +182,20 @@ class TaskQueueService extends EventEmitter {
             .set({ status: 'queued', updatedAt: new Date() })
             .where(eq(tasksTable.id, task.id));
           emitTaskStatus(task.workspaceId, task.id, 'queued');
+        } else {
+          // Stamp when the remote run started so finalize can report the
+          // actual run duration (vs total time incl. queueing).
+          await patchTaskMetadata(task.id, (existing) => ({
+            ...existing,
+            dispatchedAt: new Date().toISOString(),
+          }));
+          captureWorkspaceEvent(task.workspaceId, 'task_dispatched', {
+            task_id: task.id,
+            task_type: task.type,
+            provider: env.type,
+            priority: task.priority,
+            duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
+          });
         }
       }
     } finally {

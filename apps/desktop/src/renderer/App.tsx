@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import { MainLayout } from './components/layout/MainLayout';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from './stores/workspace';
 import { Toaster } from './components/ui/toaster';
 import {
   identifyAnalyticsUser,
+  registerSuperProperties,
   resetAnalyticsUser,
   trackEvent,
 } from './lib/analytics';
@@ -184,20 +185,46 @@ function AppBody() {
 function Analytics() {
   const { user } = useAuth();
   const activePanel = useWorkspaceStore((s) => s.activePanel);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const userId = user?.id;
   const email = user?.email;
   const githubLogin = user?.user_metadata?.user_name as string | undefined;
+  // First identify of a mount is session restore, not a fresh login — only
+  // track logged_in when the user id appears after being absent.
+  const prevUserIdRef = useRef<string | null | undefined>(undefined);
+  const previousPanelRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const prevUserId = prevUserIdRef.current;
+    prevUserIdRef.current = userId;
     if (userId) {
       identifyAnalyticsUser(userId, { email, github_login: githubLogin });
+      if (prevUserId === null) trackEvent('logged_in');
     } else {
+      // Distinguish "no session yet" (undefined) from "session ended"
+      // by recording null once auth has resolved to signed-out.
+      prevUserIdRef.current = null;
+      if (prevUserId) trackEvent('logged_out');
       resetAnalyticsUser();
     }
   }, [userId, email, githubLogin]);
 
+  // Active workspace as a super property — every event (incl. autocapture)
+  // carries it, instead of threading it through each call site.
   useEffect(() => {
-    if (activePanel) trackEvent('panel_viewed', { panel: activePanel });
+    if (currentWorkspaceId) {
+      registerSuperProperties({ workspace_id: currentWorkspaceId });
+    }
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    if (activePanel) {
+      trackEvent('panel_viewed', {
+        panel: activePanel,
+        previous_panel: previousPanelRef.current,
+      });
+      previousPanelRef.current = activePanel;
+    }
   }, [activePanel]);
 
   return null;

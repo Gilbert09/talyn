@@ -355,6 +355,7 @@ export function CreateTaskModal({ open, onOpenChange }: CreateTaskModalProps) {
             Cancel
           </Button>
           <Button
+            data-attr="task-create-submit"
             onClick={handleSubmit}
             disabled={!isValid || isLoading}
           >

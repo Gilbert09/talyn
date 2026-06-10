@@ -5,6 +5,7 @@ import {
   tasks as tasksTable,
   repositories as repositoriesTable,
 } from '../../db/schema.js';
+import { captureWorkspaceEvent } from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
@@ -278,6 +279,53 @@ class PostHogCodePoller {
       })
       .where(eq(tasksTable.id, task.id));
     emitTaskStatus(task.workspaceId, task.id, status, result);
+    void this.captureOutcome(task, status, result, now);
+  }
+
+  /**
+   * Server-side analytics for the terminal transition — the renderer can't
+   * see runs that finish while the app is closed. One projected read (type,
+   * createdAt, small cloud metadata — never the transcript) funds the
+   * durations and PR linkage on the event. Best-effort.
+   */
+  private async captureOutcome(
+    task: { id: string; workspaceId: string },
+    status: TaskStatus,
+    result: TaskResult,
+    finishedAt: Date,
+  ): Promise<void> {
+    try {
+      const rows = await getDbClient()
+        .select({
+          type: tasksTable.type,
+          createdAt: tasksTable.createdAt,
+          metadata: tasksTable.metadata,
+        })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, task.id))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return;
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      const dispatchedAtMs = Date.parse(String(meta.dispatchedAt ?? ''));
+      captureWorkspaceEvent(
+        task.workspaceId,
+        status === 'completed' ? 'task_completed' : 'task_failed',
+        {
+          task_id: task.id,
+          task_type: row.type,
+          provider: 'posthog_code',
+          opened_pr: Boolean(meta.pullRequest || meta.posthogPrUrl),
+          duration_total_ms: finishedAt.getTime() - new Date(row.createdAt).getTime(),
+          ...(Number.isNaN(dispatchedAtMs)
+            ? {}
+            : { duration_run_ms: finishedAt.getTime() - dispatchedAtMs }),
+          ...(result.error ? { error_reason: result.error } : {}),
+        },
+      );
+    } catch {
+      // Analytics must never affect task processing.
+    }
   }
 }
 

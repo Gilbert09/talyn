@@ -6,6 +6,7 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
+import { trackEvent } from '../../../lib/analytics';
 
 /** Escape a string for safe interpolation into the copied HTML list. */
 function escapeHtml(s: string): string {
@@ -64,6 +65,11 @@ export function useGitHubActions() {
       if (!result.merged) {
         throw new Error(result.message || 'GitHub did not merge the pull request');
       }
+      trackEvent('pr_merged', {
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+        blocking_reason: row.summary.blockingReason,
+      });
       toast.success(`Merged ${ref}`, row.summary.title);
       removeRow(row.id);
       await refreshPullRequests();
@@ -84,6 +90,11 @@ export function useGitHubActions() {
       });
       try {
         await api.pullRequests.setMergeQueue(row.id, enabled);
+        trackEvent('merge_queue_toggled', {
+          enabled,
+          repo: `${row.owner}/${row.repo}`,
+          pr_number: row.number,
+        });
       } catch (err) {
         patchRow(row.id, { mergeQueued: !enabled });
         toast.error(
@@ -118,6 +129,11 @@ export function useGitHubActions() {
         assignedEnvironmentId: posthogEnvId,
         pullRequestId: row.id,
       });
+      trackEvent('pr_fix_task_started', {
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+        blocking_reason: row.summary.blockingReason,
+      });
       // Optimistically link the row so the in-progress indicator shows instantly.
       patchRow(row.id, { taskId: created.id });
     },
@@ -128,6 +144,7 @@ export function useGitHubActions() {
   const connect = useCallback(async () => {
     if (!currentWorkspaceId) return;
     const { authUrl } = await api.github.connect(currentWorkspaceId);
+    trackEvent('github_connect_started');
     window.open(authUrl, '_blank', 'width=600,height=700');
   }, [currentWorkspaceId]);
 

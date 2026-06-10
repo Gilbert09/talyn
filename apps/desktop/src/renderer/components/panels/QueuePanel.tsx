@@ -124,7 +124,7 @@ export function QueuePanel() {
       <div className="w-80 border-r flex flex-col">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Task Queue</h2>
-          <Button size="sm" onClick={() => setIsCreateModalOpen(true)}>
+          <Button size="sm" data-attr="task-add" onClick={() => setIsCreateModalOpen(true)}>
             <Plus className="w-4 h-4 mr-1" />
             Add
           </Button>
@@ -577,7 +577,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
           <div className="flex items-center gap-2 flex-wrap shrink-0">
             {canStart && (
-              <Button size="sm" onClick={handleStartTask} disabled={actionInFlight}>
+              <Button size="sm" data-attr="task-start-now" onClick={handleStartTask} disabled={actionInFlight}>
                 {isLoadingFor('start') ? (
                   <Loader2 className="w-4 h-4 mr-1 animate-spin" />
                 ) : (
@@ -591,11 +591,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             <TaskPRControls task={task} onOpen={setPRSheetId} />
             {task.status === 'failed' && (
               <>
-                <Button size="sm" onClick={handleRetryTask} disabled={actionInFlight}>
+                <Button size="sm" data-attr="task-retry" onClick={handleRetryTask} disabled={actionInFlight}>
                   {isLoadingFor('retry') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RotateCw className="w-4 h-4 mr-1" />}
                   Retry
                 </Button>
-                <Button size="sm" variant="destructive" onClick={handleDeleteTask} disabled={actionInFlight}>
+                <Button size="sm" variant="destructive" data-attr="task-delete" onClick={handleDeleteTask} disabled={actionInFlight}>
                   {isLoadingFor('delete') ? (
                     <Loader2 className="w-4 h-4 mr-1 animate-spin" />
                   ) : (
@@ -611,7 +611,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               </>
             )}
             {['pending', 'queued'].includes(task.status) && (
-              <Button size="sm" variant="destructive" onClick={handleCancelTask} disabled={actionInFlight}>
+              <Button size="sm" variant="destructive" data-attr="task-cancel" onClick={handleCancelTask} disabled={actionInFlight}>
                 {isLoadingFor('cancel') && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
                 Cancel
               </Button>
