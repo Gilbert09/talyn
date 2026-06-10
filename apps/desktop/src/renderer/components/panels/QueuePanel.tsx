@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   ListTodo,
-  Plus,
   Play,
   Clock,
   CheckCircle,
@@ -27,7 +26,6 @@ import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useTaskActions } from '../../hooks/useApi';
 import { api } from '../../lib/api';
-import { CreateTaskModal } from '../modals/CreateTaskModal';
 import { TaskTerminal } from './TaskTerminal';
 import { PRStatusPill } from '../widgets/PRStatusPill';
 import { PRDetailSheet } from '../widgets/PRDetailSheet';
@@ -105,7 +103,6 @@ function formatRelativeTime(iso: string): string {
 
 export function QueuePanel() {
   const { tasks, selectedTaskId, selectTask } = useWorkspaceStore();
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const queuedTasks = tasks.filter((t) =>
     ['pending', 'queued'].includes(t.status)
@@ -117,17 +114,11 @@ export function QueuePanel() {
   );
 
   return (
-    <>
-    <CreateTaskModal open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen} />
     <div className="flex h-full">
       {/* Task List */}
       <div className="w-80 border-r flex flex-col">
         <div className="app-region-drag flex items-center justify-between p-4 border-b">
           <h2 className="text-lg font-semibold">Task Queue</h2>
-          <Button size="sm" data-attr="task-add" className="app-region-no-drag" onClick={() => setIsCreateModalOpen(true)}>
-            <Plus className="w-4 h-4 mr-1" />
-            Add
-          </Button>
         </div>
 
         <ScrollArea className="flex-1">
@@ -136,12 +127,8 @@ export function QueuePanel() {
               <ListTodo className="w-10 h-10 text-muted-foreground/50 mb-3" />
               <h3 className="font-medium mb-1 text-sm">No tasks</h3>
               <p className="text-xs text-muted-foreground">
-                Add tasks to automate your workflow
+                Start a task from a pull request in the GitHub panel.
               </p>
-              <Button size="sm" className="mt-3" onClick={() => setIsCreateModalOpen(true)}>
-                <Plus className="w-4 h-4 mr-1" />
-                Add Task
-              </Button>
             </div>
           ) : (
             <div className="p-2">
@@ -220,18 +207,14 @@ export function QueuePanel() {
           <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
             <ListTodo className="w-16 h-16 text-muted-foreground/30 mb-4" />
             <h3 className="font-medium mb-2">No task selected</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Select a task to view details or create a new one
+            <p className="text-sm text-muted-foreground">
+              Select a task to view its details. Start new tasks from a pull
+              request in the GitHub panel.
             </p>
-            <Button onClick={() => setIsCreateModalOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Task
-            </Button>
           </div>
         )}
       </div>
     </div>
-    </>
   );
 }
 
