@@ -10,7 +10,10 @@ export interface InputProps
 const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, label, error, ...props }, ref) => {
     return (
-      <div className="space-y-1">
+      // w-full: the inner input is w-full, but THIS div is the flex child —
+      // without it the input shrinks to its intrinsic ~20ch width in rows
+      // like `<div className="flex gap-2"><Input/><Button/></div>`.
+      <div className="w-full space-y-1">
         {label && (
           <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
             {label}
