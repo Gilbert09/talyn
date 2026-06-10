@@ -56,6 +56,16 @@ async function request<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
 
+  if (response.status === 401 && token) {
+    // We sent a token and the backend rejected it — the auth user was
+    // deleted or the token is unrecoverable. The locally persisted session
+    // will never work again, so sign out: onAuthStateChange clears the
+    // session and the app returns to the login screen instead of stranding
+    // a logged-in-looking UI where every request fails. Local scope: the
+    // auth server would reject a revocation call from this token anyway.
+    void getSupabase().auth.signOut({ scope: 'local' });
+  }
+
   const data = (await response.json()) as ApiResponse<T>;
 
   if (!data.success) {
