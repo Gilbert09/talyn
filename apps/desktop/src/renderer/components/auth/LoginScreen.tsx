@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from './AuthProvider';
 import { isSupabaseConfigured } from '../../lib/supabase';
+import { BlinkingOwl } from '../widgets/BlinkingOwl';
 
 export function LoginScreen() {
   const { signInWithGitHub } = useAuth();
@@ -20,6 +21,9 @@ export function LoginScreen() {
     <div className="flex items-center justify-center h-screen bg-background">
       <div className="w-full max-w-sm p-8 space-y-6 rounded-lg border bg-card shadow-sm">
         <div className="text-center space-y-2">
+          <div className="flex justify-center pb-1">
+            <BlinkingOwl />
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">FastOwl</h1>
           <p className="text-sm text-muted-foreground">
             Sign in to continue. Your tasks, workspaces, and environments stay on your account.

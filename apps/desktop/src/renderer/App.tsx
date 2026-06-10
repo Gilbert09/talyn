@@ -7,6 +7,7 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useWorkspaceStore } from './stores/workspace';
 import { Toaster } from './components/ui/toaster';
+import { BlinkingOwl } from './components/widgets/BlinkingOwl';
 import {
   identifyAnalyticsUser,
   registerSuperProperties,
@@ -39,55 +40,7 @@ const OWL_BOOT_LINES = [
   'engaging night vision',
 ];
 
-// The owl, drawn so only the eyes line swaps on a blink (same character
-// width, so the ASCII never jitters). `O   O` open → `-   -` shut.
-function owlArt(eyes: string): string {
-  return [
-    '  .-"""-.',
-    ` ( ${eyes} )`,
-    ' (   v   )',
-    "  ) '-' (",
-    ' (_/   \\_)',
-  ].join('\n');
-}
-
-/** Owls blink in quick bursts, then hold their gaze — mimic that, leak-free. */
-function useOwlBlink(): boolean {
-  const [blinking, setBlinking] = useState(false);
-  useEffect(() => {
-    const timers: number[] = [];
-    let alive = true;
-    const wink = (then: () => void) => {
-      setBlinking(true);
-      timers.push(
-        window.setTimeout(() => {
-          setBlinking(false);
-          timers.push(window.setTimeout(then, 110));
-        }, 130)
-      );
-    };
-    const loop = () => {
-      if (!alive) return;
-      const hold = 1700 + Math.floor(Math.random() * 2200);
-      timers.push(
-        window.setTimeout(() => {
-          // Every so often a double blink — owls do it, and it reads as alive.
-          if (Math.random() < 0.35) wink(() => wink(loop));
-          else wink(loop);
-        }, hold)
-      );
-    };
-    loop();
-    return () => {
-      alive = false;
-      timers.forEach((t) => window.clearTimeout(t));
-    };
-  }, []);
-  return blinking;
-}
-
 function StartingSpinner() {
-  const blinking = useOwlBlink();
   const [line, setLine] = useState(0);
   const [dots, setDots] = useState(0);
 
@@ -107,12 +60,7 @@ function StartingSpinner() {
     <div className="flex items-center justify-center h-screen">
       <MacDragOverlay />
       <div className="flex flex-col items-center select-none">
-        <pre
-          aria-hidden
-          className="owl-glow font-mono text-primary leading-[1.1] text-[15px] sm:text-base"
-        >
-          {owlArt(blinking ? '-   -' : 'O   O')}
-        </pre>
+        <BlinkingOwl />
 
         {/* Sweeping scan bar — the "techy" tell. */}
         <div className="mt-4 h-px w-44 overflow-hidden rounded-full bg-border/60">
