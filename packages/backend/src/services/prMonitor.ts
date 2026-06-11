@@ -57,6 +57,11 @@ const ACTIVE_CI_MAX_PER_WORKSPACE = 15;
 const MAX_POLL_INTERVAL_MS = 5 * 60_000;
 const MAX_FAST_INTERVAL_MS = 60_000;
 
+// How long a forced poll (user-facing Refresh) waits for an in-flight tick
+// before giving up. Keeps `POST /repositories/poll` bounded — see
+// `drainInFlightTick`.
+const FORCE_POLL_DRAIN_MS = 15_000;
+
 const MAIN_POLLER_DESC =
   "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache, and reconciles closed/merged PRs. Cadence adapts to the account's remaining GitHub rate-limit budget.";
 const FAST_POLLER_DESC =
@@ -692,10 +697,29 @@ class PRMonitorService extends EventEmitter {
    * connected workspace's PRs were just refreshed".
    */
   async forcePoll(): Promise<void> {
+    if (!(await this.drainInFlightTick())) return;
+    await this.poll();
+  }
+
+  /**
+   * Wait for an in-flight tick to finish, bounded by {@link FORCE_POLL_DRAIN_MS}.
+   * Returns false when the tick is still running past the deadline — under
+   * GitHub throttling a tick can run for minutes, and an unbounded wait here
+   * left `POST /repositories/poll` hanging until the client's 300s timeout
+   * (observed in prod, June 2026). Skipping is safe: the tick that's blocking
+   * us is itself refreshing every connected workspace, so the caller's
+   * follow-up read still gets fresh rows.
+   */
+  private async drainInFlightTick(): Promise<boolean> {
+    const deadline = Date.now() + FORCE_POLL_DRAIN_MS;
     while (this.isPolling) {
+      if (Date.now() >= deadline) {
+        console.warn('PR monitor: forced poll skipped — a poll tick is still in flight');
+        return false;
+      }
       await new Promise((r) => setTimeout(r, 25));
     }
-    await this.poll();
+    return true;
   }
 
   /**
@@ -704,9 +728,7 @@ class PRMonitorService extends EventEmitter {
    */
   async forcePollWorkspaces(workspaceIds: string[]): Promise<void> {
     if (workspaceIds.length === 0) return;
-    while (this.isPolling) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    if (!(await this.drainInFlightTick())) return;
     this.isPolling = true;
     try {
       for (const workspaceId of workspaceIds) {

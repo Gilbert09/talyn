@@ -59,7 +59,21 @@ async function request<T>(
     void getSupabase().auth.signOut({ scope: 'local' });
   }
 
-  const data = (await response.json()) as ApiResponse<T>;
+  // The edge proxy in front of the hosted backend answers with plain text
+  // ("upstream error", "upstream request timeout") when the backend can't
+  // respond — parse defensively so an outage reads as "backend unreachable"
+  // instead of a JSON SyntaxError.
+  const text = await response.text();
+  let data: ApiResponse<T> | null = null;
+  try {
+    data = JSON.parse(text) as ApiResponse<T>;
+  } catch {
+    throw new Error(
+      `Backend unreachable (HTTP ${response.status}${
+        text ? `: ${text.slice(0, 80)}` : ''
+      })`
+    );
+  }
 
   if (!data.success) {
     throw new Error(data.error || 'Request failed');

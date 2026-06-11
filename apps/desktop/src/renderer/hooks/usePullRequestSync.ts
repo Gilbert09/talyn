@@ -18,16 +18,28 @@ export async function refreshPullRequests(): Promise<void> {
   const { setRows, setLoading, setError, setConnected } = usePullRequestStore.getState();
   setLoading(true);
   setError(null);
+  // A failed force-poll (backend busy/restarting) shouldn't abort the
+  // refresh — the cached list is still worth re-reading, and a successful
+  // list clears the error so the page recovers instead of pinning a stale
+  // banner. Only an error from the list itself surfaces.
+  let pollFailure: string | null = null;
   try {
     await api.repositories.forcePoll();
+  } catch (err) {
+    pollFailure = err instanceof Error ? err.message : 'Refresh failed';
+  }
+  try {
     const data = await api.pullRequests.list({
       workspaceId: currentWorkspaceId,
       state: 'open',
     });
     setRows(data);
-    setConnected(true); // a successful poll implies a working connection
+    setConnected(true); // a successful list implies a working connection
+    if (pollFailure) {
+      console.warn(`PR refresh: force-poll failed (${pollFailure}); showing cached rows`);
+    }
   } catch (err) {
-    setError(err instanceof Error ? err.message : 'Refresh failed');
+    setError(err instanceof Error ? err.message : pollFailure ?? 'Refresh failed');
   } finally {
     setLoading(false);
   }
@@ -41,6 +53,7 @@ export async function refreshPullRequests(): Promise<void> {
  */
 export function usePullRequestSync(): void {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const fetchError = usePullRequestStore((s) => s.error);
   const {
     setRows,
     setLoading,
@@ -145,6 +158,26 @@ export function usePullRequestSync(): void {
     });
     return unsubscribe;
   }, [currentWorkspaceId, applyPullRequestUpdate, setRows]);
+
+  // Self-heal: while the store holds a fetch error (backend outage, edge
+  // 5xx), retry the plain list every 30s until one succeeds — success clears
+  // the error and replaces the stale rows, so a transient outage recovers
+  // without the user mashing Refresh. The cheap list (no force-poll) keeps
+  // the retry gentle on a backend that's struggling.
+  useEffect(() => {
+    if (!fetchError || !currentWorkspaceId) return;
+    const timer = window.setInterval(() => {
+      api.pullRequests
+        .list({ workspaceId: currentWorkspaceId, state: 'open' })
+        .then((data) => {
+          setRows(data);
+          setError(null);
+          setConnected(true);
+        })
+        .catch(() => {}); // still down — banner stays, next tick retries
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [fetchError, currentWorkspaceId, setRows, setError, setConnected]);
 
   // Reconnect catch-up: `pull_request:updated` broadcasts (which carry live
   // merge-queue positions/status) are fire-and-forget to open sockets only, so

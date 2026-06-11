@@ -939,4 +939,48 @@ describe('prMonitor — poll orchestration', () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  // A forced poll must never hang behind a long-running background tick —
+  // in prod an unbounded drain left `POST /repositories/poll` pending for the
+  // client's full 300s timeout while a throttled tick crawled. The drain is
+  // bounded: give up, skip the redundant poll, and let the caller read the
+  // cache the in-flight tick is already refreshing.
+  describe('bounded drain of an in-flight tick', () => {
+    const svc = prMonitorService as unknown as { isPolling: boolean };
+
+    afterEach(() => {
+      svc.isPolling = false;
+      vi.useRealTimers();
+    });
+
+    it.each([
+      ['forcePoll', () => prMonitorService.forcePoll()],
+      ['forcePollWorkspaces', () => prMonitorService.forcePollWorkspaces(['ws1'])],
+    ])('%s gives up when the tick outlives the drain window', async (_name, run) => {
+      vi.useFakeTimers();
+      const searchSpy = mockSearch([1]);
+      svc.isPolling = true; // a background tick that never finishes
+
+      const promise = run();
+      await vi.advanceTimersByTimeAsync(20_000); // past FORCE_POLL_DRAIN_MS
+      await promise;
+
+      expect(searchSpy).not.toHaveBeenCalled();
+      expect(svc.isPolling).toBe(true); // we never stole the guard
+    });
+
+    it('proceeds once the in-flight tick finishes within the window', async () => {
+      vi.useFakeTimers();
+      const searchSpy = mockSearch([]);
+      svc.isPolling = true;
+
+      const promise = prMonitorService.forcePollWorkspaces(['ws1']);
+      await vi.advanceTimersByTimeAsync(1_000);
+      svc.isPolling = false; // tick completes well inside the deadline
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(searchSpy).toHaveBeenCalled();
+    });
+  });
 });
