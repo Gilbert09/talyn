@@ -176,8 +176,9 @@ describe('postHogCodeStreamer', () => {
   });
 
   it('flushNow() persists the in-memory transcript of a live stream mid-run', async () => {
-    // Two events — below PERSIST_EVERY (25), so the stream would not persist
-    // on its own. The body stays open (in-progress run still tailing).
+    // Two events — inside the time-based persist debounce window (10s), so
+    // the stream would not persist on its own within the test's lifetime.
+    // The body stays open (in-progress run still tailing).
     mockClient.openRunStream.mockResolvedValue({
       ok: true,
       status: 200,
@@ -208,6 +209,49 @@ describe('postHogCodeStreamer', () => {
 
   it('flushNow() is a harmless no-op when no stream is active', async () => {
     await expect(postHogCodeStreamer.flushNow('no-such-task')).resolves.toBeUndefined();
+  });
+
+  it('debounces persists by time, not event count — a burst above the old 25-event threshold stays buffered', async () => {
+    // 30 events in one burst — under the old `PERSIST_EVERY = 25` trigger
+    // this would have flushed mid-burst; the 10s debounce must hold them
+    // all in memory. The body stays open (live run still tailing).
+    const frames = Array.from({ length: 30 }, (_, i) =>
+      acpFrame({ sessionUpdate: 'agent_message', content: { text: `e${i}` } }, `${i + 1}-0`),
+    );
+    mockClient.openRunStream.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: openSseStream(frames),
+    });
+
+    postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
+
+    // Give the read loop time to ingest the whole burst, then prove no
+    // count-triggered persist fired.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await getTranscript(db)).toHaveLength(0);
+
+    // flushNow drains the buffer — all 30 events were retained in memory.
+    await postHogCodeStreamer.flushNow(TASK);
+    const transcript = await getTranscript(db);
+    expect(transcript).toHaveLength(30);
+    expect(transcript.map((e) => e.seq)).toEqual(Array.from({ length: 30 }, (_, i) => i));
+  });
+
+  it('isActive() reflects the stream lifecycle', async () => {
+    mockClient.openRunStream.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: openSseStream([acpFrame({ sessionUpdate: 'agent_message', content: { text: 'hi' } }, '1-0')]),
+    });
+
+    expect(postHogCodeStreamer.isActive(TASK)).toBe(false);
+    postHogCodeStreamer.ensure({ taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr' });
+    expect(postHogCodeStreamer.isActive(TASK)).toBe(true);
+    postHogCodeStreamer.stop(TASK);
+    expect(postHogCodeStreamer.isActive(TASK)).toBe(false);
   });
 
   it('pages through session_logs with `after` until a short page drains the run', async () => {

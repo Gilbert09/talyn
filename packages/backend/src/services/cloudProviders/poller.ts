@@ -3,6 +3,7 @@ import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { readCloudTaskProvider } from '@fastowl/shared';
 import { getCloudProvider } from './registry.js';
+import { isWatched } from './taskWatch.js';
 import { debugBus } from '../debugBus.js';
 import type { CloudTaskRow } from './types.js';
 
@@ -82,6 +83,7 @@ class CloudTaskPoller {
           repositoryId: row.repositoryId,
           metadata,
           transcriptEmpty: row.transcriptEmpty,
+          watched: isWatched(row.id),
         };
 
         try {

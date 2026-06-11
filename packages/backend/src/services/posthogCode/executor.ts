@@ -8,7 +8,6 @@ import {
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
 import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.js';
-import { postHogCodeStreamer } from './streamer.js';
 import { DEFAULT_POSTHOG_CODE_MODEL } from './client.js';
 
 const DEFAULT_RUNTIME_ADAPTER: PostHogCodeRuntimeAdapter = 'claude';
@@ -129,18 +128,9 @@ export async function dispatchTaskToPostHogCode(
       .where(eq(tasksTable.id, task.id));
     emitTaskStatus(task.workspaceId, task.id, 'in_progress');
 
-    // Start streaming the run's logs into the transcript right away so
-    // the task terminal shows progress without waiting for the poller's
-    // first tick. If the run id isn't on the response yet, the poller
-    // picks it up from `latest_run` on its next tick.
-    if (runId) {
-      postHogCodeStreamer.ensure({
-        taskId: task.id,
-        workspaceId: task.workspaceId,
-        posthogTaskId: remoteTaskId,
-        posthogRunId: runId,
-      });
-    }
+    // No stream on dispatch — transcript streaming is view-gated. A user
+    // watching the task screen starts it instantly via refresh-logs, and
+    // SSE replays from the start so a later viewer loses nothing.
 
     console.log(
       `[posthogCode] task ${task.id.slice(0, 8)} → remote task ${remoteTaskId} run ${runId ?? '(pending)'} (${repository})`,

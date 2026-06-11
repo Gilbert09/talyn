@@ -20,13 +20,21 @@ import type { PostHogCodeClient } from './client.js';
  *     finished while the backend was down) → one-shot durable backfill
  *     from `/session_logs/` (S3).
  *
- * Lifecycle is driven from the poller: `ensure()` on each in-progress
- * cloud task (idempotent, self-healing across reconnects/restarts),
- * `stop()` once the run reaches a terminal status. The poller continues
- * to own status/PR/finalisation — this service only owns the transcript.
+ * Lifecycle is driven from the poller, gated on the task being viewed
+ * (services/cloudProviders/taskWatch.ts): `ensure()` while a task is
+ * in-progress AND watched (idempotent, self-healing across
+ * reconnects/restarts), `stop()` once the watch lapses or the run
+ * reaches a terminal status. The poller continues to own
+ * status/PR/finalisation — this service only owns the transcript.
  */
 
-const PERSIST_EVERY = 25; // events
+/**
+ * Transcript writes ship the WHOLE jsonb array (Supabase egress), so the
+ * flush is debounced by time rather than event count — a token-level
+ * burst coalesces into one write per window. The stream-end tail and
+ * `flushNow()` cover anything still buffered.
+ */
+const PERSIST_INTERVAL_MS = 10_000;
 const TRANSCRIPT_MAX_EVENTS = 2000;
 const MAX_RECONNECTS = 5;
 const RECONNECT_DELAY_MS = 1500;
@@ -52,6 +60,8 @@ interface ActiveStream {
   lastEventId?: string;
   /** Events appended since the last DB flush. */
   unpersisted: number;
+  /** When the transcript last flushed to the DB (persist debounce). */
+  lastPersistAt: number;
   closed: boolean;
   /** Skip SSE, pull the durable S3 log once (terminal runs). */
   backfillOnly: boolean;
@@ -96,6 +106,7 @@ class PostHogCodeStreamer {
       nextSeq: seed.reduce((max, e) => Math.max(max, e.seq + 1), 0),
       // Persist on the next append so a seed-only resume still saves.
       unpersisted: seed.length > 0 ? 1 : 0,
+      lastPersistAt: Date.now(),
       closed: false,
       backfillOnly: Boolean(input.backfillOnly),
     };
@@ -109,9 +120,14 @@ class PostHogCodeStreamer {
     });
   }
 
+  /** Is a stream (live or backfill) currently active for this task? */
+  isActive(taskId: string): boolean {
+    return this.active.has(taskId);
+  }
+
   /**
    * Force-persist a live stream's in-memory transcript, if one is active.
-   * The read loop only persists every PERSIST_EVERY events, so a reader
+   * The read loop only persists every PERSIST_INTERVAL_MS, so a reader
    * opening the task mid-run (which fetches the durable transcript) would
    * otherwise miss the last few buffered events. Called from the
    * refresh-logs route before it returns. No-op if no stream is active.
@@ -334,7 +350,7 @@ class PostHogCodeStreamer {
       emitTaskEvent(stream.workspaceId, stream.taskId, event);
       stream.unpersisted += 1;
     }
-    if (stream.unpersisted >= PERSIST_EVERY) {
+    if (Date.now() - stream.lastPersistAt >= PERSIST_INTERVAL_MS) {
       void this.persist(stream).catch((err) =>
         console.warn(
           `[posthogCode] transcript persist failed for ${stream.taskId.slice(0, 8)}:`,
@@ -347,6 +363,7 @@ class PostHogCodeStreamer {
   private async persist(stream: ActiveStream): Promise<void> {
     if (stream.unpersisted === 0) return;
     stream.unpersisted = 0;
+    stream.lastPersistAt = Date.now();
 
     let transcript = stream.transcript;
     if (transcript.length > TRANSCRIPT_MAX_EVENTS) {

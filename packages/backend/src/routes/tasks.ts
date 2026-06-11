@@ -14,6 +14,7 @@ import {
 } from '../services/websocket.js';
 import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
 import { getCloudProvider } from '../services/cloudProviders/registry.js';
+import { clearWatched, markWatched } from '../services/cloudProviders/taskWatch.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
 import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
 import {
@@ -336,6 +337,7 @@ export function taskRoutes(): Router {
       }
     }
     provider?.stopStreaming(task.id);
+    clearWatched(task.id);
 
     const result = {
       success: false,
@@ -389,6 +391,9 @@ export function taskRoutes(): Router {
     if (!posthogTaskId) {
       return res.status(400).json({ success: false, error: 'Not a PostHog Code task.' });
     }
+    // Mark watched before any remote call — even if the run hasn't started
+    // yet (409 below), the poller should start streaming once it has.
+    markWatched(task.id);
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) {
       return res.status(400).json({
@@ -428,6 +433,23 @@ export function taskRoutes(): Router {
     return res.json({ success: true });
   });
 
+  // Viewing heartbeat. The desktop pings this while a task screen is
+  // mounted; the cloud poller only keeps a live transcript stream open for
+  // watched tasks (services/cloudProviders/taskWatch.ts). Deliberately
+  // cheap — no remote call, no task-row read beyond the access check —
+  // unlike refresh-logs, which resolves the run remotely on every call.
+  router.post('/:id/watch', async (req, res) => {
+    try {
+      await requireTaskAccess(req, req.params.id);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const watched = (req.body as { watched?: boolean } | undefined)?.watched ?? true;
+    if (watched) markWatched(req.params.id);
+    else clearWatched(req.params.id);
+    res.status(204).end();
+  });
+
   // Delete task
   router.delete('/:id', async (req, res) => {
     try {
@@ -446,6 +468,7 @@ export function taskRoutes(): Router {
       if (task && task.status === 'in_progress') {
         const provider = getCloudProvider(readCloudTaskProvider(task));
         provider?.stopStreaming(task.id);
+        clearWatched(task.id);
       }
 
       const result = await db

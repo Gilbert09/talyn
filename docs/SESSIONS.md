@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 57 — View-gated cloud log streaming + time-debounced transcript persists
+
+Diagnosed a Railway network spike (~40MB/bucket for ~40 min, flat CPU/memory): every in-progress PostHog Code task streamed its SSE log 24/7 (token-level ACP deltas — single tasks delivered 12k+ events in a 2-minute window) and the streamer persisted the **full transcript jsonb** to Supabase every 25 events (`PERSIST_EVERY`) — ~500 full-blob UPDATEs per task per 2 minutes during bursts, quadratic over a run's life. Nothing functional needed the always-on stream: status/PR/finalisation all come from the poller's `getTask()` REST poll + bounded `getSessionLogs` tail fetches, and terminal-with-empty-transcript runs already get a one-shot durable S3 backfill. The stream's only job is the live transcript view.
+
+**Fix — stream only while someone's looking, write on a clock not a counter:**
+- New `services/cloudProviders/taskWatch.ts` (mirrors `prFocus`): in-memory `markWatched`/`isWatched`/`clearWatched`, 90s TTL, lazy expiry. `CloudTaskRow` gains `watched` (stamped by the generic poller from the registry; no query change).
+- `posthogCode/poller.ts` gate rewritten: terminal+empty-transcript → one-shot backfill (unchanged, unconditional); running+watched → live stream; otherwise tear down via new `streamer.isActive()` (stop persists buffered events). `finalize()` clears the watch.
+- `streamer.ts`: `PERSIST_EVERY = 25` → `PERSIST_INTERVAL_MS = 10s` debounce (check-on-append; stream-end tail + `flushNow` cover the rest). Worst case on hard crash: ≤10s of mid-run snapshot, and finished runs stay durable via the terminal backfill.
+- Routes: `refresh-logs` marks watched *before* the remote call (so the run-not-started 409 still arms the poller); new lightweight `POST /tasks/:id/watch` heartbeat (no remote call, no row read beyond access check); stop/delete clear the watch. `executor.ts` no longer opens a stream on dispatch — the task screen's refresh-logs starts it instantly for a viewer, SSE replays from the start for late viewers.
+- Desktop: `api.tasks.watch()` + a 30s heartbeat effect in `TaskTerminal` while a cloud task is mounted and `in_progress`. Deliberately no unwatch-on-unmount (two windows viewing the same task would race); the TTL lapse costs ≤90s of tail.
+- Tests (+15): `taskWatch.test.ts` (fake-timer TTL semantics), `posthogCodePollerGating.test.ts` (parameterized over the four gate arms + watch-cleared-on-finalize; gotcha: `finalize`'s void-ed `captureOutcome` DB read races pglite teardown — settle before `cleanup()` or the WASM wedges the worker), streamer debounce test (30-event burst stays buffered; old count trigger would have flushed at 25) + `isActive()` lifecycle.
+
+Net effect: an unwatched fleet of cloud runs (the exact spike scenario — pr-followup batches) costs only the 10s status poll; transcript bytes flow only for the task on screen, at ≤1 full-blob write per 10s. Known leftover (pre-existing, now bounded to watched tasks): the SSE edge kills streams every ~2 min and `Last-Event-ID` resume sometimes re-replays history — worth chasing separately if watched-task traffic still looks fat.
+
 ## Session 56 — Refactor-debris sweep: dead client code, doc drift, silent catches, missing tests, README
 
 A "what have we overlooked?" audit of the cloud-only refactor's leftovers, worked through as five focused commits. (Started in one Claude session, finished in another after API errors killed the first mid-edit.)

@@ -14,6 +14,10 @@ interface TaskTerminalProps {
   task: Task;
 }
 
+// Re-announce well inside the backend's 90s watch TTL so two missed
+// beats (sleep blip, slow request) don't drop the stream.
+const WATCH_HEARTBEAT_MS = 30_000;
+
 export function TaskTerminal({ task }: TaskTerminalProps) {
   const { stopTask } = useTaskActions();
   const environments = useWorkspaceStore((s) => s.environments);
@@ -56,6 +60,18 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   // socket was down are gone, and the task-list reconcile can't restore
   // them (the list payload drops `transcript` for egress).
   useOnReconnect(() => void hydrateTranscript());
+
+  // Viewing heartbeat: the backend only streams a running cloud task's logs
+  // while someone keeps announcing they're watching (90s TTL server-side).
+  // No unwatch on unmount — a second window viewing the same task would
+  // race; letting the TTL lapse costs at most ~90s of extra tail.
+  useEffect(() => {
+    if (!hasCloudRun || task.status !== 'in_progress') return undefined;
+    const beat = () => void api.tasks.watch(task.id).catch(() => {});
+    beat();
+    const timer = window.setInterval(beat, WATCH_HEARTBEAT_MS);
+    return () => window.clearInterval(timer);
+  }, [task.id, task.status, hasCloudRun]);
 
   const handleStopTask = useCallback(async () => {
     setIsStopping(true);

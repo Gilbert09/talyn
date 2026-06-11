@@ -74,4 +74,7 @@ export interface CloudTaskRow {
   repositoryId: string | null;
   metadata: Record<string, unknown>;
   transcriptEmpty: boolean;
+  /** A desktop client is viewing this task (taskWatch registry) — gates
+   *  whether the provider keeps a live transcript stream open. */
+  watched: boolean;
 }

@@ -9,6 +9,7 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
+import { clearWatched } from '../cloudProviders/taskWatch.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
 import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.js';
@@ -72,6 +73,7 @@ class PostHogCodePoller {
       posthogTaskId,
       lastStatus: row.metadata.posthogStatus as string | undefined,
       transcriptEmpty: row.transcriptEmpty,
+      watched: row.watched,
     });
   }
 
@@ -83,6 +85,7 @@ class PostHogCodePoller {
     posthogTaskId: string;
     lastStatus?: string;
     transcriptEmpty: boolean;
+    watched: boolean;
   }): Promise<void> {
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) return; // credentials removed mid-run; leave as-is.
@@ -99,21 +102,31 @@ class PostHogCodePoller {
 
     // Drive the log stream into the task transcript. `ensure` is
     // idempotent and self-heals across reconnects/backend restarts.
-    //   - running: keep a live SSE stream open.
-    //   - terminal but no transcript yet (run finished while the backend
-    //     was down): one-shot durable backfill from S3 — the stream
-    //     self-terminates once drained.
-    //   - terminal with a transcript: nothing left to do; drop any
-    //     lingering stream.
+    // Live streaming is view-gated (taskWatch) — the SSE firehose plus
+    // full-transcript persists are pure UI bytes, so nobody watching
+    // means no stream.
+    //   - terminal but no transcript yet (run finished unwatched, or
+    //     while the backend was down): one-shot durable backfill from
+    //     S3 — the stream self-terminates once drained.
+    //   - running AND watched: keep a live SSE stream open.
+    //   - otherwise (unwatched, or terminal with a transcript): tear
+    //     down any lingering stream — `stop` persists what's buffered.
     const isTerminal = TERMINAL.has(status);
-    if (runId && (!isTerminal || task.transcriptEmpty)) {
+    if (runId && isTerminal && task.transcriptEmpty) {
       postHogCodeStreamer.ensure({
         taskId: task.id,
         workspaceId: task.workspaceId,
         posthogTaskId: task.posthogTaskId,
         posthogRunId: runId,
       });
-    } else if (isTerminal) {
+    } else if (runId && !isTerminal && task.watched) {
+      postHogCodeStreamer.ensure({
+        taskId: task.id,
+        workspaceId: task.workspaceId,
+        posthogTaskId: task.posthogTaskId,
+        posthogRunId: runId,
+      });
+    } else if (postHogCodeStreamer.isActive(task.id)) {
       postHogCodeStreamer.stop(task.id);
     }
 
@@ -268,6 +281,7 @@ class PostHogCodePoller {
     result: TaskResult,
   ): Promise<void> {
     this.lastIdleCheck.delete(task.id);
+    clearWatched(task.id);
     const now = new Date();
     await getDbClient()
       .update(tasksTable)

@@ -133,6 +133,10 @@ export const tasks = {
   // Kick a PostHog Code (cloud) task's log stream/backfill on demand.
   // Transcript events arrive over the WS, so the response is just ok.
   refreshLogs: (id: string) => request<void>('POST', `/tasks/${id}/refresh-logs`),
+  // Viewing heartbeat — the backend only streams a cloud task's logs while
+  // a client keeps re-announcing that the task screen is open.
+  watch: (id: string, watched = true) =>
+    request<void>('POST', `/tasks/${id}/watch`, { watched }),
 };
 
 // GitHub Integration
