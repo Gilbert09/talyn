@@ -106,7 +106,7 @@ class PRMonitorService extends EventEmitter {
     // re-read the adaptive interval. Kick the main poll ~5s after boot.
     this.pollTimer = setTimeout(() => {
       void this.poll()
-        .catch(() => {})
+        .catch((err) => console.error('PR monitor: tick crashed:', err))
         .finally(() => this.scheduleMain());
     }, 5_000);
     this.scheduleFast();
@@ -132,7 +132,7 @@ class PRMonitorService extends EventEmitter {
     debugBus.registerPoller('pr_monitor', interval, MAIN_POLLER_DESC, POLL_INTERVAL_MS);
     this.pollTimer = setTimeout(() => {
       void this.poll()
-        .catch(() => {})
+        .catch((err) => console.error('PR monitor: tick crashed:', err))
         .finally(() => this.scheduleMain());
     }, interval);
   }
@@ -150,7 +150,7 @@ class PRMonitorService extends EventEmitter {
     );
     this.fastTimer = setTimeout(() => {
       void this.fastPoll()
-        .catch(() => {})
+        .catch((err) => console.error('PR monitor: fast tick crashed:', err))
         .finally(() => this.scheduleFast());
     }, interval);
   }

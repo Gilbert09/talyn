@@ -166,7 +166,13 @@ class PRAutoMergeWatcher {
     if (Date.now() - new Date(row.lastPolledAt).getTime() > FRESHNESS_MS) {
       await prMonitorService
         .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
-        .catch(() => {});
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          console.warn(
+            `[prAutoMergeWatcher] freshness refetch failed for ${row.owner}/${row.repo}#${row.number}:`,
+            msg
+          );
+        });
       const reread = await db
         .select(WATCH_COLUMNS)
         .from(pullRequestsTable)

@@ -113,7 +113,10 @@ class NotificationsPoller {
       const number = parsePrNumber(n.subject.url);
       if (number === null) continue;
       const [owner, repo] = fullName.split('/');
-      await prMonitorService.refreshPr(workspaceId, owner, repo, number).catch(() => {});
+      await prMonitorService.refreshPr(workspaceId, owner, repo, number).catch((err) => {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        console.warn(`notifications: refresh ${fullName}#${number} failed:`, msg);
+      });
     }
 
     this.states.set(workspaceId, {

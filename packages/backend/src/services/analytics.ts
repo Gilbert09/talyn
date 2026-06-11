@@ -131,5 +131,8 @@ export function captureWorkspaceEvent(
         ...properties,
       });
     })
-    .catch(() => {});
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : 'unknown error';
+      console.warn(`[analytics] capture "${event}" failed:`, msg);
+    });
 }

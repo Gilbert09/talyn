@@ -202,7 +202,10 @@ class PostHogCodeStreamer {
         if (errorAttempts > MAX_RECONNECTS) {
           // Last resort: pull whatever durable log exists so the user
           // isn't left with a blank pane.
-          await this.backfillFromSessionLogs(stream, client).catch(() => {});
+          await this.backfillFromSessionLogs(stream, client).catch((backfillErr) => {
+            const bMsg = backfillErr instanceof Error ? backfillErr.message : String(backfillErr);
+            console.warn(`[posthogCode] ${tag}: last-resort backfill failed: ${bMsg}`);
+          });
           break;
         }
         await delay(RECONNECT_DELAY_MS);
