@@ -2,7 +2,7 @@
 
 **Mission control for your GitHub PRs, powered by cloud coding agents.**
 
-FastOwl is a desktop app that tracks your open and review-requested pull requests, turns incoming signals (new reviews, comments, CI failures, merge-ready PRs) into a prioritized inbox, and lets you hand the routine work — fixing failing CI, addressing review comments, drafting a review — to **cloud coding agents** that run on their own sandbox and open a PR for you.
+FastOwl is a desktop app that tracks your open and review-requested pull requests, surfaces the ones that need attention (new reviews, comments, CI failures, merge conflicts), and lets you hand the routine work — fixing failing CI, addressing review comments, drafting a review — to **cloud coding agents** that run on their own sandbox and open a PR for you. Flag a PR and FastOwl keeps it mergeable on its own, firing a cloud fix run whenever it falls behind or goes red.
 
 If you live in GitHub PRs and want to delegate the rote drudgery without babysitting a local agent, FastOwl is for you.
 
@@ -18,9 +18,9 @@ Keeping on top of your PRs today means:
 
 FastOwl consolidates that:
 
-- **One prioritized inbox.** New reviews, review comments, CI failures, and merge-ready transitions on your PRs — all funneled into a priority-ordered list so you always know what needs attention next.
-- **A live PR dashboard.** Every watched repo's PRs with a check-rollup status pill, review status, and a detail sheet (summary / checks / files / conversation). Merge straight from the app.
+- **A live PR dashboard.** Every watched repo's PRs with a check-rollup status pill, review status, and a detail sheet (summary / checks / files / conversation). Needs-attention / Mine / Review buckets keep the list triaged. Merge straight from the app.
 - **Delegate to a cloud agent.** From a PR row ("fix this PR") or as a freeform task on a repo, FastOwl hands the prompt to a cloud provider. The provider runs the whole agent loop on its own sandbox and opens a PR; FastOwl streams the transcript back and links the resulting PR.
+- **Self-fixing PRs.** Queue a PR for merge or flag it *keep mergeable*, and FastOwl watches it: when it falls behind, hits a conflict, or fails CI, it automatically dispatches a cloud fix run — and the merge queue lands it once it's green.
 
 There is **no local execution** — no daemon, no SSH, no `claude` CLI to install, nothing running on your machine. The agent runs in the cloud.
 
@@ -28,9 +28,9 @@ There is **no local execution** — no daemon, no SSH, no `claude` CLI to instal
 
 ## Expected workflow
 
-1. **Open FastOwl.** The inbox shows anything that came in — a review on one of your PRs, a failing check on another, a PR that's now mergeable.
-2. **Triage the dashboard.** The GitHub panel lists your PRs with live status pills. Open one to see checks, the diff, and the conversation. Merge the ready ones.
-3. **Delegate the rest.** On a PR that needs work, kick off a cloud task (fix CI / address review). Or compose a freeform task: pick a repo, write a prompt. The task is delegated to a cloud provider.
+1. **Open FastOwl.** The GitHub panel's needs-attention bucket shows what came in — a review on one of your PRs, a failing check on another, a PR that's now mergeable.
+2. **Triage the dashboard.** Your PRs are listed with live status pills. Open one to see checks, the diff, and the conversation. Merge the ready ones.
+3. **Delegate the rest.** On a PR that needs work, kick off a cloud task (fix CI / address review), queue it for merge, or flag it keep-mergeable and let the auto-fix loop handle future breakage. Or compose a freeform task: pick a repo, write a prompt.
 4. **Watch it run.** Click an in-progress task to see the streamed transcript. When the provider opens a PR, FastOwl links it onto the task and the GitHub dashboard.
 5. **Review on GitHub.** The agent's work lands as a normal PR — review and merge it like any other.
 
@@ -92,8 +92,8 @@ Configured from **Settings → Integrations** inside the app:
 
 ## Architecture at a glance
 
-- **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui. Talks to the backend over HTTP + WebSocket; renders the inbox, PR dashboard, and cloud task transcripts.
-- **`packages/backend/`** — TypeScript + Express + Postgres (Drizzle). Monitors GitHub, caches PRs, and delegates tasks to cloud providers via the `CloudTaskProvider` registry + poller.
+- **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui. Talks to the backend over HTTP + WebSocket; renders the PR dashboard and cloud task transcripts.
+- **`packages/backend/`** — TypeScript + Express + Postgres (Drizzle). Monitors GitHub, caches PRs, runs the merge queue + auto-keep-mergeable watcher, and delegates tasks to cloud providers via the `CloudTaskProvider` registry + poller.
 - **`packages/cli/`**, **`packages/mcp-server/`** — thin `fastowl` CLI + stdio MCP surface for tasks.
 - **`packages/shared/`** — shared TypeScript types.
 
@@ -120,7 +120,7 @@ See [`CLAUDE.md`](./CLAUDE.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.
 
 FastOwl is under active development. As of June 2026 it pivoted to a **cloud-only PR-management** app — the previous local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates) was removed. See [`CLAUDE.md`](./CLAUDE.md) for orientation and active priorities, [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) for the provider abstraction + roadmap, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
 
-Shipped: GitHub OAuth + PR monitoring + PR dashboard (status pills, detail sheet, merge), prioritized inbox, cloud task delegation via the `CloudTaskProvider` abstraction (PostHog Code), live transcript streaming, PR linking.
+Shipped: GitHub OAuth + PR monitoring + PR dashboard (status pills, detail sheet, merge), merge queue + auto-keep-mergeable self-fix runs, cloud task delegation via the `CloudTaskProvider` abstraction (PostHog Code), live transcript streaming, PR linking.
 
 In flight: additional providers (Codex Cloud, Claude Routines), per-provider Settings/composer UI.
 
