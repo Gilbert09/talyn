@@ -36,7 +36,7 @@ export function userRoutes(): Router {
     // no-op, but it clears the token/viewer caches and emits 'disconnected'
     // so the PR monitor stops polling the dead workspaces.
     for (const ws of owned) {
-      await githubService.removeToken(ws.id);
+      await githubService.removeToken(ws.id, 'account deletion cleanup');
     }
 
     // Best-effort: without this the auth user survives and the next sign-in

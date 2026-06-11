@@ -239,7 +239,7 @@ describe('routes/github', () => {
         body: JSON.stringify({ workspaceId: 'ws1' }),
       });
       expect(res.status).toBe(200);
-      expect(removeSpy).toHaveBeenCalledWith('ws1');
+      expect(removeSpy).toHaveBeenCalledWith('ws1', expect.stringContaining('user disconnected'));
     });
 
     it('404s a cross-tenant workspace', async () => {

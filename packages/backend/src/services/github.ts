@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
@@ -70,6 +71,24 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Short, stable identifier for a token that's safe to log. Lets us correlate
+ * "the token we stored at connect time" with "the token GitHub later 401'd"
+ * across restarts — and cross-check against GitHub's authorized-apps page —
+ * without ever logging the credential itself.
+ */
+function tokenFingerprint(accessToken: string): string {
+  return createHash('sha256').update(accessToken).digest('hex').slice(0, 8);
+}
+
+/** Human-readable token age for log lines ("5h", "12d"). */
+function describeTokenAge(createdAt: string): string {
+  const ms = Date.now() - new Date(createdAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown age';
+  const hours = Math.round(ms / 3_600_000);
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
 /** One resource bucket from `GET /rate_limit`. `reset` is a unix epoch (s). */
@@ -283,8 +302,13 @@ class GitHubService extends EventEmitter {
         });
       }
 
+      const fingerprints = [...this.tokens.entries()]
+        .map(([ws, t]) => `${ws}=fp:${tokenFingerprint(t.accessToken)}(${describeTokenAge(t.createdAt)})`)
+        .join(' ');
       const summary =
         `Loaded ${this.tokens.size} GitHub token(s) from ${rows.length} integration row(s)` +
+        ` (oauth app ${GITHUB_CLIENT_ID || 'unconfigured'})` +
+        (fingerprints ? ` ${fingerprints}` : '') +
         (failed
           ? ` — ${failed} could not be read (likely a FASTOWL_TOKEN_KEY mismatch; reconnect GitHub to re-save).`
           : '');
@@ -408,6 +432,32 @@ class GitHubService extends EventEmitter {
       });
     }
 
+    // Log enough to reconstruct the token's life later: which OAuth app
+    // minted it, its fingerprint, and what (if anything) it replaced. When a
+    // token later dies with a 401 this is how we tell "rotated by a reconnect
+    // elsewhere" apart from "revoked by GitHub out of the blue".
+    const prior = this.tokens.get(workspaceId);
+    const fp = tokenFingerprint(accessToken);
+    const summary =
+      `[github] workspace ${workspaceId}: stored token fp:${fp} scopes="${scope}" ` +
+      `(oauth app ${GITHUB_CLIENT_ID || 'unconfigured'})` +
+      (prior
+        ? ` — replaces fp:${tokenFingerprint(prior.accessToken)} (age ${describeTokenAge(prior.createdAt)})`
+        : '');
+    console.log(summary);
+    debugBus.recordEvent({
+      service: 'github',
+      action: 'token:stored',
+      summary,
+      ok: true,
+      meta: {
+        workspaceId,
+        fingerprint: fp,
+        scope,
+        replacedFingerprint: prior ? tokenFingerprint(prior.accessToken) : null,
+      },
+    });
+
     this.tokens.set(workspaceId, {
       workspaceId,
       accessToken,
@@ -446,7 +496,34 @@ class GitHubService extends EventEmitter {
     }
   }
 
-  async removeToken(workspaceId: string): Promise<void> {
+  /**
+   * Delete the workspace's GitHub integration. `reason` is mandatory in
+   * spirit: this runs both for explicit user disconnects AND automatically
+   * when GitHub 401s a request, and prod has seen surprise disconnects —
+   * the log line here is how we tell those apart after the fact.
+   */
+  async removeToken(workspaceId: string, reason = 'unspecified'): Promise<void> {
+    const prior = this.tokens.get(workspaceId);
+    const summary =
+      `[github] workspace ${workspaceId}: REMOVING token` +
+      (prior
+        ? ` fp:${tokenFingerprint(prior.accessToken)} (age ${describeTokenAge(prior.createdAt)})`
+        : ' (none cached)') +
+      ` — reason: ${reason}`;
+    console.warn(summary);
+    debugBus.recordEvent({
+      service: 'github',
+      action: 'token:removed',
+      summary,
+      ok: false,
+      meta: {
+        workspaceId,
+        reason,
+        fingerprint: prior ? tokenFingerprint(prior.accessToken) : null,
+        tokenAge: prior ? describeTokenAge(prior.createdAt) : null,
+      },
+    });
+
     await this.db
       .delete(integrationsTable)
       .where(
@@ -577,7 +654,13 @@ class GitHubService extends EventEmitter {
         workspaceId,
       });
       if (response.status === 401) {
-        await this.removeToken(workspaceId);
+        // GitHub's body says WHY ("Bad credentials" = revoked/invalid vs
+        // "...token expired") and the request id lets GitHub support trace it.
+        await this.removeToken(
+          workspaceId,
+          `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+        );
       }
       if (rl.isRateLimited) {
         throw new GitHubRateLimitError(error, rl.retryAfterMs);
@@ -718,7 +801,12 @@ class GitHubService extends EventEmitter {
       return { status: 304, notifications: [], lastModified, pollInterval };
     }
     if (response.status === 401) {
-      await this.removeToken(workspaceId);
+      const bodyText = await response.text().catch(() => '');
+      await this.removeToken(
+        workspaceId,
+        `401 on GET /notifications — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+          `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+      );
       throw new Error('GitHub token expired or revoked');
     }
     if (!response.ok) throw new Error(await this.describeApiError(response));
@@ -1206,7 +1294,12 @@ class GitHubService extends EventEmitter {
       }
       if (response.status === 401) {
         recordGql(false, 'token expired or revoked');
-        await this.removeToken(workspaceId);
+        const bodyText = await response.text().catch(() => '');
+        await this.removeToken(
+          workspaceId,
+          `401 on POST /graphql — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+        );
         throw new Error('GitHub token expired or revoked');
       }
       // A secondary-rate-limit 403/429 is NOT retried inline — that would burst

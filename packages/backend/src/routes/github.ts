@@ -216,7 +216,7 @@ export function githubRoutes(): Router {
   router.post('/disconnect', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res, 'body');
     if (!workspaceId) return;
-    await githubService.removeToken(workspaceId);
+    await githubService.removeToken(workspaceId, 'user disconnected via POST /github/disconnect');
     res.json({ success: true } as ApiResponse<void>);
   });
 
