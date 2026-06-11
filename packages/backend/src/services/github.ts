@@ -115,6 +115,16 @@ function tokenFingerprint(accessToken: string): string {
   return createHash('sha256').update(accessToken).digest('hex').slice(0, 8);
 }
 
+/**
+ * The token's type prefix (`gho_` = OAuth app, `ghu_` = GitHub App
+ * user-to-server, etc.). Not secret — it's pure type information — and it
+ * settles which token family GitHub minted us (ghu_ would mean expiring
+ * GitHub App tokens we have no refresh handling for).
+ */
+function tokenPrefix(accessToken: string): string {
+  return /^gh[a-z]_/.exec(accessToken)?.[0] ?? 'unprefixed';
+}
+
 /** Human-readable token age for log lines ("5h", "12d"). */
 function describeTokenAge(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime();
@@ -257,6 +267,8 @@ interface StoredToken {
 export interface TokenHealthCheck {
   workspaceId: string;
   fingerprint: string;
+  /** Token type prefix (`gho_` OAuth app, `ghu_` GitHub App user token, …). */
+  prefix: string;
   /** When FastOwl stored the token (ISO). */
   storedCreatedAt: string;
   valid: boolean;
@@ -517,7 +529,7 @@ class GitHubService extends EventEmitter {
     const prior = this.tokens.get(workspaceId);
     const fp = tokenFingerprint(accessToken);
     const summary =
-      `[github] workspace ${workspaceId}: stored token fp:${fp} scopes="${scope}" ` +
+      `[github] workspace ${workspaceId}: stored token fp:${fp} prefix=${tokenPrefix(accessToken)} scopes="${scope}" ` +
       `(oauth app ${GITHUB_CLIENT_ID || 'unconfigured'})` +
       (prior
         ? ` — replaces fp:${tokenFingerprint(prior.accessToken)} (age ${describeTokenAge(prior.createdAt)})`
@@ -1187,7 +1199,13 @@ class GitHubService extends EventEmitter {
     if (response.status === 404) {
       // Token is dead on GitHub's side. Don't remove it here — leave that to
       // the regular 401 path so this stays a pure observer.
-      return { workspaceId, fingerprint, storedCreatedAt: stored.createdAt, valid: false };
+      return {
+        workspaceId,
+        fingerprint,
+        prefix: tokenPrefix(stored.accessToken),
+        storedCreatedAt: stored.createdAt,
+        valid: false,
+      };
     }
     if (!response.ok) {
       throw new Error(`GitHub check-token failed: ${response.status} ${response.statusText}`);
@@ -1201,6 +1219,7 @@ class GitHubService extends EventEmitter {
     return {
       workspaceId,
       fingerprint,
+      prefix: tokenPrefix(stored.accessToken),
       storedCreatedAt: stored.createdAt,
       valid: true,
       login: auth.user?.login ?? null,

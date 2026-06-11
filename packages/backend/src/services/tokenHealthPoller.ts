@@ -50,11 +50,12 @@ export class TokenHealthTracker {
         action: 'token:health-first-check',
         summary:
           `[github] workspace ${check.workspaceId}: token fp:${check.fingerprint} healthy — ` +
-          `login=${check.login ?? 'unknown'} expires_at=${check.expiresAt ?? 'never'} ` +
+          `prefix=${check.prefix} login=${check.login ?? 'unknown'} expires_at=${check.expiresAt ?? 'never'} ` +
           `github_created_at=${check.githubCreatedAt ?? 'unknown'} (stored ${age} ago)`,
         meta: {
           workspaceId: check.workspaceId,
           fingerprint: check.fingerprint,
+          prefix: check.prefix,
           login: check.login ?? null,
           expiresAt: check.expiresAt ?? null,
         },

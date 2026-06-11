@@ -8,6 +8,7 @@ function check(overrides: Partial<TokenHealthCheck> = {}): TokenHealthCheck {
   return {
     workspaceId: 'ws-1',
     fingerprint: 'aabbccdd',
+    prefix: 'gho_',
     storedCreatedAt: '2026-06-11T10:00:00Z',
     valid: true,
     login: 'Gilbert09',
@@ -26,6 +27,7 @@ describe('TokenHealthTracker', () => {
     expect(act!.action).toBe('token:health-first-check');
     expect(act!.level).toBe('log');
     expect(act!.summary).toContain('fp:aabbccdd');
+    expect(act!.summary).toContain('prefix=gho_');
     expect(act!.summary).toContain('login=Gilbert09');
     expect(act!.summary).toContain('expires_at=never');
     expect(act!.summary).toContain('(stored 2h ago)');
