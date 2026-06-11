@@ -8,7 +8,6 @@ import {
   Loader2,
   RotateCw,
   MessageSquare,
-  Terminal,
   GitBranch,
   Sparkles,
   Eye,
@@ -36,7 +35,7 @@ import {
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
 import { isAgentTask, readCloudTaskMeta } from '@fastowl/shared';
-import type { Task, TaskStatus, TaskType, TaskPriority, AgentStatus, AgentAttention, CloudProviderType } from '@fastowl/shared';
+import type { Task, TaskStatus, TaskType, TaskPriority, CloudProviderType } from '@fastowl/shared';
 
 const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {
   code_writing: { label: 'Code', icon: Sparkles },
@@ -218,29 +217,14 @@ export function QueuePanel() {
   );
 }
 
-// Agent status config for running tasks
-const agentStatusConfig: Record<
-  AgentStatus,
-  { icon: React.ElementType; label: string; color: string }
-> = {
-  idle: { icon: Terminal, label: 'Idle', color: 'text-slate-400' },
-  working: { icon: Loader2, label: 'Working', color: 'text-blue-400' },
-  awaiting_input: {
-    icon: MessageSquare,
-    label: 'Input Needed',
-    color: 'text-yellow-400',
-  },
-  tool_use: { icon: Play, label: 'Tool', color: 'text-purple-400' },
-  completed: { icon: CheckCircle, label: 'Done', color: 'text-green-400' },
-  error: { icon: AlertCircle, label: 'Error', color: 'text-red-400' },
-};
-
-const attentionColors: Record<AgentAttention, string> = {
-  none: 'border-transparent',
-  low: 'border-l-yellow-400/50',
-  medium: 'border-l-orange-400',
-  high: 'border-l-red-400',
-};
+// Running tasks always render as a live cloud run — a spinning
+// "Working" indicator (the cloud provider exposes no finer-grained
+// agent status).
+const runningStatus = {
+  icon: Loader2,
+  label: 'Working',
+  color: 'text-blue-400',
+} as const;
 
 interface TaskListItemProps {
   task: Task;
@@ -249,25 +233,16 @@ interface TaskListItemProps {
 }
 
 function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
-  // Show agent status indicator for running tasks
   const isRunning = task.status === 'in_progress';
-  const agentStatus = task.agentStatus || 'working';
-  const agentAttention = task.agentAttention || 'none';
 
-  // Determine which icon to show
-  const StatusIcon = isRunning
-    ? agentStatusConfig[agentStatus].icon
-    : statusConfig[task.status].icon;
-  const statusColor = isRunning
-    ? agentStatusConfig[agentStatus].color
-    : statusConfig[task.status].color;
+  const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
+  const statusColor = isRunning ? runningStatus.color : statusConfig[task.status].color;
 
   return (
     <Card
       className={cn(
-        'p-3 cursor-pointer transition-colors border-l-4',
-        isSelected ? 'bg-accent' : 'hover:bg-accent/50',
-        isRunning ? attentionColors[agentAttention] : 'border-l-transparent'
+        'p-3 cursor-pointer transition-colors border-l-4 border-l-transparent',
+        isSelected ? 'bg-accent' : 'hover:bg-accent/50'
       )}
       onClick={onSelect}
     >
@@ -278,26 +253,11 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
             statusColor
           )}
         >
-          <StatusIcon
-            className={cn(
-              'w-4 h-4',
-              isRunning && agentStatus === 'working' && 'animate-spin'
-            )}
-          />
+          <StatusIcon className={cn('w-4 h-4', isRunning && 'animate-spin')} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{task.title}</span>
-            {isRunning && agentAttention !== 'none' && (
-              <div
-                className={cn(
-                  'w-2 h-2 rounded-full flex-shrink-0',
-                  agentAttention === 'high' && 'bg-red-400',
-                  agentAttention === 'medium' && 'bg-orange-400',
-                  agentAttention === 'low' && 'bg-yellow-400'
-                )}
-              />
-            )}
           </div>
           <div className="flex items-center gap-2 mt-1">
             {task.status === 'completed' && task.completedAt ? (
@@ -317,7 +277,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
             )}
             {isRunning && (
               <Badge variant="secondary" className="text-xs">
-                {agentStatusConfig[agentStatus].label}
+                {runningStatus.label}
               </Badge>
             )}
             {!isRunning && (
@@ -378,7 +338,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const isRunning = task.status === 'in_progress';
   const isAgent = isAgentTask(task.type);
   const canStart = isAgent && ['pending', 'queued'].includes(task.status);
-  const agentStatus = task.agentStatus || 'working';
 
   const handleStartTask = async () => {
     setActiveAction('start');
@@ -422,9 +381,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     }
   };
 
-  const StatusIcon = isRunning
-    ? agentStatusConfig[agentStatus].icon
-    : statusConfig[task.status].icon;
+  const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
 
   // The cloud-run banner — provider, remote status, deep link to the run.
   const cloudBanner = cloudMeta && (
@@ -464,22 +421,15 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               <div
                 className={cn(
                   'w-10 h-10 rounded-lg flex items-center justify-center bg-secondary',
-                  agentStatusConfig[agentStatus].color
+                  runningStatus.color
                 )}
               >
-                <StatusIcon
-                  className={cn(
-                    'w-5 h-5',
-                    agentStatus === 'working' && 'animate-spin'
-                  )}
-                />
+                <StatusIcon className="w-5 h-5 animate-spin" />
               </div>
               <div>
                 <h2 className="text-lg font-semibold">{task.title}</h2>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="secondary">
-                    {agentStatusConfig[agentStatus].label}
-                  </Badge>
+                  <Badge variant="secondary">{runningStatus.label}</Badge>
                   {env && (
                     <Badge variant="outline" className="text-xs">
                       {env.name}

@@ -5,8 +5,6 @@ import type {
   DebugEvent,
   Environment,
   MergeQueueBlockedEvent,
-  PermissionRequest,
-  PermissionResponse,
   Task,
   TaskStatus,
   WSEvent,
@@ -246,22 +244,6 @@ export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void 
 }
 
 // Helper functions for common events
-export function emitAgentStatus(workspaceId: string, agentId: string, status: string, attention: string): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'agent:status',
-    payload: { agentId, status, attention },
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitAgentOutput(workspaceId: string, agentId: string, output: string, append: boolean): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'agent:output',
-    payload: { agentId, output, append },
-    timestamp: new Date().toISOString(),
-  });
-}
-
 export function emitTaskStatus(workspaceId: string, taskId: string, status: string, result?: any): void {
   broadcastToWorkspace(workspaceId, {
     type: 'task:status',
@@ -308,35 +290,6 @@ export function emitTaskCreated(workspaceId: string, task: Task): void {
   });
 }
 
-export function emitTaskOutput(workspaceId: string, taskId: string, output: string, append: boolean): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'task:output',
-    payload: { taskId, output, append },
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitTaskAgentStatus(workspaceId: string, taskId: string, status: string, attention: string): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'task:agent_status',
-    payload: { taskId, status, attention },
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitAgentEvent(
-  workspaceId: string,
-  agentId: string,
-  taskId: string | undefined,
-  event: AgentEvent
-): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'agent:event',
-    payload: { agentId, taskId, event },
-    timestamp: new Date().toISOString(),
-  });
-}
-
 export function emitTaskEvent(
   workspaceId: string,
   taskId: string,
@@ -365,50 +318,6 @@ export function emitTaskFilesChanged(
   broadcastToWorkspace(workspaceId, {
     type: 'task:files_changed',
     payload: { taskId, files },
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export interface GitLogEntryEvent {
-  ts: string;
-  command: string;
-  cwd?: string;
-  exitCode: number;
-  stdoutPreview: string;
-  stderrPreview: string;
-  durationMs: number;
-}
-
-export function emitTaskGitLog(
-  workspaceId: string,
-  taskId: string,
-  entry: GitLogEntryEvent
-): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'task:git_log',
-    payload: { taskId, entry },
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitAgentPermissionRequest(
-  workspaceId: string,
-  req: PermissionRequest
-): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'agent:permission_request',
-    payload: req,
-    timestamp: new Date().toISOString(),
-  });
-}
-
-export function emitAgentPermissionResponse(
-  workspaceId: string,
-  res: PermissionResponse & { agentId: string; taskId?: string }
-): void {
-  broadcastToWorkspace(workspaceId, {
-    type: 'agent:permission_response',
-    payload: res,
     timestamp: new Date().toISOString(),
   });
 }

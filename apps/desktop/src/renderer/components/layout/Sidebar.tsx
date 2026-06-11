@@ -42,11 +42,6 @@ export function Sidebar({ className }: SidebarProps) {
 
   const { user } = useAuth();
 
-  // Count tasks that need attention (running with high/medium attention)
-  const tasksNeedingAttention = tasks.filter(
-    (t) => t.status === 'in_progress' && t.agentAttention && t.agentAttention !== 'none'
-  ).length;
-
   // Count running tasks
   const runningTasksCount = tasks.filter((t) => t.status === 'in_progress').length;
 
@@ -83,8 +78,8 @@ export function Sidebar({ className }: SidebarProps) {
       id: 'queue' as const,
       icon: ListTodo,
       label: 'Tasks',
-      badge: tasksNeedingAttention > 0 ? tasksNeedingAttention : runningTasksCount > 0 ? runningTasksCount : undefined,
-      badgeVariant: tasksNeedingAttention > 0 ? 'warning' : 'secondary',
+      badge: runningTasksCount > 0 ? runningTasksCount : undefined,
+      badgeVariant: 'secondary',
     },
     // Developer-only — surfaced via Settings → Developer → Debug tools.
     ...(debugMode

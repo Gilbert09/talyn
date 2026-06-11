@@ -2,16 +2,9 @@ import { getSupabase, isSupabaseConfigured } from './supabase';
 import type {
   Workspace,
   Environment,
-  Agent,
   Task,
-  BacklogSource,
-  BacklogItem,
-  CreateBacklogSourceRequest,
-  UpdateBacklogSourceRequest,
   CreateWorkspaceRequest,
-  CreateEnvironmentRequest,
   CreateTaskRequest,
-  StartAgentRequest,
   ApiResponse,
   WSEvent,
   DebugEvent,
@@ -86,46 +79,12 @@ export const workspaces = {
   delete: (id: string) => request<void>('DELETE', `/workspaces/${id}`),
 };
 
-// Environments
-interface UpdateDaemonResult {
-  newSha: string;
-  message: string;
-}
-
+// Environments — cloud-provider markers are auto-provisioned by the backend
+// on integration connect, so the client only ever reads or removes them.
 export const environments = {
   list: () => request<Environment[]>('GET', '/environments'),
   get: (id: string) => request<Environment>('GET', `/environments/${id}`),
-  create: (data: CreateEnvironmentRequest) =>
-    request<Environment>('POST', '/environments', data),
-  update: (id: string, data: Partial<Environment>) =>
-    request<Environment>('PATCH', `/environments/${id}`, data),
   delete: (id: string) => request<void>('DELETE', `/environments/${id}`),
-  test: (id: string) =>
-    request<{ connected: boolean }>('POST', `/environments/${id}/test`),
-  pairingToken: (id: string) =>
-    request<{ pairingToken: string; expiresInSeconds: number }>(
-      'POST',
-      `/environments/${id}/pairing-token`
-    ),
-  updateDaemon: (id: string) =>
-    request<UpdateDaemonResult>('POST', `/environments/${id}/update-daemon`),
-};
-
-// Agents
-export const agents = {
-  list: (params?: { workspaceId?: string; environmentId?: string }) => {
-    const query = new URLSearchParams();
-    if (params?.workspaceId) query.set('workspaceId', params.workspaceId);
-    if (params?.environmentId) query.set('environmentId', params.environmentId);
-    const queryStr = query.toString();
-    return request<Agent[]>('GET', `/agents${queryStr ? `?${queryStr}` : ''}`);
-  },
-  get: (id: string) => request<Agent>('GET', `/agents/${id}`),
-  start: (data: StartAgentRequest) => request<Agent>('POST', '/agents/start', data),
-  sendInput: (id: string, input: string) =>
-    request<void>('POST', `/agents/${id}/input`, { input }),
-  stop: (id: string) => request<Agent>('POST', `/agents/${id}/stop`),
-  delete: (id: string) => request<void>('DELETE', `/agents/${id}`),
 };
 
 // Task metadata generation response
@@ -154,22 +113,6 @@ export const tasks = {
   // Task execution control
   start: (id: string) => request<Task>('POST', `/tasks/${id}/start`),
   stop: (id: string) => request<Task>('POST', `/tasks/${id}/stop`),
-  respondToPermission: (
-    taskId: string,
-    requestId: string,
-    decision: 'allow' | 'deny',
-    persist: boolean
-  ) =>
-    request<{ success: boolean }>('POST', `/tasks/${taskId}/permission`, {
-      requestId,
-      decision,
-      persist,
-    }),
-  listPendingPermissions: (taskId: string) =>
-    request<{ pending: Array<{ requestId: string; toolName: string; toolInput: unknown; toolUseId?: string; requestedAt: string }> }>(
-      'GET',
-      `/tasks/${taskId}/permission/pending`
-    ),
   // Generate task metadata from prompt using AI
   generateMetadata: (prompt: string) =>
     request<TaskMetadata>('POST', '/tasks/generate-metadata', { prompt }),
@@ -565,29 +508,6 @@ export const repositories = {
     request<{ message: string }>('POST', '/repositories/poll'),
 };
 
-// Backlog (Continuous Build)
-export const backlog = {
-  listSources: (workspaceId: string) =>
-    request<BacklogSource[]>('GET', `/backlog/sources?workspaceId=${workspaceId}`),
-  getSource: (id: string) => request<BacklogSource>('GET', `/backlog/sources/${id}`),
-  createSource: (data: CreateBacklogSourceRequest) =>
-    request<BacklogSource>('POST', '/backlog/sources', data),
-  updateSource: (id: string, data: UpdateBacklogSourceRequest) =>
-    request<BacklogSource>('PATCH', `/backlog/sources/${id}`, data),
-  deleteSource: (id: string) => request<void>('DELETE', `/backlog/sources/${id}`),
-  syncSource: (id: string) =>
-    request<{ added: number; updated: number; retired: number }>(
-      'POST',
-      `/backlog/sources/${id}/sync`
-    ),
-  listItems: (sourceId: string) =>
-    request<BacklogItem[]>('GET', `/backlog/sources/${sourceId}/items`),
-  listItemsForWorkspace: (workspaceId: string) =>
-    request<BacklogItem[]>('GET', `/backlog/items?workspaceId=${workspaceId}`),
-  schedule: (workspaceId: string) =>
-    request<void>('POST', '/backlog/schedule', { workspaceId }),
-};
-
 // Debug tooling (developer-only internals view)
 export const debug = {
   getEvents: (params?: {
@@ -874,23 +794,6 @@ class WebSocketClient {
   }
 }
 
-/**
- * Fetch the backend's "latest daemon version" — a short SHA the
- * current build was deployed from. Unauthenticated (public constant)
- * and on `/daemon/...`, not `/api/v1/...`. Used by Settings to
- * compare against each env's reported version.
- */
-export async function fetchLatestDaemonVersion(): Promise<string | null> {
-  try {
-    const res = await fetch(`${BASE_URL}/daemon/latest-version`);
-    if (!res.ok) return null;
-    const json = (await res.json()) as { success?: boolean; data?: { version?: string } };
-    return json?.data?.version ?? null;
-  } catch {
-    return null;
-  }
-}
-
 // Account-level self-service.
 export const users = {
   /**
@@ -911,14 +814,12 @@ export const wsClient = new WebSocketClient();
 export const api = {
   workspaces,
   environments,
-  agents,
   tasks,
   github,
   posthog,
   cloudProviders,
   repositories,
   pullRequests,
-  backlog,
   debug,
   users,
   ws: wsClient,

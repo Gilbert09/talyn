@@ -1,14 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  Square,
-  Loader2,
-  MessageSquare,
-  CheckCircle,
-  AlertCircle,
-  Play,
-  Terminal,
-} from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Square, Loader2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { AgentConversation } from '../terminal/AgentConversation';
@@ -17,49 +8,22 @@ import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
 import { readCloudTaskMeta } from '@fastowl/shared';
-import type { Task, AgentStatus, AgentAttention } from '@fastowl/shared';
+import type { Task } from '@fastowl/shared';
 
 interface TaskTerminalProps {
   task: Task;
 }
-
-const statusConfig: Record<
-  AgentStatus,
-  { icon: React.ElementType; label: string; color: string }
-> = {
-  idle: { icon: Terminal, label: 'Idle', color: 'text-slate-400' },
-  working: { icon: Loader2, label: 'Working', color: 'text-blue-400' },
-  awaiting_input: {
-    icon: MessageSquare,
-    label: 'Awaiting Input',
-    color: 'text-yellow-400',
-  },
-  tool_use: { icon: Play, label: 'Running Tool', color: 'text-purple-400' },
-  completed: { icon: CheckCircle, label: 'Completed', color: 'text-green-400' },
-  error: { icon: AlertCircle, label: 'Error', color: 'text-red-400' },
-};
-
-const attentionColors: Record<AgentAttention, string> = {
-  none: 'border-transparent',
-  low: 'border-yellow-400/50',
-  medium: 'border-orange-400',
-  high: 'border-red-400',
-};
 
 export function TaskTerminal({ task }: TaskTerminalProps) {
   const { stopTask } = useTaskActions();
   const environments = useWorkspaceStore((s) => s.environments);
   const [isStopping, setIsStopping] = useState(false);
 
-  const agentStatus = task.agentStatus || 'working';
-  const agentAttention = task.agentAttention || 'none';
   const assignedEnv = environments.find((e) => e.id === task.assignedEnvironmentId);
   const envName = assignedEnv?.name;
   // The task carries a remote cloud run (provider-neutral; covers legacy
   // posthog* metadata too). Null until dispatch stamps the remote ids.
   const cloudMeta = readCloudTaskMeta(task);
-
-  const StatusIcon = statusConfig[agentStatus].icon;
 
   // Cloud tasks run remotely and their transcript is NOT included in the
   // task-list payload, so the store opens them with an empty transcript.
@@ -105,35 +69,15 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   }, [task.id, stopTask]);
 
   return (
-    <div
-      className={cn(
-        'flex flex-col h-full min-w-0 border-l-4',
-        attentionColors[agentAttention]
-      )}
-    >
+    <div className="flex flex-col h-full min-w-0 border-l-4 border-transparent">
       {/* Terminal Header */}
       <div className="flex items-center justify-between p-3 border-b bg-card">
         <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              'w-3 h-3 rounded-full',
-              agentStatus === 'working' && 'bg-blue-400 animate-pulse',
-              agentStatus === 'idle' && 'bg-slate-400',
-              agentStatus === 'awaiting_input' && 'bg-yellow-400',
-              agentStatus === 'error' && 'bg-red-400',
-              agentStatus === 'completed' && 'bg-green-400',
-              agentStatus === 'tool_use' && 'bg-purple-400'
-            )}
-          />
+          <div className="w-3 h-3 rounded-full bg-blue-400 animate-pulse" />
           <span className="font-medium text-sm">Task Terminal</span>
           <Badge variant="outline" className="text-xs">
-            <StatusIcon
-              className={cn(
-                'w-3 h-3 mr-1',
-                agentStatus === 'working' && 'animate-spin'
-              )}
-            />
-            {statusConfig[agentStatus].label}
+            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+            Working
           </Badge>
         </div>
         <div className="flex items-center gap-1">
@@ -165,11 +109,9 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
           cloud agents directly (cloud-only PR-management direction). */}
       <div className="flex-1 bg-[#1e1e1e] overflow-hidden">
         <AgentConversation
-          taskId={task.id}
           transcript={task.transcript}
           envName={envName}
           waitingHint={hasCloudRun ? 'Running in the cloud — fetching logs…' : undefined}
-          interactive
         />
       </div>
     </div>

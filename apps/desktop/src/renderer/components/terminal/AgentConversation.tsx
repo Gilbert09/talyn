@@ -8,15 +8,10 @@ import React, {
 import { ChevronDown, ChevronRight, Check, X, Shield, Wrench, Brain } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
-import { Button } from '../ui/button';
-import { api } from '../../lib/api';
 import type { AgentEvent } from '@fastowl/shared';
 
 interface AgentConversationProps {
-  taskId: string;
   transcript: AgentEvent[] | undefined;
-  /** When false (completed task replays) permission buttons are hidden. */
-  interactive?: boolean;
   /** Display name of the env the task runs on. Surfaced in the auto-allowed indicator. */
   envName?: string;
   /** Overrides the "Waiting for the agent to start…" empty-state copy (e.g. cloud tasks). */
@@ -24,20 +19,15 @@ interface AgentConversationProps {
 }
 
 /**
- * Slice 2 renderer for structured-mode tasks. Takes the ordered event
- * stream the backend persists on `tasks.transcript` and lays it out as
- * a conversation: assistant text, collapsible tool calls + results,
- * thinking blocks, and inline permission-request cards.
- *
- * Permission cards are interactive — Approve / Deny / Allow-always
- * buttons POST back to the backend, which unblocks the child CLI's
- * PreToolUse hook. They auto-collapse once the matching
- * `fastowl_permission_response` event arrives on the WebSocket.
+ * Renderer for structured-mode tasks. Takes the ordered event stream
+ * the backend persists on `tasks.transcript` and lays it out as a
+ * conversation: assistant text, collapsible tool calls + results,
+ * thinking blocks, and permission-request cards (historical only —
+ * cloud runs handle permissions provider-side, so the cards render as
+ * a read-only record of what the agent asked for and was granted).
  */
 export function AgentConversation({
-  taskId,
   transcript,
-  interactive = true,
   envName,
   waitingHint,
 }: AgentConversationProps) {
@@ -87,13 +77,7 @@ export function AgentConversation({
       className="h-full overflow-auto px-4 py-3 text-sm text-zinc-100 bg-[#1a1a1a] space-y-2 min-w-0"
     >
       {blocks.map((block) => (
-        <BlockView
-          key={block.key}
-          block={block}
-          taskId={taskId}
-          interactive={interactive}
-          envName={envName}
-        />
+        <BlockView key={block.key} block={block} envName={envName} />
       ))}
     </div>
   );
@@ -378,21 +362,15 @@ function blockSignature(block: Block): string {
 const BlockView = React.memo(
   BlockViewImpl,
   (prev, next) =>
-    prev.taskId === next.taskId &&
-    prev.interactive === next.interactive &&
     prev.envName === next.envName &&
     blockSignature(prev.block) === blockSignature(next.block)
 );
 
 function BlockViewImpl({
   block,
-  taskId,
-  interactive,
   envName,
 }: {
   block: Block;
-  taskId: string;
-  interactive: boolean;
   envName?: string;
 }) {
   switch (block.kind) {
@@ -414,13 +392,10 @@ function BlockViewImpl({
     case 'permission':
       return (
         <PermissionBlock
-          taskId={taskId}
-          requestId={block.requestId}
           toolName={block.toolName}
           toolInput={block.toolInput}
           status={block.status}
           persist={block.persist}
-          interactive={interactive}
           envName={envName}
         />
       );
@@ -577,40 +552,18 @@ function ToolResultBlock({
 }
 
 function PermissionBlock({
-  taskId,
-  requestId,
   toolName,
   toolInput,
   status,
   persist,
-  interactive,
   envName,
 }: {
-  taskId: string;
-  requestId: string;
   toolName: string;
   toolInput: unknown;
   status: 'pending' | 'allowed' | 'denied' | 'auto_allowed';
   persist?: boolean;
-  interactive: boolean;
   envName?: string;
 }) {
-  const [busy, setBusy] = useState<null | 'allow' | 'deny' | 'allow-always'>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const respond = async (decision: 'allow' | 'deny', persistDecision: boolean) => {
-    const btn = decision === 'deny' ? 'deny' : persistDecision ? 'allow-always' : 'allow';
-    setBusy(btn);
-    setError(null);
-    try {
-      await api.tasks.respondToPermission(taskId, requestId, decision, persistDecision);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to respond');
-    } finally {
-      setBusy(null);
-    }
-  };
-
   if (status === 'auto_allowed') {
     // One-line summary up top; click to expand the full tool input
     // so the user can audit what ran under the standing approval.
@@ -657,36 +610,6 @@ function PermissionBlock({
         </span>
       </div>
       <ToolInputPreview toolName={toolName} toolInput={toolInput} />
-      {!resolved && interactive && (
-        <div className="mt-2.5 flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            onClick={() => respond('allow', false)}
-            disabled={busy !== null}
-          >
-            {busy === 'allow' ? '…' : 'Allow once'}
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => respond('allow', true)}
-            disabled={busy !== null}
-            title="Pre-approve this tool on this environment — no more prompts"
-          >
-            {busy === 'allow-always' ? '…' : `Allow always (${toolName})`}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-red-400 hover:text-red-300"
-            onClick={() => respond('deny', false)}
-            disabled={busy !== null}
-          >
-            {busy === 'deny' ? '…' : 'Deny'}
-          </Button>
-          {error && <span className="text-xs text-red-400 self-center">{error}</span>}
-        </div>
-      )}
     </div>
   );
 }

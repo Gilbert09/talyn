@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Workspace, Environment, Agent, Task } from '@fastowl/shared';
+import type { Workspace, Environment, Task } from '@fastowl/shared';
 import type { GitHubStatus, GitHubUser, PostHogCodeStatus } from '../lib/api';
 
 // Simplified repository type for store (matches API response)
@@ -102,9 +102,6 @@ interface WorkspaceState {
   // Environments
   environments: Environment[];
 
-  // Agents (kept for internal use but not exposed in UI)
-  agents: Agent[];
-
   // Tasks
   tasks: Task[];
 
@@ -145,16 +142,11 @@ interface WorkspaceState {
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
   addEnvironment: (environment: Environment) => void;
 
-  setAgents: (agents: Agent[]) => void;
-  updateAgent: (id: string, updates: Partial<Agent>) => void;
-  addAgent: (agent: Agent) => void;
-  removeAgent: (id: string) => void;
-
   setTasks: (tasks: Task[]) => void;
   // Reconcile the task list for one workspace against a fresh server fetch,
   // used after a WebSocket reconnect to replay status changes whose broadcasts
   // we missed while offline. Unlike setTasks it preserves locally-loaded rich
-  // fields (transcript/terminalOutput) the list endpoint omits for egress.
+  // fields (transcript) the list endpoint omits for egress.
   reconcileTasks: (tasks: Task[], workspaceId: string) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   addTask: (task: Task) => void;
@@ -176,7 +168,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   currentWorkspaceId: getInitialWorkspaceId(),
   workspaces: [],
   environments: [],
-  agents: [],
   tasks: [],
   repositories: [],
   sidebarCollapsed: false,
@@ -234,23 +225,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         : { environments: [...state.environments, environment] }
     ),
 
-  setAgents: (agents) => set({ agents }),
-
-  updateAgent: (id, updates) =>
-    set((state) => ({
-      agents: state.agents.map((a) =>
-        a.id === id ? { ...a, ...updates } : a
-      ),
-    })),
-
-  addAgent: (agent) =>
-    set((state) => ({ agents: [...state.agents, agent] })),
-
-  removeAgent: (id) =>
-    set((state) => ({
-      agents: state.agents.filter((a) => a.id !== id),
-    })),
-
   setTasks: (tasks) => set({ tasks }),
 
   reconcileTasks: (incoming, workspaceId) =>
@@ -258,14 +232,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       const localById = new Map(state.tasks.map((t) => [t.id, t]));
       const incomingIds = new Set(incoming.map((t) => t.id));
       // Rebuild in the server's order, re-attaching any rich local-only fields
-      // (transcript/terminalOutput) the list endpoint drops for egress reasons.
+      // (transcript) the list endpoint drops for egress reasons.
       const next: Task[] = incoming.map((fresh) => {
         const local = localById.get(fresh.id);
         if (!local) return fresh;
         return {
           ...fresh,
           transcript: local.transcript ?? fresh.transcript,
-          terminalOutput: local.terminalOutput ?? fresh.terminalOutput,
         };
       });
       // Keep local tasks the fetch didn't cover (a different workspace's load);

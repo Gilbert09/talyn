@@ -4,12 +4,8 @@ import { useOnReconnect } from './useOnReconnect';
 import { useWorkspaceStore } from '../stores/workspace';
 import type {
   AgentEvent,
-  AgentStatusEvent,
-  AgentOutputEvent,
   TaskStatusEvent,
-  TaskOutputEvent,
   TaskUpdateEvent,
-  TaskAgentStatusEvent,
   TaskEventBroadcast,
   TaskCreatedEvent,
   MergeQueueBlockedEvent,
@@ -136,7 +132,6 @@ async function reconcileEnvironmentsFromServer(): Promise<void> {
 export function useApiConnection() {
   const {
     currentWorkspaceId,
-    updateAgent,
     updateTask,
     updateEnvironment,
     addEnvironment,
@@ -174,31 +169,6 @@ export function useApiConnection() {
   useEffect(() => {
     const unsubscribers: (() => void)[] = [];
 
-    // Agent status updates
-    unsubscribers.push(
-      wsClient.on<AgentStatusEvent>('agent:status', (payload) => {
-        updateAgent(payload.agentId, {
-          status: payload.status,
-          attention: payload.attention,
-        });
-      })
-    );
-
-    // Agent output updates
-    unsubscribers.push(
-      wsClient.on<AgentOutputEvent>('agent:output', (payload) => {
-        // Get current output and append
-        const store = useWorkspaceStore.getState();
-        const agent = store.agents.find((a) => a.id === payload.agentId);
-        if (agent) {
-          const newOutput = payload.append
-            ? agent.terminalOutput + payload.output
-            : payload.output;
-          updateAgent(payload.agentId, { terminalOutput: newOutput });
-        }
-      })
-    );
-
     // Task deletions — single source of truth for dropping a task
     // from the local store. `useTaskActions.deleteTask` also calls
     // the store directly as an optimistic step, but this is the
@@ -229,30 +199,6 @@ export function useApiConnection() {
         updateTask(payload.taskId, {
           status: payload.status,
           result: payload.result,
-        });
-      })
-    );
-
-    // Task output updates
-    unsubscribers.push(
-      wsClient.on<TaskOutputEvent>('task:output', (payload) => {
-        const store = useWorkspaceStore.getState();
-        const task = store.tasks.find((t) => t.id === payload.taskId);
-        if (task) {
-          const newOutput = payload.append
-            ? (task.terminalOutput || '') + payload.output
-            : payload.output;
-          updateTask(payload.taskId, { terminalOutput: newOutput });
-        }
-      })
-    );
-
-    // Task agent status updates
-    unsubscribers.push(
-      wsClient.on<TaskAgentStatusEvent>('task:agent_status', (payload) => {
-        updateTask(payload.taskId, {
-          agentStatus: payload.status,
-          agentAttention: payload.attention,
         });
       })
     );
@@ -314,7 +260,7 @@ export function useApiConnection() {
         flushTaskEvents();
       }
     };
-  }, [updateAgent, updateTask, updateEnvironment, addEnvironment]);
+  }, [updateTask, updateEnvironment, addEnvironment]);
 }
 
 /**
@@ -326,7 +272,6 @@ export function useInitialDataLoad() {
     setCurrentWorkspace,
     setWorkspaces,
     setEnvironments,
-    setAgents,
     setTasks,
     setRepositories,
     setOnboardingComplete,
@@ -410,7 +355,6 @@ export function useInitialDataLoad() {
     setCurrentWorkspace,
     setWorkspaces,
     setEnvironments,
-    setAgents,
     setTasks,
     setRepositories,
     setOnboardingComplete,
@@ -421,48 +365,6 @@ export function useInitialDataLoad() {
   }, [loadData]);
 
   return { reload: loadData, loaded };
-}
-
-/**
- * Hook for agent actions
- */
-export function useAgentActions() {
-  const { addAgent, updateAgent, removeAgent } = useWorkspaceStore();
-
-  const startAgent = useCallback(
-    async (environmentId: string, workspaceId: string, prompt?: string) => {
-      const agent = await api.agents.start({
-        environmentId,
-        workspaceId,
-        prompt,
-      });
-      addAgent(agent);
-      return agent;
-    },
-    [addAgent]
-  );
-
-  const sendInput = useCallback(async (agentId: string, input: string) => {
-    await api.agents.sendInput(agentId, input);
-  }, []);
-
-  const stopAgent = useCallback(
-    async (agentId: string) => {
-      await api.agents.stop(agentId);
-      updateAgent(agentId, { status: 'idle', attention: 'none' });
-    },
-    [updateAgent]
-  );
-
-  const deleteAgent = useCallback(
-    async (agentId: string) => {
-      await api.agents.delete(agentId);
-      removeAgent(agentId);
-    },
-    [removeAgent]
-  );
-
-  return { startAgent, sendInput, stopAgent, deleteAgent };
 }
 
 /**
@@ -554,38 +456,6 @@ export function useTaskActions() {
     stopTask,
     deleteTask,
   };
-}
-
-/**
- * Hook for environment actions
- */
-export function useEnvironmentActions() {
-  const { setEnvironments } = useWorkspaceStore();
-
-  const createEnvironment = useCallback(
-    async (data: Parameters<typeof api.environments.create>[0]) => {
-      const env = await api.environments.create(data);
-      const envs = await api.environments.list();
-      setEnvironments(envs);
-      return env;
-    },
-    [setEnvironments]
-  );
-
-  const testConnection = useCallback(async (envId: string) => {
-    return api.environments.test(envId);
-  }, []);
-
-  const deleteEnvironment = useCallback(
-    async (envId: string) => {
-      await api.environments.delete(envId);
-      const envs = await api.environments.list();
-      setEnvironments(envs);
-    },
-    [setEnvironments]
-  );
-
-  return { createEnvironment, testConnection, deleteEnvironment };
 }
 
 /**

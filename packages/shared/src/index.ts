@@ -191,32 +191,6 @@ export interface PostHogCodeEnvironmentConfig {
 export type PostHogCodeRuntimeAdapter = 'claude' | 'codex';
 
 // ============================================================================
-// Agent
-// ============================================================================
-
-export type AgentStatus =
-  | 'idle'
-  | 'working'
-  | 'awaiting_input'
-  | 'tool_use'
-  | 'completed'
-  | 'error';
-
-export type AgentAttention = 'none' | 'low' | 'medium' | 'high';
-
-export interface Agent {
-  id: string;
-  environmentId: string;
-  workspaceId: string;
-  status: AgentStatus;
-  attention: AgentAttention;
-  currentTaskId?: string;
-  terminalOutput: string;
-  lastActivity: string;
-  createdAt: string;
-}
-
-// ============================================================================
 // Task
 // ============================================================================
 
@@ -226,14 +200,14 @@ export type TaskType =
   | 'pr_review'
   | 'manual';
 
-/** Types for which FastOwl spawns a Claude agent. */
+/** Types FastOwl delegates to a cloud agent (everything except `manual`). */
 export const AGENT_TASK_TYPES: readonly TaskType[] = [
   'code_writing',
   'pr_response',
   'pr_review',
 ];
 
-/** True if FastOwl should spawn/drive a Claude agent for this task. */
+/** True if FastOwl dispatches this task to a cloud agent. */
 export function isAgentTask(type: TaskType): boolean {
   return type !== 'manual';
 }
@@ -259,17 +233,12 @@ export interface Task {
   prompt?: string; // Prompt for Claude agent
   repositoryId?: string; // Repository to run the task in
   branch?: string; // Git branch for this task (auto-created for code tasks)
-  assignedAgentId?: string;
   assignedEnvironmentId?: string;
   result?: TaskResult;
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
-  // Agent-related fields (when task is running)
-  agentStatus?: AgentStatus;
-  agentAttention?: AgentAttention;
-  terminalOutput?: string;
   /**
    * Structured JSONL event log for tasks driven by the `structured`
    * renderer. One entry per event emitted by the CLI's stream-json
@@ -284,83 +253,6 @@ export interface TaskResult {
   summary?: string;
   output?: string;
   error?: string;
-}
-
-// ============================================================================
-// Backlog (Continuous Build)
-// ============================================================================
-
-/** Where backlog items are sourced from. Start with markdown; others later. */
-export type BacklogSourceType = 'markdown_file';
-
-export interface BacklogSource {
-  id: string;
-  workspaceId: string;
-  type: BacklogSourceType;
-  enabled: boolean;
-  /** Environment to read the source from. Defaults to the first local env. */
-  environmentId?: string;
-  /** Repository that generated tasks should target (branch + cwd). */
-  repositoryId?: string;
-  config: BacklogSourceConfig;
-  lastSyncedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type BacklogSourceConfig = MarkdownFileBacklogConfig;
-
-export interface MarkdownFileBacklogConfig {
-  type: 'markdown_file';
-  /** Absolute path on the environment. */
-  path: string;
-  /** Optional heading title; only items under this section are parsed. */
-  section?: string;
-}
-
-export type BacklogItemState =
-  | 'pending'
-  | 'in_progress'
-  | 'awaiting_review'
-  | 'completed'
-  | 'blocked';
-
-export interface BacklogItem {
-  id: string;
-  sourceId: string;
-  workspaceId: string;
-  /** Stable ID within the source — hash of text + parent. Survives reorderings. */
-  externalId: string;
-  text: string;
-  parentExternalId?: string;
-  completed: boolean;
-  blocked: boolean;
-  /** Task currently working on this item, if any. */
-  claimedTaskId?: string;
-  orderIndex: number;
-  /** How many times in a row a task on this item has failed. Drives scheduler backoff. */
-  consecutiveFailures: number;
-  /** Timestamp of the most recent failed task on this item, if any. */
-  lastFailureAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** Request: create a new backlog source on a workspace. */
-export interface CreateBacklogSourceRequest {
-  workspaceId: string;
-  type: BacklogSourceType;
-  config: BacklogSourceConfig;
-  environmentId?: string;
-  repositoryId?: string;
-  enabled?: boolean;
-}
-
-export interface UpdateBacklogSourceRequest {
-  enabled?: boolean;
-  environmentId?: string;
-  repositoryId?: string;
-  config?: BacklogSourceConfig;
 }
 
 // ============================================================================
@@ -410,21 +302,12 @@ export interface AgentEvent {
 // ============================================================================
 
 export type WSEventType =
-  | 'agent:status'
-  | 'agent:output'
-  | 'agent:event'
-  | 'agent:permission_request'
-  | 'agent:permission_response'
-  | 'agent:attention'
   | 'task:status'
-  | 'task:output'
   | 'task:event'
   | 'task:created'
   | 'task:update'
   | 'task:deleted'
-  | 'task:agent_status'
   | 'task:files_changed'
-  | 'task:git_log'
   | 'pull_request:updated'
   | 'merge_queue:blocked'
   | 'environment:status'
@@ -574,18 +457,6 @@ export interface DebugDbStats {
   egressBytes: number;
 }
 
-export interface AgentStatusEvent {
-  agentId: string;
-  status: AgentStatus;
-  attention: AgentAttention;
-}
-
-export interface AgentOutputEvent {
-  agentId: string;
-  output: string;
-  append: boolean;
-}
-
 export interface TaskStatusEvent {
   taskId: string;
   status: TaskStatus;
@@ -610,18 +481,6 @@ export interface TaskDeletedEvent {
  */
 export interface TaskCreatedEvent {
   task: Task;
-}
-
-export interface TaskOutputEvent {
-  taskId: string;
-  output: string;
-  append: boolean;
-}
-
-export interface TaskAgentStatusEvent {
-  taskId: string;
-  status: AgentStatus;
-  attention: AgentAttention;
 }
 
 /**
@@ -654,54 +513,9 @@ export interface EnvironmentCreatedEvent {
   environment: Environment;
 }
 
-export interface AgentEventBroadcast {
-  agentId: string;
-  taskId?: string;
-  event: AgentEvent;
-}
-
 export interface TaskEventBroadcast {
   taskId: string;
   event: AgentEvent;
-}
-
-// ============================================================================
-// Permission prompts (structured renderer Slice 2)
-// ============================================================================
-
-/**
- * A pending permission request. The child CLI's PreToolUse hook has
- * asked the backend if it can run `toolName` with `toolInput`; the
- * backend surfaces this request to the desktop until the user clicks
- * Approve / Deny.
- *
- * Synthetic events of `type: 'fastowl_permission_request'` and
- * `type: 'fastowl_permission_response'` are inserted into the task
- * transcript so the renderer has a single ordered event stream. The
- * `requestId` lets the response event close out the request block.
- */
-export interface PermissionRequest {
-  requestId: string;
-  agentId: string;
-  taskId?: string;
-  toolName: string;
-  toolInput: unknown;
-  /** The CLI's session id for this run — lets us correlate with the tool_use event. */
-  sessionId?: string;
-  /** CLI-assigned tool_use id so the renderer can co-locate the request with the tool_use block. */
-  toolUseId?: string;
-  /** When the hook call was received. ISO timestamp. */
-  requestedAt: string;
-}
-
-export type PermissionDecision = 'allow' | 'deny';
-
-export interface PermissionResponse {
-  requestId: string;
-  decision: PermissionDecision;
-  /** "Allow always for this tool on this env" when `decision === 'allow'`. */
-  persist?: boolean;
-  reason?: string;
 }
 
 // ============================================================================
@@ -733,46 +547,6 @@ export interface UpdateWorkspaceRequest {
   description?: string;
   logo?: WorkspaceLogo;
   settings?: Partial<WorkspaceSettings>;
-}
-
-// Environment API
-export interface CreateEnvironmentRequest {
-  name: string;
-  type: EnvironmentType;
-  config: Omit<EnvironmentConfig, 'type'> & { type: EnvironmentType };
-  renderer?: EnvironmentRenderer;
-  /**
-   * Override the backend's per-type default. Leave unset to accept
-   * the default (local/ssh = strict, daemon = bypass). The local
-   * daemon auto-pair flow passes `false` explicitly because "This
-   * Mac" is user hardware, not a throwaway VM.
-   */
-  autonomousBypassPermissions?: boolean;
-}
-
-export interface TestEnvironmentRequest {
-  config: EnvironmentConfig;
-}
-
-/** Provision the FastOwl daemon on a remote VM over SSH. */
-export interface InstallDaemonOverSshRequest {
-  host: string;
-  port?: number;
-  username: string;
-  authMethod: 'key' | 'password' | 'agent';
-  /** Path to a private key on the *server* side (or `~/.ssh/id_rsa`). */
-  privateKeyPath?: string;
-  /** Raw password, if `authMethod === 'password'`. */
-  password?: string;
-  /** Optional base URL override — defaults to the current backend's public URL. */
-  backendUrl?: string;
-}
-
-export interface InstallDaemonOverSshResponse {
-  success: boolean;
-  /** Transcript of the install script stdout+stderr. */
-  log: string;
-  error?: string;
 }
 
 // Task API
@@ -904,10 +678,7 @@ export function readCloudTaskMeta(task: {
 
 export interface GenerateTaskMetadataRequest {
   prompt: string;
-  /**
-   * Optional env hint — backend prefers running the LLM call on this
-   * env's daemon if it's connected. Falls back to any connected daemon.
-   */
+  /** Optional env hint for resolving the cloud provider. */
   assignedEnvironmentId?: string;
 }
 
@@ -915,17 +686,4 @@ export interface GenerateTaskMetadataResponse {
   title: string;
   description: string;
   suggestedPriority: TaskPriority;
-}
-
-// Agent API
-export interface StartAgentRequest {
-  environmentId: string;
-  workspaceId: string;
-  taskId?: string;
-  prompt?: string;
-  workingDirectory?: string; // Directory to run Claude in (e.g., repository path)
-}
-
-export interface SendAgentInputRequest {
-  input: string;
 }
