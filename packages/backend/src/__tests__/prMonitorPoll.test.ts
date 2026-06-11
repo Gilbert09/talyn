@@ -423,6 +423,84 @@ describe('prMonitor — poll orchestration', () => {
     expect(rows[0].mergedAt).toBeNull();
   });
 
+  // A queued PR that merges upstream must not keep its queue bookkeeping:
+  // stale flags once left a merged head holding the "#1" slot while being
+  // invisible to the processor's open-only select, stalling the whole group.
+  it('clears merge-queue flags and rebroadcasts positions when a queued PR merges upstream', async () => {
+    await db.insert(pullRequestsTable).values([
+      {
+        id: 'pr-2',
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        owner: 'acme',
+        repo: 'widgets',
+        number: 2,
+        state: 'open',
+        mergeQueued: true,
+        mergeQueuedAt: new Date('2026-01-01T00:00:00Z'),
+        mergeQueueState: { status: 'merging', attempts: 0, accounted: true },
+        lastPolledAt: new Date(),
+        lastSummary: { headBranch: 'feature/b', baseBranch: 'main' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        // The queued sibling behind pr-2 — still open, currently "#2".
+        id: 'pr-3',
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        owner: 'acme',
+        repo: 'widgets',
+        number: 3,
+        state: 'open',
+        mergeQueued: true,
+        mergeQueuedAt: new Date('2026-01-01T00:01:00Z'),
+        mergeQueueState: { status: 'waiting', attempts: 0, accounted: true },
+        lastPolledAt: new Date(),
+        lastSummary: { headBranch: 'feature/c', baseBranch: 'main' },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+    // pr-2 merged upstream (gone from the search); pr-3 still open and seen.
+    mockSearch([3]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
+    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
+      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
+      state: 'closed',
+      merged: true,
+      merged_at: '2026-01-02T00:00:00Z',
+    } as never);
+    const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+    await prMonitorService.forcePoll();
+
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-2'));
+    expect(rows[0].state).toBe('merged');
+    expect(rows[0].mergeQueued).toBe(false);
+    expect(rows[0].mergeQueuedAt).toBeNull();
+    expect(rows[0].mergeQueueState).toBeNull();
+
+    // The sweep emit tells the desktop the row left both the list AND the queue.
+    const swept = emitSpy.mock.calls.find(
+      ([, payload]) => payload.id === 'pr-2' && payload.state === 'merged'
+    );
+    expect(swept).toBeDefined();
+    expect(swept?.[1].mergeQueued).toBe(false);
+    expect(swept?.[1].mergeQueueState).toBeNull();
+
+    // The surviving sibling was promoted live: #2 → #1.
+    const promoted = emitSpy.mock.calls
+      .filter(([, payload]) => payload.id === 'pr-3')
+      .map(([, payload]) => payload.mergeQueueState as { position?: number } | null)
+      .filter(Boolean)
+      .pop();
+    expect(promoted?.position).toBe(1);
+  });
+
   it('leaves a still-open PR untouched when it drops off the watch list (reviewed)', async () => {
     // A review-requested PR we tracked, then the user reviewed it so it
     // fell out of requested_reviewers — but it's still OPEN on GitHub.
@@ -946,10 +1024,12 @@ describe('prMonitor — poll orchestration', () => {
   // bounded: give up, skip the redundant poll, and let the caller read the
   // cache the in-flight tick is already refreshing.
   describe('bounded drain of an in-flight tick', () => {
-    const svc = prMonitorService as unknown as { isPolling: boolean };
+    const svc = prMonitorService as unknown as {
+      pollGuard: { tryBegin(): boolean; end(): void; readonly active: boolean };
+    };
 
     afterEach(() => {
-      svc.isPolling = false;
+      svc.pollGuard.end();
       vi.useRealTimers();
     });
 
@@ -959,24 +1039,24 @@ describe('prMonitor — poll orchestration', () => {
     ])('%s gives up when the tick outlives the drain window', async (_name, run) => {
       vi.useFakeTimers();
       const searchSpy = mockSearch([1]);
-      svc.isPolling = true; // a background tick that never finishes
+      svc.pollGuard.tryBegin(); // a background tick that never finishes
 
       const promise = run();
       await vi.advanceTimersByTimeAsync(20_000); // past FORCE_POLL_DRAIN_MS
       await promise;
 
       expect(searchSpy).not.toHaveBeenCalled();
-      expect(svc.isPolling).toBe(true); // we never stole the guard
+      expect(svc.pollGuard.active).toBe(true); // we never stole the guard
     });
 
     it('proceeds once the in-flight tick finishes within the window', async () => {
       vi.useFakeTimers();
       const searchSpy = mockSearch([]);
-      svc.isPolling = true;
+      svc.pollGuard.tryBegin();
 
       const promise = prMonitorService.forcePollWorkspaces(['ws1']);
       await vi.advanceTimersByTimeAsync(1_000);
-      svc.isPolling = false; // tick completes well inside the deadline
+      svc.pollGuard.end(); // tick completes well inside the deadline
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 

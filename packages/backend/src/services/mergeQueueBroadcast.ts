@@ -5,6 +5,19 @@ import { emitPullRequestUpdated } from './websocket.js';
 
 type QueueStatus = 'waiting' | 'fixing' | 'merging' | 'blocked';
 
+/**
+ * Drop a PR out of the merge queue — spread into any `.set()` that flips a
+ * row terminal (merged/closed). Single definition shared by the processor,
+ * the monitor's closed-sweep, and the routes' terminal reconcile, so no path
+ * can flip `state` while leaking stale queue bookkeeping (which once left a
+ * merged PR holding the head slot's "#1" badge forever).
+ */
+export const QUEUE_RESET_COLUMNS = {
+  mergeQueued: false,
+  mergeQueuedAt: null,
+  mergeQueueState: null,
+} as const;
+
 /** The minimal row shape the position math needs — satisfied by both the
  *  drizzle select row and the routes' local PullRequestRow interface. */
 interface QueueableRow {

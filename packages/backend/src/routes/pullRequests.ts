@@ -18,6 +18,7 @@ import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import {
   computeQueuePositions,
   broadcastMergeQueuePositions,
+  QUEUE_RESET_COLUMNS,
 } from '../services/mergeQueueBroadcast.js';
 import type { ApiResponse } from '@fastowl/shared';
 
@@ -626,10 +627,7 @@ async function reconcileTerminalState(
   const db = getDbClient();
   // A PR that left 'open' can't be merged by the queue — drop it off so it
   // never blocks its (repo, base) group.
-  const queueReset =
-    nextState !== 'open' && row.mergeQueued
-      ? { mergeQueued: false, mergeQueuedAt: null, mergeQueueState: null }
-      : {};
+  const queueReset = nextState !== 'open' && row.mergeQueued ? QUEUE_RESET_COLUMNS : {};
   await db
     .update(pullRequestsTable)
     .set({ state: nextState, mergedAt, updatedAt: new Date(), ...queueReset })

@@ -50,19 +50,46 @@ const GITHUB_SCOPES = ['repo', 'workflow', 'read:user', 'read:org'];
 const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * `fetch` with a hard timeout via `AbortController`. On timeout it throws a
- * descriptive error (not a bare `AbortError`) so callers log something useful.
- * The `signal` is applied AFTER the spread so it always wins.
+ * A fully-consumed GitHub response. The body is already read as text so no
+ * caller can hang on a stalled body stream after the timeout was disarmed.
  */
-async function fetchWithTimeout(
+export interface TimedResponse {
+  status: number;
+  statusText: string;
+  ok: boolean;
+  headers: Headers;
+  bodyText: string;
+}
+
+/**
+ * `fetch` with a hard timeout via `AbortController`, covering the WHOLE
+ * request — headers AND body. An earlier version cleared the abort timer as
+ * soon as `fetch` resolved (headers in), leaving the subsequent
+ * `response.json()` unbounded; a merge response whose body stalled hung the
+ * merge-queue tick for 5+ minutes in prod while the PR was already merged on
+ * GitHub. The body is consumed here, inside the timer, and returned as text.
+ *
+ * On timeout it throws a descriptive error (not a bare `AbortError`) so
+ * callers log something useful. The `signal` is applied AFTER the spread so
+ * it always wins.
+ */
+export async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
   timeoutMs = GITHUB_REQUEST_TIMEOUT_MS
-): Promise<Response> {
+): Promise<TimedResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const bodyText = await response.text();
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+      headers: response.headers,
+      bodyText,
+    };
   } catch (err) {
     if (controller.signal.aborted) {
       throw new Error(`GitHub request timed out after ${timeoutMs}ms: ${url}`);
@@ -71,6 +98,11 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Parse a JSON body read by {@link fetchWithTimeout}; empty body → undefined. */
+function parseJsonBody<T>(bodyText: string): T {
+  return (bodyText ? JSON.parse(bodyText) : undefined) as T;
 }
 
 /**
@@ -354,7 +386,7 @@ class GitHubService extends EventEmitter {
     scope: string;
   }> {
     const startedAt = Date.now();
-    const response = await fetch(GITHUB_TOKEN_URL, {
+    const response = await fetchWithTimeout(GITHUB_TOKEN_URL, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -382,7 +414,13 @@ class GitHubService extends EventEmitter {
       throw new Error(`GitHub token exchange failed: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = parseJsonBody<{
+      access_token: string;
+      token_type: string;
+      scope: string;
+      error?: string;
+      error_description?: string;
+    }>(response.bodyText);
     if (data.error) {
       throw new Error(`GitHub OAuth error: ${data.error_description || data.error}`);
     }
@@ -603,7 +641,7 @@ class GitHubService extends EventEmitter {
     const url = `${GITHUB_API_URL}${endpoint}`;
     const startedAt = Date.now();
 
-    let response: Response;
+    let response: TimedResponse;
     try {
       response = await fetchWithTimeout(url, {
         ...options,
@@ -628,9 +666,7 @@ class GitHubService extends EventEmitter {
     }
 
     if (!response.ok) {
-      // Read the body once — both the rate-limit check and the error message
-      // need it, and a Response body can only be consumed a single time.
-      const bodyText = await response.text().catch(() => '');
+      const bodyText = response.bodyText;
       const rl = parseRateLimitResponse(response, bodyText);
       if (rl.isRateLimited) {
         githubRateGate.block(
@@ -677,7 +713,7 @@ class GitHubService extends EventEmitter {
       ok: true,
       workspaceId,
     });
-    return response.json();
+    return parseJsonBody<T>(response.bodyText);
   }
 
   /**
@@ -697,18 +733,8 @@ class GitHubService extends EventEmitter {
    * always explains *why* (e.g. a 403 on merge: "At least 1 approving
    * review is required" or "Resource not accessible by personal access
    * token"). We previously threw only `statusText` ("Forbidden"), which
-   * told the user nothing. Read the body and surface its message,
-   * falling back to the status line if it isn't JSON.
-   */
-  private async describeApiError(response: Response): Promise<string> {
-    const bodyText = await response.text().catch(() => '');
-    return this.describeApiErrorFromText(response.status, response.statusText, bodyText);
-  }
-
-  /**
-   * The pure core of {@link describeApiError}, taking an already-read body so a
-   * caller that must inspect the body for other reasons (rate-limit detection)
-   * can read it once and reuse it — a `Response` body can only be consumed once.
+   * told the user nothing. Surface the body's message, falling back to
+   * the status line if it isn't JSON.
    */
   private describeApiErrorFromText(status: number, statusText: string, bodyText: string): string {
     let detail = '';
@@ -792,7 +818,7 @@ class GitHubService extends EventEmitter {
     };
     if (opts.ifModifiedSince) headers['If-Modified-Since'] = opts.ifModifiedSince;
 
-    const response = await fetch(url.toString(), { headers });
+    const response = await fetchWithTimeout(url.toString(), { headers });
     const lastModified = response.headers.get('last-modified');
     const pollHeader = response.headers.get('x-poll-interval');
     const pollInterval = pollHeader ? Number.parseInt(pollHeader, 10) : null;
@@ -801,17 +827,20 @@ class GitHubService extends EventEmitter {
       return { status: 304, notifications: [], lastModified, pollInterval };
     }
     if (response.status === 401) {
-      const bodyText = await response.text().catch(() => '');
       await this.removeToken(
         workspaceId,
-        `401 on GET /notifications — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+        `401 on GET /notifications — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
           `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
       );
       throw new Error('GitHub token expired or revoked');
     }
-    if (!response.ok) throw new Error(await this.describeApiError(response));
+    if (!response.ok) {
+      throw new Error(
+        this.describeApiErrorFromText(response.status, response.statusText, response.bodyText)
+      );
+    }
 
-    const notifications = (await response.json()) as GitHubNotificationThread[];
+    const notifications = parseJsonBody<GitHubNotificationThread[]>(response.bodyText);
     return { status: response.status, notifications, lastModified, pollInterval };
   }
 
@@ -1230,7 +1259,7 @@ class GitHubService extends EventEmitter {
       // Pause behind any active secondary-rate-limit backoff before sending.
       await githubRateGate.waitIfBlocked(accountKey);
       const startedAt = Date.now();
-      let response: Response;
+      let response: TimedResponse;
       try {
         response = await fetchWithTimeout(gqlUrl, {
           method: 'POST',
@@ -1274,10 +1303,10 @@ class GitHubService extends EventEmitter {
           ...(error ? { error } : {}),
         });
       if (response.ok) {
-        const payload = (await response.json()) as {
+        const payload = parseJsonBody<{
           data?: T;
           errors?: Array<{ message: string }>;
-        };
+        }>(response.bodyText);
         if (payload.errors && payload.errors.length > 0) {
           // Surface the first GraphQL error verbatim — callers want to see
           // "Resource not accessible" or "Could not resolve to a Repository"
@@ -1294,10 +1323,9 @@ class GitHubService extends EventEmitter {
       }
       if (response.status === 401) {
         recordGql(false, 'token expired or revoked');
-        const bodyText = await response.text().catch(() => '');
         await this.removeToken(
           workspaceId,
-          `401 on POST /graphql — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+          `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
             `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
         );
         throw new Error('GitHub token expired or revoked');
@@ -1305,8 +1333,7 @@ class GitHubService extends EventEmitter {
       // A secondary-rate-limit 403/429 is NOT retried inline — that would burst
       // against the very limit we tripped. Record the backoff and bail; the next
       // gated tick retries once the window clears.
-      const bodyText = await response.text().catch(() => '');
-      const rl = parseRateLimitResponse(response, bodyText);
+      const rl = parseRateLimitResponse(response, response.bodyText);
       if (rl.isRateLimited) {
         githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql');
         recordGql(false, 'secondary rate limit');

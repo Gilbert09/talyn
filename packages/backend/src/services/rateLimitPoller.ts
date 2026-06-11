@@ -1,6 +1,7 @@
 import type { DebugRateLimitState } from '@fastowl/shared';
 import { githubService, type GitHubRateLimit } from './github.js';
 import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
 import { rateBudgetGovernor } from './rateBudgetGovernor.js';
 
 /**
@@ -78,7 +79,7 @@ export function bucketsFor(
 
 class RateLimitPoller {
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
+  private guard = new TickGuard('rateLimitPoller');
 
   init(): void {
     if (this.timer) return;
@@ -101,8 +102,7 @@ class RateLimitPoller {
   }
 
   private async tick(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+    if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     // Dedupe by label so the same account across multiple workspaces is only
     // fetched (and carded) once per tick.
@@ -137,7 +137,7 @@ class RateLimitPoller {
         }
       }
     } finally {
-      this.running = false;
+      this.guard.end();
       debugBus.pollerTick('rate_limit', {
         durationMs: Date.now() - startedAt,
         ok: !lastError,

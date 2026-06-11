@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import {
   prNeedsFollowup,
   mergeBlockerReason,
@@ -11,8 +11,12 @@ import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
-import { broadcastMergeQueuePositions } from './mergeQueueBroadcast.js';
+import {
+  broadcastMergeQueuePositions,
+  QUEUE_RESET_COLUMNS,
+} from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -143,21 +147,11 @@ function normalizeMethod(raw: unknown): MergeMethod {
  * blocked, wait for it (active-task guard), retry, and drop the PR off the
  * queue once merged — which promotes the next same-base PR to head.
  */
-/**
- * A single tick should never run longer than this. The per-request GitHub
- * timeout (`github.ts`) is the primary defense against a hung `await`, but the
- * tick also awaits the DB and cloud-task dispatch — any of which could stall
- * indefinitely. Since `ticking` is only cleared in `finally`, one stalled await
- * would otherwise freeze the loop forever (this actually happened in prod: the
- * queue went silent mid-drain with 15 mergeable PRs stuck). If `ticking` is
- * still held past this, force-release it so the loop recovers next tick.
- */
-const MAX_TICK_MS = 5 * 60_000;
-
 class MergeQueueProcessor {
   private interval: NodeJS.Timeout | null = null;
-  private ticking = false;
-  private tickStartedAt = 0;
+  // Wedge watchdog: one stalled await must never freeze the loop forever —
+  // see TickGuard for the prod incidents that shaped this.
+  private guard = new TickGuard('mergeQueueProcessor');
 
   init(): void {
     if (this.interval) return;
@@ -184,24 +178,33 @@ class MergeQueueProcessor {
   }
 
   private async tick(): Promise<void> {
-    if (this.ticking) {
-      const heldMs = Date.now() - this.tickStartedAt;
-      // A tick still running past MAX_TICK_MS wedged on a stalled await — the
-      // `finally` that clears `ticking` never ran. Force-release so the loop
-      // recovers, rather than no-op'ing forever.
-      if (heldMs <= MAX_TICK_MS) return;
-      console.error(
-        `[mergeQueueProcessor] previous tick wedged for ${heldMs}ms — force-releasing the lock`
-      );
-    }
-    this.ticking = true;
-    this.tickStartedAt = Date.now();
+    if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let headCount = 0;
     let tickError: string | undefined;
     let skipRecord = false;
     try {
       const db = getDbClient();
+
+      // Self-heal: clear queue bookkeeping on rows that left `open` while
+      // still flagged queued (a sweep/refresh path flipped the state without
+      // the reset). Such rows are invisible to the open-only select below, so
+      // their stale flags would otherwise live forever — and pollute the
+      // position math anywhere that doesn't filter on state.
+      const healed = await db
+        .update(pullRequestsTable)
+        .set({ ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })
+        .where(
+          and(
+            eq(pullRequestsTable.mergeQueued, true),
+            ne(pullRequestsTable.state, 'open')
+          )
+        )
+        .returning({ workspaceId: pullRequestsTable.workspaceId });
+      for (const workspaceId of new Set(healed.map((r) => r.workspaceId))) {
+        await broadcastMergeQueuePositions(workspaceId);
+      }
+
       const rows = await db
         .select(QUEUE_COLUMNS)
         .from(pullRequestsTable)
@@ -247,7 +250,7 @@ class MergeQueueProcessor {
       tickError = msg;
       console.error('[mergeQueueProcessor] tick error:', err);
     } finally {
-      this.ticking = false;
+      this.guard.end();
       if (!skipRecord) {
         debugBus.pollerTick('merge_queue', {
           durationMs: Date.now() - startedAt,
@@ -296,6 +299,16 @@ class MergeQueueProcessor {
 
     const summary = row.lastSummary as PRMergeableSummary;
     const state = readState(row);
+
+    // A persisted 'merging' on ENTRY means a previous attempt died between
+    // GitHub accepting the merge and our DB write (wedged await, redeploy —
+    // exactly the June 2026 incident: the PR merged on GitHub at 19:13 but the
+    // row read open/merging for ever and the queue froze). Ask GitHub directly
+    // before doing anything else; re-attempting the merge would just 405.
+    if (state.status === 'merging' && (await this.verifyMerged(row))) {
+      await this.recordMerged(row);
+      return;
+    }
 
     // 2. Active-run guard — never fire a NEW run while one is already working
     //    this PR. Check the queue's OWN last fix run by id, not just
@@ -360,6 +373,18 @@ class MergeQueueProcessor {
 
     // 5. Clean path — mergeable AND up-to-date → merge it.
     if (!queueBlocked(row, summary)) {
+      // Last-moment re-check: a force-released wedged tick can resume here
+      // minutes later, after the PR merged or the user dequeued it. Never
+      // merge off a stale snapshot.
+      const current = await db
+        .select({
+          state: pullRequestsTable.state,
+          mergeQueued: pullRequestsTable.mergeQueued,
+        })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, row.id))
+        .limit(1);
+      if (!current[0] || current[0].state !== 'open' || !current[0].mergeQueued) return;
       state.status = 'merging';
       await this.persist(row, state);
       try {
@@ -376,6 +401,10 @@ class MergeQueueProcessor {
           // the BEHIND/conflict state surfaces immediately and the next tick
           // funnels into the fix path, instead of re-attempting the merge
           // against the same stale summary until FRESHNESS_MS elapses.
+          if (await this.verifyMerged(row)) {
+            await this.recordMerged(row);
+            return;
+          }
           state.status = 'waiting';
           state.lastError = result.message || 'GitHub did not merge the pull request';
           state.lastErrorAt = new Date().toISOString();
@@ -383,41 +412,22 @@ class MergeQueueProcessor {
           await this.refreshAfterFailedMerge(row);
           return;
         }
-        // Success — flip the row terminal (the merge route can't GraphQL-refetch
-        // a merged PR either) and drop it off the queue. The next same-base PR
-        // becomes head on the next tick automatically.
-        await db
-          .update(pullRequestsTable)
-          .set({
-            state: 'merged',
-            mergedAt: new Date(),
-            mergeQueued: false,
-            mergeQueuedAt: null,
-            mergeQueueState: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(pullRequestsTable.id, row.id));
-        emitPullRequestUpdated(row.workspaceId, {
-          id: row.id,
-          taskId: row.taskId,
-          repositoryId: row.repositoryId,
-          owner: row.owner,
-          repo: row.repo,
-          number: row.number,
-          state: 'merged',
-          lastSummary: row.lastSummary as Record<string, unknown>,
-          mergeQueued: false,
-          mergeQueueState: null,
-        });
-        // The merged PR left its group — reshuffle the survivors' "#N" badges
-        // (e.g. #2 → #1) instead of leaving them stale until a refresh.
-        await broadcastMergeQueuePositions(row.workspaceId);
+        await this.recordMerged(row);
       } catch (err) {
-        // The merge was rejected (e.g. 405 "Pull Request has merge conflicts"),
-        // which means our cached mergeability was stale. Record the error, then
-        // refetch the PR immediately so the real conflicting/behind state hits
-        // the cache + UI now instead of after FRESHNESS_MS — the next tick then
-        // funnels the now-blocked PR into the cloud fix run. Don't dequeue.
+        // The merge was rejected. First disambiguate "already merged" (a lost
+        // response on a merge that landed, a redeploy mid-merge, or an external
+        // merge — GitHub 405s all of them) from a genuine blocker: the former
+        // is a SUCCESS, and without this check the queue re-attempts a doomed
+        // merge every tick while the row never leaves the head slot.
+        if (await this.verifyMerged(row)) {
+          await this.recordMerged(row);
+          return;
+        }
+        // A real rejection (e.g. 405 "Pull Request has merge conflicts") means
+        // our cached mergeability was stale. Record the error, then refetch the
+        // PR immediately so the real conflicting/behind state hits the cache +
+        // UI now instead of after FRESHNESS_MS — the next tick then funnels the
+        // now-blocked PR into the cloud fix run. Don't dequeue.
         state.status = 'waiting';
         state.lastError = err instanceof Error ? err.message : 'Merge failed';
         state.lastErrorAt = new Date().toISOString();
@@ -470,6 +480,58 @@ class MergeQueueProcessor {
     state.accounted = false;
     state.status = 'fixing';
     await this.persist(row, state);
+  }
+
+  /**
+   * Ask GitHub (REST — `merged_at` is the canonical signal, and the endpoint
+   * works on merged PRs where the open-only GraphQL search can't see them)
+   * whether the PR is in fact merged. Best-effort: any failure reads as "not
+   * merged" and the caller falls back to its normal error handling.
+   */
+  private async verifyMerged(row: PRRow): Promise<boolean> {
+    try {
+      const pr = await githubService.getPullRequest(
+        row.workspaceId,
+        row.owner,
+        row.repo,
+        row.number
+      );
+      return Boolean(pr.merged_at || pr.merged);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The single success path: flip the row terminal (the merge route can't
+   * GraphQL-refetch a merged PR either), drop it off the queue, and reshuffle
+   * the survivors' "#N" badges. The next same-base PR becomes head on the next
+   * tick automatically.
+   */
+  private async recordMerged(row: PRRow): Promise<void> {
+    const db = getDbClient();
+    await db
+      .update(pullRequestsTable)
+      .set({
+        state: 'merged',
+        mergedAt: new Date(),
+        ...QUEUE_RESET_COLUMNS,
+        updatedAt: new Date(),
+      })
+      .where(eq(pullRequestsTable.id, row.id));
+    emitPullRequestUpdated(row.workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId: row.repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: 'merged',
+      lastSummary: row.lastSummary as Record<string, unknown>,
+      mergeQueued: false,
+      mergeQueueState: null,
+    });
+    await broadcastMergeQueuePositions(row.workspaceId);
   }
 
   /**
@@ -528,12 +590,7 @@ class MergeQueueProcessor {
     const db = getDbClient();
     await db
       .update(pullRequestsTable)
-      .set({
-        mergeQueued: false,
-        mergeQueuedAt: null,
-        mergeQueueState: null,
-        updatedAt: new Date(),
-      })
+      .set({ ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })
       .where(eq(pullRequestsTable.id, row.id));
     emitPullRequestUpdated(row.workspaceId, {
       id: row.id,

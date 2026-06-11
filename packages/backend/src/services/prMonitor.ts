@@ -16,7 +16,12 @@ import {
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import {
+  broadcastMergeQueuePositions,
+  QUEUE_RESET_COLUMNS,
+} from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
 import { rateBudgetGovernor } from './rateBudgetGovernor.js';
 
 interface WatchedRepo {
@@ -70,8 +75,12 @@ const FAST_POLLER_DESC =
 class PRMonitorService extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
   private fastTimer: NodeJS.Timeout | null = null;
-  private isPolling = false;
-  private isFastPolling = false;
+  // Wedge watchdogs: a single stalled await must never silently stop the
+  // monitor — when this loop freezes, closed/merged PRs are never swept, so
+  // a merged queue head looks "open" forever and the merge queue stalls with
+  // it (observed in prod, June 2026). See TickGuard.
+  private pollGuard = new TickGuard('prMonitor');
+  private fastGuard = new TickGuard('prMonitor.fastPoll');
   /** Cached current-user logins keyed by workspaceId — saves a round-trip
    *  per poll. Cleared when the OAuth token rotates (via removeToken). */
   private userLoginCache: Map<string, string> = new Map();
@@ -231,8 +240,7 @@ class PRMonitorService extends EventEmitter {
   // ---------- Polling ----------
 
   private async poll(): Promise<void> {
-    if (this.isPolling) return;
-    this.isPolling = true;
+    if (!this.pollGuard.tryBegin()) return;
     const startedAt = Date.now();
     let count = 0;
     try {
@@ -247,7 +255,7 @@ class PRMonitorService extends EventEmitter {
         }
       }
     } finally {
-      this.isPolling = false;
+      this.pollGuard.end();
       debugBus.pollerTick('pr_monitor', {
         durationMs: Date.now() - startedAt,
         ok: true,
@@ -601,6 +609,7 @@ class PRMonitorService extends EventEmitter {
         owner: pullRequestsTable.owner,
         repo: pullRequestsTable.repo,
         lastSummary: pullRequestsTable.lastSummary,
+        mergeQueued: pullRequestsTable.mergeQueued,
       })
       .from(pullRequestsTable)
       .where(
@@ -613,6 +622,7 @@ class PRMonitorService extends EventEmitter {
     const seen = new Set(seenNumbers);
     const stale = rows.filter((r) => !seen.has(r.number));
     if (stale.length === 0) return;
+    let sweptQueued = false;
     for (const row of stale) {
       let nextState: 'merged' | 'closed' = 'closed';
       let mergedAt: Date | null = null;
@@ -639,10 +649,15 @@ class PRMonitorService extends EventEmitter {
           `[pr-monitor] sweep state lookup failed for ${repo.fullName}#${row.number}: ${msg}`
         );
       }
+      // A PR that left `open` can't be merged by the queue — clear its queue
+      // bookkeeping in the same write. Leaving the flags set once stalled the
+      // whole (repo, base) group: the merged head kept its "#1" slot while
+      // being invisible to the processor's open-only select.
       await this.db
         .update(pullRequestsTable)
-        .set({ state: nextState, mergedAt, updatedAt: new Date() })
+        .set({ state: nextState, mergedAt, updatedAt: new Date(), ...QUEUE_RESET_COLUMNS })
         .where(eq(pullRequestsTable.id, row.id));
+      if (row.mergeQueued) sweptQueued = true;
       // Tell the desktop the PR left "open" (merged/closed upstream, incl.
       // auto-merge) so the open-only GitHub list drops the row live, instead
       // of waiting for the user to open or refresh it.
@@ -655,8 +670,13 @@ class PRMonitorService extends EventEmitter {
         number: row.number,
         state: nextState,
         lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
+        mergeQueued: false,
+        mergeQueueState: null,
       });
     }
+    // A queued PR left the group — reshuffle the survivors' "#N" badges now
+    // rather than waiting for the next processor action or a manual refresh.
+    if (sweptQueued) await broadcastMergeQueuePositions(workspaceId);
   }
 
   /**
@@ -712,7 +732,7 @@ class PRMonitorService extends EventEmitter {
    */
   private async drainInFlightTick(): Promise<boolean> {
     const deadline = Date.now() + FORCE_POLL_DRAIN_MS;
-    while (this.isPolling) {
+    while (this.pollGuard.active) {
       if (Date.now() >= deadline) {
         console.warn('PR monitor: forced poll skipped — a poll tick is still in flight');
         return false;
@@ -729,7 +749,7 @@ class PRMonitorService extends EventEmitter {
   async forcePollWorkspaces(workspaceIds: string[]): Promise<void> {
     if (workspaceIds.length === 0) return;
     if (!(await this.drainInFlightTick())) return;
-    this.isPolling = true;
+    if (!this.pollGuard.tryBegin()) return;
     try {
       for (const workspaceId of workspaceIds) {
         try {
@@ -740,7 +760,7 @@ class PRMonitorService extends EventEmitter {
         }
       }
     } finally {
-      this.isPolling = false;
+      this.pollGuard.end();
     }
   }
 
@@ -767,8 +787,7 @@ class PRMonitorService extends EventEmitter {
    * never touches the rate-limited Search budget.
    */
   private async fastPoll(): Promise<void> {
-    if (this.isFastPolling) return;
-    this.isFastPolling = true;
+    if (!this.fastGuard.tryBegin()) return;
     const startedAt = Date.now();
     let count = 0;
     try {
@@ -782,7 +801,7 @@ class PRMonitorService extends EventEmitter {
         }
       }
     } finally {
-      this.isFastPolling = false;
+      this.fastGuard.end();
       debugBus.pollerTick('pr_monitor_fast_ci', {
         durationMs: Date.now() - startedAt,
         ok: true,
@@ -865,7 +884,7 @@ class PRMonitorService extends EventEmitter {
 
   /** Test/admin entry point for the fast loop — see `forcePoll`. */
   async forceFastPoll(): Promise<void> {
-    while (this.isFastPolling) {
+    while (this.fastGuard.active) {
       await new Promise((r) => setTimeout(r, 25));
     }
     await this.fastPoll();

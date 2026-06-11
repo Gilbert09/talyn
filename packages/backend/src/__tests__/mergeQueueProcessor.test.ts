@@ -168,6 +168,7 @@ describe('mergeQueueProcessor', () => {
   let mergeSpy: ReturnType<typeof vi.spyOn>;
   let refreshSpy: ReturnType<typeof vi.spyOn>;
   let blockedSpy: ReturnType<typeof vi.spyOn>;
+  let getPrSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const testDb = await createTestDb();
@@ -178,6 +179,12 @@ describe('mergeQueueProcessor', () => {
     mergeSpy = vi
       .spyOn(githubService, 'mergePullRequest')
       .mockResolvedValue({ sha: 'merged-sha', merged: true, message: 'ok' });
+    // The failure-path "is it actually merged?" REST verify. Default: still
+    // open — failure paths behave as genuine failures unless a test says
+    // otherwise.
+    getPrSpy = vi
+      .spyOn(githubService, 'getPullRequest')
+      .mockResolvedValue({ state: 'open', merged: false, merged_at: null } as never);
     // Stub the post-failure refetch so it doesn't hit GitHub; tests assert it
     // fires. The top-of-tick freshness refresh is skipped (fresh lastPolledAt).
     refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
@@ -485,6 +492,177 @@ describe('mergeQueueProcessor', () => {
 
     expect(mergeSpy).toHaveBeenCalledTimes(1);
     expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  // The June 2026 prod incident class: GitHub completes the merge but we never
+  // record it (lost response, wedged tick, redeploy mid-merge, or an external
+  // merge). The REST "is it actually merged?" verify must turn each of these
+  // failure paths into the success path, or the queue stalls forever behind a
+  // head it keeps trying to re-merge.
+  describe('verify-merged recovery', () => {
+    it('records the merge when the attempt throws 405 but GitHub says merged', async () => {
+      mergeSpy.mockRejectedValueOnce(
+        new Error('GitHub API error 405 Method Not Allowed: Pull Request is not mergeable')
+      );
+      getPrSpy.mockResolvedValueOnce({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-06-11T19:13:50Z',
+      } as never);
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const pr = await getPr(db, prId);
+      expect(pr.state).toBe('merged');
+      expect(pr.mergeQueued).toBe(false);
+      expect(pr.mergeQueueState).toBeNull();
+      expect(pr.mergedAt).toBeTruthy();
+      // Recovery is a success, not a failure — no doomed refetch loop.
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('records the merge when GitHub returns merged:false but the PR is in fact merged', async () => {
+      mergeSpy.mockResolvedValueOnce({ sha: '', merged: false, message: 'Already merged' });
+      getPrSpy.mockResolvedValueOnce({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-06-11T19:13:50Z',
+      } as never);
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const pr = await getPr(db, prId);
+      expect(pr.state).toBe('merged');
+      expect(pr.mergeQueued).toBe(false);
+    });
+
+    it('recovers a head stuck in status=merging from a tick that died mid-merge', async () => {
+      // The row a wedged/killed tick leaves behind: open + queued +
+      // status='merging', while GitHub already merged the PR.
+      getPrSpy.mockResolvedValue({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-06-11T19:13:50Z',
+      } as never);
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueueState: { status: 'merging', attempts: 0, accounted: true },
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      const pr = await getPr(db, prId);
+      expect(pr.state).toBe('merged');
+      expect(pr.mergeQueued).toBe(false);
+      // Recovered WITHOUT re-attempting the merge.
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+
+    it('proceeds normally on re-entry with status=merging when GitHub says still open', async () => {
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueueState: { status: 'merging', attempts: 0, accounted: true },
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      // Not merged upstream → falls through to a fresh merge attempt.
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      const pr = await getPr(db, prId);
+      expect(pr.state).toBe('merged');
+    });
+
+    it('advances the next same-base PR on the tick after a 405-recovery', async () => {
+      mergeSpy.mockRejectedValueOnce(new Error('405 Pull Request is not mergeable'));
+      getPrSpy.mockResolvedValueOnce({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-06-11T19:13:50Z',
+      } as never);
+      const first = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(Date.now() - 60_000),
+      });
+      const second = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce(); // head recovers via verify
+      await mergeQueueProcessor.runOnce(); // next PR becomes head and merges
+
+      expect((await getPr(db, first)).state).toBe('merged');
+      expect((await getPr(db, second)).state).toBe('merged');
+      expect(mergeSpy).toHaveBeenCalledTimes(2); // 1 failed head + 1 clean second
+    });
+  });
+
+  // The tick's opening self-heal: rows that left `open` while still flagged
+  // queued (a sweep flipped the state without the reset) are invisible to the
+  // open-only head select, so their stale flags must be scrubbed here.
+  describe('stale queue-flag self-heal', () => {
+    it('clears queue bookkeeping on a queued row that is no longer open', async () => {
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        state: 'merged',
+        mergeQueueState: { status: 'merging', attempts: 0, accounted: true },
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      const pr = await getPr(db, prId);
+      expect(pr.mergeQueued).toBe(false);
+      expect(pr.mergeQueuedAt).toBeNull();
+      expect(pr.mergeQueueState).toBeNull();
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves open queued rows untouched', async () => {
+      // Conflicting → stays queued through the tick (fix-run path).
+      const prId = await insertPr(db, { summary: conflictSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const pr = await getPr(db, prId);
+      expect(pr.mergeQueued).toBe(true);
+    });
+  });
+
+  // A force-released wedged tick can resume minutes later holding a stale row
+  // snapshot — it must re-check the live row before merging. Drive processHead
+  // directly with the stale snapshot to simulate the resumed tick.
+  describe('stale-tick guard before merging', () => {
+    it('aborts the merge when the live row was dequeued after the snapshot was taken', async () => {
+      const prId = await insertPr(db, { summary: cleanSummary() });
+      const staleSnapshot = await getPr(db, prId); // queued + open, as the wedged tick saw it
+      await db
+        .update(pullRequestsTable)
+        .set({ mergeQueued: false, mergeQueuedAt: null, mergeQueueState: null })
+        .where(eq(pullRequestsTable.id, prId));
+
+      const internals = mergeQueueProcessor as unknown as {
+        processHead(row: typeof staleSnapshot): Promise<void>;
+      };
+      await internals.processHead(staleSnapshot);
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect((await getPr(db, prId)).state).toBe('open');
+    });
+
+    it('aborts the merge when the live row already left open', async () => {
+      const prId = await insertPr(db, { summary: cleanSummary() });
+      const staleSnapshot = await getPr(db, prId);
+      await db
+        .update(pullRequestsTable)
+        .set({ state: 'merged', mergeQueued: false, mergeQueueState: null })
+        .where(eq(pullRequestsTable.id, prId));
+
+      const internals = mergeQueueProcessor as unknown as {
+        processHead(row: typeof staleSnapshot): Promise<void>;
+      };
+      await internals.processHead(staleSnapshot);
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('does not fire a fix run when the workspace has no connected cloud env', async () => {

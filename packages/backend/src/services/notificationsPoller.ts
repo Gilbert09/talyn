@@ -1,6 +1,7 @@
 import { githubService } from './github.js';
 import { prMonitorService } from './prMonitor.js';
 import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
 
 /**
  * GitHub Notifications poller — the low-latency live channel.
@@ -34,7 +35,7 @@ interface WorkspaceState {
 
 class NotificationsPoller {
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
+  private guard = new TickGuard('notificationsPoller');
   private states = new Map<string, WorkspaceState>();
 
   init(): void {
@@ -56,8 +57,7 @@ class NotificationsPoller {
   }
 
   private async tick(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+    if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let polled = 0;
     try {
@@ -72,7 +72,7 @@ class NotificationsPoller {
         });
       }
     } finally {
-      this.running = false;
+      this.guard.end();
       debugBus.pollerTick('notifications', {
         durationMs: Date.now() - startedAt,
         ok: true,

@@ -5,6 +5,7 @@ import { readCloudTaskProvider } from '@fastowl/shared';
 import { getCloudProvider } from './registry.js';
 import { isWatched } from './taskWatch.js';
 import { debugBus } from '../debugBus.js';
+import { TickGuard } from '../tickGuard.js';
 import type { CloudTaskRow } from './types.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -19,7 +20,7 @@ const POLL_INTERVAL_MS = 10_000;
  */
 class CloudTaskPoller {
   private interval: NodeJS.Timeout | null = null;
-  private ticking = false;
+  private guard = new TickGuard('cloudPoller');
 
   init(): void {
     if (this.interval) return;
@@ -41,8 +42,7 @@ class CloudTaskPoller {
   }
 
   private async tick(): Promise<void> {
-    if (this.ticking) return;
-    this.ticking = true;
+    if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let reconciled = 0;
     let tickError: string | undefined;
@@ -106,7 +106,7 @@ class CloudTaskPoller {
       tickError = msg;
       console.error('[cloudPoller] tick error:', err);
     } finally {
-      this.ticking = false;
+      this.guard.end();
       if (!skipRecord) {
         debugBus.pollerTick('cloud_task', {
           durationMs: Date.now() - startedAt,

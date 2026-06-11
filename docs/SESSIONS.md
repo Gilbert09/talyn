@@ -2,6 +2,25 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 58 — Merge-queue stall audit: bounded body reads, verify-merged recovery, watchdogs everywhere
+
+Post-mortem of the prod merge-queue freeze (3 queued PRs; the head — PostHog/posthog#62654 — merged on GitHub at 19:13:50Z but the UI showed "QUEUED #1 · MERGING" forever and the siblings never advanced; Tom merged them by hand at 19:19). Railway logs had the smoking gun: `[mergeQueueProcessor] previous tick wedged for 304973ms — force-releasing the lock`. Root cause chain:
+
+1. **`fetchWithTimeout` only bounded the headers.** It cleared its abort timer the moment `fetch` resolved, so every `response.json()`/`text()` after it was unbounded — the merge PUT's response body stalled and the tick hung *after GitHub had already merged*, so the `state='merged'` DB write never ran. (The 30s timeout was added for exactly this wedge class and only half-fixed it.)
+2. **The PR monitor had no wedge watchdog** (bare `if (isPolling) return`), so the rescue path — `sweepClosed` flipping rows that fell out of the open search — was wedged alongside (no monitor logs after 18:57). The watchdog added to the merge processor after the first prod wedge was never propagated to the other six loops.
+3. **Nothing ever asked GitHub "is this PR actually merged?"** — post-watchdog ticks re-attempted the merge, got 405, set `waiting`, and looped.
+4. **`sweepClosed` leaked queue bookkeeping** — it flipped `state` but left `mergeQueued`/`mergeQueuedAt`/`mergeQueueState` set (unlike `reconcileTerminalState`), and never rebroadcast positions.
+
+**Fixes:**
+- `github.ts`: `fetchWithTimeout` now consumes the body inside the abort window and returns a `TimedResponse` (`status`/`headers`/`bodyText`); all REST + GraphQL body reads go through it (`parseJsonBody` helper). `listNotifications` and the OAuth token exchange — previously plain `fetch` with NO timeout — converted too. `describeApiError` folded into `describeApiErrorFromText`.
+- New `services/tickGuard.ts` (`TickGuard`: `tryBegin`/`end`/`active`, force-release past 5 min) adopted by all seven loops: mergeQueueProcessor (replacing its inline watchdog), prMonitor poll + fastPoll, prAutoMergeWatcher, notificationsPoller, rateLimitPoller, cloudProviders/poller.
+- `mergeQueueProcessor`: new `verifyMerged()` (REST `merged_at`, canonical) + `recordMerged()` (single success path). Runs on entry when the row reads `status='merging'` (a tick died mid-merge), on `merged:false`, and on a thrown merge — so a lost response, a redeploy mid-merge, or an external merge all converge to the success path instead of a doomed retry loop. Plus a last-moment re-read of `state`+`mergeQueued` before the merge call (a force-released wedged tick can resume minutes later on a stale snapshot), and a per-tick self-heal that clears queue flags on any non-open row (`+ rebroadcast`) as the catch-all.
+- `QUEUE_RESET_COLUMNS` shared from `mergeQueueBroadcast.ts`; applied in `sweepClosed` (same write as the state flip, `mergeQueued:false` in its WS emit, positions rebroadcast when a queued row is swept), the processor, and `reconcileTerminalState`.
+- Deliberately NOT changed: `prCache.upsertRow` doesn't clear queue flags — if the refresh path cleared them, the processor's `dequeue()` (which owns the position rebroadcast) would never fire; the self-heal covers stragglers within one tick.
+- Tests (+16): `githubFetchTimeout.test.ts` (incl. the stalled-body-after-headers prod case via signal-wired mock streams), `tickGuard.test.ts`, processor verify-merged recovery (5 cases incl. queue advancement after a 405-recovery), self-heal, stale-tick guard (driving `processHead` with a stale snapshot), and the sweep clearing flags + promoting the surviving sibling #2 → #1.
+
+Observed-but-not-fixed: the PostHog Code SSE tail loop re-reads ~5.5k frames every ~10s per watched run (Session 57's leftover, confirmed flooding the prod logs), and a GraphQL primary-rate-limit exhaustion at 17:25 set the degraded stage for the incident.
+
 ## Session 57 — View-gated cloud log streaming + time-debounced transcript persists
 
 Diagnosed a Railway network spike (~40MB/bucket for ~40 min, flat CPU/memory): every in-progress PostHog Code task streamed its SSE log 24/7 (token-level ACP deltas — single tasks delivered 12k+ events in a 2-minute window) and the streamer persisted the **full transcript jsonb** to Supabase every 25 events (`PERSIST_EVERY`) — ~500 full-blob UPDATEs per task per 2 minutes during bursts, quadratic over a run's life. Nothing functional needed the always-on stream: status/PR/finalisation all come from the poller's `getTask()` REST poll + bounded `getSessionLogs` tail fetches, and terminal-with-empty-transcript runs already get a one-shot durable S3 backfill. The stream's only job is the live transcript view.

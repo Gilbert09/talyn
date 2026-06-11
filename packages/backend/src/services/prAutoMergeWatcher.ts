@@ -6,6 +6,7 @@ import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -77,7 +78,7 @@ function publicState(s: AutoMergeState): { attempts: number; paused: boolean } {
  */
 class PRAutoMergeWatcher {
   private interval: NodeJS.Timeout | null = null;
-  private ticking = false;
+  private guard = new TickGuard('prAutoMergeWatcher');
 
   init(): void {
     if (this.interval) return;
@@ -104,8 +105,7 @@ class PRAutoMergeWatcher {
   }
 
   private async tick(): Promise<void> {
-    if (this.ticking) return;
-    this.ticking = true;
+    if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let watched = 0;
     let tickError: string | undefined;
@@ -143,7 +143,7 @@ class PRAutoMergeWatcher {
       tickError = msg;
       console.error('[prAutoMergeWatcher] tick error:', err);
     } finally {
-      this.ticking = false;
+      this.guard.end();
       if (!skipRecord) {
         debugBus.pollerTick('auto_merge', {
           durationMs: Date.now() - startedAt,
