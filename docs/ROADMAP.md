@@ -1,87 +1,59 @@
 # FastOwl Roadmap
 
-Full phased TODO list. Active priorities live in [`CLAUDE.md`](../CLAUDE.md). The "Continuous Build, production ready" line of work has its own breakdown in [`CONTINUOUS_BUILD_ROADMAP.md`](./CONTINUOUS_BUILD_ROADMAP.md).
+Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan is [`CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
+
+> **Cloud-only refactor (June 2026)**: FastOwl is now a GitHub PR-management app that delegates work to cloud coding agents. The bundled daemon, local/remote environments, in-process agents, permission gates, and continuous build are gone. The phased history below (Phases 1–20) describes the app that was — kept for the record, **not a TODO list**. Current work is tracked in the Priority Queue / Backlog / Known Gaps sections only.
 
 > **Instructions**: Update this list as work progresses. Mark items completed with `[x]`. Add new items as discovered.
 
 ## Priority Queue (Next Up)
 
-> The top three are the active work for "Continuous Build, production ready."
-> See `docs/CONTINUOUS_BUILD_ROADMAP.md` for the full plan.
-
-1. ~~**Phase 18.5 — Daemon everywhere**~~ DONE (Session 19) — see [`docs/DAEMON_EVERYWHERE.md`](./DAEMON_EVERYWHERE.md)
-   - All 8 slices landed: single-file binary, bundled in .app, launchd/systemd install, auto-pair, env-type collapse (local|remote), session survival + state rehydration + permission-token persistence across restart, lifecycle UI + uninstall, tests + docs
-   - Backend restart no longer kills in-flight tasks
-   - Zero native deps on the backend (ssh2 + node-pty both retired)
-   - Known remaining gap: no ring buffer for session output during disconnect window (tracked in the design doc)
-
-2. ~~Phase 18.3 — Daemon split + auto-install over SSH~~ DONE (Session 17)
-   - `packages/daemon` split landed in Session 15 (18.3.A)
-   - HTTP relay + daemon-first scheduling landed in Session 16 (18.3.B foundation)
-   - Desktop "Add Environment → Remote VM (FastOwl daemon)" with SSH auto-install landed in Session 17
-   - Remaining: single-file binary + symmetric uninstall (low priority — git-clone install works today)
-
-3. ~~Phase 17.3 — Notifications on `awaiting_review`~~ DONE (Session 17)
-   - Desktop OS notification when a Continuous Build task lands for review. Toggle + permission hint in Settings → Appearance.
-
---- done above ---
-
-4. ~~Phase 13.3 — Smart Task Creation~~ DONE
-5. ~~Phase 13.4 — Repository Context~~ DONE
-6. ~~Phase 14.1-14.2 — Git Branch Management~~ DONE
-7. ~~Phase 12.8 — Light Mode~~ DONE
-8. ~~Phase 15.1-15.3 — Task History~~ DONE
-9. ~~Phase 13.1 — Interactive Terminal~~ DONE
-10. ~~Phase 16.1/16.2/16.5 — Approval Workflows~~ DONE
-11. ~~Phase 20.1-20.6 — Continuous Build (backlog model, scheduler, UI, CLI, MCP, Option 3 deterministic completion)~~ DONE
-12. ~~Phase 20.5 prep — `scripts/bootstrap-vm.sh`~~ DONE — one-command VM install pending the daemon work
-
---- later ---
-
-13. ~~**Phase 13.2 — Structured renderer + native UI overlays**~~ DONE
-    - Slice 1 DONE (Session 18): backend plumbing via `claude -p --output-format stream-json`. `environments.renderer: 'pty' | 'structured'`, `tasks.transcript` jsonb, new `agentStructured` service, interim desktop renderer.
-    - Slice 2 DONE (Session 18): `AgentConversation.tsx` (markdown-ish, collapsible tool_use/tool_result/thinking, cost/token footer) + per-tool Approve/Deny UX via a `PreToolUse` hook (`permissionHook.ts` / `permissionService.ts`). "Allow always" persists onto `environments.tool_allowlist`.
-    - Slice 3 DONE (Session 18): interactive multi-turn via `--input-format stream-json`; long-lived child per task; `sendMessage` appends user JSONL turns on stdin; `closeInput` for graceful end. Also: removed permission timeout (infinite wait), coalesced inbox items for pending prompts (one per task), boot-time orphan cleanup extended to mark tasks `failed` immediately. Slash-command palette deferred — passes through to the child's own parser.
-    - Slice 4 DONE (Session 18): daemon + SSH envs migrated to structured (`stream_spawn` wire op + ssh2 exec channel). PTY code path deleted — no more `node-pty`, `XTerm`, `STATUS_PATTERNS`, `buildFastOwlEnvPrefix`, `spawnInteractive`. `tasks.terminal_output` kept read-only for historical rows; `environments.renderer` defaults to and is back-filled to `'structured'`.
-    - Backend-restart reliability follow-up DONE (Session 19 Slice 6): daemon owns child pipes, backend restart no longer orphans tasks; per-run state + permission tokens rehydrate on reconnect.
-14. **Phase 16.3 — Automated PR Response** — hook PR monitor → auto-create `pr_response` tasks on new review comments
-15. **Phase 12.5 — Testing framework** (IN PROGRESS) — see `docs/TESTING.md`. Phase B + C largely landed (agent, agentStructured, prMonitor, ai, taskQueue, environment, github, backlog, routes/tasks/inbox/daemon/permission/repositories, middleware/auth, daemon package tests for config/executor/git/version/proxyServer/wsClient/selfUpdate). Frontend hook + component tests (Phase D) and Playwright E2E (Phase E) still to do.
-16. **Phase 18 (rest) — Deployment hardening** — after 18.1/18.3/18.4 land
+1. **Cloud provider abstraction — Phases 0 + 3–5** (see `CLOUD_PROVIDERS.md`)
+   - Phase 0 spikes: Codex Cloud (is there a cloud-task REST API, or is it GitHub-mention only?) and Claude Routines (ad-hoc runs vs pre-created routines, transcript retrieval). Cheap (~0.5–1 day each) and they gate everything else.
+   - Phases 3–4: the actual `codex/` and `claudeRoutine/` provider modules (client + credentials + converter + transcriptSource + provider each).
+   - The deferred `TranscriptSource`/`TranscriptConverter` generalisation — the PostHog streamer/poller are wrapped as-is today, so the first new provider pays that refactor cost.
+   - Phase 5: per-provider Settings cards, feature flags, docs.
+2. **Desktop generalisation** — Settings integration card + composer model/reasoning controls are hard-coded to PostHog Code; generalise per-provider once a second provider lands (on the Phase 3 critical path).
+3. **Multi-instance safety (advisory locks)** — see Known Gaps below; required before running more than one backend replica again.
+4. **Auth polish (Phase 18.2 leftovers)** — proper `fastowl login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `FASTOWL_ALLOWED_EMAILS`.
+5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
 ## Backlog
 
-- [ ] **Analytics panel — token / cost usage** — structured-renderer tasks emit a `result` event with `total_cost_usd` + `usage.{input_tokens, output_tokens}` per turn. Surface an Analytics tab that aggregates: per-workspace total spend, per-task spend + token breakdown, per-model usage mix (Opus vs Sonnet vs Haiku), a daily/weekly trend chart. Store a row per `result` event (or aggregate inline). Inspiration: how PostHog / Linear surface "insights" around usage.
-- [ ] **Per-tool allowlist patterns (`Bash(git *)`-style)** — today `environments.tool_allowlist` stores tool names as strings, so "Allow always (Bash)" approves every future `Bash` call — broad. The CLI's own `--allowedTools` supports patterns like `Bash(git *)` meaning "only bash commands starting with `git`". Match that: change `permissionService.isPreApproved` to check both exact tool name AND command-pattern match, and update the "Allow always" button to offer a pattern (e.g. extract `git` from `git status` and suggest `Bash(git *)`).
-- [ ] **Duplicate "Stop" button on running tasks** — two Stop buttons show up on a task while it's in_progress. Figure out where the second one lives (likely TaskTerminal + TaskDetail both render one) and de-dupe.
-- [ ] **Task detail screen is sluggish** — noticeable lag when switching to / interacting with a running task. With the PTY path gone the likely culprit is now unbatched `task:event` WS updates re-rendering the full `AgentConversation` tree on every token. Profile + memoise blocks / batch transcript updates.
-- [ ] **Inbox 3-dots menu does nothing** — clicking the three-dots icon on an item in the Inbox panel doesn't open a menu. Find which component renders it and wire up the dropdown actions (mark read, snooze, dismiss, etc.).
+- [ ] **Analytics panel — token / cost usage** — surface an Analytics tab aggregating per-workspace spend, per-task spend + token breakdown, per-model mix, and a trend chart from whatever usage data each cloud provider's transcript/run exposes. Inspiration: how PostHog / Linear surface "insights" around usage.
 - [ ] **Show logged-in user in the app chrome** — bottom-left of the sidebar should display GitHub username + avatar so users know which account they're using (especially on laptops with multiple GitHub accounts).
 - [ ] **Auto-connect GitHub integration from the Supabase login session** — today users sign in with GitHub OAuth (Supabase), then *separately* click "Connect GitHub" in Settings → Integrations to run a second OAuth flow. Supabase's sign-in session already returns `provider_token` with `repo` scope — we should pull it off `session.provider_token` on first login and store it as the workspace's GitHub integration token, skipping the second flow.
-- [ ] **`node --ignore-scripts` and other eslint-disables are load-bearing** — a few `eslint-disable-next-line` / `@ts-ignore` sites exist (`middleware/auth.ts` namespace augmentation, `apps/desktop/src/main/main.ts` console usage, Electron ERB build scripts). All intentional and low-risk; noted for a future "lint-cleanup" pass if it's ever worth the churn.
+- [ ] **Load-bearing eslint-disables** — a few `eslint-disable-next-line` / `@ts-ignore` sites exist (`middleware/auth.ts` namespace augmentation, `apps/desktop/src/main/main.ts` console usage, Electron ERB build scripts). All intentional and low-risk; noted for a future "lint-cleanup" pass if it's ever worth the churn.
 - [x] **Workspace endpoint returns empty `repos` + `integrations`** — Fixed 2026-04-19.
 - [x] **Change default ports** — Changed from 3001 to 4747 to avoid conflicts with common dev servers
 - [x] **Fix ESLint configuration** — Removed broken 'erb' extends, simplified config, fixed all lint errors
-- [x] **Diff renderer — swap diff2html for Shiki-based `@pierre/diffs`** — `TaskFilesPanel` now renders via `<PatchDiff>` from `@pierre/diffs/react` with syntax-highlighted hunks. Dropped diff2html + DOMPurify. (2026-04-23)
-- [x] **Per-task "+NN -MM" badge in the queue** — each task row shows aggregate added/removed line counts, live-updating off `task:files_changed`. Gated on `task.branch` so pending tasks don't fetch. (2026-04-23)
+- [x] **Diff renderer — swap diff2html for Shiki-based `@pierre/diffs`** — syntax-highlighted hunks via `<PatchDiff>`. Dropped diff2html + DOMPurify. (2026-04-23)
 - [x] **Pre-commit hook** — husky + lint-staged run the same ESLint CI runs, only on staged files. (2026-04-23)
 
-**Obsoleted by Session 18/19 (kept here for history):**
-- ~~XTerm input disabled in strict-autonomous mode~~ — XTerm was deleted in Session 18 Slice 4c; structured renderer has no such gate.
-- ~~Coder environments not implemented~~ — env types collapsed to `local | remote` in Session 19; Coder/SSH are gone.
-- ~~Terminal output blanks on task switch~~ — tied to the removed XTerm rehydrate path; `AgentConversation` renders from persisted `tasks.transcript` on mount. If the symptom reappears with the structured renderer, file a fresh item.
+**Obsoleted by the cloud-only refactor / later sessions (kept for history):**
+- ~~Per-tool allowlist patterns (`Bash(git *)`-style)~~ — the permission system (`permissionService`, `tool_allowlist`, Approve/Deny cards) was removed; cloud providers gate their own runs.
+- ~~Duplicate "Stop" button on running tasks~~ — resolved by the Session 52 task-screen action audit; Abort renders once, beside the terminal.
+- ~~Task detail screen is sluggish~~ — fixed in Session 24 (per-frame `task:event` coalescing + memoized `BlockView`).
+- ~~Inbox 3-dots menu does nothing~~ — the Inbox was removed end-to-end in Session 43.
+- ~~Per-task "+NN -MM" badge~~ — shipped 2026-04-23, then removed with the local git working tree; provider PRs carry the diff now.
+- ~~XTerm input disabled in strict-autonomous mode~~ / ~~Coder environments~~ / ~~Terminal output blanks on task switch~~ — all tied to the deleted PTY/XTerm/local-env paths.
 
 ## Known Gaps (tracked but not yet phased)
 
-- **Backend bundling for release**: `npm run package` bundles `apps/desktop` only. The backend is not shipped with the Electron artifact today — users running a packaged build would have no backend unless they run `@fastowl/backend` separately. Needs a Phase 12 sub-item.
-- **Credential encryption at rest**: GitHub OAuth tokens and other integration tokens live in SQLite as plaintext (Phase 11.1 subitem).
-- **Backend-down UX**: Frontend assumes the backend is reachable at `localhost:4747`. No graceful offline/reconnect indicator beyond the WebSocket auto-reconnect loop.
-- **Testing**: Only one smoke test (`apps/desktop/src/__tests__/App.test.tsx`). Full plan in `docs/TESTING.md`. Tracked under Phase 12.5.
-- **Release packaging**: CI `publish.yml` builds desktop only on tag push — doesn't build the backend.
-- **MacOS notarization**: `afterSign: .erb/scripts/notarize.js` is wired up but untested in the fastowl repo specifically.
-- **Multi-step agent state recovery**: A task agent crashing mid-run loses its state (the task does persist, and recovery resets to `queued` via `recoverStuckTasks`, but no partial resume).
 - **Multi-instance safety (advisory locks)**: the task dispatchers (`mergeQueueProcessor`, `prAutoMergeWatcher`) are read-check-dispatch with only an in-process tick guard — two backends on the same DB double-fire cloud fix tasks (observed June 2026 running local + Railway against one Supabase DB; the dispatch HTTP call makes the race window seconds wide, and the loser's task id is overwritten on persist, orphaning it from the active-run guard). Fix before running multiple replicas: `pg_try_advisory_xact_lock(hashtext('merge-queue:' || pr.id))` around `processHead` (and equivalent in the watcher), skipping silently when another instance holds the lock.
+- **API rate limiting on the hosted backend**: the Railway deployment has no per-user/IP throttle in front of the REST surface.
+- **Backend-down UX**: no graceful offline indicator beyond the WebSocket auto-reconnect loop when the hosted backend is unreachable.
+- **Desktop testing**: ~3 trivial renderer test files vs 240+ backend tests. Full plan in `docs/TESTING.md` (Phases D/E: component/hook tests + Playwright E2E).
+- **MacOS notarization**: `afterSign: .erb/scripts/notarize.js` is wired up but untested in the fastowl repo specifically.
+
+**Resolved:**
+- ~~Credential encryption at rest~~ — integration tokens are AES-GCM envelopes via `services/tokenCrypto.ts` (`FASTOWL_TOKEN_KEY`); used by GitHub + PostHog Code credentials.
+- ~~Backend bundling for release~~ / ~~Release packaging~~ — the backend is hosted (Railway, Phase 18.4); the desktop artifact doesn't need to ship it.
+- ~~Multi-step agent state recovery~~ — no local agents to recover; cloud providers own run durability, the poller reconciles status.
 
 ---
+
+> **Everything below this line is pre-refactor history** (the local-execution / daemon / continuous-build era). Phases 1–20 are preserved as a record of how the app was built; many of the subsystems they describe no longer exist.
 
 ## Phase 1: Foundation
 

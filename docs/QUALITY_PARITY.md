@@ -4,7 +4,7 @@ A working assessment of where the FastOwl desktop experience trails a
 polished agent IDE ([Conductor](https://www.conductor.build/)), and the
 plan to close it. Started Session 24. The recurring complaint that
 "everything feels a little buggy" is mostly **desktop polish debt**, not
-architecture — the backend/daemon layer is well-tested and solid; the
+architecture — the backend is well-tested and solid; the
 quality frontier is the renderer.
 
 ## The three things that make Conductor feel "solid"
@@ -41,10 +41,10 @@ summaries, permission cards, live streaming). Sessions 24+ attack (1) and
   re-reads the cache, instead of only re-reading the local DB.
 - **Connect-GitHub empty state** when the workspace isn't connected
   (distinct from connected-but-empty).
-- **Unread dots.** Per-row "new activity since you looked" indicator +
-  count, from unread `inbox_items` matched via `data->>'prUrl'` (no
-  schema change). `GET /pull-requests` returns `unreadCount`; opening a
-  PR clears it via `POST /pull-requests/:id/seen`; `inbox:new` bumps live.
+- ~~**Unread dots.**~~ Shipped here off unread `inbox_items`, then
+  removed in Session 43 with the Inbox (`inbox_items`, `unreadCount`,
+  and `POST /pull-requests/:id/seen` are all gone). If per-row "new
+  activity" indicators come back they need a new data source.
 - **Row actions.** Hover-revealed squash-merge (mergeable only, confirm)
   and create-task (`pr_response`) per row.
 - **Review-requested PRs.** Monitor now watches PRs awaiting the user's
@@ -82,7 +82,7 @@ summaries, permission cards, live streaming). Sessions 24+ attack (1) and
   Deliberately *not* shipping a non-functional picker — that's the
   placeholder feeling we're removing.
 - [ ] **Composer attachments.** Large: needs a file-upload pipeline to
-  the agent across the daemon transport. Deferred.
+  the cloud provider's run API (where one exists). Deferred.
 - [ ] **True simultaneous 3-pane layout** (feed + diff + terminal at
   once, like the screenshot). Today task→PR continuity goes through the
   `PRDetailSheet` overlay, which is functional; a side-by-side pane is a
