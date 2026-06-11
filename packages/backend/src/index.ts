@@ -14,6 +14,7 @@ import { githubService } from './services/github.js';
 import { prMonitorService } from './services/prMonitor.js';
 import { notificationsPoller } from './services/notificationsPoller.js';
 import { rateLimitPoller } from './services/rateLimitPoller.js';
+import { tokenHealthPoller } from './services/tokenHealthPoller.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
@@ -43,6 +44,7 @@ async function main() {
   await prMonitorService.init();
   notificationsPoller.init();
   rateLimitPoller.init();
+  tokenHealthPoller.init();
   cloudTaskPoller.init();
   prAutoMergeWatcher.init();
   mergeQueueProcessor.init();
@@ -148,6 +150,7 @@ async function main() {
     postHogCodeStreamer.shutdownAll();
     notificationsPoller.shutdown();
     rateLimitPoller.shutdown();
+    tokenHealthPoller.shutdown();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
 

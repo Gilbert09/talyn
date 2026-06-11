@@ -253,6 +253,21 @@ interface StoredToken {
   createdAt: string;
 }
 
+/** Result of GitHub's app-authenticated `POST /applications/{client_id}/token` check. */
+export interface TokenHealthCheck {
+  workspaceId: string;
+  fingerprint: string;
+  /** When FastOwl stored the token (ISO). */
+  storedCreatedAt: string;
+  valid: boolean;
+  /** Fields below only present when `valid`. */
+  login?: string | null;
+  githubCreatedAt?: string | null;
+  /** Non-null means GitHub has a scheduled expiry for this token. */
+  expiresAt?: string | null;
+  scopes?: string[] | null;
+}
+
 /**
  * Persisted shape. `accessToken` used to be a plaintext string; new
  * rows write an `EncryptedEnvelope` under `accessTokenEnc` instead and
@@ -418,11 +433,36 @@ class GitHubService extends EventEmitter {
       access_token: string;
       token_type: string;
       scope: string;
+      expires_in?: number;
+      refresh_token?: string;
+      refresh_token_expires_in?: number;
       error?: string;
       error_description?: string;
     }>(response.bodyText);
     if (data.error) {
       throw new Error(`GitHub OAuth error: ${data.error_description || data.error}`);
+    }
+    // Forensics for the disappearing-token investigation: if GitHub ever
+    // starts returning expiry fields here, the OAuth app has token
+    // expiration enabled and every stored token has a scheduled death we
+    // currently ignore (no refresh handling). Make that impossible to miss.
+    if (data.expires_in !== undefined || data.refresh_token !== undefined) {
+      const summary =
+        `[github] token exchange returned EXPIRING token: expires_in=${data.expires_in}s` +
+        ` refresh_token=${data.refresh_token ? 'present' : 'absent'}` +
+        ` refresh_token_expires_in=${data.refresh_token_expires_in ?? 'n/a'} — ` +
+        `FastOwl has no refresh handling; this token will die on schedule`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:expiring-grant',
+        summary,
+        ok: false,
+        meta: {
+          expiresIn: data.expires_in ?? null,
+          hasRefreshToken: Boolean(data.refresh_token),
+        },
+      });
     }
     return data;
   }
@@ -1108,6 +1148,66 @@ class GitHubService extends EventEmitter {
 
   getConnectedWorkspaces(): string[] {
     return Array.from(this.tokens.keys());
+  }
+
+  /**
+   * Ask GitHub (app-authenticated, free — no user budget spent) whether a
+   * workspace's stored token is still valid, and what GitHub knows about it:
+   * owning login, creation time, and any scheduled `expires_at`. This is the
+   * forensic ground truth for the disappearing-token investigation — a 404
+   * here means GitHub revoked the token server-side, independent of any
+   * poll-loop detection lag.
+   */
+  async checkTokenHealth(workspaceId: string): Promise<TokenHealthCheck | null> {
+    const stored = this.tokens.get(workspaceId);
+    if (!stored || !GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) return null;
+    const fingerprint = tokenFingerprint(stored.accessToken);
+    const url = `${GITHUB_API_URL}/applications/${GITHUB_CLIENT_ID}/token`;
+    const startedAt = Date.now();
+    const response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${Buffer.from(`${GITHUB_CLIENT_ID}:${GITHUB_CLIENT_SECRET}`).toString('base64')}`,
+      },
+      body: JSON.stringify({ access_token: stored.accessToken }),
+    });
+    debugBus.recordHttp({
+      service: 'github',
+      method: 'POST',
+      url,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: response.ok || response.status === 404,
+      ...(response.ok || response.status === 404
+        ? {}
+        : { error: `check-token: ${response.statusText}` }),
+    });
+    if (response.status === 404) {
+      // Token is dead on GitHub's side. Don't remove it here — leave that to
+      // the regular 401 path so this stays a pure observer.
+      return { workspaceId, fingerprint, storedCreatedAt: stored.createdAt, valid: false };
+    }
+    if (!response.ok) {
+      throw new Error(`GitHub check-token failed: ${response.status} ${response.statusText}`);
+    }
+    const auth = parseJsonBody<{
+      created_at?: string;
+      expires_at?: string | null;
+      scopes?: string[] | null;
+      user?: { login?: string } | null;
+    }>(response.bodyText);
+    return {
+      workspaceId,
+      fingerprint,
+      storedCreatedAt: stored.createdAt,
+      valid: true,
+      login: auth.user?.login ?? null,
+      githubCreatedAt: auth.created_at ?? null,
+      expiresAt: auth.expires_at ?? null,
+      scopes: auth.scopes ?? null,
+    };
   }
 
   async mergePullRequest(

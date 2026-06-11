@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 59 — GitHub token autopsy round 2: GitHub is revoking the tokens; check-token health poller
+
+Second investigation into the recurring "GitHub isn't connected" banner, now with Session 58's forensic logging (`token:stored`/`token:removed` fingerprints) in prod. Railway log archaeology across every deployment since Jun 8 produced a clean timeline and **exonerated FastOwl's own storage**: each incident shows the same fingerprint stored → loaded across restarts → rejected by GitHub with an authentic `401 Bad credentials` (request-id logged). GitHub is revoking the tokens server-side.
+
+Incidents: Jun 8 18:53Z, Jun 10 15:05Z (token lived ~29.5h), Jun 11 05:57Z (~12.5h), Jun 11 ~19:34Z (~11h, captured by the new REMOVING log: `401 on POST /graphql`, fp:e396c488, age 11h). Hypotheses killed by the data: fixed 8h GitHub-App-style expiry (29.5h survivor), cross-workspace revoke-on-reconnect (the 05:57Z death had no connect within 12h; GitHub docs say re-auth doesn't revoke), 10-token-cap churn (only ~4 mints in 3 days; local dev uses a separate OAuth app + local DB per SETUP §0), token leak (history of the public repo is clean; the GitHub token never leaves the backend — not sent to cloud providers), full grant revocation (the second workspace's token survived the Jun 11 19:34 death). Remaining suspects are GitHub-side per-token revocations (secret-scanning-style or risk-based) — distinguishable only with exact death times and GitHub's own metadata.
+
+**Instrumentation added (the next trap):**
+- `exchangeCodeForToken` now parses `expires_in`/`refresh_token`/`refresh_token_expires_in` and logs + `debugBus`-records (`token:expiring-grant`) if GitHub ever returns an expiring grant — would prove the OAuth app has token expiration enabled.
+- New `githubService.checkTokenHealth(workspaceId)`: app-authenticated `POST /applications/{client_id}/token` (free, no user budget) returning validity, owning `login`, `created_at`, and any scheduled `expires_at` per stored token.
+- New `services/tokenHealthPoller.ts` (5-min cadence, `TickGuard`, registered as `token_health` in the Debug panel): logs each token's GitHub-side identity once (`token:health-first-check` — immediately answers "which GitHub login is each workspace using" and "is an expiry scheduled"), and pins a revocation to a 5-minute window (`token:health-died`) instead of whenever a budgeted call next 401s — the detection lag that made this autopsy ambiguous. Pure observer; removal stays with the 401 path.
+- Tests: `tokenHealthPoller.test.ts` (10 cases over the pure `TokenHealthTracker`: first-sighting, expiry surfacing, steady-state silence, died transition, dead-at-first-check, replacement fingerprint, per-workspace independence).
+
+Next time the banner appears: grep Railway for `token:health-died` for the death window, then check github.com/settings/security-log (`action:oauth_access.destroy`) and email for GitHub revocation notices at that timestamp.
+
 ## Session 58 — Merge-queue stall audit: bounded body reads, verify-merged recovery, watchdogs everywhere
 
 Post-mortem of the prod merge-queue freeze (3 queued PRs; the head — PostHog/posthog#62654 — merged on GitHub at 19:13:50Z but the UI showed "QUEUED #1 · MERGING" forever and the siblings never advanced; Tom merged them by hand at 19:19). Railway logs had the smoking gun: `[mergeQueueProcessor] previous tick wedged for 304973ms — force-releasing the lock`. Root cause chain:
