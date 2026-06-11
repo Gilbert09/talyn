@@ -149,11 +149,10 @@ function PRTableRow({
   // A task is failed/cancelled — distinct from a clean completion so the
   // badge can flag it (and a follow-up run still makes sense).
   const taskFailed = taskStatus === 'failed' || taskStatus === 'cancelled';
-  // The linked-task badge is shown for ANY PR that has a task, regardless of
-  // status — once you've kicked a run on a PR you want to keep seeing that it
-  // happened, not have the indicator vanish the moment the run finishes.
-  // taskStatus may be undefined when the task isn't loaded in the store; the
-  // badge still shows (plain) because row.taskId is the source of truth.
+  // The badge only shows while there's something actionable: a run in
+  // flight or a failure to look at. A cleanly completed task (or one not
+  // loaded in the store, which in practice means it's long done) renders
+  // nothing — the result is visible on the PR itself.
 
   // A follow-up run only makes sense on an open PR with something to fix, and
   // not while one is already working it (a completed/failed task can be re-run).
@@ -258,11 +257,10 @@ function PRTableRow({
                 Review
               </span>
             )}
-            {/* Linked-task indicator. Persists for the life of the PR row
-                once a task is started — "Working" (spinner) while running,
-                "Failed" if it errored/was cancelled, "Task" once done.
-                Deep-links to the run. */}
-            {row.taskId && (
+            {/* Linked-task indicator — "Working" (spinner) while running,
+                "Failed" if it errored/was cancelled. Hidden once the task
+                completes cleanly. Deep-links to the run. */}
+            {row.taskId && (taskRunning || taskFailed) && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -278,9 +276,7 @@ function PRTableRow({
                 title={
                   taskRunning
                     ? 'A task is working this PR — click to open it'
-                    : taskFailed
-                      ? 'The linked task failed — click to open it'
-                      : 'Open the linked task'
+                    : 'The linked task failed — click to open it'
                 }
               >
                 {taskRunning ? (
@@ -288,10 +284,8 @@ function PRTableRow({
                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
                     Working
                   </>
-                ) : taskFailed ? (
-                  'Failed'
                 ) : (
-                  'Task'
+                  'Failed'
                 )}
               </button>
             )}
