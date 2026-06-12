@@ -28,6 +28,15 @@ const MAX_ATTEMPTS = 3;
 type MergeMethod = 'merge' | 'squash' | 'rebase';
 type QueueStatus = 'waiting' | 'fixing' | 'merging' | 'blocked';
 
+/**
+ * What a processed PR means for the rest of its queue group this tick:
+ * `hold` — the PR is being actively worked (merged, fixing, waiting on a run),
+ * so it keeps the group's turn; `advance` — the PR can't make progress (gave
+ * up as blocked, or left the queue), so the next queued PR gets a go now
+ * instead of sitting behind it.
+ */
+type HeadVerdict = 'hold' | 'advance';
+
 interface MergeQueueState {
   attempts: number;
   lastFixTaskId?: string;
@@ -137,12 +146,15 @@ function normalizeMethod(raw: unknown): MergeMethod {
  *
  *   1. Load every queued open PR, FIFO by `merge_queued_at`.
  *   2. Group by (workspace, repo, base) — only same-base merges collide.
- *   3. Act on the HEAD of each group (earliest queued). Because there's one
- *      head per group, the single-threaded `ticking` guard, and the merge is a
+ *   3. Walk each group from its HEAD (earliest queued), skipping past PRs that
+ *      can't make progress (hard-blocked after MAX_ATTEMPTS, or no longer in
+ *      the queue) until one takes an action — so a blocked PR never gates the
+ *      PRs queued behind it. The first actionable PR consumes the group's turn:
+ *      with the single-threaded `ticking` guard and the merge being a
  *      synchronous awaited REST call, two same-base PRs can never both merge in
  *      a tick — while distinct groups proceed independently.
  *
- * Per head: refresh stale state, then merge if clean, or fire the shared
+ * Per PR: refresh stale state, then merge if clean, or fire the shared
  * "take this PR to a clean, mergeable state" cloud run on conflict / behind /
  * blocked, wait for it (active-task guard), retry, and drop the PR off the
  * queue once merged — which promotes the next same-base PR to head.
@@ -158,7 +170,7 @@ class MergeQueueProcessor {
     debugBus.registerPoller(
       'merge_queue',
       POLL_INTERVAL_MS,
-      'Merges queued PRs one-by-one, serialized per (workspace, repo, base branch) — merges the head when clean, or fires a cloud fix run on conflict/behind/blocked, then promotes the next PR.',
+      'Merges queued PRs one-by-one, serialized per (workspace, repo, base branch) — merges the head when clean, fires a cloud fix run on conflict/behind/blocked, and skips past hard-blocked PRs so they never gate the rest of the queue.',
     );
     this.interval = setInterval(() => {
       void this.tick();
@@ -216,29 +228,36 @@ class MergeQueueProcessor {
         )
         .orderBy(pullRequestsTable.mergeQueuedAt);
 
-      // Group by (workspace, repo, base) and take the head (earliest queued)
-      // of each — `rows` is already FIFO-ordered, so the first row seen per
-      // key is the head, and its 1-based position within the group is the
-      // running count.
-      const heads: PRRow[] = [];
-      const groupSizeByKey = new Map<string, number>();
+      // Group by (workspace, repo, base) — `rows` is already FIFO-ordered, so
+      // each group's array is its queue order, head first.
+      const groups = new Map<string, PRRow[]>();
       for (const row of rows) {
         const key = `${row.workspaceId}|${row.repositoryId}|${baseBranchOf(row)}`;
-        const seen = groupSizeByKey.get(key) ?? 0;
-        if (seen === 0) heads.push(row);
-        groupSizeByKey.set(key, seen + 1);
+        const group = groups.get(key);
+        if (group) group.push(row);
+        else groups.set(key, [row]);
       }
 
-      headCount = heads.length;
-      for (const head of heads) {
-        try {
-          await this.processHead(head);
-        } catch (err) {
-          // One PR failing must never abort the tick — retry next time.
-          console.warn(
-            `[mergeQueueProcessor] failed for PR ${head.owner}/${head.repo}#${head.number}:`,
-            err instanceof Error ? err.message : err
-          );
+      headCount = groups.size;
+      for (const group of groups.values()) {
+        // Walk from the head, skipping past PRs that can't make progress
+        // ('advance': hard-blocked, or gone from the queue) so a blocked head
+        // never gates the PRs behind it. The first PR that takes an action
+        // ('hold': merge, fix run, in-flight run) consumes the group's turn —
+        // one same-base merge per tick, as before.
+        for (let i = 0; i < group.length; i++) {
+          const row = group[i];
+          let verdict: HeadVerdict = 'hold';
+          try {
+            verdict = await this.processHead(row, i + 1);
+          } catch (err) {
+            // One PR failing must never abort the tick — retry next time.
+            console.warn(
+              `[mergeQueueProcessor] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
+          if (verdict === 'hold') break;
         }
       }
     } catch (err) {
@@ -264,7 +283,12 @@ class MergeQueueProcessor {
     }
   }
 
-  private async processHead(initialRow: PRRow): Promise<void> {
+  /**
+   * Act on one queued PR. `position` is its 1-based slot within its queue
+   * group (1 = head), echoed on the WS badge. Returns whether the group
+   * should keep walking past this PR this tick (see `HeadVerdict`).
+   */
+  private async processHead(initialRow: PRRow, position = 1): Promise<HeadVerdict> {
     const db = getDbClient();
 
     // 1. Freshness — refetch a stale summary so behind/conflict detection is
@@ -290,12 +314,12 @@ class MergeQueueProcessor {
     }
 
     // The PR may have merged/closed underneath us. Drop it off the queue so it
-    // never blocks the group, and stop.
+    // never blocks the group, and let the next queued PR have this turn.
     if (row.state !== 'open') {
       if (row.mergeQueued) await this.dequeue(row);
-      return;
+      return 'advance';
     }
-    if (!row.mergeQueued) return;
+    if (!row.mergeQueued) return 'advance';
 
     const summary = row.lastSummary as PRMergeableSummary;
     const state = readState(row);
@@ -307,7 +331,7 @@ class MergeQueueProcessor {
     // before doing anything else; re-attempting the merge would just 405.
     if (state.status === 'merging' && (await this.verifyMerged(row))) {
       await this.recordMerged(row);
-      return;
+      return 'hold';
     }
 
     // 2. Active-run guard — never fire a NEW run while one is already working
@@ -333,8 +357,8 @@ class MergeQueueProcessor {
       (ourFix !== null && ACTIVE_STATUSES.has(ourFix)) ||
       (otherFix !== null && ACTIVE_STATUSES.has(otherFix));
     if (runActive && queueBlocked(row, summary)) {
-      await this.ensureStatus(row, state, 'fixing');
-      return;
+      await this.ensureStatus(row, state, 'fixing', position);
+      return 'hold';
     }
 
     // 3. Account the last fix run now that it's terminal. We only ever
@@ -355,7 +379,7 @@ class MergeQueueProcessor {
       // explain why the queue gave up.
       const justBlocked = !wasBlocked && state.status === 'blocked';
       if (justBlocked) state.blockReason = blockerReason(row, summary);
-      await this.persist(row, state);
+      await this.persist(row, state, position);
       // Fire-once notification: the queue exhausted its retries and now needs a
       // human. A dedicated event (not the idempotent pull_request:updated) so
       // the desktop notifies exactly once, never on reconnect/backfill replay.
@@ -366,9 +390,10 @@ class MergeQueueProcessor {
     //    `attempts` on a momentary clean reading (same transient-UNKNOWN trap as
     //    step 3). A genuinely-clean blocked PR falls through to the merge in
     //    step 5 and leaves the queue; a still-blocked one waits here until the
-    //    user re-toggles the queue (the route resets the state).
+    //    user re-toggles the queue (the route resets the state) — and hands its
+    //    turn to the next queued PR so it doesn't gate the group meanwhile.
     if (state.status === 'blocked' && queueBlocked(row, summary)) {
-      return;
+      return 'advance';
     }
 
     // 5. Clean path — mergeable AND up-to-date → merge it.
@@ -384,9 +409,9 @@ class MergeQueueProcessor {
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, row.id))
         .limit(1);
-      if (!current[0] || current[0].state !== 'open' || !current[0].mergeQueued) return;
+      if (!current[0] || current[0].state !== 'open' || !current[0].mergeQueued) return 'hold';
       state.status = 'merging';
-      await this.persist(row, state);
+      await this.persist(row, state, position);
       try {
         const result = await githubService.mergePullRequest(
           row.workspaceId,
@@ -403,14 +428,14 @@ class MergeQueueProcessor {
           // against the same stale summary until FRESHNESS_MS elapses.
           if (await this.verifyMerged(row)) {
             await this.recordMerged(row);
-            return;
+            return 'hold';
           }
           state.status = 'waiting';
           state.lastError = result.message || 'GitHub did not merge the pull request';
           state.lastErrorAt = new Date().toISOString();
-          await this.persist(row, state);
+          await this.persist(row, state, position);
           await this.refreshAfterFailedMerge(row);
-          return;
+          return 'hold';
         }
         await this.recordMerged(row);
       } catch (err) {
@@ -421,7 +446,7 @@ class MergeQueueProcessor {
         // merge every tick while the row never leaves the head slot.
         if (await this.verifyMerged(row)) {
           await this.recordMerged(row);
-          return;
+          return 'hold';
         }
         // A real rejection (e.g. 405 "Pull Request has merge conflicts") means
         // our cached mergeability was stale. Record the error, then refetch the
@@ -431,10 +456,10 @@ class MergeQueueProcessor {
         state.status = 'waiting';
         state.lastError = err instanceof Error ? err.message : 'Merge failed';
         state.lastErrorAt = new Date().toISOString();
-        await this.persist(row, state);
+        await this.persist(row, state, position);
         await this.refreshAfterFailedMerge(row);
       }
-      return;
+      return 'hold';
     }
 
     // 6. Blocked path — conflict / changes / failing CI / unresolved threads /
@@ -444,18 +469,20 @@ class MergeQueueProcessor {
     // Hard cap — the absolute guard against firing past the retry budget, even
     // if a transient clean reading + failed merge briefly downgraded `status`
     // to 'waiting'. `attempts` only ever increments in step 3 (which already
-    // notified at the cap), so just re-settle the badge to 'blocked' silently.
+    // notified at the cap), so just re-settle the badge to 'blocked' silently —
+    // and hand the turn to the next queued PR.
     if (state.attempts >= MAX_ATTEMPTS) {
-      await this.ensureStatus(row, state, 'blocked');
-      return;
+      await this.ensureStatus(row, state, 'blocked', position);
+      return 'advance';
     }
 
     const envId = await resolvePostHogEnvId(row.workspaceId);
     if (!envId) {
       // No connected PostHog Code env — can't dispatch. Keep waiting; the
-      // desktop badge surfaces this.
-      await this.ensureStatus(row, state, 'waiting');
-      return;
+      // desktop badge surfaces this. (The PRs behind it can't dispatch either —
+      // same workspace — so there's nothing to advance to.)
+      await this.ensureStatus(row, state, 'waiting', position);
+      return 'hold';
     }
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
@@ -479,7 +506,8 @@ class MergeQueueProcessor {
     state.lastFixTaskId = created.id;
     state.accounted = false;
     state.status = 'fixing';
-    await this.persist(row, state);
+    await this.persist(row, state, position);
+    return 'hold';
   }
 
   /**
@@ -578,11 +606,12 @@ class MergeQueueProcessor {
   private async ensureStatus(
     row: PRRow,
     state: MergeQueueState,
-    status: QueueStatus
+    status: QueueStatus,
+    position = 1
   ): Promise<void> {
     if (state.status === status) return;
     state.status = status;
-    await this.persist(row, state);
+    await this.persist(row, state, position);
   }
 
   /** Drop a no-longer-open PR off the queue. */
@@ -608,7 +637,7 @@ class MergeQueueProcessor {
     await broadcastMergeQueuePositions(row.workspaceId);
   }
 
-  private async persist(row: PRRow, state: MergeQueueState): Promise<void> {
+  private async persist(row: PRRow, state: MergeQueueState, position = 1): Promise<void> {
     const db = getDbClient();
     await db
       .update(pullRequestsTable)
@@ -624,8 +653,9 @@ class MergeQueueProcessor {
       state: row.state,
       lastSummary: row.lastSummary as Record<string, unknown>,
       mergeQueued: row.mergeQueued,
-      // The processor only ever acts on a group's head → position 1.
-      mergeQueueState: publicState(state, 1),
+      // The PR's 1-based slot within its queue group — the head is 1, but the
+      // processor can act deeper in when blocked PRs are skipped over.
+      mergeQueueState: publicState(state, position),
     });
   }
 }

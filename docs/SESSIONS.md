@@ -2,6 +2,13 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 60 — "Ready to merge" filter + merge queue skips blocked PRs
+
+Two PR-management quality-of-life changes:
+
+- **"Ready to merge" toggle on My PRs** (`MyPRsPanel.tsx`): a green chip next to "Needs review" with a live count. The predicate (`isReadyToMerge` in `prTableShared.tsx`) requires: non-draft, `blockingReason` ∈ {`mergeable`, `checks_failed_optional`} (same verdict as the backend's became-merge-ready notification), zero in-progress checks, and no outstanding review request (`effectiveReviewDecision` so unprotected repos work). Parameterized coverage in `prAwaitingReview.test.ts`.
+- **Merge queue: blocked PRs no longer gate the queue** (`mergeQueueProcessor.ts`): the tick now walks each (workspace, repo, base) group from the head, skipping past PRs that can't make progress — hard-blocked after MAX_ATTEMPTS, or no longer queued — until one takes an action. `processHead` returns a `HeadVerdict` (`'hold'` = consumed the group's turn: merge/fix-run/in-flight run/waiting-no-env; `'advance'` = skip to the next queued PR). One-merge-per-group-per-tick serialization is preserved (first `hold` breaks the walk); a blocked head that reads clean still re-arms and consumes the turn; `fixing` heads still hold the group. WS badge echoes now carry the acted-on PR's real group position instead of a hardcoded 1. Nine new tests in `mergeQueueProcessor.test.ts` (skip-to-next, multi-skip, single-merge-per-tick, fix-run-behind-blocked, re-arm precedence, hard-cap same-tick skip, just-blocked same-tick advance + single notification, fixing holds, position echo).
+
 ## Session 59 — GitHub token autopsy round 2: GitHub is revoking the tokens; check-token health poller
 
 Second investigation into the recurring "GitHub isn't connected" banner, now with Session 58's forensic logging (`token:stored`/`token:removed` fingerprints) in prod. Railway log archaeology across every deployment since Jun 8 produced a clean timeline and **exonerated FastOwl's own storage**: each incident shows the same fingerprint stored → loaded across restarts → rejected by GitHub with an authentic `401 Bad credentials` (request-id logged). GitHub is revoking the tokens server-side.

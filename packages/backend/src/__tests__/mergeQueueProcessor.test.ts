@@ -440,6 +440,206 @@ describe('mergeQueueProcessor', () => {
     expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'fixing' });
   });
 
+  // A hard-blocked head must not gate the PRs queued behind it — the tick
+  // walks past it to the first actionable PR, while still merging at most one
+  // same-base PR per tick.
+  describe('blocked head skipping', () => {
+    it('skips a blocked head and merges the next same-base PR in the same tick', async () => {
+      const blocked = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: {
+          status: 'blocked',
+          attempts: 3,
+          accounted: true,
+          blockReason: 'merge conflicts with the base branch',
+        },
+      });
+      const next = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, next)).state).toBe('merged');
+      // The blocked head is untouched: still queued, still blocked, no re-ping.
+      const blockedRow = await getPr(db, blocked);
+      expect(blockedRow.state).toBe('open');
+      expect(blockedRow.mergeQueued).toBe(true);
+      expect(blockedRow.mergeQueueState).toMatchObject({ status: 'blocked', attempts: 3 });
+      expect(blockedSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips multiple blocked PRs to reach the first actionable one', async () => {
+      await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(2000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      const third = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(3000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, third)).state).toBe('merged');
+    });
+
+    it('still merges only one same-base PR per tick after skipping a blocked head', async () => {
+      await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      const second = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+      const third = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(3000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      // The first actionable PR consumed the group's turn.
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, second)).state).toBe('merged');
+      expect((await getPr(db, third)).state).toBe('open');
+    });
+
+    it('fires the fix run for a conflicting PR sitting behind a blocked head', async () => {
+      await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      const second = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(await countTasks(db)).toBe(1); // the second PR's fix run
+      const state = (await getPr(db, second)).mergeQueueState as QueueState;
+      expect(state.status).toBe('fixing');
+    });
+
+    it('lets a blocked head that reads clean re-arm and consume the turn', async () => {
+      const blocked = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      const second = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      // The recovered head merges; the second still waits its turn.
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, blocked)).state).toBe('merged');
+      expect((await getPr(db, second)).state).toBe('open');
+    });
+
+    it('skips past a head re-settled to blocked by the hard cap, in the same tick', async () => {
+      // Budget spent but status flapped to 'waiting' — the hard cap re-settles
+      // it to 'blocked' and the next PR proceeds without waiting a tick.
+      const capped = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'waiting', attempts: 3, accounted: true },
+      });
+      const next = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect((await getPr(db, capped)).mergeQueueState).toMatchObject({ status: 'blocked' });
+      expect((await getPr(db, next)).state).toBe('merged');
+      expect(await countTasks(db)).toBe(0); // no 4th fix run for the capped head
+    });
+
+    it('advances past a head in the very tick it transitions to blocked, notifying once', async () => {
+      const justBlocking = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'fixing', attempts: 2, lastFixTaskId: 'prev', accounted: false },
+      });
+      await insertTask(db, 'prev', 'completed', justBlocking);
+      await db
+        .update(pullRequestsTable)
+        .set({ taskId: 'prev' })
+        .where(eq(pullRequestsTable.id, justBlocking));
+      const next = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect((await getPr(db, justBlocking)).mergeQueueState).toMatchObject({
+        status: 'blocked',
+        attempts: 3,
+      });
+      expect(blockedSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, next)).state).toBe('merged');
+    });
+
+    it('holds the group while the head is fixing — only hard-blocked heads are skipped', async () => {
+      const fixing = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'fixing', attempts: 1, lastFixTaskId: 'running', accounted: false },
+      });
+      await insertTask(db, 'running', 'in_progress', fixing);
+      const second = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect((await getPr(db, second)).state).toBe('open');
+    });
+
+    it('echoes the acted-on PR\'s real queue position on the WS badge', async () => {
+      await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(1000),
+        mergeQueueState: { status: 'blocked', attempts: 3, accounted: true },
+      });
+      const second = await insertPr(db, {
+        summary: conflictSummary(),
+        mergeQueuedAt: new Date(2000),
+      });
+      const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
+
+      await mergeQueueProcessor.runOnce();
+
+      const echo = emitSpy.mock.calls
+        .map((c) => c[1] as { id: string; mergeQueueState?: { status: string; position: number } | null })
+        .filter((p) => p.id === second && p.mergeQueueState)
+        .pop();
+      expect(echo?.mergeQueueState).toMatchObject({ status: 'fixing', position: 2 });
+    });
+  });
+
   it('re-arms a blocked PR once it is observed clean, then merges it', async () => {
     await insertPr(db, {
       summary: cleanSummary(),
