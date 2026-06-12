@@ -637,6 +637,24 @@ export function isAwaitingReview(r: PRRow): boolean {
 }
 
 /**
+ * A (non-draft) PR that's fully ready for the user to merge: GitHub reports
+ * it mergeable (only non-required check failures allowed — same verdict as
+ * the backend's became-merge-ready notification), no checks still running,
+ * and no outstanding review request. `blockingReason` already rules out
+ * conflicts, requested changes, failing required checks, and branch-protection
+ * blocks; the explicit review check covers repos without protection, where
+ * an outstanding request never reaches `blockingReason`.
+ */
+export function isReadyToMerge(r: PRRow): boolean {
+  if (r.summary.draft) return false;
+  const reason = r.summary.blockingReason;
+  if (reason !== 'mergeable' && reason !== 'checks_failed_optional') return false;
+  if (r.summary.checks.inProgress > 0) return false;
+  const decision = r.summary.effectiveReviewDecision ?? r.summary.reviewDecision;
+  return decision !== 'REVIEW_REQUIRED';
+}
+
+/**
  * Make a GitHub merge error readable in a toast. Strips the noisy
  * "GitHub API error 405 Method Not Allowed:" prefix the backend prepends,
  * and adds a nudge for the most common (and most cryptic) case.

@@ -5,14 +5,15 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus } from '@fastowl/shared';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
-import { PRTable, isNeedsAttention, isAwaitingReview } from './prTableShared';
+import { PRTable, isNeedsAttention, isAwaitingReview, isReadyToMerge } from './prTableShared';
 import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
 import { useGitHubActions } from './useGitHubActions';
 
 /**
  * "My PRs" — every open PR you authored, across watched repos. Carries the
  * repo dropdown, the created-at sort, the "Needs attention" toggle (blocking
- * issues you own), and the "Needs review" toggle (still awaiting a review).
+ * issues you own), the "Needs review" toggle (still awaiting a review), and
+ * the "Ready to merge" toggle (nothing left to do but merge).
  */
 export function MyPRsPanel() {
   const repositories = useWorkspaceStore((s) => s.repositories);
@@ -24,6 +25,7 @@ export function MyPRsPanel() {
   const [repoFilter, setRepoFilter] = useState('all');
   const [needsAttention, setNeedsAttention] = useState(false);
   const [needsReview, setNeedsReview] = useState(false);
+  const [readyToMerge, setReadyToMerge] = useState(false);
   const [search, setSearch] = useState('');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
@@ -33,6 +35,10 @@ export function MyPRsPanel() {
   );
   const reviewCount = useMemo(
     () => rows.filter((r) => r.authored && isAwaitingReview(r)).length,
+    [rows]
+  );
+  const readyCount = useMemo(
+    () => rows.filter((r) => r.authored && isReadyToMerge(r)).length,
     [rows]
   );
 
@@ -51,8 +57,9 @@ export function MyPRsPanel() {
     }
     if (needsAttention) out = out.filter(isNeedsAttention);
     if (needsReview) out = out.filter(isAwaitingReview);
+    if (readyToMerge) out = out.filter(isReadyToMerge);
     return out.slice().sort((a, b) => compareByCreated(a, b, sortDir));
-  }, [rows, repoFilter, search, needsAttention, needsReview, sortDir]);
+  }, [rows, repoFilter, search, needsAttention, needsReview, readyToMerge, sortDir]);
 
   return (
     <GitHubPageShell
@@ -96,6 +103,20 @@ export function MyPRsPanel() {
           >
             Needs review
             {reviewCount > 0 && <span className="ml-1">{reviewCount}</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setReadyToMerge((v) => !v)}
+            className={cn(
+              'rounded-md border px-2 py-1 transition-colors',
+              readyToMerge
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+            title="Only show PRs that are fully ready to merge (approved or no review needed, checks green, no conflicts)"
+          >
+            Ready to merge
+            {readyCount > 0 && <span className="ml-1">{readyCount}</span>}
           </button>
           <SortToggle sortDir={sortDir} onToggle={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} />
         </>
