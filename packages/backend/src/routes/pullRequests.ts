@@ -180,6 +180,10 @@ export function pullRequestRoutes(): Router {
         owner: row.owner,
         repo: row.repo,
         branches: [summaryHead],
+        // Carry the PR number so the fetch resolves `isRequired` per check —
+        // lets the detail pill + Checks tab tell required from non-required
+        // failures instead of guessing from mergeStateStatus.
+        numbers: [row.number],
       });
       fresh = results[0]?.pr ?? null;
     } catch (err) {

@@ -114,7 +114,14 @@ export interface PRSummary {
    * desktop Checks tab can render individual rows instead of a rollup +
    * "view on GitHub".
    */
-  checkContexts: Array<{ name: string; state: CheckState; url: string | null }>;
+  checkContexts: Array<{
+    name: string;
+    state: CheckState;
+    url: string | null;
+    /** Whether GitHub marks this check required for the PR. null when the
+     *  fetch didn't carry per-check required-ness (by-branch path). */
+    required: boolean | null;
+  }>;
   /** Rolling hash of `headSha + sorted(check.state per name)` — used by
    *  the cursor logic to detect "checks changed" without diffing the
    *  whole rollup payload. */
@@ -177,13 +184,25 @@ export async function batchPullRequests(opts: {
   owner: string;
   repo: string;
   branches: string[];
+  /**
+   * Optional PR numbers parallel to `branches`. When supplied, the query
+   * asks GitHub whether each check `isRequired` for that PR — letting the
+   * blocking-reason logic tell required from non-required failures
+   * authoritatively instead of guessing from `mergeStateStatus`. The
+   * single-PR callers (detail panel, cache refresh) know the number; the
+   * bulk monitor uses `batchPullRequestsByNumber` instead.
+   */
+  numbers?: number[];
 }): Promise<BatchPRResult[]> {
-  const { workspaceId, owner, repo, branches } = opts;
+  const { workspaceId, owner, repo, branches, numbers } = opts;
   if (branches.length === 0) return [];
 
-  const chunks: string[][] = [];
+  const chunks: Array<{ branches: string[]; numbers?: number[] }> = [];
   for (let i = 0; i < branches.length; i += CHUNK_SIZE) {
-    chunks.push(branches.slice(i, i + CHUNK_SIZE));
+    chunks.push({
+      branches: branches.slice(i, i + CHUNK_SIZE),
+      numbers: numbers ? numbers.slice(i, i + CHUNK_SIZE) : undefined,
+    });
   }
 
   // Bounded-concurrency runner: never more than CONCURRENCY queries in
@@ -193,8 +212,9 @@ export async function batchPullRequests(opts: {
   async function worker(): Promise<void> {
     while (cursor < chunks.length) {
       const idx = cursor++;
-      const chunk = chunks[idx];
-      const query = makeBatchPullRequestsQuery(chunk);
+      const { branches: chunkBranches, numbers: chunkNumbers } = chunks[idx];
+      const chunk = chunkBranches;
+      const query = makeBatchPullRequestsQuery(chunk, chunkNumbers);
       const data = await githubService.executeGraphql<BatchPullRequestsResponse>(
         workspaceId,
         query,
@@ -308,7 +328,7 @@ function makeContextsPageQuery(): string {
             statusCheckRollup {
               contexts(first: 100, after: $after) {
                 nodes {
-                  ${CONTEXT_NODE_FIELDS}
+                  ${contextNodeFields('$number')}
                 }
                 pageInfo { hasNextPage endCursor }
               }
@@ -480,18 +500,33 @@ export function computeBlockingReason(input: {
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
   checks: CheckBreakdown;
+  /** Count of *failing* checks GitHub marks required for this PR. Only
+   *  consulted when {@link requiredDataAvailable} is true. */
+  requiredFailing?: number;
+  /** True when we fetched per-check `isRequired` and know the required-ness
+   *  of every failing check — lets us decide authoritatively whether a
+   *  failure blocks, rather than inferring it from `mergeStateStatus`. */
+  requiredDataAvailable?: boolean;
 }): BlockingReason {
   if (input.mergeable === 'CONFLICTING') return 'merge_conflicts';
   if (input.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
 
   const upper = input.mergeStateStatus.toUpperCase();
-  // A failing check only *blocks* the merge when it's a required check.
-  // GitHub reports "mergeable, but with non-passing checks" as the
-  // UNSTABLE merge state — those failing checks aren't required (a failing
-  // required check would make the PR BLOCKED instead), so they don't
-  // block. Any other state with failures means a required check is red.
-  const failuresBlock =
-    input.checks.failed > 0 && !(input.mergeable === 'MERGEABLE' && upper === 'UNSTABLE');
+  // Does a failing check actually *block* the merge?
+  //   - Authoritative path: we know each failing check's `isRequired`, so a
+  //     failure blocks iff at least one failing check is required. This is
+  //     correct even when the PR is *also* blocked for another reason — a
+  //     required review masks the rollup as BLOCKED (not UNSTABLE) while the
+  //     only failing check is non-required, and that must NOT read as a red
+  //     'checks_failed'.
+  //   - Fallback heuristic (no per-check data, e.g. the by-branch path):
+  //     GitHub surfaces "mergeable but with non-passing checks" as UNSTABLE,
+  //     so those failures aren't required; any other state with failures is
+  //     conservatively treated as a red required check.
+  const failuresBlock = input.requiredDataAvailable
+    ? (input.requiredFailing ?? 0) > 0
+    : input.checks.failed > 0 &&
+      !(input.mergeable === 'MERGEABLE' && upper === 'UNSTABLE');
   if (failuresBlock) return 'checks_failed';
 
   // A required review that hasn't landed yet → "Review". Checked before
@@ -585,10 +620,19 @@ export function computeCheckDigest(
  * head order). Aliases must be valid GraphQL identifiers — we hash the
  * branch name to a stable safe alias.
  */
-// Selection for one statusCheckRollup context node. Shared by the
-// PRFields fragment and the standalone contexts-pagination query so the
-// two never drift.
-const CONTEXT_NODE_FIELDS = `__typename
+// Selection for one statusCheckRollup context node. A function (not a
+// constant) so callers that know the PR number can ask GitHub whether
+// each context `isRequired` for that PR — the authoritative signal for
+// "does this failing check actually block the merge". `numberExpr` is
+// spliced verbatim into the query (a literal int from a by-number query,
+// or the `$number` variable from the contexts-pagination query); pass
+// null when the number isn't known (the by-branch batch path), and we
+// fall back to inferring required-ness from mergeStateStatus.
+function contextNodeFields(numberExpr: string | null): string {
+  const required = numberExpr
+    ? `\n                isRequired(pullRequestNumber: ${numberExpr})`
+    : '';
+  return `__typename
               ... on CheckRun {
                 id
                 name
@@ -597,7 +641,7 @@ const CONTEXT_NODE_FIELDS = `__typename
                 detailsUrl
                 startedAt
                 completedAt
-                checkSuite { app { name } }
+                checkSuite { app { name } }${required}
               }
               ... on StatusContext {
                 id
@@ -605,11 +649,16 @@ const CONTEXT_NODE_FIELDS = `__typename
                 state
                 description
                 targetUrl
-                createdAt
+                createdAt${required}
               }`;
+}
 
-const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
-  number
+// The PullRequest field selection, inlined per query alias. Was a shared
+// `fragment PRFields`, but `isRequired` needs a per-alias PR number, which
+// a single fragment can't carry — so the contexts selection is
+// parameterised on `numberExpr` and the whole body is inlined instead.
+function prFieldsSelection(numberExpr: string | null): string {
+  return `number
   title
   body
   url
@@ -658,24 +707,31 @@ const PR_FIELDS_FRAGMENT = `fragment PRFields on PullRequest {
           state
           contexts(first: 100) {
             nodes {
-              ${CONTEXT_NODE_FIELDS}
+              ${contextNodeFields(numberExpr)}
             }
             pageInfo { hasNextPage endCursor }
           }
         }
       }
     }
-  }
-}`;
+  }`;
+}
 
-export function makeBatchPullRequestsQuery(branches: string[]): string {
+export function makeBatchPullRequestsQuery(
+  branches: string[],
+  numbers?: number[]
+): string {
   const aliasFields = branches
     .map((branch, idx) => {
       const alias = aliasForBranch(idx);
       // Escape branch names safely as JSON strings inside the GraphQL doc.
       const head = JSON.stringify(branch);
+      // When the caller knows each branch's PR number (single-PR detail /
+      // cache fetches), inline it so the contexts carry `isRequired`.
+      const numberExpr =
+        numbers && numbers[idx] != null ? String(numbers[idx]) : null;
       return `    ${alias}: pullRequests(headRefName: ${head}, first: 1, states: [OPEN]) {
-      nodes { ...PRFields }
+      nodes { ${prFieldsSelection(numberExpr)} }
     }`;
     })
     .join('\n');
@@ -684,9 +740,7 @@ export function makeBatchPullRequestsQuery(branches: string[]): string {
   repository(owner: $owner, name: $repo) {
 ${aliasFields}
   }
-}
-
-${PR_FIELDS_FRAGMENT}`;
+}`;
 }
 
 /**
@@ -700,7 +754,7 @@ export function makeBatchPullRequestsByNumberQuery(numbers: number[]): string {
     .map((number, idx) => {
       const alias = aliasForBranch(idx);
       return `    ${alias}: pullRequest(number: ${number}) {
-      ...PRFields
+      ${prFieldsSelection(String(number))}
     }`;
     })
     .join('\n');
@@ -709,9 +763,7 @@ export function makeBatchPullRequestsByNumberQuery(numbers: number[]): string {
   repository(owner: $owner, name: $repo) {
 ${aliasFields}
   }
-}
-
-${PR_FIELDS_FRAGMENT}`;
+}`;
 }
 
 export function aliasForBranch(idx: number): string {
@@ -831,6 +883,10 @@ interface RawCheckRun {
   startedAt: string | null;
   completedAt: string | null;
   checkSuite: { app: { name: string } | null } | null;
+  /** Whether GitHub marks this check required for the PR. Present only
+   *  when the query was built with a PR number; absent (undefined) on the
+   *  by-branch path. */
+  isRequired?: boolean | null;
 }
 
 interface RawStatusContext {
@@ -841,6 +897,7 @@ interface RawStatusContext {
   description: string | null;
   targetUrl: string | null;
   createdAt: string | null;
+  isRequired?: boolean | null;
 }
 
 type RawCheckContext = RawCheckRun | RawStatusContext;
@@ -875,6 +932,9 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
         : { state: c.state }
     ),
     url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
+    // `isRequired` is only in the response when the query carried a PR
+    // number; normalise missing → null ("unknown").
+    required: typeof c.isRequired === 'boolean' ? c.isRequired : null,
   }));
   const checks: CheckBreakdown = {
     total: normalizedContexts.length,
@@ -885,11 +945,20 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     ).length,
     skipped: normalizedContexts.filter((c) => c.state === 'skipped').length,
   };
+  // Required-ness is authoritative only if we know it for every failing
+  // check (a partially-paginated by-branch fetch could mix known + null);
+  // otherwise fall back to the mergeStateStatus heuristic.
+  const failingContexts = normalizedContexts.filter((c) => c.state === 'failure');
+  const requiredDataAvailable =
+    failingContexts.length === 0 || failingContexts.every((c) => c.required !== null);
+  const requiredFailing = failingContexts.filter((c) => c.required === true).length;
   const blockingReason = computeBlockingReason({
     mergeable: raw.mergeable,
     mergeStateStatus: raw.mergeStateStatus,
     reviewDecision: raw.reviewDecision,
     checks,
+    requiredFailing,
+    requiredDataAvailable,
   });
   const unresolvedReviewThreads = (raw.unresolvedThreads?.nodes ?? []).filter(
     (t) => !t.isResolved

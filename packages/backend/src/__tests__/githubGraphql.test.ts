@@ -216,6 +216,55 @@ describe('computeBlockingReason', () => {
     ).toBe('blocked');
   });
 
+  // --- authoritative path: per-check isRequired is known ---
+
+  it('authoritative: a required failing check blocks (checks_failed)', () => {
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BLOCKED',
+        reviewDecision: 'APPROVED',
+        checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
+        requiredFailing: 1,
+        requiredDataAvailable: true,
+      })
+    ).toBe('checks_failed');
+  });
+
+  it('authoritative: BLOCKED-on-review with only a non-required failure → blocked, not checks_failed', () => {
+    // The real PostHog/posthog#63399 shape: GitHub reports the PR as
+    // MERGEABLE but BLOCKED (a required review is pending) while the single
+    // failing check is non-required. The pending review masks the rollup as
+    // BLOCKED, but the failure itself doesn't block — so this must read as
+    // "Review", never a red "1/N failing".
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BLOCKED',
+        reviewDecision: 'REVIEW_REQUIRED',
+        checks: { ...baseChecks, total: 227, passed: 142, failed: 1, skipped: 84 },
+        requiredFailing: 0,
+        requiredDataAvailable: true,
+      })
+    ).toBe('blocked');
+  });
+
+  it('authoritative: a non-required failure on a CLEAN/approved PR is optional (overrides the conservative default)', () => {
+    // Without per-check data this CLEAN+failed case defaults to checks_failed
+    // (see the conservative-default test); knowing the failure is
+    // non-required lets us de-emphasise it instead.
+    expect(
+      computeBlockingReason({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        reviewDecision: 'APPROVED',
+        checks: { ...baseChecks, total: 3, passed: 2, failed: 1 },
+        requiredFailing: 0,
+        requiredDataAvailable: true,
+      })
+    ).toBe('checks_failed_optional');
+  });
+
   it('priority order: conflicts wins over changes_requested wins over checks_failed', () => {
     // All three blocking signals at once → only one is surfaced. Conflicts
     // is the most actionable so wins.
@@ -351,9 +400,8 @@ describe('makeBatchPullRequestsQuery', () => {
     expect(q).toContain('"with\\\\back"');
   });
 
-  it('embeds the PRFields fragment with statusCheckRollup + reviews + comments', () => {
+  it('inlines the PR selection with statusCheckRollup + reviews + comments', () => {
     const q = makeBatchPullRequestsQuery(['main']);
-    expect(q).toContain('fragment PRFields on PullRequest');
     expect(q).toContain('statusCheckRollup');
     expect(q).toContain('contexts(first: 100)');
     expect(q).toContain('reviews(last: 5)');
@@ -365,16 +413,32 @@ describe('makeBatchPullRequestsQuery', () => {
     expect(q).toContain('mergeStateStatus');
     expect(q).toContain('reviewDecision');
   });
+
+  it('omits isRequired when no PR numbers are supplied (no number to query)', () => {
+    const q = makeBatchPullRequestsQuery(['main']);
+    expect(q).not.toContain('isRequired');
+  });
+
+  it('inlines isRequired(pullRequestNumber:) when numbers are supplied', () => {
+    const q = makeBatchPullRequestsQuery(['main', 'feature/x'], [11, 22]);
+    expect(q).toContain('isRequired(pullRequestNumber: 11)');
+    expect(q).toContain('isRequired(pullRequestNumber: 22)');
+  });
 });
 
 describe('makeBatchPullRequestsByNumberQuery', () => {
-  it('aliases each PR by number and embeds the shared fragment', () => {
+  it('aliases each PR by number and inlines the selection', () => {
     const q = makeBatchPullRequestsByNumberQuery([60538, 60539]);
     expect(q).toMatch(/repository\(owner: \$owner, name: \$repo\)/);
     expect(q).toContain(`${aliasForBranch(0)}: pullRequest(number: 60538)`);
     expect(q).toContain(`${aliasForBranch(1)}: pullRequest(number: 60539)`);
-    expect(q).toContain('fragment PRFields on PullRequest');
     expect(q).toContain('statusCheckRollup');
+  });
+
+  it('asks GitHub whether each check isRequired for that PR', () => {
+    const q = makeBatchPullRequestsByNumberQuery([60538, 60539]);
+    expect(q).toContain('isRequired(pullRequestNumber: 60538)');
+    expect(q).toContain('isRequired(pullRequestNumber: 60539)');
   });
 });
 
@@ -428,6 +492,76 @@ describe('decodeBatchByNumberResponse', () => {
       { number: 1, pr: null },
       { number: 2, pr: null },
     ]);
+  });
+
+  it('flows isRequired through to the blocking reason + checkContexts (the #63399 shape)', () => {
+    const node = {
+      number: 63399,
+      title: 'fix(cloudflare)',
+      body: '',
+      url: 'u',
+      isDraft: false,
+      state: 'OPEN',
+      mergedAt: null,
+      closedAt: null,
+      updatedAt: '2026-01-01T00:00:00Z',
+      // MERGEABLE + BLOCKED + REVIEW_REQUIRED: the PR is held on a pending
+      // required review, not on the one non-required failing check.
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+      reviewDecision: 'REVIEW_REQUIRED',
+      author: { login: 'gilbert' },
+      headRefName: 'cloudflare-skip-forbidden-zones',
+      baseRefName: 'master',
+      headRefOid: 'sha',
+      reviews: { nodes: [] },
+      reviewThreads: { nodes: [] },
+      comments: { nodes: [] },
+      commits: {
+        nodes: [
+          {
+            commit: {
+              statusCheckRollup: {
+                state: 'FAILURE',
+                contexts: {
+                  nodes: [
+                    {
+                      __typename: 'CheckRun',
+                      id: '1',
+                      name: 'shellcheck',
+                      status: 'COMPLETED',
+                      conclusion: 'SUCCESS',
+                      isRequired: true,
+                    },
+                    {
+                      __typename: 'CheckRun',
+                      id: '2',
+                      name: 'Django Tests Pass',
+                      status: 'COMPLETED',
+                      conclusion: 'FAILURE',
+                      isRequired: false,
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+    const pr = decodeBatchByNumberResponse(
+      [63399],
+      { repository: { [aliasForBranch(0)]: node } } as never,
+      'PostHog',
+      'posthog'
+    )[0].pr!;
+    expect(pr.checks.failed).toBe(1);
+    // The failure is non-required → the PR reads as blocked-on-review, not
+    // a red failing-checks verdict.
+    expect(pr.blockingReason).toBe('blocked');
+    expect(pr.checkContexts.find((c) => c.name === 'Django Tests Pass')?.required).toBe(false);
+    expect(pr.checkContexts.find((c) => c.name === 'shellcheck')?.required).toBe(true);
   });
 });
 
@@ -560,10 +694,11 @@ describe('decodeBatchResponse', () => {
     expect(pr.blockingReason).toBe('checks_failed');
     // Per-check rows are exposed alongside the rollup (live detail
     // fetch surfaces these to the desktop Checks tab).
+    // required is null here: this by-branch fixture carries no isRequired.
     expect(pr.checkContexts).toEqual([
-      { name: 'lint', state: 'success', url: null },
-      { name: 'test', state: 'failure', url: null },
-      { name: 'ci/external', state: 'pending', url: null },
+      { name: 'lint', state: 'success', url: null, required: null },
+      { name: 'test', state: 'failure', url: null, required: null },
+      { name: 'ci/external', state: 'pending', url: null, required: null },
     ]);
   });
 

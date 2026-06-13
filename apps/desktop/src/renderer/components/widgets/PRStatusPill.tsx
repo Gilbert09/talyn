@@ -187,18 +187,29 @@ function pickVariant(
 ): PillVariant {
   // When approval lives in its own column, the review-related verdicts
   // ('changes_requested', 'blocked'-on-review) shouldn't drive this pill
-  // — fall back to the conflicts/CI/mergeability picture instead. UNSTABLE
-  // means any failing checks aren't required, so prefer the optional state.
+  // — fall back to the conflicts/CI/mergeability picture instead.
   if (
     hideReviewState &&
     (blockingReason === 'changes_requested' || blockingReason === 'blocked')
   ) {
-    const ciReason: PRBlockingReason =
-      checks.failed > 0
-        ? mergeStateStatus?.toUpperCase() === 'UNSTABLE'
+    let ciReason: PRBlockingReason;
+    if (checks.failed === 0) {
+      ciReason = 'mergeable';
+    } else if (blockingReason === 'blocked') {
+      // 'blocked' is only returned once we've ruled out a failing *required*
+      // check (checks_failed is decided first), so any failure here is
+      // non-required — e.g. a PR held on a pending review with one
+      // non-required check red. Don't paint it as a blocking CI failure.
+      ciReason = 'checks_failed_optional';
+    } else {
+      // changes_requested masks the CI verdict (it short-circuits before
+      // checks are weighed), so we can't tell required from not — fall back
+      // to the mergeStateStatus heuristic (UNSTABLE ⇒ non-required).
+      ciReason =
+        mergeStateStatus?.toUpperCase() === 'UNSTABLE'
           ? 'checks_failed_optional'
-          : 'checks_failed'
-        : 'mergeable';
+          : 'checks_failed';
+    }
     return pickVariant(ciReason, checks);
   }
   switch (blockingReason) {

@@ -265,6 +265,9 @@ export async function forceFetchAndUpsert(opts: {
     owner: opts.owner,
     repo: opts.repo,
     branches,
+    // Resolve per-check `isRequired` so the cached blockingReason can tell
+    // required from non-required failing checks.
+    numbers: [opts.number],
   });
   const summary = results[0]?.pr ?? null;
   if (!summary) return null;

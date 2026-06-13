@@ -284,6 +284,13 @@ export interface PRCheckContext {
   name: string;
   state: PRCheckState;
   url: string | null;
+  /**
+   * Whether GitHub marks this check required for the PR. null when the
+   * fetch didn't carry per-check required-ness. A *failing* check with
+   * `required === false` doesn't block the merge — it's rendered amber
+   * ("not required") rather than a blocking red.
+   */
+  required?: boolean | null;
 }
 
 /**

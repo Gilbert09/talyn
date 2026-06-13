@@ -759,10 +759,6 @@ function ChecksTab({
   detailPending: boolean;
 }) {
   const checks = data.row.summary.checks;
-  // When the PR is mergeable despite failing checks, none of those
-  // failures are required — colour them amber ("not required") instead of
-  // a blocking red.
-  const failuresOptional = data.row.summary.blockingReason === 'checks_failed_optional';
   // Clicking a tile filters the list to that state (toggle off by
   // clicking again).
   const [filter, setFilter] = useState<CheckFilter | null>(null);
@@ -773,6 +769,15 @@ function ChecksTab({
   // that's unavailable (env offline) we still show the rollup tiles +
   // a GitHub link.
   const contexts = data.fresh?.checkContexts ?? [];
+  // When the PR is mergeable despite failing checks, none of those failures
+  // are required — colour them amber ("not required") instead of a blocking
+  // red. Prefer the authoritative per-check `required` flag from the live
+  // fetch; fall back to the summary's blockingReason when it's absent.
+  const failingContexts = contexts.filter((c) => c.state === 'failure');
+  const allFailuresNonRequired =
+    failingContexts.length > 0 && failingContexts.every((c) => c.required === false);
+  const failuresOptional =
+    data.row.summary.blockingReason === 'checks_failed_optional' || allFailuresNonRequired;
   const sorted = contexts
     .slice()
     .sort((a, b) => (CHECK_STATE_ORDER[a.state] ?? 99) - (CHECK_STATE_ORDER[b.state] ?? 99));
@@ -867,8 +872,12 @@ function CheckRow({
   failuresOptional?: boolean;
 }) {
   // A non-required failing check reads amber, not red, and carries a
-  // "not required" tag so it's clear it isn't blocking the merge.
-  const optionalFail = failuresOptional && check.state === 'failure';
+  // "not required" tag so it's clear it isn't blocking the merge. Trust the
+  // per-check `required` flag when present; otherwise fall back to the
+  // tab-level verdict.
+  const optionalFail =
+    check.state === 'failure' &&
+    (check.required === false || (check.required == null && failuresOptional));
   const { icon, color } = checkStateVisual(check.state, optionalFail);
   const row = (
     <div className="flex items-center gap-2 px-2.5 py-1.5">

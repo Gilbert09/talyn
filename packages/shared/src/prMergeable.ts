@@ -48,13 +48,15 @@ export function prNeedsFollowup(s: PRMergeableSummary): boolean {
   return (
     s.blockingReason === 'merge_conflicts' ||
     s.blockingReason === 'changes_requested' ||
+    // 'checks_failed' already means a *required* check is red (the backend
+    // resolves required-ness authoritatively, falling back to a heuristic).
+    // We deliberately don't fire on raw `checks.failed > 0`: a non-required
+    // failing check (e.g. on a PR otherwise only waiting on a review) is not
+    // something a cloud follow-up can or should "fix".
     s.blockingReason === 'checks_failed' ||
     s.mergeable === 'CONFLICTING' ||
     s.reviewDecision === 'CHANGES_REQUESTED' ||
-    (s.unresolvedReviewThreads ?? 0) > 0 ||
-    // Failing checks count — but not when they're all non-required, since
-    // those don't block the merge and there's nothing to "fix".
-    (s.checks.failed > 0 && s.blockingReason !== 'checks_failed_optional')
+    (s.unresolvedReviewThreads ?? 0) > 0
   );
 }
 
@@ -77,7 +79,7 @@ export function mergeBlockerReason(s: PRMergeableSummary): string {
   if ((s.unresolvedReviewThreads ?? 0) > 0) {
     return 'unresolved review threads';
   }
-  if (s.checks.failed > 0 && s.blockingReason !== 'checks_failed_optional') {
+  if (s.blockingReason === 'checks_failed') {
     return 'failing CI checks';
   }
   return 'needs attention';
