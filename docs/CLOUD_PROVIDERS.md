@@ -225,7 +225,7 @@ export interface TranscriptSource {
 }
 
 export interface CloudTaskProvider {
-  type: EnvironmentType;            // 'posthog_code' | 'codex_cloud' | 'claude_routine'
+  type: EnvironmentType;            // 'posthog_code' | 'codex_cloud' | 'claude_code'
   displayName: string;
   defaultRenderer: EnvironmentRenderer; // 'structured'
 
@@ -338,7 +338,7 @@ export interface CloudTaskMetadata {
   frontend and delete.
 
 ### 2d. Env type union + config — `packages/shared/src/index.ts`
-- `EnvironmentType = 'local' | 'remote' | 'posthog_code' | 'codex_cloud' | 'claude_routine'`.
+- `EnvironmentType = 'local' | 'remote' | 'posthog_code' | 'codex_cloud' | 'claude_code'`.
 - Add `CodexCloudEnvironmentConfig` / `ClaudeRoutineEnvironmentConfig` to the
   `EnvironmentConfig` union (model/adapter/routine-id defaults as needed).
 
@@ -390,7 +390,7 @@ neutral shapes.
 
 > Implemented via Anthropic's **Managed Agents API** (not Routines — that path is
 > subscription-billed but fire-and-forget / low-parity; see the Phase 0 findings
-> and the billing analysis). Provider type stays `claude_routine`, displayName
+> and the billing analysis). Provider type `claude_code`, displayName
 > "Claude Code". Contract confirmed by the spike (see above).
 
 `services/claudeCode/` + `services/cloudProviders/claude/provider.ts`:

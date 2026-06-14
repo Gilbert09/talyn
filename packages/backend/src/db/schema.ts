@@ -119,8 +119,8 @@ export const environments = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    // CloudProviderType: 'posthog_code' (today), 'codex_cloud',
-    // 'claude_routine' (planned). See docs/CLOUD_PROVIDERS.md.
+    // CloudProviderType: 'posthog_code' + 'claude_code' (live), 'codex_cloud'
+    // (deferred). See docs/CLOUD_PROVIDERS.md.
     type: text('type').notNull(),
     status: text('status').notNull().default('connected'),
     config: jsonb('config').notNull(),

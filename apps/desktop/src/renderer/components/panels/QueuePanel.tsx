@@ -70,7 +70,7 @@ const priorityConfig: Record<
 const providerLabels: Record<CloudProviderType, string> = {
   posthog_code: 'PostHog Code',
   codex_cloud: 'Codex Cloud',
-  claude_routine: 'Claude Routines',
+  claude_code: 'Claude Code',
 };
 
 /**

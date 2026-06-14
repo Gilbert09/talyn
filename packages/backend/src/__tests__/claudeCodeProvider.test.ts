@@ -8,7 +8,7 @@ import {
 
 describe('claudeCodeProvider — CloudTaskProvider conformance', () => {
   it('declares the expected identity + capabilities', () => {
-    expect(claudeCodeProvider.type).toBe('claude_routine');
+    expect(claudeCodeProvider.type).toBe('claude_code');
     expect(claudeCodeProvider.displayName).toBe('Claude Code');
     expect(claudeCodeProvider.capabilities).toMatchObject({ model: true });
   });
@@ -37,7 +37,7 @@ describe('claudeCodeProvider — CloudTaskProvider conformance', () => {
 
   it('registers and resolves through the registry by type', () => {
     registerCloudProvider(claudeCodeProvider);
-    expect(getCloudProvider('claude_routine')).toBe(claudeCodeProvider);
-    expect(listCloudProviders().some((p) => p.type === 'claude_routine')).toBe(true);
+    expect(getCloudProvider('claude_code')).toBe(claudeCodeProvider);
+    expect(listCloudProviders().some((p) => p.type === 'claude_code')).toBe(true);
   });
 });

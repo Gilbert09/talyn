@@ -108,7 +108,7 @@ export async function dispatchTaskToClaudeCode(
     await client.postUserMessage(session.id, prompt);
 
     const cloudTask: CloudTaskMetadata = {
-      provider: 'claude_routine',
+      provider: 'claude_code',
       remoteTaskId: session.id,
       remoteRunId: session.id,
       status: session.status ?? 'running',

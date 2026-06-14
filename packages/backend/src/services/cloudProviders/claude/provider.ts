@@ -21,7 +21,7 @@ interface ClaudeCredInput {
  * dispatch, polling, and transcript ingestion behind this CloudTaskProvider seam.
  */
 export const claudeCodeProvider: CloudTaskProvider = {
-  type: 'claude_routine',
+  type: 'claude_code',
   displayName: 'Claude Code',
   capabilities: { model: true },
 

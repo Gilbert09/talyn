@@ -44,7 +44,7 @@ class ClaudeCodePoller {
   /** Entry point the generic cloud poller calls via the provider wrapper. */
   async reconcileTask(row: CloudTaskRow): Promise<void> {
     const cloud = readCloudTaskMeta({ metadata: row.metadata });
-    if (!cloud || cloud.provider !== 'claude_routine' || !cloud.remoteTaskId) return;
+    if (!cloud || cloud.provider !== 'claude_code' || !cloud.remoteTaskId) return;
     const sessionId = cloud.remoteTaskId;
 
     const client = await getClaudeCodeClient(row.workspaceId);
@@ -248,7 +248,7 @@ class ClaudeCodePoller {
         {
           task_id: taskId,
           task_type: row.type,
-          provider: 'claude_routine',
+          provider: 'claude_code',
           opened_pr: Boolean(meta.pullRequest || cloud?.prUrl),
           duration_total_ms: finishedAt.getTime() - new Date(row.createdAt).getTime(),
           ...(result.error ? { error_reason: result.error } : {}),

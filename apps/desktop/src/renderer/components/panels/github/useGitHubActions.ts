@@ -55,7 +55,7 @@ export function useGitHubActions() {
   // Named `posthogEnvId`/`posthogEnabled` for now to avoid churning consumers.
   const posthogEnvId = useMemo(() => {
     const envFor = (type: string) => environments.find((e) => e.type === type)?.id ?? null;
-    for (const type of ['posthog_code', 'claude_routine']) {
+    for (const type of ['posthog_code', 'claude_code']) {
       if (connectedProviders.includes(type)) {
         const id = envFor(type);
         if (id) return id;

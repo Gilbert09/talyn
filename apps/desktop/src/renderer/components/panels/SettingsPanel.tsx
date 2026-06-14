@@ -794,7 +794,7 @@ function IntegrationsSettings() {
         {/* Claude Code (Managed Agents). Generic card driven by the
             /cloud-providers routes — the template additional providers reuse. */}
         <CloudProviderCard
-          type="claude_routine"
+          type="claude_code"
           displayName="Claude Code"
           icon={Bot}
           blurb="Add an Anthropic API key to run tasks on Claude’s cloud sandbox (Managed Agents). GitHub access reuses this workspace’s GitHub connection."

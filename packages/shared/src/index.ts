@@ -606,7 +606,7 @@ export interface PostHogCodeTaskMetadata {
  * run and reconciles status/transcript back. `posthog_code` is live today;
  * the other two are planned drop-ins (see docs/CLOUD_PROVIDERS.md).
  */
-export type CloudProviderType = 'posthog_code' | 'codex_cloud' | 'claude_routine';
+export type CloudProviderType = 'posthog_code' | 'codex_cloud' | 'claude_code';
 
 /**
  * Neutral, provider-agnostic cloud-run metadata stored on
@@ -639,7 +639,7 @@ export function readCloudTaskProvider(task: {
   provider?: string;
   metadata?: Record<string, unknown> | null;
 }): CloudProviderType | null {
-  const KNOWN: CloudProviderType[] = ['posthog_code', 'codex_cloud', 'claude_routine'];
+  const KNOWN: CloudProviderType[] = ['posthog_code', 'codex_cloud', 'claude_code'];
   if (task.provider && KNOWN.includes(task.provider as CloudProviderType)) {
     return task.provider as CloudProviderType;
   }

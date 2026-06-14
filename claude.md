@@ -1,6 +1,6 @@
 # FastOwl — Claude Context
 
-FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs in a prioritized GitHub panel, and delegates fix/respond/review work to cloud providers (PostHog Code today; Codex Cloud / Claude Routines planned) that run the agent loop on their own sandbox and open a PR.
+FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs in a prioritized GitHub panel, and delegates fix/respond/review work to cloud providers (PostHog Code + Claude Code live; Codex Cloud deferred) that run the agent loop on their own sandbox and open a PR.
 
 **As of the cloud-only refactor (June 2026)** the app no longer runs anything locally: the bundled daemon, local/remote environments, in-process Claude agents, permission gates, backlog/continuous-build, and the per-task git working tree are all gone. Every task is a cloud task. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
