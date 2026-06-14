@@ -797,11 +797,10 @@ function IntegrationsSettings() {
           type="claude_routine"
           displayName="Claude Code"
           icon={Bot}
-          blurb="Add an Anthropic API key + a GitHub token to run tasks on Claude’s cloud sandbox (Managed Agents)."
-          connectedBlurb="Cloud tasks run on Claude Managed Agents and open PRs via the GitHub MCP."
+          blurb="Add an Anthropic API key to run tasks on Claude’s cloud sandbox (Managed Agents). GitHub access reuses this workspace’s GitHub connection."
+          connectedBlurb="Cloud tasks run on Claude Managed Agents and open PRs via your GitHub connection."
           fields={[
             { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
-            { key: 'githubToken', label: 'GitHub token (repo scope)', type: 'password', placeholder: 'ghp_...' },
           ]}
         />
       </div>

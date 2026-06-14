@@ -99,6 +99,14 @@ class ClaudeCodePoller {
       summary: prUrl ? `Claude Code opened ${prUrl}` : 'Claude Code run completed',
     };
     await this.finalize(row.id, row.workspaceId, 'completed', result);
+
+    // Best-effort cleanup of the per-dispatch vault (held the GitHub token).
+    const vaultId = cloud.extra?.vaultId as string | undefined;
+    if (vaultId) {
+      await client.deleteVault(vaultId).catch(() => {
+        /* vault may already be gone; harmless */
+      });
+    }
   }
 
   /** Poll-based: rebuild the transcript from the full event log, persist + emit

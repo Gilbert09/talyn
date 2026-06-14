@@ -12,7 +12,6 @@ import type { CloudTaskProvider, CloudTaskRow, DispatchResult } from '../types.j
 
 interface ClaudeCredInput {
   anthropicApiKey?: string;
-  githubToken?: string;
 }
 
 /**
@@ -27,9 +26,9 @@ export const claudeCodeProvider: CloudTaskProvider = {
   capabilities: { model: true },
 
   async validateCredentials(workspaceId, input) {
-    const { anthropicApiKey, githubToken } = (input ?? {}) as ClaudeCredInput;
-    if (!anthropicApiKey || !githubToken) {
-      return { ok: false, error: 'anthropicApiKey and githubToken are required' };
+    const { anthropicApiKey } = (input ?? {}) as ClaudeCredInput;
+    if (!anthropicApiKey) {
+      return { ok: false, error: 'anthropicApiKey is required' };
     }
     try {
       await new ClaudeManagedAgentsClient(anthropicApiKey).ping();
@@ -41,7 +40,9 @@ export const claudeCodeProvider: CloudTaskProvider = {
         }`,
       };
     }
-    await storeClaudeCodeCredentials(workspaceId, { anthropicApiKey, githubToken });
+    // GitHub access reuses the workspace's existing connection at dispatch time
+    // (githubService.getAccessToken) — no separate token stored here.
+    await storeClaudeCodeCredentials(workspaceId, { anthropicApiKey });
     return { ok: true };
   },
 
@@ -89,5 +90,12 @@ export const claudeCodeProvider: CloudTaskProvider = {
       /* may already be idle */
     }
     await client.deleteSession(cloud.remoteTaskId);
+    // Clean up the per-dispatch vault (held the GitHub token).
+    const vaultId = cloud.extra?.vaultId as string | undefined;
+    if (vaultId) {
+      await client.deleteVault(vaultId).catch(() => {
+        /* harmless */
+      });
+    }
   },
 };

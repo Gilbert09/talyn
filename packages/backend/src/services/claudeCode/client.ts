@@ -136,6 +136,11 @@ export class ClaudeManagedAgentsClient {
     return this.request('DELETE', `/v1/sessions/${sessionId}`);
   }
 
+  /** Delete a vault (best-effort cleanup of a per-dispatch GitHub credential). */
+  async deleteVault(vaultId: string): Promise<unknown> {
+    return this.request('DELETE', `/v1/vaults/${vaultId}`);
+  }
+
   /** Cheap auth/connectivity probe. Throws on bad key / unreachable host. */
   async ping(): Promise<void> {
     await this.request('GET', '/v1/agents?limit=1');

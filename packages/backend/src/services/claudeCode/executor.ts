@@ -12,6 +12,7 @@ import {
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
+import { githubService } from '../github.js';
 import { DEFAULT_CLAUDE_MODEL, ClaudeManagedAgentsClient } from './client.js';
 import {
   getClaudeCodeCredentials,
@@ -48,7 +49,17 @@ export async function dispatchTaskToClaudeCode(
     return {
       ok: false,
       error:
-        'Claude Code is not configured for this workspace — add an Anthropic API key and a GitHub token in workspace settings.',
+        'Claude Code is not configured for this workspace — add an Anthropic API key in workspace settings.',
+    };
+  }
+
+  // GitHub access reuses the workspace's existing connection (no separate PAT).
+  // Fetched fresh each dispatch so a re-connected/rotated token is always current.
+  const githubToken = githubService.getAccessToken(task.workspaceId);
+  if (!githubToken) {
+    return {
+      ok: false,
+      error: 'Connect GitHub for this workspace — Claude Code uses it to read the repo and open the PR.',
     };
   }
 
@@ -72,19 +83,25 @@ export async function dispatchTaskToClaudeCode(
 
   try {
     const client = new ClaudeManagedAgentsClient(creds.anthropicApiKey);
-    const { agentId, environmentId, vaultId } = await ensureResources(
+    const { agentId, environmentId } = await ensureResources(
       task.workspaceId,
       creds,
       client,
       String(model),
     );
 
+    // Mint a fresh vault per dispatch with the current GitHub token. Caching it
+    // would go stale when the workspace token is revoked + re-connected (see the
+    // token-revocation saga in SESSIONS.md), breaking the PR step silently.
+    const vault = await client.createVault('FastOwl GitHub');
+    await client.addVaultGitHubCredential(vault.id, githubToken);
+
     const session = await client.createSession({
       agentId,
       environmentId,
-      vaultId,
+      vaultId: vault.id,
       repoUrl: `https://github.com/${slug}`,
-      githubToken: creds.githubToken,
+      githubToken,
     });
 
     // Posting the first user message starts the run.
@@ -95,7 +112,8 @@ export async function dispatchTaskToClaudeCode(
       remoteTaskId: session.id,
       remoteRunId: session.id,
       status: session.status ?? 'running',
-      extra: { agentId, environmentId, vaultId, repo: slug, model: String(model) },
+      // vaultId is per-dispatch — tracked so finalize/cancel can delete it.
+      extra: { agentId, environmentId, vaultId: vault.id, repo: slug, model: String(model) },
     };
     await patchTaskMetadata(task.id, (existing) => ({ ...existing, cloudTask }));
 
@@ -115,19 +133,20 @@ export async function dispatchTaskToClaudeCode(
 }
 
 /**
- * Ensure the workspace's reusable Managed Agents resources exist, creating +
- * caching any that are missing. A new vault also gets the GitHub credential
- * bound to the MCP URL. Rotating credentials clears the cache (see
- * storeClaudeCodeCredentials), so this re-creates them against the new token.
+ * Ensure the workspace's reusable agent + environment exist, creating +
+ * caching any that are missing. Rotating the Anthropic key clears the cache
+ * (see storeClaudeCodeCredentials), so this re-creates them against the new key.
+ * (The vault is minted per dispatch, not here — it carries the rotating GitHub
+ * token and must always be fresh.)
  */
 async function ensureResources(
   workspaceId: string,
   creds: ClaudeCodeCredentials,
   client: ClaudeManagedAgentsClient,
   model: string,
-): Promise<{ agentId: string; environmentId: string; vaultId: string }> {
-  let { agentId, environmentId, vaultId } = creds;
-  const fresh: { agentId?: string; environmentId?: string; vaultId?: string } = {};
+): Promise<{ agentId: string; environmentId: string }> {
+  let { agentId, environmentId } = creds;
+  const fresh: { agentId?: string; environmentId?: string } = {};
 
   if (!agentId) {
     const agent = await client.createAgent({
@@ -143,17 +162,11 @@ async function ensureResources(
     environmentId = environment.id;
     fresh.environmentId = environmentId;
   }
-  if (!vaultId) {
-    const vault = await client.createVault('FastOwl GitHub');
-    vaultId = vault.id;
-    await client.addVaultGitHubCredential(vaultId, creds.githubToken);
-    fresh.vaultId = vaultId;
-  }
 
-  if (fresh.agentId || fresh.environmentId || fresh.vaultId) {
+  if (fresh.agentId || fresh.environmentId) {
     await cacheClaudeResourceIds(workspaceId, fresh);
   }
-  return { agentId, environmentId, vaultId };
+  return { agentId, environmentId };
 }
 
 async function resolveRepositorySlug(repositoryId: string): Promise<string | null> {

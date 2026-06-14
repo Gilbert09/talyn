@@ -396,6 +396,17 @@ class GitHubService extends EventEmitter {
     return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
   }
 
+  /**
+   * The decrypted GitHub access token for a workspace, or null if GitHub
+   * isn't connected. This is the same in-memory token the service uses for
+   * its own API calls (kept current on connect), so consumers like the
+   * Claude Code provider can reuse the workspace's connection instead of
+   * asking for a separate PAT.
+   */
+  getAccessToken(workspaceId: string): string | null {
+    return this.tokens.get(workspaceId)?.accessToken ?? null;
+  }
+
   getAuthorizationUrl(workspaceId: string, state: string): string {
     const params = new URLSearchParams({
       client_id: GITHUB_CLIENT_ID,

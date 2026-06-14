@@ -13,26 +13,24 @@ import { ClaudeManagedAgentsClient } from './client.js';
 const INTEGRATION_TYPE = 'claude_code';
 
 /**
- * Persisted shape of the `claude_code` integration row's `config`. Both tokens
- * are encrypted at rest. The Managed Agents agent/environment/vault are created
- * once per workspace and reused — their (non-secret) ids are cached here so we
- * don't re-create them on every dispatch.
+ * Persisted shape of the `claude_code` integration row's `config`. Only the
+ * Anthropic key is stored here (encrypted) — GitHub access reuses the
+ * workspace's existing connection (`githubService.getAccessToken`). The
+ * reusable agent + environment ids are cached so we don't re-create them on
+ * every dispatch; the vault is minted fresh per dispatch (always-current
+ * GitHub token), so it isn't cached.
  */
 interface ClaudeIntegrationConfig {
   anthropicKeyEnc?: EncryptedEnvelope;
-  githubTokenEnc?: EncryptedEnvelope;
   /** Cached, reusable Managed Agents resource ids (not secret). */
   agentId?: string;
   environmentId?: string;
-  vaultId?: string;
 }
 
 export interface ClaudeCodeCredentials {
   anthropicApiKey: string;
-  githubToken: string;
   agentId?: string;
   environmentId?: string;
-  vaultId?: string;
 }
 
 function readEnc(env: EncryptedEnvelope | undefined, label: string): string | null {
@@ -67,15 +65,12 @@ export async function getClaudeCodeCredentials(
 
   const config = (row.config as ClaudeIntegrationConfig | null) ?? {};
   const anthropicApiKey = readEnc(config.anthropicKeyEnc, 'Anthropic API key');
-  const githubToken = readEnc(config.githubTokenEnc, 'GitHub token');
-  if (!anthropicApiKey || !githubToken) return null;
+  if (!anthropicApiKey) return null;
 
   return {
     anthropicApiKey,
-    githubToken,
     agentId: config.agentId,
     environmentId: config.environmentId,
-    vaultId: config.vaultId,
   };
 }
 
@@ -88,10 +83,10 @@ export async function getClaudeCodeClient(
   return new ClaudeManagedAgentsClient(creds.anthropicApiKey);
 }
 
-/** Upsert a workspace's Claude Code credentials (both tokens encrypted). */
+/** Upsert a workspace's Claude Code credentials (Anthropic key encrypted). */
 export async function storeClaudeCodeCredentials(
   workspaceId: string,
-  input: { anthropicApiKey: string; githubToken: string },
+  input: { anthropicApiKey: string },
 ): Promise<void> {
   const db = getDbClient();
   const existing = await db
@@ -105,11 +100,10 @@ export async function storeClaudeCodeCredentials(
     )
     .limit(1);
 
-  // Rotating the key/token invalidates cached resource ids (a vault/agent is
+  // Rotating the key invalidates cached resource ids (an agent/environment is
   // tied to the account the key belongs to), so drop them on a re-store.
   const config: ClaudeIntegrationConfig = {
     anthropicKeyEnc: encryptString(input.anthropicApiKey),
-    githubTokenEnc: encryptString(input.githubToken),
   };
 
   const now = new Date();
@@ -138,7 +132,7 @@ export async function storeClaudeCodeCredentials(
  */
 export async function cacheClaudeResourceIds(
   workspaceId: string,
-  ids: { agentId?: string; environmentId?: string; vaultId?: string },
+  ids: { agentId?: string; environmentId?: string },
 ): Promise<void> {
   const db = getDbClient();
   const rows = await db

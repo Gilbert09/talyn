@@ -28,14 +28,11 @@ describe('claudeCodeProvider — CloudTaskProvider conformance', () => {
     }
   });
 
-  it('rejects credentials missing the required fields (no DB/network hit)', async () => {
+  it('rejects credentials missing the Anthropic key (no DB/network hit)', async () => {
     expect(await claudeCodeProvider.validateCredentials('ws1', {})).toEqual({
       ok: false,
-      error: 'anthropicApiKey and githubToken are required',
+      error: 'anthropicApiKey is required',
     });
-    expect(
-      await claudeCodeProvider.validateCredentials('ws1', { anthropicApiKey: 'sk-ant-x' }),
-    ).toMatchObject({ ok: false });
   });
 
   it('registers and resolves through the registry by type', () => {
