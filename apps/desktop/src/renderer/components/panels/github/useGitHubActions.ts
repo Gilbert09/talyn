@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, type PRRow } from '../../../lib/api';
+import { api, type PRRow, type CloudProviderInfo } from '../../../lib/api';
 import { buildPostHogPrompt } from '@fastowl/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
@@ -7,6 +7,7 @@ import { useTaskActions } from '../../../hooks/useApi';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
+import { pickCloudProvider } from '../../../stores/providerPicker';
 
 /** Escape a string for safe interpolation into the copied HTML list. */
 function escapeHtml(s: string): string {
@@ -23,14 +24,14 @@ function escapeHtml(s: string): string {
  * the same action works no matter which page fired it.
  */
 export function useGitHubActions() {
-  const { currentWorkspaceId, environments, selectTask, tasks, addTask, setActivePanel } =
+  const { currentWorkspaceId, workspaces, environments, selectTask, tasks, addTask, setActivePanel } =
     useWorkspaceStore();
   const { createTask } = useTaskActions();
   const { patchRow, removeRow } = usePullRequestStore.getState();
 
   // Which cloud providers this workspace has connected (authoritative — checks
   // stored credentials, not just the env marker which lingers after disconnect).
-  const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+  const [connectedProviders, setConnectedProviders] = useState<CloudProviderInfo[]>([]);
   useEffect(() => {
     if (!currentWorkspaceId) return;
     let cancelled = false;
@@ -38,7 +39,7 @@ export function useGitHubActions() {
       .list(currentWorkspaceId)
       .then((providers) => {
         if (cancelled) return;
-        setConnectedProviders(providers.filter((p) => p.connected).map((p) => p.type));
+        setConnectedProviders(providers.filter((p) => p.connected));
       })
       .catch(() => {
         /* leave empty — the fix button just won't show */
@@ -48,15 +49,12 @@ export function useGitHubActions() {
     };
   }, [currentWorkspaceId]);
 
-  // The auto-provisioned cloud env a follow-up ("get mergeable") task is
-  // assigned to. Generic across providers: prefer PostHog Code for back-compat,
-  // else fall back to Claude Code. (A per-task provider picker for the
-  // both-connected case is a planned follow-up — see docs/CLOUD_PROVIDERS.md.)
-  // Named `posthogEnvId`/`posthogEnabled` for now to avoid churning consumers.
+  // Auto fallback env: prefer PostHog Code for back-compat, else Claude Code.
+  // (Named `posthogEnvId`/`posthogEnabled` to avoid churning consumers.)
   const posthogEnvId = useMemo(() => {
     const envFor = (type: string) => environments.find((e) => e.type === type)?.id ?? null;
     for (const type of ['posthog_code', 'claude_code']) {
-      if (connectedProviders.includes(type)) {
+      if (connectedProviders.some((p) => p.type === type)) {
         const id = envFor(type);
         if (id) return id;
       }
@@ -64,6 +62,28 @@ export function useGitHubActions() {
     return null;
   }, [environments, connectedProviders]);
   const posthogEnabled = posthogEnvId !== null;
+
+  // Resolve which cloud env a new task dispatches to, honouring the workspace's
+  // `defaultCloudProvider`: a pinned provider wins when connected; `ask` prompts
+  // the provider picker when more than one is connected; otherwise auto (prefer
+  // PostHog, else Claude). Returns null when the user cancels the picker.
+  const resolveTaskEnvId = useCallback(async (): Promise<string | null> => {
+    const envFor = (type: string) => environments.find((e) => e.type === type)?.id ?? null;
+    const settings = workspaces.find((w) => w.id === currentWorkspaceId)?.settings;
+    const def = settings?.defaultCloudProvider;
+
+    if (def && def !== 'ask' && connectedProviders.some((p) => p.type === def)) {
+      const id = envFor(def);
+      if (id) return id;
+    }
+    if (def === 'ask' && connectedProviders.length > 1) {
+      const chosen = await pickCloudProvider(
+        connectedProviders.map((p) => ({ type: p.type, displayName: p.displayName }))
+      );
+      return chosen ? envFor(chosen) : null;
+    }
+    return posthogEnvId;
+  }, [environments, workspaces, currentWorkspaceId, connectedProviders, posthogEnvId]);
 
   // Deep-link to a row's linked task. It may not be in the store yet (e.g. a
   // backend-created merge-queue fix run on a client that connected after it
@@ -135,19 +155,21 @@ export function useGitHubActions() {
     [patchRow]
   );
 
-  // Kick off a PostHog Code cloud run to take the PR to a clean, mergeable
-  // state. Assigns it to the cloud env so the scheduler dispatches it to
-  // PostHog Code. The run happens entirely in the cloud, so we stay on the
-  // current page — the row's task badge is the user's signal it started.
+  // Kick off a cloud run to take the PR to a clean, mergeable state. The
+  // provider is resolved from the workspace's default (which may prompt the
+  // picker when set to "ask"); the run happens entirely in the cloud, so we stay
+  // on the current page — the row's task badge is the user's signal it started.
   const createPostHogTask = useCallback(
     async (row: PRRow) => {
-      if (!currentWorkspaceId || !posthogEnvId) return;
+      if (!currentWorkspaceId) return;
+      const envId = await resolveTaskEnvId();
+      if (!envId) return; // not connected, or the user cancelled the picker
       const ref = `${row.owner}/${row.repo}#${row.number}`;
       const created = await createTask({
         workspaceId: currentWorkspaceId,
         type: 'pr_response',
         title: `Get ${ref} mergeable`,
-        description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state via PostHog Code.`,
+        description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state.`,
         prompt: buildPostHogPrompt({
           owner: row.owner,
           repo: row.repo,
@@ -155,7 +177,7 @@ export function useGitHubActions() {
           summary: row.summary,
         }),
         repositoryId: row.repositoryId,
-        assignedEnvironmentId: posthogEnvId,
+        assignedEnvironmentId: envId,
         pullRequestId: row.id,
       });
       trackEvent('pr_fix_task_started', {
@@ -166,7 +188,7 @@ export function useGitHubActions() {
       // Optimistically link the row so the in-progress indicator shows instantly.
       patchRow(row.id, { taskId: created.id });
     },
-    [currentWorkspaceId, posthogEnvId, createTask, patchRow]
+    [currentWorkspaceId, resolveTaskEnvId, createTask, patchRow]
   );
 
   // Connect GitHub for the workspace (opens the OAuth popup).

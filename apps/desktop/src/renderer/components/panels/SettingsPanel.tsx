@@ -35,7 +35,7 @@ import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
-import type { WorkspaceLogo as WorkspaceLogoData } from '@fastowl/shared';
+import type { WorkspaceLogo as WorkspaceLogoData, Workspace } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import {
   useWorkspaceActions,
@@ -803,8 +803,98 @@ function IntegrationsSettings() {
             { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
           ]}
         />
+
+        <CloudProviderDefaultSelector />
       </div>
     </div>
+  );
+}
+
+/**
+ * When more than one cloud provider is connected, lets the workspace pick which
+ * one new tasks dispatch to — a specific provider, or "Ask every time" (the
+ * desktop prompts per task; backend auto-fixes fall back to PostHog). Persists
+ * to `workspace.settings.defaultCloudProvider`.
+ */
+function CloudProviderDefaultSelector() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const [connected, setConnected] = useState<{ type: string; displayName: string }[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    api.cloudProviders
+      .list(currentWorkspaceId)
+      .then((providers) => {
+        if (!cancelled) {
+          setConnected(
+            providers.filter((p) => p.connected).map((p) => ({ type: p.type, displayName: p.displayName }))
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
+
+  // Only relevant when there's an actual choice to make.
+  if (connected.length < 2) return null;
+
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const current = (workspace?.settings?.defaultCloudProvider as string | undefined) ?? '';
+
+  const onChange = async (value: string) => {
+    if (!currentWorkspaceId) return;
+    setSaving(true);
+    try {
+      const defaultCloudProvider = value === '' ? undefined : value;
+      await api.workspaces.update(currentWorkspaceId, {
+        settings: { defaultCloudProvider } as Workspace['settings'],
+      });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, defaultCloudProvider } as Workspace['settings'] }
+            : w
+        )
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-secondary shrink-0">
+          <Shuffle className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium">Default for new tasks</h4>
+          <p className="text-sm text-muted-foreground mt-1">
+            Which cloud provider new tasks use when more than one is connected.
+          </p>
+        </div>
+        <select
+          value={current}
+          disabled={saving}
+          onChange={(e) => onChange(e.target.value)}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          <option value="">Auto (prefer PostHog Code)</option>
+          {connected.map((p) => (
+            <option key={p.type} value={p.type}>
+              {p.displayName}
+            </option>
+          ))}
+          <option value="ask">Ask every time</option>
+        </select>
+      </div>
+    </Card>
   );
 }
 

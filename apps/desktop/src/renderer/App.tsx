@@ -7,6 +7,7 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useWorkspaceStore } from './stores/workspace';
 import { Toaster } from './components/ui/toaster';
+import { CloudProviderPickerModal } from './components/modals/CloudProviderPickerModal';
 import { BlinkingOwl } from './components/widgets/BlinkingOwl';
 import {
   identifyAnalyticsUser,
@@ -114,6 +115,7 @@ function AuthedApp() {
         </>
       )}
       <Toaster />
+      <CloudProviderPickerModal />
     </>
   );
 }
