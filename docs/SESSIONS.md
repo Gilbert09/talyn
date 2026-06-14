@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 61 — Claude Code as a 2nd cloud provider (Anthropic Managed Agents); Codex deferred
+
+Added **Claude Code** as the second `CloudTaskProvider`, with feature parity to PostHog Code.
+
+**Phase 0 (spike-first gate).** Web research + a throwaway exploratory spike (`scripts/spikes/spike-claude.ts`, git-ignored) settled the two API choices against real accounts:
+- **Codex Cloud → deferred.** OpenAI exposes no server-to-server cloud-task API — only the `codex cloud` CLI (needs a self-hosted runner + opaque env ids, unstable JSON) or `@codex` GitHub mentions. Building on it would reverse the cloud-only refactor, so it's parked behind the same provider seam.
+- **Claude → Anthropic Managed Agents API** (not Routines: Routines are subscription-billed but fire-and-forget / no transcript / no cancel). The spike confirmed the full contract by opening a real PR on `owl` (#8): `POST /v1/agents` (prebuilt toolset + GitHub MCP `always_allow`) → `/v1/environments` → `/v1/vaults` + `/credentials` (static_bearer bound to the MCP URL) → `/v1/sessions` (`agent` + `environment_id` + `vault_ids` + `github_repository` resource) → post the prompt as a `user.message` event. Transcript is **poll-based** (`GET /sessions/{id}/events`; `/events/stream` only replays then closes); terminal = `session.status_idle` + `stop_reason.end_turn`; the PR URL surfaces in the `create_pull_request` `agent.mcp_tool_result`; cancel = `user.interrupt` + `DELETE`. Plan B (agent uses `git`/`gh`) is dead — `gh` isn't installed and the mounted-repo token isn't exposed to the shell; the GitHub **MCP + vault** is the only PR path. Billing: standard API credits (no subscription option on Managed Agents); a self-hosted Modal-style sandbox on a Max subscription is prohibited by Anthropic ToS and enforced.
+
+**Implementation.** `services/claudeCode/{converter,client,credentials,executor,poller}.ts` + `cloudProviders/claude/provider.ts` (type `claude_routine`, displayName "Claude Code"), registered in `index.ts`. The lifecycle mirrors PostHog; the converter is simpler (complete polled events, no chunk coalescing). Agent/environment/vault are created once per workspace and cached on the integration `config` (cleared on credential rotation). DebugPanel `SERVICE_INFO` gains `claude_managed_agents`. Desktop: a generic `CloudProviderCard` (driven by the `/cloud-providers` routes) renders the Claude connect form (Anthropic key + GitHub PAT); `useGitHubActions` now resolves a generic "active cloud env" (prefer PostHog, else Claude) so a Claude-only workspace routes PR-fix tasks to Claude. Tests: `claudeCodeConverter.test.ts` + `claudeCodeProvider.test.ts` (18 cases); tsc + eslint clean across backend/shared/desktop.
+
+**Follow-ups:** per-task provider picker (both-connected case); `checkout` object shape for `pr_response`/`pr_review` head-branch mounting; executor/poller DB-mocked reconcile tests; reuse the workspace GitHub connection instead of a separate PAT; migrate the bespoke PostHog Settings card onto `CloudProviderCard`.
+
 ## Session 60 — "Ready to merge" filter + merge queue skips blocked PRs
 
 Two PR-management quality-of-life changes:

@@ -18,6 +18,7 @@ import { tokenHealthPoller } from './services/tokenHealthPoller.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
+import { claudeCodeProvider } from './services/cloudProviders/claude/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
 import { mergeQueueProcessor } from './services/mergeQueueProcessor.js';
@@ -33,9 +34,10 @@ async function main() {
   await initDatabase();
 
   // Register cloud task providers before any service that dispatches or
-  // polls them. One provider today (PostHog Code); Codex/Claude slot in
-  // here with no other changes (see docs/CLOUD_PROVIDERS.md).
+  // polls them. PostHog Code + Claude Code (Managed Agents) today; Codex
+  // slots in here with no other changes (see docs/CLOUD_PROVIDERS.md).
   registerCloudProvider(postHogCodeProvider);
+  registerCloudProvider(claudeCodeProvider);
 
   // Initialize services. Each init is idempotent and DB-aware.
   console.log('Initializing services...');

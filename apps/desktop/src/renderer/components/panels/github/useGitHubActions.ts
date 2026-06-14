@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type PRRow } from '../../../lib/api';
 import { buildPostHogPrompt } from '@fastowl/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -26,15 +26,44 @@ export function useGitHubActions() {
   const { currentWorkspaceId, environments, selectTask, tasks, addTask, setActivePanel } =
     useWorkspaceStore();
   const { createTask } = useTaskActions();
-  const posthogConnected = usePullRequestStore((s) => s.posthogConnected);
   const { patchRow, removeRow } = usePullRequestStore.getState();
 
-  // The auto-provisioned cloud env a follow-up task gets assigned to.
-  const posthogEnvId = useMemo(
-    () => environments.find((e) => e.type === 'posthog_code')?.id ?? null,
-    [environments]
-  );
-  const posthogEnabled = posthogConnected && posthogEnvId !== null;
+  // Which cloud providers this workspace has connected (authoritative — checks
+  // stored credentials, not just the env marker which lingers after disconnect).
+  const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    api.cloudProviders
+      .list(currentWorkspaceId)
+      .then((providers) => {
+        if (cancelled) return;
+        setConnectedProviders(providers.filter((p) => p.connected).map((p) => p.type));
+      })
+      .catch(() => {
+        /* leave empty — the fix button just won't show */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
+
+  // The auto-provisioned cloud env a follow-up ("get mergeable") task is
+  // assigned to. Generic across providers: prefer PostHog Code for back-compat,
+  // else fall back to Claude Code. (A per-task provider picker for the
+  // both-connected case is a planned follow-up — see docs/CLOUD_PROVIDERS.md.)
+  // Named `posthogEnvId`/`posthogEnabled` for now to avoid churning consumers.
+  const posthogEnvId = useMemo(() => {
+    const envFor = (type: string) => environments.find((e) => e.type === type)?.id ?? null;
+    for (const type of ['posthog_code', 'claude_routine']) {
+      if (connectedProviders.includes(type)) {
+        const id = envFor(type);
+        if (id) return id;
+      }
+    }
+    return null;
+  }, [environments, connectedProviders]);
+  const posthogEnabled = posthogEnvId !== null;
 
   // Deep-link to a row's linked task. It may not be in the store yet (e.g. a
   // backend-created merge-queue fix run on a client that connected after it

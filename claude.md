@@ -34,7 +34,7 @@ When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When
 ## Core Concepts (at a glance)
 
 - **Workspace** — groups related repos + integrations (e.g., "PostHog" = `posthog/posthog` + `posthog/posthog.com` + `posthog/charts`)
-- **Cloud provider** — a vendor that runs the whole agent loop on its own sandbox and opens a PR. Pluggable behind `CloudTaskProvider` (`packages/backend/src/services/cloudProviders/`): a registry + per-provider `dispatch`/`reconcile`/credentials. PostHog Code is the only live provider; Codex Cloud / Claude Routines are drop-in (see [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)).
+- **Cloud provider** — a vendor that runs the whole agent loop on its own sandbox and opens a PR. Pluggable behind `CloudTaskProvider` (`packages/backend/src/services/cloudProviders/`): a registry + per-provider `dispatch`/`reconcile`/credentials. **PostHog Code** and **Claude Code** (Anthropic Managed Agents) are live; **Codex Cloud is deferred** (no server-to-server API — see [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)).
 - **Environment** — now just a **secret-free marker**, one auto-provisioned row per connected cloud provider. Its `type` (a `CloudProviderType`) is how a task resolves its provider; per-workspace credentials live on the `integrations` row. No daemon, no pairing.
 - **Task** — the unit of work, always delegated to a cloud provider. Types: `code_writing` (freeform prompt on a repo), `pr_response`, `pr_review`. Lifecycle: `queued` → `in_progress` → `completed`/`failed`. The cloud poller (`cloudProviders/poller.ts`) drives status + ingests the transcript; review happens on the provider's PR (no local `awaiting_review` gate).
 - **GitHub/PR core** — `services/{github,githubGraphql,prMonitor,prCache,prFocus}.ts` + `routes/{github,pullRequests,repositories}.ts` + the desktop GitHub panel / PR pills / detail sheet. This is the heart of the app. (The standalone **Inbox** — a prioritized queue of PR items needing attention — was removed; PRs needing attention surface directly in the GitHub panel's "Needs attention" / Mine / Review buckets.)
@@ -76,7 +76,7 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 
 > **Superseded (June 2026):** the daemon-everywhere / continuous-build / local-execution roadmap is retired. FastOwl is now a cloud-only PR-management app. The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
-1. **Cloud provider abstraction** — Phases 1–2 (registry + interface, PostHog Code under it, generic credentials/routes) are **done**. Phase 0 spikes + Phases 3–4 (Codex Cloud, Claude Routines) are next. Each new provider is a self-contained `client + credentials + converter + transcriptSource + provider` module — no core changes.
+1. **Cloud provider abstraction** — Phases 1–2 (registry + interface, PostHog Code under it, generic credentials/routes) are **done**. **Claude Code (Managed Agents) shipped** as the 2nd provider (`services/claudeCode/*` + `cloudProviders/claude/provider.ts`). **Codex Cloud is deferred** — OpenAI exposes no server-to-server cloud-task API (only the `codex cloud` CLI or `@codex` GitHub mentions). Each provider is a self-contained `client + credentials + converter + executor + poller + provider` module — no core changes. Follow-ups: a per-task **provider picker** in the composer (today PR-fix tasks prefer PostHog, else Claude), the Claude `checkout` object shape for `pr_response`/`pr_review` head-branch mounting, and migrating the bespoke PostHog Settings card onto the generic `CloudProviderCard`.
 2. **Desktop polish** — generalise the Settings card + composer to render per-provider once a 2nd provider lands. (The dead local-task UI — TaskFilesPanel/TaskGitPanel/awaiting_review flow — was removed in Session 52.)
 3. **Phase 18.2 polish** — proper `fastowl login` PKCE flow, CLI refresh-token rotation, invite flow.
 
@@ -116,6 +116,6 @@ fastowl/
 └── package.json                  # npm workspace root
 ```
 
-Inside `packages/backend/src/`: `db/` (migrations + Drizzle schema/client), `routes/` (REST), `services/` (`taskQueue`, `cloudProviders/` (registry + poller + posthog provider), `posthogCode/` (client/executor/streamer/converter), `github`, `prMonitor`, `prCache`, `taskPullRequest`, `events`, `websocket`), `__tests__/` (Vitest).
+Inside `packages/backend/src/`: `db/` (migrations + Drizzle schema/client), `routes/` (REST), `services/` (`taskQueue`, `cloudProviders/` (registry + poller + posthog/claude providers), `posthogCode/` (client/executor/streamer/converter), `claudeCode/` (client/credentials/executor/poller/converter — Anthropic Managed Agents, poll-based transcript), `github`, `prMonitor`, `prCache`, `taskPullRequest`, `events`, `websocket`), `__tests__/` (Vitest).
 
 Inside `apps/desktop/src/renderer/components/`: `layout/`, `modals/`, `panels/`, `terminal/`, `widgets/`, `ui/` (shadcn).

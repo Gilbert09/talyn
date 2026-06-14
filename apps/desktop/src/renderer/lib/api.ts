@@ -237,6 +237,18 @@ export interface CloudProviderInfo {
 export const cloudProviders = {
   list: (workspaceId: string) =>
     request<CloudProviderInfo[]>('GET', `/cloud-providers?workspaceId=${workspaceId}`),
+  /** Validate + store credentials for a provider, then auto-provision its env. */
+  saveConfig: (type: string, workspaceId: string, config: Record<string, string>) =>
+    request<{ connected: boolean }>('PUT', `/cloud-providers/${type}/config`, {
+      workspaceId,
+      ...config,
+    }),
+  test: (type: string, workspaceId: string) =>
+    request<{ connected: boolean; error?: string }>('POST', `/cloud-providers/${type}/test`, {
+      workspaceId,
+    }),
+  disconnect: (type: string, workspaceId: string) =>
+    request<void>('DELETE', `/cloud-providers/${type}/config?workspaceId=${workspaceId}`),
 };
 
 // Watched Repositories

@@ -23,6 +23,7 @@ import {
   Bug,
   Info,
   Download,
+  Bot,
 } from 'lucide-react';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { api, GitHubRepo } from '../../lib/api';
@@ -789,8 +790,203 @@ function IntegrationsSettings() {
 
         {/* PostHog Code (cloud tasks) */}
         <PostHogCodeCard />
+
+        {/* Claude Code (Managed Agents). Generic card driven by the
+            /cloud-providers routes — the template additional providers reuse. */}
+        <CloudProviderCard
+          type="claude_routine"
+          displayName="Claude Code"
+          icon={Bot}
+          blurb="Add an Anthropic API key + a GitHub token to run tasks on Claude’s cloud sandbox (Managed Agents)."
+          connectedBlurb="Cloud tasks run on Claude Managed Agents and open PRs via the GitHub MCP."
+          fields={[
+            { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
+            { key: 'githubToken', label: 'GitHub token (repo scope)', type: 'password', placeholder: 'ghp_...' },
+          ]}
+        />
       </div>
     </div>
+  );
+}
+
+interface CloudProviderField {
+  key: string;
+  label: string;
+  type?: 'text' | 'password';
+  placeholder?: string;
+}
+
+/**
+ * Generic Settings card for a cloud task provider, driven entirely by the
+ * provider-agnostic `/cloud-providers` routes (list / config / disconnect).
+ * A new provider needs only a descriptor here — no bespoke API client or
+ * store wiring. (PostHogCodeCard predates this and keeps its richer
+ * project/host display; it can migrate to this card later.)
+ */
+function CloudProviderCard({
+  type,
+  displayName,
+  icon: Icon,
+  blurb,
+  connectedBlurb,
+  fields,
+}: {
+  type: string;
+  displayName: string;
+  icon: React.ComponentType<{ className?: string }>;
+  blurb: string;
+  connectedBlurb: string;
+  fields: CloudProviderField[];
+}) {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const [connected, setConnected] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load connection status (per workspace) on mount + when the workspace changes.
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    api.cloudProviders
+      .list(currentWorkspaceId)
+      .then((providers) => {
+        if (cancelled) return;
+        setConnected(Boolean(providers.find((p) => p.type === type)?.connected));
+      })
+      .catch(() => {
+        /* leave as not-connected; the form still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId, type]);
+
+  const handleSave = async () => {
+    if (!currentWorkspaceId) return;
+    const missing = fields.find((f) => !values[f.key]?.trim());
+    if (missing) return;
+    setIsSaving(true);
+    setError(null);
+    try {
+      const config = Object.fromEntries(fields.map((f) => [f.key, values[f.key].trim()]));
+      await api.cloudProviders.saveConfig(type, currentWorkspaceId, config);
+      trackEvent('cloud_provider_connected', { provider: type });
+      setConnected(true);
+      setValues({});
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save credentials');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!currentWorkspaceId) return;
+    setIsSaving(true);
+    try {
+      await api.cloudProviders.disconnect(type, currentWorkspaceId);
+      setConnected(false);
+      setValues({});
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to disconnect');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const showForm = editing || !connected;
+  const canSave = fields.every((f) => values[f.key]?.trim());
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-4">
+        <div
+          className={cn(
+            'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
+            connected ? 'bg-green-500/10' : 'bg-secondary'
+          )}
+        >
+          <Icon className={cn('w-5 h-5', connected && 'text-green-500')} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium">{displayName}</h4>
+            {connected ? (
+              <Badge variant="default" className="bg-green-600">
+                <Check className="w-3 h-3 mr-1" />
+                Connected
+              </Badge>
+            ) : (
+              <Badge variant="secondary">Not Connected</Badge>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            {connected ? connectedBlurb : blurb}
+          </p>
+
+          {showForm && (
+            <div className="mt-3 space-y-3">
+              {fields.map((f) => (
+                <Input
+                  key={f.key}
+                  label={f.label}
+                  type={f.type ?? 'text'}
+                  placeholder={f.placeholder}
+                  value={values[f.key] ?? ''}
+                  onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                  disabled={isSaving}
+                />
+              ))}
+              {error && (
+                <div className="text-sm text-destructive flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={isSaving || !canSave || !currentWorkspaceId}
+                >
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}
+                </Button>
+                {connected && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditing(false);
+                      setValues({});
+                      setError(null);
+                    }}
+                    disabled={isSaving}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {connected && !showForm && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={isSaving}>
+              <Pencil className="w-4 h-4 mr-1" />
+              Edit
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleDisconnect} disabled={isSaving}>
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

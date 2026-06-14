@@ -19,7 +19,11 @@
 > `TranscriptSource`/`TranscriptConverter` was **deferred** — with one provider, the
 > PostHog poller/streamer are wrapped as-is; generalise them when Codex/Claude land.
 > (3) The Settings/composer UI stays PostHog-specific until a 2nd provider exists.
-> Phase 0 spikes + Phases 3–4 (Codex, Claude) are the remaining work.
+> Phase 4 (Claude Code, Managed Agents) **shipped** (June 2026) — `services/claudeCode/*`
+> + `cloudProviders/claude/provider.ts`, registered in `index.ts`, with a generic
+> `CloudProviderCard` Settings form. Phase 3 (Codex Cloud) is **deferred** — no
+> server-to-server API (see the Phase 0 findings). Remaining: per-task provider
+> picker in the composer; `TranscriptSource`/`TranscriptConverter` generalisation.
 
 ## Background
 
@@ -91,6 +95,101 @@ Feasibility hinges on each vendor exposing a programmatic *create-cloud-task* an
 
 **Gate:** only start Phase 3/4 for a provider once its spike passes. Phase 1–2
 (the refactor) are worth doing regardless.
+
+### Phase 0 findings — desk research (June 13 2026)
+
+Ahead of running the spikes, web research against the vendors' official docs
+settled the two open questions and changed the Codex plan:
+
+**Codex Cloud → no server-to-server API; DEFERRED.** OpenAI ships *no* public
+REST/SDK endpoint to create a Codex Cloud task from a backend. The only
+hosted-sandbox surfaces are the **`codex cloud` CLI** (`exec`/`status`/`diff`/
+`cancel`, needs a self-hosted runner + pre-created opaque env IDs, unstable JSON
+output — see openai/codex#24777) and **`@codex` GitHub mentions**. The
+`@openai/codex` SDK and `codex exec` drive a *local* agent, not the cloud.
+Decision: **defer the Codex provider** rather than re-introduce a runner or build
+on the brittle CLI; revisit if OpenAI ships a scriptable cloud API. (The
+GitHub-mention fallback remains a future option behind the same provider seam.)
+
+**Claude Code (web) → Managed Agents API; PROCEEDING.** Anthropic exposes two
+hosted surfaces: (a) the **Routines API** (`POST /v1/claude_code/routines/:id/fire`,
+experimental beta, OAuth `sk-ant-oat01-…`) — fire-and-forget, returns only a
+session id/URL, routines must be *pre-created*, no transcript/poll/cancel; and
+(b) the **Managed Agents API** (`POST /v1/agents` + `/v1/sessions`, SSE transcript
+via `GET /v1/sessions/:id/stream`, `interrupt`/`archive` to cancel, `x-api-key`,
+beta header `managed-agents-2026-04-01`) — dynamic per-task session with a mounted
+GitHub repo + prompt + model. **We target Managed Agents** for full PostHog-Code
+parity; PR URL is parsed from the transcript (the agent prints it). Exact
+payload/event shapes are unconfirmed — `scripts/spikes/spike-claude.ts` validates
+them against a real account before the module is built.
+
+#### Claude Managed Agents — confirmed contract (spike run June 14 2026)
+
+`scripts/spikes/spike-claude.ts` (throwaway, git-ignored) exercised the full
+lifecycle against a real account. Confirmed:
+
+- **Headers (all calls):** `x-api-key`, `anthropic-version: 2023-06-01`,
+  `anthropic-beta: managed-agents-2026-04-01`, `content-type: application/json`.
+- **`POST /v1/agents`** → 200. Body: `{ name, model, system, tools, mcp_servers }`.
+  Tool `type`s are **`agent_toolset_20260401`** (prebuilt bash/read/write/edit/…,
+  defaults `permission_policy.always_allow`) and **`mcp_toolset`**
+  (`{ type:'mcp_toolset', mcp_server_name:'github' }`, defaults `always_ask`).
+  GitHub MCP wired via `mcp_servers:[{ type:'url', name:'github', url:'https://api.githubcopilot.com/mcp/' }]`.
+  Returns `agent_…` id.
+- **`POST /v1/environments`** → 200 (`env_…`). The sandbox the session runs in
+  (`config.type:'cloud'`, `networking:'unrestricted'`, has an `environment` map
+  for env vars + `init_script`). Reusable per workspace.
+- **`POST /v1/sessions`** → 200 (`sesn_…`, `status:'idle'`). Body:
+  `{ agent:'agent_…', environment_id:'env_…', resources:[{ type:'github_repository', url, authorization_token, checkout? }] }`.
+  The repo mounts at `/workspace/<repo>`. **`checkout` is an OBJECT** (string →
+  400 "value must be an object"); exact inner shape still TBD (omitting it
+  defaults to the repo's default branch). The field is **`agent`**, not `agent_id`.
+- **Prompt** is NOT in the session create — send `POST /v1/sessions/{id}/events`
+  with `{ events:[{ type:'user.message', content:[{ type:'text', text }] }] }`.
+- **Transcript = POLL `GET /v1/sessions/{id}/events?limit=100`** → `{ data:[event…] }`,
+  oldest-first, dedup by event `id`. (`/events/stream` only replays the backlog
+  then closes — not a long-lived tail, so the existing poll loop drives it.)
+  Pagination for >100 events (an `after` cursor) still to confirm.
+- **Event taxonomy** (semantic `event.type` → converter mapping to `AgentEvent`):
+  `user.message` / `agent.message` `{content:[{type:'text',text}]}`;
+  `agent.thinking`; `agent.tool_use` `{name, input, id, evaluated_permission}`;
+  `agent.tool_result` `{content:[{type:'text',text}], is_error, id}`;
+  `span.model_request_start|end` (`model_usage` token counts → cost; otherwise
+  ignorable); `session.status_running|idle`, `session.thread_status_running|idle`;
+  `session.error` `{error:{message,type,…}}` (non-fatal unless terminal).
+- **Terminal** = `session.status_idle` with `stop_reason.type:'end_turn'`
+  (sessions have no "completed" state — they sit `idle` after finishing). Session
+  GET `status` is `running` → `idle`.
+- **Cancel** = `POST …/events {events:[{type:'user.interrupt'}]}` and/or
+  `DELETE /v1/sessions/{id}` (→ `session_deleted`). Both 200.
+- **Cost** available from `span.model_request_end.model_usage` token counts.
+
+**PR-open path — CONFIRMED (write spike, real PR opened on `owl`).** Plan B
+(agent uses `git`/`gh` via bash) is **dead**: `gh` isn't installed in the sandbox,
+the repo is served through a localhost git proxy, and the `authorization_token`
+is *not* exposed to the agent's shell — the agent burned 19 tool calls hunting for
+a credential and got 403s. The working path is the **GitHub MCP + a vault**:
+- `POST /v1/vaults` `{ display_name, metadata }` → `{ id:'vlt_…', type:'vault' }`.
+- `POST /v1/vaults/{id}/credentials` `{ display_name, auth:{ type:'static_bearer', mcp_server_url:'https://api.githubcopilot.com/mcp/', token:'<gh PAT>' } }` → `{ id:'vcrd_…', vault_id }`. (Token is write-only; the stored `mcp_server_url` is returned slash-normalized and still matches.)
+- Agent: set the github `mcp_toolset` to **`default_config.permission_policy.always_allow`** (default is `always_ask`, which would stall an unattended run).
+- Session: pass **`vault_ids:[vaultId]`** — the credential is matched to the MCP by URL automatically.
+- The agent then opens the PR with the github MCP tools (`get_me`, `list_branches`,
+  `create_branch`, `create_or_update_file`, `create_pull_request`). The **PR URL
+  appears in the `agent.mcp_tool_result`** of `create_pull_request` (regex
+  `https://github\.com/[^/]+/[^/]+/pull/\d+` over the event JSON catches it).
+- PAT scopes: `repo` (classic) or fine-grained `contents:rw` + `pull_requests:rw`.
+
+Remaining minor TBD: the **`checkout` object shape** (for mounting a PR's *head*
+branch on `pr_response`/`pr_review`); `code_writing` works without it. For
+PR-response tasks the agent can also operate on the existing branch via the MCP.
+
+**Verdict: Managed Agents gives full parity, including autonomous PRs.** Provider
+design — dispatch = ensure agent (toolset + github MCP `always_allow`) + ensure
+environment + ensure vault (per workspace, reusable) → create session
+(`agent` + `environment_id` + `vault_ids` + `github_repository` resource) → post
+the prompt event; reconcile = poll `GET /sessions/{id}/events`, map → `AgentEvent[]`,
+terminal on `session.status_idle/end_turn`, detect the PR URL from the
+`create_pull_request` `agent.mcp_tool_result`; cancel = `user.interrupt` + `DELETE`.
 
 ---
 
@@ -260,10 +359,12 @@ neutral shapes.
 
 ---
 
-## Phase 3 — Codex Cloud provider (gated on Phase 0a, ~2–3 days)
+## Phase 3 — Codex Cloud provider — DEFERRED
 
-> Assumes 0a found a usable cloud task API. If not, pivot to the GitHub-mention or
-> local-daemon path and document that instead.
+> Phase 0 found **no server-to-server Codex Cloud API** (only the `codex cloud`
+> CLI under a self-hosted runner, or `@codex` GitHub mentions). Deferred until
+> OpenAI ships a scriptable cloud API, or we accept the GitHub-mention path
+> behind this same provider seam. The sketch below is retained for that day.
 
 `services/cloudProviders/codex/`:
 - **`client.ts`** — REST wrapper: create cloud task (repo + prompt + model), get
@@ -285,29 +386,39 @@ neutral shapes.
 
 ---
 
-## Phase 4 — Claude Code Routines provider (gated on Phase 0b, ~2–3 days)
+## Phase 4 — Claude Code provider — SHIPPED (June 2026)
 
-`services/cloudProviders/claudeRoutine/`:
-- **`client.ts`** — `fire(routineId, input)` → `{ sessionId, url }`; session status;
-  transcript retrieval (webhook ingest endpoint **or** session polling per 0b);
-  beta header `experimental-cc-routine-2026-04-01`.
-- **Task → routine mapping** (the key design decision from 0b):
-  - *If ad-hoc creation is supported:* create a transient routine per task
-    (prompt+repo) then fire it.
-  - *If routines must pre-exist:* bind the `claude_routine` env (or the task) to a
-    chosen routine id; Owl fires it with the task prompt as input. Surface routine
-    selection in the Add-Environment / composer UI.
-- **`webhook.ts`** (if applicable) — `POST /api/cloud-providers/claude_routine/webhook`
-  receiving run results/transcript; verify signature; feed the streamer. (Needs a
-  publicly reachable backend URL — already true on Railway; note for local dev.)
-- **`converter.ts`** — Claude Code session log → `AgentEvent[]`. This is the
-  closest to Owl's native Claude transcript shape, so the converter may be thin.
-- **`provider.ts`** — `dispatch` fires the routine + stamps `cloudTask`;
-  `reconcile` reads session status → `ReconcileOutcome` + PR URL (verify routines
-  open PRs; if not, Owl may need to open the PR from the produced branch via the
-  existing `taskPullRequest` path).
-- Register; add `claude_routine` env config; UI (routine binding).
-- **Tests:** converter unit tests, webhook-ingest test, reconcile test.
+> Implemented via Anthropic's **Managed Agents API** (not Routines — that path is
+> subscription-billed but fire-and-forget / low-parity; see the Phase 0 findings
+> and the billing analysis). Provider type stays `claude_routine`, displayName
+> "Claude Code". Contract confirmed by the spike (see above).
+
+`services/claudeCode/` + `services/cloudProviders/claude/provider.ts`:
+- **`client.ts`** — Managed Agents wrapper: create agent / environment / vault
+  (+ GitHub credential) / session, post the prompt event, poll the event list,
+  get session, interrupt + delete. `debugBus` service tag `claude_managed_agents`.
+- **`credentials.ts`** — `type: 'claude_code'` integration; encrypted Anthropic
+  key + GitHub PAT; caches the reusable agent/environment/vault ids per workspace
+  (cleared on credential rotation).
+- **`converter.ts`** — `managedAgentEventToAgentEvents` (poll-based, complete
+  events → `AgentEvent[]`; no chunk coalescing) + `findPullRequestUrl` /
+  `isTerminalEvent`.
+- **`executor.ts`** — `dispatch`: ensure resources → create session w/ repo
+  resource + vault → post the prompt (starts the run) → stamp `cloudTask` →
+  `in_progress`.
+- **`poller.ts`** — `reconcile`: poll events → transcript (persist + emit only
+  what's new), detect+link the PR from `create_pull_request`, finalize on
+  `session.status_idle`/`end_turn`; `stopStreaming` clears the in-memory cursor.
+- **`provider.ts`** — `CloudTaskProvider`; `cancel` = interrupt + delete session.
+- Registered in `index.ts`; DebugPanel `SERVICE_INFO`; generic `CloudProviderCard`
+  Settings form (Anthropic key + GitHub PAT).
+- **Tests:** `claudeCodeConverter.test.ts` (event mapping, PR detection, terminal),
+  `claudeCodeProvider.test.ts` (conformance + registry).
+- **Known follow-ups:** per-task provider picker (PR-fix tasks currently prefer
+  PostHog, else Claude); `checkout` object shape for `pr_response`/`pr_review`
+  head-branch mounting; executor/poller DB-mocked reconcile tests; reusing the
+  workspace GitHub connection instead of a separate PAT (OAuth-token↔MCP compat
+  unverified).
 
 ---
 
