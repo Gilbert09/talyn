@@ -7,7 +7,7 @@ import { prMonitorService } from './prMonitor.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
-import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
+import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnvId } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 60_000;
 /** Re-poll a watched PR if its cached summary is older than this. */
@@ -218,8 +218,8 @@ class PRAutoMergeWatcher {
     // 5. Fire — blocker present, nothing running, not paused.
     if (state.pausedAt || state.attempts >= MAX_ATTEMPTS) return;
 
-    const envId = await resolvePostHogEnvId(row.workspaceId);
-    if (!envId) return; // No connected PostHog Code env — can't dispatch.
+    const envId = await resolveCloudEnvId(row.workspaceId);
+    if (!envId) return; // No connected cloud provider — can't dispatch.
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';

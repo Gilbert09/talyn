@@ -1,7 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import {
   ACTIVE_STATUSES,
   resolvePostHogEnvId,
+  resolveCloudEnvId,
   linkedTaskStatus,
 } from '../services/prCloudFix.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -9,8 +12,17 @@ import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   environments as environmentsTable,
+  integrations as integrationsTable,
   tasks as tasksTable,
 } from '../db/schema.js';
+import { encryptString } from '../services/tokenCrypto.js';
+import { registerCloudProvider } from '../services/cloudProviders/registry.js';
+import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
+import { claudeCodeProvider } from '../services/cloudProviders/claude/provider.js';
+
+// resolveCloudEnvId resolves through the registry's hasCredentials check.
+registerCloudProvider(postHogCodeProvider);
+registerCloudProvider(claudeCodeProvider);
 
 describe('prCloudFix helpers', () => {
   let db: Database;
@@ -87,6 +99,78 @@ describe('prCloudFix helpers', () => {
 
     it('returns null for an unknown workspace', async () => {
       expect(await resolvePostHogEnvId('ws-missing')).toBeNull();
+    });
+  });
+
+  describe('resolveCloudEnvId', () => {
+    let priorKey: string | undefined;
+    beforeAll(() => {
+      // Seeding a Claude credential needs the token-encryption key.
+      priorKey = process.env.FASTOWL_TOKEN_KEY;
+      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+    });
+    afterAll(() => {
+      if (priorKey === undefined) delete process.env.FASTOWL_TOKEN_KEY;
+      else process.env.FASTOWL_TOKEN_KEY = priorKey;
+    });
+
+    async function connectPostHog() {
+      await db.insert(environmentsTable).values({
+        id: 'env-ph', ownerId: TEST_USER_ID, name: 'PostHog Code', type: 'posthog_code', config: {},
+      });
+      await db.insert(integrationsTable).values({
+        id: 'int-ph', workspaceId: 'ws1', type: 'posthog', enabled: true,
+        config: { apiKey: 'k', projectId: '1' },
+      });
+    }
+    async function connectClaude() {
+      await db.insert(environmentsTable).values({
+        id: 'env-cl', ownerId: TEST_USER_ID, name: 'Claude Code', type: 'claude_code', config: {},
+      });
+      await db.insert(integrationsTable).values({
+        id: 'int-cl', workspaceId: 'ws1', type: 'claude_code', enabled: true,
+        config: { anthropicKeyEnc: encryptString('sk-ant-test') },
+      });
+    }
+    const setDefault = (v: string) =>
+      db.update(workspacesTable).set({ settings: { defaultCloudProvider: v } }).where(eq(workspacesTable.id, 'ws1'));
+
+    it('prefers PostHog Code when both are connected and no default is set', async () => {
+      await connectPostHog();
+      await connectClaude();
+      expect(await resolveCloudEnvId('ws1')).toBe('env-ph');
+    });
+
+    it('honours a pinned default of claude_code', async () => {
+      await connectPostHog();
+      await connectClaude();
+      await setDefault('claude_code');
+      expect(await resolveCloudEnvId('ws1')).toBe('env-cl');
+    });
+
+    it("'ask' falls back to the deterministic order (PostHog) for backend tasks", async () => {
+      await connectPostHog();
+      await connectClaude();
+      await setDefault('ask');
+      expect(await resolveCloudEnvId('ws1')).toBe('env-ph');
+    });
+
+    it('falls back past a pinned provider that isn’t connected', async () => {
+      await connectClaude(); // only Claude connected
+      await setDefault('posthog_code');
+      expect(await resolveCloudEnvId('ws1')).toBe('env-cl');
+    });
+
+    it('skips a provider whose env exists but has no credentials', async () => {
+      // env marker present (lingers after disconnect) but no integration row
+      await db.insert(environmentsTable).values({
+        id: 'env-ph', ownerId: TEST_USER_ID, name: 'PostHog Code', type: 'posthog_code', config: {},
+      });
+      expect(await resolveCloudEnvId('ws1')).toBeNull();
+    });
+
+    it('returns null when no provider is connected', async () => {
+      expect(await resolveCloudEnvId('ws1')).toBeNull();
     });
   });
 

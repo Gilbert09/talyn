@@ -17,7 +17,7 @@ import {
 } from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
-import { ACTIVE_STATUSES, linkedTaskStatus, resolvePostHogEnvId } from './prCloudFix.js';
+import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnvId } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 10_000;
 /** Re-poll a queued PR if its cached summary is older than this. */
@@ -476,9 +476,9 @@ class MergeQueueProcessor {
       return 'advance';
     }
 
-    const envId = await resolvePostHogEnvId(row.workspaceId);
+    const envId = await resolveCloudEnvId(row.workspaceId);
     if (!envId) {
-      // No connected PostHog Code env — can't dispatch. Keep waiting; the
+      // No connected cloud provider — can't dispatch. Keep waiting; the
       // desktop badge surfaces this. (The PRs behind it can't dispatch either —
       // same workspace — so there's nothing to advance to.)
       await this.ensureStatus(row, state, 'waiting', position);

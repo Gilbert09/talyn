@@ -13,10 +13,17 @@ import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   environments as environmentsTable,
+  integrations as integrationsTable,
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
 } from '../db/schema.js';
+import { registerCloudProvider } from '../services/cloudProviders/registry.js';
+import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
+
+// resolveCloudEnvId checks the provider has stored credentials, so register the
+// provider + give the workspace a posthog integration row in seedBase.
+registerCloudProvider(postHogCodeProvider);
 
 /**
  * Exercises the merge-queue processor against a real (pglite) DB: it merges a
@@ -79,6 +86,13 @@ async function seedBase(db: Database): Promise<void> {
     type: 'posthog_code',
     status: 'connected',
     config: { type: 'posthog_code' },
+  });
+  await db.insert(integrationsTable).values({
+    id: 'int-ph',
+    workspaceId: 'ws1',
+    type: 'posthog',
+    enabled: true,
+    config: { apiKey: 'test-key', projectId: '1' },
   });
   await db.insert(repositoriesTable).values({
     id: 'repo1',

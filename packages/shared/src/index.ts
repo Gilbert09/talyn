@@ -56,6 +56,13 @@ export interface PostHogIntegration {
 
 export interface WorkspaceSettings {
   continuousBuild?: ContinuousBuildSettings;
+  /**
+   * Which cloud provider new tasks dispatch to when more than one is connected.
+   * A specific provider pins it; `'ask'` makes the desktop prompt per task (and
+   * backend auto-fixes fall back to a deterministic order); unset = auto
+   * (prefer PostHog Code, else Claude Code).
+   */
+  defaultCloudProvider?: CloudProviderType | 'ask';
 }
 
 export interface ContinuousBuildSettings {
