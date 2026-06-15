@@ -8,7 +8,7 @@ import { trackEvent } from '../../lib/analytics';
 import { WorkspaceNameStep } from './steps/WorkspaceNameStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
-import { ConnectPostHogStep } from './steps/ConnectPostHogStep';
+import { ConnectCloudAgentStep } from './steps/ConnectCloudAgentStep';
 
 const STEPS = [
   { title: 'Name your workspace', optional: false },
@@ -101,7 +101,7 @@ export function OnboardingWizard() {
             <WatchReposStep workspaceId={currentWorkspaceId} />
           )}
           {step === 3 && currentWorkspaceId && (
-            <ConnectPostHogStep workspaceId={currentWorkspaceId} />
+            <ConnectCloudAgentStep workspaceId={currentWorkspaceId} />
           )}
         </div>
 
