@@ -15,7 +15,8 @@ import {
   Settings,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
-import { type TaskStatus, prNeedsFollowup } from '@fastowl/shared';
+import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@fastowl/shared';
+import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { cn } from '../../../lib/utils';
@@ -54,6 +55,8 @@ interface PRTableProps {
   onOpenIntegrations?: () => void;
   /** Live status of each linked task, keyed by task id. */
   taskStatusById: Map<string, TaskStatus>;
+  /** Cloud provider of each linked task, keyed by task id (null until dispatched). */
+  taskProviderById?: Map<string, CloudProviderType | null>;
   variant: PRTableVariant;
   viewerLogin: string | null;
 }
@@ -71,6 +74,7 @@ export function PRTable({
   taskProviders,
   onOpenIntegrations,
   taskStatusById,
+  taskProviderById,
   variant,
   viewerLogin,
 }: PRTableProps) {
@@ -108,6 +112,7 @@ export function PRTable({
             taskProviders={taskProviders}
             onOpenIntegrations={onOpenIntegrations}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
+            taskProvider={row.taskId ? taskProviderById?.get(row.taskId) ?? null : null}
           />
         ))}
       </tbody>
@@ -130,6 +135,7 @@ function PRTableRow({
   taskProviders,
   onOpenIntegrations,
   taskStatus,
+  taskProvider,
 }: {
   row: PRRow;
   variant: PRTableVariant;
@@ -146,6 +152,8 @@ function PRTableRow({
   onOpenIntegrations?: () => void;
   /** Live status of the row's linked task, if any is loaded. */
   taskStatus?: TaskStatus;
+  /** Cloud provider of the row's linked task, if known. */
+  taskProvider?: CloudProviderType | null;
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
@@ -323,6 +331,7 @@ function PRTableRow({
                     : 'The linked task failed — click to open it'
                 }
               >
+                <ProviderIcon provider={taskProvider} className="h-2.5 w-2.5" />
                 {taskRunning ? (
                   <>
                     <Loader2 className="h-2.5 w-2.5 animate-spin" />

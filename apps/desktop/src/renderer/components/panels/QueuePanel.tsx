@@ -15,7 +15,6 @@ import {
   Trash2,
   ExternalLink,
   GitPullRequest,
-  BarChart3,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -34,8 +33,9 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask, readCloudTaskMeta } from '@fastowl/shared';
-import type { Task, TaskStatus, TaskType, TaskPriority, CloudProviderType } from '@fastowl/shared';
+import { isAgentTask, readCloudTaskMeta, readCloudTaskProvider } from '@fastowl/shared';
+import type { Task, TaskStatus, TaskType, TaskPriority } from '@fastowl/shared';
+import { ProviderIcon, providerLabel } from '../../lib/providerMeta';
 
 const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {
   code_writing: { label: 'Code', icon: Sparkles },
@@ -64,13 +64,6 @@ const priorityConfig: Record<
   medium: { label: 'Medium', color: 'text-blue-400', badge: 'outline' },
   high: { label: 'High', color: 'text-yellow-400', badge: 'warning' },
   urgent: { label: 'Urgent', color: 'text-red-400', badge: 'destructive' },
-};
-
-/** Human label for the provider a cloud run lives on. */
-const providerLabels: Record<CloudProviderType, string> = {
-  posthog_code: 'PostHog Code',
-  codex_cloud: 'Codex Cloud',
-  claude_code: 'Claude Code',
 };
 
 /**
@@ -258,6 +251,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{task.title}</span>
+            <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
           </div>
           <div className="flex items-center gap-2 mt-1">
             {task.status === 'completed' && task.completedAt ? (
@@ -386,9 +380,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   // The cloud-run banner — provider, remote status, deep link to the run.
   const cloudBanner = cloudMeta && (
     <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
-      <BarChart3 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      <ProviderIcon provider={cloudMeta.provider} className="h-3.5 w-3.5" />
       <span className="text-muted-foreground">
-        Cloud run on {providerLabels[cloudMeta.provider] ?? cloudMeta.provider}
+        Cloud run on {providerLabel(cloudMeta.provider) ?? cloudMeta.provider}
       </span>
       {cloudMeta.status && (
         <Badge variant="secondary" className="text-[10px]">
@@ -430,6 +424,12 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                 <h2 className="text-lg font-semibold">{task.title}</h2>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="secondary">{runningStatus.label}</Badge>
+                  {readCloudTaskProvider(task) && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
+                      {providerLabel(readCloudTaskProvider(task))}
+                    </Badge>
+                  )}
                   {env && (
                     <Badge variant="outline" className="text-xs">
                       {env.name}
@@ -494,6 +494,12 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               <h2 className="text-lg font-semibold break-words">{task.title}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <Badge variant="outline">{statusConfig[task.status].label}</Badge>
+                {readCloudTaskProvider(task) && (
+                  <Badge variant="outline" className="gap-1">
+                    <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
+                    {providerLabel(readCloudTaskProvider(task))}
+                  </Badge>
+                )}
                 <Badge
                   variant={
                     task.priority === 'urgent'

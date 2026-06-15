@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { GitMerge } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus } from '@fastowl/shared';
+import { readCloudTaskProvider, type TaskStatus, type CloudProviderType } from '@fastowl/shared';
 import type { PRRow } from '../../../lib/api';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable } from './prTableShared';
@@ -34,6 +34,12 @@ export function MergeQueuePanel() {
   const taskStatusById = useMemo(() => {
     const m = new Map<string, TaskStatus>();
     for (const t of tasks) m.set(t.id, t.status);
+    return m;
+  }, [tasks]);
+
+  const taskProviderById = useMemo(() => {
+    const m = new Map<string, CloudProviderType | null>();
+    for (const t of tasks) m.set(t.id, readCloudTaskProvider(t));
     return m;
   }, [tasks]);
 
@@ -117,6 +123,7 @@ export function MergeQueuePanel() {
                 taskProviders={actions.taskProviders}
                 onOpenIntegrations={actions.openIntegrations}
                 taskStatusById={taskStatusById}
+                taskProviderById={taskProviderById}
               />
             </div>
           ))}

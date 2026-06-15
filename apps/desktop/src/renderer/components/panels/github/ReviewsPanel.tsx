@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus } from '@fastowl/shared';
+import { readCloudTaskProvider, type TaskStatus, type CloudProviderType } from '@fastowl/shared';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, reviewRequestSearchText } from './prTableShared';
 import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
@@ -29,6 +29,12 @@ export function ReviewsPanel() {
   const taskStatusById = useMemo(() => {
     const m = new Map<string, TaskStatus>();
     for (const t of tasks) m.set(t.id, t.status);
+    return m;
+  }, [tasks]);
+
+  const taskProviderById = useMemo(() => {
+    const m = new Map<string, CloudProviderType | null>();
+    for (const t of tasks) m.set(t.id, readCloudTaskProvider(t));
     return m;
   }, [tasks]);
 
@@ -133,6 +139,7 @@ export function ReviewsPanel() {
           taskProviders={actions.taskProviders}
           onOpenIntegrations={actions.openIntegrations}
           taskStatusById={taskStatusById}
+          taskProviderById={taskProviderById}
         />
       )}
     </GitHubPageShell>
