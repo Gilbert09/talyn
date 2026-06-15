@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import { readCloudTaskProvider, type TaskStatus, type CloudProviderType } from '@fastowl/shared';
+import type { TaskStatus, CloudProviderType } from '@fastowl/shared';
+import { taskCloudProvider } from '../../../lib/providerMeta';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, reviewRequestSearchText } from './prTableShared';
 import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
@@ -17,6 +18,7 @@ import { useGitHubActions } from './useGitHubActions';
 export function ReviewsPanel() {
   const repositories = useWorkspaceStore((s) => s.repositories);
   const tasks = useWorkspaceStore((s) => s.tasks);
+  const environments = useWorkspaceStore((s) => s.environments);
   const rows = usePullRequestStore((s) => s.rows);
   const viewerLogin = usePullRequestStore((s) => s.viewerLogin);
   const actions = useGitHubActions();
@@ -34,9 +36,9 @@ export function ReviewsPanel() {
 
   const taskProviderById = useMemo(() => {
     const m = new Map<string, CloudProviderType | null>();
-    for (const t of tasks) m.set(t.id, readCloudTaskProvider(t));
+    for (const t of tasks) m.set(t.id, taskCloudProvider(t, environments));
     return m;
-  }, [tasks]);
+  }, [tasks, environments]);
 
   // The distinct "requested via" options present in the review-requested rows.
   const requestedOptions = useMemo(() => {

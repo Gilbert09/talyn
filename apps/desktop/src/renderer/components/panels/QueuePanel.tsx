@@ -33,9 +33,9 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask, readCloudTaskMeta, readCloudTaskProvider } from '@fastowl/shared';
+import { isAgentTask, readCloudTaskMeta } from '@fastowl/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority } from '@fastowl/shared';
-import { ProviderIcon, providerLabel } from '../../lib/providerMeta';
+import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
 
 const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {
   code_writing: { label: 'Code', icon: Sparkles },
@@ -226,6 +226,8 @@ interface TaskListItemProps {
 }
 
 function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
+  const environments = useWorkspaceStore((s) => s.environments);
+  const provider = taskCloudProvider(task, environments);
   const isRunning = task.status === 'in_progress';
 
   const StatusIcon = isRunning ? runningStatus.icon : statusConfig[task.status].icon;
@@ -251,7 +253,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{task.title}</span>
-            <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
+            <ProviderIcon provider={provider} className="h-3 w-3" />
           </div>
           <div className="flex items-center gap-2 mt-1">
             {task.status === 'completed' && task.completedAt ? (
@@ -315,6 +317,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const task = tasks.find((t) => t.id === taskId);
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
   const cloudMeta = task ? readCloudTaskMeta(task) : null;
+  const provider = task ? taskCloudProvider(task, environments) : null;
 
   // PR detail side-sheet — opened by clicking the PR status pill on
   // the task header. Stays mounted at the TaskDetail root so it
@@ -380,9 +383,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   // The cloud-run banner — provider, remote status, deep link to the run.
   const cloudBanner = cloudMeta && (
     <div className="px-4 py-2 border-b bg-muted/40 flex items-center gap-2 text-xs">
-      <ProviderIcon provider={cloudMeta.provider} className="h-3.5 w-3.5" />
+      <ProviderIcon provider={provider ?? cloudMeta.provider} className="h-3.5 w-3.5" />
       <span className="text-muted-foreground">
-        Cloud run on {providerLabel(cloudMeta.provider) ?? cloudMeta.provider}
+        Cloud run on {providerLabel(provider ?? cloudMeta.provider) ?? cloudMeta.provider}
       </span>
       {cloudMeta.status && (
         <Badge variant="secondary" className="text-[10px]">
@@ -424,10 +427,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                 <h2 className="text-lg font-semibold">{task.title}</h2>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="secondary">{runningStatus.label}</Badge>
-                  {readCloudTaskProvider(task) && (
+                  {provider && (
                     <Badge variant="outline" className="text-xs gap-1">
-                      <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
-                      {providerLabel(readCloudTaskProvider(task))}
+                      <ProviderIcon provider={provider} className="h-3 w-3" />
+                      {providerLabel(provider)}
                     </Badge>
                   )}
                   {env && (
@@ -494,10 +497,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               <h2 className="text-lg font-semibold break-words">{task.title}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <Badge variant="outline">{statusConfig[task.status].label}</Badge>
-                {readCloudTaskProvider(task) && (
+                {provider && (
                   <Badge variant="outline" className="gap-1">
-                    <ProviderIcon provider={readCloudTaskProvider(task)} className="h-3 w-3" />
-                    {providerLabel(readCloudTaskProvider(task))}
+                    <ProviderIcon provider={provider} className="h-3 w-3" />
+                    {providerLabel(provider)}
                   </Badge>
                 )}
                 <Badge

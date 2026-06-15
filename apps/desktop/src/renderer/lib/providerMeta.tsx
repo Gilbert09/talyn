@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Bot, BarChart3, Cloud } from 'lucide-react';
-import type { CloudProviderType } from '@fastowl/shared';
+import { readCloudTaskProvider, type CloudProviderType } from '@fastowl/shared';
 import { cn } from './utils';
 
 // One canonical place mapping a cloud provider to its display name + icon, so
@@ -24,6 +24,23 @@ export const PROVIDER_META: Record<CloudProviderType, ProviderMeta> = {
 /** Display name for a provider, or null when there's no resolved provider. */
 export function providerLabel(provider: CloudProviderType | null | undefined): string | null {
   return provider ? PROVIDER_META[provider]?.label ?? null : null;
+}
+
+/**
+ * Which cloud provider a task runs on. The task's **assigned environment** is
+ * authoritative — its `type` is set at creation and is how the queue routes
+ * dispatch, so it reflects where the run actually happens and never gets lost.
+ * Task metadata (`cloudTask.provider`) is only a fallback for when the env isn't
+ * in the store yet. (Earlier we read metadata first; partial WS updates from the
+ * pollers can strip the provider marker, which mis-showed Claude runs as PostHog.)
+ */
+export function taskCloudProvider(
+  task: { metadata?: Record<string, unknown> | null; assignedEnvironmentId?: string },
+  environments: ReadonlyArray<{ id: string; type: string }>,
+): CloudProviderType | null {
+  const envType = environments.find((e) => e.id === task.assignedEnvironmentId)?.type;
+  if (envType && envType in PROVIDER_META) return envType as CloudProviderType;
+  return readCloudTaskProvider(task);
 }
 
 /**

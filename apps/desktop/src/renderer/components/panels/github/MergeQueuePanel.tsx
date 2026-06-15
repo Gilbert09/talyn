@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { GitMerge } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import { readCloudTaskProvider, type TaskStatus, type CloudProviderType } from '@fastowl/shared';
+import type { TaskStatus, CloudProviderType } from '@fastowl/shared';
+import { taskCloudProvider } from '../../../lib/providerMeta';
 import type { PRRow } from '../../../lib/api';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable } from './prTableShared';
@@ -25,6 +26,7 @@ interface QueueGroup {
  */
 export function MergeQueuePanel() {
   const tasks = useWorkspaceStore((s) => s.tasks);
+  const environments = useWorkspaceStore((s) => s.environments);
   const rows = usePullRequestStore((s) => s.rows);
   const viewerLogin = usePullRequestStore((s) => s.viewerLogin);
   const actions = useGitHubActions();
@@ -39,9 +41,9 @@ export function MergeQueuePanel() {
 
   const taskProviderById = useMemo(() => {
     const m = new Map<string, CloudProviderType | null>();
-    for (const t of tasks) m.set(t.id, readCloudTaskProvider(t));
+    for (const t of tasks) m.set(t.id, taskCloudProvider(t, environments));
     return m;
-  }, [tasks]);
+  }, [tasks, environments]);
 
   // Flat list of queued rows matching the search — feeds Copy list + empty state.
   const queued = useMemo(() => {

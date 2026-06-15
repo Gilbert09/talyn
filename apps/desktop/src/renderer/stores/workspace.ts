@@ -295,9 +295,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   updateTask: (id, updates) =>
     set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === id ? { ...t, ...updates } : t
-      ),
+      tasks: state.tasks.map((t) => {
+        if (t.id !== id) return t;
+        const merged = { ...t, ...updates };
+        // Partial WS updates (the cloud pollers) send only the metadata keys
+        // that changed — a shallow replace would drop the rest (the provider
+        // marker, the PR pointer), which made the cloud banner vanish and
+        // mis-attributed the provider. Deep-merge metadata + its cloudTask.
+        if (updates.metadata) {
+          const prev = (t.metadata ?? {}) as Record<string, unknown>;
+          const next = updates.metadata as Record<string, unknown>;
+          merged.metadata = { ...prev, ...next };
+          const prevCloud = prev.cloudTask as Record<string, unknown> | undefined;
+          const nextCloud = next.cloudTask as Record<string, unknown> | undefined;
+          if (prevCloud || nextCloud) {
+            (merged.metadata as Record<string, unknown>).cloudTask = {
+              ...prevCloud,
+              ...nextCloud,
+            };
+          }
+        }
+        return merged;
+      }),
     })),
 
   addTask: (task) =>

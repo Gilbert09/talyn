@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { GitPullRequest } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import { readCloudTaskProvider, type TaskStatus, type CloudProviderType } from '@fastowl/shared';
+import type { TaskStatus, CloudProviderType } from '@fastowl/shared';
+import { taskCloudProvider } from '../../../lib/providerMeta';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, isNeedsAttention, isAwaitingReview, isReadyToMerge } from './prTableShared';
@@ -18,6 +19,7 @@ import { useGitHubActions } from './useGitHubActions';
 export function MyPRsPanel() {
   const repositories = useWorkspaceStore((s) => s.repositories);
   const tasks = useWorkspaceStore((s) => s.tasks);
+  const environments = useWorkspaceStore((s) => s.environments);
   const rows = usePullRequestStore((s) => s.rows);
   const viewerLogin = usePullRequestStore((s) => s.viewerLogin);
   const actions = useGitHubActions();
@@ -50,9 +52,9 @@ export function MyPRsPanel() {
 
   const taskProviderById = useMemo(() => {
     const m = new Map<string, CloudProviderType | null>();
-    for (const t of tasks) m.set(t.id, readCloudTaskProvider(t));
+    for (const t of tasks) m.set(t.id, taskCloudProvider(t, environments));
     return m;
-  }, [tasks]);
+  }, [tasks, environments]);
 
   const filtered = useMemo(() => {
     let out = rows.filter((r) => r.authored);
