@@ -51,16 +51,11 @@ import {
   formatAge,
 } from '../../lib/repoCache';
 
-type SettingsSection =
-  | 'workspace'
-  | 'integrations'
-  | 'account'
-  | 'appearance'
-  | 'developer'
-  | 'about';
-
 export function SettingsPanel() {
-  const [activeSection, setActiveSection] = useState<SettingsSection>('workspace');
+  // Section lives in the store so other surfaces (e.g. the sidebar cloud-provider
+  // status, the per-task "Set default" action) can deep-link to a section.
+  const activeSection = useWorkspaceStore((s) => s.settingsSection);
+  const setActiveSection = useWorkspaceStore((s) => s.setSettingsSection);
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
@@ -788,6 +783,18 @@ function IntegrationsSettings() {
           </div>
         </Card>
 
+      </div>
+
+      {/* Cloud providers — the vendors that run the agent loop and open PRs. */}
+      <div className="space-y-3">
+        <div>
+          <h4 className="text-sm font-semibold">Cloud providers</h4>
+          <p className="text-sm text-muted-foreground">
+            Vendors that run your tasks and open PRs. Connect one or more, then choose which
+            provider new tasks use by default.
+          </p>
+        </div>
+
         {/* PostHog Code (cloud tasks) */}
         <PostHogCodeCard />
 
@@ -811,38 +818,20 @@ function IntegrationsSettings() {
 }
 
 /**
- * When more than one cloud provider is connected, lets the workspace pick which
- * one new tasks dispatch to — a specific provider, or "Ask every time" (the
- * desktop prompts per task; backend auto-fixes fall back to PostHog). Persists
- * to `workspace.settings.defaultCloudProvider`.
+ * Lets the workspace pick which cloud provider new tasks dispatch to — Auto
+ * (prefer PostHog Code, else Claude), a specific connected provider, or "Ask
+ * every time" (the desktop shows a per-task picker; backend auto-fixes fall
+ * back to Auto). Always shown so the default is discoverable even with one (or
+ * zero) providers connected. Persists to `workspace.settings.defaultCloudProvider`.
  */
 function CloudProviderDefaultSelector() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
-  const [connected, setConnected] = useState<{ type: string; displayName: string }[]>([]);
+  // One source of truth — preloaded + kept fresh by useSystemStatus.
+  const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
+  const connected = (cloudProviders ?? []).filter((p) => p.connected);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!currentWorkspaceId) return;
-    let cancelled = false;
-    api.cloudProviders
-      .list(currentWorkspaceId)
-      .then((providers) => {
-        if (!cancelled) {
-          setConnected(
-            providers.filter((p) => p.connected).map((p) => ({ type: p.type, displayName: p.displayName }))
-          );
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWorkspaceId]);
-
-  // Only relevant when there's an actual choice to make.
-  if (connected.length < 2) return null;
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const current = (workspace?.settings?.defaultCloudProvider as string | undefined) ?? '';
@@ -876,7 +865,8 @@ function CloudProviderDefaultSelector() {
         <div className="flex-1 min-w-0">
           <h4 className="font-medium">Default for new tasks</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Which cloud provider new tasks use when more than one is connected.
+            Which cloud provider new tasks use. “Ask every time” shows a picker on the Task button
+            when more than one is connected.
           </p>
         </div>
         <select
@@ -928,29 +918,33 @@ function CloudProviderCard({
   fields: CloudProviderField[];
 }) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
-  const [connected, setConnected] = useState(false);
+  // Connection status comes from the shared store (preloaded + kept fresh by
+  // useSystemStatus on focus / WS / reconnect), so leaving and returning to this
+  // tab can't show a stale "Not Connected", and there's no flash on restart.
+  const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
+  const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
   const [editing, setEditing] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load connection status (per workspace) on mount + when the workspace changes.
-  useEffect(() => {
-    if (!currentWorkspaceId) return;
-    let cancelled = false;
-    api.cloudProviders
-      .list(currentWorkspaceId)
-      .then((providers) => {
-        if (cancelled) return;
-        setConnected(Boolean(providers.find((p) => p.type === type)?.connected));
-      })
-      .catch(() => {
-        /* leave as not-connected; the form still works */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWorkspaceId, type]);
+  const loaded = cloudProviders !== null;
+  const connected = Boolean(cloudProviders?.find((p) => p.type === type)?.connected);
+
+  // Reflect a connect/disconnect into the shared list so this badge, the sidebar
+  // status row, and the default selector all update together (and persist across
+  // tab switches) without waiting for the next focus refetch.
+  const setConnectedInStore = useCallback(
+    (isConnected: boolean) => {
+      const list = useWorkspaceStore.getState().cloudProviders ?? [];
+      const existing = list.find((p) => p.type === type);
+      const next = existing
+        ? list.map((p) => (p.type === type ? { ...p, connected: isConnected } : p))
+        : [...list, { type, displayName, connected: isConnected }];
+      setCloudProviders(next);
+    },
+    [type, displayName, setCloudProviders]
+  );
 
   const handleSave = async () => {
     if (!currentWorkspaceId) return;
@@ -962,7 +956,7 @@ function CloudProviderCard({
       const config = Object.fromEntries(fields.map((f) => [f.key, values[f.key].trim()]));
       await api.cloudProviders.saveConfig(type, currentWorkspaceId, config);
       trackEvent('cloud_provider_connected', { provider: type });
-      setConnected(true);
+      setConnectedInStore(true);
       setValues({});
       setEditing(false);
     } catch (e) {
@@ -977,7 +971,7 @@ function CloudProviderCard({
     setIsSaving(true);
     try {
       await api.cloudProviders.disconnect(type, currentWorkspaceId);
-      setConnected(false);
+      setConnectedInStore(false);
       setValues({});
       setEditing(false);
     } catch (e) {
@@ -987,7 +981,9 @@ function CloudProviderCard({
     }
   };
 
-  const showForm = editing || !connected;
+  // Don't offer the form until we actually know the state — avoids flashing the
+  // connect form (then the connected card) on first load / tab return.
+  const showForm = editing || (loaded && !connected);
   const canSave = fields.every((f) => values[f.key]?.trim());
 
   return (
@@ -1004,7 +1000,9 @@ function CloudProviderCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h4 className="font-medium">{displayName}</h4>
-            {connected ? (
+            {!loaded ? (
+              <Badge variant="secondary">Checking…</Badge>
+            ) : connected ? (
               <Badge variant="default" className="bg-green-600">
                 <Check className="w-3 h-3 mr-1" />
                 Connected

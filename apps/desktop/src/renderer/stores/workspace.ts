@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import type { Workspace, Environment, Task } from '@fastowl/shared';
-import type { GitHubStatus, GitHubUser, PostHogCodeStatus } from '../lib/api';
+import type { GitHubStatus, GitHubUser, PostHogCodeStatus, CloudProviderInfo } from '../lib/api';
+
+/** Settings sub-sections — kept in the store so other surfaces (the sidebar
+ *  provider status, the per-task "Set default" action) can deep-link into a
+ *  specific section. */
+export type SettingsSection =
+  | 'workspace'
+  | 'integrations'
+  | 'account'
+  | 'appearance'
+  | 'developer'
+  | 'about';
 
 // Simplified repository type for store (matches API response)
 export interface WatchedRepo {
@@ -127,6 +138,14 @@ interface WorkspaceState {
   githubStatus: GitHubStatus | null;
   githubUser: GitHubUser | null;
   posthogStatus: PostHogCodeStatus | null;
+  // Connected cloud providers for the current workspace, preloaded + kept fresh
+  // by useSystemStatus (one source of truth, so the Settings cards, the default
+  // selector, the sidebar status row, and the per-task picker never disagree or
+  // flash a stale "disconnected" on remount). null = not yet checked.
+  cloudProviders: CloudProviderInfo[] | null;
+  // Which Settings sub-section is active. Lifted out of SettingsPanel so other
+  // surfaces can deep-link (e.g. clicking the sidebar provider status).
+  settingsSection: SettingsSection;
 
   // Actions
   setCurrentWorkspace: (id: string | null) => void;
@@ -137,6 +156,10 @@ interface WorkspaceState {
   setGitHubStatus: (status: GitHubStatus | null) => void;
   setGitHubUser: (user: GitHubUser | null) => void;
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
+  setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
+  setSettingsSection: (section: SettingsSection) => void;
+  /** Jump to Settings, optionally pre-selecting a sub-section. */
+  openSettings: (section?: SettingsSection) => void;
 
   setEnvironments: (environments: Environment[]) => void;
   updateEnvironment: (id: string, updates: Partial<Environment>) => void;
@@ -180,6 +203,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   githubStatus: null,
   githubUser: null,
   posthogStatus: null,
+  cloudProviders: null,
+  settingsSection: 'workspace',
 
   // Actions
   setCurrentWorkspace: (id) => {
@@ -208,6 +233,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setGitHubUser: (githubUser) => set({ githubUser }),
 
   setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
+
+  setCloudProviders: (cloudProviders) => set({ cloudProviders }),
+
+  setSettingsSection: (settingsSection) => set({ settingsSection }),
+
+  openSettings: (section) =>
+    set((state) => ({
+      activePanel: 'settings',
+      settingsSection: section ?? state.settingsSection,
+    })),
 
   setEnvironments: (environments) => set({ environments }),
 

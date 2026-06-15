@@ -113,6 +113,9 @@ export function MergeQueuePanel() {
                 onSetMergeQueue={actions.setMergeQueue}
                 onCreatePostHogTask={actions.createPostHogTask}
                 posthogEnabled={actions.posthogEnabled}
+                taskAsk={actions.taskAsk}
+                taskProviders={actions.taskProviders}
+                onOpenIntegrations={actions.openIntegrations}
                 taskStatusById={taskStatusById}
               />
             </div>

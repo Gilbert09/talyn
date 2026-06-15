@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ListTodo,
   Settings,
@@ -18,11 +18,9 @@ import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { cn, isMacDesktop } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { api, type CloudProviderInfo } from '../../lib/api';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
-import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -375,41 +373,21 @@ function UpdateNotice({ collapsed }: { collapsed: boolean }) {
  * configured for this workspace), grey = not connected.
  */
 function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
-  const { currentWorkspaceId } = useWorkspaceStore();
-  const [providers, setProviders] = useState<CloudProviderInfo[]>([]);
+  // Status comes from the store (preloaded + kept fresh by useSystemStatus on
+  // focus / env WS events / reconnect), so this row never fetches on its own and
+  // can't disagree with the Settings cards.
+  const providers = useWorkspaceStore((s) => s.cloudProviders);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
 
-  const refresh = useCallback(() => {
-    if (!currentWorkspaceId) {
-      setProviders([]);
-      return;
-    }
-    api.cloudProviders
-      .list(currentWorkspaceId)
-      .then(setProviders)
-      .catch(() => setProviders([]));
-  }, [currentWorkspaceId]);
-
-  useEffect(() => {
-    refresh();
-    // Re-check when a provider's env marker is (re)provisioned or its status
-    // changes — e.g. right after the user connects credentials in Settings.
-    const offCreated = api.ws.on('environment:created', refresh);
-    const offStatus = api.ws.on('environment:status', refresh);
-    return () => {
-      offCreated();
-      offStatus();
-    };
-  }, [refresh]);
-
-  // Those env events are fire-and-forget — re-check after an outage too.
-  useOnReconnect(refresh);
-
-  if (providers.length === 0) return null;
+  if (!providers || providers.length === 0) return null;
 
   return (
-    <div
+    <button
+      type="button"
+      onClick={() => openSettings('integrations')}
+      title="Manage cloud providers"
       className={cn(
-        'mb-2 flex flex-col gap-0.5 border-b pb-2',
+        'mb-2 flex w-full flex-col gap-0.5 border-b pb-2 text-left transition-colors hover:bg-muted/50 rounded-md',
         collapsed && 'items-center',
       )}
     >
@@ -431,7 +409,7 @@ function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
           {!collapsed && <span className="min-w-0 flex-1 truncate">{p.displayName}</span>}
         </div>
       ))}
-    </div>
+    </button>
   );
 }
 

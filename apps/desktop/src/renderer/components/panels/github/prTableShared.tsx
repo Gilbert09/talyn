@@ -12,6 +12,7 @@ import {
   Eye,
   AlertTriangle,
   ListChecks,
+  Settings,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
 import { type TaskStatus, prNeedsFollowup } from '@fastowl/shared';
@@ -37,9 +38,20 @@ interface PRTableProps {
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
   onSetMergeQueue: (row: PRRow, enabled: boolean) => Promise<void>;
-  onCreatePostHogTask: (row: PRRow) => Promise<void>;
+  /** Create a cloud task for the row. Resolves true when a task was actually
+   *  created (false when nothing's connected / the user dismissed the picker),
+   *  so the button only flashes its confirmation on a real start. An explicit
+   *  `providerType` is passed from the per-task dropdown. */
+  onCreatePostHogTask: (row: PRRow, providerType?: string) => Promise<boolean>;
   /** PostHog Code is configured + a cloud env exists to dispatch to. */
   posthogEnabled: boolean;
+  /** Default is "Ask every time" with >1 provider connected → the Task button
+   *  opens a provider dropdown instead of dispatching to the default. */
+  taskAsk?: boolean;
+  /** Connected providers offered in the "ask" dropdown. */
+  taskProviders?: { type: string; displayName: string }[];
+  /** Navigate to Settings → Integrations (the dropdown's "Set default" item). */
+  onOpenIntegrations?: () => void;
   /** Live status of each linked task, keyed by task id. */
   taskStatusById: Map<string, TaskStatus>;
   variant: PRTableVariant;
@@ -55,6 +67,9 @@ export function PRTable({
   onSetMergeQueue,
   onCreatePostHogTask,
   posthogEnabled,
+  taskAsk,
+  taskProviders,
+  onOpenIntegrations,
   taskStatusById,
   variant,
   viewerLogin,
@@ -89,6 +104,9 @@ export function PRTable({
             onSetMergeQueue={onSetMergeQueue}
             onCreatePostHogTask={onCreatePostHogTask}
             posthogEnabled={posthogEnabled}
+            taskAsk={taskAsk}
+            taskProviders={taskProviders}
+            onOpenIntegrations={onOpenIntegrations}
             taskStatus={row.taskId ? taskStatusById.get(row.taskId) : undefined}
           />
         ))}
@@ -108,6 +126,9 @@ function PRTableRow({
   onSetMergeQueue,
   onCreatePostHogTask,
   posthogEnabled,
+  taskAsk,
+  taskProviders,
+  onOpenIntegrations,
   taskStatus,
 }: {
   row: PRRow;
@@ -118,8 +139,11 @@ function PRTableRow({
   onOpenTask: (taskId: string) => void;
   onMerge: (row: PRRow) => Promise<void>;
   onSetMergeQueue: (row: PRRow, enabled: boolean) => Promise<void>;
-  onCreatePostHogTask: (row: PRRow) => Promise<void>;
+  onCreatePostHogTask: (row: PRRow, providerType?: string) => Promise<boolean>;
   posthogEnabled: boolean;
+  taskAsk?: boolean;
+  taskProviders?: { type: string; displayName: string }[];
+  onOpenIntegrations?: () => void;
   /** Live status of the row's linked task, if any is loaded. */
   taskStatus?: TaskStatus;
 }) {
@@ -129,9 +153,12 @@ function PRTableRow({
   const [busy, setBusy] = useState<null | 'merge' | 'posthog' | 'queue'>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  // Brief confirmation flash after a PostHog Code run is kicked off — we
-  // stay on the GitHub page, so this is the only signal it started.
+  // Brief confirmation flash after a cloud run is kicked off — we stay on the
+  // GitHub page, so this is the only signal it started.
   const [posthogStarted, setPosthogStarted] = useState(false);
+  // "Ask every time" → the Task button opens this provider dropdown instead of
+  // dispatching to the default.
+  const [taskMenuOpen, setTaskMenuOpen] = useState(false);
   // Mergeable covers the clean case AND "mergeable, but only non-required
   // checks are failing" — GitHub lets you merge both.
   const canMerge =
@@ -202,19 +229,36 @@ function PRTableRow({
     }
   }
 
-  async function runCreatePostHogTask(e: React.MouseEvent) {
-    e.stopPropagation();
+  // Dispatch the task. Only flash the confirmation tick when a task was actually
+  // created — `onCreatePostHogTask` resolves false if nothing's connected or the
+  // user backed out, so closing the picker no longer leaves a stuck tick.
+  async function startTask(providerType?: string) {
     setBusy('posthog');
     setRowError(null);
     try {
-      await onCreatePostHogTask(row);
-      setPosthogStarted(true);
-      setTimeout(() => setPosthogStarted(false), 2000);
+      const created = await onCreatePostHogTask(row, providerType);
+      if (created) {
+        setPosthogStarted(true);
+        setTimeout(() => setPosthogStarted(false), 2000);
+      }
     } catch (err) {
-      setRowError(err instanceof Error ? err.message : 'Could not start PostHog Code task');
+      setRowError(err instanceof Error ? err.message : 'Could not start cloud task');
     } finally {
       setBusy(null);
     }
+  }
+
+  const taskMenuEnabled = Boolean(taskAsk && (taskProviders?.length ?? 0) > 0);
+
+  function runCreatePostHogTask(e: React.MouseEvent) {
+    e.stopPropagation();
+    // "Ask every time" with a real choice → open the provider dropdown rather
+    // than dispatching. Otherwise dispatch to the resolved default immediately.
+    if (taskMenuEnabled) {
+      setTaskMenuOpen((open) => !open);
+      return;
+    }
+    void startTask();
   }
   return (
     <tr
@@ -489,30 +533,79 @@ function PRTableRow({
               </button>
             ))}
           {variant !== 'review' && posthogEnabled && row.state === 'open' && (
-            <button
-              type="button"
-              data-attr="pr-row-fix-with-posthog"
-              onClick={runCreatePostHogTask}
-              disabled={!canFollowUp || busy !== null}
-              className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
-              title={
-                posthogStarted
-                  ? 'PostHog Code run started — see the Tasks panel'
-                  : taskRunning
-                  ? 'A task is already working this PR — open it from the Working badge'
-                  : canFollowUp
-                  ? 'Get this PR mergeable with PostHog Code (resolve comments, fix CI, resolve conflicts)'
-                  : 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
-              }
-            >
-              {busy === 'posthog' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : posthogStarted ? (
-                <Check className="h-3.5 w-3.5 text-emerald-600" />
-              ) : (
-                <Bot className="h-3.5 w-3.5" />
+            <div className="relative inline-flex">
+              <button
+                type="button"
+                data-attr="pr-row-fix-with-posthog"
+                onClick={runCreatePostHogTask}
+                disabled={!canFollowUp || busy !== null}
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
+                title={
+                  posthogStarted
+                    ? 'Cloud run started — see the Tasks panel'
+                    : taskRunning
+                    ? 'A task is already working this PR — open it from the Working badge'
+                    : !canFollowUp
+                    ? 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
+                    : taskMenuEnabled
+                    ? 'Get this PR mergeable — choose a cloud provider'
+                    : 'Get this PR mergeable with a cloud agent (resolve comments, fix CI, resolve conflicts)'
+                }
+              >
+                {busy === 'posthog' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : posthogStarted ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <Bot className="h-3.5 w-3.5" />
+                )}
+              </button>
+
+              {taskMenuOpen && taskMenuEnabled && (
+                <>
+                  {/* Click-away layer — closes the menu without selecting. */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTaskMenuOpen(false);
+                    }}
+                  />
+                  <div
+                    className="absolute right-0 top-full z-50 mt-1 w-56 rounded-md border bg-background p-1 shadow-md"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-2 py-1 text-xs text-muted-foreground">Run task with…</div>
+                    {taskProviders?.map((p) => (
+                      <button
+                        key={p.type}
+                        type="button"
+                        onClick={() => {
+                          setTaskMenuOpen(false);
+                          void startTask(p.type);
+                        }}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                      >
+                        <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                        {p.displayName}
+                      </button>
+                    ))}
+                    <div className="my-1 border-t" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskMenuOpen(false);
+                        onOpenIntegrations?.();
+                      }}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted"
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                      Set default…
+                    </button>
+                  </div>
+                </>
               )}
-            </button>
+            </div>
           )}
           <button
             type="button"
