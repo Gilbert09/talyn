@@ -1,5 +1,14 @@
 # @fastowl/mcp-server
 
+> **Superseded.** FastOwl now ships a **hosted** MCP server as an HTTP endpoint
+> on the backend (`/api/v1/mcp`) — nothing to install locally, connect a Claude
+> client straight to the URL with a personal token from the desktop app's
+> **Settings → MCP server** page. See [`docs/MCP_SERVER.md`](../../docs/MCP_SERVER.md).
+>
+> This local **stdio** package remains only for the legacy child-Claude spawn
+> path and is a candidate for removal. The notes below are out of date (they
+> reference backlog / `awaiting_review`, both removed in the cloud-only refactor).
+
 MCP (Model Context Protocol) server exposing FastOwl task + backlog
 operations as first-class tools to Claude. Think of it as the typed,
 documented-schema version of `@fastowl/cli` — Claude sees it as tools

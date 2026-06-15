@@ -9,6 +9,9 @@ import { repositoryRoutes } from './repositories.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { userRoutes } from './users.js';
+import { mcpTokenRoutes } from './mcpTokens.js';
+import { mcpRoutes } from '../mcp/transport.js';
+import { requireMcpToken } from '../mcp/requireMcpToken.js';
 import { requireAuth } from '../middleware/auth.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 
@@ -19,6 +22,12 @@ export function setupRoutes(app: Express): void {
   // redirect, not by our authenticated desktop client, so it must stay
   // unauth'd. State-token validation inside the handler prevents CSRF.
   app.use(`${api}/github`, githubPublicRoutes());
+
+  // The hosted MCP endpoint authenticates with a personal MCP token (not a
+  // Supabase JWT), so it mounts BEFORE requireAuth with its own gate. The
+  // tool handlers call the authenticated REST API below over loopback with
+  // internal-proxy headers, so owner scoping still applies end-to-end.
+  app.use(`${api}/mcp`, requireMcpToken, mcpRoutes());
 
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.
@@ -51,6 +60,9 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/posthog`, posthogRoutes());
   app.use(`${api}/repositories`, repositoryRoutes());
   app.use(`${api}/pull-requests`, pullRequestRoutes());
+  // Personal MCP-token management (mint/list/revoke). The tokens authenticate
+  // the `/mcp` endpoint mounted above.
+  app.use(`${api}/mcp-tokens`, mcpTokenRoutes());
 
   app.use((req, res) => {
     res.status(404).json({ success: false, error: 'Not found' });

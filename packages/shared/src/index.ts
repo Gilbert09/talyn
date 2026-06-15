@@ -566,6 +566,40 @@ export interface PaginatedResponse<T> {
   pageSize: number;
 }
 
+// ============================================================================
+// MCP tokens
+// ============================================================================
+
+/**
+ * A long-lived personal access token for the hosted MCP endpoint, as shown
+ * in the desktop "MCP server" settings list. Never carries the secret — only
+ * the human-readable prefix. The plaintext token is returned exactly once at
+ * creation (see {@link CreateMcpTokenResponse}).
+ */
+export interface McpToken {
+  id: string;
+  name: string;
+  /** Human-readable head, e.g. `fowl_mcp_ab12cd` — for disambiguation only. */
+  tokenPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
+export interface CreateMcpTokenRequest {
+  /** Optional label so the user can tell tokens apart. */
+  name?: string;
+  /** Days until expiry. Defaults to 90; null/0 means non-expiring. */
+  expiresInDays?: number | null;
+}
+
+/** Returned once on creation — `token` is never retrievable again. */
+export interface CreateMcpTokenResponse {
+  /** The full plaintext token. Show once, then discard server-side. */
+  token: string;
+  token_meta: McpToken;
+}
+
 // Workspace API
 export interface CreateWorkspaceRequest {
   name: string;

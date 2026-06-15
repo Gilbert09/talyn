@@ -176,6 +176,13 @@
 			"when": 1784160000008,
 			"tag": "0024_rls_grant_authenticated",
 			"breakpoints": true
+		},
+		{
+			"idx": 25,
+			"version": "7",
+			"when": 1784160000009,
+			"tag": "0025_mcp_tokens",
+			"breakpoints": true
 		}
 	]
 }

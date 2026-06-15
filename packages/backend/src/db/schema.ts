@@ -177,6 +177,40 @@ export const tasks = pgTable(
   })
 );
 
+// ---------- MCP tokens ----------
+//
+// Long-lived personal access tokens that authenticate the hosted MCP
+// endpoint (`/api/v1/mcp`). Minted from the desktop "MCP server" settings
+// page (gated behind the user's GitHub login) so a Claude client can drive
+// FastOwl without pasting a short-lived Supabase JWT.
+//
+// We store only a SHA-256 hash of the token — the plaintext is shown to the
+// user exactly once at creation. `token_prefix` is the human-readable head
+// (e.g. `fowl_mcp_ab12`) kept for the settings list so a user can tell their
+// tokens apart without us holding the secret.
+export const mcpTokens = pgTable(
+  'mcp_tokens',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    tokenPrefix: text('token_prefix').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => ({
+    // The validate path looks tokens up by hash on the unscoped pool, so this
+    // is the hot index. Unique so a hash collision can never authenticate two.
+    tokenHashUq: uniqueIndex('uq_mcp_tokens_token_hash').on(t.tokenHash),
+    ownerIdx: index('idx_mcp_tokens_owner').on(t.ownerId),
+  })
+);
+
 // ---------- Global settings (key/value) ----------
 
 export const settings = pgTable('settings', {
