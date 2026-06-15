@@ -251,13 +251,61 @@ describe('githubService', () => {
       await expect(githubService.getUser('ws1')).rejects.toThrow(/not connected/);
     });
 
-    it('clears the stored token on 401 from upstream (token revoked)', async () => {
+    it('clears the stored token on 401 only after check-token confirms it is dead (404)', async () => {
+      // The budgeted call 401s; the app-authenticated check-token endpoint
+      // returns 404, confirming the token really is revoked → it's removed.
       vi.stubGlobal(
         'fetch',
-        vi.fn(async () => new Response('', { status: 401, statusText: 'Unauthorized' }))
+        vi.fn(async (input: FetchInput) => {
+          if (String(input).includes('/applications/')) {
+            return new Response('', { status: 404, statusText: 'Not Found' });
+          }
+          return new Response('', { status: 401, statusText: 'Unauthorized' });
+        })
       );
       await expect(githubService.getUser('ws1')).rejects.toThrow(/expired or revoked/);
       expect(githubService.isConnected('ws1')).toBe(false);
+    });
+
+    it('KEEPS the token on a phantom 401 when check-token says it is still valid', async () => {
+      // The budgeted call 401s, but check-token (app-auth) returns 200 with the
+      // token's metadata → a spurious 401. The token must survive.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: FetchInput) => {
+          if (String(input).includes('/applications/')) {
+            return new Response(
+              JSON.stringify({
+                created_at: '2026-06-12T09:16:38Z',
+                expires_at: null,
+                scopes: ['repo'],
+                user: { login: 'octocat' },
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } }
+            );
+          }
+          return new Response('', { status: 401, statusText: 'Unauthorized' });
+        })
+      );
+      await expect(githubService.getUser('ws1')).rejects.toThrow(/expired or revoked/);
+      // Still connected — the phantom 401 did not delete the working token.
+      expect(githubService.isConnected('ws1')).toBe(true);
+    });
+
+    it('KEEPS the token when check-token itself errors (inconclusive)', async () => {
+      // check-token returns a non-404 error (e.g. app-auth 401 / GitHub 500) →
+      // we can't confirm the revocation, so the token is retained for re-check.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: FetchInput) => {
+          if (String(input).includes('/applications/')) {
+            return new Response('', { status: 500, statusText: 'Server Error' });
+          }
+          return new Response('', { status: 401, statusText: 'Unauthorized' });
+        })
+      );
+      await expect(githubService.getUser('ws1')).rejects.toThrow(/expired or revoked/);
+      expect(githubService.isConnected('ws1')).toBe(true);
     });
 
     it('surfaces GitHub\'s error message (not just "Forbidden") on a 403', async () => {

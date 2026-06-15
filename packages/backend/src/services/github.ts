@@ -636,6 +636,119 @@ class GitHubService extends EventEmitter {
     this.emit('disconnected', workspaceId);
   }
 
+  /**
+   * Confirm a token is *actually* revoked before deleting it. Called on a 401
+   * from any budgeted endpoint instead of removing blindly.
+   *
+   * GitHub occasionally returns a spurious `401 Bad credentials` for a token
+   * that is in fact still valid (auth-subsystem blips / incidents). The old
+   * behaviour — delete the integration row on the first 401 — turned every such
+   * blip into a permanent, self-inflicted "GitHub disconnected" AND destroyed
+   * the evidence: once removed, the token can no longer be health-checked, so we
+   * could never tell a genuine server-side revocation from a transient 401.
+   *
+   * Now we ask the free, app-authenticated check-token endpoint whether the
+   * token is dead before removing it:
+   *   - 404 (valid:false) → genuinely revoked: remove, logged `token:revocation-confirmed`.
+   *   - 200 (valid:true)  → PHANTOM 401: keep the token, log `token:phantom-401`.
+   *     The caller still throws so the current poll fails and retries; the token
+   *     survives to serve the next call.
+   *   - check-token errored (network/timeout/app-auth failure) → inconclusive:
+   *     keep the token, log `token:revocation-check-failed`; the next 401 re-checks.
+   *     Better a retry than a wrong delete.
+   *   - check-token unavailable (no app creds, or token already gone) → fall back
+   *     to removing (logged `token:revocation-unconfirmed`) so we never wedge a
+   *     poller forever holding a token we have no way to verify.
+   */
+  async confirmRevokedThenRemove(workspaceId: string, reason: string): Promise<void> {
+    const stored = this.tokens.get(workspaceId);
+    const fp = stored ? tokenFingerprint(stored.accessToken) : 'none';
+    const age = stored ? describeTokenAge(stored.createdAt) : 'unknown';
+
+    let health: TokenHealthCheck | null;
+    try {
+      health = await this.checkTokenHealth(workspaceId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const summary =
+        `[github] workspace ${workspaceId}: 401 received but check-token was INCONCLUSIVE ` +
+        `(${message}) — KEEPING token fp:${fp} (age ${age}) for re-check on next 401. ` +
+        `Original 401: ${reason}`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:revocation-check-failed',
+        summary,
+        ok: false,
+        meta: { workspaceId, fingerprint: fp, tokenAge: age, reason, error: message },
+      });
+      return;
+    }
+
+    if (health === null) {
+      // No app credentials to verify with (or the token's already gone). We
+      // can't confirm, so fall back to the historical remove-on-401 behaviour
+      // rather than hold a possibly-dead token that no-ops every poll.
+      const summary =
+        `[github] workspace ${workspaceId}: 401 received and check-token UNAVAILABLE ` +
+        `(no app creds?) — removing token fp:${fp} (age ${age}) UNCONFIRMED. ` +
+        `Original 401: ${reason}`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:revocation-unconfirmed',
+        summary,
+        ok: false,
+        meta: { workspaceId, fingerprint: fp, tokenAge: age, reason },
+      });
+      await this.removeToken(workspaceId, `${reason} [UNCONFIRMED: check-token unavailable]`);
+      return;
+    }
+
+    if (health.valid) {
+      // GitHub says the token is alive — the 401 was spurious. Do NOT delete it.
+      const summary =
+        `[github] workspace ${workspaceId}: PHANTOM 401 — check-token reports token fp:${fp} ` +
+        `(age ${age}) still VALID (login=${health.login ?? 'unknown'} ` +
+        `github_created_at=${health.githubCreatedAt ?? 'unknown'} ` +
+        `expires_at=${health.expiresAt ?? 'never'}). KEEPING it; the failing call will retry. ` +
+        `Original 401: ${reason}`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:phantom-401',
+        summary,
+        ok: false,
+        meta: {
+          workspaceId,
+          fingerprint: fp,
+          tokenAge: age,
+          login: health.login ?? null,
+          githubCreatedAt: health.githubCreatedAt ?? null,
+          expiresAt: health.expiresAt ?? null,
+          reason,
+        },
+      });
+      return;
+    }
+
+    // check-token returned 404: GitHub confirms the token is dead. Removing it
+    // here is now a *confirmed* revocation — the distinction we've been unable
+    // to make. removeToken logs `token:removed`; this adds the confirmation.
+    const summary =
+      `[github] workspace ${workspaceId}: CONFIRMED revoked — check-token 404 for token fp:${fp} ` +
+      `(age ${age}). Removing. Original 401: ${reason}`;
+    console.warn(summary);
+    debugBus.recordEvent({
+      service: 'github',
+      action: 'token:revocation-confirmed',
+      summary,
+      ok: false,
+      meta: { workspaceId, fingerprint: fp, tokenAge: age, reason },
+    });
+    await this.removeToken(workspaceId, `${reason} [CONFIRMED revoked: check-token 404]`);
+  }
+
   isConnected(workspaceId: string): boolean {
     return this.tokens.has(workspaceId);
   }
@@ -755,7 +868,9 @@ class GitHubService extends EventEmitter {
       if (response.status === 401) {
         // GitHub's body says WHY ("Bad credentials" = revoked/invalid vs
         // "...token expired") and the request id lets GitHub support trace it.
-        await this.removeToken(
+        // Confirm the token is actually dead (check-token 404) before deleting —
+        // a spurious 401 must not nuke a working token. See confirmRevokedThenRemove.
+        await this.confirmRevokedThenRemove(
           workspaceId,
           `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
             `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
@@ -890,7 +1005,7 @@ class GitHubService extends EventEmitter {
       return { status: 304, notifications: [], lastModified, pollInterval };
     }
     if (response.status === 401) {
-      await this.removeToken(
+      await this.confirmRevokedThenRemove(
         workspaceId,
         `401 on GET /notifications — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
           `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
@@ -1183,16 +1298,21 @@ class GitHubService extends EventEmitter {
    */
   async checkTokenHealth(workspaceId: string): Promise<TokenHealthCheck | null> {
     const stored = this.tokens.get(workspaceId);
-    if (!stored || !GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) return null;
+    // Resolve app creds at call time (not the import-time consts): this is the
+    // forensic path the 401 guard depends on, and it must not silently no-op if
+    // the env was populated after module load.
+    const clientId = process.env.GITHUB_CLIENT_ID || GITHUB_CLIENT_ID;
+    const clientSecret = process.env.GITHUB_CLIENT_SECRET || GITHUB_CLIENT_SECRET;
+    if (!stored || !clientId || !clientSecret) return null;
     const fingerprint = tokenFingerprint(stored.accessToken);
-    const url = `${GITHUB_API_URL}/applications/${GITHUB_CLIENT_ID}/token`;
+    const url = `${GITHUB_API_URL}/applications/${clientId}/token`;
     const startedAt = Date.now();
     const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         Accept: 'application/vnd.github+json',
         'Content-Type': 'application/json',
-        Authorization: `Basic ${Buffer.from(`${GITHUB_CLIENT_ID}:${GITHUB_CLIENT_SECRET}`).toString('base64')}`,
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
       },
       body: JSON.stringify({ access_token: stored.accessToken }),
     });
@@ -1453,7 +1573,7 @@ class GitHubService extends EventEmitter {
       }
       if (response.status === 401) {
         recordGql(false, 'token expired or revoked');
-        await this.removeToken(
+        await this.confirmRevokedThenRemove(
           workspaceId,
           `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
             `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
