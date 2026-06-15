@@ -5,6 +5,9 @@ import type {
   Task,
   CreateWorkspaceRequest,
   CreateTaskRequest,
+  CreateMcpTokenRequest,
+  CreateMcpTokenResponse,
+  McpToken,
   ApiResponse,
   WSEvent,
   DebugEvent,
@@ -17,6 +20,16 @@ import type {
 const BASE_URL = process.env.FASTOWL_API_URL || 'http://localhost:4747';
 const API_BASE = `${BASE_URL}/api/v1`;
 const WS_URL = BASE_URL.replace(/^http/, 'ws') + '/ws';
+
+/** Backend base URL (e.g. for building the hosted MCP endpoint command). */
+export function getApiBaseUrl(): string {
+  return BASE_URL;
+}
+
+/** The hosted MCP endpoint a Claude client connects to. */
+export function getMcpEndpoint(): string {
+  return `${API_BASE}/mcp`;
+}
 
 // ============================================================================
 // HTTP Client
@@ -99,6 +112,14 @@ export const environments = {
   list: () => request<Environment[]>('GET', '/environments'),
   get: (id: string) => request<Environment>('GET', `/environments/${id}`),
   delete: (id: string) => request<void>('DELETE', `/environments/${id}`),
+};
+
+// MCP tokens — long-lived personal tokens for the hosted MCP endpoint.
+export const mcpTokens = {
+  list: () => request<McpToken[]>('GET', '/mcp-tokens'),
+  create: (data: CreateMcpTokenRequest = {}) =>
+    request<CreateMcpTokenResponse>('POST', '/mcp-tokens', data),
+  revoke: (id: string) => request<void>('DELETE', `/mcp-tokens/${id}`),
 };
 
 // Task metadata generation response
@@ -857,6 +878,7 @@ export const api = {
   cloudProviders,
   repositories,
   pullRequests,
+  mcpTokens,
   debug,
   users,
   ws: wsClient,
