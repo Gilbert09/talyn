@@ -31,6 +31,9 @@ const AGENT_SYSTEM_PROMPT =
   'Make the requested change, then open a GitHub pull request using your GitHub tools ' +
   '(the connected `github` MCP server). Local `git push` and the `gh` CLI are not available — ' +
   'use the GitHub MCP tools to create the branch, write files, and open the PR. ' +
+  // Keep runs efficient: this is a metered cloud run, so stay focused and don't idle.
+  'Keep the change minimal and focused on what was asked — do not refactor or touch unrelated ' +
+  'code, and do not sit waiting on long-running CI. Once the PR is open, state its URL and stop. ' +
   'When done, state the URL of the pull request you opened.';
 
 /**

@@ -120,15 +120,22 @@ describe('buildMergeablePrompt — claude_code variant (GitHub MCP, no signed-gi
     expect(prompt).toMatch(/no .*`git push`/i);
   });
 
-  it('keeps the same goals, loop, and base-leak guard, threading the real base branch', () => {
+  it('keeps the same goals and base-leak guard, threading the real base branch', () => {
     expect(prompt).toContain('Every reviewer comment is resolved.');
     expect(prompt).toContain('CI is fully green');
     expect(prompt).toContain('The branch merges cleanly');
-    expect(prompt).toContain('Loop discipline:');
     expect(prompt.toUpperCase()).toContain('ANCESTOR');
     expect(prompt.toLowerCase()).toContain('leak');
     expect(prompt).toContain('git diff --name-only origin/main...HEAD');
     expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
+  });
+
+  it('bounds the run for efficiency — no idling on CI, capped cycles, give up + comment', () => {
+    expect(prompt).toContain('Efficiency');
+    expect(prompt.toLowerCase()).toContain("don't babysit ci");
+    expect(prompt).toMatch(/bound your effort/i);
+    // It must NOT tell the agent to loop forever until everything is green.
+    expect(prompt).not.toContain('do not hand control back until ALL conditions');
   });
 
   it('still permits local rebase for conflicts but never a single-parent base imitation', () => {

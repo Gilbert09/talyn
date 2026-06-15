@@ -290,10 +290,11 @@ Your job is to keep iterating on this PR until ALL of the following are true and
    - If you find ANY leaked file or hunk, do not publish. Reset to the remote branch state (the remote is untouched until you push through the \`github\` MCP server) and redo the update, taking the base side for files this PR never meant to touch.
    - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.
 
-Loop discipline:
-  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
-  - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
-  - If you genuinely get stuck (e.g. you need credentials you don't have, or a reviewer's request is impossible without product-level decisions), leave a clear PR comment describing exactly what you need and why, then stop. Otherwise keep going.
+Efficiency — this run is metered, so be decisive and do not idle:
+  - Investigate ONCE, then batch. Gather every unresolved review thread, the failing required checks, and the mergeability state up front, then make all the fixes you can determine and publish them TOGETHER. Each push re-triggers CI and can reopen threads, so don't publish a separate commit per comment.
+  - Don't babysit CI. After publishing, check the required checks once; if they're still queued/running, do at most ONE short re-check — never sit polling a slow pipeline. FastOwl re-checks this PR continuously and starts a fresh run if CI later regresses, so you do NOT need to wait out a full CI cycle.
+  - Bound your effort to about TWO fix → publish → verify cycles. If required checks are still failing for reasons you can't fix, or you're blocked (missing credentials/secrets, a product decision, or domain knowledge you don't have), post ONE concise PR comment listing exactly what remains and why, then stop — do not keep looping.
+  - Make the smallest change that resolves each item — no refactors or edits to unrelated code. If a condition already holds when you fetch state, leave it alone.
 
-Start by checking out the PR branch (${ref}), fetching the current state of review threads and CI, and then work the loop until done.`;
+Stop as soon as the PR is clean, or after your bounded attempts with a short summary comment. Start by checking out the PR branch (${ref}) and fetching review threads + CI in a single pass.`;
 }
