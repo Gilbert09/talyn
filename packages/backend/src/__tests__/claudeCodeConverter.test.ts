@@ -4,6 +4,7 @@ import {
   managedAgentEventsToAgentEvents,
   findPullRequestUrl,
   isTerminalEvent,
+  terminalStopReasonFromEvents,
   type ManagedAgentEvent,
 } from '../services/claudeCode/converter.js';
 
@@ -191,5 +192,46 @@ describe('isTerminalEvent', () => {
       isTerminalEvent({ type: 'session.status_idle', stop_reason: { type: 'requires_action' } }),
     ).toBe(false);
     expect(isTerminalEvent({ type: 'session.status_running' })).toBe(false);
+  });
+});
+
+describe('terminalStopReasonFromEvents', () => {
+  it('returns null when no idle marker has been emitted yet', () => {
+    expect(terminalStopReasonFromEvents([])).toBeNull();
+    expect(
+      terminalStopReasonFromEvents([
+        { type: 'agent.message', content: [{ type: 'text', text: 'working' }] },
+        { type: 'session.status_running' },
+      ]),
+    ).toBeNull();
+    // idle marker with no stop_reason (a freshly created session) is not terminal
+    expect(terminalStopReasonFromEvents([{ type: 'session.status_idle' }])).toBeNull();
+  });
+
+  it('extracts the stop reason the session GET object omits', () => {
+    expect(
+      terminalStopReasonFromEvents([
+        { type: 'agent.message', content: [{ type: 'text', text: 'done' }] },
+        { type: 'session.status_idle', stop_reason: { type: 'end_turn' } },
+      ]),
+    ).toBe('end_turn');
+  });
+
+  it('also reads a thread-scoped status_idle marker', () => {
+    expect(
+      terminalStopReasonFromEvents([
+        { type: 'session.thread_status_idle', stop_reason: { type: 'max_tokens' } },
+      ]),
+    ).toBe('max_tokens');
+  });
+
+  it('returns the LAST idle marker — a paused run that later resumes + ends', () => {
+    expect(
+      terminalStopReasonFromEvents([
+        { type: 'session.status_idle', stop_reason: { type: 'pause_turn' } },
+        { type: 'agent.message', content: [{ type: 'text', text: 'resumed' }] },
+        { type: 'session.status_idle', stop_reason: { type: 'end_turn' } },
+      ]),
+    ).toBe('end_turn');
   });
 });

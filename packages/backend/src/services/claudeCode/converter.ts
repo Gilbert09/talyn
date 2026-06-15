@@ -123,6 +123,26 @@ export function isTerminalEvent(ev: ManagedAgentEvent): boolean {
   return ev.type === 'session.status_idle' && asText(ev.stop_reason?.type) === 'end_turn';
 }
 
+/**
+ * Resolve the run's terminal stop reason from the event log. The session GET
+ * object frequently omits `stop_reason` even after a run finishes — the
+ * authoritative marker is the `session.status_idle` event, which carries
+ * `{ stop_reason: { type } }`. Returns the *last* such marker's type (a run can
+ * pause + resume, emitting several `status_idle` markers) or null if no idle
+ * stop has been reported yet. The poller layers its pause_turn / success
+ * semantics on top of this raw value.
+ */
+export function terminalStopReasonFromEvents(events: ManagedAgentEvent[]): string | null {
+  let stopType: string | null = null;
+  for (const ev of events) {
+    if (typeof ev.type === 'string' && ev.type.endsWith('status_idle')) {
+      const t = asText(ev.stop_reason?.type);
+      if (t) stopType = t;
+    }
+  }
+  return stopType;
+}
+
 // ---------- helpers (mirrors posthogCode/acpConverter) ----------
 
 function systemEvent(text: string): AgentEventInput {
