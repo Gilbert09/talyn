@@ -21,6 +21,7 @@ import { getClaudeCodeClient } from './credentials.js';
 import {
   managedAgentEventsToAgentEvents,
   findPullRequestUrl,
+  terminalStopReasonFromEvents,
   type ManagedAgentEvent,
 } from './converter.js';
 
@@ -84,23 +85,41 @@ class ClaudeCodePoller {
     if (!client) return; // credentials removed mid-run; leave as-is.
 
     const session = await client.getSession(sessionId);
-    const stopType = session.stop_reason?.type ?? null;
-    const terminal = isManagedSessionTerminal(session);
+    const sessionStatus = session.status ?? null;
 
-    // Fetch the event log (the transcript source) when the run is being watched
-    // (live view) or has finished (one-shot backfill + PR detection). Skipping
-    // it for unwatched in-flight runs keeps egress + token cost down.
-    let prUrl = cloud.prUrl ?? null;
-    if (terminal || row.watched) {
-      let events: ManagedAgentEvent[] = [];
+    // Fetch the event log when the run looks idle (either not-yet-started or
+    // finished) or is being watched (live view). The session GET object very
+    // often omits `stop_reason` even once a run has finished — the authoritative
+    // terminal marker is the `session.status_idle` *event* — so we must consult
+    // the events to finalize, not only after we already know it's terminal.
+    // (Skipping the fetch for unwatched *running* runs keeps egress + token cost
+    // down; an idle session is at most polled this way once before it finalizes.)
+    let events: ManagedAgentEvent[] = [];
+    let fetchedEvents = false;
+    if (sessionStatus === 'idle' || row.watched) {
       try {
         events = await client.listEvents(sessionId);
+        fetchedEvents = true;
       } catch (err) {
         console.warn(
           `[claudeCode] listEvents failed for task ${row.id.slice(0, 8)}:`,
           err instanceof Error ? err.message : err,
         );
       }
+    }
+
+    // Resolve the stop reason from the session object first, falling back to the
+    // terminal `session.status_idle` event — the session GET frequently lacks it,
+    // which previously left finished runs stuck `in_progress` forever.
+    const stopType =
+      (session.stop_reason?.type ?? null) || terminalStopReasonFromEvents(events);
+    const terminal = isManagedSessionTerminal({
+      status: sessionStatus ?? undefined,
+      stop_reason: stopType ? { type: stopType } : null,
+    });
+
+    let prUrl = cloud.prUrl ?? null;
+    if (fetchedEvents) {
       prUrl = findPullRequestUrl(events) ?? prUrl;
       await this.syncTranscript(row.id, row.workspaceId, events);
     }

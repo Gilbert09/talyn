@@ -20,7 +20,9 @@ import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
  *   merge_conflicts        → red, "Conflicts"
  *   changes_requested      → amber, "N changes requested" (use review count)
  *   checks_failed          → red, "N/M failing"
- *   checks_failed_optional → amber, "N non-required" (mergeable; not blocking)
+ *   checks_failed_optional → green, "N non-required" (mergeable; the failures
+ *                            don't block, so it reads as ready — the rollup bar
+ *                            still shows the non-required reds in amber)
  *   checks running         → blue spinner, "N/M running"
  *   mergeable              → green, "Ready"
  *   blocked                → amber, "Blocked"
@@ -224,8 +226,10 @@ function pickVariant(
         tone: 'red',
       };
     case 'checks_failed_optional':
-      // Mergeable despite failing checks — none are required. Amber, and a
-      // running spinner still wins if some checks haven't finished.
+      // Mergeable despite failing checks — none are required. A running spinner
+      // still wins if some checks haven't finished; otherwise it reads green
+      // (the PR can merge), with the label noting the non-required failures and
+      // the rollup bar drawing those reds in amber so the detail isn't lost.
       if (checks.inProgress > 0) {
         return {
           icon: Loader2,
@@ -236,9 +240,9 @@ function pickVariant(
         };
       }
       return {
-        icon: AlertTriangle,
+        icon: CheckCircle2,
         label: `${checks.failed} non-required`,
-        tone: 'amber',
+        tone: 'green',
         optionalFailures: true,
       };
     case 'mergeable':
