@@ -1,24 +1,21 @@
-import * as React from 'react';
-import { Bot, BarChart3, Cloud } from 'lucide-react';
 import { readCloudTaskProvider, type CloudProviderType } from '@fastowl/shared';
 import { cn } from './utils';
+import { POSTHOG_LOGO, CLAUDE_LOGO, CODEX_LOGO } from '../assets/providers/logos';
 
-// One canonical place mapping a cloud provider to its display name + icon, so
-// the Tasks panel, task detail, PR-row task badge, and Settings all show the
-// same thing. No brand SVGs yet — lucide glyphs with a brand-ish accent stand
-// in (PostHog → chart, Claude → bot, Codex → cloud).
+// One canonical place mapping a cloud provider to its display name + brand logo,
+// so the Tasks panel, task detail, PR-row task badge, and Settings all show the
+// same thing. Logos are the official marks (logo.dev), inlined as data URIs.
 
 interface ProviderMeta {
   label: string;
-  Icon: React.ComponentType<{ className?: string }>;
-  /** Brand-ish accent colour for the icon. */
-  className: string;
+  /** Brand logo as a data URI (see assets/providers/logos.ts). */
+  src: string;
 }
 
 export const PROVIDER_META: Record<CloudProviderType, ProviderMeta> = {
-  posthog_code: { label: 'PostHog Code', Icon: BarChart3, className: 'text-sky-500' },
-  claude_code: { label: 'Claude Code', Icon: Bot, className: 'text-amber-500' },
-  codex_cloud: { label: 'Codex Cloud', Icon: Cloud, className: 'text-emerald-500' },
+  posthog_code: { label: 'PostHog Code', src: POSTHOG_LOGO },
+  claude_code: { label: 'Claude Code', src: CLAUDE_LOGO },
+  codex_cloud: { label: 'Codex Cloud', src: CODEX_LOGO },
 };
 
 /** Display name for a provider, or null when there's no resolved provider. */
@@ -44,9 +41,10 @@ export function taskCloudProvider(
 }
 
 /**
- * The cloud provider's icon, brand-tinted, with a hover tooltip naming it.
- * Renders nothing for a task with no resolved provider (e.g. a queued task not
- * yet dispatched), so callers can drop it in unconditionally.
+ * The cloud provider's brand logo, with a hover tooltip naming it. Renders
+ * nothing for a task with no resolved provider (e.g. a queued task not yet
+ * dispatched), so callers can drop it in unconditionally. Size defaults to
+ * 3.5 (14px); pass `className` (e.g. `h-3 w-3`) to override.
  */
 export function ProviderIcon({
   provider,
@@ -61,14 +59,13 @@ export function ProviderIcon({
   if (!provider) return null;
   const meta = PROVIDER_META[provider];
   if (!meta) return null;
-  const { Icon } = meta;
   return (
-    <span
+    <img
+      src={meta.src}
+      alt={label ?? meta.label}
       title={label ?? meta.label}
-      aria-label={label ?? meta.label}
-      className="inline-flex shrink-0"
-    >
-      <Icon className={cn('h-3.5 w-3.5', meta.className, className)} />
-    </span>
+      draggable={false}
+      className={cn('inline-block h-3.5 w-3.5 shrink-0 rounded-[3px] object-contain', className)}
+    />
   );
 }
