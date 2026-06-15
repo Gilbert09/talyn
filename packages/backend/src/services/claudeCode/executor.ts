@@ -1,7 +1,10 @@
 import { eq } from 'drizzle-orm';
 import {
   readCloudTaskMeta,
+  isClaudeModelId,
+  DEFAULT_CLAUDE_MODEL_ID,
   type CloudTaskMetadata,
+  type ClaudeModelId,
   type Environment,
   type Task,
 } from '@fastowl/shared';
@@ -9,11 +12,12 @@ import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,
   repositories as repositoriesTable,
+  workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
 import { githubService } from '../github.js';
-import { DEFAULT_CLAUDE_MODEL, ClaudeManagedAgentsClient } from './client.js';
+import { ClaudeManagedAgentsClient } from './client.js';
 import {
   getClaudeCodeCredentials,
   cacheClaudeResourceIds,
@@ -74,11 +78,7 @@ export async function dispatchTaskToClaudeCode(
     };
   }
 
-  const model =
-    (typeof (task.metadata as Record<string, unknown>)?.model === 'string' &&
-      (task.metadata as Record<string, unknown>).model) ||
-    modelFromEnv(env) ||
-    DEFAULT_CLAUDE_MODEL;
+  const model = await resolveClaudeModel(task, env);
   const prompt = task.prompt?.trim() || task.description?.trim() || task.title;
 
   try {
@@ -87,7 +87,7 @@ export async function dispatchTaskToClaudeCode(
       task.workspaceId,
       creds,
       client,
-      String(model),
+      model,
     );
 
     // Mint a fresh vault per dispatch with the current GitHub token. Caching it
@@ -113,7 +113,7 @@ export async function dispatchTaskToClaudeCode(
       remoteRunId: session.id,
       status: session.status ?? 'running',
       // vaultId is per-dispatch — tracked so finalize/cancel can delete it.
-      extra: { agentId, environmentId, vaultId: vault.id, repo: slug, model: String(model) },
+      extra: { agentId, environmentId, vaultId: vault.id, repo: slug, model },
     };
     await patchTaskMetadata(task.id, (existing) => ({ ...existing, cloudTask }));
 
@@ -143,30 +143,55 @@ async function ensureResources(
   workspaceId: string,
   creds: ClaudeCodeCredentials,
   client: ClaudeManagedAgentsClient,
-  model: string,
+  model: ClaudeModelId,
 ): Promise<{ agentId: string; environmentId: string }> {
-  let { agentId, environmentId } = creds;
-  const fresh: { agentId?: string; environmentId?: string } = {};
+  // A Managed Agent has a fixed model, so reuse the agent cached for THIS model
+  // (creating one the first time the workspace runs on it); the environment is
+  // model-independent.
+  let agentId = creds.agentIdsByModel?.[model];
+  let environmentId = creds.environmentId;
 
   if (!agentId) {
     const agent = await client.createAgent({
-      name: 'FastOwl',
+      name: `FastOwl (${model})`,
       model,
       system: AGENT_SYSTEM_PROMPT,
     });
     agentId = agent.id;
-    fresh.agentId = agentId;
+    await cacheClaudeResourceIds(workspaceId, { model, agentId });
   }
   if (!environmentId) {
     const environment = await client.createEnvironment('fastowl');
     environmentId = environment.id;
-    fresh.environmentId = environmentId;
-  }
-
-  if (fresh.agentId || fresh.environmentId) {
-    await cacheClaudeResourceIds(workspaceId, fresh);
+    await cacheClaudeResourceIds(workspaceId, { environmentId });
   }
   return { agentId, environmentId };
+}
+
+/**
+ * Pick the Claude model for a run: a per-task override wins, then the
+ * workspace's chosen model (Settings → Claude Code), then any env-config model,
+ * then the default (Sonnet). Anything that isn't a known model id is ignored.
+ */
+async function resolveClaudeModel(task: Task, env: Environment): Promise<ClaudeModelId> {
+  const fromTask = (task.metadata as Record<string, unknown> | null)?.model;
+  if (isClaudeModelId(fromTask)) return fromTask;
+  const fromWorkspace = await readWorkspaceClaudeModel(task.workspaceId);
+  if (fromWorkspace) return fromWorkspace;
+  const fromEnv = modelFromEnv(env);
+  if (isClaudeModelId(fromEnv)) return fromEnv;
+  return DEFAULT_CLAUDE_MODEL_ID;
+}
+
+/** The workspace's chosen Claude model, or null if unset / not a known id. */
+async function readWorkspaceClaudeModel(workspaceId: string): Promise<ClaudeModelId | null> {
+  const rows = await getDbClient()
+    .select({ settings: workspacesTable.settings })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  const m = (rows[0]?.settings as { claudeModel?: unknown } | null)?.claudeModel;
+  return isClaudeModelId(m) ? m : null;
 }
 
 async function resolveRepositorySlug(repositoryId: string): Promise<string | null> {

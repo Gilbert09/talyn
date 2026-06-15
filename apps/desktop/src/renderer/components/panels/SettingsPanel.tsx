@@ -36,6 +36,7 @@ import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace } from '@fastowl/shared';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import {
   useWorkspaceActions,
@@ -811,9 +812,83 @@ function IntegrationsSettings() {
           ]}
         />
 
+        <ClaudeModelSelector />
+
         <CloudProviderDefaultSelector />
       </div>
     </div>
+  );
+}
+
+/**
+ * Which Claude model Claude Code tasks run on. Shown only when Claude Code is
+ * connected. Defaults to Sonnet — PR fix/respond/review work doesn't warrant
+ * Opus pricing. Persists to `workspace.settings.claudeModel`; editable without
+ * re-entering the API key. Switching models just makes the next run use (and,
+ * on first use, create) a reusable agent for that model.
+ */
+function ClaudeModelSelector() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
+  const [saving, setSaving] = useState(false);
+
+  const claudeConnected = (cloudProviders ?? []).some(
+    (p) => p.type === 'claude_code' && p.connected,
+  );
+  if (!claudeConnected) return null;
+
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const current = workspace?.settings?.claudeModel ?? DEFAULT_CLAUDE_MODEL_ID;
+
+  const onChange = async (value: string) => {
+    if (!currentWorkspaceId) return;
+    setSaving(true);
+    try {
+      const claudeModel = value as ClaudeModelId;
+      await api.workspaces.update(currentWorkspaceId, {
+        settings: { claudeModel } as Workspace['settings'],
+      });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, claudeModel } as Workspace['settings'] }
+            : w,
+        ),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-4">
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-secondary shrink-0">
+          <Bot className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h4 className="font-medium">Claude model</h4>
+          <p className="text-sm text-muted-foreground mt-1">
+            Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable
+            but costs more.
+          </p>
+        </div>
+        <select
+          value={current}
+          disabled={saving}
+          onChange={(e) => onChange(e.target.value)}
+          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+        >
+          {CLAUDE_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    </Card>
   );
 }
 

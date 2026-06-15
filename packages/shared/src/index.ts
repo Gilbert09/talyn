@@ -54,6 +54,28 @@ export interface PostHogIntegration {
   host?: string;
 }
 
+/**
+ * Claude models a workspace can run Claude Code tasks on, cheapest-capable
+ * first in cost. Sonnet is the default — PR fix/respond/review work doesn't
+ * warrant Opus pricing. Ids are the Anthropic model ids passed to the
+ * Managed Agents API.
+ */
+export const CLAUDE_MODELS = [
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', blurb: 'Balanced capability and cost — the default.' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', blurb: 'Most capable, most expensive.' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', blurb: 'Fastest and cheapest.' },
+] as const;
+
+export type ClaudeModelId = (typeof CLAUDE_MODELS)[number]['id'];
+
+/** Default Claude model for Claude Code tasks when the workspace hasn't picked one. */
+export const DEFAULT_CLAUDE_MODEL_ID: ClaudeModelId = 'claude-sonnet-4-6';
+
+/** Type guard for a stored/incoming value being a known Claude model id. */
+export function isClaudeModelId(value: unknown): value is ClaudeModelId {
+  return typeof value === 'string' && CLAUDE_MODELS.some((m) => m.id === value);
+}
+
 export interface WorkspaceSettings {
   continuousBuild?: ContinuousBuildSettings;
   /**
@@ -63,6 +85,8 @@ export interface WorkspaceSettings {
    * (prefer PostHog Code, else Claude Code).
    */
   defaultCloudProvider?: CloudProviderType | 'ask';
+  /** Which Claude model Claude Code tasks run on. Unset = {@link DEFAULT_CLAUDE_MODEL_ID}. */
+  claudeModel?: ClaudeModelId;
 }
 
 export interface ContinuousBuildSettings {

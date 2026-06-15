@@ -1,3 +1,4 @@
+import { DEFAULT_CLAUDE_MODEL_ID } from '@fastowl/shared';
 import { debugBus } from '../debugBus.js';
 
 /**
@@ -16,8 +17,9 @@ export const ANTHROPIC_VERSION = '2023-06-01';
 export const MANAGED_AGENTS_BETA = 'managed-agents-2026-04-01';
 /** The GitHub MCP server the agent opens PRs through. */
 export const GITHUB_MCP_URL = 'https://api.githubcopilot.com/mcp/';
-/** Required on every cloud run; kept current with the latest Opus. */
-export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+/** Default model when a workspace hasn't picked one — Sonnet (PR work doesn't
+ *  need Opus pricing). Single source of truth lives in @fastowl/shared. */
+export const DEFAULT_CLAUDE_MODEL = DEFAULT_CLAUDE_MODEL_ID;
 
 export class ClaudeManagedAgentsClient {
   constructor(

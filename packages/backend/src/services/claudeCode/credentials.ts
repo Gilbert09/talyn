@@ -22,14 +22,18 @@ const INTEGRATION_TYPE = 'claude_code';
  */
 interface ClaudeIntegrationConfig {
   anthropicKeyEnc?: EncryptedEnvelope;
-  /** Cached, reusable Managed Agents resource ids (not secret). */
-  agentId?: string;
+  /** Cached, reusable Managed Agents resource ids (not secret). A Managed Agent
+   *  has a FIXED model, so agents are cached per model id (the workspace can
+   *  switch models). `environmentId` is model-independent. */
+  agentIdsByModel?: Record<string, string>;
   environmentId?: string;
+  /** Legacy single-agent cache (pre model-picker); ignored on read. */
+  agentId?: string;
 }
 
 export interface ClaudeCodeCredentials {
   anthropicApiKey: string;
-  agentId?: string;
+  agentIdsByModel?: Record<string, string>;
   environmentId?: string;
 }
 
@@ -69,7 +73,7 @@ export async function getClaudeCodeCredentials(
 
   return {
     anthropicApiKey,
-    agentId: config.agentId,
+    agentIdsByModel: config.agentIdsByModel,
     environmentId: config.environmentId,
   };
 }
@@ -126,13 +130,14 @@ export async function storeClaudeCodeCredentials(
 }
 
 /**
- * Persist the reusable Managed Agents resource ids after the executor creates
- * them, so subsequent dispatches reuse the same agent/environment/vault.
- * Merges into the existing encrypted config (never clobbers the tokens).
+ * Persist reusable Managed Agents resource ids after the executor creates them,
+ * so subsequent dispatches reuse the same agent/environment. The agent id is
+ * cached under its model (each model needs its own agent); the environment is
+ * model-independent. Merges into the existing config (never clobbers the key).
  */
 export async function cacheClaudeResourceIds(
   workspaceId: string,
-  ids: { agentId?: string; environmentId?: string },
+  ids: { model?: string; agentId?: string; environmentId?: string },
 ): Promise<void> {
   const db = getDbClient();
   const rows = await db
@@ -147,7 +152,11 @@ export async function cacheClaudeResourceIds(
     .limit(1);
   const row = rows[0];
   if (!row) return;
-  const config = { ...((row.config as ClaudeIntegrationConfig | null) ?? {}), ...ids };
+  const config = { ...((row.config as ClaudeIntegrationConfig | null) ?? {}) };
+  if (ids.model && ids.agentId) {
+    config.agentIdsByModel = { ...config.agentIdsByModel, [ids.model]: ids.agentId };
+  }
+  if (ids.environmentId) config.environmentId = ids.environmentId;
   await db
     .update(integrationsTable)
     .set({ config, updatedAt: new Date() })
