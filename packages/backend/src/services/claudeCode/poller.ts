@@ -26,6 +26,39 @@ import {
 
 const TRANSCRIPT_MAX_EVENTS = 2000;
 
+/** The stop reasons we treat as "still working" rather than terminal. The
+ *  vendor resumes a `pause_turn` (a long turn paused server-side) on its own. */
+const NON_TERMINAL_STOP_REASONS = new Set(['pause_turn']);
+
+/** Stop reasons that mean the run finished normally (vs. an abnormal cutoff
+ *  like `max_tokens` / `refusal`). */
+const NORMAL_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
+
+/**
+ * Whether a Managed Agents session has reached a state we should finalize on.
+ * Sessions have no "completed" status: a finished run sits `idle` with a
+ * terminal `stop_reason`, while a not-yet-started session is `idle` with none.
+ * We accept ANY real stop_reason as terminal (keying only on `end_turn` left
+ * runs that ended for any other reason stuck `in_progress`), except the
+ * self-resuming `pause_turn`.
+ */
+export function isManagedSessionTerminal(session: {
+  status?: string;
+  stop_reason?: { type?: string } | null;
+}): boolean {
+  const stopType = session.stop_reason?.type ?? null;
+  return session.status === 'idle' && !!stopType && !NON_TERMINAL_STOP_REASONS.has(stopType);
+}
+
+/**
+ * A finished run is a success if it opened a PR, or stopped for a normal
+ * reason. An abnormal stop with no PR (ran out of tokens, refused, …) is a
+ * failure worth surfacing rather than a silent "completed".
+ */
+export function isManagedRunSuccess(stopType: string | null, hasPr: boolean): boolean {
+  return hasPr || (stopType !== null && NORMAL_STOP_REASONS.has(stopType));
+}
+
 /**
  * Reconciles FastOwl tasks delegated to Claude Managed Agents. Anthropic owns
  * the agent loop in its sandbox; we poll each in-flight session, ingest its
@@ -51,10 +84,8 @@ class ClaudeCodePoller {
     if (!client) return; // credentials removed mid-run; leave as-is.
 
     const session = await client.getSession(sessionId);
-    // Sessions have no "completed" status — a finished run sits `idle` with a
-    // terminal `stop_reason`. A not-yet-started session is `idle` with no
-    // stop_reason, so requiring end_turn avoids a false terminal.
-    const terminal = session.status === 'idle' && session.stop_reason?.type === 'end_turn';
+    const stopType = session.stop_reason?.type ?? null;
+    const terminal = isManagedSessionTerminal(session);
 
     // Fetch the event log (the transcript source) when the run is being watched
     // (live view) or has finished (one-shot backfill + PR detection). Skipping
@@ -94,11 +125,18 @@ class ClaudeCodePoller {
     if (prUrl && row.repositoryId) {
       await this.linkPr(row.workspaceId, row.repositoryId, row.id, prUrl);
     }
-    const result: TaskResult = {
-      success: true,
-      summary: prUrl ? `Claude Code opened ${prUrl}` : 'Claude Code run completed',
-    };
-    await this.finalize(row.id, row.workspaceId, 'completed', result);
+    const success = isManagedRunSuccess(stopType, Boolean(prUrl));
+    const result: TaskResult = success
+      ? {
+          success: true,
+          summary: prUrl ? `Claude Code opened ${prUrl}` : 'Claude Code run completed',
+        }
+      : {
+          success: false,
+          summary: `Claude Code stopped without opening a PR (stop reason: ${stopType})`,
+          error: `Run ended with stop reason "${stopType}"`,
+        };
+    await this.finalize(row.id, row.workspaceId, success ? 'completed' : 'failed', result);
 
     // Best-effort cleanup of the per-dispatch vault (held the GitHub token).
     const vaultId = cloud.extra?.vaultId as string | undefined;
