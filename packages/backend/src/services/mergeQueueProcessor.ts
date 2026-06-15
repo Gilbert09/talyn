@@ -2,7 +2,7 @@ import { and, eq, ne } from 'drizzle-orm';
 import {
   prNeedsFollowup,
   mergeBlockerReason,
-  buildPostHogPrompt,
+  buildMergeablePrompt,
   type PRMergeableSummary,
 } from '@fastowl/shared';
 import { getDbClient } from '../db/client.js';
@@ -17,7 +17,7 @@ import {
 } from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
-import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnvId } from './prCloudFix.js';
+import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnv } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 10_000;
 /** Re-poll a queued PR if its cached summary is older than this. */
@@ -476,14 +476,15 @@ class MergeQueueProcessor {
       return 'advance';
     }
 
-    const envId = await resolveCloudEnvId(row.workspaceId);
-    if (!envId) {
+    const resolved = await resolveCloudEnv(row.workspaceId);
+    if (!resolved) {
       // No connected cloud provider — can't dispatch. Keep waiting; the
       // desktop badge surfaces this. (The PRs behind it can't dispatch either —
       // same workspace — so there's nothing to advance to.)
       await this.ensureStatus(row, state, 'waiting', position);
       return 'hold';
     }
+    const { envId, provider } = resolved;
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
@@ -491,12 +492,13 @@ class MergeQueueProcessor {
       workspaceId: row.workspaceId,
       type: 'pr_response',
       title: `Get ${ref} mergeable (merge queue)`,
-      description: `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state via PostHog Code.`,
-      prompt: buildPostHogPrompt({
+      description: `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
+      prompt: buildMergeablePrompt({
         owner: row.owner,
         repo: row.repo,
         number: row.number,
         summary,
+        provider,
       }),
       repositoryId: row.repositoryId,
       assignedEnvironmentId: envId,

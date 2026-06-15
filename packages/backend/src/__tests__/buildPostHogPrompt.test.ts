@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
+import { buildPostHogPrompt, buildMergeablePrompt, type PRMergeableSummary } from '@fastowl/shared';
 
 /**
  * The cloud "make this PR mergeable" prompt must match the PostHog Code
@@ -81,5 +81,59 @@ describe('buildPostHogPrompt — base-merge leak guard', () => {
   it('requires the deterministic post-update ancestor / behind-by assertion', () => {
     expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
     expect(prompt).toContain('git rev-list --count HEAD..origin/main');
+  });
+});
+
+describe('buildMergeablePrompt — provider dispatch', () => {
+  it('posthog_code matches the back-compat buildPostHogPrompt output', () => {
+    expect(buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider: 'posthog_code' })).toBe(
+      buildPostHogPrompt({ owner: 'acme', repo: 'widgets', number: 7, summary })
+    );
+  });
+
+  it('an unknown/deferred provider falls back to the PostHog variant', () => {
+    expect(buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider: 'codex_cloud' })).toBe(
+      buildPostHogPrompt({ owner: 'acme', repo: 'widgets', number: 7, summary })
+    );
+  });
+});
+
+describe('buildMergeablePrompt — claude_code variant (GitHub MCP, no signed-git/gh)', () => {
+  const prompt = buildMergeablePrompt({
+    owner: 'acme',
+    repo: 'widgets',
+    number: 7,
+    summary,
+    provider: 'claude_code',
+  });
+
+  it('drops the PostHog-only signed-git tools and the gh CLI', () => {
+    expect(prompt).not.toContain('git_signed_commit');
+    expect(prompt).not.toContain('git_signed_merge');
+    expect(prompt).not.toContain('git_signed_rewrite');
+    expect(prompt).not.toContain('gh pr ');
+  });
+
+  it('publishes through the github MCP server', () => {
+    expect(prompt).toContain('`github` MCP server');
+    expect(prompt.toLowerCase()).toContain('no');
+    expect(prompt).toMatch(/no .*`git push`/i);
+  });
+
+  it('keeps the same goals, loop, and base-leak guard, threading the real base branch', () => {
+    expect(prompt).toContain('Every reviewer comment is resolved.');
+    expect(prompt).toContain('CI is fully green');
+    expect(prompt).toContain('The branch merges cleanly');
+    expect(prompt).toContain('Loop discipline:');
+    expect(prompt.toUpperCase()).toContain('ANCESTOR');
+    expect(prompt.toLowerCase()).toContain('leak');
+    expect(prompt).toContain('git diff --name-only origin/main...HEAD');
+    expect(prompt).toContain('git merge-base --is-ancestor origin/main HEAD');
+  });
+
+  it('still permits local rebase for conflicts but never a single-parent base imitation', () => {
+    expect(prompt).toContain('git rebase origin/main');
+    expect(prompt).toContain('git merge --squash');
+    expect(prompt.toLowerCase()).toContain('single-parent');
   });
 });

@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { prNeedsFollowup, buildPostHogPrompt, type PRMergeableSummary } from '@fastowl/shared';
+import { prNeedsFollowup, buildMergeablePrompt, type PRMergeableSummary } from '@fastowl/shared';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
@@ -7,7 +7,7 @@ import { prMonitorService } from './prMonitor.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
-import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnvId } from './prCloudFix.js';
+import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnv } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 60_000;
 /** Re-poll a watched PR if its cached summary is older than this. */
@@ -218,8 +218,9 @@ class PRAutoMergeWatcher {
     // 5. Fire — blocker present, nothing running, not paused.
     if (state.pausedAt || state.attempts >= MAX_ATTEMPTS) return;
 
-    const envId = await resolveCloudEnvId(row.workspaceId);
-    if (!envId) return; // No connected cloud provider — can't dispatch.
+    const resolved = await resolveCloudEnv(row.workspaceId);
+    if (!resolved) return; // No connected cloud provider — can't dispatch.
+    const { envId, provider } = resolved;
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
@@ -227,12 +228,13 @@ class PRAutoMergeWatcher {
       workspaceId: row.workspaceId,
       type: 'pr_response',
       title: `Get ${ref} mergeable`,
-      description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state via PostHog Code.`,
-      prompt: buildPostHogPrompt({
+      description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state.`,
+      prompt: buildMergeablePrompt({
         owner: row.owner,
         repo: row.repo,
         number: row.number,
         summary,
+        provider,
       }),
       repositoryId: row.repositoryId,
       assignedEnvironmentId: envId,

@@ -60,16 +60,23 @@ async function defaultCloudProvider(
   return settings.defaultCloudProvider ?? null;
 }
 
+/** A resolved cloud target: which env marker to dispatch to, and the provider
+ *  type behind it (so the caller can build a provider-appropriate prompt). */
+export interface ResolvedCloudEnv {
+  envId: string;
+  provider: CloudProviderType;
+}
+
 /**
  * The cloud env a backend-initiated fix task (auto-keep-mergeable watcher,
- * merge-queue auto-fix) should dispatch to. Honours the workspace's
- * `defaultCloudProvider` setting — a specific provider wins when it's connected,
- * otherwise (or for `'ask'`/unset) we fall back through {@link
- * CLOUD_PROVIDER_ORDER} since background tasks can't prompt. A provider counts
- * as usable only when it has stored credentials AND an env marker. Null when
- * none qualify.
+ * merge-queue auto-fix) should dispatch to, plus the provider behind it. Honours
+ * the workspace's `defaultCloudProvider` setting — a specific provider wins when
+ * it's connected, otherwise (or for `'ask'`/unset) we fall back through {@link
+ * CLOUD_PROVIDER_ORDER} since background tasks can't prompt. A provider counts as
+ * usable only when it has stored credentials AND an env marker. Null when none
+ * qualify.
  */
-export async function resolveCloudEnvId(workspaceId: string): Promise<string | null> {
+export async function resolveCloudEnv(workspaceId: string): Promise<ResolvedCloudEnv | null> {
   const pinned = await defaultCloudProvider(workspaceId);
   const order: CloudProviderType[] =
     pinned && pinned !== 'ask'
@@ -81,9 +88,14 @@ export async function resolveCloudEnvId(workspaceId: string): Promise<string | n
     if (!provider) continue;
     if (!(await provider.hasCredentials(workspaceId))) continue;
     const envId = await envIdForType(workspaceId, type);
-    if (envId) return envId;
+    if (envId) return { envId, provider: type };
   }
   return null;
+}
+
+/** Env-id-only convenience over {@link resolveCloudEnv}. */
+export async function resolveCloudEnvId(workspaceId: string): Promise<string | null> {
+  return (await resolveCloudEnv(workspaceId))?.envId ?? null;
 }
 
 /** Current status of the PR's most-recently-linked task, or null. */

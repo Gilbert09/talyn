@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { api, type PRRow } from '../../../lib/api';
-import { buildPostHogPrompt } from '@fastowl/shared';
+import { buildMergeablePrompt, type CloudProviderType } from '@fastowl/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
@@ -176,17 +176,22 @@ export function useGitHubActions() {
       if (!currentWorkspaceId) return false;
       const envId = resolveTaskEnvId(providerType);
       if (!envId) return false; // nothing connected / resolvable — caller shows no confirmation
+      // Build the prompt for the provider actually behind the resolved env — the
+      // git/publishing mechanics differ (PostHog signed-git vs Claude's GitHub MCP).
+      const provider = (environments.find((e) => e.id === envId)?.type ??
+        'posthog_code') as CloudProviderType;
       const ref = `${row.owner}/${row.repo}#${row.number}`;
       const created = await createTask({
         workspaceId: currentWorkspaceId,
         type: 'pr_response',
         title: `Get ${ref} mergeable`,
         description: `Take ${ref} ("${row.summary.title}") to a clean, mergeable state.`,
-        prompt: buildPostHogPrompt({
+        prompt: buildMergeablePrompt({
           owner: row.owner,
           repo: row.repo,
           number: row.number,
           summary: row.summary,
+          provider,
         }),
         repositoryId: row.repositoryId,
         assignedEnvironmentId: envId,
@@ -201,7 +206,7 @@ export function useGitHubActions() {
       patchRow(row.id, { taskId: created.id });
       return true;
     },
-    [currentWorkspaceId, resolveTaskEnvId, createTask, patchRow]
+    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
   );
 
   // Connect GitHub for the workspace (opens the OAuth popup).

@@ -4,6 +4,13 @@
 //   - the desktop "Get PR mergeable" button (one-shot, manual)
 //   - the backend auto-keep-mergeable watcher (repeated, unattended)
 // so the watcher fires the *identical* cloud task the button does.
+//
+// The prompt's git/publishing mechanics differ per cloud provider (PostHog Code
+// publishes through signed-git MCP tools; Claude Code publishes through the
+// `github` MCP server, with no `gh` CLI and no raw `git push`), so the builder
+// is provider-aware while keeping the same goals, leak-guard, and loop.
+
+import type { CloudProviderType } from './index.js';
 
 export type PRBlockingReason =
   | 'mergeable'
@@ -109,17 +116,44 @@ export function buildIssuesSummary(s: PRMergeableSummary): string {
     : '- (Re-fetch the PR to confirm the current issues.)';
 }
 
-/**
- * The "take this PR to a clean, mergeable state" prompt handed to a cloud
- * run: resolve every reviewer comment, get CI green, and resolve conflicts,
- * looping until all three hold on the latest commit.
- */
-export function buildPostHogPrompt(input: {
+/** Inputs shared by every provider variant of the "make this PR mergeable" prompt. */
+export interface MergeablePromptInput {
   owner: string;
   repo: string;
   number: number;
   summary: PRMergeableSummary;
-}): string {
+}
+
+/**
+ * The "take this PR to a clean, mergeable state" prompt handed to a cloud run:
+ * resolve every reviewer comment, get CI green, and resolve conflicts, looping
+ * until all three hold on the latest commit. The goals, leak-guard, and loop are
+ * identical across providers; only the git/publishing mechanics change, picked
+ * by `provider` (PostHog Code uses signed-git MCP tools; Claude Code uses the
+ * `github` MCP server). Unknown/deferred providers get the PostHog variant.
+ */
+export function buildMergeablePrompt(
+  input: MergeablePromptInput & { provider: CloudProviderType }
+): string {
+  return input.provider === 'claude_code'
+    ? buildClaudeCodePrompt(input)
+    : buildPostHogCodePrompt(input);
+}
+
+/**
+ * Back-compat alias for the PostHog Code variant. Prefer
+ * {@link buildMergeablePrompt} with an explicit provider.
+ */
+export function buildPostHogPrompt(input: MergeablePromptInput): string {
+  return buildPostHogCodePrompt(input);
+}
+
+/**
+ * PostHog Code variant — publishing goes through the sandbox's signed-git MCP
+ * tools (`git_signed_commit` / `git_signed_merge` / `git_signed_rewrite`); raw
+ * `git commit`/`push` and force-push are blocked.
+ */
+function buildPostHogCodePrompt(input: MergeablePromptInput): string {
   const { owner, repo, number, summary: s } = input;
   const ref = `${owner}/${repo}#${number}`;
   return `You are taking a pull request to a fully clean, mergeable state.
@@ -180,6 +214,81 @@ Your job is to keep iterating on this PR until ALL of the following are true and
        c. For every file still in the diff, eyeball it: \`git diff origin/${s.baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${s.baseBranch} is a leak.
    - If you find ANY leaked file or hunk after a rebase, do not publish. \`git rebase --abort\` (or restart from the remote branch state — the remote is untouched until \`git_signed_rewrite\`) and redo the rebase, taking the base side for files this PR never meant to touch.
    - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Then re-run the build/tests locally where feasible and publish (\`git_signed_rewrite\` for a rebase; a server-side \`git_signed_merge\` needs no publish step). Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.
+
+Loop discipline:
+  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
+  - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
+  - If you genuinely get stuck (e.g. you need credentials you don't have, or a reviewer's request is impossible without product-level decisions), leave a clear PR comment describing exactly what you need and why, then stop. Otherwise keep going.
+
+Start by checking out the PR branch (${ref}), fetching the current state of review threads and CI, and then work the loop until done.`;
+}
+
+/**
+ * Claude Code variant — the repo is mounted in the sandbox, but there is NO
+ * `gh` CLI and NO raw `git push`: every change reaches GitHub through the
+ * connected `github` MCP server's tools. Local git is fine for READ-ONLY
+ * inspection and preparing changes (fetch / diff / log / merge-base / a local
+ * rebase), but the branch is only updated by pushing through the `github` MCP
+ * tools. Same goals, leak-guard, and loop as the PostHog variant.
+ */
+function buildClaudeCodePrompt(input: MergeablePromptInput): string {
+  const { owner, repo, number, summary: s } = input;
+  const ref = `${owner}/${repo}#${number}`;
+  return `You are taking a pull request to a fully clean, mergeable state.
+
+Pull request: ${s.url}
+Repository: ${owner}/${repo}
+PR number: #${number}
+Branch: ${s.headBranch}
+
+NON-NEGOTIABLE PUBLISHING RULES — read these first, they apply to EVERYTHING below:
+  - The repository is mounted in your sandbox, but you have NO \`gh\` CLI and NO outbound \`git push\`. Every change that must reach GitHub — commits to the PR branch, updating the branch from its base, PR comments, resolving review threads — goes through the connected \`github\` MCP server's tools. Use those tools to publish.
+  - Local git is available for READ-ONLY inspection and for preparing changes: \`git fetch\`, \`git status\`, \`git diff\`, \`git log\`, \`git merge-base\`, \`git rev-list\`, and a LOCAL \`git rebase\` to resolve conflicts. None of that reaches GitHub on its own — only the \`github\` MCP tools publish.
+  - To incorporate changes from ${s.baseBranch}, bring the base in as a TRUE MERGE so it becomes an ANCESTOR of the PR branch — prefer GitHub's "update branch" / merge-base-into-head operation via the \`github\` MCP server (the same machinery as GitHub's "Update branch" button). Do NOT fabricate a single-parent imitation of a merge (no \`git merge --squash\`, no \`git checkout ${s.baseBranch} -- .\`, no \`git read-tree\`, no "apply the base's diff"): that makes the base look like your work and leaks every file the base changed into the PR's diff (hundreds of unrelated files). Naming a single-parent commit "Merge branch '${s.baseBranch}'" does not make it a merge.
+  - If GitHub can't auto-update the branch because of CONFLICTS, resolve them LOCALLY (\`git fetch origin ${s.baseBranch}\` then \`git rebase origin/${s.baseBranch}\`, resolving each conflict), then publish the resolved branch by pushing it through the \`github\` MCP server. Rebase is ONLY for conflict resolution onto the PR's own base — never rebase for any other reason or onto any other branch.
+  - If a \`github\` MCP tool rejects an operation, its error is authoritative — read it and follow the recovery path it describes rather than retrying the same call or working around it.
+
+Current issues detected (verify by re-fetching — state may have changed since this task was created):
+${buildIssuesSummary(s)}
+
+Your job is to keep iterating on this PR until ALL of the following are true and stay true:
+
+1. Every reviewer comment is resolved.
+   - For each unresolved review comment / review thread on the PR (top-level review comments AND inline code review threads):
+     a. Read the comment carefully and understand what the reviewer is asking for.
+     b. If the feedback is correct or reasonable: implement the requested change in code and commit it to the PR branch through the \`github\` MCP server, then mark the thread as resolved.
+     c. If you disagree with the feedback: reply to the thread on GitHub (via the \`github\` MCP server) explaining your reasoning clearly and respectfully, then mark the thread as resolved.
+     d. Do NOT silently ignore a comment. Every thread must end either with a code change you published, or with a reply from you, and in both cases the thread must be marked resolved.
+   - Re-fetch review comments after publishing changes — reviewers may have left new feedback while you were working.
+
+2. CI is fully green on the latest commit of the PR branch.
+   - Inspect the check runs / status checks via the \`github\` MCP server's checks / commit-status tools (there is no \`gh\` CLI here).
+   - If any required check is failing, investigate the failure (logs, test output) and fix the underlying problem in code, then publish the fix by committing to the PR branch through the \`github\` MCP server.
+   - Flaky tests: re-run them once to confirm they're actually flaky; if they are, document it briefly in a PR comment, but otherwise still try to fix the root cause rather than ignoring it.
+   - Do not bypass checks (no --no-verify, no skipping required checks). Fix the real issue.
+
+3. The branch merges cleanly into its base branch (no merge conflicts, not behind).
+   - Check mergeability via the \`github\` MCP server's pull-request tools (mergeable / mergeStateStatus).
+   - BEFORE updating anything, record the exact set of files this PR owns (local read, safe):
+       git fetch origin ${s.baseBranch}
+       git diff --name-only origin/${s.baseBranch}...HEAD   # save this "before" list
+   - If the branch is BEHIND or CONFLICTING, first try to update it from ${s.baseBranch} through the \`github\` MCP server (a real merge of the base into the head branch). If that succeeds, the base is now an ancestor of your branch — \`git fetch\` and continue to the verification step.
+   - ONLY if GitHub reports the update can't be done automatically because of a CONFLICT, resolve it with a local rebase:
+       git fetch origin ${s.baseBranch}
+       git rebase origin/${s.baseBranch}
+     For each conflicted file, resolve ONLY the genuine conflict: preserve the intent of BOTH sides; never blindly discard the PR's changes or the base's. Then \`git add\` the resolutions and \`git rebase --continue\`, repeating until the rebase completes. Publish the rebased branch by pushing it through the \`github\` MCP server. Only ever rebase onto the PR's own base branch (\`origin/${s.baseBranch}\`). If the rebase goes sideways, \`git rebase --abort\` and start over — never leave it half-finished.
+   - VERIFY THE UPDATE ACTUALLY JOINED THE BASE, whichever path ran (this is the #1 cause of mass file leaks — the base never truly becomes an ancestor). Both of these must hold (local reads):
+       git fetch origin ${s.baseBranch}
+       git merge-base --is-ancestor origin/${s.baseBranch} HEAD   # must exit 0 — the base tip is now an ancestor of your branch
+       git rev-list --count HEAD..origin/${s.baseBranch}          # must print 0 — your branch is NOT behind the base anymore
+     If either fails, the update did not take — redo it; do not proceed.
+   - GUARD AGAINST BASE-BRANCH FILES LEAKING INTO THE PR. This is a real, recurring failure: a botched base update or conflict resolution drags files that only changed on ${s.baseBranch} into the PR's diff. Catch it explicitly:
+       a. AFTER the update, record the file set again:
+            git diff --name-only origin/${s.baseBranch}...HEAD   # the "after" list
+       b. Compare with the "before" list you saved. The two MUST be identical. A clean base update adds NOTHING to the PR's own diff — files that already live on ${s.baseBranch} must never appear as PR changes. Any file in "after" that wasn't in "before" is a leak.
+       c. For every file still in the diff, eyeball it: \`git diff origin/${s.baseBranch}...HEAD -- <file>\`. Each hunk must be either this PR's intended work or a genuine conflict resolution. A hunk that just restates what's already on ${s.baseBranch} is a leak.
+   - If you find ANY leaked file or hunk, do not publish. Reset to the remote branch state (the remote is untouched until you push through the \`github\` MCP server) and redo the update, taking the base side for files this PR never meant to touch.
+   - Do not publish until the "before" and "after" file sets match and every remaining hunk is intentional. Updating the branch re-triggers CI and can reopen review threads, so re-check conditions (1) and (2) afterwards.
 
 Loop discipline:
   - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
