@@ -176,7 +176,12 @@ export async function ingestCheckRun(
         ts: ev.ts,
         updatedAt: new Date(),
       },
-      setWhere: sql`${prCheckStates.ts} <= ${ev.ts}`,
+      // NB: pass the timestamp as an ISO string, not a Date. In a raw `sql`
+      // fragment drizzle can't apply the column's type serializer, so a Date
+      // reaches postgres-js unserialized — which the transaction pooler's
+      // `prepare:false` simple protocol rejects (ERR_INVALID_ARG_TYPE). The
+      // `.values({ ts })` above is fine: there drizzle knows the column type.
+      setWhere: sql`${prCheckStates.ts} <= ${ev.ts.toISOString()}::timestamptz`,
     });
 
   // Recompute counts + digest ONCE from the deduped per-check rows for this sha.
