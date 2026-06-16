@@ -2,8 +2,12 @@ import { Router } from 'express';
 import { and, desc, eq } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
-import { forceFetchAndUpsert } from '../services/prCache.js';
-import { batchPullRequests, fetchPRReviewDetail } from '../services/githubGraphql.js';
+import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
+import {
+  batchPullRequests,
+  fetchPRReviewDetail,
+  type PRSummary,
+} from '../services/githubGraphql.js';
 import { githubService } from '../services/github.js';
 import {
   setFocused,
@@ -192,13 +196,34 @@ export function pullRequestRoutes(): Router {
       console.warn(`[pull-requests] fresh detail fetch failed for ${row.id}:`, err);
     }
 
-    // GraphQL only returns OPEN PRs. A null result on a row still marked
-    // 'open' means it merged/closed upstream — reconcile so the row (and
-    // its tab) stops claiming it's open.
     let outRow = row;
     if (!fresh && row.state === 'open') {
+      // GraphQL only returns OPEN PRs. A null result on a row still marked
+      // 'open' means it merged/closed upstream — reconcile so the row (and
+      // its tab) stops claiming it's open.
       const reconciled = await reconcileTerminalState(row);
       if (reconciled) outRow = reconciled;
+    } else if (fresh && freshDiffersMaterially(row, fresh)) {
+      // Persist the authoritative live fetch when it materially differs from
+      // the cache. Otherwise the cached summary only updates on the next
+      // background poll — so a base-branch retarget (which flips a check's
+      // required-ness) or a stale-check correction can show wrong until then,
+      // even though we just fetched the truth to render `fresh`. The upsert
+      // also broadcasts pull_request:updated, fixing the list rows too. Guarded
+      // so an unchanged open is a pure read (no write, no broadcast, flat egress).
+      const result = await upsertFromBatchResult({
+        workspaceId: row.workspaceId,
+        repositoryId: row.repositoryId,
+        taskId: row.taskId,
+        summary: fresh,
+        existingId: row.id,
+      });
+      const refreshed = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, result.rowId))
+        .limit(1);
+      if (refreshed[0]) outRow = refreshed[0];
     }
 
     res.json({
@@ -680,6 +705,30 @@ function publicMergeQueueState(
     // still explains itself in the badge tooltip.
     ...(status === 'blocked' && s.blockReason ? { reason: s.blockReason } : {}),
   };
+}
+
+/**
+ * Whether a freshly-fetched summary differs from the cached row in a way worth
+ * persisting on a detail open. Covers the fields the UI's status pill + header
+ * read off the cache: base branch (changes when a PR is retargeted, flipping
+ * required-ness), the merge-readiness verdict, GitHub's merge state/mergeability,
+ * and the check rollup (via its digest). Everything else (titles, timestamps)
+ * rides the next background poll. Keeping this tight avoids a write + broadcast
+ * on every open when nothing material moved.
+ */
+export function freshDiffersMaterially(
+  row: Pick<PullRequestRow, 'lastSummary' | 'lastCheckDigest' | 'state'>,
+  fresh: PRSummary
+): boolean {
+  const cached = (row.lastSummary as Partial<PRSummary> | null) ?? {};
+  return (
+    cached.baseBranch !== fresh.baseBranch ||
+    cached.blockingReason !== fresh.blockingReason ||
+    cached.mergeable !== fresh.mergeable ||
+    cached.mergeStateStatus !== fresh.mergeStateStatus ||
+    (row.lastCheckDigest ?? '') !== fresh.checkDigest ||
+    row.state !== fresh.state
+  );
 }
 
 function rowToPublicShape(row: PullRequestRow, queuePosition = 0) {

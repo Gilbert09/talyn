@@ -14,6 +14,7 @@ import {
   tasks as tasksTable,
 } from '../../db/schema.js';
 import * as graphqlModule from '../../services/githubGraphql.js';
+import * as prCacheModule from '../../services/prCache.js';
 import type { PRSummary } from '../../services/githubGraphql.js';
 import { githubService } from '../../services/github.js';
 
@@ -319,6 +320,51 @@ describe('routes/pullRequests', () => {
       };
       expect(body.data.row.id).toBe(id);
       expect(body.data.fresh).toBeNull();
+    });
+
+    it('persists the fresh fetch into the cache when it materially differs', async () => {
+      // Mirrors the base-retarget bug: the cached row has a stale base + no
+      // blocking verdict; the live fetch resolves the new base + a real
+      // failure. Opening the PR should self-heal the cache, not just display.
+      const id = await insertPR(db, { headBranch: 'feature/x' });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        {
+          branch: 'feature/x',
+          pr: fakeSummary({
+            baseBranch: 'master',
+            blockingReason: 'checks_failed',
+            mergeStateStatus: 'BLOCKED',
+            checks: { total: 4, passed: 1, failed: 3, inProgress: 0, skipped: 0 },
+            checkDigest: 'sha1:Frontend=failure',
+          }),
+        },
+      ]);
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      expect(res.status).toBe(200);
+
+      const [persisted] = await db
+        .select()
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, id));
+      const summary = persisted.lastSummary as Record<string, unknown>;
+      expect(summary.baseBranch).toBe('master');
+      expect(summary.blockingReason).toBe('checks_failed');
+      expect(persisted.lastCheckDigest).toBe('sha1:Frontend=failure');
+    });
+
+    it('does NOT re-persist on a subsequent open when nothing material changed', async () => {
+      const id = await insertPR(db, { headBranch: 'feature/x' });
+      vi.spyOn(graphqlModule, 'batchPullRequests').mockResolvedValue([
+        { branch: 'feature/x', pr: fakeSummary({ baseBranch: 'master' }) },
+      ]);
+      // First open persists the fresh summary into the cache.
+      await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+
+      // Second open with the identical fresh summary must be a pure read.
+      const upsertSpy = vi.spyOn(prCacheModule, 'upsertFromBatchResult');
+      const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
+      expect(res.status).toBe(200);
+      expect(upsertSpy).not.toHaveBeenCalled();
     });
   });
 

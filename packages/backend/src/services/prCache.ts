@@ -302,14 +302,17 @@ export async function upsertFromBatchResult(opts: {
   summary: PRSummary;
   reviewRequested?: boolean;
   authored?: boolean;
+  /**
+   * Update this known row id instead of matching by (workspace, repo, number).
+   * Callers that already hold the row (e.g. the detail route persisting a fresh
+   * fetch) pass it so a number mismatch can't spawn a duplicate row.
+   */
+  existingId?: string;
 }): Promise<UpsertResult> {
   const db = getDbClient();
-  const existing = await readRow(
-    db,
-    opts.workspaceId,
-    opts.repositoryId,
-    opts.summary.number
-  );
+  const existing = opts.existingId
+    ? await readRowById(db, opts.existingId)
+    : await readRow(db, opts.workspaceId, opts.repositoryId, opts.summary.number);
   const previous: CursorState | null = existing
     ? {
         lastReviewId: existing.lastReviewId,
@@ -488,6 +491,15 @@ async function readRow(
         eq(pullRequestsTable.number, number)
       )
     )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+async function readRowById(db: Database, id: string): Promise<PullRequestRow | null> {
+  const rows = await db
+    .select(PR_CACHE_COLUMNS)
+    .from(pullRequestsTable)
+    .where(eq(pullRequestsTable.id, id))
     .limit(1);
   return rows[0] ?? null;
 }
