@@ -17,7 +17,9 @@ Began the migration from GitHub-API polling to **GitHub-App webhooks**, with **R
 
 **Tests added:** wsBus fan-out (8), githubApp (12), hybrid-auth routing (2), webhook receiver HMAC (5), webhook worker classify/fan-out/coalesce (14), migration table assertion, debugBus webhook recorder (4). Full backend suite green.
 
-**Known follow-ups (need the live App):** remove the OAuth-only connect path + redundant pollers (notifications/search/fast-CI/token-health) once webhooks are validated end-to-end; event-driven merge-queue/auto-merge nudges; `status`-event PR mapping (commit-scoped — currently caught by the sweep); per-installation pause-on-inactivity at the receiver; dedicated stream-depth (XLEN) tile; repositories.ts install-allowlist gating.
+**Cutover completed (same session):** went App-only. Deleted the notifications poller, the 30s Search poll + 10s fast-CI loop, and the token-health poller. `refreshPr` (the webhook per-PR trigger) now derives the Mine/Review bucket flags from the fetched summary + viewer identity (`relationshipFlags`) — so buckets stay realtime without Search — and only materializes PRs the viewer relates to. The reconcile sweep (15 min, full `pollWorkspace`) is the bucket/closed-PR backstop. Removed the OAuth connect flow end-to-end (routes + `getAuthorizationUrl`/`exchangeCodeForToken` + `api.github.connect`); every desktop connect entry point now runs the App install flow. Added expiring-user-token rotation (`refreshUserToken` + in-band refresh in `resolveAuth`) since the App has "Expire user authorization tokens" on. Full backend suite green (752, run sequentially — parallel runs flake on pglite contention only).
+
+**Remaining follow-ups:** event-driven merge-queue/auto-merge nudges; `status`-event PR mapping (commit-scoped — caught by the sweep); per-installation pause-on-inactivity at the receiver; dedicated stream-depth (XLEN) tile; repositories.ts install-allowlist gating.
 
 ## Session 61 — Claude Code as a 2nd cloud provider (Anthropic Managed Agents); Codex deferred
 
