@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { getRedis, isRedisEnabled } from '../services/redis.js';
 import { isRepoWatchedSync } from '../services/webhookIndex.js';
-import { WEBHOOK_STREAM, type WebhookDelivery } from '../services/webhookWorker.js';
+import { WEBHOOK_STREAM, whTrace, type WebhookDelivery } from '../services/webhookWorker.js';
 import { debugBus } from '../services/debugBus.js';
 
 /**
@@ -51,6 +51,7 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
 
   const signature = verifyGithubSignature(rawBody, req.headers['x-hub-signature-256'] as string | undefined, secret);
   if (signature !== 'valid') {
+    whTrace(`receiver DROP bad_signature ${eventType} delivery=${deliveryId}`);
     debugBus.recordWebhook({ action: 'received', eventType, ok: false, signature, dropReason: 'bad_signature' });
     res.status(401).json({ error: 'invalid signature' });
     return;
@@ -73,6 +74,10 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
   }
 
   const repoFullName = (payload.repository as { full_name?: string } | undefined)?.full_name ?? '';
+  whTrace(
+    `receiver recv ${eventType}/${(typeof payload.action === 'string' ? payload.action : '-')} ` +
+      `${repoFullName || '(no repo)'} delivery=${deliveryId}`,
+  );
   const installationId = (payload.installation as { id?: number } | undefined)?.id;
   const ghAction = typeof payload.action === 'string' ? payload.action : undefined;
 
@@ -81,6 +86,7 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
   // ownership filter drops repos nobody is tracking.
   const isInstallationEvent = eventType === 'installation' || eventType === 'installation_repositories';
   if (!isInstallationEvent && (!repoFullName || !isRepoWatchedSync(repoFullName))) {
+    whTrace(`receiver DROP untracked_repo ${eventType} ${repoFullName || '(no repo)'} delivery=${deliveryId}`);
     debugBus.recordWebhook({
       action: 'received',
       eventType,
@@ -116,6 +122,7 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
   try {
     const redis = getRedis();
     await redis?.xadd(WEBHOOK_STREAM, 'MAXLEN', '~', String(STREAM_MAXLEN), '*', 'data', JSON.stringify(delivery));
+    whTrace(`receiver QUEUED ${eventType}/${ghAction ?? '-'} ${repoFullName} delivery=${deliveryId}`);
     debugBus.recordWebhook({
       action: 'received',
       eventType,

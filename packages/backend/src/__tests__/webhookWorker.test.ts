@@ -66,6 +66,30 @@ describe('webhook classification helpers', () => {
   it('returns no numbers for commit-scoped status events', () => {
     expect(extractPrNumbers('status', { sha: 'abc', state: 'success' })).toEqual([]);
   });
+
+  // A faithful subset of the real `pull_request` / action=closed (merged)
+  // delivery for PostHog/posthog#64026 (only the fields our pipeline reads,
+  // plus a few documenting ones). Guards against a regression in how a merge
+  // delivery is classified.
+  it('classifies a real merged-PR (action=closed) delivery as a single-PR refresh', () => {
+    const payload = {
+      action: 'closed',
+      number: 64026,
+      pull_request: {
+        number: 64026,
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-06-16T20:47:18Z',
+        user: { login: 'Gilbert09' },
+        base: { ref: 'master' },
+        html_url: 'https://github.com/PostHog/posthog/pull/64026',
+      },
+      repository: { full_name: 'PostHog/posthog', name: 'posthog', owner: { login: 'PostHog' } },
+      installation: { id: 140694558 },
+    };
+    expect(isRefreshEvent('pull_request')).toBe(true);
+    expect(extractPrNumbers('pull_request', payload)).toEqual([64026]);
+  });
 });
 
 describe('processWebhookDelivery (fan-out + coalescing)', () => {
@@ -109,6 +133,54 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(n).toBe(2);
     expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7);
     expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7);
+  });
+
+  it('dispatches the real PostHog/posthog#64026 merge delivery to refreshPr', async () => {
+    // End-to-end on the actual webhook envelope: a watched repo + the real
+    // merged-PR payload must fan out to refreshPr(workspace, owner, repo, 64026).
+    // Mirrors the prod path that wasn't firing — proves classification + repo
+    // resolution + dispatch are correct for this exact delivery.
+    await db.insert(workspacesTable).values({
+      id: 'wsPH',
+      ownerId: TEST_USER_ID,
+      name: 'PostHog',
+      settings: {},
+    });
+    await db.insert(repositoriesTable).values({
+      id: 'rPH',
+      workspaceId: 'wsPH',
+      name: 'PostHog/posthog',
+      url: 'https://github.com/PostHog/posthog',
+      defaultBranch: 'master',
+      createdAt: new Date(),
+    });
+    _resetWebhookIndex();
+    await refreshWebhookIndex();
+
+    const n = await processWebhookDelivery(
+      delivery({
+        deliveryId: '0a4c1f00-real',
+        eventType: 'pull_request',
+        repoFullName: 'PostHog/posthog',
+        payload: {
+          action: 'closed',
+          number: 64026,
+          pull_request: {
+            number: 64026,
+            state: 'closed',
+            merged: true,
+            user: { login: 'Gilbert09' },
+            base: { ref: 'master' },
+          },
+          repository: { full_name: 'PostHog/posthog', name: 'posthog', owner: { login: 'PostHog' } },
+          installation: { id: 140694558 },
+        },
+      }),
+      5_000,
+    );
+
+    expect(n).toBe(1);
+    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026);
   });
 
   it('coalesces a burst for the same (workspace, PR) within the window', async () => {
