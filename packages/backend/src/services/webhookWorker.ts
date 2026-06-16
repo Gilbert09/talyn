@@ -235,10 +235,28 @@ export async function processWebhookDelivery(
       );
       return 0;
     });
+    if (updated > 0) {
+      whTrace(
+        `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
+      );
+      return updated;
+    }
+    // Incremental applied to nothing even though we track PR(s) on this check —
+    // the row is an unmaterialised placeholder (e.g. a just-opened cloud-task PR,
+    // title still empty) or its cached headSha is stale. Fall back to a full
+    // refresh to backfill the summary + head; subsequent checks then go
+    // incremental. Coalesced, so this is at most one refresh per stale PR.
+    let dispatched = 0;
+    for (const target of targets) {
+      for (const number of trackedByRepo.get(target.repositoryId) ?? []) {
+        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'check_run');
+      }
+    }
     whTrace(
-      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
+      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → 0 incremental; ` +
+        `${dispatched} stale/placeholder PR(s) → full-refresh fallback`,
     );
-    return updated;
+    return dispatched;
   }
 
   // A PR closing/merging or force-pushing makes its per-check state irrelevant —

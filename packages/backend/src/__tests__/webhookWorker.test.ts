@@ -194,6 +194,32 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     });
   });
 
+  it('falls back to a full refresh when the tracked PR row is stale/placeholder', async () => {
+    // The row's cached head is sha-OLD but the check is on sha-NEW (or the row is
+    // an unmaterialised placeholder) → incremental applies to nothing → fall back
+    // to refreshPr to backfill the summary + head.
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-OLD');
+    const n = await processWebhookDelivery(
+      delivery({
+        eventType: 'check_run',
+        payload: {
+          check_run: {
+            id: 1,
+            name: 'lint',
+            status: 'completed',
+            conclusion: 'success',
+            head_sha: 'sha-NEW',
+            pull_requests: [{ number: 7 }],
+          },
+          repository: { owner: { login: 'acme' }, name: 'widget' },
+        },
+      }),
+      1_000,
+    );
+    expect(n).toBe(1);
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+  });
+
   it('treats check_suite as a no-op (counts come from check_run)', async () => {
     await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
     const n = await processWebhookDelivery(
