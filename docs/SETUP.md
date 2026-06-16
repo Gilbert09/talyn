@@ -126,6 +126,36 @@ No scopes are configured on the app itself — the backend requests
 
 Without these, the "Connect GitHub" button in Settings will fail loudly.
 
+### 3b. GitHub App (webhooks + realtime, hybrid auth)
+
+The App is what lets us replace polling with **webhooks** and scale across
+replicas. It uses **hybrid auth**: an installation token does all repo/PR/checks
+reads + receives webhooks, while a user-to-server token (requested during
+install) resolves the viewer's login + authored/review-requested buckets. The
+classic OAuth App above still works; the App lights up per workspace as each one
+re-connects via the install flow.
+
+1. https://github.com/settings/apps → **New GitHub App**.
+2. **Webhook URL**: `https://<your-backend>/api/v1/webhooks/github` (for local dev,
+   tunnel it, e.g. `smee`/`ngrok`). **Webhook secret**: generate one → `GITHUB_WEBHOOK_SECRET`.
+3. **Permissions** (read-only unless noted): Pull requests **R/W** (merge/auto-merge
+   write paths), Checks **R**, Commit statuses **R**, Contents **R**, Metadata **R**,
+   Members **R** (team-based review-request resolution).
+4. **Subscribe to events**: `pull_request`, `pull_request_review`,
+   `pull_request_review_comment`, `issue_comment`, `check_run`, `check_suite`,
+   `status`, `installation`, `installation_repositories`.
+5. Enable **"Request user authorization (OAuth) during installation"**, and set the
+   **Callback URL** to `http://localhost:4747/api/v1/github/app/callback`.
+6. Generate a **private key** (.pem), base64 it, and set the env vars (see the
+   `.env` block below): `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`,
+   `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`.
+7. Set `REDIS_URL` (webhooks are enqueued onto a Redis Stream; without it the
+   receiver acks-and-drops and the reconcile sweep keeps PRs fresh).
+
+A repo only delivers webhooks once the App is **installed** on its owner (user/org)
+with the repo selected. The reconcile sweep (every ~15 min) + the manual refresh
+are the safety net for any missed/dropped deliveries.
+
 ---
 
 ## 🔜 Needed for Phase 18 (hosted backend)
@@ -298,6 +328,22 @@ DATABASE_URL=postgres://...supabase.co:6543/postgres?pgbouncer=true
 SUPABASE_URL=https://<ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
 # FASTOWL_ALLOWED_EMAILS=you@example.com   # optional single-user lock
+
+# Redis — cross-replica WebSocket fan-out + the GitHub webhook ingest queue.
+# Optional: leave unset to run single-process; the app degrades to local-only
+# delivery and webhooks are not enqueued (the reconcile sweep keeps PRs fresh).
+# Start the container with `npm run dev:redis` (see docker-compose.yml).
+# REDIS_URL=redis://localhost:6379
+
+# GitHub App (webhooks + installation auth). Optional until you create the App;
+# when unset, the app stays on the OAuth connect flow. See the GitHub App
+# section below. GITHUB_APP_PRIVATE_KEY is the .pem, base64-encoded.
+# GITHUB_APP_ID=123456
+# GITHUB_APP_SLUG=fastowl
+# GITHUB_APP_CLIENT_ID=Iv1.xxxxxxxx
+# GITHUB_APP_CLIENT_SECRET=xxxxxxxx
+# GITHUB_APP_PRIVATE_KEY=<base64 of the downloaded .pem>
+# GITHUB_WEBHOOK_SECRET=<the secret you set on the App's webhook>
 
 POSTHOG_PROJECT_API_KEY=phc_xxx     # optional, for when 18.8 lands
 POSTHOG_HOST=https://us.i.posthog.com

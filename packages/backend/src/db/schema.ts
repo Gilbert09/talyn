@@ -105,6 +105,27 @@ export const integrations = pgTable(
   })
 );
 
+// ---------- GitHub App installations ----------
+//
+// App-owned, NOT workspace-scoped: a single GitHub App installation (on a user
+// or org) can back PRs across many workspaces/owners, and one webhook delivery
+// must resolve its installation without a per-workspace scan. `installationId`
+// is GitHub's numeric id, stored as text per the IDs-are-text convention.
+// `repoFullNames` is the App's selected-repo allowlist for this installation —
+// the webhook receiver's cheap ownership filter reads it to drop deliveries for
+// repos nobody watches. `suspendedAt` set ⇒ delivery is dropped+acked (pause
+// for inactive accounts, or GitHub-side suspension). No RLS: this is global
+// infrastructure read by the webhook pipeline running as the privileged pool.
+export const githubInstallations = pgTable('github_installations', {
+  installationId: text('installation_id').primaryKey(),
+  accountLogin: text('account_login').notNull(),
+  accountType: text('account_type').notNull(), // 'User' | 'Organization'
+  repoFullNames: jsonb('repo_full_names').notNull().default([]),
+  suspendedAt: timestamp('suspended_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ---------- Environments ----------
 
 // A cloud-only environment is a secret-free marker, one per connected

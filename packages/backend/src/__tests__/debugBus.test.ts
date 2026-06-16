@@ -434,3 +434,62 @@ describe('owner attribution + filtering', () => {
     expect(debugBus.snapshot().owners).toHaveLength(0);
   });
 });
+
+describe('recordWebhook', () => {
+  it('records a queued delivery under the webhook category', () => {
+    debugBus.recordWebhook({
+      action: 'received',
+      eventType: 'pull_request',
+      delivery: 'abc',
+      signature: 'valid',
+      ok: true,
+      queued: true,
+    });
+    const events = debugBus.getEvents({ category: 'webhook' });
+    expect(events).toHaveLength(1);
+    expect(events[0].service).toBe('github_webhooks');
+    expect(events[0].summary).toContain('recv pull_request');
+    expect(events[0].summary).toContain('queued');
+    expect(debugBus.snapshot().counters.webhook).toBe(1);
+  });
+
+  it('records a drop with its reason and stays in the webhook category', () => {
+    debugBus.recordWebhook({
+      action: 'received',
+      eventType: 'check_run',
+      signature: 'valid',
+      ok: true,
+      dropReason: 'untracked_repo',
+    });
+    const [e] = debugBus.getEvents({ category: 'webhook' });
+    expect(e.summary).toContain('dropped (untracked_repo)');
+    expect(e.meta?.dropReason).toBe('untracked_repo');
+  });
+
+  it('routes a bad-signature delivery to the error category', () => {
+    debugBus.recordWebhook({
+      action: 'received',
+      eventType: 'pull_request',
+      signature: 'invalid',
+      ok: false,
+      dropReason: 'bad_signature',
+    });
+    expect(debugBus.getEvents({ category: 'webhook' })).toHaveLength(0);
+    expect(debugBus.getEvents({ category: 'error' })).toHaveLength(1);
+  });
+
+  it('records fan-out + enqueue→process latency on a processed delivery', () => {
+    debugBus.recordWebhook({
+      action: 'processed',
+      eventType: 'pull_request',
+      ok: true,
+      fanout: 3,
+      latencyMs: 42,
+    });
+    const [e] = debugBus.getEvents({ category: 'webhook' });
+    expect(e.summary).toContain('proc pull_request');
+    expect(e.summary).toContain('fanout 3');
+    expect(e.meta?.fanout).toBe(3);
+    expect(e.meta?.latencyMs).toBe(42);
+  });
+});

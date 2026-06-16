@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 62 — GitHub App + webhooks (replace polling) + Redis cross-replica backbone
+
+Began the migration from GitHub-API polling to **GitHub-App webhooks**, with **Redis** as the cross-replica backbone. Built additively so the whole suite stays green and nothing is observable until the App + `REDIS_URL` are configured; the destructive parts (removing OAuth-only paths, deleting the now-redundant pollers) are explicit follow-ups gated on the live App. Plan: `~/.claude/plans/could-you-spec-out-harmonic-cookie.md`.
+
+**Landed:**
+- **Redis layer** (`services/redis.ts`) — lazy shared client + dedicated-connection factory; no-op when `REDIS_URL` unset. `docker-compose.yml` + `npm run dev:redis`.
+- **Cross-replica WS fan-out** (`services/wsBus.ts`) — `broadcast`/`broadcastToWorkspace` now deliver locally **and** publish to a Redis Pub/Sub channel; each replica re-delivers to its own clients, deduped by a per-process `REPLICA_ID`. WS event contract unchanged → no desktop changes.
+- **GitHub App auth** (`services/githubApp.ts`) — RS256 App-JWT signing, installation-token mint/cache/refresh/coalesce, user-code exchange, install-URL builder, suspension handling.
+- **Hybrid auth seam in `github.ts`** — App workspaces (those with an `installationId` on the integration config) use a fresh **installation token** for data-plane reads and the **user token** for viewer-identity endpoints (`/user`, `/user/teams`, `/user/repos`, notifications); rate-key by installation; installation-token 401s clear the mint cache instead of nuking the user integration. Legacy OAuth workspaces are completely unchanged (all existing tests green).
+- **Install flow** — `POST /github/app/install-url` + public `GET /github/app/callback` (exchange user code, upsert `github_installations`, store integration w/ installationId, bulk-refresh). Migration `0026_github_app.sql` adds the global `github_installations` table.
+- **Webhook pipeline** — public `POST /api/v1/webhooks/github` (raw-body HMAC verify → ownership filter → XADD → 202, mounted before `express.json`); `services/webhookWorker.ts` (Redis Stream consumer group, competing consumers, event→`refreshPr` fan-out across every watching workspace, 750ms coalescing); `services/webhookIndex.ts` (full-name→workspaces index for the filter + fan-out); `services/prReconcileSweep.ts` (15-min jittered safety-net re-poll).
+- **Debug panel** — new `webhook` category + `debugBus.recordWebhook` (signature, drop-reason, fan-out, enqueue→process latency); `redis`/`github_webhooks` in `SERVICE_INFO`.
+
+**Tests added:** wsBus fan-out (8), githubApp (12), hybrid-auth routing (2), webhook receiver HMAC (5), webhook worker classify/fan-out/coalesce (14), migration table assertion, debugBus webhook recorder (4). Full backend suite green.
+
+**Known follow-ups (need the live App):** remove the OAuth-only connect path + redundant pollers (notifications/search/fast-CI/token-health) once webhooks are validated end-to-end; event-driven merge-queue/auto-merge nudges; `status`-event PR mapping (commit-scoped — currently caught by the sweep); per-installation pause-on-inactivity at the receiver; dedicated stream-depth (XLEN) tile; repositories.ts install-allowlist gating.
+
 ## Session 61 — Claude Code as a 2nd cloud provider (Anthropic Managed Agents); Codex deferred
 
 Added **Claude Code** as the second `CloudTaskProvider`, with feature parity to PostHog Code.

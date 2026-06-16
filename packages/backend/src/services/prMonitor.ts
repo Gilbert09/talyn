@@ -279,6 +279,16 @@ class PRMonitorService extends EventEmitter {
    *      search and mark them closed/merged so the GitHub page stops
    *      actively polling them.
    */
+  /**
+   * Full re-poll of one workspace, on demand. The bulk-refresh fallback: run on
+   * App (re)connect, after a paused→active transition, and by the low-frequency
+   * reconcile sweep to catch any webhook deliveries that were dropped or missed.
+   * Re-derives buckets + summaries exactly as a scheduled tick would.
+   */
+  async refreshWorkspaceNow(workspaceId: string): Promise<void> {
+    await this.pollWorkspace(workspaceId);
+  }
+
   private async pollWorkspace(workspaceId: string): Promise<void> {
     const login = await this.resolveCurrentUser(workspaceId);
     if (!login) return;

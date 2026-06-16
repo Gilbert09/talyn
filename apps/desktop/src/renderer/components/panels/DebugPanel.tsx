@@ -25,6 +25,7 @@ const CATEGORY_LABEL: Record<DebugCategory, string> = {
   polling: 'Polling',
   websocket: 'WebSocket',
   event: 'Events',
+  webhook: 'Webhooks',
   error: 'Errors',
 };
 
@@ -35,6 +36,7 @@ const FILTERS: { id: CategoryFilter; label: string }[] = [
   { id: 'polling', label: 'Polling' },
   { id: 'websocket', label: 'WebSocket' },
   { id: 'event', label: 'Events' },
+  { id: 'webhook', label: 'Webhooks' },
   { id: 'error', label: 'Errors' },
 ];
 
@@ -46,6 +48,8 @@ const CATEGORY_INFO: Record<DebugCategory, string> = {
   polling: 'Background poll-loop ticks. Each loop wakes on its own interval to reconcile state — see the cards above for what each does.',
   websocket: 'The realtime channel to the desktop app: client connect/disconnect, inbound messages, and outbound broadcasts.',
   event: 'In-process domain events (e.g. a task changing status) that other backend services react to.',
+  webhook:
+    'Inbound GitHub webhook deliveries: receipt (signature check, ownership filter, enqueue) and processing (fan-out to PR refreshes, enqueue→process lag). Metadata only — event type, delivery id, fan-out count.',
   error: 'A request or poll tick that failed — expand the row for the error message.',
 };
 
@@ -62,6 +66,9 @@ const SERVICE_INFO: Record<string, string> = {
     'PostHog product-analytics capture — server-side task lifecycle events (dispatched/completed/failed).',
   ws: 'The WebSocket server fanning realtime updates out to connected desktop clients.',
   tasks: 'Task lifecycle domain events (queued → in_progress → completed/failed).',
+  github_webhooks:
+    'Inbound GitHub App webhooks — verified, filtered, and pushed onto the Redis ingest stream, then drained by the worker into PR refreshes.',
+  redis: 'Redis — the cross-replica backbone: WebSocket fan-out (Pub/Sub) and the webhook ingest queue (Stream).',
 };
 
 const TIP_WIDTH = 256; // matches w-64
@@ -148,6 +155,8 @@ function categoryClasses(category: DebugCategory): string {
       return 'bg-emerald-500/15 text-emerald-300';
     case 'event':
       return 'bg-amber-500/15 text-amber-300';
+    case 'webhook':
+      return 'bg-teal-500/15 text-teal-300';
     case 'error':
       return 'bg-red-500/15 text-red-300';
   }

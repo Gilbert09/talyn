@@ -1,0 +1,86 @@
+import { githubService } from './github.js';
+import { prMonitorService } from './prMonitor.js';
+import { debugBus } from './debugBus.js';
+import { TickGuard } from './tickGuard.js';
+
+/**
+ * Low-frequency safety net for the webhook pipeline.
+ *
+ * Webhooks are best-effort: GitHub can drop a delivery, a replica can crash
+ * mid-process, and a paused/suspended installation receives nothing while it's
+ * off. This sweep re-polls every connected workspace on a long, jittered
+ * interval — re-deriving buckets + summaries exactly as a scheduled tick would
+ * — so anything a webhook missed self-heals within one sweep. It reuses
+ * prMonitor.refreshWorkspaceNow; it does NOT add GitHub load beyond the normal
+ * poll (it IS a poll, just slower).
+ *
+ * The same per-workspace refresh is exposed for on-demand use (install
+ * (re)connect, paused→active) via prMonitorService.refreshWorkspaceNow directly.
+ */
+
+// 15 min baseline; jitter avoids a thundering herd across replicas/workspaces.
+const BASE_INTERVAL_MS = 15 * 60_000;
+const JITTER_MS = 90_000;
+
+class PrReconcileSweep {
+  private timer: NodeJS.Timeout | null = null;
+  private guard = new TickGuard('pr_reconcile_sweep', 10 * 60_000);
+
+  init(): void {
+    if (this.timer) return;
+    debugBus.registerPoller(
+      'pr_reconcile_sweep',
+      BASE_INTERVAL_MS,
+      'Low-frequency full re-poll of every workspace — the webhook safety net for dropped/missed deliveries.',
+    );
+    const schedule = () => {
+      const jitter = Math.floor(JITTER_MS * pseudoJitter());
+      this.timer = setTimeout(() => {
+        void this.tick().finally(schedule);
+      }, BASE_INTERVAL_MS + jitter);
+    };
+    schedule();
+  }
+
+  private async tick(): Promise<void> {
+    if (!this.guard.tryBegin()) return;
+    const startedAt = Date.now();
+    let count = 0;
+    try {
+      const workspaces = githubService.getConnectedWorkspaces();
+      count = workspaces.length;
+      for (const workspaceId of workspaces) {
+        try {
+          await prMonitorService.refreshWorkspaceNow(workspaceId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'unknown error';
+          console.error(`[reconcileSweep] workspace ${workspaceId.slice(0, 8)} failed:`, msg);
+        }
+      }
+    } finally {
+      this.guard.end();
+      debugBus.pollerTick('pr_reconcile_sweep', {
+        durationMs: Date.now() - startedAt,
+        ok: true,
+        summary: `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}`,
+      });
+    }
+  }
+
+  shutdown(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
+
+/**
+ * Cheap deterministic-ish jitter without Math.random (kept available for
+ * resume-safety parity with the rest of the codebase): derive a [0,1) factor
+ * from the current minute. Good enough to de-sync replicas.
+ */
+function pseudoJitter(): number {
+  const m = new Date().getTime() % 1000;
+  return m / 1000;
+}
+
+export const prReconcileSweep = new PrReconcileSweep();

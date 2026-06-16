@@ -183,6 +183,13 @@
 			"when": 1784160000009,
 			"tag": "0025_mcp_tokens",
 			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1784160000010,
+			"tag": "0026_github_app",
+			"breakpoints": true
 		}
 	]
 }

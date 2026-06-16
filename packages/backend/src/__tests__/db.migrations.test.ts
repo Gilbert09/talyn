@@ -29,6 +29,7 @@ describe('Drizzle migration', () => {
       'tasks',
       'settings',
       'pull_requests',
+      'github_installations',
     ]) {
       expect(tables).toContain(expected);
     }

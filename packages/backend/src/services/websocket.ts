@@ -11,6 +11,7 @@ import type {
 } from '@fastowl/shared';
 import { domainEvents } from './events.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
+import { setLocalDelivery, publishBroadcast, publishToWorkspace } from './wsBus.js';
 import { verifyTokenAndGetUser, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
@@ -52,6 +53,11 @@ export function setupWebSocket(wss: WebSocketServer): void {
   // here (not in debugBus) so debugBus stays dependency-free.
   debugBus.setClientCounter(() => clients.size);
   debugBus.setLiveSink(fanOutDebugEvent);
+
+  // Let wsBus deliver events that arrive from OTHER replicas to our local
+  // clients. We hand it the local-only delivery functions (not the public
+  // broadcasters) so a remote event isn't re-published into a loop.
+  setLocalDelivery({ all: deliverBroadcastLocal, workspace: deliverToWorkspaceLocal });
 
   wss.on('connection', async (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
@@ -203,8 +209,9 @@ function sendToClient(ws: WebSocket, event: WSEvent): void {
   }
 }
 
-// Broadcast to all clients
-export function broadcast(event: WSEvent): void {
+// Deliver to this replica's local clients only. Shared by the public
+// broadcasters and by wsBus when re-delivering an event from another replica.
+function deliverBroadcastLocal(event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const client of clients) {
@@ -224,8 +231,7 @@ export function broadcast(event: WSEvent): void {
   }
 }
 
-// Broadcast to clients subscribed to a specific workspace
-export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void {
+function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const [client, workspaces] of subscriptions) {
@@ -241,6 +247,18 @@ export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void 
       meta: { type: event.type, workspaceId, recipients: sent },
     });
   }
+}
+
+// Broadcast to all clients — local, then fan out to the other replicas.
+export function broadcast(event: WSEvent): void {
+  deliverBroadcastLocal(event);
+  publishBroadcast(event);
+}
+
+// Broadcast to clients subscribed to a specific workspace — local, then fan out.
+export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void {
+  deliverToWorkspaceLocal(workspaceId, event);
+  publishToWorkspace(workspaceId, event);
 }
 
 // Helper functions for common events

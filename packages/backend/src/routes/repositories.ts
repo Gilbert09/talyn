@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prMonitorService } from '../services/prMonitor.js';
+import { refreshWebhookIndex } from '../services/webhookIndex.js';
 import {
   assertUser,
   handleAccessError,
@@ -39,6 +40,9 @@ export function repositoryRoutes(): Router {
     }
     try {
       const watched = await prMonitorService.addWatchedRepo(workspaceId, owner, repo, url);
+      // Refresh the webhook fan-out index so deliveries for this repo match
+      // immediately instead of waiting for the next periodic rebuild.
+      void refreshWebhookIndex().catch(() => undefined);
       res.json({ success: true, data: watched });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'unknown error';
@@ -55,6 +59,7 @@ export function repositoryRoutes(): Router {
     const { id } = req.params;
     try {
       await prMonitorService.removeWatchedRepo(id);
+      void refreshWebhookIndex().catch(() => undefined);
       res.json({ success: true, data: null });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'unknown error';

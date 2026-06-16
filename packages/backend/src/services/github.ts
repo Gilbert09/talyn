@@ -20,6 +20,12 @@ import {
   GitHubRateLimitError,
   parseRateLimitResponse,
 } from './githubRateGate.js';
+import {
+  getInstallationToken,
+  clearInstallationToken,
+  isGitHubAppConfigured,
+  InstallationUnavailableError,
+} from './githubApp.js';
 
 // GitHub OAuth configuration. Set via environment variables in production.
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
@@ -261,6 +267,19 @@ interface StoredToken {
   tokenType: string;
   scope: string;
   createdAt: string;
+  // Set for GitHub-App-connected workspaces (hybrid auth): the stored token
+  // above is the user-to-server token (viewer identity); data-plane reads use a
+  // freshly-minted installation token keyed by this id. Absent ⇒ legacy OAuth
+  // workspace, every call uses the stored token (unchanged behaviour).
+  installationId?: string;
+}
+
+/** Resolved auth for one outbound call — which token family it used. */
+interface ResolvedAuth {
+  tokenType: string;
+  accessToken: string;
+  kind: 'installation' | 'user';
+  installationId?: string;
 }
 
 /** Result of GitHub's app-authenticated `POST /applications/{client_id}/token` check. */
@@ -292,6 +311,10 @@ interface GitHubIntegrationConfig {
   tokenType?: string;
   scope?: string;
   createdAt?: string;
+  // GitHub App (hybrid auth): when set, `accessTokenEnc` is the user-to-server
+  // token and `installationId` backs the data-plane installation token.
+  authMethod?: 'github_app';
+  installationId?: string;
 }
 
 function readAccessToken(config: GitHubIntegrationConfig): string | null {
@@ -358,6 +381,7 @@ class GitHubService extends EventEmitter {
           tokenType: config.tokenType || 'bearer',
           scope: config.scope || '',
           createdAt: config.createdAt || new Date().toISOString(),
+          ...(config.installationId ? { installationId: config.installationId } : {}),
         });
       }
 
@@ -494,18 +518,23 @@ class GitHubService extends EventEmitter {
     workspaceId: string,
     accessToken: string,
     tokenType: string,
-    scope: string
+    scope: string,
+    opts: { installationId?: string } = {}
   ): Promise<void> {
     const createdAt = new Date().toISOString();
     // New rows: encrypt the access token; drop the plaintext field.
     // Existing plaintext rows will be overwritten with the encrypted
     // shape on next storeToken call (disconnect+reconnect, or token
-    // rotation).
+    // rotation). For an App connection (hybrid auth) the encrypted token is
+    // the user-to-server token and `installationId` backs the data plane.
     const config: GitHubIntegrationConfig = {
       accessTokenEnc: encryptString(accessToken),
       tokenType,
       scope,
       createdAt,
+      ...(opts.installationId
+        ? { authMethod: 'github_app' as const, installationId: opts.installationId }
+        : {}),
     };
 
     const existing = await this.db
@@ -565,6 +594,7 @@ class GitHubService extends EventEmitter {
       tokenType,
       scope,
       createdAt,
+      ...(opts.installationId ? { installationId: opts.installationId } : {}),
     });
     void this.registerWorkspaceOwners([workspaceId]);
     this.emit('connected', workspaceId);
@@ -772,11 +802,74 @@ class GitHubService extends EventEmitter {
    * safe in the hot request path.
    */
   accountKeyFor(workspaceId: string): string {
+    const stored = this.tokens.get(workspaceId);
+    // App workspaces share the installation's rate bucket — key on it so the
+    // gate accounts all of an installation's traffic together.
+    if (stored?.installationId && isGitHubAppConfigured()) {
+      return `inst:${stored.installationId}`;
+    }
     return (
       this.viewerLoginCache.get(workspaceId) ??
-      this.tokens.get(workspaceId)?.accessToken ??
+      stored?.accessToken ??
       workspaceId
     );
+  }
+
+  /**
+   * Resolve the auth for one outbound call. App workspaces use a freshly-minted
+   * installation token for the data plane (`auto`); viewer-identity endpoints
+   * (`/user`, `/user/teams`, …) force the user token with `preferUser`. Legacy
+   * OAuth workspaces always return the stored token regardless — so their
+   * behaviour (and tests) are unchanged. Returns null when nothing is connected.
+   */
+  private async resolveAuth(
+    workspaceId: string,
+    preferUser = false,
+  ): Promise<ResolvedAuth | null> {
+    const stored = this.tokens.get(workspaceId);
+    if (stored?.installationId && isGitHubAppConfigured() && !preferUser) {
+      try {
+        const token = await getInstallationToken(stored.installationId);
+        return {
+          tokenType: 'token',
+          accessToken: token,
+          kind: 'installation',
+          installationId: stored.installationId,
+        };
+      } catch (err) {
+        if (err instanceof InstallationUnavailableError) {
+          void this.markInstallationUnavailable(stored.installationId, err.status);
+        }
+        // Fall through to the user token if we have one — better a degraded
+        // viewer-scoped call than a hard failure.
+        if (!stored.accessToken) throw err;
+      }
+    }
+    if (!stored) return null;
+    return { tokenType: stored.tokenType, accessToken: stored.accessToken, kind: 'user' };
+  }
+
+  /**
+   * Flag an installation as suspended/removed in the DB so the webhook receiver
+   * stops enqueuing its deliveries. Best-effort, fire-and-forget. Defined here
+   * (not imported) to avoid a hard dependency cycle with the install routes.
+   */
+  private async markInstallationUnavailable(installationId: string, status: number): Promise<void> {
+    try {
+      const { githubInstallations } = await import('../db/schema.js');
+      await this.db
+        .update(githubInstallations)
+        .set({ suspendedAt: new Date(), updatedAt: new Date() })
+        .where(eq(githubInstallations.installationId, installationId));
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'installation:unavailable',
+        ok: false,
+        summary: `installation ${installationId} unavailable (${status}) — marked suspended`,
+      });
+    } catch (err) {
+      console.error('Failed to mark installation suspended:', err);
+    }
   }
 
   /**
@@ -801,10 +894,11 @@ class GitHubService extends EventEmitter {
   private async apiRequest<T>(
     workspaceId: string,
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    auth: 'auto' | 'user' = 'auto'
   ): Promise<T> {
-    const token = this.tokens.get(workspaceId);
-    if (!token) {
+    const resolved = await this.resolveAuth(workspaceId, auth === 'user');
+    if (!resolved) {
       throw new Error('GitHub not connected for this workspace');
     }
 
@@ -823,7 +917,7 @@ class GitHubService extends EventEmitter {
         ...options,
         headers: {
           Accept: 'application/vnd.github.v3+json',
-          Authorization: `${token.tokenType} ${token.accessToken}`,
+          Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
           'User-Agent': 'FastOwl',
           ...options.headers,
         },
@@ -866,15 +960,22 @@ class GitHubService extends EventEmitter {
         workspaceId,
       });
       if (response.status === 401) {
-        // GitHub's body says WHY ("Bad credentials" = revoked/invalid vs
-        // "...token expired") and the request id lets GitHub support trace it.
-        // Confirm the token is actually dead (check-token 404) before deleting —
-        // a spurious 401 must not nuke a working token. See confirmRevokedThenRemove.
-        await this.confirmRevokedThenRemove(
-          workspaceId,
-          `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
-            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
-        );
+        if (resolved.kind === 'installation' && resolved.installationId) {
+          // A stale installation token — drop it from the mint cache so the
+          // next call re-mints from a fresh App JWT. Do NOT touch the user
+          // integration row; the installation token is ephemeral.
+          clearInstallationToken(resolved.installationId);
+        } else {
+          // GitHub's body says WHY ("Bad credentials" = revoked/invalid vs
+          // "...token expired") and the request id lets GitHub support trace it.
+          // Confirm the token is actually dead (check-token 404) before deleting —
+          // a spurious 401 must not nuke a working token. See confirmRevokedThenRemove.
+          await this.confirmRevokedThenRemove(
+            workspaceId,
+            `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+              `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+          );
+        }
       }
       if (rl.isRateLimited) {
         throw new GitHubRateLimitError(error, rl.retryAfterMs);
@@ -935,7 +1036,9 @@ class GitHubService extends EventEmitter {
   }
 
   async getUser(workspaceId: string): Promise<GitHubUser> {
-    return this.apiRequest<GitHubUser>(workspaceId, '/user');
+    // Viewer identity — must use the user-to-server token (an installation
+    // token has no `/user`).
+    return this.apiRequest<GitHubUser>(workspaceId, '/user', {}, 'user');
   }
 
   /**
@@ -951,7 +1054,7 @@ class GitHubService extends EventEmitter {
     try {
       const teams = await this.apiRequest<
         Array<{ slug: string; organization: { login: string } }>
-      >(workspaceId, '/user/teams?per_page=100');
+      >(workspaceId, '/user/teams?per_page=100', {}, 'user');
       const slugs = new Set(
         teams
           .filter((t) => t.organization?.login && t.slug)
@@ -982,8 +1085,9 @@ class GitHubService extends EventEmitter {
     lastModified: string | null;
     pollInterval: number | null;
   }> {
-    const token = this.tokens.get(workspaceId);
-    if (!token) throw new Error('GitHub not connected for this workspace');
+    // Notifications are the viewer's activity feed — user-token scoped.
+    const resolved = await this.resolveAuth(workspaceId, true);
+    if (!resolved) throw new Error('GitHub not connected for this workspace');
 
     const url = new URL(`${GITHUB_API_URL}/notifications`);
     url.searchParams.set('all', 'true');
@@ -991,7 +1095,7 @@ class GitHubService extends EventEmitter {
 
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github.v3+json',
-      Authorization: `${token.tokenType} ${token.accessToken}`,
+      Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
       'User-Agent': 'FastOwl',
     };
     if (opts.ifModifiedSince) headers['If-Modified-Since'] = opts.ifModifiedSince;
@@ -1047,10 +1151,13 @@ class GitHubService extends EventEmitter {
    * runaway loops on pathological accounts.
    */
   async listRepositories(workspaceId: string): Promise<GitHubRepo[]> {
+    // "What can the human see" — user-token scoped.
     return this.paginate<GitHubRepo>(
       workspaceId,
       (page) =>
-        `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`
+        `/user/repos?per_page=100&page=${page}&sort=pushed&affiliation=owner,collaborator,organization_member`,
+      20,
+      'user'
     );
   }
 
@@ -1072,7 +1179,9 @@ class GitHubService extends EventEmitter {
     try {
       const authed = await this.paginate<{ login: string; avatar_url: string }>(
         workspaceId,
-        (page) => `/user/orgs?per_page=100&page=${page}`
+        (page) => `/user/orgs?per_page=100&page=${page}`,
+        20,
+        'user'
       );
       for (const o of authed) byLogin.set(o.login, o);
     } catch (err) {
@@ -1145,11 +1254,12 @@ class GitHubService extends EventEmitter {
   private async paginate<T>(
     workspaceId: string,
     urlForPage: (page: number) => string,
-    maxPages = 20
+    maxPages = 20,
+    auth: 'auto' | 'user' = 'auto'
   ): Promise<T[]> {
     const out: T[] = [];
     for (let page = 1; page <= maxPages; page++) {
-      const batch = await this.apiRequest<T[]>(workspaceId, urlForPage(page));
+      const batch = await this.apiRequest<T[]>(workspaceId, urlForPage(page), {}, auth);
       out.push(...batch);
       if (batch.length < 100) break;
     }
@@ -1495,8 +1605,8 @@ class GitHubService extends EventEmitter {
     query: string,
     variables: Record<string, unknown> = {}
   ): Promise<T> {
-    const token = this.tokens.get(workspaceId);
-    if (!token) {
+    const resolved = await this.resolveAuth(workspaceId);
+    if (!resolved) {
       throw new Error('GitHub not connected for this workspace');
     }
     // GitHub's GraphQL endpoint occasionally 502/503/504s on heavy
@@ -1515,7 +1625,7 @@ class GitHubService extends EventEmitter {
           method: 'POST',
           headers: {
             Accept: 'application/vnd.github+json',
-            Authorization: `${token.tokenType} ${token.accessToken}`,
+            Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
             'Content-Type': 'application/json',
             'User-Agent': 'FastOwl',
           },
@@ -1573,11 +1683,15 @@ class GitHubService extends EventEmitter {
       }
       if (response.status === 401) {
         recordGql(false, 'token expired or revoked');
-        await this.confirmRevokedThenRemove(
-          workspaceId,
-          `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
-            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
-        );
+        if (resolved.kind === 'installation' && resolved.installationId) {
+          clearInstallationToken(resolved.installationId);
+        } else {
+          await this.confirmRevokedThenRemove(
+            workspaceId,
+            `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
+              `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+          );
+        }
         throw new Error('GitHub token expired or revoked');
       }
       // A secondary-rate-limit 403/429 is NOT retried inline — that would burst

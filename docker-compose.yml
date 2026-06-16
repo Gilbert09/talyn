@@ -1,0 +1,29 @@
+# Local dev infra that the Supabase CLI doesn't manage.
+#
+# The local Postgres/Auth stack comes from `npm run dev:db` (Supabase CLI).
+# Redis is the cross-replica backbone (WebSocket fan-out today; the webhook
+# ingest Stream next), so it lives here.
+#
+#   npm run dev:redis        # start Redis in the background
+#   npm run dev:redis:stop   # stop + remove it
+#
+# Point the backend at it with REDIS_URL=redis://localhost:6379 in
+# packages/backend/.env. Leave REDIS_URL unset to run single-process without it.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: fastowl-redis
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes
+    volumes:
+      - fastowl-redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  fastowl-redis-data:

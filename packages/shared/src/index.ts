@@ -369,6 +369,7 @@ export type DebugCategory =
   | 'polling' // a poll loop tick
   | 'websocket' // client connect/disconnect, inbound message, outbound broadcast
   | 'event' // in-process domain event (e.g. task:status)
+  | 'webhook' // an inbound GitHub webhook delivery (receipt → enqueue → process)
   | 'error'; // an unexpected failure worth surfacing on its own
 
 /**

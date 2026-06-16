@@ -272,6 +272,60 @@ class DebugBus {
     });
   }
 
+  /**
+   * Record one inbound GitHub webhook delivery, at one of its lifecycle points:
+   *   - 'received'  — signature verified + enqueued (or dropped at the filter)
+   *   - 'processed' — a worker drained it and fanned it out
+   * Drives the Debug panel's webhook tiles (throughput, signature failures,
+   * drops-by-reason, enqueue→process latency, fan-out factor). Metadata only.
+   */
+  recordWebhook(input: {
+    action: 'received' | 'processed';
+    eventType: string;
+    delivery?: string;
+    signature?: 'valid' | 'invalid' | 'missing';
+    ok: boolean;
+    durationMs?: number;
+    queued?: boolean;
+    dropReason?: string;
+    /** How many (workspace, PR) targets this delivery fanned out to. */
+    fanout?: number;
+    /** enqueue→pickup latency for a processed delivery. */
+    latencyMs?: number;
+    workspaceId?: string;
+    error?: string;
+  }): void {
+    const verb = input.action === 'received' ? 'recv' : 'proc';
+    const detail =
+      input.action === 'received'
+        ? input.dropReason
+          ? `dropped (${input.dropReason})`
+          : input.queued
+            ? 'queued'
+            : input.signature === 'invalid'
+              ? 'bad signature'
+              : 'ok'
+        : `fanout ${input.fanout ?? 0}${input.latencyMs !== undefined ? ` · ${Math.round(input.latencyMs)}ms lag` : ''}`;
+    this.record({
+      category: input.ok ? 'webhook' : 'error',
+      service: 'github_webhooks',
+      action: input.action,
+      ok: input.ok,
+      summary: `${verb} ${input.eventType} → ${detail}`,
+      ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+      ...this.resolveOwner(input.workspaceId),
+      meta: {
+        eventType: input.eventType,
+        ...(input.delivery ? { delivery: input.delivery } : {}),
+        ...(input.signature ? { signature: input.signature } : {}),
+        ...(input.dropReason ? { dropReason: input.dropReason } : {}),
+        ...(input.fanout !== undefined ? { fanout: input.fanout } : {}),
+        ...(input.latencyMs !== undefined ? { latencyMs: Math.round(input.latencyMs) } : {}),
+        ...(input.error ? { error: truncate(input.error) } : {}),
+      },
+    });
+  }
+
   // ---- Poller registry ----------------------------------------------------
 
   /**

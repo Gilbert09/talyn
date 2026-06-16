@@ -1,0 +1,154 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  isRefreshEvent,
+  extractPrNumbers,
+  processWebhookDelivery,
+  _resetCoalesce,
+  type WebhookDelivery,
+} from '../services/webhookWorker.js';
+import { refreshWebhookIndex, _resetWebhookIndex } from '../services/webhookIndex.js';
+import { prMonitorService } from '../services/prMonitor.js';
+import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
+import type { Database } from '../db/client.js';
+import {
+  workspaces as workspacesTable,
+  repositories as repositoriesTable,
+} from '../db/schema.js';
+
+function delivery(over: Partial<WebhookDelivery>): WebhookDelivery {
+  return {
+    deliveryId: 'd1',
+    eventType: 'pull_request',
+    repoFullName: 'acme/widget',
+    enqueuedAtMs: 0,
+    payload: {},
+    ...over,
+  };
+}
+
+describe('webhook classification helpers', () => {
+  it('flags PR-affecting events as refresh events', () => {
+    for (const e of [
+      'pull_request',
+      'pull_request_review',
+      'pull_request_review_comment',
+      'issue_comment',
+      'check_run',
+      'check_suite',
+    ]) {
+      expect(isRefreshEvent(e)).toBe(true);
+    }
+    for (const e of ['installation', 'status', 'push', 'ping']) {
+      expect(isRefreshEvent(e)).toBe(false);
+    }
+  });
+
+  it('extracts PR numbers per event shape', () => {
+    expect(extractPrNumbers('pull_request', { pull_request: { number: 7 } })).toEqual([7]);
+    expect(extractPrNumbers('pull_request', { number: 9 })).toEqual([9]);
+    expect(extractPrNumbers('pull_request_review', { pull_request: { number: 3 } })).toEqual([3]);
+    expect(
+      extractPrNumbers('pull_request_review_comment', { pull_request: { number: 4 } }),
+    ).toEqual([4]);
+    expect(
+      extractPrNumbers('check_run', { check_run: { pull_requests: [{ number: 1 }, { number: 2 }] } }),
+    ).toEqual([1, 2]);
+    expect(
+      extractPrNumbers('check_suite', { check_suite: { pull_requests: [{ number: 5 }] } }),
+    ).toEqual([5]);
+  });
+
+  it('only treats issue_comment as a PR when issue.pull_request is present', () => {
+    expect(extractPrNumbers('issue_comment', { issue: { number: 8, pull_request: {} } })).toEqual([8]);
+    expect(extractPrNumbers('issue_comment', { issue: { number: 8 } })).toEqual([]);
+  });
+
+  it('returns no numbers for commit-scoped status events', () => {
+    expect(extractPrNumbers('status', { sha: 'abc', state: 'success' })).toEqual([]);
+  });
+});
+
+describe('processWebhookDelivery (fan-out + coalescing)', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+  let refreshSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seedUser(db, { id: TEST_USER_ID });
+    // Two workspaces watching the SAME repo → one event fans to both.
+    await db.insert(workspacesTable).values([
+      { id: 'wsA', ownerId: TEST_USER_ID, name: 'A', settings: {} },
+      { id: 'wsB', ownerId: TEST_USER_ID, name: 'B', settings: {} },
+    ]);
+    await db.insert(repositoriesTable).values([
+      { id: 'rA', workspaceId: 'wsA', name: 'acme/widget', url: 'https://github.com/acme/widget', defaultBranch: 'main', createdAt: new Date() },
+      { id: 'rB', workspaceId: 'wsB', name: 'acme/widget', url: 'https://github.com/acme/widget', defaultBranch: 'main', createdAt: new Date() },
+    ]);
+    _resetWebhookIndex();
+    await refreshWebhookIndex();
+    _resetCoalesce();
+    // Stub the actual refresh so we assert dispatch without hitting GitHub.
+    refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    _resetWebhookIndex();
+    _resetCoalesce();
+    await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('fans one PR event out to every workspace watching the repo', async () => {
+    const n = await processWebhookDelivery(
+      delivery({ payload: { pull_request: { number: 7 } } }),
+      1_000,
+    );
+    expect(n).toBe(2);
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7);
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7);
+  });
+
+  it('coalesces a burst for the same (workspace, PR) within the window', async () => {
+    await processWebhookDelivery(delivery({ payload: { pull_request: { number: 7 } } }), 1_000);
+    refreshSpy.mockClear();
+    // Same PR, 100ms later — inside the 750ms window → dropped.
+    const n = await processWebhookDelivery(
+      delivery({ eventType: 'check_run', payload: { check_run: { pull_requests: [{ number: 7 }] } } }),
+      1_100,
+    );
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('refreshes again once the coalescing window has elapsed', async () => {
+    await processWebhookDelivery(delivery({ payload: { pull_request: { number: 7 } } }), 1_000);
+    refreshSpy.mockClear();
+    const n = await processWebhookDelivery(
+      delivery({ payload: { pull_request: { number: 7 } } }),
+      2_000, // > 750ms later
+    );
+    expect(n).toBe(2);
+    expect(refreshSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops events for a repo nobody watches', async () => {
+    const n = await processWebhookDelivery(
+      delivery({ repoFullName: 'someone/else', payload: { pull_request: { number: 1 } } }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh on installation events (index maintenance only)', async () => {
+    const n = await processWebhookDelivery(
+      delivery({ eventType: 'installation', repoFullName: '', payload: { action: 'created' } }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+});

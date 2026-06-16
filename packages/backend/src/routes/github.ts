@@ -1,11 +1,22 @@
 import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { githubService } from '../services/github.js';
+import { prMonitorService } from '../services/prMonitor.js';
+import {
+  isGitHubAppConfigured,
+  buildInstallUrl,
+  exchangeUserCode,
+  fetchInstallation,
+  fetchInstallationRepos,
+} from '../services/githubApp.js';
+import { getPoolDbClient } from '../db/client.js';
+import { githubInstallations } from '../db/schema.js';
 import {
   handleAccessError,
   requireWorkspaceAccess,
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
+import { debugBus } from '../services/debugBus.js';
 import type { ApiResponse } from '@fastowl/shared';
 
 // OAuth flows don't run more than a few times per user per hour. 20 per
@@ -85,7 +96,104 @@ export function githubPublicRoutes(): Router {
     }
   });
 
+  // GitHub App install redirect. GitHub appends `installation_id`,
+  // `setup_action`, plus the OAuth `code` (user authorization requested during
+  // install) and our `state`. We exchange the code for the user-to-server
+  // token, persist the installation + integration, then kick a bulk refresh.
+  router.get('/app/callback', oauthRateLimit, async (req, res) => {
+    const { code, state, installation_id, error, error_description } = req.query;
+    if (error) {
+      return res.status(400).type('html').send(
+        renderCallbackPage({
+          ok: false,
+          message: (error_description as string) || (error as string) || 'GitHub App error',
+        })
+      );
+    }
+    if (!code || !state || !installation_id) {
+      return res.status(400).type('html').send(
+        renderCallbackPage({ ok: false, message: 'Missing code, state, or installation_id' })
+      );
+    }
+    const [workspaceId, stateToken] = (state as string).split(':');
+    const pendingState = pendingOAuthStates.get(stateToken);
+    if (!pendingState || pendingState.workspaceId !== workspaceId) {
+      return res.status(400).type('html').send(
+        renderCallbackPage({ ok: false, message: 'Invalid install state — try again from FastOwl' })
+      );
+    }
+    pendingOAuthStates.delete(stateToken);
+
+    try {
+      await completeAppInstallation(workspaceId, code as string, String(installation_id));
+      res.type('html').send(renderCallbackPage({ ok: true, message: 'GitHub App connected!' }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).type('html').send(renderCallbackPage({ ok: false, message }));
+    }
+  });
+
   return router;
+}
+
+/**
+ * Finish an App installation: exchange the OAuth code for the user-to-server
+ * token, read the installation's account + selected repos, upsert the global
+ * `github_installations` row, store the workspace integration (user token +
+ * installationId), and trigger a bulk refresh so the UI fills immediately.
+ */
+async function completeAppInstallation(
+  workspaceId: string,
+  code: string,
+  installationId: string
+): Promise<void> {
+  const userToken = await exchangeUserCode(code);
+  const info = await fetchInstallation(installationId);
+  const repoFullNames = await fetchInstallationRepos(installationId).catch(() => []);
+
+  const db = getPoolDbClient();
+  const now = new Date();
+  await db
+    .insert(githubInstallations)
+    .values({
+      installationId,
+      accountLogin: info.accountLogin,
+      accountType: info.accountType,
+      repoFullNames,
+      suspendedAt: info.suspended ? now : null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: githubInstallations.installationId,
+      set: {
+        accountLogin: info.accountLogin,
+        accountType: info.accountType,
+        repoFullNames,
+        suspendedAt: info.suspended ? now : null,
+        updatedAt: now,
+      },
+    });
+
+  await githubService.storeToken(
+    workspaceId,
+    userToken.access_token,
+    userToken.token_type,
+    userToken.scope,
+    { installationId }
+  );
+
+  debugBus.recordEvent({
+    service: 'github',
+    action: 'installation:connected',
+    summary: `installation ${installationId} (${info.accountLogin}) connected to ws ${workspaceId.slice(0, 8)} — ${repoFullNames.length} repo(s)`,
+    workspaceId,
+  });
+
+  // Fill the UI immediately rather than waiting for the first webhook.
+  void prMonitorService.refreshWorkspaceNow(workspaceId).catch((err) => {
+    console.error('[github] post-install bulk refresh failed:', err);
+  });
 }
 
 /**
@@ -211,6 +319,29 @@ export function githubRoutes(): Router {
 
     const authUrl = githubService.getAuthorizationUrl(workspaceId, state);
     res.json({ success: true, data: { authUrl, state } });
+  });
+
+  // GitHub App install URL. Same pending-state model as /connect — the public
+  // /app/callback validates the state token before persisting anything.
+  router.post('/app/install-url', oauthRateLimit, async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res, 'body');
+    if (!workspaceId) return;
+    if (!isGitHubAppConfigured()) {
+      return res.status(400).json({ success: false, error: 'GitHub App not configured' });
+    }
+    const state = uuid();
+    pendingOAuthStates.set(state, {
+      workspaceId,
+      userId: req.user!.id,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+    try {
+      const installUrl = buildInstallUrl(`${workspaceId}:${state}`);
+      res.json({ success: true, data: { installUrl, state } });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
   });
 
   router.post('/disconnect', async (req, res) => {

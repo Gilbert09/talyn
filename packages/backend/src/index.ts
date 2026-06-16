@@ -6,6 +6,12 @@ import { WebSocketServer } from 'ws';
 import { eq } from 'drizzle-orm';
 import { setupRoutes } from './routes/index.js';
 import { setupWebSocket } from './services/websocket.js';
+import { initWsBus, shutdownWsBus } from './services/wsBus.js';
+import { closeRedis } from './services/redis.js';
+import { initWebhookIndex } from './services/webhookIndex.js';
+import { webhookWorker } from './services/webhookWorker.js';
+import { prReconcileSweep } from './services/prReconcileSweep.js';
+import { handleGithubWebhook } from './routes/webhooks.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, closeDbClient } from './db/client.js';
 import { environments as environmentsTable } from './db/schema.js';
@@ -51,6 +57,12 @@ async function main() {
   prAutoMergeWatcher.init();
   mergeQueueProcessor.init();
 
+  // Webhook pipeline: prime the watch index, start the Redis Stream worker, and
+  // arm the low-frequency reconcile sweep. Worker is inert without REDIS_URL.
+  await initWebhookIndex().catch((err) => console.error('webhook index init failed:', err));
+  await webhookWorker.init();
+  prReconcileSweep.init();
+
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
   await markCloudEnvironmentsConnected();
@@ -90,6 +102,18 @@ async function main() {
       credentials: true,
     })
   );
+  // GitHub webhook receiver. MUST be mounted before express.json so the handler
+  // gets the raw body for HMAC verification (signature is over the exact bytes).
+  // Public — no auth header; the HMAC IS the auth. Kept tiny + fast: verify,
+  // filter, enqueue, 202.
+  app.post(
+    '/api/v1/webhooks/github',
+    express.raw({ type: () => true, limit: '5mb' }),
+    (req, res) => {
+      void handleGithubWebhook(req, res);
+    }
+  );
+
   // 2mb (vs the 100kb default) leaves comfortable room for inline
   // workspace-logo image uploads; the per-logo cap in the workspaces route is
   // the real guard.
@@ -117,6 +141,11 @@ async function main() {
   // instead of crashing the ws library's auto-attached listener.
   const wss = new WebSocketServer({ noServer: true });
   setupWebSocket(wss);
+
+  // Cross-replica WebSocket fan-out over Redis Pub/Sub. Inert (single-process
+  // delivery only) when REDIS_URL is unset. Started after setupWebSocket so the
+  // local-delivery callback is registered before the first remote message.
+  initWsBus();
 
   server.on('upgrade', (req, socket, head) => {
     const { pathname } = new URL(req.url ?? '/', 'http://localhost');
@@ -155,8 +184,12 @@ async function main() {
     tokenHealthPoller.shutdown();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
+    webhookWorker.shutdown();
+    prReconcileSweep.shutdown();
 
     server.close(async () => {
+      await shutdownWsBus();
+      await closeRedis();
       await closeDbClient();
       console.log('Goodbye!');
       process.exit(0);
