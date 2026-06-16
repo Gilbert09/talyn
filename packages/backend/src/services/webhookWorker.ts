@@ -223,8 +223,15 @@ export async function processWebhookDelivery(
     const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
     if (!ev) return 0;
     const updated = await ingestCheckRun(ev, targets, numbers, trackedByRepo).catch((err) => {
+      // drizzle wraps the driver error: `err.message` is just "Failed query: …",
+      // the real Postgres error (code + message) is on `err.cause`.
+      const cause = (err as { cause?: unknown }).cause;
+      const causeMsg =
+        cause instanceof Error
+          ? `${cause.message}${(cause as { code?: string }).code ? ` [${(cause as { code?: string }).code}]` : ''}`
+          : '';
       console.warn(
-        `[webhookWorker] ingestCheckRun ${delivery.repoFullName}: ${err instanceof Error ? err.message : String(err)}`,
+        `[webhookWorker] ingestCheckRun ${delivery.repoFullName}: ${err instanceof Error ? err.message : String(err)}${causeMsg ? ` | cause: ${causeMsg}` : ''}`,
       );
       return 0;
     });
