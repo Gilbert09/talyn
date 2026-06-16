@@ -1752,30 +1752,38 @@ class GitHubService extends EventEmitter {
           errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
         }>(response.bodyText);
         if (payload.errors && payload.errors.length > 0) {
-          // GitHub returns *partial* data alongside per-field FORBIDDEN errors:
-          // when the installation can read an object but not one of its leaf
-          // fields (e.g. …statusCheckRollup.contexts.nodes.N.isRequired needs
-          // branch-protection read, …checkSuite.app can 403 on suites owned by
-          // an app we can't see) that leaf comes back null and the error names
-          // its deep path. Keep the data and drop the leaf rather than
-          // discarding the whole response — otherwise a single forbidden
-          // sub-field sinks an entire PR refresh, and callers that match on
-          // "Resource not accessible by integration" (prMonitor's
-          // isRepoAccessError) misread it as the *whole repo* being
-          // inaccessible and stop polling it.
+          // GitHub returns *partial* data alongside errors scoped to a single
+          // node or field inside the `repository` tree, and GraphQL guarantees
+          // the errored field is null in `data` (errors propagate up to the
+          // nearest nullable field). Two cases we hit constantly:
+          //   - a per-field FORBIDDEN on a check sub-field the install can't
+          //     read (…contexts.nodes.N.isRequired, …checkSuite.app) → that
+          //     leaf is null, the check is otherwise intact;
+          //   - a per-alias NOT_FOUND in a batch query when one PR number was
+          //     deleted/transferred (…repository.b3 "Could not resolve to a
+          //     PullRequest with the number of 21") → that alias is null, the
+          //     other PRs in the batch are intact.
+          // Both decode paths already treat a null alias/leaf as nullable, so
+          // keep the partial data rather than discarding the whole response.
+          // Throwing instead would sink an entire PR refresh over one stale
+          // number, and callers that match on "Resource not accessible by
+          // integration" (prMonitor's isRepoAccessError) would misread a
+          // per-field 403 as the *whole repo* being inaccessible and stop
+          // polling it.
           //
-          // Only tolerate when every error is a deep-path FORBIDDEN (path
-          // length > 2, i.e. well past the `repository` root) and we still got
-          // a data payload. A root-level FORBIDDEN/NOT_FOUND (genuine
-          // no-access), any non-FORBIDDEN error, or a null `data` stays fatal
-          // and is surfaced verbatim with its type + path — that's the actual
-          // signal repo-access classification depends on.
-          const isLeafForbidden = (e: {
+          // Only tolerate when every error is scoped *below* the `repository`
+          // root (path length >= 2, rooted at `repository`) and we still got a
+          // data payload. A bare-`repository` error (whole-repo no-access), a
+          // path-less top-level error (rate limit, bad query), or a null `data`
+          // stays fatal and is surfaced verbatim with its type + path — that's
+          // the actual signal repo-access classification depends on.
+          const isScopedError = (e: {
             type?: string;
             path?: Array<string | number>;
-          }) => e.type === 'FORBIDDEN' && Array.isArray(e.path) && e.path.length > 2;
+          }) =>
+            Array.isArray(e.path) && e.path.length >= 2 && e.path[0] === 'repository';
           const tolerable =
-            payload.data != null && payload.errors.every(isLeafForbidden);
+            payload.data != null && payload.errors.every(isScopedError);
           if (!tolerable) {
             // Surface the first GraphQL error verbatim, plus its `type`
             // (e.g. FORBIDDEN) and `path` — which field/node GitHub refused.
@@ -1786,9 +1794,9 @@ class GitHubService extends EventEmitter {
             recordGql(false, `GraphQL: ${e.message}${detail}`);
             throw new Error(`GitHub GraphQL: ${e.message}${detail}`);
           }
-          // Partial success — record the forbidden leaves so the Debug panel
+          // Partial success — record the scoped errors so the Debug panel
           // isn't blind to them, but don't fail the request.
-          recordGql(true, `partial: ${payload.errors.length} forbidden leaf(s)`);
+          recordGql(true, `partial: ${payload.errors.length} scoped error(s)`);
           // `tolerable` already verified data != null; the const boolean just
           // doesn't carry the narrowing.
           return payload.data as T;

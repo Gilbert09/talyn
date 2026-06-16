@@ -458,17 +458,20 @@ describe('githubService', () => {
       );
     });
 
-    it('executeGraphql does not swallow a non-FORBIDDEN error even with partial data', async () => {
+    it('executeGraphql tolerates a per-alias NOT_FOUND in a batch and returns partial data', async () => {
+      // One PR number in a by-number batch was deleted/transferred: GitHub
+      // nulls that alias and resolves the rest. A stale number must not sink
+      // the whole batch refresh.
       const stub = vi.fn(
         async () =>
           new Response(
             JSON.stringify({
-              data: { repository: { pr: { ok: true } } },
+              data: { repository: { b0: { number: 22 }, b3: null } },
               errors: [
                 {
                   type: 'NOT_FOUND',
-                  message: 'Could not resolve to a node',
-                  path: ['repository', 'pr', 'x'],
+                  message: 'Could not resolve to a PullRequest with the number of 21.',
+                  path: ['repository', 'b3'],
                 },
               ],
             }),
@@ -477,7 +480,32 @@ describe('githubService', () => {
       );
       vi.stubGlobal('fetch', stub);
 
-      await expect(githubService.executeGraphql('ws1', 'query{}')).rejects.toThrow(/NOT_FOUND/);
+      const data = await githubService.executeGraphql<{
+        repository: { b0: { number: number }; b3: null };
+      }>('ws1', 'query{}');
+      expect(data.repository.b0.number).toBe(22);
+      expect(data.repository.b3).toBeNull();
+    });
+
+    it('executeGraphql still throws on a path-less top-level error (even with partial data)', async () => {
+      // No path → not scoped to a nullable node; could be a rate limit or a
+      // query-level failure. Stay fatal so it surfaces rather than silently
+      // returning half a response.
+      const stub = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { repository: { b0: { number: 22 } } },
+              errors: [{ message: 'API rate limit exceeded for installation' }],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+      );
+      vi.stubGlobal('fetch', stub);
+
+      await expect(githubService.executeGraphql('ws1', 'query{}')).rejects.toThrow(
+        /API rate limit exceeded/
+      );
     });
 
     it('getCheckRuns hits /repos/:owner/:repo/commits/:ref/check-runs', async () => {
