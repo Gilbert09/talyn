@@ -22,32 +22,6 @@ import {
 
 // ---------- Helpers ----------
 
-function fakeRESTPullRequest(over: Partial<{
-  number: number;
-  title: string;
-  userLogin: string;
-  headRef: string;
-  headSha: string;
-  requestedReviewers: string[];
-}> = {}) {
-  return {
-    id: 1,
-    number: over.number ?? 42,
-    title: over.title ?? 'Add feature',
-    state: 'open' as const,
-    html_url: `https://github.com/acme/widgets/pull/${over.number ?? 42}`,
-    user: { login: over.userLogin ?? 'me', avatar_url: 'x' },
-    created_at: 'now',
-    updated_at: 'now',
-    draft: false,
-    mergeable: null,
-    mergeable_state: 'clean',
-    head: { ref: over.headRef ?? 'feature/x', sha: over.headSha ?? 'sha1' },
-    base: { ref: 'main' },
-    requested_reviewers: (over.requestedReviewers ?? []).map((login) => ({ login })),
-  };
-}
-
 function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
   return {
     owner: 'acme',
@@ -339,13 +313,18 @@ describe('prMonitor — poll orchestration', () => {
     ]);
     // The user merged #2 — it's gone from the search results.
     mockSearch([1]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-      state: 'closed',
-      merged: true,
-      merged_at: '2026-01-02T00:00:00Z',
-    } as never);
+    // The sweep resolves merged/closed via the batched GraphQL lookup now.
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      {
+        number: 2,
+        pr: fakeSummary({
+          number: 2,
+          headBranch: 'feature/b',
+          state: 'merged',
+          mergedAt: '2026-01-02T00:00:00Z',
+        }),
+      },
+    ]);
 
     await prMonitorService.forcePoll();
 
@@ -373,13 +352,17 @@ describe('prMonitor — poll orchestration', () => {
     });
     // #2 auto-merged upstream — gone from the search, GitHub reports merged.
     mockSearch([]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-      state: 'closed',
-      merged: true,
-      merged_at: '2026-01-02T00:00:00Z',
-    } as never);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      {
+        number: 2,
+        pr: fakeSummary({
+          number: 2,
+          headBranch: 'feature/b',
+          state: 'merged',
+          mergedAt: '2026-01-02T00:00:00Z',
+        }),
+      },
+    ]);
     const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
 
     await prMonitorService.forcePoll();
@@ -405,13 +388,9 @@ describe('prMonitor — poll orchestration', () => {
       updatedAt: new Date(),
     });
     mockSearch([]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-      state: 'closed',
-      merged: false,
-      merged_at: null,
-    } as never);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b', state: 'closed' }) },
+    ]);
 
     await prMonitorService.forcePoll();
 
@@ -464,13 +443,18 @@ describe('prMonitor — poll orchestration', () => {
     ]);
     // pr-2 merged upstream (gone from the search); pr-3 still open and seen.
     mockSearch([3]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'me' }),
-      state: 'closed',
-      merged: true,
-      merged_at: '2026-01-02T00:00:00Z',
-    } as never);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      {
+        number: 2,
+        pr: fakeSummary({
+          number: 2,
+          headBranch: 'feature/b',
+          baseBranch: 'main',
+          state: 'merged',
+          mergedAt: '2026-01-02T00:00:00Z',
+        }),
+      },
+    ]);
     const emitSpy = vi.spyOn(websocketModule, 'emitPullRequestUpdated');
 
     await prMonitorService.forcePoll();
@@ -519,13 +503,11 @@ describe('prMonitor — poll orchestration', () => {
       updatedAt: new Date(),
     });
     mockSearch([]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 2, headRef: 'feature/b', userLogin: 'someone-else' }),
-      state: 'open',
-      merged: false,
-      merged_at: null,
-    } as never);
+    // Still OPEN on GitHub — the batched sweep lookup reports it open, so the
+    // row is left untouched.
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 2, pr: fakeSummary({ number: 2, headBranch: 'feature/b', state: 'open' }) },
+    ]);
 
     await prMonitorService.forcePoll();
 
@@ -536,7 +518,7 @@ describe('prMonitor — poll orchestration', () => {
     expect(rows[0].state).toBe('open');
   });
 
-  it('falls back to closed when the per-PR state lookup fails', async () => {
+  it('leaves a fallen-out row untouched when the sweep batch lookup fails (retries next tick, never mass-closes)', async () => {
     await db.insert(pullRequestsTable).values({
       id: 'pr-2',
       workspaceId: 'ws1',
@@ -551,8 +533,11 @@ describe('prMonitor — poll orchestration', () => {
       updatedAt: new Date(),
     });
     mockSearch([]);
-    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([]);
-    vi.spyOn(githubService, 'getPullRequest').mockRejectedValue(new Error('rate limit'));
+    // A transient failure of the single batched lookup must NOT flip the row —
+    // batching means one error would otherwise mass-close every fallen-out PR.
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockRejectedValue(
+      new Error('rate limit')
+    );
 
     await prMonitorService.forcePoll();
 
@@ -560,7 +545,7 @@ describe('prMonitor — poll orchestration', () => {
       .select()
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, 'pr-2'));
-    expect(rows[0].state).toBe('closed');
+    expect(rows[0].state).toBe('open');
   });
 
   it('isolates per-workspace failures (one repo throwing does not stop others)', async () => {
@@ -768,22 +753,18 @@ describe('prMonitor — poll orchestration', () => {
       updatedAt: new Date(),
     });
     mockSearch([]); // dropped out of authored/review-requested/reviewed-by
+    // The main poll refetches the stale fallen-out row (call 1); the closed
+    // sweep then makes its own batched state-check (call 2). The mock reports it
+    // still open, so sweepClosed leaves the row alone.
     const graphqlSpy = vi
       .spyOn(graphqlModule, 'batchPullRequestsByNumber')
       .mockResolvedValue([
         { number: 9, pr: fakeSummary({ number: 9, headBranch: 'feature/i', title: 'New title' }) },
       ]);
-    // Still open on GitHub, so sweepClosed leaves the row alone.
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
-      state: 'open',
-      merged: false,
-      merged_at: null,
-    } as never);
 
     await prMonitorService.forcePoll();
 
-    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy).toHaveBeenCalledTimes(2);
     expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
     const row = (await db.select().from(pullRequestsTable)).find((r) => r.number === 9);
     expect(row?.state).toBe('open');
@@ -807,17 +788,19 @@ describe('prMonitor — poll orchestration', () => {
       updatedAt: new Date(),
     });
     mockSearch([]);
-    const graphqlSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber');
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
-      state: 'open',
-      merged: false,
-      merged_at: null,
-    } as never);
+    // 2 min old → within the untracked TTL, so the main poll must NOT refetch.
+    // The closed-sweep still makes its single batched state-check every tick, so
+    // exactly ONE batched call (the sweep), never two.
+    const graphqlSpy = vi
+      .spyOn(graphqlModule, 'batchPullRequestsByNumber')
+      .mockResolvedValue([
+        { number: 9, pr: fakeSummary({ number: 9, headBranch: 'feature/i', state: 'open' }) },
+      ]);
 
     await prMonitorService.forcePoll();
 
-    expect(graphqlSpy).not.toHaveBeenCalled();
+    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
   });
 
   it('refetches a fallen-out tracked-open row early when the user focuses it', async () => {
@@ -838,21 +821,17 @@ describe('prMonitor — poll orchestration', () => {
     });
     setFocused('ws1', 'pr-untracked-focus');
     mockSearch([]);
+    // Focus forces the main poll to refetch early (call 1); the closed-sweep
+    // then makes its batched state-check (call 2). Both target [9].
     const graphqlSpy = vi
       .spyOn(graphqlModule, 'batchPullRequestsByNumber')
       .mockResolvedValue([
         { number: 9, pr: fakeSummary({ number: 9, headBranch: 'feature/i' }) },
       ]);
-    vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
-      ...fakeRESTPullRequest({ number: 9, headRef: 'feature/i', userLogin: 'someone-else' }),
-      state: 'open',
-      merged: false,
-      merged_at: null,
-    } as never);
 
     await prMonitorService.forcePoll();
 
-    expect(graphqlSpy).toHaveBeenCalledTimes(1);
+    expect(graphqlSpy).toHaveBeenCalledTimes(2);
     expect(graphqlSpy.mock.calls[0][0].numbers).toEqual([9]);
   });
 

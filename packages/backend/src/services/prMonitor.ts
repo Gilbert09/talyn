@@ -521,33 +521,48 @@ class PRMonitorService extends EventEmitter {
     const seen = new Set(seenNumbers);
     const stale = rows.filter((r) => !seen.has(r.number));
     if (stale.length === 0) return;
+
+    // Resolve merged-vs-closed for every stale row in ONE batched GraphQL call
+    // (`pullRequest(number:)` returns merged/closed PRs too) instead of an N+1
+    // chain of per-PR REST lookups. The serial REST chain dragged the tick out
+    // and burned the REST rate-limit budget on repos with many fallen-out PRs,
+    // which then stretched the adaptive poller — the dominant slowdown when a
+    // user has a lot of PRs in flight.
+    let byNumber: Map<number, PRSummary | null>;
+    try {
+      const results = await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers: stale.map((r) => r.number),
+      });
+      byNumber = new Map(results.map((r) => [r.number, r.pr]));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown error';
+      console.warn(`[pr-monitor] sweep batch lookup failed for ${repo.fullName}: ${msg}`);
+      return; // skip this tick and retry — never mass-close on a transient error.
+    }
+    // A successful response that resolved NOTHING (every PR null) means the repo
+    // node came back empty (access/transient blip), not that N PRs all closed —
+    // a genuinely closed/merged PR still resolves with a non-null summary. Skip
+    // rather than risk mass-closing open rows.
+    if (![...byNumber.values()].some((pr) => pr !== null)) return;
+
     let sweptQueued = false;
     for (const row of stale) {
-      let nextState: 'merged' | 'closed' = 'closed';
-      let mergedAt: Date | null = null;
-      try {
-        const pr = await githubService.getPullRequest(
-          workspaceId,
-          repo.owner,
-          repo.repo,
-          row.number
-        );
-        // A review-requested PR drops out of our watch list the moment
-        // the user submits their review, but stays OPEN on GitHub. Don't
-        // mark such a PR closed — leave its state untouched.
-        if (pr.state === 'open' && !pr.merged_at && !pr.merged) {
-          continue;
-        }
-        if (pr.merged_at || pr.merged) {
-          nextState = 'merged';
-          mergedAt = pr.merged_at ? new Date(pr.merged_at) : new Date();
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'unknown error';
-        console.warn(
-          `[pr-monitor] sweep state lookup failed for ${repo.fullName}#${row.number}: ${msg}`
-        );
-      }
+      const pr = byNumber.get(row.number) ?? null;
+      // A review-requested PR drops out of our watch list the moment the user
+      // submits their review, but stays OPEN on GitHub — leave it untouched.
+      if (pr && pr.state === 'open' && !pr.mergedAt) continue;
+      // `pr == null` here is a number GitHub returned no node for while others
+      // resolved — treat it as closed so a vanished PR doesn't re-poll forever.
+      const merged = Boolean(pr && (pr.mergedAt || pr.state === 'merged'));
+      const nextState: 'merged' | 'closed' = merged ? 'merged' : 'closed';
+      const mergedAt: Date | null = merged
+        ? pr?.mergedAt
+          ? new Date(pr.mergedAt)
+          : new Date()
+        : null;
       // A PR that left `open` can't be merged by the queue — clear its queue
       // bookkeeping in the same write. Leaving the flags set once stalled the
       // whole (repo, base) group: the merged head kept its "#1" slot while
