@@ -5,6 +5,11 @@ import { targetsForRepo, refreshWebhookIndex } from './webhookIndex.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
 import { debugBus } from './debugBus.js';
+import {
+  ingestCheckRun,
+  parseCheckRunPayload,
+  pruneChecksForSha,
+} from './checkCounts.js';
 
 /**
  * Drains the GitHub webhook ingest stream and turns each delivery into the
@@ -196,39 +201,71 @@ export async function processWebhookDelivery(
       `PRs=[${numbers.join(',')}] → ${targets.length} workspace(s)`,
   );
 
-  const isCheckEvent =
-    delivery.eventType === 'check_run' || delivery.eventType === 'check_suite';
-  // Check events fan in for every open PR sharing the commit (a single check_run
-  // can list several, incl. cross-fork junk). Resolve which of those each
-  // watching workspace actually tracks in ONE query across all repos, instead of
-  // a query per workspace — untracked PRs (the vast majority on a busy repo) cost
-  // nothing past this filter. PR/push/review events are low-volume and may need
-  // to *materialise* a new row, so they're never filtered.
-  const trackedByRepo = isCheckEvent
-    ? await prMonitorService
-        .filterTrackedOpenAcross(
-          targets.map((t) => t.repositoryId),
-          numbers,
-        )
-        .catch(() => new Map<string, Set<number>>())
-    : null;
+  // check_suite carries no per-check data — the individual check_run events do —
+  // so it's a no-op for the incremental count path. Skipping it removes a big
+  // slice of the firehose; the per-check_run updates + the sweep keep counts live.
+  if (delivery.eventType === 'check_suite') {
+    whTrace(`  check_suite ${delivery.repoFullName}: no-op (counts come from check_run)`);
+    return 0;
+  }
 
+  // check_run: update the pill counts INCREMENTALLY from the webhook — no GraphQL
+  // refresh. One query says which of the check's PRs each workspace tracks (a
+  // single check_run can list several, incl. cross-fork junk); untracked PRs cost
+  // nothing past it. See docs/INCREMENTAL_CHECK_COUNTS.md.
+  if (delivery.eventType === 'check_run') {
+    const trackedByRepo = await prMonitorService
+      .filterTrackedOpenAcross(
+        targets.map((t) => t.repositoryId),
+        numbers,
+      )
+      .catch(() => new Map<string, Set<number>>());
+    const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
+    if (!ev) return 0;
+    const updated = await ingestCheckRun(ev, targets, numbers, trackedByRepo).catch((err) => {
+      console.warn(
+        `[webhookWorker] ingestCheckRun ${delivery.repoFullName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    });
+    whTrace(
+      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
+    );
+    return updated;
+  }
+
+  // A PR closing/merging or force-pushing makes its per-check state irrelevant —
+  // prune it (the count fast-path stays bounded to open, tracked PRs). Done
+  // alongside the normal refresh below, which still materialises the PR row.
+  if (delivery.eventType === 'pull_request') {
+    await pruneOnPullRequest(delivery).catch(() => undefined);
+  }
+
+  // Everything else (pull_request actions, reviews, comments): a full refresh
+  // that materialises/updates the row (mergeable, reviews, authoritative counts).
   let dispatched = 0;
   for (const target of targets) {
-    const relevant = trackedByRepo
-      ? [...(trackedByRepo.get(target.repositoryId) ?? [])]
-      : numbers;
-    if (trackedByRepo) {
-      whTrace(
-        `  ${delivery.eventType} ${delivery.repoFullName} ws=${target.workspaceId}: ` +
-          `tracked ${relevant.length}/${numbers.length}`,
-      );
-    }
-    for (const number of relevant) {
+    for (const number of numbers) {
       dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, delivery.eventType);
     }
   }
   return dispatched;
+}
+
+/**
+ * Drop per-check state a `pull_request` event has made stale: the head commit on
+ * close/merge (the PR is done), and the *previous* head on a force-push
+ * (`synchronize` carries `before`/`after`; checks on `before` no longer count).
+ */
+async function pruneOnPullRequest(delivery: WebhookDelivery): Promise<void> {
+  const pr = delivery.payload.pull_request as { head?: { sha?: string } } | undefined;
+  if (delivery.action === 'closed') {
+    const sha = pr?.head?.sha;
+    if (typeof sha === 'string') await pruneChecksForSha(delivery.repoFullName, sha);
+  } else if (delivery.action === 'synchronize') {
+    const before = delivery.payload.before;
+    if (typeof before === 'string') await pruneChecksForSha(delivery.repoFullName, before);
+  }
 }
 
 /** Coalesced single-PR refresh for one watching workspace. Returns 1 if dispatched, 0 if coalesced. */

@@ -397,3 +397,47 @@ export const pullRequests = pgTable(
     ),
   })
 );
+
+/**
+ * Per-check state for the incremental check-count fast path. One row per
+ * (repo, head commit, check name) — a re-run of a name upserts in place, so the
+ * table is self-deduping (mirrors `dedupeLatestCheckByName`). Fed by `check_run`
+ * webhooks; a PR's pill counts are derived from a `GROUP BY` here instead of a
+ * GraphQL `refreshPr`. Pruned on close/merge/force-push + a TTL sweep, so it
+ * only ever holds checks for currently-open, currently-tracked PRs.
+ *
+ * Workspace-independent: checks belong to a commit, shared by every workspace
+ * tracking the PR. Backend-derived state read by the privileged pool role —
+ * never shipped to the desktop (only the derived counts are), so RLS stays off,
+ * like the other infra tables. See docs/INCREMENTAL_CHECK_COUNTS.md.
+ */
+export const prCheckStates = pgTable(
+  'pr_check_states',
+  {
+    id: text('id').primaryKey(),
+    /** `owner/repo`, lowercased — the GitHub repo, workspace-independent. */
+    repoFullName: text('repo_full_name').notNull(),
+    headSha: text('head_sha').notNull(),
+    /** Check / status context name — the dedupe key (re-runs of a name win). */
+    name: text('name').notNull(),
+    source: text('source').notNull(), // 'check_run' | 'status'
+    /** GitHub check_run id / status context id — debugging only. */
+    externalId: text('external_id'),
+    /** Normalized CheckState: success | failure | pending | in_progress | skipped | cancelled. */
+    state: text('state').notNull(),
+    /** Latest activity time for this check — guards against out-of-order events. */
+    ts: timestamp('ts', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // One row per check name on a commit — re-runs upsert in place.
+    repoShaNameUq: uniqueIndex('uq_pr_check_states_repo_sha_name').on(
+      t.repoFullName,
+      t.headSha,
+      t.name
+    ),
+    // Drives the count aggregate + sha-scoped pruning.
+    repoShaIdx: index('idx_pr_check_states_repo_sha').on(t.repoFullName, t.headSha),
+  })
+);

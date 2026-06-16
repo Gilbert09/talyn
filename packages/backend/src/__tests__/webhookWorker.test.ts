@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import {
   isRefreshEvent,
   extractPrNumbers,
@@ -119,9 +120,13 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
   });
 
-  // A tracked open PR row, so check events for it survive the filterTrackedOpen
-  // pre-filter (check events only refresh PRs we already track).
-  async function seedTrackedPr(repositoryId: string, workspaceId: string, number: number) {
+  // A tracked open PR row (with a known head sha for the incremental check path).
+  async function seedTrackedPr(
+    repositoryId: string,
+    workspaceId: string,
+    number: number,
+    headSha = 'sha-1',
+  ) {
     await db.insert(pullRequestsTable).values({
       id: `pr-${repositoryId}-${number}`,
       workspaceId,
@@ -130,6 +135,7 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       repo: 'widget',
       number,
       state: 'open',
+      lastSummary: { headSha, checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 } },
     });
   }
   // refreshPr opts the webhook fan-out always passes: the index-resolved repo id
@@ -155,22 +161,50 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, opts('rB'));
   });
 
-  it('refreshes a check event only for PRs the workspace already tracks', async () => {
-    // A single check_run lists a tracked PR (7) and an untracked one (8). The
-    // filterTrackedOpen pre-filter must drop 8 (no fetch) and dispatch only 7.
-    await seedTrackedPr('rA', 'wsA', 7);
+  it('routes a check_run to the incremental count path, not refreshPr', async () => {
+    // A tracked PR (7) on head sha-1 + an untracked one (8). check_run updates
+    // counts incrementally (no refreshPr) and only for the tracked PR on its head.
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
     const n = await processWebhookDelivery(
       delivery({
         eventType: 'check_run',
-        payload: { check_run: { pull_requests: [{ number: 7 }, { number: 8 }] } },
+        payload: {
+          check_run: {
+            id: 1,
+            name: 'lint',
+            status: 'completed',
+            conclusion: 'success',
+            head_sha: 'sha-1',
+            pull_requests: [{ number: 7 }, { number: 8 }],
+          },
+          repository: { owner: { login: 'acme' }, name: 'widget' },
+        },
       }),
       1_000,
     );
-    // Only wsA tracks #7; wsB tracks neither.
-    expect(n).toBe(1);
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
-    expect(refreshSpy).not.toHaveBeenCalledWith('wsA', 'acme', 'widget', 8, opts('rA'));
+    expect(refreshSpy).not.toHaveBeenCalled(); // incremental, never a GraphQL refresh
+    expect(n).toBe(1); // only PR 7 (tracked, on head) updated
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-rA-7'));
+    expect((rows[0].ls as { checks: { total: number; passed: number } }).checks).toMatchObject({
+      total: 1,
+      passed: 1,
+    });
+  });
+
+  it('treats check_suite as a no-op (counts come from check_run)', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const n = await processWebhookDelivery(
+      delivery({
+        eventType: 'check_suite',
+        payload: { check_suite: { pull_requests: [{ number: 7 }] } },
+      }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it('dispatches the real PostHog/posthog#64026 merge delivery to refreshPr', async () => {
@@ -222,15 +256,13 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
   });
 
   it('coalesces a burst for the same (workspace, PR) within the window', async () => {
-    // PR 7 is tracked in both workspaces so the follow-up check_run survives the
-    // tracked-only filter and actually exercises the coalescing window.
-    await seedTrackedPr('rA', 'wsA', 7);
-    await seedTrackedPr('rB', 'wsB', 7);
     await processWebhookDelivery(delivery({ payload: { pull_request: { number: 7 } } }), 1_000);
     refreshSpy.mockClear();
-    // Same PR, 100ms later — inside the 750ms window → dropped.
+    // A different refresh event for the same PR, 100ms later — inside the 750ms
+    // window → dropped. (check events take the incremental path, so a review
+    // event exercises the coalescing window.)
     const n = await processWebhookDelivery(
-      delivery({ eventType: 'check_run', payload: { check_run: { pull_requests: [{ number: 7 }] } } }),
+      delivery({ eventType: 'pull_request_review', payload: { pull_request: { number: 7 } } }),
       1_100,
     );
     expect(n).toBe(0);

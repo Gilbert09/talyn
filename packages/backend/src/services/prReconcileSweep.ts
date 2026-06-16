@@ -2,6 +2,7 @@ import { githubService } from './github.js';
 import { prMonitorService } from './prMonitor.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
+import { pruneStaleCheckStates } from './checkCounts.js';
 
 /**
  * Low-frequency safety net for the webhook pipeline.
@@ -57,6 +58,12 @@ class PrReconcileSweep {
           console.error(`[reconcileSweep] workspace ${workspaceId.slice(0, 8)} failed:`, msg);
         }
       }
+      // TTL safety net for the incremental check-count table — drops any per-check
+      // state orphaned by a missed close/force-push delivery so it can't grow
+      // unbounded. Close/merge/synchronize prune precisely; this is the backstop.
+      await pruneStaleCheckStates().catch((err) => {
+        console.error('[reconcileSweep] pruneStaleCheckStates failed:', err);
+      });
     } finally {
       this.guard.end();
       debugBus.pollerTick('pr_reconcile_sweep', {

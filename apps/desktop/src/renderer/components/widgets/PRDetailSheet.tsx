@@ -173,7 +173,9 @@ export function PRDetailSheet({
           ...prev,
           row: {
             ...prev.row,
-            summary: p.lastSummary as PRSummaryShape,
+            // Merge, not replace: incremental echoes carry only the changed slice
+            // (e.g. `{ checks }`); full echoes carry every field so it's a no-op.
+            summary: { ...prev.row.summary, ...(p.lastSummary as Partial<PRSummaryShape>) },
             autoKeepMergeable: p.autoKeepMergeable ?? prev.row.autoKeepMergeable,
             autoMergeState:
               p.autoMergeState !== undefined ? p.autoMergeState : prev.row.autoMergeState,

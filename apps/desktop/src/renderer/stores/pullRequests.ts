@@ -18,7 +18,9 @@ export interface PullRequestUpdatePayload {
   id: string;
   taskId: string | null;
   state: PRState;
-  lastSummary: PRSummaryShape;
+  /** May be a *partial* summary (e.g. the incremental check-count path sends only
+   *  `{ checks }`); it's merged into the held summary, not replaced. */
+  lastSummary: Partial<PRSummaryShape>;
   reviewRequested?: boolean;
   authored?: boolean;
   autoKeepMergeable?: boolean;
@@ -102,7 +104,10 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
     next[idx] = {
       ...next[idx],
       state: p.state,
-      summary: p.lastSummary,
+      // Merge, don't replace: an incremental echo carries only the changed slice
+      // (e.g. `{ checks }`), and full echoes carry every field so merging is a
+      // no-op for them. Keeps title/mergeable/etc. when only counts changed.
+      summary: { ...next[idx].summary, ...p.lastSummary },
       // Preserve a known link if the echo omits it; adopt a new one when the
       // backend reports it (e.g. just-started fix task).
       taskId: p.taskId ?? next[idx].taskId,

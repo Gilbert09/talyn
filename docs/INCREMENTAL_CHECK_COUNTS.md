@@ -1,6 +1,15 @@
 # Incremental check counts from webhooks
 
-**Status:** design / not yet implemented.
+**Status:** SHIPPED (check_run path). `pr_check_states` table (migration 0027),
+`services/checkCounts.ts`, worker cutover (`check_run` → incremental, no GraphQL;
+`check_suite` → no-op), close/merge/force-push pruning, and a TTL safety-net
+prune in the reconcile sweep are all live. Desktop merges partial `{ checks }`
+echoes (`stores/pullRequests.ts`, `PRDetailSheet.tsx`).
+
+**Deferred** (don't fire / aren't needed yet): legacy `status` events (posthog
+uses check_runs; needs the subscription anyway), the `blockingReason` heuristic
+on check events (counts-only for now; PR/push events + the sweep keep the
+blocking colour authoritative), and a Debug tile for incremental-vs-sweep drift.
 
 **Goal:** keep the PR pill's check **counts** (`total / passed / failed / inProgress / skipped`)
 live from `check_run` / `check_suite` / `status` webhooks **without a GraphQL
