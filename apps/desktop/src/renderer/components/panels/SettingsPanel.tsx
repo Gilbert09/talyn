@@ -695,6 +695,30 @@ function IntegrationsSettings() {
     }
   };
 
+  // Start the GitHub App install flow. The stateful install URL must be opened
+  // in the real browser (it's a multi-step GitHub install + authorize page);
+  // GitHub redirects back through /github/app/callback, which records the
+  // installation + user token. Connection status refreshes on window focus.
+  const handleGitHubAppConnect = async () => {
+    if (!currentWorkspaceId) return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const { installUrl } = await api.github.installViaApp(currentWorkspaceId);
+      if (window.electron?.auth?.openExternal) {
+        await window.electron.auth.openExternal(installUrl);
+      } else {
+        window.open(installUrl, '_blank');
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to start GitHub App install');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleGitHubDisconnect = async () => {
     if (!currentWorkspaceId) return;
 
@@ -761,31 +785,51 @@ function IntegrationsSettings() {
               </p>
             </div>
             {githubStatus?.connected ? (
-              <Button
-                variant="outline"
-                onClick={handleGitHubDisconnect}
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <>
-                    <Unlink className="w-4 h-4 mr-1" />
-                    Disconnect
-                  </>
-                )}
-              </Button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Upgrade an OAuth-connected workspace to the App (webhooks +
+                    realtime). Harmless if already on the App — it re-installs. */}
+                <Button
+                  variant="outline"
+                  onClick={handleGitHubAppConnect}
+                  disabled={isLoading || !currentWorkspaceId}
+                  title="Install the GitHub App to enable realtime webhooks"
+                >
+                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Enable webhooks'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleGitHubDisconnect}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Unlink className="w-4 h-4 mr-1" />
+                      Disconnect
+                    </>
+                  )}
+                </Button>
+              </div>
             ) : (
-              <Button
-                onClick={handleGitHubConnect}
-                disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
-              >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  'Connect'
-                )}
-              </Button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* App-first: the recommended path (webhooks + realtime). OAuth
+                    stays available as a fallback. */}
+                <Button
+                  onClick={handleGitHubAppConnect}
+                  disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
+                >
+                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect via GitHub App'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleGitHubConnect}
+                  disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
+                  title="Connect with the classic OAuth flow (no webhooks)"
+                >
+                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'OAuth'}
+                </Button>
+              </div>
             )}
           </div>
         </Card>

@@ -200,6 +200,13 @@ export const github = {
   },
   connect: (workspaceId: string) =>
     request<{ authUrl: string; state: string }>('POST', '/github/connect', { workspaceId }),
+  // GitHub App install flow (webhooks + hybrid auth). Returns a stateful
+  // install URL — open it in the browser; GitHub redirects back through
+  // /github/app/callback, which records the installation + user token.
+  installViaApp: (workspaceId: string) =>
+    request<{ installUrl: string; state: string }>('POST', '/github/app/install-url', {
+      workspaceId,
+    }),
   disconnect: (workspaceId: string) =>
     request<void>('POST', '/github/disconnect', { workspaceId }),
   getUser: (workspaceId: string) =>

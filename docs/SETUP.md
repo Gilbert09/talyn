@@ -135,9 +135,17 @@ install) resolves the viewer's login + authored/review-requested buckets. The
 classic OAuth App above still works; the App lights up per workspace as each one
 re-connects via the install flow.
 
+> **Make TWO Apps — "FastOwl (Dev)" and "FastOwl (Prod)".** A GitHub App has
+> exactly **one** webhook URL, so it can't serve localhost and Railway at once.
+> Dev's creds go in `packages/backend/.env`; prod's go in Railway variables. The
+> backend just reads whatever `GITHUB_APP_*` / `GITHUB_WEBHOOK_SECRET` env it
+> finds — no code difference. Use a separate private key + secret per App.
+
 1. https://github.com/settings/apps → **New GitHub App**.
-2. **Webhook URL**: `https://<your-backend>/api/v1/webhooks/github` (for local dev,
-   tunnel it, e.g. `smee`/`ngrok`). **Webhook secret**: generate one → `GITHUB_WEBHOOK_SECRET`.
+2. **Webhook URL**: `https://<your-backend>/api/v1/webhooks/github`.
+   - Prod: `https://fastowl-backend-production.up.railway.app/api/v1/webhooks/github`.
+   - Local: tunnel it — `npx smee-client --url https://smee.io/<channel> --target http://localhost:4747/api/v1/webhooks/github`, and use the `smee.io/<channel>` URL here.
+   **Webhook secret**: generate one → `GITHUB_WEBHOOK_SECRET`.
 3. **Permissions** (read-only unless noted): Pull requests **R/W** (merge/auto-merge
    write paths), Checks **R**, Commit statuses **R**, Contents **R**, Metadata **R**,
    Members **R** (team-based review-request resolution).
@@ -145,12 +153,25 @@ re-connects via the install flow.
    `pull_request_review_comment`, `issue_comment`, `check_run`, `check_suite`,
    `status`, `installation`, `installation_repositories`.
 5. Enable **"Request user authorization (OAuth) during installation"**, and set the
-   **Callback URL** to `http://localhost:4747/api/v1/github/app/callback`.
-6. Generate a **private key** (.pem), base64 it, and set the env vars (see the
+   **Callback URL** to `http://localhost:4747/api/v1/github/app/callback` (prod: the
+   Railway host equivalent — an App can list multiple callback URLs).
+6. **Leave "Expire user authorization tokens" OFF.** With it on, the user token
+   dies after 8h and we have no refresh-token rotation yet — the workspace would
+   silently break (and a 401 on the user token can tear down the integration).
+   The installation token is separate and always short-lived; we mint/refresh it
+   ourselves regardless. (Turning expiry on is a follow-up, paired with rotation.)
+7. Generate a **private key** (.pem), base64 it, and set the env vars (see the
    `.env` block below): `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`,
    `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`.
-7. Set `REDIS_URL` (webhooks are enqueued onto a Redis Stream; without it the
+8. Set `REDIS_URL` (webhooks are enqueued onto a Redis Stream; without it the
    receiver acks-and-drops and the reconcile sweep keeps PRs fresh).
+
+**Connecting a workspace:** in the desktop, Settings → Integrations → GitHub →
+**Connect via GitHub App** (or **Enable webhooks** if already OAuth-connected).
+That starts the stateful install flow and, on redirect back through
+`/github/app/callback`, records the installation + user token and bulk-refreshes.
+Installing the App **directly from GitHub's page won't work** — the callback
+needs the signed `state` only the in-app button provides.
 
 A repo only delivers webhooks once the App is **installed** on its owner (user/org)
 with the repo selected. The reconcile sweep (every ~15 min) + the manual refresh
