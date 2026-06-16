@@ -378,6 +378,10 @@ async function fetchRemainingCheckContexts(
  * surrounding batch worker is already concurrency-bounded, and >100-check
  * PRs are rare enough that serial top-ups don't meaningfully add latency.
  */
+// Repos we've already warned about a failing check-context tail for — keeps the
+// (recurring, non-fatal) warning to one line per repo per process.
+const loggedContextTailIssues = new Set<string>();
+
 async function topUpCheckContexts(
   prs: RawPullRequest[],
   ctx: { workspaceId: string; owner: string; repo: string }
@@ -400,11 +404,16 @@ async function topUpCheckContexts(
       // most often "Resource not accessible by integration" when the App lacks
       // (or hasn't had approved) Commit-statuses/Checks read for a later
       // StatusContext, but also any transient. Don't fail the whole PR refresh
-      // over the check-context tail: keep what we have and move on.
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[githubGraphql] check-context tail for ${ctx.owner}/${ctx.repo}#${pr.number} not fetched (${msg}); using the first ${rollup.contexts.nodes.length}`
-      );
+      // over the check-context tail: keep what we have and move on. Log once per
+      // repo (with the error's field path) — these recur on every >100-check PR.
+      const repoKey = `${ctx.owner}/${ctx.repo}`;
+      if (!loggedContextTailIssues.has(repoKey)) {
+        loggedContextTailIssues.add(repoKey);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[githubGraphql] ${repoKey}: check-context tail (>100) not fetched (${msg}); using the first 100. Further occurrences suppressed.`
+        );
+      }
     }
     // Either way, stop advertising more pages so downstream treats it as complete.
     rollup.contexts.pageInfo = { hasNextPage: false, endCursor: null };

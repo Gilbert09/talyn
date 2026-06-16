@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
-import { prMonitorService, relationshipFlags } from '../services/prMonitor.js';
+import { prMonitorService, relationshipFlags, isRepoAccessError } from '../services/prMonitor.js';
 import { githubService } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
 import type { PRSummary } from '../services/githubGraphql.js';
@@ -41,6 +41,19 @@ function summary(over: Partial<PRSummary>): PRSummary {
     ...over,
   } as unknown as PRSummary;
 }
+
+describe('isRepoAccessError', () => {
+  it('flags App-can\'t-reach-repo errors (search 422 / GraphQL 403 / unresolved repo)', () => {
+    expect(isRepoAccessError('GitHub GraphQL: Resource not accessible by integration [FORBIDDEN] at repository')).toBe(true);
+    expect(isRepoAccessError('GitHub API error 422 Unprocessable Entity: Validation Failed (The listed users and repositories cannot be searched either because the resources do not exist or you do not have permission to view them.)')).toBe(true);
+    expect(isRepoAccessError('GitHub GraphQL: Could not resolve to a Repository with the name \'PostHog/charts\'.')).toBe(true);
+  });
+  it('does not flag transient/other errors', () => {
+    expect(isRepoAccessError('GitHub GraphQL error: Bad Gateway')).toBe(false);
+    expect(isRepoAccessError('Could not resolve to a PullRequest with the number of 3')).toBe(false);
+    expect(isRepoAccessError('socket hang up')).toBe(false);
+  });
+});
 
 describe('relationshipFlags', () => {
   it('marks a PR the viewer authored', () => {

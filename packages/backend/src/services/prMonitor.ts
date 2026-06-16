@@ -54,6 +54,10 @@ class PRMonitorService extends EventEmitter {
   /** Cached current-user logins keyed by workspaceId — saves a round-trip
    *  per poll. Cleared when the token rotates / disconnects (via removeToken). */
   private userLoginCache: Map<string, string> = new Map();
+  // Watched repos the GitHub App can't access (private repo not in the
+  // installation's selected list). Tracked `${workspaceId}:${fullName}` so we
+  // log the "grant access" notice ONCE, not every sweep, and log recovery once.
+  private inaccessibleRepos: Set<string> = new Set();
 
   private get db(): Database {
     // The monitor is a background, cross-owner service: its global poll
@@ -184,10 +188,28 @@ class PRMonitorService extends EventEmitter {
     const repos = await this.getWatchedRepos(workspaceId);
 
     for (const repo of repos) {
+      const accessKey = `${workspaceId}:${repo.fullName}`;
       try {
         await this.pollRepo(workspaceId, repo, login);
+        // Recovered (e.g. the App was just granted access) — note it once.
+        if (this.inaccessibleRepos.delete(accessKey)) {
+          console.log(`PR monitor: ${repo.fullName} is now accessible to the GitHub App`);
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown error';
+        // A watched repo the App can't reach (private repo not in the
+        // installation's selected list): no token can read it until access is
+        // granted on GitHub. Log the actionable notice ONCE, then stay quiet —
+        // don't spam this every 5-min sweep.
+        if (isRepoAccessError(msg)) {
+          if (!this.inaccessibleRepos.has(accessKey)) {
+            this.inaccessibleRepos.add(accessKey);
+            console.warn(
+              `PR monitor: the GitHub App has no access to ${repo.fullName} — grant it on GitHub (org → Installed GitHub Apps → Repository access). Skipping until then.`
+            );
+          }
+          continue;
+        }
         console.error(`PR monitor: ${repo.fullName} poll failed:`, msg);
       }
     }
@@ -807,6 +829,21 @@ class PRMonitorService extends EventEmitter {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Does this error mean the GitHub App simply can't reach the repo (vs a
+ * transient failure)? Covers the Search API's 422 ("cannot be searched … do
+ * not have permission to view them"), the GraphQL 403 ("Resource not accessible
+ * by integration"), and a repo node that won't resolve. These all mean: grant
+ * the App access to the repo — retrying won't help until then.
+ */
+export function isRepoAccessError(message: string): boolean {
+  return (
+    /Resource not accessible by integration/i.test(message) ||
+    /cannot be searched|do not have permission to view/i.test(message) ||
+    /Could not resolve to a Repository/i.test(message)
+  );
 }
 
 /**
