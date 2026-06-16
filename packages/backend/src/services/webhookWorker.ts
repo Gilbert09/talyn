@@ -25,6 +25,11 @@ import { debugBus } from './debugBus.js';
 export const WEBHOOK_STREAM = 'gh:webhooks';
 const GROUP = 'fastowl';
 const COALESCE_WINDOW_MS = 750;
+// How many stream deliveries to read and process concurrently per loop. Each
+// delivery's slow step is an independent GitHub GraphQL refresh, so processing a
+// batch in parallel (rather than serially) multiplies throughput by ~this much.
+// Bounded to keep simultaneous GraphQL/DB load reasonable.
+const WORKER_BATCH = 10;
 
 // Opt-in deep trace of the webhook pipeline (set WEBHOOK_TRACE=1). Logs every
 // step a delivery takes — received → fanout → dispatch/coalesce → refresh →
@@ -193,20 +198,27 @@ export async function processWebhookDelivery(
 
   const isCheckEvent =
     delivery.eventType === 'check_run' || delivery.eventType === 'check_suite';
+  // Check events fan in for every open PR sharing the commit (a single check_run
+  // can list several, incl. cross-fork junk). Resolve which of those each
+  // watching workspace actually tracks in ONE query across all repos, instead of
+  // a query per workspace — untracked PRs (the vast majority on a busy repo) cost
+  // nothing past this filter. PR/push/review events are low-volume and may need
+  // to *materialise* a new row, so they're never filtered.
+  const trackedByRepo = isCheckEvent
+    ? await prMonitorService
+        .filterTrackedOpenAcross(
+          targets.map((t) => t.repositoryId),
+          numbers,
+        )
+        .catch(() => new Map<string, Set<number>>())
+    : null;
+
   let dispatched = 0;
   for (const target of targets) {
-    // Check events fan in for every open PR sharing the commit (a single
-    // check_run can list several, incl. cross-fork junk). Resolve which of those
-    // this workspace actually tracks in ONE `IN` query instead of a
-    // getWatchedRepos + prRowExists per number — untracked PRs (the vast
-    // majority on a busy repo) cost nothing past this filter. PR/push/review
-    // events are low-volume and may need to *materialise* a new row, so they're
-    // never filtered.
-    let relevant = numbers;
-    if (isCheckEvent) {
-      relevant = await prMonitorService
-        .filterTrackedOpen(target.workspaceId, target.repositoryId, numbers)
-        .catch(() => [] as number[]);
+    const relevant = trackedByRepo
+      ? [...(trackedByRepo.get(target.repositoryId) ?? [])]
+      : numbers;
+    if (trackedByRepo) {
       whTrace(
         `  ${delivery.eventType} ${delivery.repoFullName} ws=${target.workspaceId}: ` +
           `tracked ${relevant.length}/${numbers.length}`,
@@ -311,7 +323,7 @@ class WebhookWorker {
           GROUP,
           REPLICA_ID,
           'COUNT',
-          10,
+          WORKER_BATCH,
           'BLOCK',
           5_000,
           'STREAMS',
@@ -319,11 +331,17 @@ class WebhookWorker {
           '>',
         )) as Array<[string, Array<[string, string[]]>]> | null;
         if (!res) continue;
-        for (const [, entries] of res) {
-          for (const [id, fields] of entries) {
-            await this.handleEntry(id, fieldsToObject(fields));
-          }
-        }
+        // Process the batch CONCURRENTLY rather than one-at-a-time. Each
+        // delivery's expensive step (refreshPr → GitHub GraphQL, ~1-2s for a big
+        // PR) is independent, so serial processing capped throughput at
+        // 1/latency and let the firehose back up. handleEntry is self-contained
+        // (its own try/catch + xack), so a failure in one never rejects the
+        // batch. Concurrency is bounded by WORKER_BATCH (the read COUNT), which
+        // keeps simultaneous GraphQL/DB load in check.
+        const batch = res.flatMap(([, entries]) => entries);
+        await Promise.all(
+          batch.map(([id, fields]) => this.handleEntry(id, fieldsToObject(fields))),
+        );
       } catch (err) {
         if (this.running) {
           console.error('[webhookWorker] read loop error:', err);

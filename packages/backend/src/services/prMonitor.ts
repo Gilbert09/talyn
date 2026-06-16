@@ -461,31 +461,43 @@ class PRMonitorService extends EventEmitter {
   }
 
   /**
-   * Of `numbers`, the ones already tracked OPEN for this (workspace, repo) — in
-   * a single `IN` query. The webhook fan-out uses this to drop the high-volume
-   * check events (a check_run can list several PRs, incl. cross-fork junk) for
-   * PRs we don't track, with one round-trip instead of a getWatchedRepos +
-   * prRowExists per number. Untracked PRs — the overwhelming majority on a busy
-   * repo — then cost nothing past this filter.
+   * Which of `numbers` are tracked OPEN, across ALL the given repositories, in a
+   * SINGLE query — returned as `repositoryId → tracked numbers`. The webhook
+   * fan-out calls this once per delivery (a repo watched in N workspaces has N
+   * distinct repository rows) instead of one query per workspace. Each
+   * `repositoryId` is unique to one (workspace, repo), so `repository_id IN (…)`
+   * already disambiguates the workspace. Drops the high-volume check events (a
+   * check_run can list several PRs, incl. cross-fork junk) for PRs we don't
+   * track — the overwhelming majority on a busy repo — for one round-trip total.
    */
-  async filterTrackedOpen(
-    workspaceId: string,
-    repositoryId: string,
+  async filterTrackedOpenAcross(
+    repositoryIds: string[],
     numbers: number[]
-  ): Promise<number[]> {
-    if (numbers.length === 0) return [];
+  ): Promise<Map<string, Set<number>>> {
+    const byRepo = new Map<string, Set<number>>();
+    if (repositoryIds.length === 0 || numbers.length === 0) return byRepo;
     const rows = await this.db
-      .select({ number: pullRequestsTable.number })
+      .select({
+        repositoryId: pullRequestsTable.repositoryId,
+        number: pullRequestsTable.number,
+      })
       .from(pullRequestsTable)
       .where(
         and(
-          eq(pullRequestsTable.workspaceId, workspaceId),
-          eq(pullRequestsTable.repositoryId, repositoryId),
+          inArray(pullRequestsTable.repositoryId, repositoryIds),
           eq(pullRequestsTable.state, 'open'),
           inArray(pullRequestsTable.number, numbers)
         )
       );
-    return rows.map((r) => r.number);
+    for (const r of rows) {
+      let set = byRepo.get(r.repositoryId);
+      if (!set) {
+        set = new Set();
+        byRepo.set(r.repositoryId, set);
+      }
+      set.add(r.number);
+    }
+    return byRepo;
   }
 
   private async filterStale(
