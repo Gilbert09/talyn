@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
@@ -74,6 +74,37 @@ const PR_FLAG_COLUMNS = {
   mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
 } as const;
 
+/**
+ * Exactly the columns the list endpoint serializes (`rowToPublicShape`) plus
+ * what `computeQueuePositions` reads — and nothing else. Projecting keeps the
+ * review/comment/check cursor columns in the DB instead of shipping them on
+ * every list fetch; the big `lastSummary` jsonb still ships (the pill needs it).
+ * Typed as a `Pick` so tsc fails if a consumer later reads a dropped column.
+ */
+const LIST_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  taskId: pullRequestsTable.taskId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  reviewRequested: pullRequestsTable.reviewRequested,
+  authored: pullRequestsTable.authored,
+  mergedAt: pullRequestsTable.mergedAt,
+  lastPolledAt: pullRequestsTable.lastPolledAt,
+  lastSummary: pullRequestsTable.lastSummary,
+  autoKeepMergeable: pullRequestsTable.autoKeepMergeable,
+  autoMergeState: pullRequestsTable.autoMergeState,
+  mergeQueued: pullRequestsTable.mergeQueued,
+  mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
+  mergeMethod: pullRequestsTable.mergeMethod,
+  mergeQueueState: pullRequestsTable.mergeQueueState,
+  createdAt: pullRequestsTable.createdAt,
+  updatedAt: pullRequestsTable.updatedAt,
+} as const;
+
 export function pullRequestRoutes(): Router {
   const router = Router();
 
@@ -116,33 +147,36 @@ export function pullRequestRoutes(): Router {
       // clears it once the user reviews the PR, so an approved PR is gone.
       conditions.push(eq(pullRequestsTable.reviewRequested, true));
     }
+    // `taskOnly` + `search` used to filter in JS after loading every open PR;
+    // do it in SQL so a workspace with hundreds of PRs neither ships nor walks
+    // the non-matching rows on the request hot path. `search` is already
+    // lower-cased + trimmed above — escape LIKE metacharacters so it stays a
+    // plain substring match (the old `.includes()` semantics).
+    if (taskOnly) {
+      conditions.push(isNotNull(pullRequestsTable.taskId));
+    }
+    if (search) {
+      const term = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      const searchCondition = or(
+        sql`lower(${pullRequestsTable.owner} || '/' || ${pullRequestsTable.repo}) like ${term}`,
+        sql`lower(coalesce(${pullRequestsTable.lastSummary} ->> 'title', '')) like ${term}`
+      );
+      if (searchCondition) conditions.push(searchCondition);
+    }
 
     const rows = await db
-      .select()
+      .select(LIST_COLUMNS)
       .from(pullRequestsTable)
       .where(and(...conditions))
       .orderBy(desc(pullRequestsTable.lastPolledAt));
 
-    let filtered = rows;
-    if (taskOnly) {
-      filtered = filtered.filter((r) => r.taskId != null);
-    }
-    if (search) {
-      filtered = filtered.filter((r) => {
-        const title =
-          ((r.lastSummary as { title?: string } | null)?.title ?? '').toLowerCase();
-        const fullName = `${r.owner}/${r.repo}`.toLowerCase();
-        return title.includes(search) || fullName.includes(search);
-      });
-    }
-
     // 1-based merge-queue position per (repo, base branch) group, FIFO by
     // `mergeQueuedAt`. Computed locally over the rows we already have.
-    const queuePositionById = computeQueuePositions(filtered as PullRequestRow[]);
+    const queuePositionById = computeQueuePositions(rows);
 
     res.json({
       success: true,
-      data: filtered.map((r) =>
+      data: rows.map((r) =>
         rowToPublicShape(r, queuePositionById.get(r.id) ?? 0)
       ),
     } as ApiResponse<ReturnType<typeof rowToPublicShape>[]>);
@@ -767,7 +801,37 @@ export function freshDiffersMaterially(
   );
 }
 
-function rowToPublicShape(row: PullRequestRow, queuePosition = 0) {
+/**
+ * The subset of columns {@link rowToPublicShape} actually serializes. Both the
+ * full {@link PullRequestRow} (detail paths) and the projected `LIST_COLUMNS`
+ * row satisfy it, so the list endpoint can hand over projected rows directly.
+ */
+type PublicShapeRow = Pick<
+  PullRequestRow,
+  | 'id'
+  | 'workspaceId'
+  | 'repositoryId'
+  | 'taskId'
+  | 'owner'
+  | 'repo'
+  | 'number'
+  | 'state'
+  | 'reviewRequested'
+  | 'authored'
+  | 'mergedAt'
+  | 'lastPolledAt'
+  | 'lastSummary'
+  | 'autoKeepMergeable'
+  | 'autoMergeState'
+  | 'mergeQueued'
+  | 'mergeQueuedAt'
+  | 'mergeMethod'
+  | 'mergeQueueState'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+function rowToPublicShape(row: PublicShapeRow, queuePosition = 0) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,

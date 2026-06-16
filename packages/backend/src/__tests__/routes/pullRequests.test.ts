@@ -258,6 +258,30 @@ describe('routes/pullRequests', () => {
       const body = (await res.json()) as { data: Array<{ id: string }> };
       expect(body.data.map((r) => r.id)).toEqual(['p1']);
     });
+
+    it('matches search against owner/repo, not only the title', async () => {
+      // Every inserted PR is acme/widgets; the title here deliberately misses.
+      await insertPR(db, { id: 'p1', title: 'Unrelated change' });
+      const res = await fetch(
+        `${serverUrl}/pull-requests?workspaceId=ws-mine&search=WIDGETS`,
+        { headers: authMine }
+      );
+      const body = (await res.json()) as { data: Array<{ id: string }> };
+      expect(body.data.map((r) => r.id)).toEqual(['p1']);
+    });
+
+    it('treats LIKE metacharacters in the search term literally', async () => {
+      await insertPR(db, { id: 'p1', title: '50% off sale' });
+      await insertPR(db, { id: 'p2', title: 'no discount' });
+      // Unescaped, the "%" would act as a wildcard and match everything;
+      // "50%" must hit only p1.
+      const res = await fetch(
+        `${serverUrl}/pull-requests?workspaceId=ws-mine&search=${encodeURIComponent('50%')}`,
+        { headers: authMine }
+      );
+      const body = (await res.json()) as { data: Array<{ id: string }> };
+      expect(body.data.map((r) => r.id)).toEqual(['p1']);
+    });
   });
 
   // -------- GET /:id --------
