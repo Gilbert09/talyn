@@ -493,6 +493,32 @@ describe('prCache — DB integration', () => {
       expect((rows[0].lastSummary as { mergeable: string }).mergeable).toBe('MERGEABLE');
     });
 
+    it('refuses to link a PR whose owner/repo does not match the repository', async () => {
+      // repo1 is github.com/acme/widgets; a cloud run reporting a PR on a
+      // different repo (e.g. a fork or sibling) must not file its low number
+      // against repo1 — that poisons the poller (NOT_FOUND on re-query).
+      const taskId = await seedTask();
+      await expect(
+        linkTaskToPullRequest({
+          workspaceId: 'ws1',
+          repositoryId: 'repo1',
+          taskId,
+          owner: 'someone-else',
+          repo: 'fork',
+          number: 21,
+          url: 'https://github.com/someone-else/fork/pull/21',
+          title: 'x',
+          author: 'me',
+          headBranch: 'feature/x',
+          baseBranch: 'main',
+          headSha: 'sha1',
+        })
+      ).rejects.toThrow(/does not belong to acme\/widgets/);
+      // No poisoned row was written.
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows).toHaveLength(0);
+    });
+
     it('does NOT overwrite an existing task_id (linkage stays sticky once set)', async () => {
       const taskA = await seedTask();
       await linkTaskToPullRequest({

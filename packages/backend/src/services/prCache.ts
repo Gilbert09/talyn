@@ -1,7 +1,10 @@
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
-import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import {
+  pullRequests as pullRequestsTable,
+  repositories as repositoriesTable,
+} from '../db/schema.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import {
   batchPullRequests,
@@ -118,6 +121,13 @@ export async function getOrFetchPRSummary(opts: {
  * Summary fields are placeholders ('UNKNOWN' / zeroed checks) — the
  * first prMonitor refresh fills in real data within seconds.
  */
+/** Parse `owner`/`repo` from a stored repository URL (https or git@ form). */
+function parseOwnerRepo(url: string): { owner: string; repo: string } | null {
+  const m = url.match(/github\.com[/:]([\w-]+)\/([\w.-]+)/);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2].replace(/\.git$/, '') };
+}
+
 export async function linkTaskToPullRequest(opts: {
   workspaceId: string;
   repositoryId: string;
@@ -133,6 +143,35 @@ export async function linkTaskToPullRequest(opts: {
   headSha: string;
 }): Promise<string> {
   const db = getDbClient();
+
+  // A pull_requests row's repositoryId and its (owner, repo) must describe the
+  // SAME repo. A cloud run reports a /pull/N URL for the *base* repo it opened
+  // the PR against; if that doesn't match the task's repository (the agent
+  // opened the PR on a fork or a sibling repo, or returned an unexpected URL),
+  // linking it under task.repositoryId files a foreign — usually low — number
+  // against this repo. The poller keys tracked numbers off repositoryId and
+  // re-queries them against this repo's owner/name, so the mismatch resurfaces
+  // as "Could not resolve to a PullRequest with the number of N". Refuse it.
+  const repoRow = (
+    await db
+      .select({ url: repositoriesTable.url })
+      .from(repositoriesTable)
+      .where(eq(repositoriesTable.id, opts.repositoryId))
+      .limit(1)
+  )[0];
+  const repoCoords = repoRow ? parseOwnerRepo(repoRow.url) : null;
+  if (
+    repoCoords &&
+    (repoCoords.owner.toLowerCase() !== opts.owner.toLowerCase() ||
+      repoCoords.repo.toLowerCase() !== opts.repo.toLowerCase())
+  ) {
+    throw new Error(
+      `PR ${opts.owner}/${opts.repo}#${opts.number} does not belong to ` +
+        `${repoCoords.owner}/${repoCoords.repo} (repositoryId ${opts.repositoryId}) — ` +
+        `refusing to link a cross-repo PR.`
+    );
+  }
+
   const now = new Date();
   const placeholderSummary = {
     title: opts.title,
