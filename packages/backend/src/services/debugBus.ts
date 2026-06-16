@@ -5,6 +5,7 @@ import type {
   DebugPollerState,
   DebugRateLimitState,
   DebugSnapshot,
+  DebugWebhookLag,
 } from '@fastowl/shared';
 
 /**
@@ -85,6 +86,11 @@ class DebugBus {
   // Cumulative Postgres traffic since the last clear, surfaced as panel tiles.
   private dbRequestCount = 0;
   private dbEgressBytes = 0;
+  // Rolling window of recent webhook enqueue→pickup latencies (ms), for the
+  // consumer-lag tile. Bounded ring — only the tail matters.
+  private webhookLatencies: number[] = [];
+  private lastWebhookProcessedAt: string | null = null;
+  private static readonly WEBHOOK_LAG_WINDOW = 50;
   private pollers = new Map<string, DebugPollerState>();
   private rateLimits = new Map<string, DebugRateLimitState>();
   // Attribution: which FastOwl account owns a workspace's activity, so events
@@ -301,6 +307,15 @@ class DebugBus {
     workspaceId?: string;
     error?: string;
   }): void {
+    // Feed the consumer-lag gauge: how long this delivery waited between the
+    // receiver enqueuing it and the worker picking it up.
+    if (input.action === 'processed' && input.latencyMs !== undefined) {
+      this.webhookLatencies.push(Math.max(0, Math.round(input.latencyMs)));
+      if (this.webhookLatencies.length > DebugBus.WEBHOOK_LAG_WINDOW) {
+        this.webhookLatencies.shift();
+      }
+      this.lastWebhookProcessedAt = new Date().toISOString();
+    }
     const verb = input.action === 'received' ? 'recv' : 'proc';
     // "pull_request.synchronize acme/widgets #7" — what the delivery was *for*.
     const subject =
@@ -473,6 +488,23 @@ class DebugBus {
       rateLimits,
       owners,
       dbStats: { requests: this.dbRequestCount, egressBytes: this.dbEgressBytes },
+      webhookLag: this.computeWebhookLag(),
+    };
+  }
+
+  /** Last / median / max enqueue→pickup lag over the recent sample window. */
+  private computeWebhookLag(): DebugWebhookLag {
+    const samples = this.webhookLatencies.length;
+    if (samples === 0) {
+      return { lastMs: 0, medianMs: 0, maxMs: 0, samples: 0, observedAt: null };
+    }
+    const sorted = [...this.webhookLatencies].sort((a, b) => a - b);
+    return {
+      lastMs: this.webhookLatencies[this.webhookLatencies.length - 1],
+      medianMs: sorted[Math.floor(sorted.length / 2)],
+      maxMs: sorted[sorted.length - 1],
+      samples,
+      observedAt: this.lastWebhookProcessedAt,
     };
   }
 
@@ -489,6 +521,8 @@ class DebugBus {
     this.counters = {};
     this.dbRequestCount = 0;
     this.dbEgressBytes = 0;
+    this.webhookLatencies = [];
+    this.lastWebhookProcessedAt = null;
   }
 
   /** Test helper — drop all state including the poller registry. */

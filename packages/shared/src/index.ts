@@ -474,6 +474,26 @@ export interface DebugSnapshot {
   owners: DebugOwner[];
   /** Cumulative Postgres query stats since the last clear. */
   dbStats: DebugDbStats;
+  /** Webhook consumer lag (enqueue→pickup) over recent processed deliveries. */
+  webhookLag: DebugWebhookLag;
+}
+
+/**
+ * How far behind real-time the webhook worker is: the enqueue→pickup latency of
+ * recently processed deliveries. A healthy worker sits near zero; a rising
+ * `maxMs` means the consumer can't keep up with the ingest stream.
+ */
+export interface DebugWebhookLag {
+  /** Most recent processed delivery's enqueue→pickup lag, ms. */
+  lastMs: number;
+  /** Median lag across the recent sample window, ms. */
+  medianMs: number;
+  /** Worst lag in the recent sample window, ms. */
+  maxMs: number;
+  /** Number of samples behind the figures (0 = nothing processed yet). */
+  samples: number;
+  /** ISO time of the most recent processed delivery, or null if none yet. */
+  observedAt: string | null;
 }
 
 /**

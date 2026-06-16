@@ -165,6 +165,48 @@ describe('recordDbQuery', () => {
     expect(debugBus.getEvents()).toHaveLength(0);
     expect(debugBus.snapshot().dbStats).toEqual({ requests: 0, egressBytes: 0 });
   });
+
+  describe('webhookLag gauge', () => {
+    const proc = (latencyMs: number) =>
+      debugBus.recordWebhook({ action: 'processed', eventType: 'pull_request', ok: true, fanout: 1, latencyMs });
+
+    it('reports zeros with no processed deliveries yet', () => {
+      expect(debugBus.snapshot().webhookLag).toEqual({
+        lastMs: 0,
+        medianMs: 0,
+        maxMs: 0,
+        samples: 0,
+        observedAt: null,
+      });
+    });
+
+    it('tracks last / median / max enqueue→pickup lag across processed deliveries', () => {
+      proc(100);
+      proc(900);
+      proc(500);
+      const lag = debugBus.snapshot().webhookLag;
+      expect(lag.lastMs).toBe(500);
+      expect(lag.medianMs).toBe(500); // sorted [100,500,900] → middle
+      expect(lag.maxMs).toBe(900);
+      expect(lag.samples).toBe(3);
+      expect(lag.observedAt).not.toBeNull();
+    });
+
+    it('only counts processed deliveries that carry a latency (not received)', () => {
+      debugBus.recordWebhook({ action: 'received', eventType: 'pull_request', ok: true, queued: true });
+      proc(7_000);
+      const lag = debugBus.snapshot().webhookLag;
+      expect(lag.samples).toBe(1);
+      expect(lag.maxMs).toBe(7_000);
+    });
+
+    it('clear() resets the lag window', () => {
+      proc(1_234);
+      debugBus.clear();
+      expect(debugBus.snapshot().webhookLag.samples).toBe(0);
+      expect(debugBus.snapshot().webhookLag.observedAt).toBeNull();
+    });
+  });
 });
 
 describe('poller registry', () => {

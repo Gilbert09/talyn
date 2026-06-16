@@ -185,6 +185,14 @@ function formatBytes(n: number): string {
   return `${i === 0 || v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** Human-friendly latency: 320ms · 8.4s · 14m. */
+function formatLag(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60_000).toFixed(1)}m`;
+}
+
 function ago(iso: string | null): string {
   if (!iso) return 'never';
   const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
@@ -473,6 +481,31 @@ export function DebugPanel() {
               <Database className="h-3.5 w-3.5 text-indigo-400" />
               {(snapshot?.dbStats?.requests ?? 0).toLocaleString()} DB quer
               {snapshot?.dbStats?.requests === 1 ? 'y' : 'ies'}
+            </span>
+          </Tip>
+          <Tip
+            side="bottom"
+            content={
+              (snapshot?.webhookLag?.samples ?? 0) === 0
+                ? 'Webhook consumer lag: how long a delivery waits between the receiver enqueuing it and the worker picking it up. No deliveries processed yet.'
+                : `Webhook consumer lag (enqueue→pickup) over the last ${snapshot?.webhookLag?.samples} deliveries — median ${formatLag(snapshot?.webhookLag?.medianMs ?? 0)}, worst ${formatLag(snapshot?.webhookLag?.maxMs ?? 0)}, last processed ${ago(snapshot?.webhookLag?.observedAt ?? null)}. Near zero is healthy; a rising figure means the worker can't keep up with the ingest stream.`
+            }
+          >
+            <span
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs',
+                (snapshot?.webhookLag?.maxMs ?? 0) >= 60_000
+                  ? 'bg-red-500/15 text-red-300'
+                  : (snapshot?.webhookLag?.maxMs ?? 0) >= 10_000
+                    ? 'bg-amber-500/15 text-amber-300'
+                    : 'bg-zinc-800/60 text-zinc-300'
+              )}
+            >
+              <Gauge className="h-3.5 w-3.5 text-sky-400" />
+              {formatLag(snapshot?.webhookLag?.medianMs ?? 0)} webhook lag
+              {(snapshot?.webhookLag?.maxMs ?? 0) > (snapshot?.webhookLag?.medianMs ?? 0)
+                ? ` (max ${formatLag(snapshot?.webhookLag?.maxMs ?? 0)})`
+                : ''}
             </span>
           </Tip>
           {snapshot &&
