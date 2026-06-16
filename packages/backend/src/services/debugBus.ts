@@ -282,6 +282,12 @@ class DebugBus {
   recordWebhook(input: {
     action: 'received' | 'processed';
     eventType: string;
+    /** The GitHub event's action sub-type (`opened`, `synchronize`, `submitted`, …). */
+    ghAction?: string;
+    /** The repo the delivery is about (`owner/repo`). */
+    repo?: string;
+    /** PR number(s) the delivery touches. */
+    prNumbers?: number[];
     delivery?: string;
     signature?: 'valid' | 'invalid' | 'missing';
     ok: boolean;
@@ -296,6 +302,13 @@ class DebugBus {
     error?: string;
   }): void {
     const verb = input.action === 'received' ? 'recv' : 'proc';
+    // "pull_request.synchronize acme/widgets #7" — what the delivery was *for*.
+    const subject =
+      `${input.eventType}${input.ghAction ? `.${input.ghAction}` : ''}` +
+      (input.repo ? ` ${input.repo}` : '') +
+      (input.prNumbers && input.prNumbers.length
+        ? ` ${input.prNumbers.map((n) => `#${n}`).join(',')}`
+        : '');
     const detail =
       input.action === 'received'
         ? input.dropReason
@@ -305,17 +318,20 @@ class DebugBus {
             : input.signature === 'invalid'
               ? 'bad signature'
               : 'ok'
-        : `fanout ${input.fanout ?? 0}${input.latencyMs !== undefined ? ` · ${Math.round(input.latencyMs)}ms lag` : ''}`;
+        : `${input.fanout ?? 0} refresh${input.fanout === 1 ? '' : 'es'}${input.latencyMs !== undefined ? ` · ${Math.round(input.latencyMs)}ms lag` : ''}`;
     this.record({
       category: input.ok ? 'webhook' : 'error',
       service: 'github_webhooks',
       action: input.action,
       ok: input.ok,
-      summary: `${verb} ${input.eventType} → ${detail}`,
+      summary: `${verb} ${subject} → ${detail}`,
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       ...this.resolveOwner(input.workspaceId),
       meta: {
         eventType: input.eventType,
+        ...(input.ghAction ? { ghAction: input.ghAction } : {}),
+        ...(input.repo ? { repo: input.repo } : {}),
+        ...(input.prNumbers && input.prNumbers.length ? { prNumbers: input.prNumbers } : {}),
         ...(input.delivery ? { delivery: input.delivery } : {}),
         ...(input.signature ? { signature: input.signature } : {}),
         ...(input.dropReason ? { dropReason: input.dropReason } : {}),

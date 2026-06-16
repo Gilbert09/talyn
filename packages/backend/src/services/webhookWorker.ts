@@ -225,6 +225,9 @@ class WebhookWorker {
       debugBus.recordWebhook({
         action: 'processed',
         eventType: delivery.eventType,
+        ghAction: delivery.action,
+        repo: delivery.repoFullName,
+        prNumbers: extractPrNumbers(delivery.eventType, delivery.payload),
         delivery: delivery.deliveryId,
         ok: true,
         fanout,
@@ -235,6 +238,8 @@ class WebhookWorker {
       debugBus.recordWebhook({
         action: 'processed',
         eventType: delivery?.eventType ?? 'unknown',
+        ghAction: delivery?.action,
+        repo: delivery?.repoFullName,
         ok: false,
         durationMs: Date.now() - startedAt,
         error: err instanceof Error ? err.message : String(err),

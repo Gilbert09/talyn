@@ -436,10 +436,12 @@ describe('owner attribution + filtering', () => {
 });
 
 describe('recordWebhook', () => {
-  it('records a queued delivery under the webhook category', () => {
+  it('records a queued delivery under the webhook category with its subject', () => {
     debugBus.recordWebhook({
       action: 'received',
       eventType: 'pull_request',
+      ghAction: 'opened',
+      repo: 'acme/widgets',
       delivery: 'abc',
       signature: 'valid',
       ok: true,
@@ -448,8 +450,9 @@ describe('recordWebhook', () => {
     const events = debugBus.getEvents({ category: 'webhook' });
     expect(events).toHaveLength(1);
     expect(events[0].service).toBe('github_webhooks');
-    expect(events[0].summary).toContain('recv pull_request');
+    expect(events[0].summary).toContain('recv pull_request.opened acme/widgets');
     expect(events[0].summary).toContain('queued');
+    expect(events[0].meta?.repo).toBe('acme/widgets');
     expect(debugBus.snapshot().counters.webhook).toBe(1);
   });
 
@@ -482,14 +485,21 @@ describe('recordWebhook', () => {
     debugBus.recordWebhook({
       action: 'processed',
       eventType: 'pull_request',
+      ghAction: 'synchronize',
+      repo: 'acme/widgets',
+      prNumbers: [7],
       ok: true,
       fanout: 3,
       latencyMs: 42,
     });
     const [e] = debugBus.getEvents({ category: 'webhook' });
-    expect(e.summary).toContain('proc pull_request');
-    expect(e.summary).toContain('fanout 3');
+    // The summary says what the webhook was FOR + the result.
+    expect(e.summary).toContain('proc pull_request.synchronize acme/widgets #7');
+    expect(e.summary).toContain('3 refreshes');
+    expect(e.summary).toContain('42ms lag');
     expect(e.meta?.fanout).toBe(3);
     expect(e.meta?.latencyMs).toBe(42);
+    expect(e.meta?.repo).toBe('acme/widgets');
+    expect(e.meta?.prNumbers).toEqual([7]);
   });
 });

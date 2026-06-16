@@ -20,7 +20,6 @@ import {
   broadcastMergeQueuePositions,
   QUEUE_RESET_COLUMNS,
 } from './mergeQueueBroadcast.js';
-import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
 
 interface WatchedRepo {
@@ -70,14 +69,9 @@ class PRMonitorService extends EventEmitter {
     githubService.on('disconnected', (workspaceId: string) => {
       this.invalidateUserLogin(workspaceId);
     });
-    // No periodic loop: webhooks drive realtime freshness + buckets, and the
-    // reconcile sweep re-derives buckets/closed PRs every ~15 min. `poll()`
-    // survives as the on-demand entry point (user Refresh / forced).
-    debugBus.registerPoller(
-      'pr_monitor',
-      0,
-      'On-demand PR refresh (user Refresh / forced). Periodic polling is retired — PRs are kept fresh by GitHub webhooks, with the reconcile sweep as the bucket/closed-PR backstop.',
-    );
+    // No periodic loop and no poller tile: webhooks drive realtime freshness +
+    // buckets, and the reconcile sweep is the backstop. `poll()` survives only
+    // as the on-demand entry point (user Refresh / forced).
   }
 
   shutdown(): void {
@@ -145,12 +139,8 @@ class PRMonitorService extends EventEmitter {
 
   private async poll(): Promise<void> {
     if (!this.pollGuard.tryBegin()) return;
-    const startedAt = Date.now();
-    let count = 0;
     try {
-      const connectedWorkspaces = githubService.getConnectedWorkspaces();
-      count = connectedWorkspaces.length;
-      for (const workspaceId of connectedWorkspaces) {
+      for (const workspaceId of githubService.getConnectedWorkspaces()) {
         try {
           await this.pollWorkspace(workspaceId);
         } catch (err) {
@@ -160,11 +150,6 @@ class PRMonitorService extends EventEmitter {
       }
     } finally {
       this.pollGuard.end();
-      debugBus.pollerTick('pr_monitor', {
-        durationMs: Date.now() - startedAt,
-        ok: true,
-        summary: `pr_monitor tick — ${count} workspace${count === 1 ? '' : 's'}`,
-      });
     }
   }
 

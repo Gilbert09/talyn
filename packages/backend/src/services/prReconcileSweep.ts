@@ -18,9 +18,9 @@ import { TickGuard } from './tickGuard.js';
  * (re)connect, paused→active) via prMonitorService.refreshWorkspaceNow directly.
  */
 
-// 15 min baseline; jitter avoids a thundering herd across replicas/workspaces.
-const BASE_INTERVAL_MS = 15 * 60_000;
-const JITTER_MS = 90_000;
+// 5 min baseline; jitter avoids a thundering herd across replicas/workspaces.
+const BASE_INTERVAL_MS = 5 * 60_000;
+const JITTER_MS = 60_000;
 
 class PrReconcileSweep {
   private timer: NodeJS.Timeout | null = null;

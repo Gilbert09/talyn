@@ -74,6 +74,7 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
 
   const repoFullName = (payload.repository as { full_name?: string } | undefined)?.full_name ?? '';
   const installationId = (payload.installation as { id?: number } | undefined)?.id;
+  const ghAction = typeof payload.action === 'string' ? payload.action : undefined;
 
   // Always let installation lifecycle events through (they maintain our index +
   // allowlist even before any repo is watched). For everything else, the cheap
@@ -83,6 +84,8 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
     debugBus.recordWebhook({
       action: 'received',
       eventType,
+      ghAction,
+      repo: repoFullName || undefined,
       signature,
       ok: true,
       queued: false,
@@ -95,7 +98,7 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
   if (!isRedisEnabled()) {
     // Without Redis there's no queue to enqueue onto. Ack so GitHub doesn't
     // disable the hook; the reconcile sweep keeps data fresh meanwhile.
-    debugBus.recordWebhook({ action: 'received', eventType, signature, ok: true, queued: false, dropReason: 'no_redis' });
+    debugBus.recordWebhook({ action: 'received', eventType, ghAction, repo: repoFullName, signature, ok: true, queued: false, dropReason: 'no_redis' });
     res.status(202).json({ ok: true, dropped: 'no_redis' });
     return;
   }
@@ -116,6 +119,8 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
     debugBus.recordWebhook({
       action: 'received',
       eventType,
+      ghAction,
+      repo: repoFullName,
       delivery: deliveryId,
       signature,
       ok: true,
@@ -127,6 +132,8 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
     debugBus.recordWebhook({
       action: 'received',
       eventType,
+      ghAction,
+      repo: repoFullName,
       delivery: deliveryId,
       signature,
       ok: false,
