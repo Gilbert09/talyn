@@ -131,8 +131,32 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       1_000,
     );
     expect(n).toBe(2);
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7);
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7);
+    // pull_request is not a check event → onlyIfTracked false; webhook refreshes
+    // never block on mergeable → resolveMergeable false.
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
+  });
+
+  it('passes onlyIfTracked for high-volume check events (skip-untracked-before-fetch)', async () => {
+    // check_run/check_suite fan in for every open PR; refreshPr must be told to
+    // bail before the GraphQL fetch unless the PR is already tracked.
+    await processWebhookDelivery(
+      delivery({
+        eventType: 'check_run',
+        payload: { check_run: { pull_requests: [{ number: 7 }] } },
+      }),
+      1_000,
+    );
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, {
+      onlyIfTracked: true,
+      resolveMergeable: false,
+    });
   });
 
   it('dispatches the real PostHog/posthog#64026 merge delivery to refreshPr', async () => {
@@ -180,7 +204,10 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     );
 
     expect(n).toBe(1);
-    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026);
+    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
   });
 
   it('coalesces a burst for the same (workspace, PR) within the window', async () => {
@@ -238,9 +265,19 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(baseSpy).toHaveBeenCalledWith('wsA', 'rA', 'main');
     expect(baseSpy).toHaveBeenCalledWith('wsB', 'rB', 'main');
     expect(n).toBe(3); // 2 (wsA) + 1 (wsB)
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3);
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4);
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9);
+    // push is not a check event → onlyIfTracked false.
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9, {
+      onlyIfTracked: false,
+      resolveMergeable: false,
+    });
   });
 
   it('ignores a push to a non-branch ref (tags etc.)', async () => {

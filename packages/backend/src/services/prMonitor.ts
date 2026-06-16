@@ -738,7 +738,8 @@ class PRMonitorService extends EventEmitter {
     workspaceId: string,
     owner: string,
     repo: string,
-    number: number
+    number: number,
+    opts: { onlyIfTracked?: boolean; resolveMergeable?: boolean } = {}
   ): Promise<void> {
     const watched = (await this.getWatchedRepos(workspaceId)).find(
       (r) =>
@@ -746,20 +747,37 @@ class PRMonitorService extends EventEmitter {
         r.repo.toLowerCase() === repo.toLowerCase()
     );
     if (!watched) return;
-    // Resolve GitHub's lazy `mergeable: UNKNOWN` inline (a push — the PR's own
-    // or a base-branch advance — resets mergeability to UNKNOWN until GitHub
-    // recomputes it). Without this, a conflict introduced by the triggering
-    // event would show blank until the next reconcile sweep.
-    const results = await this.resolveUnknownMergeable(
+    // High-volume check events (check_run/check_suite) fan in for *every* open
+    // PR in the repo — thousands on a repo like posthog/posthog, almost all of
+    // which the viewer has no relationship with. Refreshing them means a full
+    // GraphQL fetch we'd only discard at the relevance gate below. For those
+    // events (opts.onlyIfTracked) bail BEFORE the fetch unless we already track
+    // this PR: a PR the viewer cares about is materialised by its pull_request /
+    // review event (or the search-based sweep), so check events only ever need
+    // to *update* an already-tracked row. Turns ~thousands of GraphQL fetches
+    // per CI burst into ~dozens — the cheap `prRowExists` is an indexed lookup.
+    if (opts.onlyIfTracked && !(await this.prRowExists(workspaceId, watched.id, number))) {
+      whTrace(
+        `      refreshPr ${watched.fullName}#${number}: untracked + check-only event — skipped before fetch`,
+      );
+      return;
+    }
+    const fetched = await batchPullRequestsByNumber({
       workspaceId,
-      watched,
-      await batchPullRequestsByNumber({
-        workspaceId,
-        owner: watched.owner,
-        repo: watched.repo,
-        numbers: [number],
-      })
-    );
+      owner: watched.owner,
+      repo: watched.repo,
+      numbers: [number],
+    });
+    // GitHub returns `mergeable: UNKNOWN` on a fresh fetch and recomputes it in
+    // the background. Resolving it inline is a 3×1.5s blocking retry — fine for
+    // the merge-queue / auto-merge callers that need an authoritative answer
+    // (default), but a major backlog source on the webhook hot path. Webhook
+    // refreshes pass resolveMergeable:false and let a follow-up event or the
+    // reconcile sweep settle UNKNOWN.
+    const results =
+      opts.resolveMergeable === false
+        ? fetched
+        : await this.resolveUnknownMergeable(workspaceId, watched, fetched);
     const login = await this.resolveCurrentUser(workspaceId);
     if (WEBHOOK_TRACE && results.every((r) => !r.pr)) {
       whTrace(

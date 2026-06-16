@@ -213,9 +213,16 @@ async function refreshTarget(
     whTrace(`    coalesced ${repoFullName}#${number} (${eventType}) — refreshed <${COALESCE_WINDOW_MS}ms ago`);
     return 0;
   }
+  // Check events fan in for every open PR in the repo; only refresh ones we
+  // already track. Webhook refreshes never block on `mergeable: UNKNOWN` — the
+  // sweep / a follow-up event settles it (keeps the consumer draining fast).
+  const onlyIfTracked = eventType === 'check_run' || eventType === 'check_suite';
   whTrace(`    dispatch ${repoFullName}#${number} (${eventType}) → refreshPr`);
   await prMonitorService
-    .refreshPr(target.workspaceId, target.owner, target.repo, number)
+    .refreshPr(target.workspaceId, target.owner, target.repo, number, {
+      onlyIfTracked,
+      resolveMergeable: false,
+    })
     .then(() => whTrace(`    done ${repoFullName}#${number} (${eventType})`))
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
