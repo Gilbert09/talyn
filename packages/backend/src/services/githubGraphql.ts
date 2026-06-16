@@ -612,6 +612,46 @@ export function computeCheckDigest(
   return `${headSha}:${sorted}`;
 }
 
+/** Latest of a set of ISO timestamps as epoch ms; 0 when none are parseable. */
+function latestTimestamp(values: Array<string | null | undefined>): number {
+  let max = 0;
+  for (const v of values) {
+    if (!v) continue;
+    const t = Date.parse(v);
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  return max;
+}
+
+/**
+ * Collapse check contexts that share a name down to the single most recent
+ * run.
+ *
+ * GitHub's `statusCheckRollup` returns EVERY check run on the head commit,
+ * including stale ones a re-run superseded — e.g. an old "Frontend Tests Pass
+ * = FAILURE" (ran at 21:16) sitting alongside the fresh "Frontend Tests Pass =
+ * QUEUED" (re-triggered at 21:24) that replaced it. Counting both made the PR
+ * pill show phantom failures while GitHub's own merge view — which keeps only
+ * the latest run per name — showed the check as pending. So we match GitHub:
+ * within a name, the run with the newest timestamp (max of started / completed
+ * / created) wins.
+ *
+ * Safe for matrix jobs: GitHub expands a matrix into concrete per-leg names
+ * ("Jest test (chromium - 1)"), so genuine parallel legs keep distinct names
+ * and their own entries — only same-name re-runs collapse.
+ */
+export function dedupeLatestCheckByName<T extends { name: string; ts: number }>(
+  items: T[]
+): T[] {
+  const byName = new Map<string, T>();
+  for (const item of items) {
+    const existing = byName.get(item.name);
+    // `>=` so a later-in-array run wins an exact-timestamp tie.
+    if (!existing || item.ts >= existing.ts) byName.set(item.name, item);
+  }
+  return [...byName.values()];
+}
+
 // ---------- GraphQL query construction ----------
 
 /**
@@ -924,18 +964,28 @@ export function decodeBatchResponse(
 function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSummary {
   const contexts =
     raw.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
-  const normalizedContexts = contexts.map((c) => ({
-    name: c.__typename === 'CheckRun' ? c.name : c.context,
-    state: normalizeCheckState(
-      c.__typename === 'CheckRun'
-        ? { status: c.status, conclusion: c.conclusion }
-        : { state: c.state }
-    ),
-    url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
-    // `isRequired` is only in the response when the query carried a PR
-    // number; normalise missing → null ("unknown").
-    required: typeof c.isRequired === 'boolean' ? c.isRequired : null,
-  }));
+  const contextsWithTs = contexts.map((c) => {
+    const isCheckRun = c.__typename === 'CheckRun';
+    return {
+      name: isCheckRun ? c.name : c.context,
+      state: normalizeCheckState(
+        isCheckRun ? { status: c.status, conclusion: c.conclusion } : { state: c.state }
+      ),
+      url: (isCheckRun ? c.detailsUrl : c.targetUrl) ?? null,
+      // `isRequired` is only in the response when the query carried a PR
+      // number; normalise missing → null ("unknown").
+      required: typeof c.isRequired === 'boolean' ? c.isRequired : null,
+      // Newest event on the run — lets us keep the latest of same-name runs.
+      ts: isCheckRun
+        ? latestTimestamp([c.startedAt, c.completedAt])
+        : latestTimestamp([c.createdAt]),
+    };
+  });
+  // Drop stale runs a re-run superseded (an old FAILURE behind a fresh QUEUED
+  // re-run of the same name) so the counts match GitHub's latest-per-name view.
+  const normalizedContexts = dedupeLatestCheckByName(contextsWithTs).map(
+    ({ name, state, url, required }) => ({ name, state, url, required })
+  );
   const checks: CheckBreakdown = {
     total: normalizedContexts.length,
     passed: normalizedContexts.filter((c) => c.state === 'success').length,

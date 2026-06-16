@@ -8,6 +8,7 @@ import {
   decodeBatchResponse,
   decodeBatchByNumberResponse,
   decodeReviewDetail,
+  dedupeLatestCheckByName,
   makeBatchPullRequestsQuery,
   makeBatchPullRequestsByNumberQuery,
   normalizeCheckState,
@@ -562,6 +563,107 @@ describe('decodeBatchByNumberResponse', () => {
     expect(pr.blockingReason).toBe('blocked');
     expect(pr.checkContexts.find((c) => c.name === 'Django Tests Pass')?.required).toBe(false);
     expect(pr.checkContexts.find((c) => c.name === 'shellcheck')?.required).toBe(true);
+  });
+});
+
+describe('dedupeLatestCheckByName', () => {
+  it('keeps the latest run when a name repeats; preserves distinct names', () => {
+    const out = dedupeLatestCheckByName([
+      { name: 'a', ts: 100, state: 'failure' },
+      { name: 'a', ts: 200, state: 'pending' }, // newer re-run supersedes
+      { name: 'b', ts: 50, state: 'success' },
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.find((c) => c.name === 'a')?.state).toBe('pending');
+    expect(out.find((c) => c.name === 'b')?.state).toBe('success');
+  });
+
+  it('on an exact-timestamp tie, the later-in-array run wins', () => {
+    const out = dedupeLatestCheckByName([
+      { name: 'a', ts: 100, state: 'failure' },
+      { name: 'a', ts: 100, state: 'success' },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].state).toBe('success');
+  });
+});
+
+describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
+  // Reproduces PostHog/posthog#63722: a required "Pass" gate that re-ran has
+  // an OLD failure run sitting in the rollup behind a fresh QUEUED run of the
+  // same name. We must count only the latest (queued → pending), not the stale
+  // failure — otherwise the pill shows a phantom failure.
+  function prWithContexts(contexts: unknown[]): unknown {
+    return {
+      number: 7,
+      title: 'x',
+      body: '',
+      url: 'https://github.com/acme/widgets/pull/7',
+      isDraft: false,
+      state: 'OPEN',
+      mergedAt: null,
+      closedAt: null,
+      createdAt: '2026-06-15T00:00:00Z',
+      updatedAt: '2026-06-15T00:00:00Z',
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+      reviewDecision: 'APPROVED',
+      author: { login: 'alice' },
+      headRefName: 'feature/x',
+      baseRefName: 'master',
+      headRefOid: 'sha7',
+      reviews: { nodes: [] },
+      reviewThreads: { nodes: [] },
+      comments: { nodes: [] },
+      commits: {
+        nodes: [{ commit: { statusCheckRollup: { state: 'PENDING', contexts: { nodes: contexts } } } }],
+      },
+    };
+  }
+  const checkRun = (over: Record<string, unknown>) => ({
+    __typename: 'CheckRun',
+    id: String(Math.random()),
+    detailsUrl: null,
+    startedAt: null,
+    completedAt: null,
+    checkSuite: { app: { name: 'GitHub Actions' } },
+    ...over,
+  });
+
+  it('counts the fresh queued re-run, not the superseded failure of the same name', () => {
+    const data = {
+      repository: {
+        [aliasForBranch(0)]: {
+          nodes: [
+            prWithContexts([
+              checkRun({
+                name: 'Frontend Tests Pass',
+                status: 'COMPLETED',
+                conclusion: 'FAILURE',
+                startedAt: '2026-06-15T21:16:57Z',
+                completedAt: '2026-06-15T21:16:59Z',
+              }),
+              checkRun({
+                name: 'Frontend Tests Pass',
+                status: 'QUEUED',
+                conclusion: null,
+                startedAt: '2026-06-15T21:24:14Z',
+                completedAt: null,
+              }),
+              checkRun({ name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS' }),
+            ]),
+          ],
+        },
+      },
+    };
+    const [{ pr }] = decodeBatchResponse(['feature/x'], data, 'acme', 'widgets');
+    expect(pr).not.toBeNull();
+    // The stale "Frontend Tests Pass = FAILURE" must NOT be counted.
+    expect(pr!.checks.failed).toBe(0);
+    expect(pr!.checks.inProgress).toBe(1); // the queued run → pending
+    expect(pr!.checks.passed).toBe(1); // lint
+    expect(pr!.checks.total).toBe(2); // de-duped: 2 distinct names
+    expect(pr!.blockingReason).not.toBe('checks_failed');
   });
 });
 
