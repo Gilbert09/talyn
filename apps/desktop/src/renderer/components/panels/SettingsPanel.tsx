@@ -763,37 +763,27 @@ function IntegrationsSettings() {
                 ) : githubStatus?.configured ? (
                   'Connect to GitHub to track PRs, issues, and CI status'
                 ) : (
-                  githubStatus?.message || 'Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables'
+                  githubStatus?.message || 'Set up the GitHub App (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY)'
                 )}
               </p>
             </div>
             {githubStatus?.connected ? (
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {/* Upgrade an OAuth-connected workspace to the App (webhooks +
-                    realtime). Harmless if already on the App — it re-installs. */}
-                <Button
-                  variant="outline"
-                  onClick={handleGitHubAppConnect}
-                  disabled={isLoading || !currentWorkspaceId}
-                  title="Install the GitHub App to enable realtime webhooks"
-                >
-                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Enable webhooks'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleGitHubDisconnect}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Unlink className="w-4 h-4 mr-1" />
-                      Disconnect
-                    </>
-                  )}
-                </Button>
-              </div>
+              // Connecting GitHub installs the App, so a connected workspace
+              // always has webhooks — no separate "enable" step.
+              <Button
+                variant="outline"
+                onClick={handleGitHubDisconnect}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <Unlink className="w-4 h-4 mr-1" />
+                    Disconnect
+                  </>
+                )}
+              </Button>
             ) : (
               // The GitHub App (webhooks + realtime) is the only connect path —
               // a "connected" workspace always has webhooks.
