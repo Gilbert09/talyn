@@ -26,6 +26,17 @@ export const WEBHOOK_STREAM = 'gh:webhooks';
 const GROUP = 'fastowl';
 const COALESCE_WINDOW_MS = 750;
 
+// Opt-in deep trace of the webhook pipeline (set WEBHOOK_TRACE=1). Logs every
+// step a delivery takes — received → fanout → dispatch/coalesce → refresh →
+// resolved state — so a "why didn't my merge update?" can be followed end to
+// end in stdout. Off by default: with org-wide ("All repositories") install
+// access this is a firehose, so it's a deliberate, temporary debug switch.
+export const WEBHOOK_TRACE =
+  process.env.WEBHOOK_TRACE === '1' || process.env.WEBHOOK_TRACE === 'true';
+export function whTrace(msg: string): void {
+  if (WEBHOOK_TRACE) console.log(`[wh-trace] ${msg}`);
+}
+
 /** The decoded envelope the receiver enqueues. */
 export interface WebhookDelivery {
   deliveryId: string;
@@ -121,6 +132,11 @@ export async function processWebhookDelivery(
   delivery: WebhookDelivery,
   nowMs: number = Date.now(),
 ): Promise<number> {
+  whTrace(
+    `recv ${delivery.eventType}/${delivery.action ?? '-'} ` +
+      `${delivery.repoFullName || '(no repo)'} delivery=${delivery.deliveryId}`,
+  );
+
   // installation lifecycle: keep the repo watch index + the account→installation
   // index current (the latter so data-plane reads resolve a newly-(un)installed
   // account immediately, across replicas).
@@ -131,7 +147,10 @@ export async function processWebhookDelivery(
   }
 
   const targets = await targetsForRepo(delivery.repoFullName);
-  if (targets.length === 0) return 0;
+  if (targets.length === 0) {
+    whTrace(`  └ ${delivery.repoFullName}: no watching workspace — dropped`);
+    return 0;
+  }
 
   // A push to a branch advances it; every OPEN PR targeting that branch as its
   // base may have just become (un)conflicting, and GitHub fires no per-PR event
@@ -145,6 +164,9 @@ export async function processWebhookDelivery(
       const numbers = await prMonitorService
         .openPrNumbersForBase(target.workspaceId, target.repositoryId, branch)
         .catch(() => [] as number[]);
+      whTrace(
+        `  push ${delivery.repoFullName}@${branch} → open PRs on this base=[${numbers.join(',')}]`,
+      );
       for (const number of numbers) {
         dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'push');
       }
@@ -152,9 +174,22 @@ export async function processWebhookDelivery(
     return dispatched;
   }
 
-  if (!isRefreshEvent(delivery.eventType)) return 0;
+  if (!isRefreshEvent(delivery.eventType)) {
+    whTrace(`  └ ${delivery.eventType}: not a refresh event — ignored`);
+    return 0;
+  }
   const numbers = extractPrNumbers(delivery.eventType, delivery.payload);
-  if (numbers.length === 0) return 0;
+  if (numbers.length === 0) {
+    whTrace(
+      `  └ ${delivery.eventType}/${delivery.action ?? '-'} ${delivery.repoFullName}: ` +
+        `no PR number on payload — ignored`,
+    );
+    return 0;
+  }
+  whTrace(
+    `  ${delivery.eventType}/${delivery.action ?? '-'} ${delivery.repoFullName} ` +
+      `PRs=[${numbers.join(',')}] → ${targets.length} workspace(s)`,
+  );
 
   let dispatched = 0;
   for (const target of targets) {
@@ -174,9 +209,14 @@ async function refreshTarget(
   eventType: string,
 ): Promise<number> {
   const key = `${target.workspaceId}:${repoFullName.toLowerCase()}:${number}`;
-  if (!shouldRefresh(key, nowMs)) return 0;
+  if (!shouldRefresh(key, nowMs)) {
+    whTrace(`    coalesced ${repoFullName}#${number} (${eventType}) — refreshed <${COALESCE_WINDOW_MS}ms ago`);
+    return 0;
+  }
+  whTrace(`    dispatch ${repoFullName}#${number} (${eventType}) → refreshPr`);
   await prMonitorService
     .refreshPr(target.workspaceId, target.owner, target.repo, number)
+    .then(() => whTrace(`    done ${repoFullName}#${number} (${eventType})`))
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       // Benign on busy repos: the number is an ISSUE (issues + PRs share a

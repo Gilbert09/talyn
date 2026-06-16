@@ -45,6 +45,16 @@ const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 // `drainInFlightTick`.
 const FORCE_POLL_DRAIN_MS = 15_000;
 
+// Mirrors webhookWorker's WEBHOOK_TRACE switch (kept local to dodge the import
+// cycle — webhookWorker already imports prMonitor). Lets `refreshPr` log the
+// state it actually resolved + whether it upserted/emitted, which is the
+// missing piece when tracing a merge that didn't propagate.
+const WEBHOOK_TRACE =
+  process.env.WEBHOOK_TRACE === '1' || process.env.WEBHOOK_TRACE === 'true';
+function whTrace(msg: string): void {
+  if (WEBHOOK_TRACE) console.log(`[wh-trace] ${msg}`);
+}
+
 class PRMonitorService extends EventEmitter {
   // Wedge watchdog for the on-demand full poll (user Refresh + reconcile sweep):
   // a single stalled await must never let two refreshes overlap. See TickGuard.
@@ -751,6 +761,12 @@ class PRMonitorService extends EventEmitter {
       })
     );
     const login = await this.resolveCurrentUser(workspaceId);
+    if (WEBHOOK_TRACE && results.every((r) => !r.pr)) {
+      whTrace(
+        `      refreshPr ${watched.fullName}#${number}: GitHub returned no PR ` +
+          `(deleted/transferred or not visible) — nothing to update`,
+      );
+    }
     for (const result of results) {
       if (!result.pr) continue;
       await this.annotateReviewRequest(workspaceId, result.pr);
@@ -759,9 +775,13 @@ class PRMonitorService extends EventEmitter {
       // materialize a row if there's a relationship now, or one already exists
       // (so a PR that just lost its relationship still gets updated/cleared).
       const relevant = authored || reviewRequested;
-      if (!relevant && !(await this.prRowExists(workspaceId, watched.id, number))) {
-        continue;
-      }
+      const exists = relevant || (await this.prRowExists(workspaceId, watched.id, number));
+      whTrace(
+        `      refreshPr ${watched.fullName}#${result.pr.number}: state=${result.pr.state} ` +
+          `authored=${authored} reviewRequested=${reviewRequested} ` +
+          `${exists ? 'upsert+emit' : 'skip (no relationship, untracked)'}`,
+      );
+      if (!exists) continue;
       await upsertFromBatchResult({
         workspaceId,
         repositoryId: watched.id,
