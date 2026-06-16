@@ -321,6 +321,14 @@ class WebhookWorker {
     try {
       delivery = JSON.parse(fields.data) as WebhookDelivery;
       const fanout = await processWebhookDelivery(delivery);
+      // Definitive consumer-lag readout: how long this delivery sat between the
+      // receiver enqueuing it and the worker starting it. Reading this directly
+      // beats inferring lag from UUID gaps in a noisy log buffer.
+      const lagMs = delivery.enqueuedAtMs ? startedAt - delivery.enqueuedAtMs : -1;
+      whTrace(
+        `entry ${delivery.eventType}/${delivery.action ?? '-'} ${delivery.repoFullName} ` +
+          `lag=${(lagMs / 1000).toFixed(1)}s fanout=${fanout} took=${Date.now() - startedAt}ms`,
+      );
       debugBus.recordWebhook({
         action: 'processed',
         eventType: delivery.eventType,
