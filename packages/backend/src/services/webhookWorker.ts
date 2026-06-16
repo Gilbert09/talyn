@@ -146,7 +146,7 @@ export async function processWebhookDelivery(
         .openPrNumbersForBase(target.workspaceId, target.repositoryId, branch)
         .catch(() => [] as number[]);
       for (const number of numbers) {
-        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs);
+        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'push');
       }
     }
     return dispatched;
@@ -159,7 +159,7 @@ export async function processWebhookDelivery(
   let dispatched = 0;
   for (const target of targets) {
     for (const number of numbers) {
-      dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs);
+      dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, delivery.eventType);
     }
   }
   return dispatched;
@@ -171,13 +171,32 @@ async function refreshTarget(
   number: number,
   repoFullName: string,
   nowMs: number,
+  eventType: string,
 ): Promise<number> {
   const key = `${target.workspaceId}:${repoFullName.toLowerCase()}:${number}`;
   if (!shouldRefresh(key, nowMs)) return 0;
   await prMonitorService
     .refreshPr(target.workspaceId, target.owner, target.repo, number)
     .catch((err) => {
-      console.error(`[webhookWorker] refreshPr ${repoFullName}#${number} failed:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Benign on busy repos: the number is an ISSUE (issues + PRs share a
+      // numbering space, and a check_run/check_suite/comment can reference one)
+      // or a transferred/deleted PR. Not an error — record where it came from on
+      // the Debug bus (not stdout) so the source is traceable without spam.
+      if (/Could not resolve to a PullRequest/i.test(msg)) {
+        debugBus.recordWebhook({
+          action: 'processed',
+          eventType,
+          repo: repoFullName,
+          prNumbers: [number],
+          ok: true,
+          fanout: 0,
+          dropReason: 'not_a_pr',
+        });
+        return;
+      }
+      // One concise line, no stack — operational, not a crash.
+      console.warn(`[webhookWorker] refreshPr (${eventType}) ${repoFullName}#${number}: ${msg}`);
     });
   return 1;
 }

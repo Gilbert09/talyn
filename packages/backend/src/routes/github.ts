@@ -5,6 +5,7 @@ import { prMonitorService } from '../services/prMonitor.js';
 import {
   isGitHubAppConfigured,
   buildUserAuthUrl,
+  buildInstallUrl,
   appInstallationsPageUrl,
   exchangeUserCode,
   fetchInstallation,
@@ -80,6 +81,7 @@ export function githubPublicRoutes(): Router {
         renderCallbackPage({ ok: false, message: 'Invalid install state — try again from FastOwl' })
       );
     }
+    const { userId } = pendingState;
     pendingOAuthStates.delete(stateToken);
 
     try {
@@ -88,6 +90,20 @@ export function githubPublicRoutes(): Router {
         code as string,
         installation_id ? String(installation_id) : undefined
       );
+      // New user: authorized, but the App isn't installed on any account yet.
+      // Send them straight into the install flow (with a fresh state) so that,
+      // once they install, GitHub returns here with installation_id and the
+      // connection completes. We only do this on the pure-authorize hop (no
+      // installation_id) so a genuine "installed nothing" return doesn't loop.
+      if (installCount === 0 && !installation_id) {
+        const newState = uuid();
+        pendingOAuthStates.set(newState, {
+          workspaceId,
+          userId,
+          expiresAt: Date.now() + 10 * 60 * 1000,
+        });
+        return res.redirect(buildInstallUrl(`${workspaceId}:${newState}`));
+      }
       res.type('html').send(
         renderCallbackPage(
           installCount > 0
@@ -95,8 +111,8 @@ export function githubPublicRoutes(): Router {
             : {
                 ok: true,
                 message:
-                  'GitHub authorized — but the FastOwl app isn’t installed on any account yet. ' +
-                  `Install it (${appInstallationsPageUrl()}) on the org/user whose repos you want to track.`,
+                  'GitHub authorized, but no installation was completed. ' +
+                  `Install the FastOwl app (${appInstallationsPageUrl()}) on the org/user whose repos you want to track, then hit Connect again.`,
               }
         )
       );
@@ -124,21 +140,31 @@ async function completeAppConnection(
   installationIdHint: string | undefined
 ): Promise<number> {
   const userToken = await exchangeUserCode(code);
-  const installations = await fetchUserInstallations(userToken.access_token).catch(() => []);
+  const listed = await fetchUserInstallations(userToken.access_token).catch(() => []);
+
+  // Union the listing with a fresh-install hint: right after an install, the
+  // `/user/installations` listing can lag, so trust the installation_id GitHub
+  // just handed us too.
+  const ids = new Set(listed.map((i) => i.installationId));
+  if (installationIdHint) ids.add(installationIdHint);
 
   const db = getPoolDbClient();
   const now = new Date();
-  for (const inst of installations) {
-    // Per-installation account + selected repos. Account login/type come from
-    // the listing; the repo allowlist needs an installation-token call.
-    const info = await fetchInstallation(inst.installationId).catch(() => null);
-    const repoFullNames = await fetchInstallationRepos(inst.installationId).catch(() => []);
+  const listedById = new Map(listed.map((i) => [i.installationId, i]));
+  for (const installationId of ids) {
+    // Per-installation account + selected repos. The App-JWT fetch is the
+    // source of truth for account + suspension; fall back to the listing.
+    const info = await fetchInstallation(installationId).catch(() => null);
+    const fallback = listedById.get(installationId);
+    const accountLogin = info?.accountLogin ?? fallback?.accountLogin ?? 'unknown';
+    const accountType = info?.accountType ?? fallback?.accountType ?? 'User';
+    const repoFullNames = await fetchInstallationRepos(installationId).catch(() => []);
     await db
       .insert(githubInstallations)
       .values({
-        installationId: inst.installationId,
-        accountLogin: info?.accountLogin ?? inst.accountLogin,
-        accountType: info?.accountType ?? inst.accountType,
+        installationId,
+        accountLogin,
+        accountType,
         repoFullNames,
         suspendedAt: info?.suspended ? now : null,
         createdAt: now,
@@ -146,19 +172,14 @@ async function completeAppConnection(
       })
       .onConflictDoUpdate({
         target: githubInstallations.installationId,
-        set: {
-          accountLogin: info?.accountLogin ?? inst.accountLogin,
-          accountType: info?.accountType ?? inst.accountType,
-          repoFullNames,
-          suspendedAt: info?.suspended ? now : null,
-          updatedAt: now,
-        },
+        set: { accountLogin, accountType, repoFullNames, suspendedAt: info?.suspended ? now : null, updatedAt: now },
       });
   }
 
+  const installations = [...ids];
   // Primary installation (fallback when a call's repo owner can't be resolved):
   // the hint from a first-install redirect, else the first discovered install.
-  const primaryInstallationId = installationIdHint ?? installations[0]?.installationId;
+  const primaryInstallationId = installationIdHint ?? installations[0];
 
   const nowMs = Date.now();
   await githubService.storeToken(
@@ -185,7 +206,7 @@ async function completeAppConnection(
   debugBus.recordEvent({
     service: 'github',
     action: 'github:connected',
-    summary: `ws ${workspaceId.slice(0, 8)} connected — ${installations.length} installation(s): ${installations.map((i) => i.accountLogin).join(', ') || 'none'}`,
+    summary: `ws ${workspaceId.slice(0, 8)} connected — ${installations.length} installation(s)`,
     workspaceId,
   });
 

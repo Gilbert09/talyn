@@ -824,11 +824,16 @@ class GitHubService extends EventEmitter {
     opts: { preferUser?: boolean; owner?: string } = {},
   ): Promise<ResolvedAuth | null> {
     const stored = this.tokens.get(workspaceId);
-    // Data-plane calls use an installation token. Resolve the installation by
-    // the repo's OWNER (a workspace can span accounts/installations); fall back
-    // to the workspace's primary installationId when the owner isn't known.
-    const installationId =
-      this.installationForOwner(opts.owner) ?? stored?.installationId;
+    // Data-plane calls use an installation token, resolved by the repo's OWNER
+    // (a workspace can span accounts/installations). When the owner is KNOWN but
+    // no installation covers it, do NOT fall back to the workspace's primary
+    // installation — that token is for a different account and would 403
+    // ("Resource not accessible by integration"); fall through to the user
+    // token, which carries the user's actual access. The primary installation
+    // is only the fallback for owner-less calls (e.g. /rate_limit).
+    const installationId = opts.owner
+      ? this.installationForOwner(opts.owner)
+      : stored?.installationId;
     if (installationId && isGitHubAppConfigured() && !opts.preferUser) {
       try {
         const token = await getInstallationToken(installationId);

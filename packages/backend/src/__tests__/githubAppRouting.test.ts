@@ -61,6 +61,9 @@ describe('github hybrid-auth routing', () => {
     await db.insert(workspacesTable).values({ id: 'ws1', ownerId: TEST_USER_ID, name: 'mine', settings: {} });
 
     _resetInstallationTokenCache();
+    // Rebuild the (singleton) installation index from the fresh, empty test DB
+    // so entries seeded by a prior test don't leak in.
+    await githubService.refreshInstallationIndex();
     for (const ws of githubService.getConnectedWorkspaces()) {
       await githubService.removeToken(ws).catch(() => {});
     }
@@ -76,6 +79,11 @@ describe('github hybrid-auth routing', () => {
   });
 
   it('uses the installation token for data-plane reads and the user token for /user', async () => {
+    await db.insert(githubInstallationsTable).values({
+      installationId: '555', accountLogin: 'acme', accountType: 'Organization',
+      repoFullNames: [], createdAt: new Date(), updatedAt: new Date(),
+    });
+    await githubService.refreshInstallationIndex();
     await githubService.storeToken('ws1', 'ghu_usertoken', 'bearer', 'repo', {
       installationId: '555',
     });
