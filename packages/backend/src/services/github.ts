@@ -1749,14 +1749,20 @@ class GitHubService extends EventEmitter {
       if (response.ok) {
         const payload = parseJsonBody<{
           data?: T;
-          errors?: Array<{ message: string }>;
+          errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
         }>(response.bodyText);
         if (payload.errors && payload.errors.length > 0) {
-          // Surface the first GraphQL error verbatim — callers want to see
-          // "Resource not accessible" or "Could not resolve to a Repository"
-          // rather than a generic 200-but-failed.
-          recordGql(false, `GraphQL: ${payload.errors[0].message}`);
-          throw new Error(`GitHub GraphQL: ${payload.errors[0].message}`);
+          // Surface the first GraphQL error verbatim, plus its `type`
+          // (e.g. FORBIDDEN) and `path` — which field/node GitHub refused.
+          // For "Resource not accessible by integration" the path pinpoints the
+          // exact selection (e.g. …statusCheckRollup.contexts.nodes.47.isRequired),
+          // turning a vague 403 into an actionable cause.
+          const e = payload.errors[0];
+          const detail =
+            (e.type ? ` [${e.type}]` : '') +
+            (e.path ? ` at ${e.path.join('.')}` : '');
+          recordGql(false, `GraphQL: ${e.message}${detail}`);
+          throw new Error(`GitHub GraphQL: ${e.message}${detail}`);
         }
         if (!payload.data) {
           recordGql(false, 'response missing data');
