@@ -125,28 +125,57 @@ export async function processWebhookDelivery(
     await refreshWebhookIndex().catch(() => undefined);
     return 0;
   }
-  if (!isRefreshEvent(delivery.eventType)) return 0;
-
-  const numbers = extractPrNumbers(delivery.eventType, delivery.payload);
-  if (numbers.length === 0) return 0;
 
   const targets = await targetsForRepo(delivery.repoFullName);
   if (targets.length === 0) return 0;
 
+  // A push to a branch advances it; every OPEN PR targeting that branch as its
+  // base may have just become (un)conflicting, and GitHub fires no per-PR event
+  // for that. Refresh each such PR (mergeability resolves inline in refreshPr).
+  if (delivery.eventType === 'push') {
+    const ref = typeof delivery.payload.ref === 'string' ? delivery.payload.ref : '';
+    if (!ref.startsWith('refs/heads/')) return 0;
+    const branch = ref.slice('refs/heads/'.length);
+    let dispatched = 0;
+    for (const target of targets) {
+      const numbers = await prMonitorService
+        .openPrNumbersForBase(target.workspaceId, target.repositoryId, branch)
+        .catch(() => [] as number[]);
+      for (const number of numbers) {
+        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs);
+      }
+    }
+    return dispatched;
+  }
+
+  if (!isRefreshEvent(delivery.eventType)) return 0;
+  const numbers = extractPrNumbers(delivery.eventType, delivery.payload);
+  if (numbers.length === 0) return 0;
+
   let dispatched = 0;
   for (const target of targets) {
     for (const number of numbers) {
-      const key = `${target.workspaceId}:${delivery.repoFullName.toLowerCase()}:${number}`;
-      if (!shouldRefresh(key, nowMs)) continue;
-      dispatched += 1;
-      await prMonitorService
-        .refreshPr(target.workspaceId, target.owner, target.repo, number)
-        .catch((err) => {
-          console.error(`[webhookWorker] refreshPr ${delivery.repoFullName}#${number} failed:`, err);
-        });
+      dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs);
     }
   }
   return dispatched;
+}
+
+/** Coalesced single-PR refresh for one watching workspace. Returns 1 if dispatched, 0 if coalesced. */
+async function refreshTarget(
+  target: { workspaceId: string; owner: string; repo: string },
+  number: number,
+  repoFullName: string,
+  nowMs: number,
+): Promise<number> {
+  const key = `${target.workspaceId}:${repoFullName.toLowerCase()}:${number}`;
+  if (!shouldRefresh(key, nowMs)) return 0;
+  await prMonitorService
+    .refreshPr(target.workspaceId, target.owner, target.repo, number)
+    .catch((err) => {
+      console.error(`[webhookWorker] refreshPr ${repoFullName}#${number} failed:`, err);
+    });
+  return 1;
 }
 
 // ---- Stream consumer ------------------------------------------------------

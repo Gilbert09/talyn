@@ -145,4 +145,20 @@ describe('refreshPr (webhook-driven flags + relevance guard)', () => {
     expect(row).toBeDefined();
     expect(row?.authored).toBe(false); // cleared
   });
+
+  it('openPrNumbersForBase returns only OPEN PRs whose base branch matches', async () => {
+    const base = (number: number, state: string, baseBranch: string) => ({
+      id: `pr-${number}`, workspaceId: 'ws1', repositoryId: 'repo1', owner: 'acme', repo: 'widgets',
+      number, state, authored: false, reviewRequested: false,
+      lastPolledAt: new Date(), lastSummary: { baseBranch }, createdAt: new Date(), updatedAt: new Date(),
+    });
+    await db.insert(pullRequestsTable).values([
+      base(1, 'open', 'main'),
+      base(2, 'open', 'develop'),
+      base(3, 'closed', 'main'),
+      base(4, 'open', 'main'),
+    ]);
+    const nums = await prMonitorService.openPrNumbersForBase('ws1', 'repo1', 'main');
+    expect(nums.sort((a, b) => a - b)).toEqual([1, 4]); // #2 wrong base, #3 closed
+  });
 });

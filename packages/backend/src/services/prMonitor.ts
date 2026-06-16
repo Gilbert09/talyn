@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
@@ -699,12 +699,20 @@ class PRMonitorService extends EventEmitter {
         r.repo.toLowerCase() === repo.toLowerCase()
     );
     if (!watched) return;
-    const results = await batchPullRequestsByNumber({
+    // Resolve GitHub's lazy `mergeable: UNKNOWN` inline (a push — the PR's own
+    // or a base-branch advance — resets mergeability to UNKNOWN until GitHub
+    // recomputes it). Without this, a conflict introduced by the triggering
+    // event would show blank until the next reconcile sweep.
+    const results = await this.resolveUnknownMergeable(
       workspaceId,
-      owner: watched.owner,
-      repo: watched.repo,
-      numbers: [number],
-    });
+      watched,
+      await batchPullRequestsByNumber({
+        workspaceId,
+        owner: watched.owner,
+        repo: watched.repo,
+        numbers: [number],
+      })
+    );
     const login = await this.resolveCurrentUser(workspaceId);
     for (const result of results) {
       if (!result.pr) continue;
@@ -725,6 +733,31 @@ class PRMonitorService extends EventEmitter {
         authored,
       });
     }
+  }
+
+  /**
+   * Open PR numbers in a repo whose BASE branch is `baseBranch`. Used by the
+   * `push` webhook handler: when a branch advances, every open PR targeting it
+   * may have just become (un)conflicting, and GitHub sends no per-PR event.
+   * Selects only `number` — never ships the `lastSummary` blob.
+   */
+  async openPrNumbersForBase(
+    workspaceId: string,
+    repositoryId: string,
+    baseBranch: string
+  ): Promise<number[]> {
+    const rows = await this.db
+      .select({ number: pullRequestsTable.number })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.state, 'open'),
+          sql`${pullRequestsTable.lastSummary} ->> 'baseBranch' = ${baseBranch}`
+        )
+      );
+    return rows.map((r) => r.number);
   }
 
   /** Whether a pull_requests row already exists for this (workspace, repo, number). */

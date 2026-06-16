@@ -151,7 +151,10 @@ re-connects via the install flow.
    Members **R** (team-based review-request resolution).
 4. **Subscribe to events**: `pull_request`, `pull_request_review`,
    `pull_request_review_comment`, `issue_comment`, `check_run`, `check_suite`,
-   `status`, `installation`, `installation_repositories`.
+   `status`, `push`, `installation`, `installation_repositories`.
+   (`push` is what lets us catch a PR becoming conflicting because its **base
+   branch** advanced — GitHub sends no per-PR event for that; on a push we
+   refresh every open PR based on the pushed branch.)
 5. Enable **"Request user authorization (OAuth) during installation"**, and set the
    **Callback URL** to `http://localhost:4747/api/v1/github/app/callback` (prod: the
    Railway host equivalent — an App can list multiple callback URLs).

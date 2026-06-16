@@ -151,4 +151,34 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(n).toBe(0);
     expect(refreshSpy).not.toHaveBeenCalled();
   });
+
+  it('on a push to a branch, refreshes every open PR based on that branch (per workspace)', async () => {
+    // wsA has 2 open PRs based on `main`, wsB has 1.
+    const baseSpy = vi
+      .spyOn(prMonitorService, 'openPrNumbersForBase')
+      .mockImplementation(async (workspaceId) => (workspaceId === 'wsA' ? [3, 4] : [9]));
+
+    const n = await processWebhookDelivery(
+      delivery({ eventType: 'push', payload: { ref: 'refs/heads/main' } }),
+      1_000,
+    );
+
+    expect(baseSpy).toHaveBeenCalledWith('wsA', 'rA', 'main');
+    expect(baseSpy).toHaveBeenCalledWith('wsB', 'rB', 'main');
+    expect(n).toBe(3); // 2 (wsA) + 1 (wsB)
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3);
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4);
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9);
+  });
+
+  it('ignores a push to a non-branch ref (tags etc.)', async () => {
+    const baseSpy = vi.spyOn(prMonitorService, 'openPrNumbersForBase');
+    const n = await processWebhookDelivery(
+      delivery({ eventType: 'push', payload: { ref: 'refs/tags/v1.0.0' } }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    expect(baseSpy).not.toHaveBeenCalled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
 });
