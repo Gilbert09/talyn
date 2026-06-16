@@ -15,6 +15,7 @@ import {
 } from '../../db/schema.js';
 import * as graphqlModule from '../../services/githubGraphql.js';
 import * as prCacheModule from '../../services/prCache.js';
+import * as prCloudFixModule from '../../services/prCloudFix.js';
 import type { PRSummary } from '../../services/githubGraphql.js';
 import { githubService } from '../../services/github.js';
 
@@ -365,6 +366,77 @@ describe('routes/pullRequests', () => {
       const res = await fetch(`${serverUrl}/pull-requests/${id}`, { headers: authMine });
       expect(res.status).toBe(200);
       expect(upsertSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------- POST /:id/fix --------
+
+  describe('POST /pull-requests/:id/fix', () => {
+    function fakeTaskRow(over: Record<string, unknown> = {}) {
+      const now = new Date();
+      return {
+        id: 'task-fix-1',
+        workspaceId: 'ws-mine',
+        type: 'pr_response',
+        status: 'queued',
+        priority: 'medium',
+        title: 'Get acme/widgets#1 mergeable',
+        description: '',
+        prompt: 'standard prompt',
+        repositoryId: 'repo-mine',
+        branch: null,
+        assignedEnvironmentId: 'env-1',
+        result: null,
+        metadata: null,
+        transcript: null,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: null,
+        ...over,
+      };
+    }
+
+    it('404 for a missing PR', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/none/fix`, {
+        method: 'POST',
+        headers: authMine,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('fires the standard mergeable run and returns the created task', async () => {
+      const id = await insertPR(db);
+      const spy = vi
+        .spyOn(prCloudFixModule, 'startPrMergeableRun')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValue({ ok: true, task: fakeTaskRow() as any });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/fix`, {
+        method: 'POST',
+        headers: authMine,
+        body: JSON.stringify({ model: 'claude-opus-4-8' }),
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { data: { id: string; type: string } };
+      expect(body.data.id).toBe('task-fix-1');
+      expect(body.data.type).toBe('pr_response');
+      // The route forwards the PR row + model to the canonical action.
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ id }),
+        { model: 'claude-opus-4-8' }
+      );
+    });
+
+    it('400 when the workspace has no connected cloud provider', async () => {
+      const id = await insertPR(db);
+      vi.spyOn(prCloudFixModule, 'startPrMergeableRun').mockResolvedValue({
+        ok: false,
+        reason: 'no_cloud_provider',
+      });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/fix`, {
+        method: 'POST',
+        headers: authMine,
+      });
+      expect(res.status).toBe(400);
     });
   });
 

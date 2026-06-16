@@ -332,34 +332,26 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'fastowl_fix_pull_request',
     description:
-      'Start a cloud coding-agent task on a PR. mode "respond" (default) addresses review comments / fixes CI as a pr_response task; "review" runs a pr_review; "freeform" runs a code_writing task. The task runs on the provider configured for the workspace and opens/updates the PR.',
+      "Start the standard FastOwl \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using FastOwl's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use fastowl_create_task for freeform work).",
     inputSchema: {
       type: 'object',
       properties: {
         pull_request_id: { type: 'string' },
-        instructions: { type: 'string', description: 'What the agent should do.' },
-        mode: { type: 'string', enum: ['respond', 'review', 'freeform'], description: 'Default respond.' },
         model: { type: 'string', description: 'Optional model id override (provider-specific).' },
-        environment_id: { type: 'string', description: 'Optional cloud environment marker id.' },
       },
-      required: ['pull_request_id', 'instructions'],
+      required: ['pull_request_id'],
     },
-    handler: (ownerId, args) => startFixTask(ownerId, args, str(args.mode) ?? 'respond'),
-  },
-  {
-    name: 'fastowl_review_pull_request',
-    description: 'Start a cloud pr_review task on a PR (shorthand for fastowl_fix_pull_request with mode "review").',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        pull_request_id: { type: 'string' },
-        instructions: { type: 'string', description: 'What to focus the review on.' },
-        model: { type: 'string' },
-        environment_id: { type: 'string' },
-      },
-      required: ['pull_request_id', 'instructions'],
+    handler: async (ownerId, args) => {
+      const id = requireId(args, 'pull_request_id');
+      const model = str(args.model);
+      const task = await callApi<Task>(
+        ownerId,
+        'POST',
+        `/pull-requests/${id}/fix`,
+        model ? { model } : {}
+      );
+      return `Started "${task.title}" — task ${task.id} (${task.status}).`;
     },
-    handler: (ownerId, args) => startFixTask(ownerId, args, 'review'),
   },
   {
     name: 'fastowl_create_task',
@@ -477,33 +469,6 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
 ];
-
-// ---------- shared handler bodies ----------
-
-async function startFixTask(
-  ownerId: string,
-  args: Record<string, unknown>,
-  mode: string
-): Promise<string> {
-  const id = requireId(args, 'pull_request_id');
-  const instructions = requireId(args, 'instructions');
-  const { row: pr } = await callApi<{ row: PublicPr }>(ownerId, 'GET', `/pull-requests/${id}`);
-  const type: TaskType =
-    mode === 'review' ? 'pr_review' : mode === 'freeform' ? 'code_writing' : 'pr_response';
-  const body: CreateTaskRequest = {
-    workspaceId: pr.workspaceId,
-    type,
-    title: deriveTitle(`${type} ${pr.owner}/${pr.repo}#${pr.number}: ${instructions}`),
-    description: '',
-    prompt: instructions,
-    repositoryId: pr.repositoryId,
-    pullRequestId: pr.id,
-    assignedEnvironmentId: str(args.environment_id),
-    model: str(args.model),
-  };
-  const task = await callApi<Task>(ownerId, 'POST', '/tasks', body);
-  return `Started ${type} task ${task.id} on ${pr.owner}/${pr.repo}#${pr.number} (${task.status}).`;
-}
 
 // ---------- tiny utils ----------
 

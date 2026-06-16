@@ -6,7 +6,11 @@
 // the PR's linked task is still working — so they live here to avoid drift.
 
 import { and, eq } from 'drizzle-orm';
-import type { CloudProviderType } from '@fastowl/shared';
+import {
+  buildMergeablePrompt,
+  type CloudProviderType,
+  type PRMergeableSummary,
+} from '@fastowl/shared';
 import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,
@@ -14,6 +18,7 @@ import {
   environments as environmentsTable,
 } from '../db/schema.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
+import { createCloudTask } from './taskCreate.js';
 
 /** Task statuses that mean a run is still working the PR. */
 export const ACTIVE_STATUSES = new Set(['pending', 'queued', 'in_progress']);
@@ -108,4 +113,60 @@ export async function linkedTaskStatus(taskId: string | null): Promise<string | 
     .where(eq(tasksTable.id, taskId))
     .limit(1);
   return rows[0]?.status ?? null;
+}
+
+/** Minimal PR shape needed to fire a "get mergeable" run. */
+export interface PrFixRow {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  owner: string;
+  repo: string;
+  number: number;
+  lastSummary: unknown;
+}
+
+export type PrFixResult =
+  | { ok: true; task: Awaited<ReturnType<typeof createCloudTask>> }
+  | { ok: false; reason: 'no_cloud_provider' };
+
+/**
+ * The canonical "fix this PR" action — the one the desktop fix button, the
+ * merge-queue, and the auto-keep-mergeable watcher all express: resolve the
+ * workspace's cloud provider, build FastOwl's STANDARD `buildMergeablePrompt`,
+ * and queue a `pr_response` task linked to the PR. Callers pass only the PR
+ * row; everything (provider, env, prompt) is derived. Returns `no_cloud_provider`
+ * when the workspace has no connected provider to dispatch to.
+ */
+export async function startPrMergeableRun(
+  row: PrFixRow,
+  opts: { title?: string; description?: string; model?: string } = {}
+): Promise<PrFixResult> {
+  const resolved = await resolveCloudEnv(row.workspaceId);
+  if (!resolved) return { ok: false, reason: 'no_cloud_provider' };
+  const { envId, provider } = resolved;
+
+  const summary = (row.lastSummary ?? {}) as PRMergeableSummary;
+  const ref = `${row.owner}/${row.repo}#${row.number}`;
+  const prTitle = (summary as { title?: string }).title ?? '';
+
+  const task = await createCloudTask({
+    workspaceId: row.workspaceId,
+    type: 'pr_response',
+    title: opts.title ?? `Get ${ref} mergeable`,
+    description:
+      opts.description ?? `Take ${ref} ("${prTitle}") to a clean, mergeable state.`,
+    prompt: buildMergeablePrompt({
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      summary,
+      provider,
+    }),
+    repositoryId: row.repositoryId,
+    assignedEnvironmentId: envId,
+    pullRequestId: row.id,
+    model: opts.model,
+  });
+  return { ok: true, task };
 }

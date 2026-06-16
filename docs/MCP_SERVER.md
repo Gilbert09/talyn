@@ -70,8 +70,7 @@ owner-scoped RLS as the desktop app — no separate permission surface.
 | `fastowl_set_auto_keep_mergeable` | Enable/disable the keep-mergeable watcher. |
 | `fastowl_set_merge_queue` | Add/remove from the merge queue (+ method). |
 | `fastowl_merge_pull_request` | Merge now (merge / squash / rebase). |
-| `fastowl_fix_pull_request` | Start a cloud task on a PR (respond / review / freeform). |
-| `fastowl_review_pull_request` | Shorthand for a `pr_review` task. |
+| `fastowl_fix_pull_request` | Run the standard "get this PR mergeable" task — the same action as the app's fix button (standard prompt, workspace provider). Takes only the PR id. |
 | `fastowl_create_task` | Freeform cloud coding task on a repo. |
 | `fastowl_list_tasks` / `fastowl_get_task` | Inspect cloud tasks. |
 | `fastowl_stop_task` / `fastowl_retry_task` | Cancel / re-queue a task. |

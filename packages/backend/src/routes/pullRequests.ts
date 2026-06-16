@@ -3,6 +3,8 @@ import { and, desc, eq } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
+import { startPrMergeableRun } from '../services/prCloudFix.js';
+import { rowToTask } from '../services/taskSerialize.js';
 import {
   batchPullRequests,
   fetchPRReviewDetail,
@@ -351,6 +353,40 @@ export function pullRequestRoutes(): Router {
       .where(eq(pullRequestsTable.id, result.rowId))
       .limit(1);
     res.json({ success: true, data: rowToPublicShape(fresh[0]) });
+  });
+
+  // Fire the standard "get this PR mergeable" cloud run — the same action as
+  // the desktop fix button and the merge-queue / auto-keep watchers, using
+  // FastOwl's canonical buildMergeablePrompt and the workspace's configured
+  // provider. Body is optional `{ model? }`. Returns the created task.
+  router.post('/:id/fix', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const model =
+      typeof req.body?.model === 'string' && req.body.model.trim()
+        ? req.body.model.trim()
+        : undefined;
+    const result = await startPrMergeableRun(row, { model });
+    if (!result.ok) {
+      return res.status(400).json({
+        success: false,
+        error: 'No connected cloud provider for this workspace',
+      });
+    }
+    res.status(201).json({ success: true, data: rowToTask(result.task) });
   });
 
   // Auto-keep-mergeable toggle. Body `{ enabled: boolean }`. When on, the

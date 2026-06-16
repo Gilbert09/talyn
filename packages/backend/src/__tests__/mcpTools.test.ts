@@ -88,7 +88,6 @@ describe('mcp tool registry', () => {
       'fastowl_set_merge_queue',
       'fastowl_merge_pull_request',
       'fastowl_fix_pull_request',
-      'fastowl_review_pull_request',
       'fastowl_create_task',
       'fastowl_get_task',
       'fastowl_stop_task',
@@ -149,26 +148,29 @@ describe('mcp tool handlers', () => {
     expect(withPatch).toContain('PATCHTEXT');
   });
 
-  it('fix_pull_request resolves repo/PR from the PR and posts the right task type', async () => {
+  it('fix_pull_request calls the standard /fix action (no freeform params)', async () => {
     const { calls } = mockApi({
-      'GET /api/v1/pull-requests/pr1': () => ({ row: pr() }),
-      'POST /api/v1/tasks': () => ({ id: 'task1', type: 'pr_review', title: 't', status: 'queued' }),
+      'POST /api/v1/pull-requests/pr1/fix': () => ({
+        id: 'task1',
+        type: 'pr_response',
+        title: 'Get acme/web#42 mergeable',
+        status: 'queued',
+      }),
     });
 
-    await tool('fastowl_fix_pull_request').handler(OWNER, {
+    const out = await tool('fastowl_fix_pull_request').handler(OWNER, {
       pull_request_id: 'pr1',
-      instructions: 'fix the lint',
-      mode: 'review',
+      model: 'claude-opus-4-8',
     });
 
-    const post = calls.find((c) => c.method === 'POST' && c.url.pathname === '/api/v1/tasks');
+    // Hits the dedicated fix endpoint — the backend builds the standard prompt.
+    const post = calls.find(
+      (c) => c.method === 'POST' && c.url.pathname === '/api/v1/pull-requests/pr1/fix'
+    );
     expect(post).toBeTruthy();
-    const body = post!.body as Record<string, unknown>;
-    expect(body.type).toBe('pr_review');
-    expect(body.repositoryId).toBe('repo1');
-    expect(body.pullRequestId).toBe('pr1');
-    expect(body.workspaceId).toBe('ws1');
-    expect(body.prompt).toBe('fix the lint');
+    expect(post!.body).toEqual({ model: 'claude-opus-4-8' });
+    expect(out).toContain('task1');
+    expect(out).toContain('Get acme/web#42 mergeable');
   });
 
   it('passes internal-proxy headers identifying the owner', async () => {
