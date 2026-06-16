@@ -209,12 +209,16 @@ export function useGitHubActions() {
     [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
   );
 
-  // Connect GitHub for the workspace (opens the OAuth popup).
+  // Connect GitHub for the workspace via the GitHub App install flow.
   const connect = useCallback(async () => {
     if (!currentWorkspaceId) return;
-    const { authUrl } = await api.github.connect(currentWorkspaceId);
+    const { installUrl } = await api.github.installViaApp(currentWorkspaceId);
     trackEvent('github_connect_started');
-    window.open(authUrl, '_blank', 'width=600,height=700');
+    if (window.electron?.auth?.openExternal) {
+      await window.electron.auth.openExternal(installUrl);
+    } else {
+      window.open(installUrl, '_blank');
+    }
   }, [currentWorkspaceId]);
 
   // Copy the given PRs as a list for pasting into Slack (etc.). Writes a rich

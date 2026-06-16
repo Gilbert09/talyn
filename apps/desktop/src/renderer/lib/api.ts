@@ -198,8 +198,6 @@ export const github = {
     const query = workspaceId ? `?workspaceId=${workspaceId}` : '';
     return request<GitHubStatus>('GET', `/github/status${query}`);
   },
-  connect: (workspaceId: string) =>
-    request<{ authUrl: string; state: string }>('POST', '/github/connect', { workspaceId }),
   // GitHub App install flow (webhooks + hybrid auth). Returns a stateful
   // install URL — open it in the browser; GitHub redirects back through
   // /github/app/callback, which records the installation + user token.

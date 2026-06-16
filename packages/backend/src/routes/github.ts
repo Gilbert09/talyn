@@ -51,51 +51,6 @@ setInterval(() => {
 export function githubPublicRoutes(): Router {
   const router = Router();
 
-  router.get('/callback', oauthRateLimit, async (req, res) => {
-    const { code, state, error, error_description } = req.query;
-
-    if (error) {
-      return res.status(400).type('html').send(
-        renderCallbackPage({
-          ok: false,
-          message: (error_description as string) || (error as string) || 'GitHub OAuth error',
-        })
-      );
-    }
-
-    if (!code || !state) {
-      return res.status(400).type('html').send(
-        renderCallbackPage({ ok: false, message: 'Missing code or state parameter' })
-      );
-    }
-
-    const stateStr = state as string;
-    const [workspaceId, stateToken] = stateStr.split(':');
-
-    const pendingState = pendingOAuthStates.get(stateToken);
-    if (!pendingState || pendingState.workspaceId !== workspaceId) {
-      return res.status(400).type('html').send(
-        renderCallbackPage({ ok: false, message: 'Invalid OAuth state — try again from FastOwl' })
-      );
-    }
-
-    pendingOAuthStates.delete(stateToken);
-
-    try {
-      const tokenData = await githubService.exchangeCodeForToken(code as string);
-      await githubService.storeToken(
-        workspaceId,
-        tokenData.access_token,
-        tokenData.token_type,
-        tokenData.scope
-      );
-      res.type('html').send(renderCallbackPage({ ok: true, message: 'GitHub connected!' }));
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).type('html').send(renderCallbackPage({ ok: false, message }));
-    }
-  });
-
   // GitHub App install redirect. GitHub appends `installation_id`,
   // `setup_action`, plus the OAuth `code` (user authorization requested during
   // install) and our `state`. We exchange the code for the user-to-server
@@ -292,7 +247,7 @@ export function githubRoutes(): Router {
         data: {
           configured: false,
           connected: false,
-          message: 'GitHub OAuth not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.',
+          message: 'GitHub App not configured. Set GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY (see docs/SETUP.md §3b).',
         },
       });
     }
@@ -314,26 +269,8 @@ export function githubRoutes(): Router {
     res.json({ success: true, data: { configured: true, connected: false } });
   });
 
-  router.post('/connect', oauthRateLimit, async (req, res) => {
-    const workspaceId = await gateWorkspace(req, res, 'body');
-    if (!workspaceId) return;
-    if (!githubService.isConfigured()) {
-      return res.status(400).json({ success: false, error: 'GitHub OAuth not configured' });
-    }
-
-    const state = uuid();
-    pendingOAuthStates.set(state, {
-      workspaceId,
-      userId: req.user!.id,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-    });
-
-    const authUrl = githubService.getAuthorizationUrl(workspaceId, state);
-    res.json({ success: true, data: { authUrl, state } });
-  });
-
-  // GitHub App install URL. Same pending-state model as /connect — the public
-  // /app/callback validates the state token before persisting anything.
+  // GitHub App install URL. The public /app/callback validates the state token
+  // before persisting anything.
   router.post('/app/install-url', oauthRateLimit, async (req, res) => {
     const workspaceId = await gateWorkspace(req, res, 'body');
     if (!workspaceId) return;

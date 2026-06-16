@@ -114,9 +114,9 @@ describe('routes/github', () => {
     });
   });
 
-  describe('POST /api/v1/github/connect', () => {
+  describe('POST /api/v1/github/app/install-url', () => {
     it('401s unauthenticated', async () => {
-      const res = await fetch(`${serverUrl}/api/v1/github/connect`, {
+      const res = await fetch(`${serverUrl}/api/v1/github/app/install-url`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: 'ws1' }),
@@ -124,19 +124,8 @@ describe('routes/github', () => {
       expect(res.status).toBe(401);
     });
 
-    it('requires workspaceId', async () => {
-      vi.spyOn(githubService, 'isConfigured').mockReturnValue(true);
-      const res = await fetch(`${serverUrl}/api/v1/github/connect`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({}),
-      });
-      expect(res.status).toBe(400);
-    });
-
     it('404s a cross-tenant workspace', async () => {
-      vi.spyOn(githubService, 'isConfigured').mockReturnValue(true);
-      const res = await fetch(`${serverUrl}/api/v1/github/connect`, {
+      const res = await fetch(`${serverUrl}/api/v1/github/app/install-url`, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ workspaceId: 'ws2' }),
@@ -144,9 +133,10 @@ describe('routes/github', () => {
       expect(res.status).toBe(404);
     });
 
-    it('400s when GitHub OAuth is not configured', async () => {
-      vi.spyOn(githubService, 'isConfigured').mockReturnValue(false);
-      const res = await fetch(`${serverUrl}/api/v1/github/connect`, {
+    it('400s when the GitHub App is not configured', async () => {
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      const res = await fetch(`${serverUrl}/api/v1/github/app/install-url`, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ workspaceId: 'ws1' }),
@@ -155,28 +145,12 @@ describe('routes/github', () => {
       const body = await res.json();
       expect(body.error).toMatch(/not configured/i);
     });
-
-    it('returns an auth URL + state when configured', async () => {
-      vi.spyOn(githubService, 'isConfigured').mockReturnValue(true);
-      vi.spyOn(githubService, 'getAuthorizationUrl').mockReturnValue(
-        'https://github.com/login/oauth/authorize?client_id=x&state=ws1:token'
-      );
-      const res = await fetch(`${serverUrl}/api/v1/github/connect`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ workspaceId: 'ws1' }),
-      });
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.data.authUrl).toMatch(/github\.com\/login\/oauth\/authorize/);
-      expect(body.data.state).toBeTruthy();
-    });
   });
 
-  describe('GET /github/callback', () => {
-    it('400s (HTML page) on OAuth error query param', async () => {
+  describe('GET /github/app/callback', () => {
+    it('400s (HTML page) on an error query param', async () => {
       const res = await fetch(
-        `${serverUrl}/github/callback?error=access_denied&error_description=User+declined`
+        `${serverUrl}/github/app/callback?error=access_denied&error_description=User+declined`
       );
       expect(res.status).toBe(400);
       expect(res.headers.get('content-type')).toMatch(/text\/html/);
@@ -184,47 +158,20 @@ describe('routes/github', () => {
       expect(body).toContain('User declined');
     });
 
-    it('400s on missing code or state', async () => {
-      const res = await fetch(`${serverUrl}/github/callback`);
+    it('400s on missing code/state/installation_id', async () => {
+      const res = await fetch(`${serverUrl}/github/app/callback?code=abc`);
       expect(res.status).toBe(400);
       const body = await res.text();
-      expect(body).toContain('Missing code or state');
+      expect(body).toContain('Missing code');
     });
 
     it('400s on a bogus state token not in the in-memory map', async () => {
       const res = await fetch(
-        `${serverUrl}/github/callback?code=abc&state=ws1:never-issued`
+        `${serverUrl}/github/app/callback?code=abc&installation_id=42&state=ws1:never-issued`
       );
       expect(res.status).toBe(400);
       const body = await res.text();
-      expect(body).toMatch(/Invalid OAuth state/);
-    });
-
-    it('round-trips code for a token on the happy path', async () => {
-      vi.spyOn(githubService, 'isConfigured').mockReturnValue(true);
-      vi.spyOn(githubService, 'getAuthorizationUrl').mockReturnValue('x');
-      vi.spyOn(githubService, 'exchangeCodeForToken').mockResolvedValue({
-        access_token: 'gho_test',
-        token_type: 'bearer',
-        scope: 'repo',
-      });
-      const storeSpy = vi.spyOn(githubService, 'storeToken').mockResolvedValue();
-
-      // Step 1: initiate via /connect so a state token is registered.
-      const init = await fetch(`${serverUrl}/api/v1/github/connect`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ workspaceId: 'ws1' }),
-      });
-      const { data: initData } = await init.json();
-      const stateToken = initData.state as string;
-
-      // Step 2: callback hit with the matching state.
-      const res = await fetch(
-        `${serverUrl}/github/callback?code=abc&state=${encodeURIComponent(`ws1:${stateToken}`)}`
-      );
-      expect(res.status).toBe(200);
-      expect(storeSpy).toHaveBeenCalledWith('ws1', 'gho_test', 'bearer', 'repo');
+      expect(body).toMatch(/Invalid install state/);
     });
   });
 

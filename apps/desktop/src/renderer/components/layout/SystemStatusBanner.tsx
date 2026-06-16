@@ -29,10 +29,14 @@ export function SystemStatusBanner() {
     if (!currentWorkspaceId) return;
     setConnecting(true);
     try {
-      const { authUrl } = await api.github.connect(currentWorkspaceId);
-      // OAuth runs in the system browser; useSystemStatus re-checks on focus
-      // when the user returns, which clears this banner.
-      window.open(authUrl, '_blank', 'width=600,height=700');
+      const { installUrl } = await api.github.installViaApp(currentWorkspaceId);
+      // The GitHub App install runs in the system browser; useSystemStatus
+      // re-checks on focus when the user returns, which clears this banner.
+      if (window.electron?.auth?.openExternal) {
+        await window.electron.auth.openExternal(installUrl);
+      } else {
+        window.open(installUrl, '_blank');
+      }
     } catch {
       // Nothing to do — the banner persists until the connection succeeds.
     } finally {

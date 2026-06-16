@@ -27,10 +27,14 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
     setConnecting(true);
     setError(null);
     try {
-      const { authUrl } = await api.github.connect(workspaceId);
-      window.open(authUrl, '_blank', 'width=600,height=700');
+      const { installUrl } = await api.github.installViaApp(workspaceId);
+      if (window.electron?.auth?.openExternal) {
+        await window.electron.auth.openExternal(installUrl);
+      } else {
+        window.open(installUrl, '_blank');
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start the OAuth flow');
+      setError(e instanceof Error ? e.message : 'Failed to start the GitHub App install');
     } finally {
       setConnecting(false);
     }

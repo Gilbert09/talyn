@@ -29,23 +29,12 @@ import {
   UserTokenRefreshError,
 } from './githubApp.js';
 
-// GitHub OAuth configuration. Set via environment variables in production.
+// Classic-OAuth-app credentials. Still read for the check-token (token-health)
+// forensic path; the connect flow itself is now the GitHub App (see githubApp.ts).
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
-const GITHUB_REDIRECT_URI =
-  process.env.GITHUB_REDIRECT_URI || 'http://localhost:4747/api/v1/github/callback';
 
 const GITHUB_API_URL = 'https://api.github.com';
-const GITHUB_AUTH_URL = 'https://github.com/login/oauth/authorize';
-const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
-
-// `workflow` is needed to merge PRs in large repos: before allowing a merge,
-// GitHub gate-checks whether the PR modifies `.github/workflows/**` and, if the
-// token lacks the `workflow` scope, that check can time out on big diffs —
-// surfacing as "403 … Unable to determine if workflow can be created or updated
-// due to timeout; `workflows` scope may be required" even when no workflow file
-// is touched. Granting the scope removes the gate-check entirely.
-const GITHUB_SCOPES = ['repo', 'workflow', 'read:user', 'read:org'];
 
 /**
  * Hard ceiling on any single GitHub HTTP call. Node's global `fetch` (undici)
@@ -433,8 +422,13 @@ class GitHubService extends EventEmitter {
     }
   }
 
+  /**
+   * Whether GitHub connection is available. The connect flow is now the GitHub
+   * App, so this is App config first; the classic-OAuth creds also count so a
+   * deployment still mid-migration (App not yet set up) isn't reported broken.
+   */
   isConfigured(): boolean {
-    return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
+    return isGitHubAppConfigured() || Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
   }
 
   /**
@@ -446,89 +440,6 @@ class GitHubService extends EventEmitter {
    */
   getAccessToken(workspaceId: string): string | null {
     return this.tokens.get(workspaceId)?.accessToken ?? null;
-  }
-
-  getAuthorizationUrl(workspaceId: string, state: string): string {
-    const params = new URLSearchParams({
-      client_id: GITHUB_CLIENT_ID,
-      redirect_uri: GITHUB_REDIRECT_URI,
-      scope: GITHUB_SCOPES.join(' '),
-      state: `${workspaceId}:${state}`,
-      allow_signup: 'false',
-    });
-    return `${GITHUB_AUTH_URL}?${params.toString()}`;
-  }
-
-  async exchangeCodeForToken(code: string): Promise<{
-    access_token: string;
-    token_type: string;
-    scope: string;
-  }> {
-    const startedAt = Date.now();
-    const response = await fetchWithTimeout(GITHUB_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        client_id: GITHUB_CLIENT_ID,
-        client_secret: GITHUB_CLIENT_SECRET,
-        code,
-        redirect_uri: GITHUB_REDIRECT_URI,
-      }),
-    });
-
-    debugBus.recordHttp({
-      service: 'github',
-      method: 'POST',
-      url: GITHUB_TOKEN_URL,
-      status: response.status,
-      durationMs: Date.now() - startedAt,
-      ok: response.ok,
-      ...(response.ok ? {} : { error: `token exchange: ${response.statusText}` }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitHub token exchange failed: ${response.statusText}`);
-    }
-
-    const data = parseJsonBody<{
-      access_token: string;
-      token_type: string;
-      scope: string;
-      expires_in?: number;
-      refresh_token?: string;
-      refresh_token_expires_in?: number;
-      error?: string;
-      error_description?: string;
-    }>(response.bodyText);
-    if (data.error) {
-      throw new Error(`GitHub OAuth error: ${data.error_description || data.error}`);
-    }
-    // Forensics for the disappearing-token investigation: if GitHub ever
-    // starts returning expiry fields here, the OAuth app has token
-    // expiration enabled and every stored token has a scheduled death we
-    // currently ignore (no refresh handling). Make that impossible to miss.
-    if (data.expires_in !== undefined || data.refresh_token !== undefined) {
-      const summary =
-        `[github] token exchange returned EXPIRING token: expires_in=${data.expires_in}s` +
-        ` refresh_token=${data.refresh_token ? 'present' : 'absent'}` +
-        ` refresh_token_expires_in=${data.refresh_token_expires_in ?? 'n/a'} — ` +
-        `FastOwl has no refresh handling; this token will die on schedule`;
-      console.warn(summary);
-      debugBus.recordEvent({
-        service: 'github',
-        action: 'token:expiring-grant',
-        summary,
-        ok: false,
-        meta: {
-          expiresIn: data.expires_in ?? null,
-          hasRefreshToken: Boolean(data.refresh_token),
-        },
-      });
-    }
-    return data;
   }
 
   async storeToken(
@@ -1515,9 +1426,12 @@ class GitHubService extends EventEmitter {
     const stored = this.tokens.get(workspaceId);
     // Resolve app creds at call time (not the import-time consts): this is the
     // forensic path the 401 guard depends on, and it must not silently no-op if
-    // the env was populated after module load.
-    const clientId = process.env.GITHUB_CLIENT_ID || GITHUB_CLIENT_ID;
-    const clientSecret = process.env.GITHUB_CLIENT_SECRET || GITHUB_CLIENT_SECRET;
+    // the env was populated after module load. For an App-connected workspace,
+    // the user token belongs to the GitHub App, so the check-token call must use
+    // the App's client credentials — falling back to the classic-OAuth app's.
+    const isApp = Boolean(stored?.installationId);
+    const clientId = (isApp ? process.env.GITHUB_APP_CLIENT_ID : '') || process.env.GITHUB_CLIENT_ID || GITHUB_CLIENT_ID;
+    const clientSecret = (isApp ? process.env.GITHUB_APP_CLIENT_SECRET : '') || process.env.GITHUB_CLIENT_SECRET || GITHUB_CLIENT_SECRET;
     if (!stored || !clientId || !clientSecret) return null;
     const fingerprint = tokenFingerprint(stored.accessToken);
     const url = `${GITHUB_API_URL}/applications/${clientId}/token`;
