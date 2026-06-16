@@ -152,7 +152,28 @@ describe('taskQueueService.processQueue (cloud dispatch)', () => {
     expect(meta.lastScheduleError?.reason).toMatch(/no api key/);
   });
 
-  it('skips a task with no assigned cloud env', async () => {
+  it('falls back to the workspace provider and dispatches a task with no pinned env', async () => {
+    // CLI / MCP / generic-API tasks arrive with no assignedEnvironmentId.
+    const id = await insertQueuedTask(db, { assignedEnvironmentId: null });
+    const dispatch = vi.fn(async () => ({ ok: true as const }));
+    registerCloudProvider(fakeProvider(dispatch));
+
+    await taskQueueService.processQueue();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const [, env] = dispatch.mock.calls[0];
+    expect(env.id).toBe('cloud1');
+    // The resolved env is persisted onto the row so it's stable + visible.
+    const rows = await db
+      .select({ envId: tasksTable.assignedEnvironmentId })
+      .from(tasksTable)
+      .where(eq(tasksTable.id, id));
+    expect(rows[0].envId).toBe('cloud1');
+  });
+
+  it('skips a no-env task only when the workspace has no connected provider', async () => {
+    // No env marker for the owner → nothing resolves.
+    await db.delete(environmentsTable).where(eq(environmentsTable.id, 'cloud1'));
     await insertQueuedTask(db, { assignedEnvironmentId: null });
     const dispatch = vi.fn(async () => ({ ok: true as const }));
     registerCloudProvider(fakeProvider(dispatch));

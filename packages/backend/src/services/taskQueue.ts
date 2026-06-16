@@ -8,6 +8,7 @@ import type {
 } from '@fastowl/shared';
 import { captureWorkspaceEvent } from './analytics.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
+import { resolveCloudEnvId } from './prCloudFix.js';
 import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
 import { emitTaskStatus } from './websocket.js';
@@ -139,11 +140,12 @@ class TaskQueueService extends EventEmitter {
       for (const task of queuedTasks) {
         const env = await this.resolveCloudEnv(task);
         if (!env) {
-          // No cloud-marker env assigned — nothing can run it. The
-          // composer always assigns a provider, so this only happens
-          // for malformed rows. Leave it queued (visible, not lost).
+          // resolveCloudEnv already tried the workspace's configured provider,
+          // so reaching here means the workspace has NO connected cloud
+          // provider at all — nothing can run it. Leave it queued (visible,
+          // not lost) until a provider is connected.
           console.warn(
-            `[TaskQueue] task "${task.title}" has no cloud provider env; skipping`
+            `[TaskQueue] task "${task.title}" has no connected cloud provider; skipping`
           );
           continue;
         }
@@ -203,13 +205,33 @@ class TaskQueueService extends EventEmitter {
     }
   }
 
-  /** Resolve the cloud-marker env a task is assigned to, or null. */
+  /**
+   * Resolve the cloud-marker env to dispatch this task to.
+   *
+   * Prefers the env pinned at creation (the desktop composer always sets one).
+   * When none is pinned — tasks created by the CLI, the MCP server, or the
+   * generic `POST /tasks` API — we fall back to the workspace's configured
+   * cloud provider (its `defaultCloudProvider`, else the standard order) and
+   * persist it onto the row. Without this, an env-less task sits `queued`
+   * forever because the dispatcher has nothing to call. Returns null only when
+   * the workspace genuinely has no connected provider.
+   */
   private async resolveCloudEnv(task: Task): Promise<Environment | null> {
-    if (!task.assignedEnvironmentId) return null;
+    let envId = task.assignedEnvironmentId ?? null;
+    if (!envId) {
+      envId = await resolveCloudEnvId(task.workspaceId);
+      if (envId) {
+        await this.db
+          .update(tasksTable)
+          .set({ assignedEnvironmentId: envId, updatedAt: new Date() })
+          .where(eq(tasksTable.id, task.id));
+      }
+    }
+    if (!envId) return null;
     const rows = await this.db
       .select(CLOUD_ENV_COLUMNS)
       .from(environmentsTable)
-      .where(eq(environmentsTable.id, task.assignedEnvironmentId))
+      .where(eq(environmentsTable.id, envId))
       .limit(1);
     const row = rows[0];
     if (!row) return null;
