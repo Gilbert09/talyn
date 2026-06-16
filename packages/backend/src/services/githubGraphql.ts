@@ -702,8 +702,7 @@ function contextNodeFields(numberExpr: string | null): string {
                 conclusion
                 detailsUrl
                 startedAt
-                completedAt
-                checkSuite { app { name } }${required}
+                completedAt${required}
               }
               ... on StatusContext {
                 id
@@ -944,7 +943,6 @@ interface RawCheckRun {
   detailsUrl: string | null;
   startedAt: string | null;
   completedAt: string | null;
-  checkSuite: { app: { name: string } | null } | null;
   /** Whether GitHub marks this check required for the PR. Present only
    *  when the query was built with a PR number; absent (undefined) on the
    *  by-branch path. */

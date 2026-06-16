@@ -1752,17 +1752,46 @@ class GitHubService extends EventEmitter {
           errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
         }>(response.bodyText);
         if (payload.errors && payload.errors.length > 0) {
-          // Surface the first GraphQL error verbatim, plus its `type`
-          // (e.g. FORBIDDEN) and `path` — which field/node GitHub refused.
-          // For "Resource not accessible by integration" the path pinpoints the
-          // exact selection (e.g. …statusCheckRollup.contexts.nodes.47.isRequired),
-          // turning a vague 403 into an actionable cause.
-          const e = payload.errors[0];
-          const detail =
-            (e.type ? ` [${e.type}]` : '') +
-            (e.path ? ` at ${e.path.join('.')}` : '');
-          recordGql(false, `GraphQL: ${e.message}${detail}`);
-          throw new Error(`GitHub GraphQL: ${e.message}${detail}`);
+          // GitHub returns *partial* data alongside per-field FORBIDDEN errors:
+          // when the installation can read an object but not one of its leaf
+          // fields (e.g. …statusCheckRollup.contexts.nodes.N.isRequired needs
+          // branch-protection read, …checkSuite.app can 403 on suites owned by
+          // an app we can't see) that leaf comes back null and the error names
+          // its deep path. Keep the data and drop the leaf rather than
+          // discarding the whole response — otherwise a single forbidden
+          // sub-field sinks an entire PR refresh, and callers that match on
+          // "Resource not accessible by integration" (prMonitor's
+          // isRepoAccessError) misread it as the *whole repo* being
+          // inaccessible and stop polling it.
+          //
+          // Only tolerate when every error is a deep-path FORBIDDEN (path
+          // length > 2, i.e. well past the `repository` root) and we still got
+          // a data payload. A root-level FORBIDDEN/NOT_FOUND (genuine
+          // no-access), any non-FORBIDDEN error, or a null `data` stays fatal
+          // and is surfaced verbatim with its type + path — that's the actual
+          // signal repo-access classification depends on.
+          const isLeafForbidden = (e: {
+            type?: string;
+            path?: Array<string | number>;
+          }) => e.type === 'FORBIDDEN' && Array.isArray(e.path) && e.path.length > 2;
+          const tolerable =
+            payload.data != null && payload.errors.every(isLeafForbidden);
+          if (!tolerable) {
+            // Surface the first GraphQL error verbatim, plus its `type`
+            // (e.g. FORBIDDEN) and `path` — which field/node GitHub refused.
+            const e = payload.errors[0];
+            const detail =
+              (e.type ? ` [${e.type}]` : '') +
+              (e.path ? ` at ${e.path.join('.')}` : '');
+            recordGql(false, `GraphQL: ${e.message}${detail}`);
+            throw new Error(`GitHub GraphQL: ${e.message}${detail}`);
+          }
+          // Partial success — record the forbidden leaves so the Debug panel
+          // isn't blind to them, but don't fail the request.
+          recordGql(true, `partial: ${payload.errors.length} forbidden leaf(s)`);
+          // `tolerable` already verified data != null; the const boolean just
+          // doesn't carry the narrowing.
+          return payload.data as T;
         }
         if (!payload.data) {
           recordGql(false, 'response missing data');

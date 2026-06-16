@@ -626,7 +626,6 @@ describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
     detailsUrl: null,
     startedAt: null,
     completedAt: null,
-    checkSuite: { app: { name: 'GitHub Actions' } },
     ...over,
   });
 

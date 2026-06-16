@@ -400,6 +400,86 @@ describe('githubService', () => {
       expect(calls).toBe(2);
     });
 
+    it('executeGraphql tolerates deep FORBIDDEN leaves and returns the partial data', async () => {
+      // GitHub 403s an individual sub-field (e.g. contexts.nodes.N.checkSuite.app
+      // or .isRequired) but still hands back the rest of the tree — keep it.
+      const stub = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { repository: { pr: { ok: true } } },
+              errors: [
+                {
+                  type: 'FORBIDDEN',
+                  message: 'Resource not accessible by integration',
+                  path: [
+                    'repository', 'b0', 'commits', 'nodes', 0, 'commit',
+                    'statusCheckRollup', 'contexts', 'nodes', 24, 'checkSuite', 'app',
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+      );
+      vi.stubGlobal('fetch', stub);
+
+      const data = await githubService.executeGraphql<{ repository: { pr: { ok: boolean } } }>(
+        'ws1',
+        'query{}'
+      );
+      expect(data.repository.pr.ok).toBe(true);
+      expect(stub).toHaveBeenCalledTimes(1);
+    });
+
+    it('executeGraphql still throws on a root-level FORBIDDEN (genuine repo no-access)', async () => {
+      // path === ['repository'] is the whole-repo-inaccessible signal that
+      // prMonitor.isRepoAccessError depends on — it must stay fatal.
+      const stub = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { repository: null },
+              errors: [
+                {
+                  type: 'FORBIDDEN',
+                  message: 'Resource not accessible by integration',
+                  path: ['repository'],
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+      );
+      vi.stubGlobal('fetch', stub);
+
+      await expect(githubService.executeGraphql('ws1', 'query{}')).rejects.toThrow(
+        /Resource not accessible by integration/
+      );
+    });
+
+    it('executeGraphql does not swallow a non-FORBIDDEN error even with partial data', async () => {
+      const stub = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { repository: { pr: { ok: true } } },
+              errors: [
+                {
+                  type: 'NOT_FOUND',
+                  message: 'Could not resolve to a node',
+                  path: ['repository', 'pr', 'x'],
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          )
+      );
+      vi.stubGlobal('fetch', stub);
+
+      await expect(githubService.executeGraphql('ws1', 'query{}')).rejects.toThrow(/NOT_FOUND/);
+    });
+
     it('getCheckRuns hits /repos/:owner/:repo/commits/:ref/check-runs', async () => {
       const fetchStub = mockFetch({
         'commits/abc123/check-runs': () => ({ check_runs: [] }),
