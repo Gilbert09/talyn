@@ -74,6 +74,15 @@ describe('notificationsPoller', () => {
     expect(refreshSpy).toHaveBeenCalledWith('ws1', 'acme', 'widgets', 42);
   });
 
+  it('skips App-connected workspaces (Notifications API is unavailable to GitHub Apps)', async () => {
+    vi.spyOn(githubService, 'isAppConnected').mockReturnValue(true);
+    const listSpy = vi.spyOn(githubService, 'listNotifications');
+    // Drive a full tick (the skip guard lives there, not in forcePollWorkspace).
+    await (notificationsPoller as unknown as { tick(): Promise<void> }).tick();
+    expect(listSpy).not.toHaveBeenCalled();
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
   it('ignores non-PullRequest notifications', async () => {
     vi.spyOn(githubService, 'listNotifications').mockResolvedValue({
       status: 200,

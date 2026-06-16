@@ -63,6 +63,9 @@ class NotificationsPoller {
     try {
       const now = Date.now();
       for (const workspaceId of githubService.getConnectedWorkspaces()) {
+        // GitHub Apps can't use the Notifications API, and webhooks already
+        // give App workspaces their low-latency triggers — skip them.
+        if (githubService.isAppConnected(workspaceId)) continue;
         const state = this.states.get(workspaceId);
         if (state && state.nextPollAt > now) continue;
         polled++;

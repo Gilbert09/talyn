@@ -7,8 +7,10 @@ import {
   getAppPrivateKey,
   getInstallationToken,
   exchangeUserCode,
+  refreshUserToken,
   buildInstallUrl,
   InstallationUnavailableError,
+  UserTokenRefreshError,
   _resetInstallationTokenCache,
 } from '../services/githubApp.js';
 
@@ -176,6 +178,24 @@ describe('exchangeUserCode', () => {
     const res = await exchangeUserCode('the-code');
     expect(res.access_token).toBe('ghu_user');
     expect(res.token_type).toBe('bearer');
+    expect(res.refreshToken).toBeUndefined();
+  });
+
+  it('surfaces refresh token + expiry when the App expires user tokens', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({
+        access_token: 'ghu_user',
+        token_type: 'bearer',
+        scope: 'repo',
+        expires_in: 28800,
+        refresh_token: 'ghr_refresh',
+        refresh_token_expires_in: 15897600,
+      }),
+    );
+    const res = await exchangeUserCode('the-code');
+    expect(res.refreshToken).toBe('ghr_refresh');
+    expect(res.expiresInSec).toBe(28800);
+    expect(res.refreshTokenExpiresInSec).toBe(15897600);
   });
 
   it('throws when GitHub returns an OAuth error', async () => {
@@ -183,6 +203,37 @@ describe('exchangeUserCode', () => {
       mockFetchOnce({ error: 'bad_verification_code', error_description: 'expired' }),
     );
     await expect(exchangeUserCode('stale')).rejects.toThrow(/expired/);
+  });
+});
+
+describe('refreshUserToken', () => {
+  it('rotates and returns a fresh access + refresh token pair', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({
+        access_token: 'ghu_new',
+        token_type: 'bearer',
+        scope: 'repo',
+        expires_in: 28800,
+        refresh_token: 'ghr_new',
+        refresh_token_expires_in: 15897600,
+      }),
+    );
+    const res = await refreshUserToken('ghr_old');
+    expect(res.access_token).toBe('ghu_new');
+    expect(res.refreshToken).toBe('ghr_new');
+    expect(res.expiresInSec).toBe(28800);
+  });
+
+  it('throws UserTokenRefreshError on a dead refresh token (200 + error body)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({ error: 'bad_refresh_token', error_description: 'expired' }),
+    );
+    await expect(refreshUserToken('ghr_dead')).rejects.toBeInstanceOf(UserTokenRefreshError);
+  });
+
+  it('throws UserTokenRefreshError on an HTTP error', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockFetchOnce({}, { status: 401, ok: false }));
+    await expect(refreshUserToken('ghr_x')).rejects.toBeInstanceOf(UserTokenRefreshError);
   });
 });
 

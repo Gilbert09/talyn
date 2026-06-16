@@ -25,6 +25,8 @@ import {
   clearInstallationToken,
   isGitHubAppConfigured,
   InstallationUnavailableError,
+  refreshUserToken,
+  UserTokenRefreshError,
 } from './githubApp.js';
 
 // GitHub OAuth configuration. Set via environment variables in production.
@@ -272,6 +274,12 @@ interface StoredToken {
   // freshly-minted installation token keyed by this id. Absent ⇒ legacy OAuth
   // workspace, every call uses the stored token (unchanged behaviour).
   installationId?: string;
+  // Set when the App has "Expire user authorization tokens" enabled: the user
+  // token lives ~8h and is rotated via `refreshToken` before expiry. Absent ⇒
+  // a non-expiring token (classic OAuth, or App with expiry off) — never refreshed.
+  refreshToken?: string;
+  accessTokenExpiresAt?: number; // epoch ms
+  refreshTokenExpiresAt?: number; // epoch ms
 }
 
 /** Resolved auth for one outbound call — which token family it used. */
@@ -315,6 +323,20 @@ interface GitHubIntegrationConfig {
   // token and `installationId` backs the data-plane installation token.
   authMethod?: 'github_app';
   installationId?: string;
+  // Rotation state for an expiring user token (App with token expiry enabled).
+  refreshTokenEnc?: EncryptedEnvelope;
+  accessTokenExpiresAt?: string; // ISO
+  refreshTokenExpiresAt?: string; // ISO
+}
+
+/** Decrypt an envelope, returning undefined (not throwing) on failure. */
+function safeDecrypt(envelope: EncryptedEnvelope): string | undefined {
+  try {
+    return decryptString(envelope);
+  } catch (err) {
+    console.error('Failed to decrypt GitHub refresh token:', err);
+    return undefined;
+  }
 }
 
 function readAccessToken(config: GitHubIntegrationConfig): string | null {
@@ -347,6 +369,11 @@ class GitHubService extends EventEmitter {
   // secondary limits on the tight `search` budget — so even across repos and
   // same-account workspaces, searches run one-at-a-time. Keyed by account.
   private searchChains: Map<string, Promise<unknown>> = new Map();
+  // Coalesce concurrent user-token refreshes per workspace into one HTTP call.
+  private userTokenRefreshes: Map<string, Promise<StoredToken | null>> = new Map();
+
+  // Refresh an expiring user token once it's within this window of expiry.
+  private static readonly USER_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
 
   private get db(): Database {
     return getDbClient();
@@ -375,6 +402,10 @@ class GitHubService extends EventEmitter {
           failed++;
           continue;
         }
+        const refreshToken =
+          config.refreshTokenEnc && isEncryptedEnvelope(config.refreshTokenEnc)
+            ? safeDecrypt(config.refreshTokenEnc)
+            : undefined;
         this.tokens.set(row.workspaceId, {
           workspaceId: row.workspaceId,
           accessToken,
@@ -382,6 +413,13 @@ class GitHubService extends EventEmitter {
           scope: config.scope || '',
           createdAt: config.createdAt || new Date().toISOString(),
           ...(config.installationId ? { installationId: config.installationId } : {}),
+          ...(refreshToken ? { refreshToken } : {}),
+          ...(config.accessTokenExpiresAt
+            ? { accessTokenExpiresAt: new Date(config.accessTokenExpiresAt).getTime() }
+            : {}),
+          ...(config.refreshTokenExpiresAt
+            ? { refreshTokenExpiresAt: new Date(config.refreshTokenExpiresAt).getTime() }
+            : {}),
         });
       }
 
@@ -519,7 +557,12 @@ class GitHubService extends EventEmitter {
     accessToken: string,
     tokenType: string,
     scope: string,
-    opts: { installationId?: string } = {}
+    opts: {
+      installationId?: string;
+      refreshToken?: string;
+      accessTokenExpiresAt?: number;
+      refreshTokenExpiresAt?: number;
+    } = {}
   ): Promise<void> {
     const createdAt = new Date().toISOString();
     // New rows: encrypt the access token; drop the plaintext field.
@@ -534,6 +577,13 @@ class GitHubService extends EventEmitter {
       createdAt,
       ...(opts.installationId
         ? { authMethod: 'github_app' as const, installationId: opts.installationId }
+        : {}),
+      ...(opts.refreshToken ? { refreshTokenEnc: encryptString(opts.refreshToken) } : {}),
+      ...(opts.accessTokenExpiresAt
+        ? { accessTokenExpiresAt: new Date(opts.accessTokenExpiresAt).toISOString() }
+        : {}),
+      ...(opts.refreshTokenExpiresAt
+        ? { refreshTokenExpiresAt: new Date(opts.refreshTokenExpiresAt).toISOString() }
         : {}),
     };
 
@@ -595,6 +645,9 @@ class GitHubService extends EventEmitter {
       scope,
       createdAt,
       ...(opts.installationId ? { installationId: opts.installationId } : {}),
+      ...(opts.refreshToken ? { refreshToken: opts.refreshToken } : {}),
+      ...(opts.accessTokenExpiresAt ? { accessTokenExpiresAt: opts.accessTokenExpiresAt } : {}),
+      ...(opts.refreshTokenExpiresAt ? { refreshTokenExpiresAt: opts.refreshTokenExpiresAt } : {}),
     });
     void this.registerWorkspaceOwners([workspaceId]);
     this.emit('connected', workspaceId);
@@ -783,6 +836,16 @@ class GitHubService extends EventEmitter {
     return this.tokens.has(workspaceId);
   }
 
+  /**
+   * Whether a workspace is connected via the GitHub App (vs classic OAuth).
+   * App workspaces get realtime updates from webhooks, and crucially the
+   * Notifications API is NOT available to GitHub Apps ("Resource not accessible
+   * by integration"), so the notifications poller must skip them.
+   */
+  isAppConnected(workspaceId: string): boolean {
+    return Boolean(this.tokens.get(workspaceId)?.installationId);
+  }
+
   getConnectionStatus(workspaceId: string): {
     connected: boolean;
     user?: GitHubUser;
@@ -846,7 +909,138 @@ class GitHubService extends EventEmitter {
       }
     }
     if (!stored) return null;
-    return { tokenType: stored.tokenType, accessToken: stored.accessToken, kind: 'user' };
+    // User-token path. Rotate first if it's an expiring App token near expiry.
+    const fresh = await this.ensureFreshUserToken(workspaceId);
+    if (!fresh) return null;
+    return { tokenType: fresh.tokenType, accessToken: fresh.accessToken, kind: 'user' };
+  }
+
+  /**
+   * Return the workspace's user token, rotating it first if it's an expiring
+   * App token within the refresh window. A non-expiring token (no
+   * `accessTokenExpiresAt`/`refreshToken` — classic OAuth, or App with expiry
+   * off) is returned as-is. Concurrent callers share one in-flight refresh.
+   * Returns null if there's no token, or if a refresh fails (refresh token dead
+   * → the user must reconnect; surfaced via a debug event).
+   */
+  private async ensureFreshUserToken(workspaceId: string): Promise<StoredToken | null> {
+    const stored = this.tokens.get(workspaceId);
+    if (!stored) return null;
+    // Non-expiring token, or expiry not yet near → use as-is.
+    if (
+      !stored.accessTokenExpiresAt ||
+      !stored.refreshToken ||
+      stored.accessTokenExpiresAt - Date.now() > GitHubService.USER_TOKEN_REFRESH_SKEW_MS
+    ) {
+      return stored;
+    }
+
+    const inFlight = this.userTokenRefreshes.get(workspaceId);
+    if (inFlight) return inFlight;
+
+    const refresh = this.rotateUserToken(workspaceId, stored).finally(() => {
+      this.userTokenRefreshes.delete(workspaceId);
+    });
+    this.userTokenRefreshes.set(workspaceId, refresh);
+    return refresh;
+  }
+
+  private async rotateUserToken(
+    workspaceId: string,
+    stored: StoredToken
+  ): Promise<StoredToken | null> {
+    try {
+      const grant = await refreshUserToken(stored.refreshToken!);
+      const now = Date.now();
+      const updated: StoredToken = {
+        ...stored,
+        accessToken: grant.access_token,
+        tokenType: grant.token_type,
+        scope: grant.scope || stored.scope,
+        refreshToken: grant.refreshToken ?? stored.refreshToken,
+        accessTokenExpiresAt: grant.expiresInSec ? now + grant.expiresInSec * 1000 : undefined,
+        refreshTokenExpiresAt: grant.refreshTokenExpiresInSec
+          ? now + grant.refreshTokenExpiresInSec * 1000
+          : stored.refreshTokenExpiresAt,
+      };
+      this.tokens.set(workspaceId, updated);
+      await this.persistRotatedUserToken(workspaceId, updated);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:user-refreshed',
+        summary: `[github] workspace ${workspaceId}: rotated user token fp:${tokenFingerprint(updated.accessToken)}`,
+        ok: true,
+        workspaceId,
+      });
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isDead = err instanceof UserTokenRefreshError;
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:user-refresh-failed',
+        summary:
+          `[github] workspace ${workspaceId}: user-token refresh FAILED (${message})` +
+          (isDead ? ' — refresh token dead; user must reconnect via the GitHub App' : ''),
+        ok: false,
+        workspaceId,
+      });
+      // A dead refresh token can't recover without re-auth — drop the rotation
+      // state so we stop hammering the endpoint; the (now-expiring) token stays
+      // until the user reconnects. A transient failure (network/5xx) keeps the
+      // refresh token and retries on the next call.
+      if (isDead) {
+        const cur = this.tokens.get(workspaceId);
+        if (cur) {
+          this.tokens.set(workspaceId, {
+            ...cur,
+            refreshToken: undefined,
+            accessTokenExpiresAt: undefined,
+          });
+        }
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Quietly persist a rotated user token to the integration row — no connect
+   * logging/events (unlike storeToken). Read-modify-write so App fields
+   * (installationId/authMethod) on the config are preserved.
+   */
+  private async persistRotatedUserToken(workspaceId: string, token: StoredToken): Promise<void> {
+    try {
+      const existing = await this.db
+        .select({ id: integrationsTable.id, config: integrationsTable.config })
+        .from(integrationsTable)
+        .where(
+          and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github'))
+        )
+        .limit(1);
+      if (!existing[0]) return;
+      const prevConfig = (existing[0].config as GitHubIntegrationConfig | null) ?? {};
+      const config: GitHubIntegrationConfig = {
+        ...prevConfig,
+        accessTokenEnc: encryptString(token.accessToken),
+        tokenType: token.tokenType,
+        scope: token.scope,
+        ...(token.refreshToken ? { refreshTokenEnc: encryptString(token.refreshToken) } : {}),
+        accessTokenExpiresAt: token.accessTokenExpiresAt
+          ? new Date(token.accessTokenExpiresAt).toISOString()
+          : undefined,
+        refreshTokenExpiresAt: token.refreshTokenExpiresAt
+          ? new Date(token.refreshTokenExpiresAt).toISOString()
+          : undefined,
+      };
+      await this.db
+        .update(integrationsTable)
+        .set({ config, updatedAt: new Date() })
+        .where(eq(integrationsTable.id, existing[0].id));
+    } catch (err) {
+      // In-memory token is already updated; a failed persist just means we
+      // re-rotate after a restart. Log, don't throw into the request path.
+      console.error(`[github] failed to persist rotated user token for ${workspaceId}:`, err);
+    }
   }
 
   /**

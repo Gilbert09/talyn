@@ -257,15 +257,62 @@ export async function fetchInstallationRepos(installationId: string): Promise<st
 }
 
 /**
- * Exchange the OAuth `code` from the install redirect for a user-to-server
- * token. Same token endpoint as classic OAuth, but with the App's client
- * credentials — yields a `ghu_` token scoped to the user.
+ * A user-to-server token grant. When the App has "Expire user authorization
+ * tokens" enabled, `refreshToken` + `expiresInSec` are present and the token
+ * must be rotated before it expires (~8h); otherwise the token is long-lived
+ * and those fields are absent.
  */
-export async function exchangeUserCode(code: string): Promise<{
+export interface UserTokenGrant {
   access_token: string;
   token_type: string;
   scope: string;
-}> {
+  /** Seconds until the access token expires (only when expiry is enabled). */
+  expiresInSec?: number;
+  /** Refresh token to rotate with (only when expiry is enabled). */
+  refreshToken?: string;
+  /** Seconds until the refresh token itself expires (~6 months). */
+  refreshTokenExpiresInSec?: number;
+}
+
+/** Raised when a user-token refresh fails (refresh token expired/revoked → user must re-auth). */
+export class UserTokenRefreshError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserTokenRefreshError';
+  }
+}
+
+function parseUserTokenResponse(bodyText: string, context: string): UserTokenGrant {
+  const data = JSON.parse(bodyText) as {
+    access_token?: string;
+    token_type?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (data.error || !data.access_token) {
+    throw new Error(`GitHub App OAuth error (${context}): ${data.error_description || data.error || 'no token'}`);
+  }
+  return {
+    access_token: data.access_token,
+    token_type: data.token_type || 'bearer',
+    scope: data.scope || '',
+    expiresInSec: data.expires_in,
+    refreshToken: data.refresh_token,
+    refreshTokenExpiresInSec: data.refresh_token_expires_in,
+  };
+}
+
+/**
+ * Exchange the OAuth `code` from the install redirect for a user-to-server
+ * token. Same token endpoint as classic OAuth, but with the App's client
+ * credentials — yields a `ghu_` token scoped to the user (plus a `ghr_` refresh
+ * token when token expiry is enabled on the App).
+ */
+export async function exchangeUserCode(code: string): Promise<UserTokenGrant> {
   const clientId = appClientId();
   const clientSecret = appClientSecret();
   if (!clientId || !clientSecret) {
@@ -289,21 +336,51 @@ export async function exchangeUserCode(code: string): Promise<{
   if (!response.ok) {
     throw new Error(`GitHub App user token exchange failed: ${response.statusText}`);
   }
-  const data = JSON.parse(response.bodyText) as {
-    access_token?: string;
-    token_type?: string;
-    scope?: string;
-    error?: string;
-    error_description?: string;
-  };
-  if (data.error || !data.access_token) {
-    throw new Error(`GitHub App OAuth error: ${data.error_description || data.error || 'no token'}`);
+  return parseUserTokenResponse(response.bodyText, 'exchange');
+}
+
+/**
+ * Rotate an expiring user-to-server token using its refresh token. GitHub
+ * returns a fresh access token AND a fresh refresh token (rotation) — the
+ * caller MUST persist the new refresh token. Throws {@link UserTokenRefreshError}
+ * when the refresh token is itself expired/revoked (user must re-authorize).
+ */
+export async function refreshUserToken(refreshToken: string): Promise<UserTokenGrant> {
+  const clientId = appClientId();
+  const clientSecret = appClientSecret();
+  if (!clientId || !clientSecret) {
+    throw new Error('GitHub App OAuth not configured (GITHUB_APP_CLIENT_ID / GITHUB_APP_CLIENT_SECRET)');
   }
-  return {
-    access_token: data.access_token,
-    token_type: data.token_type || 'bearer',
-    scope: data.scope || '',
-  };
+  const startedAt = Date.now();
+  const response = await fetchWithTimeout(GITHUB_TOKEN_URL, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }),
+  });
+  debugBus.recordHttp({
+    service: 'github',
+    method: 'POST',
+    url: GITHUB_TOKEN_URL,
+    status: response.status,
+    durationMs: Date.now() - startedAt,
+    ok: response.ok,
+    ...(response.ok ? {} : { error: `app user token refresh: ${response.statusText}` }),
+  });
+  if (!response.ok) {
+    throw new UserTokenRefreshError(`user token refresh failed: ${response.status} ${response.statusText}`);
+  }
+  try {
+    return parseUserTokenResponse(response.bodyText, 'refresh');
+  } catch (err) {
+    // A 200 with an `error` body (e.g. bad_refresh_token) means the refresh
+    // token is dead — surface as the typed error so the caller prompts re-auth.
+    throw new UserTokenRefreshError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 /** The URL that starts a fresh App installation (+ user OAuth) with our state. */

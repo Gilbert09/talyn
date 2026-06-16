@@ -175,12 +175,23 @@ async function completeAppInstallation(
       },
     });
 
+  const nowMs = Date.now();
   await githubService.storeToken(
     workspaceId,
     userToken.access_token,
     userToken.token_type,
     userToken.scope,
-    { installationId }
+    {
+      installationId,
+      // Present only when the App has token expiry enabled — drives rotation.
+      ...(userToken.refreshToken ? { refreshToken: userToken.refreshToken } : {}),
+      ...(userToken.expiresInSec
+        ? { accessTokenExpiresAt: nowMs + userToken.expiresInSec * 1000 }
+        : {}),
+      ...(userToken.refreshTokenExpiresInSec
+        ? { refreshTokenExpiresAt: nowMs + userToken.refreshTokenExpiresInSec * 1000 }
+        : {}),
+    }
   );
 
   debugBus.recordEvent({
