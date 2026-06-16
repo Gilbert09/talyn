@@ -242,27 +242,6 @@ interface GitHubIssueComment {
   html_url: string;
 }
 
-export interface GitHubNotification {
-  type: 'review' | 'review_comment' | 'comment' | 'ci_failure' | 'mergeable';
-  pr: GitHubPullRequest;
-  repo: { owner: string; name: string };
-  data: GitHubReview | GitHubReviewComment | GitHubIssueComment | GitHubCheckRun | { mergeable: boolean };
-}
-
-/**
- * A raw notification thread from `GET /notifications` — GitHub's user
- * activity feed. Used as a low-latency *trigger* (refetch this PR now), not
- * as a data source; the `subject.url` is an API URL we parse the PR number
- * from. `reason` ∈ review_requested | comment | ci_activity | state_change | …
- */
-export interface GitHubNotificationThread {
-  id: string;
-  reason: string;
-  updated_at: string;
-  subject: { title: string; url: string | null; type: string };
-  repository: { full_name: string };
-}
-
 interface StoredToken {
   workspaceId: string;
   accessToken: string;
@@ -836,16 +815,6 @@ class GitHubService extends EventEmitter {
     return this.tokens.has(workspaceId);
   }
 
-  /**
-   * Whether a workspace is connected via the GitHub App (vs classic OAuth).
-   * App workspaces get realtime updates from webhooks, and crucially the
-   * Notifications API is NOT available to GitHub Apps ("Resource not accessible
-   * by integration"), so the notifications poller must skip them.
-   */
-  isAppConnected(workspaceId: string): boolean {
-    return Boolean(this.tokens.get(workspaceId)?.installationId);
-  }
-
   getConnectionStatus(workspaceId: string): {
     connected: boolean;
     user?: GitHubUser;
@@ -1260,64 +1229,6 @@ class GitHubService extends EventEmitter {
       // Don't cache a failure — retry next time, meanwhile degrade gracefully.
       return cached?.slugs ?? new Set();
     }
-  }
-
-  /**
-   * The authenticated user's notification threads — GitHub's user-scoped
-   * activity feed. Designed for polling: pass the previous response's
-   * `Last-Modified` as `ifModifiedSince` to get a free `304` when nothing
-   * changed, and respect the returned `pollInterval` (X-Poll-Interval). We
-   * fetch `all=true` so reading notifications in the GitHub UI doesn't blank
-   * the feed, and bound the payload with `since`.
-   */
-  async listNotifications(
-    workspaceId: string,
-    opts: { since?: string; ifModifiedSince?: string } = {}
-  ): Promise<{
-    status: number;
-    notifications: GitHubNotificationThread[];
-    lastModified: string | null;
-    pollInterval: number | null;
-  }> {
-    // Notifications are the viewer's activity feed — user-token scoped.
-    const resolved = await this.resolveAuth(workspaceId, true);
-    if (!resolved) throw new Error('GitHub not connected for this workspace');
-
-    const url = new URL(`${GITHUB_API_URL}/notifications`);
-    url.searchParams.set('all', 'true');
-    if (opts.since) url.searchParams.set('since', opts.since);
-
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-      Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
-      'User-Agent': 'FastOwl',
-    };
-    if (opts.ifModifiedSince) headers['If-Modified-Since'] = opts.ifModifiedSince;
-
-    const response = await fetchWithTimeout(url.toString(), { headers });
-    const lastModified = response.headers.get('last-modified');
-    const pollHeader = response.headers.get('x-poll-interval');
-    const pollInterval = pollHeader ? Number.parseInt(pollHeader, 10) : null;
-
-    if (response.status === 304) {
-      return { status: 304, notifications: [], lastModified, pollInterval };
-    }
-    if (response.status === 401) {
-      await this.confirmRevokedThenRemove(
-        workspaceId,
-        `401 on GET /notifications — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
-          `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
-      );
-      throw new Error('GitHub token expired or revoked');
-    }
-    if (!response.ok) {
-      throw new Error(
-        this.describeApiErrorFromText(response.status, response.statusText, response.bodyText)
-      );
-    }
-
-    const notifications = parseJsonBody<GitHubNotificationThread[]>(response.bodyText);
-    return { status: response.status, notifications, lastModified, pollInterval };
   }
 
   /**

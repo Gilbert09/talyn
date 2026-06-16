@@ -678,23 +678,6 @@ function IntegrationsSettings() {
     void refreshGitHubStatus();
   }, [refreshGitHubStatus]);
 
-  const handleGitHubConnect = async () => {
-    if (!currentWorkspaceId) return;
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const { authUrl } = await api.github.connect(currentWorkspaceId);
-      // Open GitHub OAuth in a new window/tab
-      window.open(authUrl, '_blank', 'width=600,height=700');
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to start OAuth flow');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   // Start the GitHub App install flow. The stateful install URL must be opened
   // in the real browser (it's a multi-step GitHub install + authorize page);
   // GitHub redirects back through /github/app/callback, which records the
@@ -812,24 +795,14 @@ function IntegrationsSettings() {
                 </Button>
               </div>
             ) : (
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {/* App-first: the recommended path (webhooks + realtime). OAuth
-                    stays available as a fallback. */}
-                <Button
-                  onClick={handleGitHubAppConnect}
-                  disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
-                >
-                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect via GitHub App'}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleGitHubConnect}
-                  disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
-                  title="Connect with the classic OAuth flow (no webhooks)"
-                >
-                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'OAuth'}
-                </Button>
-              </div>
+              // The GitHub App (webhooks + realtime) is the only connect path —
+              // a "connected" workspace always has webhooks.
+              <Button
+                onClick={handleGitHubAppConnect}
+                disabled={isLoading || !githubStatus?.configured || !currentWorkspaceId}
+              >
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect GitHub'}
+              </Button>
             )}
           </div>
         </Card>
