@@ -14,6 +14,15 @@ After completing each task: stage relevant files, commit with a descriptive mess
 
 **Commit authorship**: commits should be authored by Tom directly. Do NOT append `Co-Authored-By: Claude …` trailers or any other AI-attribution lines to commit messages in this repo.
 
+## Testing — run only the relevant tests while iterating
+
+**Do NOT run the whole test suite on every change.** It's slow (many backend suites spin up a real pglite Postgres per file) and wastes the loop. Run only the tests that cover what you actually touched, picked by what the change can plausibly break — not by habit:
+
+- **Backend** (`packages/backend`, Vitest): `npx vitest run <path/to/file.test.ts>` for the specific file(s); add more paths or a glob (e.g. `npx vitest run src/__tests__/prMonitor*`) when a change spans a few related suites; use `-t "<name>"` to target a single `describe`/`it`.
+- **Desktop** (`apps/desktop`, Jest): `npx jest <pattern>` for the matching test(s).
+
+Run the **full** package suite (`npm test`) only when wrapping up a change, or when the edit is genuinely cross-cutting — shared types (`packages/shared`), a widely-imported helper, or DB schema/migrations. Always pair the run with `tsc --noEmit` + `eslint` on the changed files. See [`docs/TESTING.md`](./docs/TESTING.md) for the broader strategy.
+
 ## Where Things Live
 
 - **[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)** — system diagram, tech stack, core concept details, key decisions, resolved questions
