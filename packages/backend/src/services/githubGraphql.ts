@@ -386,14 +386,27 @@ async function topUpCheckContexts(
     const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
     const pageInfo = rollup?.contexts.pageInfo;
     if (!rollup || !pageInfo?.hasNextPage || !pageInfo.endCursor) continue;
-    const remaining = await fetchRemainingCheckContexts(
-      ctx.workspaceId,
-      ctx.owner,
-      ctx.repo,
-      pr.number,
-      pageInfo.endCursor
-    );
-    rollup.contexts.nodes.push(...remaining);
+    try {
+      const remaining = await fetchRemainingCheckContexts(
+        ctx.workspaceId,
+        ctx.owner,
+        ctx.repo,
+        pr.number,
+        pageInfo.endCursor
+      );
+      rollup.contexts.nodes.push(...remaining);
+    } catch (err) {
+      // The first 100 contexts already fetched fine; only the tail failed —
+      // most often "Resource not accessible by integration" when the App lacks
+      // (or hasn't had approved) Commit-statuses/Checks read for a later
+      // StatusContext, but also any transient. Don't fail the whole PR refresh
+      // over the check-context tail: keep what we have and move on.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[githubGraphql] check-context tail for ${ctx.owner}/${ctx.repo}#${pr.number} not fetched (${msg}); using the first ${rollup.contexts.nodes.length}`
+      );
+    }
+    // Either way, stop advertising more pages so downstream treats it as complete.
     rollup.contexts.pageInfo = { hasNextPage: false, endCursor: null };
   }
 }

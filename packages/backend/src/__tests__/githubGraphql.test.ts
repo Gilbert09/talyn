@@ -1167,6 +1167,78 @@ describe('batchPullRequests — orchestration', () => {
     expect(pr.blockingReason).toBe('checks_failed');
   });
 
+  it('keeps the first contexts page when the pagination tail fails (no abort)', async () => {
+    const ctx = (over: Record<string, unknown>) => ({ __typename: 'CheckRun', status: 'COMPLETED', ...over });
+    const spy = vi
+      .spyOn(githubService, 'executeGraphql')
+      .mockImplementation(async (_ws, query: string) => {
+        // The tail pagination 403s (e.g. missing Commit-statuses read for a
+        // later StatusContext) — must NOT fail the whole PR refresh.
+        if (query.includes('ContextsPage')) {
+          throw new Error('GitHub GraphQL: Resource not accessible by integration');
+        }
+        return {
+          repository: {
+            [aliasForBranch(0)]: {
+              nodes: [
+                {
+                  number: 42,
+                  title: 'big',
+                  body: '',
+                  url: 'https://github.com/acme/widgets/pull/42',
+                  isDraft: false,
+                  state: 'OPEN',
+                  mergedAt: null,
+                  closedAt: null,
+                  updatedAt: '2026-01-01T00:00:00Z',
+                  mergeable: 'MERGEABLE',
+                  mergeStateStatus: 'CLEAN',
+                  reviewDecision: 'APPROVED',
+                  author: { login: 'alice' },
+                  headRefName: 'feature/x',
+                  baseRefName: 'main',
+                  headRefOid: 'abc',
+                  reviews: { nodes: [] },
+                  reviewThreads: { nodes: [] },
+                  comments: { nodes: [] },
+                  commits: {
+                    nodes: [
+                      {
+                        commit: {
+                          statusCheckRollup: {
+                            state: 'SUCCESS',
+                            contexts: {
+                              nodes: [ctx({ id: '1', name: 'a', conclusion: 'SUCCESS' })],
+                              pageInfo: { hasNextPage: true, endCursor: 'C1' },
+                            },
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        } as never;
+      });
+
+    const out = await batchPullRequests({
+      workspaceId: 'ws1',
+      owner: 'acme',
+      repo: 'widgets',
+      branches: ['feature/x'],
+    });
+
+    // It tried the tail (2 calls) but the failure didn't sink the PR.
+    expect(spy).toHaveBeenCalledTimes(2);
+    const pr = out[0].pr;
+    expect(pr).toBeTruthy();
+    // Falls back to just the first page's contexts.
+    expect(pr!.checks.total).toBe(1);
+    expect(pr!.checks.passed).toBe(1);
+  });
+
   it('limits in-flight queries to 3 even when more chunks exist', async () => {
     let inFlight = 0;
     let peak = 0;
