@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
@@ -14,7 +14,7 @@ import {
   type PRSummary,
 } from './githubGraphql.js';
 import { upsertFromBatchResult } from './prCache.js';
-import { ttlFor, isCohortActive, isInCooldown } from './prFocus.js';
+import { ttlFor, isCohortActive } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import {
   broadcastMergeQueuePositions,
@@ -22,7 +22,6 @@ import {
 } from './mergeQueueBroadcast.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
-import { rateBudgetGovernor } from './rateBudgetGovernor.js';
 
 interface WatchedRepo {
   id: string;
@@ -33,11 +32,6 @@ interface WatchedRepo {
   defaultBranch: string;
 }
 
-// Tick at the focused TTL so a focused PR can be re-checked the
-// instant it ages past 30 s. Unfocused PRs hit a 60 s TTL inside
-// `filterStale` so they only get refetched every other tick.
-const POLL_INTERVAL_MS = 30_000;
-
 // GitHub computes `mergeable` lazily: the first query kicks off a
 // background job and returns UNKNOWN, and every base-branch push resets it
 // to UNKNOWN until recomputed. On a busy repo a single poll usually lands
@@ -47,42 +41,19 @@ const POLL_INTERVAL_MS = 30_000;
 const UNKNOWN_MERGEABLE_RETRIES = 3;
 const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 
-// Active-CI fast loop: authored PRs whose checks are still running change
-// state fast (CI settling, mergeability flipping), so they get a dedicated
-// ~10 s loop that hits GraphQL directly — no Search calls, so it sidesteps
-// the 30/min Search limit entirely. Self-draining: a PR leaves the set the
-// moment its checks settle. Capped so a burst of building PRs can't blow up.
-const ACTIVE_CI_INTERVAL_MS = 10_000;
-const ACTIVE_CI_MAX_PER_WORKSPACE = 15;
-
-// Adaptive cadence: when an account is burning its GitHub budget faster than the
-// reset window can replenish it, the rate-budget governor returns a factor > 1
-// and we stretch the poll interval so usage glides under the limit. Cap the
-// stretch so a starved account still gets polled occasionally.
-const MAX_POLL_INTERVAL_MS = 5 * 60_000;
-const MAX_FAST_INTERVAL_MS = 60_000;
-
 // How long a forced poll (user-facing Refresh) waits for an in-flight tick
 // before giving up. Keeps `POST /repositories/poll` bounded — see
 // `drainInFlightTick`.
 const FORCE_POLL_DRAIN_MS = 15_000;
 
-const MAIN_POLLER_DESC =
-  "The baseline PR poll: per workspace, searches the user's open authored + review-requested PRs, batch-fetches summaries/checks via GraphQL, upserts the cache, and reconciles closed/merged PRs. Cadence adapts to the account's remaining GitHub rate-limit budget.";
-const FAST_POLLER_DESC =
-  'Fast loop for authored PRs with in-flight CI — re-queries GraphQL directly (no Search calls) so settling checks and flipping mergeability update quickly. Self-draining once checks settle. Cadence adapts to remaining GitHub budget.';
-
 class PRMonitorService extends EventEmitter {
-  private pollTimer: NodeJS.Timeout | null = null;
-  private fastTimer: NodeJS.Timeout | null = null;
-  // Wedge watchdogs: a single stalled await must never silently stop the
-  // monitor — when this loop freezes, closed/merged PRs are never swept, so
-  // a merged queue head looks "open" forever and the merge queue stalls with
-  // it (observed in prod, June 2026). See TickGuard.
+  // Wedge watchdog for the on-demand full poll (user Refresh + reconcile sweep):
+  // a single stalled await must never let two refreshes overlap. See TickGuard.
+  // The periodic 30s/10s loops are gone — PR freshness is webhook-driven, with
+  // the reconcile sweep (15 min) as the bucket/closed-PR backstop.
   private pollGuard = new TickGuard('prMonitor');
-  private fastGuard = new TickGuard('prMonitor.fastPoll');
   /** Cached current-user logins keyed by workspaceId — saves a round-trip
-   *  per poll. Cleared when the OAuth token rotates (via removeToken). */
+   *  per poll. Cleared when the token rotates / disconnects (via removeToken). */
   private userLoginCache: Map<string, string> = new Map();
 
   private get db(): Database {
@@ -99,85 +70,18 @@ class PRMonitorService extends EventEmitter {
     githubService.on('disconnected', (workspaceId: string) => {
       this.invalidateUserLogin(workspaceId);
     });
-    this.startPolling();
+    // No periodic loop: webhooks drive realtime freshness + buckets, and the
+    // reconcile sweep re-derives buckets/closed PRs every ~15 min. `poll()`
+    // survives as the on-demand entry point (user Refresh / forced).
+    debugBus.registerPoller(
+      'pr_monitor',
+      0,
+      'On-demand PR refresh (user Refresh / forced). Periodic polling is retired — PRs are kept fresh by GitHub webhooks, with the reconcile sweep as the bucket/closed-PR backstop.',
+    );
   }
 
   shutdown(): void {
-    this.stopPolling();
-  }
-
-  private startPolling(): void {
-    if (this.pollTimer || this.fastTimer) return;
-    console.log('Starting PR monitor polling...');
-    debugBus.registerPoller('pr_monitor', POLL_INTERVAL_MS, MAIN_POLLER_DESC, POLL_INTERVAL_MS);
-    debugBus.registerPoller(
-      'pr_monitor_fast_ci',
-      ACTIVE_CI_INTERVAL_MS,
-      FAST_POLLER_DESC,
-      ACTIVE_CI_INTERVAL_MS,
-    );
-    // Both loops self-schedule via setTimeout (not setInterval) so each tick can
-    // re-read the adaptive interval. Kick the main poll ~5s after boot.
-    this.pollTimer = setTimeout(() => {
-      void this.poll()
-        .catch((err) => console.error('PR monitor: tick crashed:', err))
-        .finally(() => this.scheduleMain());
-    }, 5_000);
-    this.scheduleFast();
-  }
-
-  /**
-   * Loop-wide slowdown factor: the max governor factor across every connected
-   * account's budget. The loop iterates all workspaces in one tick, so it paces
-   * to the most-constrained account (usually there's just one).
-   */
-  private loopDelayFactor(): number {
-    const keys = new Set<string>();
-    for (const ws of githubService.getConnectedWorkspaces()) {
-      keys.add(githubService.accountKeyFor(ws));
-    }
-    return rateBudgetGovernor.maxDelayFactor(keys);
-  }
-
-  private scheduleMain(): void {
-    const interval = Math.min(POLL_INTERVAL_MS * this.loopDelayFactor(), MAX_POLL_INTERVAL_MS);
-    // Reflect the live (possibly stretched) cadence in the Debug panel, keeping
-    // the base so the panel can flag when we've been throttled.
-    debugBus.registerPoller('pr_monitor', interval, MAIN_POLLER_DESC, POLL_INTERVAL_MS);
-    this.pollTimer = setTimeout(() => {
-      void this.poll()
-        .catch((err) => console.error('PR monitor: tick crashed:', err))
-        .finally(() => this.scheduleMain());
-    }, interval);
-  }
-
-  private scheduleFast(): void {
-    const interval = Math.min(
-      ACTIVE_CI_INTERVAL_MS * this.loopDelayFactor(),
-      MAX_FAST_INTERVAL_MS,
-    );
-    debugBus.registerPoller(
-      'pr_monitor_fast_ci',
-      interval,
-      FAST_POLLER_DESC,
-      ACTIVE_CI_INTERVAL_MS,
-    );
-    this.fastTimer = setTimeout(() => {
-      void this.fastPoll()
-        .catch((err) => console.error('PR monitor: fast tick crashed:', err))
-        .finally(() => this.scheduleFast());
-    }, interval);
-  }
-
-  private stopPolling(): void {
-    if (this.pollTimer) {
-      clearTimeout(this.pollTimer);
-      this.pollTimer = null;
-    }
-    if (this.fastTimer) {
-      clearTimeout(this.fastTimer);
-      this.fastTimer = null;
-    }
+    // No periodic timers to stop — kept for the index.ts shutdown contract.
   }
 
   // ---------- Repo CRUD (unchanged surface, used by /repositories) ----------
@@ -789,121 +693,14 @@ class PRMonitorService extends EventEmitter {
     await this.forcePollWorkspaces(owned.map((r) => r.id).filter((id) => connected.has(id)));
   }
 
-  // ---------- Active-CI fast loop ----------
-
   /**
-   * Refetch only authored PRs with in-flight CI, GraphQL-only, on a tight
-   * cadence. Skips Search entirely (the numbers come from the cache), so it
-   * never touches the rate-limited Search budget.
-   */
-  private async fastPoll(): Promise<void> {
-    if (!this.fastGuard.tryBegin()) return;
-    const startedAt = Date.now();
-    let count = 0;
-    try {
-      for (const workspaceId of githubService.getConnectedWorkspaces()) {
-        count++;
-        try {
-          await this.fastPollWorkspace(workspaceId);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'unknown error';
-          console.error(`PR fast-poll: workspace ${workspaceId.slice(0, 8)} failed:`, msg);
-        }
-      }
-    } finally {
-      this.fastGuard.end();
-      debugBus.pollerTick('pr_monitor_fast_ci', {
-        durationMs: Date.now() - startedAt,
-        ok: true,
-        summary: `pr_monitor_fast_ci tick — ${count} workspace${count === 1 ? '' : 's'}`,
-      });
-    }
-  }
-
-  private async fastPollWorkspace(workspaceId: string): Promise<void> {
-    const rows = await this.db
-      .select({
-        id: pullRequestsTable.id,
-        owner: pullRequestsTable.owner,
-        repo: pullRequestsTable.repo,
-        number: pullRequestsTable.number,
-        repositoryId: pullRequestsTable.repositoryId,
-        // Derive the only bit of `lastSummary` this loop needs — the in-flight
-        // check count — server-side, so the ~2KB summary jsonb never ships for
-        // every authored open PR on the 10s fast tick. Mirrors `inProgressChecks`.
-        inProgressChecks: sql<number>`COALESCE((${pullRequestsTable.lastSummary} -> 'checks' ->> 'inProgress')::int, 0)`,
-        authored: pullRequestsTable.authored,
-        reviewRequested: pullRequestsTable.reviewRequested,
-      })
-      .from(pullRequestsTable)
-      .where(
-        and(
-          eq(pullRequestsTable.workspaceId, workspaceId),
-          eq(pullRequestsTable.state, 'open'),
-          eq(pullRequestsTable.authored, true)
-        )
-      );
-
-    // Authored PRs with checks still running, whose cohort is the one being
-    // viewed (CI matters on "My PRs", not while reviewing others'), skipping
-    // any in post-refresh cooldown. Capped.
-    const due = rows
-      .filter(
-        (r) =>
-          r.inProgressChecks > 0 &&
-          isCohortActive(workspaceId, r) &&
-          !isInCooldown(workspaceId, r.id)
-      )
-      .slice(0, ACTIVE_CI_MAX_PER_WORKSPACE);
-    if (due.length === 0) return;
-
-    // Group by repo so each repo is one batched GraphQL round-trip.
-    const byRepo = new Map<string, { owner: string; repo: string; repositoryId: string; numbers: number[] }>();
-    for (const r of due) {
-      const key = `${r.owner}/${r.repo}`;
-      const g = byRepo.get(key) ?? { owner: r.owner, repo: r.repo, repositoryId: r.repositoryId, numbers: [] };
-      g.numbers.push(r.number);
-      byRepo.set(key, g);
-    }
-
-    for (const g of byRepo.values()) {
-      try {
-        const results = await batchPullRequestsByNumber({
-          workspaceId,
-          owner: g.owner,
-          repo: g.repo,
-          numbers: g.numbers,
-        });
-        for (const result of results) {
-          if (!result.pr) continue;
-          await this.annotateReviewRequest(workspaceId, result.pr);
-          // No flag changes — relationship reconcile stays on the search
-          // ticks; this loop only refreshes the summary (CI, mergeable).
-          await upsertFromBatchResult({
-            workspaceId,
-            repositoryId: g.repositoryId,
-            summary: result.pr,
-          });
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'unknown error';
-        console.error(`PR fast-poll: ${g.owner}/${g.repo} failed:`, msg);
-      }
-    }
-  }
-
-  /** Test/admin entry point for the fast loop — see `forcePoll`. */
-  async forceFastPoll(): Promise<void> {
-    while (this.fastGuard.active) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    await this.fastPoll();
-  }
-
-  /**
-   * Refetch a single PR's summary now — the trigger the notifications poller
-   * fires on activity. GraphQL-only, no relationship-flag changes (those stay
-   * on the search ticks). No-op if the repo isn't watched in this workspace.
+   * Refetch a single PR's summary now — the per-PR trigger the webhook worker
+   * fires on activity. GraphQL-only. Unlike the old notifications trigger, this
+   * ALSO derives the relationship flags (authored / reviewRequested) from the
+   * fetched summary + viewer identity, so webhooks keep the Mine / Review
+   * buckets realtime without a Search call. Only tracks a PR the viewer has a
+   * relationship with (or one already tracked) — an unrelated PR in a watched
+   * repo is not materialized. No-op if the repo isn't watched in this workspace.
    */
   async refreshPr(
     workspaceId: string,
@@ -923,15 +720,46 @@ class PRMonitorService extends EventEmitter {
       repo: watched.repo,
       numbers: [number],
     });
+    const login = await this.resolveCurrentUser(workspaceId);
     for (const result of results) {
       if (!result.pr) continue;
       await this.annotateReviewRequest(workspaceId, result.pr);
+      const { authored, reviewRequested } = relationshipFlags(result.pr, login);
+      // Keep the cache scoped to PRs the viewer actually cares about: only
+      // materialize a row if there's a relationship now, or one already exists
+      // (so a PR that just lost its relationship still gets updated/cleared).
+      const relevant = authored || reviewRequested;
+      if (!relevant && !(await this.prRowExists(workspaceId, watched.id, number))) {
+        continue;
+      }
       await upsertFromBatchResult({
         workspaceId,
         repositoryId: watched.id,
         summary: result.pr,
+        reviewRequested,
+        authored,
       });
     }
+  }
+
+  /** Whether a pull_requests row already exists for this (workspace, repo, number). */
+  private async prRowExists(
+    workspaceId: string,
+    repositoryId: string,
+    number: number
+  ): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: pullRequestsTable.id })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.number, number)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   /**
@@ -949,14 +777,32 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Number of in-flight check runs on a cached PR summary (0 if unknown).
- * `fastPollWorkspace` now derives this in SQL (see its select) to avoid
- * shipping `lastSummary`; this stays as the canonical JS definition the
- * SQL must stay equivalent to (pinned by `prMonitorFastPollEgress.test.ts`).
+ * Derive the viewer's relationship to a PR from its fetched summary — the same
+ * Mine / Review buckets the Search poll computes, but from a single PR's data
+ * so a webhook refresh can set them without a Search call.
+ *
+ *   - authored: the viewer opened it.
+ *   - reviewRequested: the viewer is a requested reviewer (directly, or via a
+ *     team — `reviewRequestVia` is set by `annotateReviewRequest`), AND hasn't
+ *     already reviewed it, AND isn't the author. GitHub drops an individual
+ *     request once you review, but leaves a team request standing, so we also
+ *     subtract "the viewer appears in recentReviews" (mirrors the Search
+ *     `review-requested MINUS reviewed-by` logic; the reconcile sweep is the
+ *     authoritative backstop for the recentReviews-window edge cases).
  */
-export function inProgressChecks(lastSummary: unknown): number {
-  const checks = (lastSummary as { checks?: { inProgress?: number } } | null)?.checks;
-  return checks?.inProgress ?? 0;
+export function relationshipFlags(
+  summary: PRSummary,
+  login: string | null
+): { authored: boolean; reviewRequested: boolean } {
+  if (!login) return { authored: false, reviewRequested: false };
+  const me = login.toLowerCase();
+  const authored = summary.author?.toLowerCase() === me;
+  const via = summary.reviewRequestVia;
+  const requested = via ? via.direct || via.teams.length > 0 : false;
+  const reviewedByViewer = (summary.recentReviews ?? []).some(
+    (r) => r.author?.toLowerCase() === me
+  );
+  return { authored, reviewRequested: requested && !reviewedByViewer && !authored };
 }
 
 export const prMonitorService = new PRMonitorService();
