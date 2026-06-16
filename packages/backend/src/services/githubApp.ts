@@ -390,6 +390,78 @@ export function buildInstallUrl(state: string): string {
   return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new?state=${encodeURIComponent(state)}`;
 }
 
+/**
+ * The user-authorization URL. Unlike the install URL, this ALWAYS runs the OAuth
+ * authorize step and redirects to the App's callback with `code` + `state` —
+ * whether or not the App is already installed (the install URL dead-ends on the
+ * "configure" page for an existing install). This is what the connect button
+ * uses; the install itself is a one-time per-account action the user does on
+ * GitHub. Omits redirect_uri so GitHub uses the App's configured callback.
+ */
+export function buildUserAuthUrl(state: string): string {
+  const clientId = appClientId();
+  if (!clientId) throw new Error('GITHUB_APP_CLIENT_ID not configured');
+  return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&state=${encodeURIComponent(state)}`;
+}
+
+/** The page where a user manages which repos the App can access (install / add repos). */
+export function appInstallationsPageUrl(): string {
+  const slug = appSlug();
+  return slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : 'https://github.com/settings/installations';
+}
+
+export interface UserInstallationSummary {
+  installationId: string;
+  accountLogin: string;
+  accountType: string;
+}
+
+/**
+ * Every installation of this App that the authorizing user can access, via the
+ * user-to-server token. The authorize flow gives us a user token but no
+ * `installation_id`, so this is how we discover which account(s) the user
+ * installed the App on (a user can have it on their personal account + orgs).
+ */
+export async function fetchUserInstallations(userToken: string): Promise<UserInstallationSummary[]> {
+  const out: UserInstallationSummary[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const url = `${GITHUB_API_URL}/user/installations?per_page=100&page=${page}`;
+    const startedAt = Date.now();
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `token ${userToken}`,
+        'User-Agent': 'FastOwl',
+      },
+    });
+    debugBus.recordHttp({
+      service: 'github',
+      method: 'GET',
+      url,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: response.ok,
+      ...(response.ok ? {} : { error: `user installations: ${response.statusText}` }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to list user installations: ${response.statusText}`);
+    }
+    const data = JSON.parse(response.bodyText) as {
+      installations?: Array<{ id: number; account?: { login?: string; type?: string } }>;
+    };
+    const insts = data.installations ?? [];
+    for (const i of insts) {
+      out.push({
+        installationId: String(i.id),
+        accountLogin: i.account?.login ?? 'unknown',
+        accountType: i.account?.type ?? 'User',
+      });
+    }
+    if (insts.length < 100) break;
+  }
+  return out;
+}
+
 /** Test helper — clear the in-memory installation-token cache. */
 export function _resetInstallationTokenCache(): void {
   installationTokens.clear();

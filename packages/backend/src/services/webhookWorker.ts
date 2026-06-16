@@ -3,6 +3,7 @@ import { createRedisConnection, isRedisEnabled } from './redis.js';
 import { REPLICA_ID } from './wsBus.js';
 import { targetsForRepo, refreshWebhookIndex } from './webhookIndex.js';
 import { prMonitorService } from './prMonitor.js';
+import { githubService } from './github.js';
 import { debugBus } from './debugBus.js';
 
 /**
@@ -120,9 +121,12 @@ export async function processWebhookDelivery(
   delivery: WebhookDelivery,
   nowMs: number = Date.now(),
 ): Promise<number> {
-  // installation lifecycle: keep the watch index + allowlist current.
+  // installation lifecycle: keep the repo watch index + the account→installation
+  // index current (the latter so data-plane reads resolve a newly-(un)installed
+  // account immediately, across replicas).
   if (delivery.eventType === 'installation' || delivery.eventType === 'installation_repositories') {
     await refreshWebhookIndex().catch(() => undefined);
+    await githubService.refreshInstallationIndex().catch(() => undefined);
     return 0;
   }
 

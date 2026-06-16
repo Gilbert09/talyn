@@ -4,7 +4,7 @@ import { githubService } from '../services/github.js';
 import { _resetInstallationTokenCache } from '../services/githubApp.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
-import { workspaces as workspacesTable } from '../db/schema.js';
+import { workspaces as workspacesTable, githubInstallations as githubInstallationsTable } from '../db/schema.js';
 
 /**
  * Hybrid-auth routing: an App-connected workspace (one with an installationId)
@@ -117,5 +117,33 @@ describe('github hybrid-auth routing', () => {
     // authed with the stored OAuth token.
     expect(captured.some((c) => c.url.includes('/access_tokens'))).toBe(false);
     expect(prCall?.authorization).toBe('bearer gho_legacy');
+  });
+
+  it('resolves the installation by repo OWNER when a workspace spans accounts', async () => {
+    // Two installations: acme → inst-A (the workspace's primary), beta → inst-B.
+    await db.insert(githubInstallationsTable).values([
+      { installationId: 'inst-A', accountLogin: 'acme', accountType: 'Organization', repoFullNames: [], createdAt: new Date(), updatedAt: new Date() },
+      { installationId: 'inst-B', accountLogin: 'beta', accountType: 'Organization', repoFullNames: [], createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    await githubService.refreshInstallationIndex();
+    await githubService.storeToken('ws1', 'ghu_usertoken', 'bearer', 'repo', { installationId: 'inst-A' });
+
+    const captured: Captured[] = [];
+    vi.stubGlobal(
+      'fetch',
+      capturingFetch(captured, {
+        '/app/installations/inst-A/access_tokens': { token: 'ghs_A', expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+        '/app/installations/inst-B/access_tokens': { token: 'ghs_B', expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+        '/repos/acme/widget/pulls/1': { number: 1 },
+        '/repos/beta/gadget/pulls/2': { number: 2 },
+      }),
+    );
+
+    await githubService.getPullRequest('ws1', 'acme', 'widget', 1);
+    await githubService.getPullRequest('ws1', 'beta', 'gadget', 2);
+
+    // acme repo → inst-A token; beta repo → inst-B token (resolved by owner).
+    expect(captured.find((c) => c.url.includes('/repos/acme/widget'))?.authorization).toBe('token ghs_A');
+    expect(captured.find((c) => c.url.includes('/repos/beta/gadget'))?.authorization).toBe('token ghs_B');
   });
 });

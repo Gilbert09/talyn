@@ -169,16 +169,24 @@ re-connects via the install flow.
 8. Set `REDIS_URL` (webhooks are enqueued onto a Redis Stream; without it the
    receiver acks-and-drops and the reconcile sweep keeps PRs fresh).
 
-**Connecting a workspace:** in the desktop, Settings → Integrations → GitHub →
-**Connect via GitHub App** (or **Enable webhooks** if already OAuth-connected).
-That starts the stateful install flow and, on redirect back through
-`/github/app/callback`, records the installation + user token and bulk-refreshes.
-Installing the App **directly from GitHub's page won't work** — the callback
-needs the signed `state` only the in-app button provides.
+**Connecting (two steps):**
+1. **Install** the App on each account/org whose repos you want to track —
+   GitHub → the App's page → *Install* (or *Configure* to add repos). One-time
+   per account; a user can install it on their personal account **and** several
+   orgs.
+2. In the desktop, Settings → Integrations → GitHub → **Connect GitHub**. This
+   runs the OAuth **user-authorization** flow (`/login/oauth/authorize`), which
+   always redirects back to `/github/app/callback` with a signed `state` —
+   whether or not the App is already installed. (We deliberately do NOT use
+   `/installations/new`, which dead-ends on the "configure" page for an existing
+   install.) The callback exchanges the code for the user token, discovers **all**
+   the user's installations via `GET /user/installations`, records them, and
+   bulk-refreshes.
 
-A repo only delivers webhooks once the App is **installed** on its owner (user/org)
-with the repo selected. The reconcile sweep (every ~15 min) + the manual refresh
-are the safety net for any missed/dropped deliveries.
+Data-plane reads resolve the installation **per repo owner**, so one workspace
+can span repos across multiple installed accounts/orgs. A repo only delivers
+webhooks once the App is installed on its owner with that repo selected. The
+reconcile sweep (~5 min) + manual refresh are the safety net for missed deliveries.
 
 ---
 

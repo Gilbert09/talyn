@@ -9,6 +9,8 @@ import {
   exchangeUserCode,
   refreshUserToken,
   buildInstallUrl,
+  buildUserAuthUrl,
+  fetchUserInstallations,
   InstallationUnavailableError,
   UserTokenRefreshError,
   _resetInstallationTokenCache,
@@ -242,5 +244,42 @@ describe('buildInstallUrl', () => {
     const url = buildInstallUrl('ws-1:nonce');
     expect(url).toContain('/apps/fastowl-test/installations/new');
     expect(url).toContain('state=ws-1%3Anonce');
+  });
+});
+
+describe('buildUserAuthUrl', () => {
+  it('builds the OAuth authorize URL with client id + url-encoded state', () => {
+    const url = buildUserAuthUrl('ws-1:nonce');
+    expect(url).toContain('https://github.com/login/oauth/authorize');
+    expect(url).toContain('client_id=Iv1.appclient');
+    expect(url).toContain('state=ws-1%3Anonce');
+    // No /installations/new — that's the path that dead-ends on "configure".
+    expect(url).not.toContain('/installations/new');
+  });
+});
+
+describe('fetchUserInstallations', () => {
+  it('returns every installation the user can access', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({
+        total_count: 2,
+        installations: [
+          { id: 111, account: { login: 'acme', type: 'Organization' } },
+          { id: 222, account: { login: 'octocat', type: 'User' } },
+        ],
+      }),
+    );
+    const insts = await fetchUserInstallations('ghu_user');
+    expect(insts).toEqual([
+      { installationId: '111', accountLogin: 'acme', accountType: 'Organization' },
+      { installationId: '222', accountLogin: 'octocat', accountType: 'User' },
+    ]);
+  });
+
+  it('returns an empty list when the user has no installations', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({ total_count: 0, installations: [] }),
+    );
+    expect(await fetchUserInstallations('ghu_user')).toEqual([]);
   });
 });

@@ -7,6 +7,7 @@ import {
   integrations as integrationsTable,
   workspaces as workspacesTable,
   users as usersTable,
+  githubInstallations as githubInstallationsTable,
 } from '../db/schema.js';
 import {
   encryptString,
@@ -297,6 +298,21 @@ interface GitHubIntegrationConfig {
   refreshTokenExpiresAt?: string; // ISO
 }
 
+/**
+ * Best-effort repo owner from a REST endpoint, so a data-plane call can pick the
+ * installation covering that account. Handles `/repos/{owner}/…` and the
+ * `repo:{owner}/{repo}` search qualifier; returns undefined for owner-less
+ * endpoints (`/user`, `/rate_limit`, `/app/…`) — those use the user token or the
+ * workspace's primary installation.
+ */
+function ownerFromEndpoint(endpoint: string): string | undefined {
+  const repos = /\/repos\/([^/]+)\//.exec(endpoint);
+  if (repos) return decodeURIComponent(repos[1]);
+  const search = /[?&]q=[^&]*repo:([^/%]+)(?:\/|%2F)/i.exec(endpoint);
+  if (search) return decodeURIComponent(search[1]);
+  return undefined;
+}
+
 /** Decrypt an envelope, returning undefined (not throwing) on failure. */
 function safeDecrypt(envelope: EncryptedEnvelope): string | undefined {
   try {
@@ -324,6 +340,12 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
 
 class GitHubService extends EventEmitter {
   private tokens: Map<string, StoredToken> = new Map();
+  // GitHub App installations keyed by account login (lowercased) → installation
+  // id. Installations are PER-ACCOUNT (a user can install the App on their
+  // personal account + several orgs), so data-plane reads resolve the right
+  // installation by the repo's owner — not by a single per-workspace id.
+  // Loaded from `github_installations` at init + on connect/installation events.
+  private installationsByAccount: Map<string, string> = new Map();
   // Authenticated user's login per workspace. Resolved once via /user
   // and reused — callers (e.g. the rate-limit poller) read it hot, so
   // we can't afford an API round-trip each time.
@@ -349,6 +371,38 @@ class GitHubService extends EventEmitter {
 
   async init(): Promise<void> {
     await this.loadStoredTokens();
+    await this.refreshInstallationIndex();
+  }
+
+  /**
+   * Rebuild the account-login → installation-id index from `github_installations`.
+   * Called at init, after an install completes, and on `installation*` webhooks.
+   * Suspended installations are excluded so we don't mint tokens for them.
+   */
+  async refreshInstallationIndex(): Promise<void> {
+    try {
+      const rows = await this.db
+        .select({
+          installationId: githubInstallationsTable.installationId,
+          accountLogin: githubInstallationsTable.accountLogin,
+          suspendedAt: githubInstallationsTable.suspendedAt,
+        })
+        .from(githubInstallationsTable);
+      const next = new Map<string, string>();
+      for (const r of rows) {
+        if (r.suspendedAt) continue;
+        if (r.accountLogin) next.set(r.accountLogin.toLowerCase(), r.installationId);
+      }
+      this.installationsByAccount = next;
+    } catch (err) {
+      console.error('Failed to load GitHub installation index:', err);
+    }
+  }
+
+  /** The installation id covering a repo owner (account login), if the App is installed there. */
+  private installationForOwner(owner: string | undefined): string | undefined {
+    if (!owner) return undefined;
+    return this.installationsByAccount.get(owner.toLowerCase());
   }
 
   private async loadStoredTokens(): Promise<void> {
@@ -767,25 +821,25 @@ class GitHubService extends EventEmitter {
    */
   private async resolveAuth(
     workspaceId: string,
-    preferUser = false,
+    opts: { preferUser?: boolean; owner?: string } = {},
   ): Promise<ResolvedAuth | null> {
     const stored = this.tokens.get(workspaceId);
-    if (stored?.installationId && isGitHubAppConfigured() && !preferUser) {
+    // Data-plane calls use an installation token. Resolve the installation by
+    // the repo's OWNER (a workspace can span accounts/installations); fall back
+    // to the workspace's primary installationId when the owner isn't known.
+    const installationId =
+      this.installationForOwner(opts.owner) ?? stored?.installationId;
+    if (installationId && isGitHubAppConfigured() && !opts.preferUser) {
       try {
-        const token = await getInstallationToken(stored.installationId);
-        return {
-          tokenType: 'token',
-          accessToken: token,
-          kind: 'installation',
-          installationId: stored.installationId,
-        };
+        const token = await getInstallationToken(installationId);
+        return { tokenType: 'token', accessToken: token, kind: 'installation', installationId };
       } catch (err) {
         if (err instanceof InstallationUnavailableError) {
-          void this.markInstallationUnavailable(stored.installationId, err.status);
+          void this.markInstallationUnavailable(installationId, err.status);
         }
         // Fall through to the user token if we have one — better a degraded
         // viewer-scoped call than a hard failure.
-        if (!stored.accessToken) throw err;
+        if (!stored?.accessToken) throw err;
       }
     }
     if (!stored) return null;
@@ -971,7 +1025,10 @@ class GitHubService extends EventEmitter {
     options: RequestInit = {},
     auth: 'auto' | 'user' = 'auto'
   ): Promise<T> {
-    const resolved = await this.resolveAuth(workspaceId, auth === 'user');
+    const resolved = await this.resolveAuth(workspaceId, {
+      preferUser: auth === 'user',
+      owner: ownerFromEndpoint(endpoint),
+    });
     if (!resolved) {
       throw new Error('GitHub not connected for this workspace');
     }
@@ -1624,7 +1681,10 @@ class GitHubService extends EventEmitter {
     query: string,
     variables: Record<string, unknown> = {}
   ): Promise<T> {
-    const resolved = await this.resolveAuth(workspaceId);
+    // Every batched query passes `owner` in its variables — use it to resolve
+    // the right installation when the workspace spans multiple accounts.
+    const owner = typeof variables.owner === 'string' ? variables.owner : undefined;
+    const resolved = await this.resolveAuth(workspaceId, { owner });
     if (!resolved) {
       throw new Error('GitHub not connected for this workspace');
     }

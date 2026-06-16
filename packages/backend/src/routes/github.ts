@@ -4,10 +4,12 @@ import { githubService } from '../services/github.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import {
   isGitHubAppConfigured,
-  buildInstallUrl,
+  buildUserAuthUrl,
+  appInstallationsPageUrl,
   exchangeUserCode,
   fetchInstallation,
   fetchInstallationRepos,
+  fetchUserInstallations,
 } from '../services/githubApp.js';
 import { getPoolDbClient } from '../db/client.js';
 import { githubInstallations } from '../db/schema.js';
@@ -51,10 +53,11 @@ setInterval(() => {
 export function githubPublicRoutes(): Router {
   const router = Router();
 
-  // GitHub App install redirect. GitHub appends `installation_id`,
-  // `setup_action`, plus the OAuth `code` (user authorization requested during
-  // install) and our `state`. We exchange the code for the user-to-server
-  // token, persist the installation + integration, then kick a bulk refresh.
+  // GitHub App user-authorization redirect. The connect button sends the user
+  // through `/login/oauth/authorize`, so we get `code` + `state` (and, on a
+  // first-install redirect, `installation_id`). We exchange the code for the
+  // user-to-server token, discover the user's installation(s), persist them,
+  // store the workspace integration, then kick a bulk refresh.
   router.get('/app/callback', oauthRateLimit, async (req, res) => {
     const { code, state, installation_id, error, error_description } = req.query;
     if (error) {
@@ -65,9 +68,9 @@ export function githubPublicRoutes(): Router {
         })
       );
     }
-    if (!code || !state || !installation_id) {
+    if (!code || !state) {
       return res.status(400).type('html').send(
-        renderCallbackPage({ ok: false, message: 'Missing code, state, or installation_id' })
+        renderCallbackPage({ ok: false, message: 'Missing code or state' })
       );
     }
     const [workspaceId, stateToken] = (state as string).split(':');
@@ -80,8 +83,23 @@ export function githubPublicRoutes(): Router {
     pendingOAuthStates.delete(stateToken);
 
     try {
-      await completeAppInstallation(workspaceId, code as string, String(installation_id));
-      res.type('html').send(renderCallbackPage({ ok: true, message: 'GitHub App connected!' }));
+      const installCount = await completeAppConnection(
+        workspaceId,
+        code as string,
+        installation_id ? String(installation_id) : undefined
+      );
+      res.type('html').send(
+        renderCallbackPage(
+          installCount > 0
+            ? { ok: true, message: 'GitHub connected!' }
+            : {
+                ok: true,
+                message:
+                  'GitHub authorized — but the FastOwl app isn’t installed on any account yet. ' +
+                  `Install it (${appInstallationsPageUrl()}) on the org/user whose repos you want to track.`,
+              }
+        )
+      );
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(500).type('html').send(renderCallbackPage({ ok: false, message }));
@@ -92,43 +110,55 @@ export function githubPublicRoutes(): Router {
 }
 
 /**
- * Finish an App installation: exchange the OAuth code for the user-to-server
- * token, read the installation's account + selected repos, upsert the global
- * `github_installations` row, store the workspace integration (user token +
- * installationId), and trigger a bulk refresh so the UI fills immediately.
+ * Finish connecting GitHub: exchange the OAuth code for the user-to-server
+ * token, discover EVERY installation of the App the user can access (a user can
+ * install it on their personal account + multiple orgs — data-plane reads then
+ * resolve the right installation per repo owner), upsert each into the global
+ * `github_installations` table, store the workspace integration (user token +
+ * a primary installationId fallback), refresh the in-memory installation index,
+ * and trigger a bulk refresh. Returns the number of installations found.
  */
-async function completeAppInstallation(
+async function completeAppConnection(
   workspaceId: string,
   code: string,
-  installationId: string
-): Promise<void> {
+  installationIdHint: string | undefined
+): Promise<number> {
   const userToken = await exchangeUserCode(code);
-  const info = await fetchInstallation(installationId);
-  const repoFullNames = await fetchInstallationRepos(installationId).catch(() => []);
+  const installations = await fetchUserInstallations(userToken.access_token).catch(() => []);
 
   const db = getPoolDbClient();
   const now = new Date();
-  await db
-    .insert(githubInstallations)
-    .values({
-      installationId,
-      accountLogin: info.accountLogin,
-      accountType: info.accountType,
-      repoFullNames,
-      suspendedAt: info.suspended ? now : null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: githubInstallations.installationId,
-      set: {
-        accountLogin: info.accountLogin,
-        accountType: info.accountType,
+  for (const inst of installations) {
+    // Per-installation account + selected repos. Account login/type come from
+    // the listing; the repo allowlist needs an installation-token call.
+    const info = await fetchInstallation(inst.installationId).catch(() => null);
+    const repoFullNames = await fetchInstallationRepos(inst.installationId).catch(() => []);
+    await db
+      .insert(githubInstallations)
+      .values({
+        installationId: inst.installationId,
+        accountLogin: info?.accountLogin ?? inst.accountLogin,
+        accountType: info?.accountType ?? inst.accountType,
         repoFullNames,
-        suspendedAt: info.suspended ? now : null,
+        suspendedAt: info?.suspended ? now : null,
+        createdAt: now,
         updatedAt: now,
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: githubInstallations.installationId,
+        set: {
+          accountLogin: info?.accountLogin ?? inst.accountLogin,
+          accountType: info?.accountType ?? inst.accountType,
+          repoFullNames,
+          suspendedAt: info?.suspended ? now : null,
+          updatedAt: now,
+        },
+      });
+  }
+
+  // Primary installation (fallback when a call's repo owner can't be resolved):
+  // the hint from a first-install redirect, else the first discovered install.
+  const primaryInstallationId = installationIdHint ?? installations[0]?.installationId;
 
   const nowMs = Date.now();
   await githubService.storeToken(
@@ -137,7 +167,7 @@ async function completeAppInstallation(
     userToken.token_type,
     userToken.scope,
     {
-      installationId,
+      ...(primaryInstallationId ? { installationId: primaryInstallationId } : {}),
       // Present only when the App has token expiry enabled — drives rotation.
       ...(userToken.refreshToken ? { refreshToken: userToken.refreshToken } : {}),
       ...(userToken.expiresInSec
@@ -149,17 +179,21 @@ async function completeAppInstallation(
     }
   );
 
+  // Make the new installations resolvable by repo owner immediately.
+  await githubService.refreshInstallationIndex();
+
   debugBus.recordEvent({
     service: 'github',
-    action: 'installation:connected',
-    summary: `installation ${installationId} (${info.accountLogin}) connected to ws ${workspaceId.slice(0, 8)} — ${repoFullNames.length} repo(s)`,
+    action: 'github:connected',
+    summary: `ws ${workspaceId.slice(0, 8)} connected — ${installations.length} installation(s): ${installations.map((i) => i.accountLogin).join(', ') || 'none'}`,
     workspaceId,
   });
 
   // Fill the UI immediately rather than waiting for the first webhook.
   void prMonitorService.refreshWorkspaceNow(workspaceId).catch((err) => {
-    console.error('[github] post-install bulk refresh failed:', err);
+    console.error('[github] post-connect bulk refresh failed:', err);
   });
+  return installations.length;
 }
 
 /**
@@ -284,7 +318,9 @@ export function githubRoutes(): Router {
       expiresAt: Date.now() + 10 * 60 * 1000,
     });
     try {
-      const installUrl = buildInstallUrl(`${workspaceId}:${state}`);
+      // The user-authorization URL (not /installations/new): it always runs the
+      // OAuth authorize → callback, whether or not the App is already installed.
+      const installUrl = buildUserAuthUrl(`${workspaceId}:${state}`);
       res.json({ success: true, data: { installUrl, state } });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
