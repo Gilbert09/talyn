@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
@@ -460,6 +460,34 @@ class PRMonitorService extends EventEmitter {
     return rows.map((r) => r.number);
   }
 
+  /**
+   * Of `numbers`, the ones already tracked OPEN for this (workspace, repo) — in
+   * a single `IN` query. The webhook fan-out uses this to drop the high-volume
+   * check events (a check_run can list several PRs, incl. cross-fork junk) for
+   * PRs we don't track, with one round-trip instead of a getWatchedRepos +
+   * prRowExists per number. Untracked PRs — the overwhelming majority on a busy
+   * repo — then cost nothing past this filter.
+   */
+  async filterTrackedOpen(
+    workspaceId: string,
+    repositoryId: string,
+    numbers: number[]
+  ): Promise<number[]> {
+    if (numbers.length === 0) return [];
+    const rows = await this.db
+      .select({ number: pullRequestsTable.number })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.state, 'open'),
+          inArray(pullRequestsTable.number, numbers)
+        )
+      );
+    return rows.map((r) => r.number);
+  }
+
   private async filterStale(
     workspaceId: string,
     repositoryId: string,
@@ -739,29 +767,30 @@ class PRMonitorService extends EventEmitter {
     owner: string,
     repo: string,
     number: number,
-    opts: { onlyIfTracked?: boolean; resolveMergeable?: boolean } = {}
+    opts: { resolveMergeable?: boolean; repositoryId?: string } = {}
   ): Promise<void> {
-    const watched = (await this.getWatchedRepos(workspaceId)).find(
-      (r) =>
-        r.owner.toLowerCase() === owner.toLowerCase() &&
-        r.repo.toLowerCase() === repo.toLowerCase()
-    );
-    if (!watched) return;
-    // High-volume check events (check_run/check_suite) fan in for *every* open
-    // PR in the repo — thousands on a repo like posthog/posthog, almost all of
-    // which the viewer has no relationship with. Refreshing them means a full
-    // GraphQL fetch we'd only discard at the relevance gate below. For those
-    // events (opts.onlyIfTracked) bail BEFORE the fetch unless we already track
-    // this PR: a PR the viewer cares about is materialised by its pull_request /
-    // review event (or the search-based sweep), so check events only ever need
-    // to *update* an already-tracked row. Turns ~thousands of GraphQL fetches
-    // per CI burst into ~dozens — the cheap `prRowExists` is an indexed lookup.
-    if (opts.onlyIfTracked && !(await this.prRowExists(workspaceId, watched.id, number))) {
-      whTrace(
-        `      refreshPr ${watched.fullName}#${number}: untracked + check-only event — skipped before fetch`,
+    // The webhook fan-out already resolved the repo (id + canonical owner/repo
+    // from the in-memory watch index), so it passes `repositoryId` to skip the
+    // getWatchedRepos DB round-trip + URL parse on the hot path. Other callers
+    // (merge queue, auto-merge) omit it and resolve from the DB.
+    let watched: WatchedRepo | undefined;
+    if (opts.repositoryId) {
+      watched = {
+        id: opts.repositoryId,
+        workspaceId,
+        owner,
+        repo,
+        fullName: `${owner}/${repo}`,
+        defaultBranch: '',
+      };
+    } else {
+      watched = (await this.getWatchedRepos(workspaceId)).find(
+        (r) =>
+          r.owner.toLowerCase() === owner.toLowerCase() &&
+          r.repo.toLowerCase() === repo.toLowerCase()
       );
-      return;
     }
+    if (!watched) return;
     const fetched = await batchPullRequestsByNumber({
       workspaceId,
       owner: watched.owner,

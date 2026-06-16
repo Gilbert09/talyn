@@ -191,9 +191,28 @@ export async function processWebhookDelivery(
       `PRs=[${numbers.join(',')}] → ${targets.length} workspace(s)`,
   );
 
+  const isCheckEvent =
+    delivery.eventType === 'check_run' || delivery.eventType === 'check_suite';
   let dispatched = 0;
   for (const target of targets) {
-    for (const number of numbers) {
+    // Check events fan in for every open PR sharing the commit (a single
+    // check_run can list several, incl. cross-fork junk). Resolve which of those
+    // this workspace actually tracks in ONE `IN` query instead of a
+    // getWatchedRepos + prRowExists per number — untracked PRs (the vast
+    // majority on a busy repo) cost nothing past this filter. PR/push/review
+    // events are low-volume and may need to *materialise* a new row, so they're
+    // never filtered.
+    let relevant = numbers;
+    if (isCheckEvent) {
+      relevant = await prMonitorService
+        .filterTrackedOpen(target.workspaceId, target.repositoryId, numbers)
+        .catch(() => [] as number[]);
+      whTrace(
+        `  ${delivery.eventType} ${delivery.repoFullName} ws=${target.workspaceId}: ` +
+          `tracked ${relevant.length}/${numbers.length}`,
+      );
+    }
+    for (const number of relevant) {
       dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, delivery.eventType);
     }
   }
@@ -202,7 +221,7 @@ export async function processWebhookDelivery(
 
 /** Coalesced single-PR refresh for one watching workspace. Returns 1 if dispatched, 0 if coalesced. */
 async function refreshTarget(
-  target: { workspaceId: string; owner: string; repo: string },
+  target: { workspaceId: string; owner: string; repo: string; repositoryId: string },
   number: number,
   repoFullName: string,
   nowMs: number,
@@ -213,14 +232,13 @@ async function refreshTarget(
     whTrace(`    coalesced ${repoFullName}#${number} (${eventType}) — refreshed <${COALESCE_WINDOW_MS}ms ago`);
     return 0;
   }
-  // Check events fan in for every open PR in the repo; only refresh ones we
-  // already track. Webhook refreshes never block on `mergeable: UNKNOWN` — the
+  // Pass the index-resolved repositoryId so refreshPr skips its getWatchedRepos
+  // DB round-trip. Webhook refreshes never block on `mergeable: UNKNOWN` — the
   // sweep / a follow-up event settles it (keeps the consumer draining fast).
-  const onlyIfTracked = eventType === 'check_run' || eventType === 'check_suite';
   whTrace(`    dispatch ${repoFullName}#${number} (${eventType}) → refreshPr`);
   await prMonitorService
     .refreshPr(target.workspaceId, target.owner, target.repo, number, {
-      onlyIfTracked,
+      repositoryId: target.repositoryId,
       resolveMergeable: false,
     })
     .then(() => whTrace(`    done ${repoFullName}#${number} (${eventType})`))

@@ -13,6 +13,7 @@ import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   repositories as repositoriesTable,
+  pullRequests as pullRequestsTable,
 } from '../db/schema.js';
 
 function delivery(over: Partial<WebhookDelivery>): WebhookDelivery {
@@ -118,6 +119,23 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
   });
 
+  // A tracked open PR row, so check events for it survive the filterTrackedOpen
+  // pre-filter (check events only refresh PRs we already track).
+  async function seedTrackedPr(repositoryId: string, workspaceId: string, number: number) {
+    await db.insert(pullRequestsTable).values({
+      id: `pr-${repositoryId}-${number}`,
+      workspaceId,
+      repositoryId,
+      owner: 'acme',
+      repo: 'widget',
+      number,
+      state: 'open',
+    });
+  }
+  // refreshPr opts the webhook fan-out always passes: the index-resolved repo id
+  // (skips getWatchedRepos) + resolveMergeable:false (never block the consumer).
+  const opts = (repositoryId: string) => ({ repositoryId, resolveMergeable: false });
+
   afterEach(async () => {
     _resetWebhookIndex();
     _resetCoalesce();
@@ -131,32 +149,28 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       1_000,
     );
     expect(n).toBe(2);
-    // pull_request is not a check event → onlyIfTracked false; webhook refreshes
-    // never block on mergeable → resolveMergeable false.
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
+    // pull_request is not a check event → not pre-filtered; webhook always passes
+    // the index-resolved repositoryId + resolveMergeable:false.
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, opts('rB'));
   });
 
-  it('passes onlyIfTracked for high-volume check events (skip-untracked-before-fetch)', async () => {
-    // check_run/check_suite fan in for every open PR; refreshPr must be told to
-    // bail before the GraphQL fetch unless the PR is already tracked.
-    await processWebhookDelivery(
+  it('refreshes a check event only for PRs the workspace already tracks', async () => {
+    // A single check_run lists a tracked PR (7) and an untracked one (8). The
+    // filterTrackedOpen pre-filter must drop 8 (no fetch) and dispatch only 7.
+    await seedTrackedPr('rA', 'wsA', 7);
+    const n = await processWebhookDelivery(
       delivery({
         eventType: 'check_run',
-        payload: { check_run: { pull_requests: [{ number: 7 }] } },
+        payload: { check_run: { pull_requests: [{ number: 7 }, { number: 8 }] } },
       }),
       1_000,
     );
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, {
-      onlyIfTracked: true,
-      resolveMergeable: false,
-    });
+    // Only wsA tracks #7; wsB tracks neither.
+    expect(n).toBe(1);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+    expect(refreshSpy).not.toHaveBeenCalledWith('wsA', 'acme', 'widget', 8, opts('rA'));
   });
 
   it('dispatches the real PostHog/posthog#64026 merge delivery to refreshPr', async () => {
@@ -204,13 +218,14 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     );
 
     expect(n).toBe(1);
-    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
+    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026, opts('rPH'));
   });
 
   it('coalesces a burst for the same (workspace, PR) within the window', async () => {
+    // PR 7 is tracked in both workspaces so the follow-up check_run survives the
+    // tracked-only filter and actually exercises the coalescing window.
+    await seedTrackedPr('rA', 'wsA', 7);
+    await seedTrackedPr('rB', 'wsB', 7);
     await processWebhookDelivery(delivery({ payload: { pull_request: { number: 7 } } }), 1_000);
     refreshSpy.mockClear();
     // Same PR, 100ms later — inside the 750ms window → dropped.
@@ -265,19 +280,10 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(baseSpy).toHaveBeenCalledWith('wsA', 'rA', 'main');
     expect(baseSpy).toHaveBeenCalledWith('wsB', 'rB', 'main');
     expect(n).toBe(3); // 2 (wsA) + 1 (wsB)
-    // push is not a check event → onlyIfTracked false.
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9, {
-      onlyIfTracked: false,
-      resolveMergeable: false,
-    });
+    // push is not a check event → not pre-filtered; passes the index repo id.
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3, opts('rA'));
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4, opts('rA'));
+    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9, opts('rB'));
   });
 
   it('ignores a push to a non-branch ref (tags etc.)', async () => {
