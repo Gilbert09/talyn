@@ -436,14 +436,27 @@ export function PRDetailSheet({
         )}
         {view && (
           <div className="flex items-center justify-between gap-2 border-t pt-3">
-            {/* Left: the status (own PR) or review-decision (reviewer) pill. */}
+            {/* Left: the status (own PR) or review-decision (reviewer) pill.
+                For an own PR, mirror the list — a review pill (approval) PLUS a
+                status pill with `hideReviewState`, so the review verdict isn't
+                double-counted as "Review" in the status pill when the row is
+                already approved. */}
             {isOwnPr ? (
-              <PRStatusPill
-                blockingReason={view.row.summary.blockingReason}
-                checks={view.row.summary.checks}
-                mergeStateStatus={view.row.summary.mergeStateStatus}
-                state={view.row.state}
-              />
+              <div className="flex items-center gap-2">
+                <PRReviewPill
+                  reviewDecision={
+                    view.row.summary.effectiveReviewDecision ?? view.row.summary.reviewDecision
+                  }
+                  state={view.row.state}
+                />
+                <PRStatusPill
+                  blockingReason={view.row.summary.blockingReason}
+                  checks={view.row.summary.checks}
+                  mergeStateStatus={view.row.summary.mergeStateStatus}
+                  state={view.row.state}
+                  hideReviewState
+                />
+              </div>
             ) : (
               <PRReviewPill
                 reviewDecision={
