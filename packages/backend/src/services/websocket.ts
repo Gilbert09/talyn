@@ -48,7 +48,16 @@ function fanOutDebugEvent(event: DebugEvent): void {
   }
 }
 
-export function setupWebSocket(wss: WebSocketServer): void {
+/** How long a freshly-upgraded socket has to send its `auth` frame before we
+ *  close it. Generous so a backend under DB-connection pressure (the webhook
+ *  worker once starved WS auth) doesn't drop legitimate clients mid-handshake.
+ *  Injectable so tests can use a short window instead of waiting the full 10s. */
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+export function setupWebSocket(
+  wss: WebSocketServer,
+  handshakeTimeoutMs: number = DEFAULT_HANDSHAKE_TIMEOUT_MS
+): void {
   // Wire the debug bus to the live client fan-out + connection count. Kept
   // here (not in debugBus) so debugBus stays dependency-free.
   debugBus.setClientCounter(() => clients.size);
@@ -71,7 +80,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
         console.warn('WebSocket auth timeout; closing');
         ws.close(4401, 'auth timeout');
       }
-    }, 10_000);
+    }, handshakeTimeoutMs);
 
     ws.on('message', async (data: Buffer) => {
       let message: unknown;

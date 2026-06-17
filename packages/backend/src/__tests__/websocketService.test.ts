@@ -17,13 +17,18 @@ import { workspaces as workspacesTable } from '../db/schema.js';
 
 const OTHER_USER_ID = 'user-other';
 
+// Short handshake window so the "no auth in time" test closes promptly instead
+// of waiting the production 10s. Long enough that the authed clients in the
+// other tests comfortably send their `auth` frame first.
+const TEST_HANDSHAKE_TIMEOUT_MS = 300;
+
 async function makeWsServer(): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
   const server: Server = createServer();
   const wss = new WebSocketServer({ server, path: '/ws' });
-  setupWebSocket(wss);
+  setupWebSocket(wss, TEST_HANDSHAKE_TIMEOUT_MS);
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const addr = server.address() as AddressInfo;
@@ -136,18 +141,24 @@ describe('websocket service', () => {
 
   it('closes the socket when no auth arrives within the handshake window', async () => {
     const ws = new WSClient(serverUrl);
-    let closeCode = 0;
-    ws.on('close', (code) => {
-      closeCode = code;
-    });
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve());
       ws.once('error', reject);
     });
-    // Don't send auth. Wait past the 5s timeout.
-    await new Promise((r) => setTimeout(r, 5200));
-    expect(closeCode).toBe(4401);
-  }, 10_000);
+    // Don't send auth. Await the actual close event (rather than a fixed sleep)
+    // so a slow runner finishing the timer a beat late can't flake the assert.
+    const code = await new Promise<number>((resolve, reject) => {
+      const guard = setTimeout(
+        () => reject(new Error('socket did not close within the handshake window')),
+        TEST_HANDSHAKE_TIMEOUT_MS + 2000
+      );
+      ws.on('close', (c) => {
+        clearTimeout(guard);
+        resolve(c);
+      });
+    });
+    expect(code).toBe(4401);
+  });
 
   it('closes the socket when the first frame is not an auth message', async () => {
     const ws = new WSClient(serverUrl);
