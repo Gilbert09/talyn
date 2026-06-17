@@ -852,6 +852,70 @@ class PRMonitorService extends EventEmitter {
   }
 
   /**
+   * Patch metadata fields on the matching tracked OPEN PR rows directly from a
+   * webhook payload — NO GitHub fetch. For `pull_request` actions whose only
+   * effect is a field we already persist verbatim (title, draft) and that feeds
+   * no derived/aggregate state (mergeability, review decision, checks), a full
+   * `refreshPr` is wasted work; we `jsonb_set` just the changed key(s) and
+   * broadcast the partial so the desktop merges it live.
+   *
+   * Updates every workspace's row for `(repo, number)` via the resolved targets,
+   * never reads the `last_summary` blob back (chained `jsonb_set`), and returns
+   * the number of rows patched.
+   */
+  async patchOpenPrSummary(
+    targets: Array<{ repositoryId: string }>,
+    number: number,
+    patch: { title?: string; draft?: boolean }
+  ): Promise<number> {
+    const repoIds = [...new Set(targets.map((t) => t.repositoryId))];
+    if (repoIds.length === 0) return 0;
+    let expr = sql`${pullRequestsTable.lastSummary}`;
+    if (patch.title !== undefined)
+      expr = sql`jsonb_set(${expr}, '{title}', ${JSON.stringify(patch.title)}::jsonb)`;
+    if (patch.draft !== undefined)
+      expr = sql`jsonb_set(${expr}, '{draft}', ${JSON.stringify(patch.draft)}::jsonb)`;
+    if (patch.title === undefined && patch.draft === undefined) return 0;
+
+    const rows = await this.db
+      .update(pullRequestsTable)
+      .set({ lastSummary: expr, updatedAt: new Date() })
+      .where(
+        and(
+          inArray(pullRequestsTable.repositoryId, repoIds),
+          eq(pullRequestsTable.number, number),
+          eq(pullRequestsTable.state, 'open')
+        )
+      )
+      .returning({
+        id: pullRequestsTable.id,
+        workspaceId: pullRequestsTable.workspaceId,
+        repositoryId: pullRequestsTable.repositoryId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+        taskId: pullRequestsTable.taskId,
+      });
+
+    const partial: Record<string, unknown> = {};
+    if (patch.title !== undefined) partial.title = patch.title;
+    if (patch.draft !== undefined) partial.draft = patch.draft;
+    for (const row of rows) {
+      emitPullRequestUpdated(row.workspaceId, {
+        id: row.id,
+        taskId: row.taskId,
+        repositoryId: row.repositoryId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+        state: 'open',
+        lastSummary: partial,
+      });
+    }
+    return rows.length;
+  }
+
+  /**
    * Open PR numbers in a repo whose BASE branch is `baseBranch`. Used by the
    * `push` webhook handler: when a branch advances, every open PR targeting it
    * may have just become (un)conflicting, and GitHub sends no per-PR event.

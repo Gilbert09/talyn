@@ -261,6 +261,11 @@ export async function processWebhookDelivery(
   // alongside the normal refresh below, which still materialises the PR row.
   if (delivery.eventType === 'pull_request') {
     await pruneOnPullRequest(delivery).catch(() => undefined);
+    // Metadata-only actions (label/title/draft) change a field we persist
+    // verbatim, or nothing at all — patch it from the payload and skip the
+    // ~1-2s refreshPr. `null` = "needs the full refresh" (falls through below).
+    const handled = await tryIncrementalPrMetadata(delivery, targets, numbers);
+    if (handled !== null) return handled;
   }
 
   // Everything else (pull_request actions, reviews, comments): a full refresh
@@ -287,6 +292,67 @@ async function pruneOnPullRequest(delivery: WebhookDelivery): Promise<void> {
   } else if (delivery.action === 'synchronize') {
     const before = delivery.payload.before;
     if (typeof before === 'string') await pruneChecksForSha(delivery.repoFullName, before);
+  }
+}
+
+/**
+ * Handle `pull_request` actions whose effect is fully contained in the payload —
+ * a persisted field we copy verbatim (title, draft) or nothing we track at all
+ * (labels) — without a GitHub fetch. Returns the rows-updated count when handled,
+ * or `null` to signal "this action needs the full `refreshPr`".
+ *
+ * Deliberately NOT shortcut (→ refreshPr): `opened`/`reopened`/`synchronize`
+ * (new/changed head → checks + mergeability), `closed`/merged (flows through the
+ * cursor/delta + merge-queue path), `review_requested*` (recomputes the
+ * viewer-relative `reviewRequestVia`), and `edited` that changed the base branch
+ * (mergeability). Validated against `summaryToJsonb`: labels aren't persisted and
+ * `draft`/`title` feed no derived field (mergeable/reviewDecision/blockingReason).
+ */
+async function tryIncrementalPrMetadata(
+  delivery: WebhookDelivery,
+  targets: Array<{ repositoryId: string }>,
+  numbers: number[],
+): Promise<number | null> {
+  const action = delivery.action;
+  const pr = delivery.payload.pull_request as { title?: string; draft?: boolean } | undefined;
+  const changes = delivery.payload.changes as Record<string, unknown> | undefined;
+
+  const patchAll = async (patch: { title?: string; draft?: boolean }): Promise<number> => {
+    let n = 0;
+    for (const number of numbers) n += await prMonitorService.patchOpenPrSummary(targets, number, patch);
+    return n;
+  };
+
+  switch (action) {
+    case 'labeled':
+    case 'unlabeled':
+      // Labels are neither persisted nor read by any FastOwl logic — no-op.
+      whTrace(`  pull_request/${action} ${delivery.repoFullName}: labels not tracked — no refresh`);
+      return 0;
+    case 'edited': {
+      // A base-branch edit changes mergeability → needs the full refresh.
+      if (changes?.base !== undefined) return null;
+      // Only a title change touches a persisted field; a body-only edit is a no-op.
+      if (changes?.title === undefined) {
+        whTrace(`  pull_request/edited ${delivery.repoFullName}: no title/base change — no refresh`);
+        return 0;
+      }
+      if (typeof pr?.title !== 'string') return null;
+      const n = await patchAll({ title: pr.title });
+      whTrace(`  pull_request/edited ${delivery.repoFullName}: title patched → ${n} row(s) (no refresh)`);
+      return n;
+    }
+    case 'ready_for_review':
+    case 'converted_to_draft': {
+      if (typeof pr?.draft !== 'boolean') return null;
+      const n = await patchAll({ draft: pr.draft });
+      whTrace(
+        `  pull_request/${action} ${delivery.repoFullName}: draft=${pr.draft} patched → ${n} row(s) (no refresh)`,
+      );
+      return n;
+    }
+    default:
+      return null; // opened / reopened / synchronize / closed / review_requested / …
   }
 }
 

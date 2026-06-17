@@ -175,6 +175,76 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, opts('rB'));
   });
 
+  // Read the cached summary of the seeded PR row.
+  const summaryOf = async (id = 'pr-rA-7') => {
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, id));
+    return rows[0]?.ls as Record<string, unknown>;
+  };
+
+  it('patches title from a pull_request/edited (title) without a refreshPr', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const n = await processWebhookDelivery(
+      delivery({
+        action: 'edited',
+        payload: {
+          pull_request: { number: 7, title: 'Renamed PR' },
+          changes: { title: { from: 'Old title' } },
+        },
+      }),
+      1_000,
+    );
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(n).toBe(1);
+    expect((await summaryOf()).title).toBe('Renamed PR');
+  });
+
+  it('patches draft on ready_for_review / converted_to_draft without a refreshPr', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    await processWebhookDelivery(
+      delivery({ action: 'converted_to_draft', payload: { pull_request: { number: 7, draft: true } } }),
+      1_000,
+    );
+    expect((await summaryOf()).draft).toBe(true);
+    await processWebhookDelivery(
+      delivery({ action: 'ready_for_review', payload: { pull_request: { number: 7, draft: false } } }),
+      1_000,
+    );
+    expect((await summaryOf()).draft).toBe(false);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('treats labeled/unlabeled as a no-op (labels are not tracked)', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const before = await summaryOf();
+    const n = await processWebhookDelivery(
+      delivery({ action: 'labeled', payload: { pull_request: { number: 7 }, label: { name: 'bug' } } }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(await summaryOf()).toEqual(before); // untouched
+  });
+
+  it('still does a full refreshPr when an edited delivery changed the base branch', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const n = await processWebhookDelivery(
+      delivery({
+        action: 'edited',
+        payload: {
+          pull_request: { number: 7, title: 'x' },
+          changes: { base: { ref: { from: 'main' } } },
+        },
+      }),
+      1_000,
+    );
+    // base change affects mergeability → must refetch, not patch.
+    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+    expect(n).toBeGreaterThanOrEqual(1);
+  });
+
   it('buffers a check_run into the coalescer, then flushes incremental counts (not refreshPr)', async () => {
     // A tracked PR (7) on head sha-1 + an untracked one (8). check_run is BUFFERED
     // (returns 0 — accounted at flush), then a flush updates counts incrementally
