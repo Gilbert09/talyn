@@ -228,28 +228,18 @@ export async function processWebhookDelivery(
       );
       return 0;
     });
-    if (updated > 0) {
-      whTrace(
-        `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
-      );
-      return updated;
-    }
-    // Incremental applied to nothing even though we track PR(s) on this check —
-    // the row is an unmaterialised placeholder (e.g. a just-opened cloud-task PR,
-    // title still empty) or its cached headSha is stale. Fall back to a full
-    // refresh to backfill the summary + head; subsequent checks then go
-    // incremental. Coalesced, so this is at most one refresh per stale PR.
-    let dispatched = 0;
-    for (const target of targets) {
-      for (const number of trackedByRepo.get(target.repositoryId) ?? []) {
-        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'check_run');
-      }
-    }
+    // NB: NO full-refresh fallback when incremental applies to nothing. A
+    // check_run whose head_sha ≠ the PR's head (very common — GitHub runs many
+    // checks on a *merge commit*) isn't in the PR head's statusCheckRollup
+    // anyway, so a refresh would add nothing — but each ~2s refreshPr, batched
+    // via Promise.all, dragged every batch to seconds and capped throughput so
+    // the firehose never drained (and merges sat in the backlog). A genuinely
+    // stale head is corrected by the PR's own pull_request/synchronize event and
+    // the reconcile sweep. So check_run is always cheap: incremental or a no-op.
     whTrace(
-      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → 0 incremental; ` +
-        `${dispatched} stale/placeholder PR(s) → full-refresh fallback`,
+      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
     );
-    return dispatched;
+    return updated;
   }
 
   // A PR closing/merging or force-pushing makes its per-check state irrelevant —

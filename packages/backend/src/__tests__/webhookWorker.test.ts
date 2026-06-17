@@ -194,10 +194,12 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     });
   });
 
-  it('falls back to a full refresh when the tracked PR row is stale/placeholder', async () => {
-    // The row's cached head is sha-OLD but the check is on sha-NEW (or the row is
-    // an unmaterialised placeholder) → incremental applies to nothing → fall back
-    // to refreshPr to backfill the summary + head.
+  it('does NOT refresh on a head-sha mismatch (no fallback — keeps the worker fast)', async () => {
+    // The check is on sha-NEW but the row's cached head is sha-OLD (e.g. a check
+    // that ran on a merge commit, which isn't in the PR head's rollup anyway).
+    // Incremental applies to nothing and we must NOT fall back to a ~2s refreshPr
+    // — that gated the batch and capped throughput. The PR's own synchronize
+    // event + the sweep correct a genuinely stale head.
     await seedTrackedPr('rA', 'wsA', 7, 'sha-OLD');
     const n = await processWebhookDelivery(
       delivery({
@@ -216,8 +218,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       }),
       1_000,
     );
-    expect(n).toBe(1);
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+    expect(n).toBe(0);
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it('treats check_suite as a no-op (counts come from check_run)', async () => {
