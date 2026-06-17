@@ -74,6 +74,16 @@ export function usePullRequestSync(): void {
       setLoading(false);
       return;
     }
+    // Just finished onboarding: the freshly-watched repos haven't been polled
+    // yet, so a plain cached list would land the user on an empty state. Force
+    // a real GitHub poll instead (refreshPullRequests keeps `loading` true
+    // throughout) so their PRs populate immediately. One-shot — clear the flag.
+    const { justOnboarded, setJustOnboarded } = useWorkspaceStore.getState();
+    if (justOnboarded) {
+      setJustOnboarded(false);
+      void refreshPullRequests();
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);

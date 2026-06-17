@@ -24,7 +24,8 @@ const STEPS = [
  * App in place of MainLayout until `onboardingComplete` flips true.
  */
 export function OnboardingWizard() {
-  const { currentWorkspaceId, repositories, setOnboardingComplete } = useWorkspaceStore();
+  const { currentWorkspaceId, repositories, setOnboardingComplete, setJustOnboarded } =
+    useWorkspaceStore();
   const { status, user } = useGithubConnection(currentWorkspaceId);
   const [step, setStep] = useState(0);
 
@@ -45,6 +46,9 @@ export function OnboardingWizard() {
         github_connected: githubConnected,
         repos_watched: repositories.length,
       });
+      // Tell the PR sync to force a real poll on first entry (the repos were
+      // only just watched, so the cache is empty) — see usePullRequestSync.
+      setJustOnboarded(true);
       setOnboardingComplete(true);
       return;
     }

@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import type { Workspace, Environment, Task } from '@fastowl/shared';
-import type { GitHubStatus, GitHubUser, PostHogCodeStatus, CloudProviderInfo } from '../lib/api';
+import type {
+  GitHubStatus,
+  GitHubUser,
+  GitHubInstallation,
+  PostHogCodeStatus,
+  CloudProviderInfo,
+} from '../lib/api';
 
 /** Settings sub-sections — kept in the store so other surfaces (the sidebar
  *  provider status, the per-task "Set default" action) can deep-link into a
@@ -133,11 +139,22 @@ interface WorkspaceState {
   // First-run onboarding gate. When false, App renders the OnboardingWizard
   // instead of MainLayout.
   onboardingComplete: boolean;
+  // One-shot flag set when the user finishes the wizard (not on the returning-
+  // user migration path). The freshly-watched repos haven't been polled yet, so
+  // usePullRequestSync consumes this to force a real GitHub poll on first entry
+  // instead of a cached list that would land them on an empty state. Transient
+  // (never persisted) — cleared immediately after it's consumed.
+  justOnboarded: boolean;
   // Integration connection state for the current workspace, preloaded at
   // startup (useSystemStatus) so Settings → Integrations renders instantly
   // instead of fetching on open. null = not yet checked.
   githubStatus: GitHubStatus | null;
   githubUser: GitHubUser | null;
+  // GitHub App installations the connected user can access (one per account/org).
+  // Preloaded by useSystemStatus and kept fresh on focus, so the global banner +
+  // Settings can tell which watched repos lack an active App install. null = not
+  // yet checked (don't flash a "not installed" warning before the first load).
+  githubInstallations: GitHubInstallation[] | null;
   posthogStatus: PostHogCodeStatus | null;
   // Connected cloud providers for the current workspace, preloaded + kept fresh
   // by useSystemStatus (one source of truth, so the Settings cards, the default
@@ -154,8 +171,10 @@ interface WorkspaceState {
   addWorkspace: (workspace: Workspace) => void;
   setCreateWorkspaceOpen: (open: boolean) => void;
   setOnboardingComplete: (done: boolean) => void;
+  setJustOnboarded: (value: boolean) => void;
   setGitHubStatus: (status: GitHubStatus | null) => void;
   setGitHubUser: (user: GitHubUser | null) => void;
+  setGitHubInstallations: (installations: GitHubInstallation[] | null) => void;
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
   setSettingsSection: (section: SettingsSection) => void;
@@ -201,8 +220,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   theme: getInitialTheme(),
   createWorkspaceOpen: false,
   onboardingComplete: getInitialOnboardingComplete(),
+  justOnboarded: false,
   githubStatus: null,
   githubUser: null,
+  githubInstallations: null,
   posthogStatus: null,
   cloudProviders: null,
   settingsSection: 'workspace',
@@ -229,9 +250,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     set({ onboardingComplete: done });
   },
 
+  setJustOnboarded: (justOnboarded) => set({ justOnboarded }),
+
   setGitHubStatus: (githubStatus) => set({ githubStatus }),
 
   setGitHubUser: (githubUser) => set({ githubUser }),
+
+  setGitHubInstallations: (githubInstallations) => set({ githubInstallations }),
 
   setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
 
