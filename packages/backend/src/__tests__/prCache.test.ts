@@ -556,6 +556,59 @@ describe('prCache — DB integration', () => {
     });
   });
 
+  describe('upsertFromBatchResult — mergeable UNKNOWN preserve', () => {
+    async function summaryOf(number: number) {
+      const rows = await db
+        .select({ ls: pullRequestsTable.lastSummary })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.number, number));
+      return rows[0].ls as { mergeable: string; blockingReason: string };
+    }
+
+    it('keeps a known mergeable/blockingReason when a refresh comes back unknown', async () => {
+      // First: a known-mergeable PR.
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 5, mergeable: 'MERGEABLE', blockingReason: 'mergeable' }),
+      });
+      // A webhook refresh catches GitHub mid-recompute → UNKNOWN → blockingReason 'unknown'.
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 5, mergeable: 'UNKNOWN', blockingReason: 'unknown' }),
+      });
+      expect(await summaryOf(5)).toMatchObject({ mergeable: 'MERGEABLE', blockingReason: 'mergeable' });
+    });
+
+    it('writes a known new blocking-reason as-is (no preserve)', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 6, mergeable: 'MERGEABLE', blockingReason: 'mergeable' }),
+      });
+      // A real conflict — not 'unknown' — must overwrite.
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 6, mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }),
+      });
+      expect(await summaryOf(6)).toMatchObject({
+        mergeable: 'CONFLICTING',
+        blockingReason: 'merge_conflicts',
+      });
+    });
+
+    it('writes unknown on first insert (no prior to preserve)', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 7, mergeable: 'UNKNOWN', blockingReason: 'unknown' }),
+      });
+      expect(await summaryOf(7)).toMatchObject({ blockingReason: 'unknown' });
+    });
+  });
+
   describe('attachTaskToPullRequestRow', () => {
     async function seedTask(status = 'queued'): Promise<string> {
       const id = `task-${Math.random().toString(36).slice(2, 8)}`;

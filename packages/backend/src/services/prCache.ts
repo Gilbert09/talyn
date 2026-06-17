@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
@@ -561,8 +561,37 @@ async function upsertRow(
 ): Promise<string> {
   const now = new Date();
   const id = opts.existingId ?? uuid();
-  const lastSummary = summaryToJsonb(opts.summary);
-  const cursors = nextCursors(opts.summary);
+  // GitHub resets `mergeable` to UNKNOWN on any base-branch advance and
+  // recomputes it lazily; a webhook refresh (resolveMergeable:false) catches it
+  // mid-recompute and `computeBlockingReason` then yields 'unknown' — a "?" pill.
+  // Don't downgrade a known state: when the fresh summary is 'unknown' but we
+  // already have a known blocking-reason, keep the prior mergeable +
+  // blockingReason (the sweep, which resolves UNKNOWN, writes the real value
+  // within a tick). Reads two small scalars, never the blob. NB: blockingReason
+  // is only 'unknown' when nothing else blocks — a failing check yields
+  // 'checks_failed', not 'unknown' — so this can't mask a check regression.
+  let summary = opts.summary;
+  if (opts.existingId && summary.blockingReason === 'unknown') {
+    const prev = (
+      await db
+        .select({
+          mergeable: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'mergeable'`,
+          blockingReason: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'blockingReason'`,
+        })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, opts.existingId))
+        .limit(1)
+    )[0];
+    if (prev?.blockingReason && prev.blockingReason !== 'unknown') {
+      summary = {
+        ...summary,
+        mergeable: (prev.mergeable as PRSummary['mergeable']) ?? summary.mergeable,
+        blockingReason: prev.blockingReason as PRSummary['blockingReason'],
+      };
+    }
+  }
+  const lastSummary = summaryToJsonb(summary);
+  const cursors = nextCursors(summary);
   if (opts.existingId) {
     // Update path — leave taskId alone (set on first insert only).
     await db
