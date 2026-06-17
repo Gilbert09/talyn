@@ -163,26 +163,18 @@ export async function processWebhookDelivery(
     return 0;
   }
 
-  // A push to a branch advances it; every OPEN PR targeting that branch as its
-  // base may have just become (un)conflicting, and GitHub fires no per-PR event
-  // for that. Refresh each such PR (mergeability resolves inline in refreshPr).
+  // A push to a busy base branch (posthog merges to `master` constantly) would
+  // fan out to a full refreshPr for EVERY open PR on that base — dozens of ~1-2s
+  // GraphQL calls per push — which starves the worker and buries low-volume,
+  // high-value events (a PR merge) behind the backlog. And it couldn't do its
+  // job anyway: the refresh runs with resolveMergeable:false, so it only ever
+  // saw `mergeable: UNKNOWN` (GitHub recomputes lazily) and never detected the
+  // conflict it existed to catch. The 5-min reconcile sweep (resolveMergeable:
+  // true) is the authoritative base-advance conflict check; a PR's *own* push
+  // still fires `pull_request synchronize`. So skip push entirely.
   if (delivery.eventType === 'push') {
-    const ref = typeof delivery.payload.ref === 'string' ? delivery.payload.ref : '';
-    if (!ref.startsWith('refs/heads/')) return 0;
-    const branch = ref.slice('refs/heads/'.length);
-    let dispatched = 0;
-    for (const target of targets) {
-      const numbers = await prMonitorService
-        .openPrNumbersForBase(target.workspaceId, target.repositoryId, branch)
-        .catch(() => [] as number[]);
-      whTrace(
-        `  push ${delivery.repoFullName}@${branch} → open PRs on this base=[${numbers.join(',')}]`,
-      );
-      for (const number of numbers) {
-        dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'push');
-      }
-    }
-    return dispatched;
+    whTrace(`  push ${delivery.repoFullName}: skipped (sweep handles base-advance conflicts)`);
+    return 0;
   }
 
   if (!isRefreshEvent(delivery.eventType)) {

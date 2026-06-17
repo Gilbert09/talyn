@@ -324,24 +324,18 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 
-  it('on a push to a branch, refreshes every open PR based on that branch (per workspace)', async () => {
-    // wsA has 2 open PRs based on `main`, wsB has 1.
-    const baseSpy = vi
-      .spyOn(prMonitorService, 'openPrNumbersForBase')
-      .mockImplementation(async (workspaceId) => (workspaceId === 'wsA' ? [3, 4] : [9]));
-
+  it('skips a push to a base branch (no per-PR refresh — sweep handles conflicts)', async () => {
+    // A push to a busy base would fan out to a refresh per open PR — an expensive
+    // backlog source that buries merges and (with resolveMergeable:false) never
+    // detected conflicts anyway. It must now be a cheap no-op.
+    const baseSpy = vi.spyOn(prMonitorService, 'openPrNumbersForBase');
     const n = await processWebhookDelivery(
       delivery({ eventType: 'push', payload: { ref: 'refs/heads/main' } }),
       1_000,
     );
-
-    expect(baseSpy).toHaveBeenCalledWith('wsA', 'rA', 'main');
-    expect(baseSpy).toHaveBeenCalledWith('wsB', 'rB', 'main');
-    expect(n).toBe(3); // 2 (wsA) + 1 (wsB)
-    // push is not a check event → not pre-filtered; passes the index repo id.
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 3, opts('rA'));
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 4, opts('rA'));
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 9, opts('rB'));
+    expect(n).toBe(0);
+    expect(baseSpy).not.toHaveBeenCalled();
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it('ignores a push to a non-branch ref (tags etc.)', async () => {
