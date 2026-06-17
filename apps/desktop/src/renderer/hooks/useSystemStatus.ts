@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
+import { useGithubInstallations } from './useGithubInstallations';
 import { useOnReconnect } from './useOnReconnect';
 
 /**
@@ -29,6 +30,9 @@ export function useSystemStatus(): void {
   const setPostHogStatus = useWorkspaceStore((s) => s.setPostHogStatus);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
   const { status, user } = useGithubConnection(currentWorkspaceId);
+  // Load which orgs/accounts have the App installed (kept fresh on focus), so
+  // the banner + Settings can flag watched repos whose owner lacks an install.
+  useGithubInstallations(currentWorkspaceId, Boolean(status?.connected));
 
   useEffect(() => {
     setGitHubStatus(status);

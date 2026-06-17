@@ -147,6 +147,46 @@ describe('routes/github', () => {
     });
   });
 
+  describe('GET /api/v1/github/installations', () => {
+    it('401s unauthenticated', async () => {
+      const res = await fetch(`${serverUrl}/api/v1/github/installations?workspaceId=ws1`);
+      expect(res.status).toBe(401);
+    });
+
+    it('404s a workspace the caller does not own', async () => {
+      const res = await fetch(`${serverUrl}/api/v1/github/installations?workspaceId=ws2`, {
+        headers: authHeaders,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns the installations for an owned workspace', async () => {
+      const spy = vi.spyOn(githubService, 'listInstallations').mockResolvedValue([
+        {
+          accountLogin: 'acme',
+          accountType: 'Organization',
+          suspended: false,
+          repositorySelection: 'all',
+        },
+      ]);
+      const res = await fetch(`${serverUrl}/api/v1/github/installations?workspaceId=ws1`, {
+        headers: authHeaders,
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data).toEqual([
+        {
+          accountLogin: 'acme',
+          accountType: 'Organization',
+          suspended: false,
+          repositorySelection: 'all',
+        },
+      ]);
+      expect(spy).toHaveBeenCalledWith('ws1');
+    });
+  });
+
   describe('GET /github/app/callback', () => {
     it('400s (HTML page) on an error query param', async () => {
       const res = await fetch(

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Github, Loader2, Settings } from 'lucide-react';
+import { AlertTriangle, Github, Loader2, Plus, Settings } from 'lucide-react';
 import { Button } from '../ui/button';
-import { api } from '../../lib/api';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { openGithubAppFlow, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
 
 /** One warning row in the global banner. */
 function BannerRow({ message, action }: { message: string; action?: React.ReactNode }) {
@@ -22,25 +22,34 @@ function BannerRow({ message, action }: { message: string; action?: React.ReactN
  * extended: push more rows as other core services gain hard requirements.
  */
 export function SystemStatusBanner() {
-  const { currentWorkspaceId, githubStatus, setActivePanel } = useWorkspaceStore();
+  const { currentWorkspaceId, githubStatus, githubInstallations, repositories, setActivePanel } =
+    useWorkspaceStore();
   const [connecting, setConnecting] = useState(false);
+  const [installing, setInstalling] = useState(false);
 
   async function handleConnect() {
     if (!currentWorkspaceId) return;
     setConnecting(true);
     try {
-      const { installUrl } = await api.github.installViaApp(currentWorkspaceId);
       // The GitHub App install runs in the system browser; useSystemStatus
       // re-checks on focus when the user returns, which clears this banner.
-      if (window.electron?.auth?.openExternal) {
-        await window.electron.auth.openExternal(installUrl);
-      } else {
-        window.open(installUrl, '_blank');
-      }
+      await openGithubAppFlow(currentWorkspaceId, 'connect');
     } catch {
       // Nothing to do — the banner persists until the connection succeeds.
     } finally {
       setConnecting(false);
+    }
+  }
+
+  async function handleInstallApp() {
+    if (!currentWorkspaceId) return;
+    setInstalling(true);
+    try {
+      await openGithubAppFlow(currentWorkspaceId, 'manage');
+    } catch {
+      // Banner persists until the install lands + the focus re-check runs.
+    } finally {
+      setInstalling(false);
     }
   }
 
@@ -84,6 +93,48 @@ export function SystemStatusBanner() {
         />
       )
     );
+  }
+
+  // App-installation coverage — only meaningful once GitHub is connected and the
+  // installation list has actually loaded (null = not checked). A watched repo
+  // whose owner has no active install is silently never tracked, so surface it.
+  if (currentWorkspaceId && githubStatus?.connected && githubInstallations) {
+    const uncovered = uncoveredOwners(
+      repositories.map((r) => r.owner),
+      githubInstallations
+    );
+    if (uncovered.length > 0) {
+      rows.push(
+        <BannerRow
+          key="gh-app-uncovered"
+          message={`The FastOwl GitHub App isn't installed on ${formatOwnerList(
+            uncovered
+          )} — watched repos there aren't being tracked until you install it.`}
+          action={
+            <>
+              <Button size="sm" onClick={handleInstallApp} disabled={installing}>
+                {installing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Plus className="mr-1 h-4 w-4" />
+                    Install app
+                  </>
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setActivePanel('settings')}
+                title="GitHub settings"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            </>
+          }
+        />
+      );
+    }
   }
 
   if (rows.length === 0) return null;

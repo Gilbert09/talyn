@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import { AlertCircle, Check, Github, Loader2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
-import { api, type GitHubStatus, type GitHubUser } from '../../../lib/api';
+import { type GitHubStatus, type GitHubUser } from '../../../lib/api';
+import { useGithubInstallations } from '../../../hooks/useGithubInstallations';
+import { openGithubAppFlow } from '../../../lib/githubInstall';
+import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
 
 interface ConnectGitHubStepProps {
   workspaceId: string | null;
@@ -21,18 +24,17 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
 
   const connected = Boolean(status?.connected);
   const configured = status?.configured !== false;
+  const { installations, checked, loading, refresh } = useGithubInstallations(
+    workspaceId,
+    connected
+  );
 
   async function handleConnect() {
     if (!workspaceId) return;
     setConnecting(true);
     setError(null);
     try {
-      const { installUrl } = await api.github.installViaApp(workspaceId);
-      if (window.electron?.auth?.openExternal) {
-        await window.electron.auth.openExternal(installUrl);
-      } else {
-        window.open(installUrl, '_blank');
-      }
+      await openGithubAppFlow(workspaceId, 'connect');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start the GitHub App install');
     } finally {
@@ -79,10 +81,22 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
         )}
       </div>
 
+      {connected && workspaceId && (
+        <GithubInstallStatus
+          workspaceId={workspaceId}
+          installations={installations}
+          checked={checked}
+          loading={loading}
+          onRefresh={refresh}
+          showAddAccount
+        />
+      )}
+
       {!connected && (
         <p className="text-xs text-muted-foreground">
           After authorizing in your browser, return to this window — the connection is
-          detected automatically.
+          detected automatically. You’ll choose which org or account to install the
+          FastOwl app on as part of that flow.
         </p>
       )}
 

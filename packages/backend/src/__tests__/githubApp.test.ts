@@ -259,21 +259,53 @@ describe('buildUserAuthUrl', () => {
 });
 
 describe('fetchUserInstallations', () => {
-  it('returns every installation the user can access', async () => {
+  it('returns every installation the user can access, with suspension + repo selection', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockFetchOnce({
         total_count: 2,
         installations: [
-          { id: 111, account: { login: 'acme', type: 'Organization' } },
-          { id: 222, account: { login: 'octocat', type: 'User' } },
+          {
+            id: 111,
+            account: { login: 'acme', type: 'Organization' },
+            repository_selection: 'selected',
+          },
+          {
+            id: 222,
+            account: { login: 'octocat', type: 'User' },
+            suspended_at: '2026-06-01T00:00:00Z',
+            repository_selection: 'all',
+          },
         ],
       }),
     );
     const insts = await fetchUserInstallations('ghu_user');
     expect(insts).toEqual([
-      { installationId: '111', accountLogin: 'acme', accountType: 'Organization' },
-      { installationId: '222', accountLogin: 'octocat', accountType: 'User' },
+      {
+        installationId: '111',
+        accountLogin: 'acme',
+        accountType: 'Organization',
+        suspended: false,
+        repositorySelection: 'selected',
+      },
+      {
+        installationId: '222',
+        accountLogin: 'octocat',
+        accountType: 'User',
+        suspended: true,
+        repositorySelection: 'all',
+      },
     ]);
+  });
+
+  it('defaults repository selection to "all" when GitHub omits it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockFetchOnce({
+        total_count: 1,
+        installations: [{ id: 333, account: { login: 'solo', type: 'User' } }],
+      }),
+    );
+    const [inst] = await fetchUserInstallations('ghu_user');
+    expect(inst).toMatchObject({ suspended: false, repositorySelection: 'all' });
   });
 
   it('returns an empty list when the user has no installations', async () => {

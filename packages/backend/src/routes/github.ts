@@ -339,10 +339,26 @@ export function githubRoutes(): Router {
       expiresAt: Date.now() + 10 * 60 * 1000,
     });
     try {
-      // The user-authorization URL (not /installations/new): it always runs the
-      // OAuth authorize → callback, whether or not the App is already installed.
+      // Two URLs, same single-use state:
+      //  - installUrl: the user-authorization URL — always runs OAuth authorize →
+      //    callback, whether or not the App is already installed. Used by Connect.
+      //  - manageUrl: the App's installations/new page — where the user picks an
+      //    account/org to install on (or adds repos to an existing install). Used
+      //    by "install on another org" once already connected. With OAuth-on-
+      //    install enabled it returns through the same callback, so completing it
+      //    re-discovers every installation (including the new org).
       const installUrl = buildUserAuthUrl(`${workspaceId}:${state}`);
-      res.json({ success: true, data: { installUrl, state } });
+      // manageUrl needs the App slug; if it's unconfigured, fall back to the
+      // generic installations page (no state — the install is still recorded via
+      // the `installation` webhook) rather than failing the whole request and
+      // breaking the connect button, which only needs installUrl.
+      let manageUrl: string;
+      try {
+        manageUrl = buildInstallUrl(`${workspaceId}:${state}`);
+      } catch {
+        manageUrl = appInstallationsPageUrl();
+      }
+      res.json({ success: true, data: { installUrl, manageUrl, state } });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(400).json({ success: false, error: message });
@@ -362,6 +378,21 @@ export function githubRoutes(): Router {
     try {
       const user = await githubService.getUser(workspaceId);
       res.json({ success: true, data: user });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  // The GitHub App installations the connected user can access (one per
+  // account/org). Drives the desktop's "is the App installed on this org?"
+  // coverage banners + repo-picker hints.
+  router.get('/installations', async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res);
+    if (!workspaceId) return;
+    try {
+      const installations = await githubService.listInstallations(workspaceId);
+      res.json({ success: true, data: installations });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(400).json({ success: false, error: message });

@@ -6,6 +6,9 @@ import { Badge } from '../../ui/badge';
 import { api, type GitHubRepo } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useWorkspaceActions } from '../../../hooks/useApi';
+import { useGithubInstallations } from '../../../hooks/useGithubInstallations';
+import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
+import { isOwnerCovered } from '../../../lib/githubInstall';
 import {
   REPO_CACHE_TTL_MS,
   readRepoCache,
@@ -28,6 +31,8 @@ interface WatchReposStepProps {
 export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const { repositories, setRepositories } = useWorkspaceStore();
   const { refreshWorkspaces } = useWorkspaceActions();
+  // Reaching this step means GitHub is connected (the wizard gates Next on it).
+  const { installations, checked, loading, refresh } = useGithubInstallations(workspaceId, true);
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
@@ -110,6 +115,11 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
               <div className="flex min-w-0 items-center gap-2">
                 <Github className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="truncate text-sm">{repo.fullName}</span>
+                {checked && !isOwnerCovered(repo.owner, installations) && (
+                  <Badge variant="warning" className="shrink-0 text-xs">
+                    App not installed
+                  </Badge>
+                )}
               </div>
               <Button
                 variant="ghost"
@@ -124,6 +134,15 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           ))}
         </div>
       )}
+
+      <GithubInstallStatus
+        workspaceId={workspaceId}
+        installations={installations}
+        checked={checked}
+        loading={loading}
+        watchedOwners={repositories.map((r) => r.owner)}
+        onRefresh={refresh}
+      />
 
       <div className="flex items-center gap-2">
         <Input
@@ -162,11 +181,18 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
             >
               <Github className="h-4 w-4 text-muted-foreground" />
               <span>{repo.full_name}</span>
-              {repo.private && (
-                <Badge variant="outline" className="ml-auto text-xs">
-                  Private
-                </Badge>
-              )}
+              <span className="ml-auto flex items-center gap-1">
+                {checked && !isOwnerCovered(repo.owner.login, installations) && (
+                  <Badge variant="warning" className="text-xs">
+                    App not installed
+                  </Badge>
+                )}
+                {repo.private && (
+                  <Badge variant="outline" className="text-xs">
+                    Private
+                  </Badge>
+                )}
+              </span>
             </button>
           ))}
         </div>

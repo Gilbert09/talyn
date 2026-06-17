@@ -188,6 +188,15 @@ export interface GitHubRepo {
   };
 }
 
+// One GitHub App installation the connected user can access (per account/org).
+// Drives the "is the FastOwl app installed on this org?" coverage UI.
+export interface GitHubInstallation {
+  accountLogin: string;
+  accountType: 'User' | 'Organization';
+  suspended: boolean;
+  repositorySelection: 'all' | 'selected';
+}
+
 // GitHub OAuth + repo discovery only. Every PR-management surface
 // (list / get / create / merge / review / comment) was removed in
 // Phase 7 — the new pull_requests client (see below) replaces the
@@ -198,17 +207,30 @@ export const github = {
     const query = workspaceId ? `?workspaceId=${workspaceId}` : '';
     return request<GitHubStatus>('GET', `/github/status${query}`);
   },
-  // GitHub App install flow (webhooks + hybrid auth). Returns a stateful
-  // install URL — open it in the browser; GitHub redirects back through
-  // /github/app/callback, which records the installation + user token.
+  // GitHub App install flow (webhooks + hybrid auth). Returns two stateful URLs
+  // sharing one single-use state — `installUrl` (OAuth authorize, used to first
+  // connect) and `manageUrl` (the installations/new page, used to install on
+  // another org or add repos once connected). Open one in the browser; GitHub
+  // redirects back through /github/app/callback, which records the installation
+  // + user token (and re-discovers every install).
   installViaApp: (workspaceId: string) =>
-    request<{ installUrl: string; state: string }>('POST', '/github/app/install-url', {
-      workspaceId,
-    }),
+    request<{ installUrl: string; manageUrl: string; state: string }>(
+      'POST',
+      '/github/app/install-url',
+      { workspaceId }
+    ),
   disconnect: (workspaceId: string) =>
     request<void>('POST', '/github/disconnect', { workspaceId }),
   getUser: (workspaceId: string) =>
     request<GitHubUser>('GET', `/github/user?workspaceId=${workspaceId}`),
+  // The GitHub App installations the connected user can access (one per
+  // account/org). A watched repo is only tracked if its owner has an active
+  // (non-suspended) installation here.
+  listInstallations: (workspaceId: string) =>
+    request<GitHubInstallation[]>(
+      'GET',
+      `/github/installations?workspaceId=${workspaceId}`
+    ),
   listRepos: (workspaceId: string) =>
     request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}`),
   // User's own repos + all their orgs' repos, merged. Expensive — the

@@ -28,6 +28,7 @@ import {
   InstallationUnavailableError,
   refreshUserToken,
   UserTokenRefreshError,
+  fetchUserInstallations,
 } from './githubApp.js';
 
 // Classic-OAuth-app credentials. Still read for the check-token (token-health)
@@ -257,6 +258,14 @@ interface ResolvedAuth {
   accessToken: string;
   kind: 'installation' | 'user';
   installationId?: string;
+}
+
+/** One GitHub App installation visible to the connected user (per account/org). */
+export interface GitHubInstallationInfo {
+  accountLogin: string;
+  accountType: 'User' | 'Organization';
+  suspended: boolean;
+  repositorySelection: 'all' | 'selected';
 }
 
 /** Result of GitHub's app-authenticated `POST /applications/{client_id}/token` check. */
@@ -788,6 +797,28 @@ class GitHubService extends EventEmitter {
     const token = this.tokens.get(workspaceId);
     if (!token) return { connected: false };
     return { connected: true, scopes: token.scope.split(' ').filter(Boolean) };
+  }
+
+  /**
+   * The GitHub App installations the connected user can access — one per
+   * account/org they installed FastOwl on. Drives the desktop's "is the App
+   * installed on this org?" coverage UI: a watched repo is only tracked if its
+   * owner has an active (non-suspended) installation here. Resolved live via the
+   * user-to-server token (the authoritative per-user view), so it reflects an
+   * install the user just added on GitHub without waiting for a webhook. Returns
+   * [] when the App isn't configured or the workspace isn't connected.
+   */
+  async listInstallations(workspaceId: string): Promise<GitHubInstallationInfo[]> {
+    if (!isGitHubAppConfigured()) return [];
+    const auth = await this.resolveAuth(workspaceId, { preferUser: true });
+    if (!auth) return [];
+    const installations = await fetchUserInstallations(auth.accessToken);
+    return installations.map((i) => ({
+      accountLogin: i.accountLogin,
+      accountType: i.accountType === 'Organization' ? 'Organization' : 'User',
+      suspended: i.suspended,
+      repositorySelection: i.repositorySelection,
+    }));
   }
 
   /**

@@ -39,6 +39,9 @@ import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
+import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
+import { useGithubInstallations } from '../../hooks/useGithubInstallations';
+import { isOwnerCovered } from '../../lib/githubInstall';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@fastowl/shared';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
@@ -245,6 +248,13 @@ function WorkspaceSettings() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
+  // App-installation coverage for the watched repos' orgs.
+  const {
+    installations,
+    checked: installsChecked,
+    loading: installsLoading,
+    refresh: refreshInstalls,
+  } = useGithubInstallations(currentWorkspaceId, githubConnected);
 
   // Fetch the full repo set from GitHub (user + all orgs) and cache it.
   // This is the expensive call, so it only runs on a cache miss/stale or
@@ -465,6 +475,11 @@ function WorkspaceSettings() {
                       <div className="flex items-center gap-2 min-w-0">
                         <Github className="w-4 h-4 text-muted-foreground shrink-0" />
                         <span className="text-sm truncate">{repo.fullName}</span>
+                        {installsChecked && !isOwnerCovered(repo.owner, installations) && (
+                          <Badge variant="warning" className="shrink-0 text-xs">
+                            App not installed
+                          </Badge>
+                        )}
                       </div>
                       <Button
                         variant="ghost"
@@ -478,6 +493,19 @@ function WorkspaceSettings() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {githubConnected && (
+              <div className="mb-3">
+                <GithubInstallStatus
+                  workspaceId={currentWorkspaceId ?? ''}
+                  installations={installations}
+                  checked={installsChecked}
+                  loading={installsLoading}
+                  watchedOwners={watchedRepos.map((r) => r.owner)}
+                  onRefresh={refreshInstalls}
+                />
               </div>
             )}
 
@@ -525,9 +553,14 @@ function WorkspaceSettings() {
                       >
                         <Github className="w-4 h-4 text-muted-foreground" />
                         <span>{repo.full_name}</span>
-                        {repo.private && (
-                          <Badge variant="outline" className="ml-auto text-xs">Private</Badge>
-                        )}
+                        <span className="ml-auto flex items-center gap-1">
+                          {installsChecked && !isOwnerCovered(repo.owner.login, installations) && (
+                            <Badge variant="warning" className="text-xs">App not installed</Badge>
+                          )}
+                          {repo.private && (
+                            <Badge variant="outline" className="text-xs">Private</Badge>
+                          )}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -649,6 +682,12 @@ function IntegrationsSettings() {
   const githubUser = useWorkspaceStore((s) => s.githubUser);
   const setGitHubStatus = useWorkspaceStore((s) => s.setGitHubStatus);
   const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
+  const {
+    installations,
+    checked: installsChecked,
+    loading: installsLoading,
+    refresh: refreshInstalls,
+  } = useGithubInstallations(currentWorkspaceId, Boolean(githubStatus?.connected));
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -795,6 +834,19 @@ function IntegrationsSettings() {
               </Button>
             )}
           </div>
+
+          {githubStatus?.connected && currentWorkspaceId && (
+            <div className="mt-4 border-t pt-4">
+              <GithubInstallStatus
+                workspaceId={currentWorkspaceId}
+                installations={installations}
+                checked={installsChecked}
+                loading={installsLoading}
+                onRefresh={refreshInstalls}
+                showAddAccount
+              />
+            </div>
+          )}
         </Card>
 
       </div>
@@ -1765,6 +1817,16 @@ function MCPServerSettings() {
   );
 }
 
+const REPO_URL = 'https://github.com/Gilbert09/owl';
+
+function openRepo() {
+  if (window.electron?.auth?.openExternal) {
+    void window.electron.auth.openExternal(REPO_URL);
+  } else {
+    window.open(REPO_URL, '_blank');
+  }
+}
+
 function AboutSettings() {
   const [version, setVersion] = useState<string | null>(null);
   const [status, setStatus] = useState<UpdaterEvent | null>(null);
@@ -1878,6 +1940,17 @@ function AboutSettings() {
             {statusText}
           </p>
         )}
+
+        <div className="border-t pt-3">
+          <button
+            type="button"
+            onClick={openRepo}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Github className="w-4 h-4" />
+            View source on GitHub
+          </button>
+        </div>
       </Card>
     </div>
   );

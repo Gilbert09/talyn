@@ -414,6 +414,10 @@ export interface UserInstallationSummary {
   installationId: string;
   accountLogin: string;
   accountType: string;
+  /** True when GitHub has suspended the install (no token can be minted for it). */
+  suspended: boolean;
+  /** Whether the App is scoped to all of the account's repos or a hand-picked set. */
+  repositorySelection: 'all' | 'selected';
 }
 
 /**
@@ -447,7 +451,12 @@ export async function fetchUserInstallations(userToken: string): Promise<UserIns
       throw new Error(`Failed to list user installations: ${response.statusText}`);
     }
     const data = JSON.parse(response.bodyText) as {
-      installations?: Array<{ id: number; account?: { login?: string; type?: string } }>;
+      installations?: Array<{
+        id: number;
+        account?: { login?: string; type?: string };
+        suspended_at?: string | null;
+        repository_selection?: string;
+      }>;
     };
     const insts = data.installations ?? [];
     for (const i of insts) {
@@ -455,6 +464,8 @@ export async function fetchUserInstallations(userToken: string): Promise<UserIns
         installationId: String(i.id),
         accountLogin: i.account?.login ?? 'unknown',
         accountType: i.account?.type ?? 'User',
+        suspended: Boolean(i.suspended_at),
+        repositorySelection: i.repository_selection === 'selected' ? 'selected' : 'all',
       });
     }
     if (insts.length < 100) break;
