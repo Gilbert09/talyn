@@ -508,6 +508,31 @@ export function DebugPanel() {
                 : ''}
             </span>
           </Tip>
+          <Tip
+            side="bottom"
+            content={
+              (snapshot?.webhookLagSlow?.samples ?? 0) === 0
+                ? 'PR-lane lag: enqueue→pickup for pull_request / review / comment deliveries, which run a bounded-concurrency refreshPr. No such deliveries processed yet.'
+                : `PR-lane lag (pull_request/review/comment → refreshPr) over the last ${snapshot?.webhookLagSlow?.samples} deliveries — median ${formatLag(snapshot?.webhookLagSlow?.medianMs ?? 0)}, worst ${formatLag(snapshot?.webhookLagSlow?.maxMs ?? 0)}, last processed ${ago(snapshot?.webhookLagSlow?.observedAt ?? null)}. This lane is capped (6 concurrent refreshes) so it never gates the check firehose; a rising figure here means the refresh pool is backed up under a PR/review burst.`
+            }
+          >
+            <span
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs',
+                (snapshot?.webhookLagSlow?.maxMs ?? 0) >= 60_000
+                  ? 'bg-red-500/15 text-red-300'
+                  : (snapshot?.webhookLagSlow?.maxMs ?? 0) >= 10_000
+                    ? 'bg-amber-500/15 text-amber-300'
+                    : 'bg-zinc-800/60 text-zinc-300'
+              )}
+            >
+              <Gauge className="h-3.5 w-3.5 text-violet-400" />
+              {formatLag(snapshot?.webhookLagSlow?.medianMs ?? 0)} PR lag
+              {(snapshot?.webhookLagSlow?.maxMs ?? 0) > (snapshot?.webhookLagSlow?.medianMs ?? 0)
+                ? ` (max ${formatLag(snapshot?.webhookLagSlow?.maxMs ?? 0)})`
+                : ''}
+            </span>
+          </Tip>
           {snapshot &&
             Object.entries(snapshot.counters).map(([cat, n]) => (
               <Tip

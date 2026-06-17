@@ -206,6 +206,31 @@ describe('recordDbQuery', () => {
       expect(debugBus.snapshot().webhookLag.samples).toBe(0);
       expect(debugBus.snapshot().webhookLag.observedAt).toBeNull();
     });
+
+    it('splits the slow (pull_request) lane into its own gauge, also feeding overall', () => {
+      const procLane = (latencyMs: number, lane: 'fast' | 'slow') =>
+        debugBus.recordWebhook({ action: 'processed', eventType: 'pull_request', ok: true, fanout: 1, latencyMs, lane });
+      procLane(50, 'fast'); // firehose only
+      procLane(4_000, 'slow'); // refreshPr lane
+      procLane(6_000, 'slow');
+      const snap = debugBus.snapshot();
+      // Overall counts every processed delivery (both lanes).
+      expect(snap.webhookLag.samples).toBe(3);
+      expect(snap.webhookLag.maxMs).toBe(6_000);
+      // Slow lane tracks only the refresh deliveries.
+      expect(snap.webhookLagSlow.samples).toBe(2);
+      expect(snap.webhookLagSlow.lastMs).toBe(6_000);
+      expect(snap.webhookLagSlow.maxMs).toBe(6_000);
+      expect(snap.webhookLagSlow.observedAt).not.toBeNull();
+    });
+
+    it('leaves the slow-lane gauge empty when only the fast lane runs', () => {
+      debugBus.recordWebhook({ action: 'processed', eventType: 'check_run', ok: true, fanout: 0, latencyMs: 20, lane: 'fast' });
+      const snap = debugBus.snapshot();
+      expect(snap.webhookLag.samples).toBe(1);
+      expect(snap.webhookLagSlow.samples).toBe(0);
+      expect(snap.webhookLagSlow.observedAt).toBeNull();
+    });
   });
 });
 

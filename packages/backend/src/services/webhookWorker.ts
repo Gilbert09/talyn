@@ -419,10 +419,10 @@ class WebhookWorker {
         // reading more when the slow lane is saturated.
         const fast = batch.filter((b) => !b.delivery || !isSlowEvent(b.delivery.eventType));
         const slow = batch.filter((b) => b.delivery && isSlowEvent(b.delivery.eventType));
-        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery)));
+        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast')));
         for (const b of slow) {
           await this.slowGate.acquire();
-          void this.handleEntry(b.id, b.delivery).finally(() => this.slowGate.release());
+          void this.handleEntry(b.id, b.delivery, 'slow').finally(() => this.slowGate.release());
         }
       } catch (err) {
         if (this.running) {
@@ -433,7 +433,11 @@ class WebhookWorker {
     }
   }
 
-  private async handleEntry(id: string, delivery: WebhookDelivery | null): Promise<void> {
+  private async handleEntry(
+    id: string,
+    delivery: WebhookDelivery | null,
+    lane: 'fast' | 'slow',
+  ): Promise<void> {
     const startedAt = Date.now();
     try {
       if (!delivery) throw new Error('unparseable delivery payload');
@@ -456,6 +460,7 @@ class WebhookWorker {
         ok: true,
         fanout,
         latencyMs: delivery.enqueuedAtMs ? startedAt - delivery.enqueuedAtMs : undefined,
+        lane,
         durationMs: Date.now() - startedAt,
       });
     } catch (err) {

@@ -87,9 +87,15 @@ class DebugBus {
   private dbRequestCount = 0;
   private dbEgressBytes = 0;
   // Rolling window of recent webhook enqueue→pickup latencies (ms), for the
-  // consumer-lag tile. Bounded ring — only the tail matters.
+  // consumer-lag tile. Bounded ring — only the tail matters. The worker runs two
+  // lanes (fast check_run/check_suite firehose vs the bounded refreshPr lane for
+  // pull_request/review/comment), so we keep a window per lane: `webhookLatencies`
+  // is the fast firehose; `webhookSlowLatencies` is how far behind the slow lane
+  // is once the firehose itself is caught up.
   private webhookLatencies: number[] = [];
+  private webhookSlowLatencies: number[] = [];
   private lastWebhookProcessedAt: string | null = null;
+  private lastWebhookSlowProcessedAt: string | null = null;
   private static readonly WEBHOOK_LAG_WINDOW = 50;
   private pollers = new Map<string, DebugPollerState>();
   private rateLimits = new Map<string, DebugRateLimitState>();
@@ -304,17 +310,29 @@ class DebugBus {
     fanout?: number;
     /** enqueue→pickup latency for a processed delivery. */
     latencyMs?: number;
+    /** Which worker lane processed it — splits the lag gauge by lane. */
+    lane?: 'fast' | 'slow';
     workspaceId?: string;
     error?: string;
   }): void {
     // Feed the consumer-lag gauge: how long this delivery waited between the
-    // receiver enqueuing it and the worker picking it up.
+    // receiver enqueuing it and the worker picking it up. The fast firehose feeds
+    // the overall gauge; the slow (refreshPr) lane also feeds its own so a
+    // backed-up refresh pool is visible even when the firehose is at zero.
     if (input.action === 'processed' && input.latencyMs !== undefined) {
-      this.webhookLatencies.push(Math.max(0, Math.round(input.latencyMs)));
+      const ms = Math.max(0, Math.round(input.latencyMs));
+      this.webhookLatencies.push(ms);
       if (this.webhookLatencies.length > DebugBus.WEBHOOK_LAG_WINDOW) {
         this.webhookLatencies.shift();
       }
       this.lastWebhookProcessedAt = new Date().toISOString();
+      if (input.lane === 'slow') {
+        this.webhookSlowLatencies.push(ms);
+        if (this.webhookSlowLatencies.length > DebugBus.WEBHOOK_LAG_WINDOW) {
+          this.webhookSlowLatencies.shift();
+        }
+        this.lastWebhookSlowProcessedAt = new Date().toISOString();
+      }
     }
     const verb = input.action === 'received' ? 'recv' : 'proc';
     // "pull_request.synchronize acme/widgets #7" — what the delivery was *for*.
@@ -488,23 +506,27 @@ class DebugBus {
       rateLimits,
       owners,
       dbStats: { requests: this.dbRequestCount, egressBytes: this.dbEgressBytes },
-      webhookLag: this.computeWebhookLag(),
+      webhookLag: this.computeWebhookLag(this.webhookLatencies, this.lastWebhookProcessedAt),
+      webhookLagSlow: this.computeWebhookLag(
+        this.webhookSlowLatencies,
+        this.lastWebhookSlowProcessedAt,
+      ),
     };
   }
 
-  /** Last / median / max enqueue→pickup lag over the recent sample window. */
-  private computeWebhookLag(): DebugWebhookLag {
-    const samples = this.webhookLatencies.length;
+  /** Last / median / max enqueue→pickup lag over a lane's recent sample window. */
+  private computeWebhookLag(latencies: number[], observedAt: string | null): DebugWebhookLag {
+    const samples = latencies.length;
     if (samples === 0) {
       return { lastMs: 0, medianMs: 0, maxMs: 0, samples: 0, observedAt: null };
     }
-    const sorted = [...this.webhookLatencies].sort((a, b) => a - b);
+    const sorted = [...latencies].sort((a, b) => a - b);
     return {
-      lastMs: this.webhookLatencies[this.webhookLatencies.length - 1],
+      lastMs: latencies[latencies.length - 1],
       medianMs: sorted[Math.floor(sorted.length / 2)],
       maxMs: sorted[sorted.length - 1],
       samples,
-      observedAt: this.lastWebhookProcessedAt,
+      observedAt,
     };
   }
 
@@ -522,7 +544,9 @@ class DebugBus {
     this.dbRequestCount = 0;
     this.dbEgressBytes = 0;
     this.webhookLatencies = [];
+    this.webhookSlowLatencies = [];
     this.lastWebhookProcessedAt = null;
+    this.lastWebhookSlowProcessedAt = null;
   }
 
   /** Test helper — drop all state including the poller registry. */

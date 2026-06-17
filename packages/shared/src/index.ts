@@ -474,8 +474,17 @@ export interface DebugSnapshot {
   owners: DebugOwner[];
   /** Cumulative Postgres query stats since the last clear. */
   dbStats: DebugDbStats;
-  /** Webhook consumer lag (enqueue→pickup) over recent processed deliveries. */
+  /**
+   * Webhook consumer lag (enqueue→pickup) over recent processed deliveries —
+   * dominated by the fast check_run/check_suite firehose.
+   */
   webhookLag: DebugWebhookLag;
+  /**
+   * Lag of the SLOW lane only: pull_request/review/comment deliveries, which run
+   * a bounded-concurrency `refreshPr`. Surfaces a backed-up refresh pool even
+   * when the firehose (`webhookLag`) is at zero.
+   */
+  webhookLagSlow: DebugWebhookLag;
 }
 
 /**
