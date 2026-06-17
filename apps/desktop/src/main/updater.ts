@@ -26,22 +26,18 @@ const INITIAL_CHECK_DELAY_MS = 10 * 1000;
 let checkTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Turn the raw electron-updater error into something a user can read. The common
- * one is a 404 on `latest-*.yml`: a GitHub release with a newer tag exists but
- * its artifacts haven't finished uploading yet (a Publish build still running),
- * or this platform has no artifact in that release. That's transient/benign —
- * don't dump the HttpError stack trace into the Settings panel.
+ * A 404 on `latest-*.yml` means a GitHub release with a newer tag exists but its
+ * artifacts haven't finished uploading yet (a Publish build still running), or
+ * this platform has no artifact in that release. There's nothing to offer yet
+ * and it isn't a real failure — so we report it as "up to date" rather than an
+ * error, and the next (or periodic) check picks it up once the files are there.
  */
-function friendlyUpdaterError(err: unknown): string {
+function isPendingReleaseArtifact(err: unknown): boolean {
   const raw = err instanceof Error ? err.message : String(err);
-  const pendingArtifact =
+  return (
     /Cannot find .*\.yml in the latest release artifacts/i.test(raw) ||
-    (/latest(-mac|-linux|-arm64)?\.yml/i.test(raw) && /\b404\b/.test(raw));
-  if (pendingArtifact) {
-    const version = raw.match(/releases\/download\/(v[\w.-]+)\//)?.[1];
-    return `A newer version${version ? ` (${version})` : ''} is being published — its files aren’t ready yet. Try again in a few minutes.`;
-  }
-  return raw;
+    (/latest(-mac|-linux|-arm64)?\.yml/i.test(raw) && /\b404\b/.test(raw))
+  );
 }
 
 export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
@@ -71,9 +67,15 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   autoUpdater.on('update-downloaded', (info) =>
     send({ kind: 'downloaded', version: info.version }),
   );
-  autoUpdater.on('error', (err) =>
-    send({ kind: 'error', message: friendlyUpdaterError(err) }),
-  );
+  autoUpdater.on('error', (err) => {
+    // A release whose artifacts aren't uploaded yet isn't an update we can offer
+    // and isn't a failure — show "no updates" instead of an error.
+    if (isPendingReleaseArtifact(err)) {
+      send({ kind: 'not-available' });
+      return;
+    }
+    send({ kind: 'error', message: err?.message ?? String(err) });
+  });
 
   // Renderer-driven controls. Returns whether a check actually started so the
   // Settings UI can distinguish "checking…" from "unsupported in dev". The
