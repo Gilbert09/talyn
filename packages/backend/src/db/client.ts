@@ -136,7 +136,11 @@ function createPostgresHandle(connectionString: string): Handle {
   const url = new URL(connectionString);
   const isPooler = url.hostname.includes('pooler.supabase.com');
   const sql = postgres(connectionString, {
-    max: 10,
+    // Headroom so the webhook worker's concurrent batch can't starve everything
+    // else of connections — WS auth (a DB upsert with a 5s handshake budget),
+    // HTTP requests, and the pollers all share this pool. The Supabase
+    // transaction pooler multiplexes, so a larger client pool is fine.
+    max: 20,
     idle_timeout: 20,
     prepare: !isPooler,
     // Cap how long any single statement can run. Without this a query stuck on

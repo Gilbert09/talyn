@@ -71,7 +71,7 @@ export function setupWebSocket(wss: WebSocketServer): void {
         console.warn('WebSocket auth timeout; closing');
         ws.close(4401, 'auth timeout');
       }
-    }, 5_000);
+    }, 10_000);
 
     ws.on('message', async (data: Buffer) => {
       let message: unknown;

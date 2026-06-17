@@ -33,8 +33,9 @@ const COALESCE_WINDOW_MS = 750;
 // How many stream deliveries to read and process concurrently per loop. Each
 // delivery's slow step is an independent GitHub GraphQL refresh, so processing a
 // batch in parallel (rather than serially) multiplies throughput by ~this much.
-// Bounded to keep simultaneous GraphQL/DB load reasonable.
-const WORKER_BATCH = 10;
+// Bounded to keep simultaneous GraphQL/DB load reasonable — and, with a 20-slot
+// DB pool, to leave connections free for WS auth + HTTP under the firehose.
+const WORKER_BATCH = 6;
 
 // Opt-in deep trace of the webhook pipeline (set WEBHOOK_TRACE=1). Logs every
 // step a delivery takes — received → fanout → dispatch/coalesce → refresh →
