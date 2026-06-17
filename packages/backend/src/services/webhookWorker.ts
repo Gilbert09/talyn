@@ -6,7 +6,7 @@ import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
 import { debugBus } from './debugBus.js';
 import {
-  ingestCheckRun,
+  checkCountCoalescer,
   parseCheckRunPayload,
   pruneChecksForSha,
 } from './checkCounts.js';
@@ -35,7 +35,14 @@ const COALESCE_WINDOW_MS = 750;
 // batch in parallel (rather than serially) multiplies throughput by ~this much.
 // Bounded to keep simultaneous GraphQL/DB load reasonable — and, with a 20-slot
 // DB pool, to leave connections free for WS auth + HTTP under the firehose.
-const WORKER_BATCH = 6;
+//
+// Raised 6→16 because the PostHog CI firehose is overwhelmingly `check_run`
+// events that resolve to a 0-fanout no-op (a check on a merge commit, not any
+// tracked PR's head — see ingestCheckRun) yet still cost ~1-2 Supabase
+// round-trips each. Those are DB-bound, not GraphQL-bound, so wider concurrency
+// drains the backlog without risking the GitHub rate budget; 16 still leaves
+// headroom under the 20-slot pool for WS auth + HTTP.
+const WORKER_BATCH = 16;
 
 // Opt-in deep trace of the webhook pipeline (set WEBHOOK_TRACE=1). Logs every
 // step a delivery takes — received → fanout → dispatch/coalesce → refresh →
@@ -202,44 +209,24 @@ export async function processWebhookDelivery(
     return 0;
   }
 
-  // check_run: update the pill counts INCREMENTALLY from the webhook — no GraphQL
-  // refresh. One query says which of the check's PRs each workspace tracks (a
-  // single check_run can list several, incl. cross-fork junk); untracked PRs cost
-  // nothing past it. See docs/INCREMENTAL_CHECK_COUNTS.md.
+  // check_run: update the pill counts INCREMENTALLY — no GraphQL refresh. We
+  // BUFFER the event into the coalescer keyed by (repo, sha) and return
+  // immediately; a short window collapses a CI suite's burst of check_runs for
+  // one commit into a single DB flush (one multi-row upsert + one recompute +
+  // one broadcast per PR) instead of paying that per event. The receiver has
+  // already dropped check_runs whose sha is no PR head (webhookHeadIndex), so
+  // anything reaching here is a live, tracked head worth buffering.
+  //
+  // NB: NO full-refresh fallback. A check_run whose head_sha ≠ the PR's head
+  // (very common — GitHub runs many checks on a *merge commit*) isn't in the PR
+  // head's statusCheckRollup anyway; a genuinely stale head is corrected by the
+  // PR's own pull_request/synchronize event and the reconcile sweep.
   if (delivery.eventType === 'check_run') {
-    const trackedByRepo = await prMonitorService
-      .filterTrackedOpenAcross(
-        targets.map((t) => t.repositoryId),
-        numbers,
-      )
-      .catch(() => new Map<string, Set<number>>());
     const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
     if (!ev) return 0;
-    const updated = await ingestCheckRun(ev, targets, numbers, trackedByRepo).catch((err) => {
-      // drizzle wraps the driver error: `err.message` is just "Failed query: …",
-      // the real Postgres error (code + message) is on `err.cause`.
-      const cause = (err as { cause?: unknown }).cause;
-      const causeMsg =
-        cause instanceof Error
-          ? `${cause.message}${(cause as { code?: string }).code ? ` [${(cause as { code?: string }).code}]` : ''}`
-          : '';
-      console.warn(
-        `[webhookWorker] ingestCheckRun ${delivery.repoFullName}: ${err instanceof Error ? err.message : String(err)}${causeMsg ? ` | cause: ${causeMsg}` : ''}`,
-      );
-      return 0;
-    });
-    // NB: NO full-refresh fallback when incremental applies to nothing. A
-    // check_run whose head_sha ≠ the PR's head (very common — GitHub runs many
-    // checks on a *merge commit*) isn't in the PR head's statusCheckRollup
-    // anyway, so a refresh would add nothing — but each ~2s refreshPr, batched
-    // via Promise.all, dragged every batch to seconds and capped throughput so
-    // the firehose never drained (and merges sat in the backlog). A genuinely
-    // stale head is corrected by the PR's own pull_request/synchronize event and
-    // the reconcile sweep. So check_run is always cheap: incremental or a no-op.
-    whTrace(
-      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ${updated} PR(s) updated (incremental)`,
-    );
-    return updated;
+    checkCountCoalescer.enqueue(ev);
+    whTrace(`  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → buffered (coalesced)`);
+    return 0; // the count update is accounted at flush time, not per delivery
   }
 
   // A PR closing/merging or force-pushing makes its per-check state irrelevant —

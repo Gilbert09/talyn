@@ -8,6 +8,7 @@ import {
   type WebhookDelivery,
 } from '../services/webhookWorker.js';
 import { refreshWebhookIndex, _resetWebhookIndex } from '../services/webhookIndex.js';
+import { checkCountCoalescer } from '../services/checkCounts.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -145,6 +146,7 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
   afterEach(async () => {
     _resetWebhookIndex();
     _resetCoalesce();
+    checkCountCoalescer._reset();
     await cleanup();
     vi.restoreAllMocks();
   });
@@ -161,9 +163,10 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, opts('rB'));
   });
 
-  it('routes a check_run to the incremental count path, not refreshPr', async () => {
-    // A tracked PR (7) on head sha-1 + an untracked one (8). check_run updates
-    // counts incrementally (no refreshPr) and only for the tracked PR on its head.
+  it('buffers a check_run into the coalescer, then flushes incremental counts (not refreshPr)', async () => {
+    // A tracked PR (7) on head sha-1 + an untracked one (8). check_run is BUFFERED
+    // (returns 0 — accounted at flush), then a flush updates counts incrementally
+    // (no refreshPr) for the tracked PR on its head.
     await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
     const n = await processWebhookDelivery(
       delivery({
@@ -182,8 +185,9 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       }),
       1_000,
     );
+    expect(n).toBe(0); // buffered, not applied per-delivery
+    await checkCountCoalescer.flushAllNow();
     expect(refreshSpy).not.toHaveBeenCalled(); // incremental, never a GraphQL refresh
-    expect(n).toBe(1); // only PR 7 (tracked, on head) updated
     const rows = await db
       .select({ ls: pullRequestsTable.lastSummary })
       .from(pullRequestsTable)
@@ -194,12 +198,35 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     });
   });
 
-  it('does NOT refresh on a head-sha mismatch (no fallback — keeps the worker fast)', async () => {
+  it('coalesces a burst of check_runs for one sha into a single count update', async () => {
+    // Three checks for the same (repo, sha) arrive in one window. They buffer and
+    // flush ONCE — the final counts reflect all three (2 passed, 1 in-progress).
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const mk = (name: string, conclusion: string | null, status: string) =>
+      delivery({
+        eventType: 'check_run',
+        payload: {
+          check_run: { id: name, name, status, conclusion, head_sha: 'sha-1', pull_requests: [{ number: 7 }] },
+          repository: { owner: { login: 'acme' }, name: 'widget' },
+        },
+      });
+    await processWebhookDelivery(mk('lint', 'success', 'completed'), 1_000);
+    await processWebhookDelivery(mk('test', 'success', 'completed'), 1_000);
+    await processWebhookDelivery(mk('e2e', null, 'in_progress'), 1_000);
+    await checkCountCoalescer.flushAllNow();
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-rA-7'));
+    expect(
+      (rows[0].ls as { checks: { total: number; passed: number; inProgress: number } }).checks,
+    ).toMatchObject({ total: 3, passed: 2, inProgress: 1 });
+  });
+
+  it('does NOT refresh or update on a head-sha mismatch (no fallback — keeps the worker fast)', async () => {
     // The check is on sha-NEW but the row's cached head is sha-OLD (e.g. a check
     // that ran on a merge commit, which isn't in the PR head's rollup anyway).
-    // Incremental applies to nothing and we must NOT fall back to a ~2s refreshPr
-    // — that gated the batch and capped throughput. The PR's own synchronize
-    // event + the sweep correct a genuinely stale head.
+    // Incremental applies to nothing and we must NOT fall back to a ~2s refreshPr.
     await seedTrackedPr('rA', 'wsA', 7, 'sha-OLD');
     const n = await processWebhookDelivery(
       delivery({
@@ -219,7 +246,14 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       1_000,
     );
     expect(n).toBe(0);
+    await checkCountCoalescer.flushAllNow();
     expect(refreshSpy).not.toHaveBeenCalled();
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-rA-7'));
+    // Counts untouched — the sha is no tracked PR's head.
+    expect((rows[0].ls as { checks: { total: number } }).checks).toMatchObject({ total: 0 });
   });
 
   it('treats check_suite as a no-op (counts come from check_run)', async () => {

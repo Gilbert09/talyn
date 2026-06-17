@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { getRedis, isRedisEnabled } from '../services/redis.js';
 import { isRepoWatchedSync } from '../services/webhookIndex.js';
+import { shouldDropByHeadSha, noteHeadSha } from '../services/webhookHeadIndex.js';
 import { WEBHOOK_STREAM, whTrace, type WebhookDelivery } from '../services/webhookWorker.js';
 import { debugBus } from '../services/debugBus.js';
 
@@ -31,6 +32,14 @@ export function verifyGithubSignature(
   const b = Buffer.from(expected);
   if (a.length !== b.length) return 'invalid';
   return timingSafeEqual(a, b) ? 'valid' : 'invalid';
+}
+
+/** The head SHA a `check_run`/`check_suite` payload is for (the dedupe/match key). */
+function checkHeadSha(eventType: string, payload: Record<string, unknown>): string | undefined {
+  const node = (eventType === 'check_run' ? payload.check_run : payload.check_suite) as
+    | { head_sha?: unknown }
+    | undefined;
+  return typeof node?.head_sha === 'string' ? node.head_sha : undefined;
 }
 
 export async function handleGithubWebhook(req: Request, res: Response): Promise<void> {
@@ -107,6 +116,41 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
     debugBus.recordWebhook({ action: 'received', eventType, ghAction, repo: repoFullName, signature, ok: true, queued: false, dropReason: 'no_redis' });
     res.status(202).json({ ok: true, dropped: 'no_redis' });
     return;
+  }
+
+  // Note a live PR head BEFORE we might drop checks for it: a freshly opened /
+  // force-pushed PR's head must be forwardable the instant its event arrives,
+  // even before the worker writes the row or the next reseed runs. Cheap Redis
+  // SADD into a short-TTL set; awaited so the head is recorded before we ack.
+  if (eventType === 'pull_request') {
+    const headSha = (payload.pull_request as { head?: { sha?: string } } | undefined)?.head?.sha;
+    await noteHeadSha(repoFullName, headSha);
+  }
+
+  // The firehose: drop `check_run`/`check_suite` whose commit is not the head of
+  // any tracked OPEN PR — they could never change a pill count, and this spares
+  // both the stream slot and the ~1-2 DB round-trips a no-op would have cost.
+  // Fails OPEN (never drops) when the repo isn't authoritatively seeded yet.
+  if (eventType === 'check_run' || eventType === 'check_suite') {
+    const headSha = checkHeadSha(eventType, payload);
+    if (await shouldDropByHeadSha(repoFullName, headSha)) {
+      whTrace(
+        `receiver DROP head_sha_not_tracked ${eventType} ${repoFullName} ` +
+          `sha=${headSha?.slice(0, 7) ?? '-'} delivery=${deliveryId}`,
+      );
+      debugBus.recordWebhook({
+        action: 'received',
+        eventType,
+        ghAction,
+        repo: repoFullName,
+        signature,
+        ok: true,
+        queued: false,
+        dropReason: 'head_sha_not_tracked',
+      });
+      res.status(202).json({ ok: true, dropped: 'head_sha_not_tracked' });
+      return;
+    }
   }
 
   const delivery: WebhookDelivery = {

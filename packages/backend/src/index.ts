@@ -9,6 +9,8 @@ import { setupWebSocket } from './services/websocket.js';
 import { initWsBus, shutdownWsBus } from './services/wsBus.js';
 import { closeRedis } from './services/redis.js';
 import { initWebhookIndex } from './services/webhookIndex.js';
+import { webhookHeadIndex } from './services/webhookHeadIndex.js';
+import { checkCountCoalescer } from './services/checkCounts.js';
 import { webhookWorker } from './services/webhookWorker.js';
 import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
@@ -57,6 +59,9 @@ async function main() {
   // arm the low-frequency reconcile sweep. Worker is inert without REDIS_URL.
   await initWebhookIndex().catch((err) => console.error('webhook index init failed:', err));
   await webhookWorker.init();
+  // Reseed the Redis head-SHA index that lets the receiver drop CI checks for
+  // commits no tracked PR head points at. Inert without REDIS_URL.
+  await webhookHeadIndex.init().catch((err) => console.error('webhook head index init failed:', err));
   prReconcileSweep.init();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
@@ -179,6 +184,10 @@ async function main() {
     prMonitorService.shutdown();
     taskQueueService.shutdown();
     webhookWorker.shutdown();
+    webhookHeadIndex.shutdown();
+    // Flush any buffered check counts so an in-flight CI burst isn't lost on a
+    // graceful restart (the sweep would re-derive it, but this avoids the gap).
+    await checkCountCoalescer.flushAllNow().catch(() => undefined);
     prReconcileSweep.shutdown();
 
     server.close(async () => {

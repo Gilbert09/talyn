@@ -25,6 +25,7 @@ import {
   type CheckBreakdown,
 } from './githubGraphql.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { targetsForRepo } from './webhookIndex.js';
 import { debugBus } from './debugBus.js';
 
 /** A single check's state extracted from a `check_run` webhook payload. */
@@ -94,107 +95,102 @@ function countsFromStates(states: CheckState[]): CheckBreakdown {
   };
 }
 
+/** An open PR a check on a given sha applies to. */
+interface AffectedPr {
+  id: string;
+  workspaceId: string;
+  repositoryId: string;
+  number: number;
+  owner: string;
+  repo: string;
+  taskId: string | null;
+}
+
+/** Columns of the open PRs in `repoIds` whose CURRENT head is `headSha`. */
+const AFFECTED_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  number: pullRequestsTable.number,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  taskId: pullRequestsTable.taskId,
+  // `->>`, never the blob — keeps this off the egress hot list.
+  headSha: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'headSha'`,
+} as const;
+
 /**
- * Apply one `check_run` event: upsert its state, then for every tracked PR on
- * THIS commit recompute the counts and broadcast them. Returns the number of PR
- * rows updated (0 when the check is for an untracked PR or a superseded commit).
- *
- * `prNumbers` are the PRs the check belongs to; `trackedByRepo` (from
- * `filterTrackedOpenAcross`) says which of those each workspace tracks.
+ * Open PRs among `repoIds` whose current head IS `headSha`. Checks on a
+ * superseded sha (post-force-push) match nothing — exactly like GitHub's rollup.
  */
-export async function ingestCheckRun(
-  ev: CheckEventInput,
-  targets: CheckTarget[],
-  prNumbers: number[],
-  trackedByRepo: Map<string, Set<number>>,
-): Promise<number> {
+async function affectedPrsForSha(repoIds: string[], headSha: string): Promise<AffectedPr[]> {
+  if (repoIds.length === 0) return [];
   const db = getPoolDbClient();
-
-  // 1. Which (repositoryId, number) pairs does this check belong to AND we track?
-  //    Resolved entirely in memory from the worker's filter result. If none, we
-  //    bail BEFORE any DB write — we never store check state for PRs nobody
-  //    tracks (that would accumulate the whole firehose).
-  const wanted: Array<{ repositoryId: string; number: number }> = [];
-  for (const t of targets) {
-    const nums = trackedByRepo.get(t.repositoryId);
-    if (!nums) continue;
-    for (const n of prNumbers) if (nums.has(n)) wanted.push({ repositoryId: t.repositoryId, number: n });
-  }
-  if (wanted.length === 0) return 0;
-
-  // 2. Read those rows + their CURRENT head sha (via `->>`, not the blob). Only
-  //    PRs whose current head IS this commit count — checks on a superseded sha
-  //    (post-force-push) are dropped, matching GitHub's rollup, and aren't even
-  //    stored (keeps the table to live checks on tracked PRs).
-  const repoIds = [...new Set(wanted.map((w) => w.repositoryId))];
-  const numbers = [...new Set(wanted.map((w) => w.number))];
-  const wantedKey = new Set(wanted.map((w) => `${w.repositoryId}:${w.number}`));
   const rows = await db
-    .select({
-      id: pullRequestsTable.id,
-      workspaceId: pullRequestsTable.workspaceId,
-      repositoryId: pullRequestsTable.repositoryId,
-      number: pullRequestsTable.number,
-      owner: pullRequestsTable.owner,
-      repo: pullRequestsTable.repo,
-      taskId: pullRequestsTable.taskId,
-      headSha: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'headSha'`,
-    })
+    .select(AFFECTED_COLUMNS)
     .from(pullRequestsTable)
-    .where(
-      and(
-        inArray(pullRequestsTable.repositoryId, repoIds),
-        inArray(pullRequestsTable.number, numbers),
-        eq(pullRequestsTable.state, 'open'),
-      ),
-    );
-  const affected = rows.filter(
-    (r) => wantedKey.has(`${r.repositoryId}:${r.number}`) && r.headSha === ev.headSha,
-  );
-  if (affected.length === 0) return 0;
+    .where(and(inArray(pullRequestsTable.repositoryId, repoIds), eq(pullRequestsTable.state, 'open')));
+  return rows
+    .filter((r) => r.headSha === headSha)
+    .map(({ headSha: _drop, ...rest }) => rest);
+}
 
-  // 3. Upsert the check's latest state (workspace-independent). Guard against
-  //    out-of-order events: only overwrite when this event is at least as recent.
+/**
+ * Upsert one or many check states for the SAME (repo, sha) in a single
+ * statement. Out-of-order safe: a conflicting row is overwritten only when the
+ * incoming event is at least as recent (`pr_check_states.ts <= excluded.ts`).
+ * Callers must de-dupe by name first (one row per conflict target per statement).
+ */
+async function upsertCheckStates(states: CheckEventInput[]): Promise<void> {
+  if (states.length === 0) return;
+  const db = getPoolDbClient();
   await db
     .insert(prCheckStates)
-    .values({
-      id: uuid(),
-      repoFullName: ev.repoFullName,
-      headSha: ev.headSha,
-      name: ev.name,
-      source: ev.source,
-      externalId: ev.externalId,
-      state: ev.state,
-      ts: ev.ts,
-    })
+    .values(
+      states.map((s) => ({
+        id: uuid(),
+        repoFullName: s.repoFullName,
+        headSha: s.headSha,
+        name: s.name,
+        source: s.source,
+        externalId: s.externalId,
+        state: s.state,
+        ts: s.ts,
+      })),
+    )
     .onConflictDoUpdate({
       target: [prCheckStates.repoFullName, prCheckStates.headSha, prCheckStates.name],
+      // Reference the incoming row via `excluded.*` so a multi-row upsert applies
+      // each row's own value (a literal would force every conflict to the last).
       set: {
-        state: ev.state,
-        source: ev.source,
-        externalId: ev.externalId,
-        ts: ev.ts,
-        updatedAt: new Date(),
+        state: sql`excluded.state`,
+        source: sql`excluded.source`,
+        externalId: sql`excluded.external_id`,
+        ts: sql`excluded.ts`,
+        updatedAt: sql`now()`,
       },
-      // NB: pass the timestamp as an ISO string, not a Date. In a raw `sql`
-      // fragment drizzle can't apply the column's type serializer, so a Date
-      // reaches postgres-js unserialized — which the transaction pooler's
-      // `prepare:false` simple protocol rejects (ERR_INVALID_ARG_TYPE). The
-      // `.values({ ts })` above is fine: there drizzle knows the column type.
-      setWhere: sql`${prCheckStates.ts} <= ${ev.ts.toISOString()}::timestamptz`,
+      setWhere: sql`${prCheckStates.ts} <= excluded.ts`,
     });
+}
 
-  // Recompute counts + digest ONCE from the deduped per-check rows for this sha.
+/**
+ * Recompute a sha's pill counts from the deduped per-check rows, write them to
+ * every affected PR, and broadcast. One GROUP-BY read + one UPDATE per PR,
+ * regardless of how many check events drove it.
+ */
+async function recomputeAndBroadcast(
+  repoFullName: string,
+  headSha: string,
+  affected: AffectedPr[],
+): Promise<void> {
+  const db = getPoolDbClient();
   const stateRows = await db
     .select({ state: prCheckStates.state, name: prCheckStates.name })
     .from(prCheckStates)
-    .where(
-      and(eq(prCheckStates.repoFullName, ev.repoFullName), eq(prCheckStates.headSha, ev.headSha)),
-    );
-  const states = stateRows.map((r) => r.state as CheckState);
-  const counts = countsFromStates(states);
+    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
+  const counts = countsFromStates(stateRows.map((r) => r.state as CheckState));
   const digest = computeCheckDigest(
-    ev.headSha,
+    headSha,
     stateRows.map((r) => ({ name: r.name, state: r.state as CheckState })),
   );
 
@@ -223,6 +219,42 @@ export async function ingestCheckRun(
       lastSummary: { checks: counts },
     });
   }
+}
+
+/**
+ * Apply one `check_run` event synchronously: upsert its state, then for every
+ * tracked PR on THIS commit recompute the counts and broadcast them. Returns the
+ * number of PR rows updated (0 when the check is for an untracked PR or a
+ * superseded commit).
+ *
+ * `prNumbers` are the PRs the check belongs to; `trackedByRepo` (from
+ * `filterTrackedOpenAcross`) says which of those each workspace tracks.
+ *
+ * Kept for direct/single-shot use and as the canonical reference; the webhook
+ * worker drives the higher-throughput {@link checkCountCoalescer} instead.
+ */
+export async function ingestCheckRun(
+  ev: CheckEventInput,
+  targets: CheckTarget[],
+  prNumbers: number[],
+  trackedByRepo: Map<string, Set<number>>,
+): Promise<number> {
+  // Which (repositoryId, number) pairs does this check belong to AND we track?
+  // Resolved in memory from the worker's filter result — never store check state
+  // for PRs nobody tracks (that would accumulate the whole firehose).
+  const repoIds = new Set<string>();
+  for (const t of targets) {
+    const nums = trackedByRepo.get(t.repositoryId);
+    if (!nums) continue;
+    if (prNumbers.some((n) => nums.has(n))) repoIds.add(t.repositoryId);
+  }
+  if (repoIds.size === 0) return 0;
+
+  const affected = await affectedPrsForSha([...repoIds], ev.headSha);
+  if (affected.length === 0) return 0;
+
+  await upsertCheckStates([ev]);
+  await recomputeAndBroadcast(ev.repoFullName, ev.headSha, affected);
   debugBus.recordEvent({
     service: 'check_counts',
     action: 'incremental',
@@ -231,6 +263,102 @@ export async function ingestCheckRun(
   });
   return affected.length;
 }
+
+/**
+ * Coalesces the high-volume `check_run` firehose by (repo, sha).
+ *
+ * When a CI run starts, GitHub fires dozens of `check_run` events for the SAME
+ * commit within a moment, then dozens of `completed` later. Handling each one
+ * independently means N upserts + N GROUP-BY recomputes + N UPDATEs + N
+ * broadcasts for a single PR's suite. The coalescer instead buffers events for a
+ * short window keyed by `(repoFullName, headSha)`, de-duping to the latest state
+ * per check name, then flushes ONCE: a single multi-row upsert, one recompute,
+ * one UPDATE + broadcast per affected PR — independent of burst size.
+ *
+ * Multi-replica note: buffers are per-process, so with the consumer group each
+ * replica coalesces its own slice of a burst. That's still a large reduction;
+ * and because the recompute reads ALL stored states for the sha (a GROUP BY over
+ * the shared table), the final counts converge correctly no matter which replica
+ * wrote which check.
+ *
+ * Durability: a delivery is ack'd before its buffered flush lands, so a crash
+ * inside the (sub-second) window can drop a pending count update. Pill counts
+ * are non-critical and self-heal — the next event for the sha re-flushes, and
+ * the 5-min reconcile sweep re-derives authoritative counts regardless.
+ */
+class CheckCountCoalescer {
+  private readonly windowMs: number;
+  private pending = new Map<string, { states: Map<string, CheckEventInput>; timer: NodeJS.Timeout }>();
+
+  constructor(windowMs = 750) {
+    this.windowMs = windowMs;
+  }
+
+  private key(repoFullName: string, headSha: string): string {
+    return `${repoFullName} ${headSha}`;
+  }
+
+  /** Buffer one parsed check event; schedules a flush for its (repo, sha). */
+  enqueue(ev: CheckEventInput): void {
+    const k = this.key(ev.repoFullName, ev.headSha);
+    let entry = this.pending.get(k);
+    if (!entry) {
+      const timer = setTimeout(() => {
+        void this.flush(k);
+      }, this.windowMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      entry = { states: new Map(), timer };
+      this.pending.set(k, entry);
+    }
+    // Latest activity wins (matches the upsert's out-of-order guard).
+    const prev = entry.states.get(ev.name);
+    if (!prev || prev.ts <= ev.ts) entry.states.set(ev.name, ev);
+  }
+
+  private async flush(k: string): Promise<void> {
+    const entry = this.pending.get(k);
+    if (!entry) return;
+    this.pending.delete(k);
+    clearTimeout(entry.timer);
+    const states = [...entry.states.values()];
+    if (states.length === 0) return;
+    const { repoFullName, headSha } = states[0];
+    try {
+      const targets = await targetsForRepo(repoFullName);
+      const repoIds = [...new Set(targets.map((t) => t.repositoryId))];
+      const affected = await affectedPrsForSha(repoIds, headSha);
+      if (affected.length === 0) return; // sha no longer any tracked PR's head
+      await upsertCheckStates(states);
+      await recomputeAndBroadcast(repoFullName, headSha, affected);
+      debugBus.recordEvent({
+        service: 'check_counts',
+        action: 'incremental',
+        ok: true,
+        summary: `incremental checks ${repoFullName} ${headSha.slice(0, 7)} ×${states.length} → ${affected.length} PR(s)`,
+      });
+    } catch (err) {
+      debugBus.recordEvent({
+        service: 'check_counts',
+        action: 'incremental',
+        ok: false,
+        summary: `coalesced flush ${repoFullName} ${headSha.slice(0, 7)} failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+
+  /** Flush everything now — for graceful shutdown and deterministic tests. */
+  async flushAllNow(): Promise<void> {
+    for (const k of [...this.pending.keys()]) await this.flush(k);
+  }
+
+  /** Test helper — drop buffered state without flushing. */
+  _reset(): void {
+    for (const entry of this.pending.values()) clearTimeout(entry.timer);
+    this.pending.clear();
+  }
+}
+
+export const checkCountCoalescer = new CheckCountCoalescer();
 
 /** Drop all check state for a commit — called on PR close/merge and force-push. */
 export async function pruneChecksForSha(repoFullName: string, headSha: string): Promise<void> {

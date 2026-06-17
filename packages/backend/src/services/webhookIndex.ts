@@ -77,6 +77,14 @@ export function isRepoWatchedSync(fullName: string): boolean {
   return index.has(fullName.toLowerCase());
 }
 
+/**
+ * Every watched repo's `owner/repo` full name (lowercased). Used by the
+ * head-SHA reseeder to mark even zero-open-PR repos as authoritatively known.
+ */
+export function allWatchedRepoFullNames(): string[] {
+  return [...index.keys()];
+}
+
 /** Force a rebuild now (called after a repo is added/removed or on install events). */
 export async function refreshWebhookIndex(): Promise<void> {
   await build();
