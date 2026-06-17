@@ -139,6 +139,14 @@ function createPostgresHandle(connectionString: string): Handle {
     max: 10,
     idle_timeout: 20,
     prepare: !isPooler,
+    // Cap how long any single statement can run. Without this a query stuck on
+    // the (cross-region) pooler hangs forever, and since the webhook worker
+    // awaits a `Promise.all` over the batch, one stuck query wedges the whole
+    // consumer with no error. 30s errors it instead — handleEntry catches it,
+    // the delivery stays un-acked, and the loop keeps draining.
+    connection: { statement_timeout: 30_000 },
+    // Don't wait forever to acquire a socket either.
+    connect_timeout: 15,
   });
   instrumentEgress(sql);
   const db = drizzle(sql, { schema, casing: 'snake_case' }) as Database;
