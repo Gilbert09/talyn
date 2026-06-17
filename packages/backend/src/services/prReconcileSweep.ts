@@ -64,6 +64,12 @@ class PrReconcileSweep {
       await pruneStaleCheckStates().catch((err) => {
         console.error('[reconcileSweep] pruneStaleCheckStates failed:', err);
       });
+      // Backfill placeholder rows that never got a real title (cloud-task PRs
+      // whose repository row the per-repo poll doesn't cover). Refreshes them by
+      // their own coordinates so they stop showing as "(no title)".
+      await prMonitorService.backfillUntitledOpenPrs().catch((err) => {
+        console.error('[reconcileSweep] backfillUntitledOpenPrs failed:', err);
+      });
     } finally {
       this.guard.end();
       debugBus.pollerTick('pr_reconcile_sweep', {

@@ -876,6 +876,47 @@ class PRMonitorService extends EventEmitter {
     return rows.map((r) => r.number);
   }
 
+  /**
+   * Fill open rows whose summary never got a real title — typically a cloud-task
+   * PR linked as a placeholder (`title: ''`) whose repository row the normal poll
+   * loop doesn't cover, so neither the sweep, the webhook fan-out, nor a
+   * pull_request event ever materialised it. Refresh each by its OWN stored
+   * owner/repo/repositoryId so it fills regardless of whether the repo is
+   * "watched". Bounded + only ships small columns (the title filter is a `->>`
+   * in WHERE, never the blob). Returns how many it refreshed.
+   */
+  async backfillUntitledOpenPrs(limit = 200): Promise<number> {
+    const rows = await this.db
+      .select({
+        workspaceId: pullRequestsTable.workspaceId,
+        repositoryId: pullRequestsTable.repositoryId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        number: pullRequestsTable.number,
+      })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.state, 'open'),
+          sql`COALESCE(${pullRequestsTable.lastSummary} ->> 'title', '') = ''`
+        )
+      )
+      .limit(limit);
+    let filled = 0;
+    for (const r of rows) {
+      // resolveMergeable:false keeps it cheap; the next event/sweep settles it.
+      await this.refreshPr(r.workspaceId, r.owner, r.repo, r.number, {
+        repositoryId: r.repositoryId,
+        resolveMergeable: false,
+      })
+        .then(() => {
+          filled++;
+        })
+        .catch(() => undefined);
+    }
+    return filled;
+  }
+
   /** Whether a pull_requests row already exists for this (workspace, repo, number). */
   private async prRowExists(
     workspaceId: string,

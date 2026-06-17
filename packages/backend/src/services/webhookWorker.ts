@@ -252,10 +252,12 @@ export async function processWebhookDelivery(
         dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, 'check_run');
       }
     }
-    whTrace(
-      `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → 0 incremental; ` +
-        `${dispatched} stale/placeholder PR(s) → full-refresh fallback`,
-    );
+    if (dispatched > 0) {
+      whTrace(
+        `  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → ` +
+          `${dispatched} stale/placeholder PR(s) → full-refresh fallback`,
+      );
+    }
     return dispatched;
   }
 
