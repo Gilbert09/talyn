@@ -106,7 +106,7 @@ interface AffectedPr {
   taskId: string | null;
 }
 
-/** Columns of the open PRs in `repoIds` whose CURRENT head is `headSha`. */
+/** Columns of an affected PR — never the `last_summary` blob. */
 const AFFECTED_COLUMNS = {
   id: pullRequestsTable.id,
   workspaceId: pullRequestsTable.workspaceId,
@@ -115,24 +115,28 @@ const AFFECTED_COLUMNS = {
   owner: pullRequestsTable.owner,
   repo: pullRequestsTable.repo,
   taskId: pullRequestsTable.taskId,
-  // `->>`, never the blob — keeps this off the egress hot list.
-  headSha: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'headSha'`,
 } as const;
 
 /**
- * Open PRs among `repoIds` whose current head IS `headSha`. Checks on a
- * superseded sha (post-force-push) match nothing — exactly like GitHub's rollup.
+ * Open PRs among `repoIds` whose current head IS `headSha`. The head match is
+ * pushed into SQL (`last_summary ->> 'headSha' = $sha`) so a repo with hundreds
+ * of open PRs returns only the (usually one) matching row — not the whole open
+ * set to filter in JS. Checks on a superseded sha (post-force-push) match
+ * nothing, exactly like GitHub's rollup.
  */
 async function affectedPrsForSha(repoIds: string[], headSha: string): Promise<AffectedPr[]> {
   if (repoIds.length === 0) return [];
   const db = getPoolDbClient();
-  const rows = await db
+  return db
     .select(AFFECTED_COLUMNS)
     .from(pullRequestsTable)
-    .where(and(inArray(pullRequestsTable.repositoryId, repoIds), eq(pullRequestsTable.state, 'open')));
-  return rows
-    .filter((r) => r.headSha === headSha)
-    .map(({ headSha: _drop, ...rest }) => rest);
+    .where(
+      and(
+        inArray(pullRequestsTable.repositoryId, repoIds),
+        eq(pullRequestsTable.state, 'open'),
+        sql`${pullRequestsTable.lastSummary} ->> 'headSha' = ${headSha}`,
+      ),
+    );
 }
 
 /**

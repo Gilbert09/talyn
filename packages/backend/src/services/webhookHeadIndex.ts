@@ -3,6 +3,7 @@ import { getPoolDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { getRedis, isRedisEnabled } from './redis.js';
 import { allWatchedRepoFullNames } from './webhookIndex.js';
+import { WEBHOOK_TRACE } from './webhookWorker.js';
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
 
@@ -188,7 +189,20 @@ export async function reseedHeadShas(): Promise<{ repos: number; heads: number }
     }
     pipe.set(readyKey(repo), '1', 'EX', READY_TTL_SEC);
   }
-  await pipe.exec();
+  // exec() resolves even when individual queued commands error (Redis MULTI has
+  // no rollback) — surface any per-command failures rather than silently
+  // "succeeding" with an unset `ready` marker.
+  const results = (await pipe.exec()) as Array<[Error | null, unknown]> | null;
+  const cmdErrors = (results ?? []).filter(([err]) => err).map(([err]) => err?.message);
+  if (WEBHOOK_TRACE || cmdErrors.length > 0) {
+    const perRepo = [...repos]
+      .map((r) => `${r}:${(byRepo.get(r) ?? new Set()).size}`)
+      .join(' ');
+    console.log(
+      `[head-index] reseed repos=${repos.size} heads=${heads} [${perRepo}]` +
+        (cmdErrors.length ? ` ERRORS(${cmdErrors.length}): ${cmdErrors.slice(0, 3).join(' | ')}` : ''),
+    );
+  }
   return { repos: repos.size, heads };
 }
 
