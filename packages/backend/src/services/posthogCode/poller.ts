@@ -9,7 +9,6 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
-import { prMonitorService } from '../prMonitor.js';
 import { clearWatched } from '../cloudProviders/taskWatch.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
@@ -215,14 +214,6 @@ class PostHogCodePoller {
           createdAt: new Date().toISOString(),
         },
       }));
-      // Fill the placeholder summary (title/author/checks) right away so the row
-      // never shows as "(no title)" while it waits for the reconcile sweep.
-      await prMonitorService
-        .refreshPr(task.workspaceId, parsed.owner, parsed.repo, parsed.number, {
-          repositoryId: task.repositoryId,
-          resolveMergeable: false,
-        })
-        .catch(() => undefined);
     } catch (err) {
       console.warn(
         `[posthogCode] failed to link PR for task ${task.id.slice(0, 8)}:`,

@@ -15,7 +15,6 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate, emitTaskEvent } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
-import { prMonitorService } from '../prMonitor.js';
 import { clearWatched } from '../cloudProviders/taskWatch.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 import { getClaudeCodeClient } from './credentials.js';
@@ -249,14 +248,6 @@ class ClaudeCodePoller {
           createdAt: new Date().toISOString(),
         },
       }));
-      // Fill the placeholder summary right away so the row never shows as
-      // "(no title)" while it waits for the reconcile sweep.
-      await prMonitorService
-        .refreshPr(workspaceId, parsed.owner, parsed.repo, parsed.number, {
-          repositoryId,
-          resolveMergeable: false,
-        })
-        .catch(() => undefined);
     } catch (err) {
       console.warn(
         `[claudeCode] failed to link PR for task ${taskId.slice(0, 8)}:`,
