@@ -892,7 +892,7 @@ function ClaudeModelSelector() {
           value={current}
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+          className="shrink-0 rounded-md border bg-background px-2 py-1.5 text-sm"
         >
           {CLAUDE_MODELS.map((m) => (
             <option key={m.id} value={m.id}>
@@ -961,7 +961,7 @@ function CloudProviderDefaultSelector() {
           value={current}
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
-          className="rounded-md border bg-background px-2 py-1.5 text-sm"
+          className="shrink-0 rounded-md border bg-background px-2 py-1.5 text-sm"
         >
           <option value="">Auto (prefer PostHog Code)</option>
           {connected.map((p) => (
