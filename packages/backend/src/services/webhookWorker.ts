@@ -30,19 +30,46 @@ import {
 export const WEBHOOK_STREAM = 'gh:webhooks';
 const GROUP = 'fastowl';
 const COALESCE_WINDOW_MS = 750;
-// How many stream deliveries to read and process concurrently per loop. Each
-// delivery's slow step is an independent GitHub GraphQL refresh, so processing a
-// batch in parallel (rather than serially) multiplies throughput by ~this much.
-// Bounded to keep simultaneous GraphQL/DB load reasonable — and, with a 20-slot
-// DB pool, to leave connections free for WS auth + HTTP under the firehose.
-//
-// Raised 6→16 because the PostHog CI firehose is overwhelmingly `check_run`
-// events that resolve to a 0-fanout no-op (a check on a merge commit, not any
-// tracked PR's head — see ingestCheckRun) yet still cost ~1-2 Supabase
-// round-trips each. Those are DB-bound, not GraphQL-bound, so wider concurrency
-// drains the backlog without risking the GitHub rate budget; 16 still leaves
-// headroom under the 20-slot pool for WS auth + HTTP.
-const WORKER_BATCH = 16;
+// How many stream deliveries to read per loop iteration.
+const WORKER_BATCH = 32;
+
+// Max concurrent SLOW deliveries (pull_request/review/comment → a ~1-2s
+// `refreshPr` GraphQL call). These run in a background lane so they never gate
+// the fast `check_run`/`check_suite` firehose (which only buffers into the
+// coalescer, ~1ms). Before this split, one slow refresh in a Promise.all batch
+// dragged the whole batch to ~1.5s and capped drain below the ingest rate, so a
+// CI burst built a multi-minute backlog the worker could never claw back. The
+// cap also bounds simultaneous GitHub GraphQL + DB-pool load.
+const SLOW_LANE_MAX = 6;
+
+/** Events whose processing makes a ~1-2s `refreshPr` GraphQL call (the slow lane). */
+export function isSlowEvent(eventType: string): boolean {
+  return [
+    'pull_request',
+    'pull_request_review',
+    'pull_request_review_comment',
+    'issue_comment',
+  ].includes(eventType);
+}
+
+/** Minimal counting semaphore with fair slot hand-off, for the slow lane. */
+class Semaphore {
+  private active = 0;
+  private waiters: Array<() => void> = [];
+  constructor(private readonly max: number) {}
+  async acquire(): Promise<void> {
+    if (this.active < this.max) {
+      this.active++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiters.push(resolve));
+  }
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) next(); // hand the slot directly to a waiter (active unchanged)
+    else this.active--;
+  }
+}
 
 // Opt-in deep trace of the webhook pipeline (set WEBHOOK_TRACE=1). Logs every
 // step a delivery takes — received → fanout → dispatch/coalesce → refresh →
@@ -318,9 +345,19 @@ function fieldsToObject(fields: string[]): Record<string, string> {
   return obj;
 }
 
+/** Decode a stream entry's fields into a delivery, or null if unparseable. */
+function parseDelivery(fields: string[]): WebhookDelivery | null {
+  try {
+    return JSON.parse(fieldsToObject(fields).data) as WebhookDelivery;
+  } catch {
+    return null;
+  }
+}
+
 class WebhookWorker {
   private conn: Redis | null = null;
   private running = false;
+  private slowGate = new Semaphore(SLOW_LANE_MAX);
 
   async init(): Promise<void> {
     if (!isRedisEnabled()) {
@@ -370,10 +407,23 @@ class WebhookWorker {
         // (its own try/catch + xack), so a failure in one never rejects the
         // batch. Concurrency is bounded by WORKER_BATCH (the read COUNT), which
         // keeps simultaneous GraphQL/DB load in check.
-        const batch = res.flatMap(([, entries]) => entries);
-        await Promise.all(
-          batch.map(([id, fields]) => this.handleEntry(id, fieldsToObject(fields))),
-        );
+        const batch = res
+          .flatMap(([, entries]) => entries)
+          .map(([id, fields]) => ({ id, delivery: parseDelivery(fields) }));
+
+        // FAST lane: check_run/check_suite (buffer into the coalescer, ~1ms) and
+        // anything unparseable/no-op. Drained inline at memory speed so the
+        // firehose never waits on a refresh. SLOW lane: refresh events run in a
+        // bounded background pool (slowGate) and are NOT awaited here, so one
+        // slow refreshPr can't gate the batch. Backpressure: we only block
+        // reading more when the slow lane is saturated.
+        const fast = batch.filter((b) => !b.delivery || !isSlowEvent(b.delivery.eventType));
+        const slow = batch.filter((b) => b.delivery && isSlowEvent(b.delivery.eventType));
+        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery)));
+        for (const b of slow) {
+          await this.slowGate.acquire();
+          void this.handleEntry(b.id, b.delivery).finally(() => this.slowGate.release());
+        }
       } catch (err) {
         if (this.running) {
           console.error('[webhookWorker] read loop error:', err);
@@ -383,11 +433,10 @@ class WebhookWorker {
     }
   }
 
-  private async handleEntry(id: string, fields: Record<string, string>): Promise<void> {
+  private async handleEntry(id: string, delivery: WebhookDelivery | null): Promise<void> {
     const startedAt = Date.now();
-    let delivery: WebhookDelivery | null = null;
     try {
-      delivery = JSON.parse(fields.data) as WebhookDelivery;
+      if (!delivery) throw new Error('unparseable delivery payload');
       const fanout = await processWebhookDelivery(delivery);
       // Definitive consumer-lag readout: how long this delivery sat between the
       // receiver enqueuing it and the worker starting it. Reading this directly

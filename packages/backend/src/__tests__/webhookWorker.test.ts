@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
   isRefreshEvent,
+  isSlowEvent,
   extractPrNumbers,
   processWebhookDelivery,
   _resetCoalesce,
@@ -43,6 +44,17 @@ describe('webhook classification helpers', () => {
     }
     for (const e of ['installation', 'status', 'push', 'ping']) {
       expect(isRefreshEvent(e)).toBe(false);
+    }
+  });
+
+  it('routes refresh events to the slow lane and the check firehose to the fast lane', () => {
+    // Slow = makes a ~1-2s refreshPr; must run in the bounded background lane so
+    // it never gates the fast check_run/check_suite drain.
+    for (const e of ['pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment']) {
+      expect(isSlowEvent(e)).toBe(true);
+    }
+    for (const e of ['check_run', 'check_suite', 'push', 'installation', 'status']) {
+      expect(isSlowEvent(e)).toBe(false);
     }
   });
 
