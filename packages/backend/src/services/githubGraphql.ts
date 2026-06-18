@@ -674,6 +674,73 @@ export function dedupeLatestCheckByName<T extends { name: string; ts: number }>(
   return [...byName.values()];
 }
 
+interface NormalizedCheck {
+  name: string;
+  state: CheckState;
+  url: string | null;
+  required: boolean | null;
+}
+
+/**
+ * Collapse the raw head-commit check contexts to one entry per name and a
+ * {total,passed,failed,…} breakdown — reconciled against GitHub's own
+ * `statusCheckRollup.state`.
+ *
+ * We normally keep only the latest run per name (see {@link dedupeLatestCheckByName})
+ * to drop stale re-runs. But that heuristic can erase a failure GitHub still
+ * counts: when a gate check runs twice on the head commit — an early FAILURE
+ * and a later SUCCESS, e.g. from two separate workflow runs — "latest per name"
+ * keeps only the SUCCESS while GitHub's rollup stays FAILURE, leaving us showing
+ * 0 failing and the PR "Ready" on a PR GitHub considers broken (seen on
+ * PostHog/posthog#64614: the *Tests Pass gates each had a superseded FAILURE).
+ *
+ * So we defer to GitHub: when its rollup says the commit FAILED but our
+ * latest-per-name view found no failure, any name with a failing raw run is
+ * forced back to `failure`. When the rollup is NOT failing (the original
+ * stale-re-run case — an old FAILURE behind an in-flight QUEUED re-run leaves
+ * the rollup PENDING, which is what GitHub's own merge box shows) we keep the
+ * de-noised latest-per-name view untouched. Either way our verdict matches the
+ * single field GitHub's UI is derived from.
+ */
+export function summarizeCheckContexts(
+  contexts: Array<NormalizedCheck & { ts: number }>,
+  rollupState: string | null | undefined
+): { normalized: NormalizedCheck[]; checks: CheckBreakdown } {
+  let normalized: NormalizedCheck[] = dedupeLatestCheckByName(contexts).map(
+    ({ name, state, url, required }) => ({ name, state, url, required })
+  );
+  const rollupFailed = rollupState === 'FAILURE' || rollupState === 'ERROR';
+  const dedupedFailed = normalized.some((c) => c.state === 'failure');
+  if (rollupFailed && !dedupedFailed) {
+    // The latest-per-name view erased every failure GitHub is still counting.
+    // Force each name that has *any* failing raw run back to `failure`, keeping
+    // its failing detailsUrl so the pill links to the failure, not the re-run.
+    const failingUrlByName = new Map<string, string | null>();
+    for (const c of contexts) {
+      if (c.state === 'failure' && !failingUrlByName.has(c.name)) {
+        failingUrlByName.set(c.name, c.url);
+      }
+    }
+    if (failingUrlByName.size > 0) {
+      normalized = normalized.map((c) =>
+        failingUrlByName.has(c.name)
+          ? { ...c, state: 'failure', url: failingUrlByName.get(c.name) ?? c.url }
+          : c
+      );
+    }
+  }
+  const checks: CheckBreakdown = {
+    total: normalized.length,
+    passed: normalized.filter((c) => c.state === 'success').length,
+    failed: normalized.filter((c) => c.state === 'failure').length,
+    inProgress: normalized.filter(
+      (c) => c.state === 'in_progress' || c.state === 'pending'
+    ).length,
+    skipped: normalized.filter((c) => c.state === 'skipped').length,
+  };
+  return { normalized, checks };
+}
+
 // ---------- GraphQL query construction ----------
 
 /**
@@ -982,8 +1049,8 @@ export function decodeBatchResponse(
 }
 
 function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSummary {
-  const contexts =
-    raw.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
+  const rollup = raw.commits.nodes[0]?.commit.statusCheckRollup;
+  const contexts = rollup?.contexts.nodes ?? [];
   const contextsWithTs = contexts.map((c) => {
     const isCheckRun = c.__typename === 'CheckRun';
     return {
@@ -1001,20 +1068,13 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
         : latestTimestamp([c.createdAt]),
     };
   });
-  // Drop stale runs a re-run superseded (an old FAILURE behind a fresh QUEUED
-  // re-run of the same name) so the counts match GitHub's latest-per-name view.
-  const normalizedContexts = dedupeLatestCheckByName(contextsWithTs).map(
-    ({ name, state, url, required }) => ({ name, state, url, required })
+  // Collapse same-name re-runs to GitHub's latest-per-name view, but defer to
+  // GitHub's authoritative rollup state so a superseded-but-still-counted
+  // failure can't read as "Ready" (see summarizeCheckContexts).
+  const { normalized: normalizedContexts, checks } = summarizeCheckContexts(
+    contextsWithTs,
+    rollup?.state
   );
-  const checks: CheckBreakdown = {
-    total: normalizedContexts.length,
-    passed: normalizedContexts.filter((c) => c.state === 'success').length,
-    failed: normalizedContexts.filter((c) => c.state === 'failure').length,
-    inProgress: normalizedContexts.filter(
-      (c) => c.state === 'in_progress' || c.state === 'pending'
-    ).length,
-    skipped: normalizedContexts.filter((c) => c.state === 'skipped').length,
-  };
   // Required-ness is authoritative only if we know it for every failing
   // check (a partially-paginated by-branch fetch could mix known + null);
   // otherwise fall back to the mergeStateStatus heuristic.
