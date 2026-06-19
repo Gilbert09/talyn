@@ -6,7 +6,7 @@ import type { MockId } from "@/components/mocks/AppMocks";
 
 export function HowItWorks() {
   return (
-    <section id="how" className="relative border-t border-white/[0.05] bg-ink-900/30 py-24">
+    <section id="how" className="relative border-t border-line bg-paper-100 py-24">
       <div className="container">
         <SectionHeading kicker={how.kicker} title={how.title} sub={how.sub} />
 
@@ -14,31 +14,22 @@ export function HowItWorks() {
           {how.steps.map((step, i) => {
             const flip = i % 2 === 1;
             return (
-              <div
-                key={step.n}
-                className="grid items-center gap-10 lg:grid-cols-2"
-              >
+              <div key={step.n} className="grid items-center gap-10 lg:grid-cols-2">
                 <Reveal className={flip ? "lg:order-2" : ""}>
                   <div className="flex items-center gap-3">
-                    <span className="font-display text-5xl font-semibold text-white/10">
+                    <span className="font-display text-5xl font-semibold text-clay/20">
                       {step.n}
                     </span>
-                    <span className="h-px flex-1 bg-gradient-to-r from-talon/40 to-transparent" />
+                    <span className="h-px flex-1 bg-gradient-to-r from-clay/40 to-transparent" />
                   </div>
-                  <h3 className="mt-4 font-display text-2xl font-semibold text-white">
+                  <h3 className="mt-4 font-display text-2xl font-semibold text-ink">
                     {step.title}
                   </h3>
-                  <p className="mt-3 max-w-md text-owl-50/60">{step.body}</p>
+                  <p className="mt-3 max-w-md text-ink-500">{step.body}</p>
                 </Reveal>
 
-                <Reveal
-                  delay={0.1}
-                  className={flip ? "lg:order-1" : ""}
-                >
-                  <ScreenshotPlaceholder
-                    shot={step.shot as MockId}
-                    glow={false}
-                  />
+                <Reveal delay={0.1} className={flip ? "lg:order-1" : ""}>
+                  <ScreenshotPlaceholder shot={step.shot as MockId} glow={false} />
                 </Reveal>
               </div>
             );

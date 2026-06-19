@@ -10,40 +10,47 @@ const config: Config = {
     container: {
       center: true,
       padding: "1.5rem",
-      screens: { "2xl": "1200px" },
+      screens: { "2xl": "1180px" },
     },
     extend: {
       colors: {
-        // Brand DNA carried over from the desktop owl icon.
+        // Warm paper surfaces (page + cards).
+        paper: {
+          DEFAULT: "#f8f5f0",
+          50: "#fcfbf8",
+          100: "#f5f1ea",
+          200: "#efe9df",
+          300: "#e7ded1",
+        },
+        // Warm charcoal ink (text), stepping down into muted grays.
         ink: {
-          DEFAULT: "#030816", // deepest navy-black (page base)
-          900: "#050b1c",
-          800: "#0a1226",
-          700: "#16203a",
+          DEFAULT: "#23201b",
+          700: "#3d3830",
+          600: "#5c554a",
+          500: "#7a7264",
+          400: "#9a9183",
         },
-        owl: {
-          // owl-blue accents from icon.svg (#7da2e8 / #aac4f5 / #eef3fb)
-          50: "#eef3fb",
-          200: "#aac4f5",
-          400: "#7da2e8",
-          600: "#3b5a9a",
-          700: "#22345e",
+        // Single signature accent: terracotta / clay.
+        clay: {
+          DEFAULT: "#c25e3a",
+          600: "#a64e2f",
+          500: "#c25e3a",
+          400: "#cf7553",
+          300: "#dd9a7e",
+          200: "#ecc4b1",
+          100: "#f5e2d7",
         },
-        // Signature "talon" gold — the pop colour for CTAs / highlights.
-        talon: {
-          DEFAULT: "#f5b94d",
-          300: "#ffd98a",
-          400: "#f5b94d",
-          500: "#e89a2b",
-          600: "#c97d18",
+        line: {
+          DEFAULT: "#e8e1d6",
+          strong: "#dbd1c2",
         },
-        // Product status semantics, mirrored from the app.
+        // Product status semantics, tuned for light surfaces.
         status: {
-          green: "#34d399",
-          red: "#f87171",
-          amber: "#fbbf24",
-          blue: "#60a5fa",
-          purple: "#a78bfa",
+          green: "#15a34a",
+          red: "#dc2626",
+          amber: "#d97706",
+          blue: "#2563eb",
+          purple: "#7c3aed",
         },
         border: "hsl(var(--border))",
         background: "hsl(var(--background))",
@@ -64,14 +71,11 @@ const config: Config = {
         "2xl": "1.25rem",
       },
       boxShadow: {
-        glow: "0 0 80px -20px rgba(125,162,232,0.45)",
-        "glow-talon": "0 0 60px -18px rgba(245,185,77,0.55)",
+        soft: "0 1px 2px rgba(35,32,27,0.04), 0 14px 40px -18px rgba(35,32,27,0.16)",
+        card: "0 1px 0 0 rgba(255,255,255,0.6) inset, 0 12px 30px -16px rgba(35,32,27,0.14)",
         frame:
-          "0 1px 0 0 rgba(255,255,255,0.06) inset, 0 40px 120px -40px rgba(0,0,0,0.8)",
-      },
-      backgroundImage: {
-        "grid-fade":
-          "linear-gradient(to bottom, transparent, hsl(var(--background)))",
+          "0 1px 0 0 rgba(255,255,255,0.7) inset, 0 40px 90px -40px rgba(35,32,27,0.30)",
+        "glow-clay": "0 26px 70px -34px rgba(194,94,58,0.45)",
       },
       keyframes: {
         "fade-up": {
@@ -80,15 +84,11 @@ const config: Config = {
         },
         blink: {
           "0%, 92%, 100%": { opacity: "1" },
-          "94%, 98%": { opacity: "0.15" },
-        },
-        marquee: {
-          from: { transform: "translateX(0)" },
-          to: { transform: "translateX(-50%)" },
+          "94%, 98%": { opacity: "0.2" },
         },
         "pulse-ring": {
-          "0%": { transform: "scale(0.9)", opacity: "0.6" },
-          "100%": { transform: "scale(1.6)", opacity: "0" },
+          "0%": { transform: "scale(0.9)", opacity: "0.55" },
+          "100%": { transform: "scale(1.7)", opacity: "0" },
         },
         scan: {
           "0%, 100%": { transform: "translateX(-40%)", opacity: "0" },
@@ -98,7 +98,6 @@ const config: Config = {
       animation: {
         "fade-up": "fade-up 0.6s ease both",
         blink: "blink 5s ease-in-out infinite",
-        marquee: "marquee 32s linear infinite",
         "pulse-ring": "pulse-ring 2.4s ease-out infinite",
         scan: "scan 3.5s ease-in-out infinite",
       },

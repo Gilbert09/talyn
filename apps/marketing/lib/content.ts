@@ -6,9 +6,9 @@
 export const site = {
   name: "Talyn",
   domain: "talyn.dev",
-  tagline: "Drag your PRs to green.",
+  tagline: "Merge more. Babysit less.",
   description:
-    "Talyn watches every pull request, flags what's broken, and sends cloud agents to fix CI, clear conflicts, and answer reviews — so your PRs land themselves.",
+    "Talyn watches every pull request, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews — so they land without you babysitting them.",
   // Swap this for the real release artifact when the beta build is public.
   downloadUrl: "#download",
   githubUrl: "https://github.com/Gilbert09/owl",
@@ -23,24 +23,22 @@ export const nav = [
 ];
 
 export const hero = {
-  badge: "Free while in beta",
-  // Primary line + the bit we tint gold.
-  titleLead: "Drag your PRs to",
-  titleAccent: "green.",
-  sub: "Talyn is mission control for your GitHub pull requests. It watches every PR, flags the ones rotting in CI hell, and dispatches cloud coding agents to fix the checks, clear the conflicts, and answer the reviews — automatically.",
+  badge: "Public beta",
+  titleLead: "Merge more.",
+  titleAccent: "Babysit less.",
+  sub: "Talyn is mission control for your GitHub pull requests. It watches every PR, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews — so they land without you hovering over them.",
   primaryCta: "Download for Mac",
   secondaryCta: "See how it works",
-  microtrust: "Apple silicon · macOS 13+ · free in beta",
+  microtrust: "Apple silicon · macOS 13+",
 };
 
 export const poweredBy = {
   kicker: "Bring your own agent",
   blurb:
-    "Talyn doesn't run a model — it conducts the best ones. Plug in the cloud agents you already trust.",
+    "Talyn doesn't run a model — it conducts the ones you already trust.",
   logos: [
     { name: "Claude Code", note: "Anthropic Managed Agents" },
-    { name: "PostHog Code", note: "Live" },
-    { name: "OpenAI Codex", note: "Coming soon" },
+    { name: "PostHog Code", note: "Connected" },
     { name: "GitHub", note: "Your repos" },
   ],
 };
@@ -64,7 +62,7 @@ export const problem = {
     },
     {
       title: "Agent babysitting",
-      body: "You kicked off an agent, then sat there watching the terminal so you could open the PR yourself.",
+      body: "You kicked off an agent, then sat there watching the log so you could open the PR yourself.",
     },
   ],
 };
@@ -77,7 +75,7 @@ export const how = {
     {
       n: "01",
       title: "Connect GitHub + an agent",
-      body: "Sign in with GitHub, pick the repos you live in, and plug in a cloud provider — Claude Code or PostHog Code. No daemon, no SSH, nothing running on your laptop.",
+      body: "Sign in with GitHub, pick the repos you live in, and connect a cloud agent — Claude Code or PostHog Code. That's the whole setup.",
       shot: "onboarding",
     },
     {
@@ -89,7 +87,7 @@ export const how = {
     {
       n: "03",
       title: "Delegate, or let it auto-fix",
-      body: "Hit \"fix this PR\" and a cloud agent resolves CI in its own sandbox, then opens the fix. Or flag it keep-mergeable and Talyn does it the moment things go red.",
+      body: "Hit \"fix this PR\" and a cloud agent resolves CI, then opens the fix. Or flag it keep-mergeable and Talyn does it the moment things go red.",
       shot: "task-running",
     },
   ],
@@ -104,7 +102,7 @@ export const features = [
     bullets: [
       "Real-time check rollups across every watched repo",
       "Needs-attention bucket surfaces blockers instantly",
-      "Open diffs, checks, and conversation in-app",
+      "Diffs, checks, and conversation right inside the app",
     ],
     shot: "dashboard",
     flip: false,
@@ -113,11 +111,11 @@ export const features = [
     id: "delegate",
     eyebrow: "Delegate the drudgery",
     title: "Send a cloud agent. Get a PR back.",
-    body: "Fix failing CI, answer review comments, or write a whole feature — the agent runs the full loop on its own sandbox and opens a pull request. Watch the transcript stream live, then review it like any other PR.",
+    body: "Fix failing CI, reply to review comments, or write a whole feature — the agent runs the full loop and opens a pull request. Watch the transcript stream live, then take it from there.",
     bullets: [
-      "Fix CI / respond to review / freeform code tasks",
+      "Fix CI / reply to review / freeform code tasks",
       "Live transcript streaming as the agent works",
-      "It opens the PR — you just review and merge",
+      "It opens the PR — you stay in control",
     ],
     shot: "task-running",
     flip: true,
@@ -136,14 +134,14 @@ export const features = [
     flip: false,
   },
   {
-    id: "in-app",
-    eyebrow: "Native, not a browser tab",
-    title: "Review and merge without leaving.",
-    body: "File-by-file diffs, the full check breakdown, the conversation thread, and a real one-click merge — all in a desktop app that's always there. Your laptop can close; the agents keep working in the cloud.",
+    id: "context",
+    eyebrow: "Full context, zero tabs",
+    title: "Know what's blocking. Know what's ready.",
+    body: "See the diff, the check breakdown, the conversation, and the review state for any PR without leaving Talyn. The ones that are good to go go straight into the merge queue.",
     bullets: [
-      "In-app diffs, checks, and conversation",
-      "One-click merge — not a GitHub.com redirect",
-      "Cloud-only: work survives a closed lid",
+      "Diffs, checks, and conversation in one view",
+      "Live review + CI state at a glance",
+      "Queue the ready ones straight to merge",
     ],
     shot: "pr-detail",
     flip: true,
@@ -152,71 +150,71 @@ export const features = [
 
 export const providers = {
   kicker: "Providers",
-  title: "No lock-in. Switch per task.",
-  sub: "Talyn is a pluggable conductor for cloud coding agents. Use the one your team already pays for — or pick a different one for each task.",
+  title: "No lock-in. Use the agent you trust.",
+  sub: "Talyn is a pluggable conductor for cloud coding agents. Use the one your team already pays for — or pick a different one per task.",
   items: [
     {
       name: "Claude Code",
       sub: "Anthropic Managed Agents",
-      status: "Live",
-      body: "Anthropic's hosted sandbox runs the agent loop and opens the PR. Full parity: transcript polling, PR creation, cancellation.",
+      status: "Connected",
+      body: "Anthropic's hosted sandbox runs the agent loop and opens the PR. Full support: live transcript, PR creation, cancellation.",
     },
     {
       name: "PostHog Code",
       sub: "Personal API key + project",
-      status: "Live",
-      body: "Connect a PostHog Code key and project ID. Powers auto-fixes, review responses, and freeform tasks end to end.",
+      status: "Connected",
+      body: "Connect a PostHog Code key and project. Powers auto-fixes, review replies, and freeform tasks end to end.",
     },
     {
-      name: "OpenAI Codex",
-      sub: "Codex Cloud",
-      status: "Coming soon",
-      body: "Wired for the day OpenAI ships a server-to-server cloud API. The provider seam is already built and waiting.",
+      name: "More on the way",
+      sub: "Pluggable by design",
+      status: "Soon",
+      body: "Every provider is a self-contained module behind one clean interface — so adding the next agent doesn't touch your workflow.",
     },
   ],
 };
 
 export const why = {
   kicker: "Why Talyn",
-  title: "Built for people who live in PRs.",
+  title: "It doesn't just flag problems. It fixes them.",
   cards: [
     {
-      title: "No daemon. No SSH.",
-      body: "Nothing runs on your machine. Agents work in the cloud; you get a transcript and a pull request.",
-      tone: "talon",
+      title: "Triage that thinks",
+      body: "Every PR ranked by what needs you — blocked, behind, or ready — the moment you open the app.",
+      tone: "clay",
     },
     {
-      title: "Survives a closed laptop",
-      body: "Kick off a fix, shut the lid, go to lunch. The run finishes in the cloud and the PR is waiting.",
-      tone: "blue",
+      title: "Fixes, not just alerts",
+      body: "Other tools tell you CI broke. Talyn sends an agent to fix it and opens the pull request.",
+      tone: "clay",
     },
     {
-      title: "PR-native, not a generic IDE",
-      body: "Every feature is wired to GitHub — triage, auto-fix, merge queue. It does one thing relentlessly well.",
-      tone: "blue",
+      title: "Stays green on its own",
+      body: "Flag a PR keep-mergeable and Talyn re-fixes it the moment it falls behind or breaks.",
+      tone: "plain",
     },
     {
-      title: "Auto-keep-mergeable",
-      body: "The thing nothing else does: re-fix a PR the moment it falls behind or breaks, and merge it when green.",
-      tone: "talon",
+      title: "Bring your own agent",
+      body: "Claude Code or PostHog Code — use the one you trust. No model lock-in, switch per task.",
+      tone: "plain",
     },
     {
-      title: "Multi-provider by design",
-      body: "Claude Code and PostHog Code today, Codex next. A clean seam shields you from provider API churn.",
-      tone: "blue",
+      title: "Lands them in order",
+      body: "The merge queue ships your ready PRs the second they're green — conflicts handled along the way.",
+      tone: "plain",
     },
     {
-      title: "Desktop-grade craft",
-      body: "Coalesced live transcripts, real diffs, instant triage. The polish of a tool you keep open all day.",
-      tone: "blue",
+      title: "Built to live in",
+      body: "Real diffs, live transcripts, instant triage — the polish of a tool you keep open all day.",
+      tone: "plain",
     },
   ],
 };
 
 export const beta = {
   badge: "Public beta",
-  title: "Free while we're in beta.",
-  body: "Talyn is free during the beta — you bring your own cloud agent, we conduct it. No card, no seats, no catch. Grab the Mac build and start clearing your PR backlog tonight.",
+  title: "Talyn is in beta.",
+  body: "Connect your repos, bring your own cloud agent, and start clearing your PR backlog tonight. We're building in the open and would love your feedback while we get to 1.0.",
   cta: "Download for Mac",
   emailLabel: "Not on a Mac? Get notified.",
   emailPlaceholder: "you@startup.dev",
@@ -226,15 +224,15 @@ export const beta = {
 export const faq = [
   {
     q: "What is Talyn, exactly?",
-    a: "A desktop app that tracks your GitHub PRs and delegates the routine work — fixing CI, clearing conflicts, answering reviews — to cloud coding agents that run in their own sandbox and open a pull request. Think mission control for getting PRs to a mergeable state.",
+    a: "A desktop app that tracks your GitHub PRs and delegates the routine work — fixing CI, clearing conflicts, replying to reviews — to cloud coding agents that run the loop and open a pull request. Think mission control for getting PRs to a mergeable state.",
   },
   {
     q: "Which AI agents does it use?",
-    a: "You bring your own. Claude Code (Anthropic Managed Agents) and PostHog Code are live today; OpenAI Codex Cloud is planned. Talyn doesn't run a model itself — it conducts the provider you connect, and you can switch per task.",
+    a: "You bring your own. Claude Code (Anthropic Managed Agents) and PostHog Code are supported today, with more providers on the way. Talyn doesn't run a model itself — it conducts the provider you connect, and you can switch per task.",
   },
   {
-    q: "Does anything run on my machine?",
-    a: "No daemon, no SSH, no local CLI. Every agent run happens in the provider's cloud sandbox. Talyn is just the desktop control surface — your laptop can sleep while a fix finishes.",
+    q: "Where does the work actually happen?",
+    a: "Agent runs happen in your provider's cloud, under your account. Talyn is the desktop control surface that kicks them off, streams the progress live, and links the resulting PR back onto your dashboard.",
   },
   {
     q: "How does auto-keep-mergeable work?",
@@ -246,7 +244,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "Talyn is free during the public beta. You pay only for your own cloud-agent usage with whichever provider you connect. Pricing for general availability will be announced later — beta users get a heads up first.",
+    a: "Talyn is in public beta. You bring your own cloud-agent credits with whichever provider you connect. Pricing for general availability will be announced before we leave beta — beta users get a heads up first.",
   },
   {
     q: "What platforms are supported?",
@@ -261,26 +259,24 @@ export const footer = {
     {
       title: "Product",
       links: [
-        { label: "How it works", href: "#how" },
-        { label: "Features", href: "#features" },
-        { label: "Providers", href: "#providers" },
-        { label: "Download", href: "#download" },
+        { label: "How it works", href: "/#how" },
+        { label: "Features", href: "/#features" },
+        { label: "Providers", href: "/#providers" },
+        { label: "Download", href: "/#download" },
       ],
     },
     {
       title: "Company",
       links: [
-        { label: "FAQ", href: "#faq" },
+        { label: "FAQ", href: "/#faq" },
         { label: "GitHub", href: "https://github.com/Gilbert09/owl" },
-        { label: "Status", href: "#" },
-        { label: "Changelog", href: "#" },
       ],
     },
     {
       title: "Legal",
       links: [
-        { label: "Privacy", href: "#" },
-        { label: "Terms", href: "#" },
+        { label: "Privacy", href: "/privacy" },
+        { label: "Terms", href: "/terms" },
       ],
     },
   ],

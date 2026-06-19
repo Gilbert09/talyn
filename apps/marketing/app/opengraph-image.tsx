@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Talyn — Drag your PRs to green";
+export const alt = "Talyn — Merge more. Babysit less.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -17,15 +17,15 @@ export default function OgImage() {
           justifyContent: "center",
           padding: "80px",
           background:
-            "radial-gradient(900px circle at 30% 0%, #16203a 0%, #050b1c 55%, #030816 100%)",
-          color: "white",
+            "radial-gradient(900px circle at 28% 0%, #ffffff 0%, #f8f5f0 55%, #f2ede5 100%)",
+          color: "#23201b",
           fontFamily: "sans-serif",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
           <svg width="56" height="56" viewBox="0 0 64 64" fill="none">
             <g
-              stroke="#f5b94d"
+              stroke="#c25e3a"
               strokeWidth={3.4}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -47,23 +47,23 @@ export default function OgImage() {
         <div
           style={{
             marginTop: 40,
-            fontSize: 76,
+            fontSize: 80,
             fontWeight: 700,
-            lineHeight: 1.05,
+            lineHeight: 1.04,
             letterSpacing: -2,
             display: "flex",
           }}
         >
-          Drag your PRs to{" "}
-          <span style={{ color: "#f5b94d", marginLeft: 18 }}>green.</span>
+          Merge more.{" "}
+          <span style={{ color: "#c25e3a", marginLeft: 18 }}>Babysit less.</span>
         </div>
 
         <div
           style={{
             marginTop: 28,
             fontSize: 30,
-            color: "#aac4f5",
-            maxWidth: 900,
+            color: "#5c554a",
+            maxWidth: 920,
             lineHeight: 1.4,
           }}
         >
@@ -77,12 +77,12 @@ export default function OgImage() {
             display: "flex",
             gap: 14,
             fontSize: 22,
-            color: "#7da2e8",
+            color: "#9a9183",
           }}
         >
           <span>talyn.dev</span>
-          <span style={{ color: "#3b5a9a" }}>·</span>
-          <span>Free in beta</span>
+          <span>·</span>
+          <span>Public beta</span>
         </div>
       </div>
     ),

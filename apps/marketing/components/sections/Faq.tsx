@@ -10,11 +10,11 @@ export function Faq() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <section id="faq" className="border-t border-white/[0.05] bg-ink-900/30 py-24">
+    <section id="faq" className="border-t border-line bg-paper-100 py-24">
       <div className="container">
         <SectionHeading kicker="FAQ" title="Questions, answered." />
 
-        <div className="mx-auto mt-12 max-w-2xl divide-y divide-white/[0.06] overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+        <div className="mx-auto mt-12 max-w-2xl divide-y divide-line overflow-hidden rounded-2xl border border-line bg-white shadow-soft">
           {faq.map((item, i) => {
             const isOpen = open === i;
             return (
@@ -24,10 +24,10 @@ export function Faq() {
                   className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
                   aria-expanded={isOpen}
                 >
-                  <span className="text-sm font-medium text-white">{item.q}</span>
+                  <span className="text-sm font-medium text-ink">{item.q}</span>
                   <Plus
                     className={cn(
-                      "h-4 w-4 shrink-0 text-talon-300 transition-transform duration-300",
+                      "h-4 w-4 shrink-0 text-clay-600 transition-transform duration-300",
                       isOpen && "rotate-45"
                     )}
                   />
@@ -39,7 +39,7 @@ export function Faq() {
                   )}
                 >
                   <div className="overflow-hidden">
-                    <p className="px-5 pb-5 text-sm leading-relaxed text-owl-50/60">
+                    <p className="px-5 pb-5 text-sm leading-relaxed text-ink-500">
                       {item.a}
                     </p>
                   </div>

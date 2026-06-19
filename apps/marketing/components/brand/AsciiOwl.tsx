@@ -6,7 +6,7 @@ export function AsciiOwl({ className }: { className?: string }) {
     <pre
       aria-hidden
       className={cn(
-        "select-none font-mono text-[10px] leading-[1.15] text-owl-400/70",
+        "select-none font-mono text-[10px] leading-[1.15] text-clay/60",
         className
       )}
     >

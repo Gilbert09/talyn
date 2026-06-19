@@ -1,11 +1,11 @@
 # Talyn — marketing site
 
-The public marketing site for **Talyn** (`talyn.dev`): mission control for your GitHub PRs, powered by cloud coding agents. Premium-dark, single rich landing page. Independent of the FastOwl backend/desktop — its own Next.js app, deploys to Vercel.
+The public marketing site for **Talyn** (`talyn.dev`): mission control for your GitHub PRs, powered by cloud coding agents. Light & warm aesthetic, single rich landing page. Independent of the FastOwl backend/desktop — its own Next.js app, deploys to Vercel.
 
 ## Stack
 
 - **Next.js 14** (App Router, TypeScript), statically rendered
-- **Tailwind CSS** — brand tokens in `app/globals.css` + `tailwind.config.ts` (navy + owl-blue + signature talon-gold), carried over from the desktop owl icon
+- **Tailwind CSS** — brand tokens in `app/globals.css` + `tailwind.config.ts` (warm paper + charcoal ink + single terracotta/clay accent)
 - **framer-motion** scroll reveals · **lucide-react** icons
 - Hand-themed marketing components (glow cards, dotted-grid backdrop, marquee, macOS app frame) inspired by Aceternity / Magic UI
 
@@ -52,6 +52,7 @@ Shot ids: `dashboard`, `task-running`, `merge-queue`, `pr-detail`, `onboarding`.
 ## Brand quick reference
 
 - **Name:** Talyn (a stylized "talon" — the owl's grip that drags a failing PR to green)
-- **Palette:** ink navy `#030816`, owl-blue `#7da2e8` / `#aac4f5`, talon-gold `#f5b94d` (CTAs)
+- **Tagline:** "Merge more. Babysit less."
+- **Palette:** warm paper `#f8f5f0`, charcoal ink `#23201b`, terracotta/clay accent `#c25e3a` (CTAs); status colors only inside the product mockups
 - **Type:** Space Grotesk (display) · Inter (body) · JetBrains Mono (code)
 - **Voice:** dry, dev-native, a little silly. Owl/talon/night puns used sparingly.

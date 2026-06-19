@@ -19,7 +19,7 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const title = `${site.name} — Drag your PRs to green`;
+const title = `${site.name} — Merge more. Babysit less.`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(`https://${site.domain}`),
@@ -56,7 +56,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#030816",
+  themeColor: "#f8f5f0",
 };
 
 export default function RootLayout({

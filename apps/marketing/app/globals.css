@@ -3,12 +3,12 @@
 @tailwind utilities;
 
 :root {
-  /* Talyn is dark-only. Tokens mirror the desktop app's HSL system. */
-  --background: 222 70% 5%;
-  --foreground: 210 40% 98%;
-  --muted: 217 33% 14%;
-  --muted-foreground: 215 20% 62%;
-  --border: 217 33% 16%;
+  /* Light & warm. Tokens map to the paper / ink / line scale. */
+  --background: 40 33% 96%; /* paper #f8f5f0 */
+  --foreground: 36 13% 12%; /* ink #23201b */
+  --muted: 40 22% 90%;
+  --muted-foreground: 36 9% 46%;
+  --border: 38 27% 87%; /* line #e8e1d6 */
 }
 
 * {
@@ -22,56 +22,48 @@ html {
 }
 
 body {
-  background-color: #030816;
-  color: hsl(var(--foreground));
+  background-color: #f8f5f0;
+  color: #23201b;
   font-feature-settings: "ss01", "cv11";
 }
 
-/* Subtle owl-blue selection. */
 ::selection {
-  background: rgba(245, 185, 77, 0.28);
-  color: #fff;
+  background: rgba(194, 94, 58, 0.18);
+  color: #23201b;
 }
 
-/* Thin desktop-style scrollbar. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(125, 162, 232, 0.18);
+  background: rgba(35, 32, 27, 0.16);
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(125, 162, 232, 0.32);
+  background: rgba(35, 32, 27, 0.28);
 }
 
 @layer components {
-  /* Reusable dotted-grid backdrop. */
+  /* Faint warm dotted grid backdrop. */
   .bg-dot-grid {
     background-image: radial-gradient(
-      rgba(125, 162, 232, 0.12) 1px,
+      rgba(35, 32, 27, 0.07) 1px,
       transparent 1px
     );
     background-size: 26px 26px;
   }
 
-  .text-gradient {
-    background: linear-gradient(180deg, #ffffff 0%, #aac4f5 130%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  .text-gradient-talon {
-    background: linear-gradient(180deg, #ffd98a 0%, #e89a2b 120%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  /* Faint hairline ring used on cards / frames. */
+  /* Hairline ring used on cards / frames. */
   .ring-hairline {
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    box-shadow: 0 0 0 1px rgba(35, 32, 27, 0.06);
+  }
+
+  /* Subtle warm gradient for large display headings. */
+  .text-warm {
+    background: linear-gradient(180deg, #2a261f 0%, #4a4339 130%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }

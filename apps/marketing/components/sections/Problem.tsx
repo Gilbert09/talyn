@@ -10,7 +10,7 @@ export function Problem() {
     <section className="relative py-24">
       <div className="container">
         <SectionHeading kicker={problem.kicker} title={problem.title} />
-        <Reveal className="mx-auto mt-4 max-w-2xl text-center text-lg text-owl-50/60">
+        <Reveal className="mx-auto mt-4 max-w-2xl text-center text-lg text-ink-500">
           {problem.body}
         </Reveal>
 
@@ -21,13 +21,13 @@ export function Problem() {
               <Reveal
                 key={p.title}
                 delay={i * 0.06}
-                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5"
+                className="rounded-2xl border border-line bg-white p-5 shadow-soft"
               >
                 <div className="mb-3 inline-flex rounded-xl border border-status-red/20 bg-status-red/10 p-2.5">
                   <Icon className="h-5 w-5 text-status-red" />
                 </div>
-                <h3 className="text-sm font-semibold text-white">{p.title}</h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-owl-50/55">
+                <h3 className="text-sm font-semibold text-ink">{p.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
                   {p.body}
                 </p>
               </Reveal>

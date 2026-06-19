@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
 import { Reveal } from "@/components/ui/Reveal";
-import { beta, site } from "@/lib/content";
+import { beta } from "@/lib/content";
 
 function EmailCapture() {
   const [email, setEmail] = useState("");
@@ -28,7 +28,7 @@ function EmailCapture() {
         onChange={(e) => setEmail(e.target.value)}
         placeholder={beta.emailPlaceholder}
         disabled={done}
-        className="h-11 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm text-white placeholder:text-owl-50/35 focus:border-talon/50 focus:outline-none focus:ring-2 focus:ring-talon/30 disabled:opacity-60"
+        className="h-11 flex-1 rounded-xl border border-line-strong bg-white px-4 text-sm text-ink placeholder:text-ink-400 focus:border-clay/50 focus:outline-none focus:ring-2 focus:ring-clay/25 disabled:opacity-60"
       />
       <Button type="submit" variant={done ? "secondary" : "primary"} disabled={done}>
         {done ? (
@@ -48,17 +48,17 @@ export function Beta() {
     <section id="download" className="relative overflow-hidden py-24">
       <GridBackground />
       <div className="container relative">
-        <Reveal className="mx-auto max-w-2xl rounded-3xl border border-white/10 bg-ink-800/60 p-10 text-center shadow-glow backdrop-blur sm:p-14">
+        <Reveal className="mx-auto max-w-2xl rounded-3xl border border-line-strong bg-white p-10 text-center shadow-frame sm:p-14">
           <div className="mb-5 flex justify-center">
             <Badge dot>{beta.badge}</Badge>
           </div>
-          <h2 className="font-display text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-            <span className="text-gradient-talon">{beta.title}</span>
+          <h2 className="font-display text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
+            {beta.title}
           </h2>
-          <p className="mx-auto mt-4 max-w-lg text-owl-50/65">{beta.body}</p>
+          <p className="mx-auto mt-4 max-w-lg text-ink-500">{beta.body}</p>
 
           <div className="mt-8 flex justify-center">
-            <a href={site.downloadUrl}>
+            <a href="#download">
               <Button size="lg">
                 <Download className="h-5 w-5" />
                 {beta.cta}
@@ -66,8 +66,8 @@ export function Beta() {
             </a>
           </div>
 
-          <div className="mt-8 border-t border-white/[0.06] pt-6">
-            <p className="text-sm text-owl-50/50">{beta.emailLabel}</p>
+          <div className="mt-8 border-t border-line pt-6">
+            <p className="text-sm text-ink-500">{beta.emailLabel}</p>
             <EmailCapture />
           </div>
         </Reveal>

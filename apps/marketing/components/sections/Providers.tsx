@@ -5,16 +5,13 @@ import { providers } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
 const statusTone: Record<string, string> = {
-  Live: "border-status-green/30 bg-status-green/10 text-status-green",
-  "Coming soon": "border-owl-400/30 bg-owl-400/10 text-owl-200",
+  Connected: "border-status-green/30 bg-status-green/10 text-status-green",
+  Soon: "border-clay/30 bg-clay/10 text-clay-600",
 };
 
 export function Providers() {
   return (
-    <section
-      id="providers"
-      className="relative border-t border-white/[0.05] bg-ink-900/30 py-24"
-    >
+    <section id="providers" className="relative border-t border-line py-24">
       <div className="container">
         <SectionHeading
           kicker={providers.kicker}
@@ -25,9 +22,9 @@ export function Providers() {
         <div className="mx-auto mt-14 grid max-w-5xl gap-4 md:grid-cols-3">
           {providers.items.map((p, i) => (
             <Reveal key={p.name} delay={i * 0.08}>
-              <GlowCard className="h-full" tone={p.status === "Live" ? "blue" : "talon"}>
+              <GlowCard className="h-full" tone={p.status === "Connected" ? "plain" : "clay"}>
                 <div className="flex items-center justify-between">
-                  <h3 className="font-display text-lg font-semibold text-white">
+                  <h3 className="font-display text-lg font-semibold text-ink">
                     {p.name}
                   </h3>
                   <span
@@ -39,8 +36,8 @@ export function Providers() {
                     {p.status}
                   </span>
                 </div>
-                <p className="mt-1 font-mono text-xs text-owl-50/40">{p.sub}</p>
-                <p className="mt-4 text-sm leading-relaxed text-owl-50/60">{p.body}</p>
+                <p className="mt-1 font-mono text-xs text-ink-400">{p.sub}</p>
+                <p className="mt-4 text-sm leading-relaxed text-ink-500">{p.body}</p>
               </GlowCard>
             </Reveal>
           ))}

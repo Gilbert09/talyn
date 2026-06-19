@@ -23,12 +23,12 @@ export function Nav() {
       className={cn(
         "fixed inset-x-0 top-0 z-50 transition-all duration-300",
         scrolled
-          ? "border-b border-white/[0.06] bg-ink/70 backdrop-blur-xl"
+          ? "border-b border-line bg-paper/80 backdrop-blur-xl"
           : "border-b border-transparent"
       )}
     >
       <nav className="container flex h-16 items-center justify-between">
-        <a href="#top" aria-label="Talyn home">
+        <a href="/#top" aria-label="Talyn home">
           <Logo />
         </a>
 
@@ -36,8 +36,8 @@ export function Nav() {
           {nav.map((item) => (
             <a
               key={item.href}
-              href={item.href}
-              className="rounded-lg px-3 py-2 text-sm text-owl-50/70 transition-colors hover:text-white"
+              href={`/${item.href}`}
+              className="rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
             >
               {item.label}
             </a>
@@ -50,7 +50,7 @@ export function Nav() {
               GitHub
             </Button>
           </a>
-          <a href={site.downloadUrl}>
+          <a href="/#download">
             <Button size="sm">
               <Download className="h-4 w-4" />
               Download
@@ -59,7 +59,7 @@ export function Nav() {
         </div>
 
         <button
-          className="rounded-lg p-2 text-white md:hidden"
+          className="rounded-lg p-2 text-ink md:hidden"
           onClick={() => setOpen((v) => !v)}
           aria-label="Toggle menu"
         >
@@ -68,19 +68,19 @@ export function Nav() {
       </nav>
 
       {open && (
-        <div className="border-t border-white/[0.06] bg-ink/95 px-6 py-4 backdrop-blur-xl md:hidden">
+        <div className="border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl md:hidden">
           <div className="flex flex-col gap-1">
             {nav.map((item) => (
               <a
                 key={item.href}
-                href={item.href}
+                href={`/${item.href}`}
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2.5 text-sm text-owl-50/80 hover:bg-white/[0.05]"
+                className="rounded-lg px-3 py-2.5 text-sm text-ink-600 hover:bg-ink/[0.04]"
               >
                 {item.label}
               </a>
             ))}
-            <a href={site.downloadUrl} onClick={() => setOpen(false)} className="mt-2">
+            <a href="/#download" onClick={() => setOpen(false)} className="mt-2">
               <Button className="w-full">
                 <Download className="h-4 w-4" />
                 Download for Mac

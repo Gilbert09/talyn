@@ -42,8 +42,8 @@ export function Logo({
 }) {
   return (
     <span className={cn("inline-flex items-center gap-2", className)}>
-      <OwlMark className={cn("h-7 w-7 text-talon-300", markClassName)} />
-      <span className="font-display text-xl font-semibold tracking-tight text-white">
+      <OwlMark className={cn("h-7 w-7 text-clay", markClassName)} />
+      <span className="font-display text-xl font-semibold tracking-tight text-ink">
         Talyn
       </span>
     </span>

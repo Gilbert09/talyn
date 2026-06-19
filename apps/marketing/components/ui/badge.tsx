@@ -13,14 +13,14 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-owl-50/80 backdrop-blur",
+        "inline-flex items-center gap-2 rounded-full border border-line-strong bg-white/70 px-3 py-1 text-xs font-medium text-ink-600 shadow-soft backdrop-blur",
         className
       )}
     >
       {dot && (
         <span className="relative flex h-1.5 w-1.5">
-          <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-talon" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-talon" />
+          <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-clay" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-clay" />
         </span>
       )}
       {children}

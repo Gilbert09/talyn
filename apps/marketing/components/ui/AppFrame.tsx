@@ -16,18 +16,18 @@ export function AppFrame({
   return (
     <div
       className={cn(
-        "relative rounded-2xl border border-white/10 bg-ink-800/80 shadow-frame backdrop-blur",
-        glow && "shadow-glow",
+        "relative overflow-hidden rounded-2xl border border-line-strong bg-white",
+        glow ? "shadow-frame" : "shadow-soft",
         className
       )}
     >
-      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
+      <div className="flex items-center gap-2 border-b border-line bg-paper-100/80 px-4 py-3">
         <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
         <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
         <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-        <span className="ml-3 font-mono text-xs text-owl-50/40">{title}</span>
+        <span className="ml-3 font-mono text-xs text-ink-400">{title}</span>
       </div>
-      <div className="overflow-hidden rounded-b-2xl">{children}</div>
+      <div className="overflow-hidden">{children}</div>
     </div>
   );
 }

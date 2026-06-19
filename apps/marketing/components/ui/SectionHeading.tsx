@@ -23,14 +23,14 @@ export function SectionHeading({
       )}
     >
       {kicker && (
-        <p className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-talon-300">
+        <p className="mb-3 font-mono text-xs uppercase tracking-[0.2em] text-clay-600">
           {kicker}
         </p>
       )}
-      <h2 className="font-display text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+      <h2 className="font-display text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
         {title}
       </h2>
-      {sub && <p className="mt-4 text-lg text-owl-50/60">{sub}</p>}
+      {sub && <p className="mt-4 text-lg text-ink-500">{sub}</p>}
     </Reveal>
   );
 }

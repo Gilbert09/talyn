@@ -4,21 +4,21 @@ import { useRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Card with a cursor-following radial highlight (Aceternity-style spotlight),
- * themed to owl-blue. Pure CSS var update on mousemove — cheap, no re-render.
+ * Card with a cursor-following warm highlight. Pure CSS-var update on
+ * mousemove — cheap, no re-render. Reads as a soft clay wash on light paper.
  */
 export function GlowCard({
   children,
   className,
-  tone = "blue",
+  tone = "plain",
 }: {
   children: ReactNode;
   className?: string;
-  tone?: "blue" | "talon";
+  tone?: "plain" | "clay";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const glow =
-    tone === "talon" ? "rgba(245,185,77,0.16)" : "rgba(125,162,232,0.18)";
+    tone === "clay" ? "rgba(194,94,58,0.12)" : "rgba(35,32,27,0.05)";
 
   return (
     <div
@@ -31,7 +31,7 @@ export function GlowCard({
         el.style.setProperty("--my", `${e.clientY - rect.top}px`);
       }}
       className={cn(
-        "group relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-6 transition-colors hover:border-white/20",
+        "group relative overflow-hidden rounded-2xl border border-line bg-white p-6 shadow-soft transition-colors hover:border-line-strong",
         className
       )}
     >
