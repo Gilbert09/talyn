@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Talyn is dark-only. Tokens mirror the desktop app's HSL system. */
+  --background: 222 70% 5%;
+  --foreground: 210 40% 98%;
+  --muted: 217 33% 14%;
+  --muted-foreground: 215 20% 62%;
+  --border: 217 33% 16%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: #030816;
+  color: hsl(var(--foreground));
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Subtle owl-blue selection. */
+::selection {
+  background: rgba(245, 185, 77, 0.28);
+  color: #fff;
+}
+
+/* Thin desktop-style scrollbar. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(125, 162, 232, 0.18);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(125, 162, 232, 0.32);
+}
+
+@layer components {
+  /* Reusable dotted-grid backdrop. */
+  .bg-dot-grid {
+    background-image: radial-gradient(
+      rgba(125, 162, 232, 0.12) 1px,
+      transparent 1px
+    );
+    background-size: 26px 26px;
+  }
+
+  .text-gradient {
+    background: linear-gradient(180deg, #ffffff 0%, #aac4f5 130%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .text-gradient-talon {
+    background: linear-gradient(180deg, #ffd98a 0%, #e89a2b 120%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Faint hairline ring used on cards / frames. */
+  .ring-hairline {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+}

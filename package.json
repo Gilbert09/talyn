@@ -4,7 +4,7 @@
   "private": true,
   "description": "Mission control for AI-assisted software engineering",
   "workspaces": [
-    "apps/*",
+    "apps/desktop",
     "packages/*"
   ],
   "scripts": {
