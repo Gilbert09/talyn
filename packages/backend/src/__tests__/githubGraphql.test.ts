@@ -49,6 +49,12 @@ describe('normalizeCheckState', () => {
     expect(normalizeCheckState({ status: 'COMPLETED', conclusion: 'CANCELLED' })).toBe('cancelled');
   });
 
+  it('maps STALE conclusion to skipped (superseded — not a failure)', () => {
+    // GitHub excludes STALE runs from its rollup; mapping to `failure` made a
+    // green PR show phantom failures (PostHog/posthog#65121).
+    expect(normalizeCheckState({ status: 'COMPLETED', conclusion: 'STALE' })).toBe('skipped');
+  });
+
   it('treats unknown conclusion conservatively as failure', () => {
     expect(normalizeCheckState({ status: 'COMPLETED', conclusion: 'PURPLE' })).toBe('failure');
   });
@@ -650,6 +656,37 @@ describe('summarizeCheckContexts', () => {
     expect(checks.passed).toBe(1);
     expect(checks.total).toBe(2);
   });
+
+  it('demotes a phantom failure when GitHub\'s rollup is SUCCESS', () => {
+    // PostHog/posthog#65121: a superseded run (the only one of its name) maps to
+    // `failure` while GitHub's green rollup excludes it. The PR is green, so the
+    // failure must not surface — it's demoted to skipped, never counted failing.
+    const { checks, normalized } = summarizeCheckContexts(
+      [
+        ctx({ name: 'Stale build (1)', state: 'failure', ts: 100, required: true }),
+        ctx({ name: 'Stale build (2)', state: 'failure', ts: 110, required: true }),
+        ctx({ name: 'lint', state: 'success', ts: 50 }),
+      ],
+      'SUCCESS'
+    );
+    expect(checks.failed).toBe(0);
+    expect(checks.skipped).toBe(2);
+    expect(checks.passed).toBe(1);
+    expect(checks.total).toBe(3);
+    expect(normalized.some((c) => c.state === 'failure')).toBe(false);
+  });
+
+  it('does not touch failures when the rollup state is unknown (null)', () => {
+    // No rollup signal → trust the latest-per-name view as-is.
+    const { checks } = summarizeCheckContexts(
+      [
+        ctx({ name: 'build', state: 'failure', ts: 100 }),
+        ctx({ name: 'lint', state: 'success', ts: 50 }),
+      ],
+      null
+    );
+    expect(checks.failed).toBe(1);
+  });
 });
 
 describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
@@ -764,6 +801,28 @@ describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
     expect(pr!.checks.total).toBe(2); // de-duped distinct names
     expect(pr!.blockingReason).toBe('checks_failed');
   });
+
+  it('reads as Ready when GitHub\'s rollup is SUCCESS despite stale runs (posthog#65121)', () => {
+    // The PR is green on GitHub, but three superseded STALE runs sit in the
+    // rollup. They must not surface as "3 failing" or block the merge.
+    const base = prWithContexts([
+      checkRun({ name: 'Build (1)', status: 'COMPLETED', conclusion: 'STALE', isRequired: true }),
+      checkRun({ name: 'Build (2)', status: 'COMPLETED', conclusion: 'STALE', isRequired: true }),
+      checkRun({ name: 'Build (3)', status: 'COMPLETED', conclusion: 'STALE', isRequired: true }),
+      checkRun({ name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true }),
+    ]) as {
+      mergeStateStatus: string;
+      commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } } }> };
+    };
+    base.commits.nodes[0].commit.statusCheckRollup.state = 'SUCCESS';
+    base.mergeStateStatus = 'CLEAN';
+    const data = { repository: { [aliasForBranch(0)]: { nodes: [base] } } };
+    const [{ pr }] = decodeBatchResponse(['feature/x'], data, 'acme', 'widgets');
+    expect(pr).not.toBeNull();
+    expect(pr!.checks.failed).toBe(0); // no phantom failures on a green PR
+    expect(pr!.checks.passed).toBe(1); // lint
+    expect(pr!.blockingReason).toBe('mergeable');
+  });
 });
 
 describe('decodeBatchResponse', () => {
@@ -834,7 +893,9 @@ describe('decodeBatchResponse', () => {
                   {
                     commit: {
                       statusCheckRollup: {
-                        state: 'SUCCESS',
+                        // FAILURE: GitHub never reports SUCCESS while a context
+                        // is still failing — the rollup aggregates them.
+                        state: 'FAILURE',
                         contexts: {
                           nodes: [
                             {

@@ -477,6 +477,12 @@ export function normalizeCheckState(input: {
         return 'success';
       case 'SKIPPED':
         return 'skipped';
+      case 'STALE':
+        // A superseded run GitHub drops from its `statusCheckRollup.state`
+        // (e.g. a job re-run replaced it). It's neither a pass nor a real
+        // failure — treat as skipped so it can't surface as a phantom failure
+        // on a PR GitHub considers green.
+        return 'skipped';
       case 'FAILURE':
       case 'TIMED_OUT':
       case 'STARTUP_FAILURE':
@@ -694,13 +700,17 @@ interface NormalizedCheck {
  * 0 failing and the PR "Ready" on a PR GitHub considers broken (seen on
  * PostHog/posthog#64614: the *Tests Pass gates each had a superseded FAILURE).
  *
- * So we defer to GitHub: when its rollup says the commit FAILED but our
- * latest-per-name view found no failure, any name with a failing raw run is
- * forced back to `failure`. When the rollup is NOT failing (the original
- * stale-re-run case — an old FAILURE behind an in-flight QUEUED re-run leaves
- * the rollup PENDING, which is what GitHub's own merge box shows) we keep the
- * de-noised latest-per-name view untouched. Either way our verdict matches the
- * single field GitHub's UI is derived from.
+ * So we defer to GitHub's rollup in both directions:
+ *   - Rollup FAILURE but our latest-per-name view found no failure → any name
+ *     with a failing raw run is forced back to `failure` (PostHog#64614).
+ *   - Rollup SUCCESS but our view still holds a failure → that run is one
+ *     GitHub excludes from its green rollup (a superseded/STALE re-run, or a
+ *     conclusion we map conservatively to `failure`), so we demote it to
+ *     skipped — a green PR must not show a phantom "N failing" (PostHog#65121).
+ *   - Rollup PENDING (the original stale-re-run case — an old FAILURE behind an
+ *     in-flight QUEUED re-run) → we keep the de-noised latest-per-name view
+ *     untouched, which is what GitHub's own merge box shows.
+ * Either way our verdict matches the single field GitHub's UI is derived from.
  */
 export function summarizeCheckContexts(
   contexts: Array<NormalizedCheck & { ts: number }>,
@@ -728,6 +738,16 @@ export function summarizeCheckContexts(
           : c
       );
     }
+  } else if (rollupState === 'SUCCESS' && dedupedFailed) {
+    // Mirror image: GitHub's rollup is green, yet latest-per-name still holds a
+    // failure. GitHub's SUCCESS rollup counts zero failing contexts, so that
+    // run is one it excludes — a superseded/STALE re-run, or a conclusion we
+    // map conservatively to `failure` — not a real failure. Demote it to
+    // skipped so a green PR can't show a phantom "N failing"
+    // (PostHog/posthog#65121).
+    normalized = normalized.map((c) =>
+      c.state === 'failure' ? { ...c, state: 'skipped' } : c
+    );
   }
   const checks: CheckBreakdown = {
     total: normalized.length,
