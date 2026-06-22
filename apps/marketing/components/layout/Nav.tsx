@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Menu, X, Download } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
+import { DownloadButton } from "@/components/ui/DownloadButton";
 import { nav, site } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
@@ -50,12 +51,7 @@ export function Nav() {
               GitHub
             </Button>
           </a>
-          <a href="/#download">
-            <Button size="sm">
-              <Download className="h-4 w-4" />
-              Download
-            </Button>
-          </a>
+          <DownloadButton size="sm">Download</DownloadButton>
         </div>
 
         <button
@@ -80,12 +76,11 @@ export function Nav() {
                 {item.label}
               </a>
             ))}
-            <a href="/#download" onClick={() => setOpen(false)} className="mt-2">
-              <Button className="w-full">
-                <Download className="h-4 w-4" />
+            <div onClick={() => setOpen(false)} className="mt-2">
+              <DownloadButton size="md" className="w-full">
                 Download for Mac
-              </Button>
-            </a>
+              </DownloadButton>
+            </div>
           </div>
         </div>
       )}

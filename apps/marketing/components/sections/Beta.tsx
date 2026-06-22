@@ -1,21 +1,23 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { DownloadButton } from "@/components/ui/DownloadButton";
 import { GridBackground } from "@/components/ui/GridBackground";
 import { Reveal } from "@/components/ui/Reveal";
 import { beta } from "@/lib/content";
+import { captureSignup } from "@/lib/analytics";
 
 function EmailCapture() {
   const [email, setEmail] = useState("");
   const [done, setDone] = useState(false);
 
-  // Placeholder handler — wire to Resend / Loops / a form endpoint at launch.
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
+    captureSignup(email); // recorded as a `waitlist_signup` event in PostHog
     setDone(true);
   };
 
@@ -58,12 +60,7 @@ export function Beta() {
           <p className="mx-auto mt-4 max-w-lg text-ink-500">{beta.body}</p>
 
           <div className="mt-8 flex justify-center">
-            <a href="#download">
-              <Button size="lg">
-                <Download className="h-5 w-5" />
-                {beta.cta}
-              </Button>
-            </a>
+            <DownloadButton size="lg">{beta.cta}</DownloadButton>
           </div>
 
           <div className="mt-8 border-t border-line pt-6">

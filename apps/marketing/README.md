@@ -30,10 +30,23 @@ Everything that needs a real value lives in one of two places.
 
 ### 1. Copy — `lib/content.ts`
 
-All headlines, feature blurbs, FAQ, nav, and footer text. Edit here to retune voice; no component changes needed. Key fields in `site`:
+All headlines, feature blurbs, FAQ, nav, and footer text. Edit here to retune voice; no component changes needed. Key fields in `site`: `githubUrl`, `email`, `domain`.
 
-- `downloadUrl` — currently `#download`. **Point at the real Mac build/release** (e.g. a GitHub Releases `.dmg` URL).
-- `githubUrl`, `email`, `domain`.
+### Download button — live
+
+`components/ui/DownloadButton.tsx` fetches the newest release from the public
+GitHub API (`Gilbert09/owl`) on click and downloads the Apple-silicon `.dmg`,
+falling back to the releases page. It uses `/releases?per_page=1` (not
+`/releases/latest`) because all current builds are pre-releases. Change `REPO`
+there if the repo moves. A `download_click` event is sent to PostHog.
+
+### Analytics — PostHog
+
+`components/analytics/Analytics.tsx` + `lib/analytics.ts`. Set
+`NEXT_PUBLIC_POSTHOG_KEY` (and optionally `NEXT_PUBLIC_POSTHOG_HOST`, default US
+cloud) — see `.env.example`. Inert until the key is set, so safe to deploy
+without it. Captures pageviews, `download_click`, and `waitlist_signup` (the
+email form records the address as a PostHog event).
 
 ### 2. Product screenshots — currently live HTML mockups
 
@@ -47,7 +60,9 @@ Shot ids: `dashboard`, `task-running`, `merge-queue`, `pr-detail`, `onboarding`.
 
 ### 3. Email capture — `components/sections/Beta.tsx`
 
-`EmailCapture` has a placeholder submit handler (sets local "you're on the list" state). Wire `onSubmit` to Resend / Loops / a form endpoint.
+`EmailCapture` records each signup as a `waitlist_signup` PostHog event (via
+`captureSignup`) and shows a local confirmation. To also pipe signups into a
+dedicated tool (Resend / Loops), add the POST in `onSubmit`.
 
 ## Brand quick reference
 

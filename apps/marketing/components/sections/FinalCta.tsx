@@ -1,6 +1,5 @@
-import { Download } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Reveal } from "@/components/ui/Reveal";
+import { DownloadButton } from "@/components/ui/DownloadButton";
 import { OwlMark } from "@/components/brand/Logo";
 
 export function FinalCta() {
@@ -22,12 +21,7 @@ export function FinalCta() {
             In public beta. Bring your own agent. Clear your PR backlog tonight.
           </p>
           <div className="mt-8 flex justify-center">
-            <a href="#download">
-              <Button size="lg">
-                <Download className="h-5 w-5" />
-                Download for Mac
-              </Button>
-            </a>
+            <DownloadButton size="lg">Download for Mac</DownloadButton>
           </div>
         </Reveal>
       </div>

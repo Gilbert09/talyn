@@ -1,4 +1,5 @@
 import { Reveal } from "@/components/ui/Reveal";
+import { ProviderMark } from "@/components/brand/ProviderMarks";
 import { poweredBy } from "@/lib/content";
 
 export function PoweredBy() {
@@ -12,17 +13,15 @@ export function PoweredBy() {
           <p className="mt-3 text-ink-500">{poweredBy.blurb}</p>
         </Reveal>
 
-        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-3">
+        <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-center gap-4">
           {poweredBy.logos.map((l, i) => (
             <Reveal
               key={l.name}
-              delay={i * 0.06}
-              className="flex items-center gap-3 rounded-xl border border-line bg-white px-5 py-3 shadow-soft"
+              delay={i * 0.08}
+              className="flex items-center gap-3 rounded-2xl border border-line bg-white px-6 py-4 shadow-soft"
             >
-              <span className="text-base font-semibold text-ink">{l.name}</span>
-              <span className="rounded-full bg-paper-200 px-2 py-0.5 font-mono text-[10px] text-ink-500">
-                {l.note}
-              </span>
+              <ProviderMark mark={l.mark} className="h-7 w-7 text-clay" />
+              <span className="text-lg font-semibold text-ink">{l.name}</span>
             </Reveal>
           ))}
         </div>

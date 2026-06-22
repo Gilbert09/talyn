@@ -9,8 +9,6 @@ export const site = {
   tagline: "Merge more. Babysit less.",
   description:
     "Talyn watches every pull request, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews — so they land without you babysitting them.",
-  // Swap this for the real release artifact when the beta build is public.
-  downloadUrl: "#download",
   githubUrl: "https://github.com/Gilbert09/owl",
   email: "hey@talyn.dev",
 };
@@ -37,9 +35,8 @@ export const poweredBy = {
   blurb:
     "Talyn doesn't run a model — it conducts the ones you already trust.",
   logos: [
-    { name: "Claude Code", note: "Anthropic Managed Agents" },
-    { name: "PostHog Code", note: "Connected" },
-    { name: "GitHub", note: "Your repos" },
+    { name: "Claude Code", mark: "claude" as const },
+    { name: "PostHog Code", mark: "posthog" as const },
   ],
 };
 
@@ -62,7 +59,7 @@ export const problem = {
     },
     {
       title: "Agent babysitting",
-      body: "You kicked off an agent, then sat there watching the log so you could open the PR yourself.",
+      body: "You kicked off an agent, then sat there watching the log so you could merge it yourself.",
     },
   ],
 };
@@ -87,7 +84,7 @@ export const how = {
     {
       n: "03",
       title: "Delegate, or let it auto-fix",
-      body: "Hit \"fix this PR\" and a cloud agent resolves CI, then opens the fix. Or flag it keep-mergeable and Talyn does it the moment things go red.",
+      body: "Hit \"fix this PR\" and a cloud agent resolves CI and pushes the fix to the branch. Or flag it keep-mergeable and Talyn does it the moment things go red.",
       shot: "task-running",
     },
   ],
@@ -110,12 +107,12 @@ export const features = [
   {
     id: "delegate",
     eyebrow: "Delegate the drudgery",
-    title: "Send a cloud agent. Get a PR back.",
-    body: "Fix failing CI, reply to review comments, or write a whole feature — the agent runs the full loop and opens a pull request. Watch the transcript stream live, then take it from there.",
+    title: "Send a cloud agent. Get back a mergeable PR.",
+    body: "Point Talyn at a PR that's red or behind main and it dispatches a cloud agent to fix the checks, clear the conflicts, and answer the review — pushing straight to the branch. Watch the transcript stream live; what comes back is green ticks, ready to merge.",
     bullets: [
-      "Fix CI / reply to review / freeform code tasks",
+      "Fixes CI, resolves conflicts, addresses review comments",
       "Live transcript streaming as the agent works",
-      "It opens the PR — you stay in control",
+      "Green checks back on your existing PR — no new PR to wrangle",
     ],
     shot: "task-running",
     flip: true,
@@ -155,21 +152,18 @@ export const providers = {
   items: [
     {
       name: "Claude Code",
-      sub: "Anthropic Managed Agents",
-      status: "Connected",
-      body: "Anthropic's hosted sandbox runs the agent loop and opens the PR. Full support: live transcript, PR creation, cancellation.",
+      mark: "claude" as const,
+      body: "Anthropic's hosted agents run the loop and push the fix back to your PR — live transcript and all.",
     },
     {
       name: "PostHog Code",
-      sub: "Personal API key + project",
-      status: "Connected",
-      body: "Connect a PostHog Code key and project. Powers auto-fixes, review replies, and freeform tasks end to end.",
+      mark: "posthog" as const,
+      body: "Connect PostHog Code to power auto-fixes, conflict resolution, and review replies end to end.",
     },
     {
       name: "More on the way",
-      sub: "Pluggable by design",
-      status: "Soon",
-      body: "Every provider is a self-contained module behind one clean interface — so adding the next agent doesn't touch your workflow.",
+      mark: "soon" as const,
+      body: "Every provider is a self-contained module behind one clean interface — so the next agent slots in without touching your workflow.",
     },
   ],
 };
@@ -181,32 +175,26 @@ export const why = {
     {
       title: "Triage that thinks",
       body: "Every PR ranked by what needs you — blocked, behind, or ready — the moment you open the app.",
-      tone: "clay",
     },
     {
       title: "Fixes, not just alerts",
-      body: "Other tools tell you CI broke. Talyn sends an agent to fix it and opens the pull request.",
-      tone: "clay",
+      body: "Other tools tell you CI broke. Talyn sends an agent to fix it and push the checks back to green.",
     },
     {
       title: "Stays green on its own",
       body: "Flag a PR keep-mergeable and Talyn re-fixes it the moment it falls behind or breaks.",
-      tone: "plain",
     },
     {
       title: "Bring your own agent",
       body: "Claude Code or PostHog Code — use the one you trust. No model lock-in, switch per task.",
-      tone: "plain",
     },
     {
       title: "Lands them in order",
       body: "The merge queue ships your ready PRs the second they're green — conflicts handled along the way.",
-      tone: "plain",
     },
     {
       title: "Built to live in",
       body: "Real diffs, live transcripts, instant triage — the polish of a tool you keep open all day.",
-      tone: "plain",
     },
   ],
 };
@@ -224,7 +212,7 @@ export const beta = {
 export const faq = [
   {
     q: "What is Talyn, exactly?",
-    a: "A desktop app that tracks your GitHub PRs and delegates the routine work — fixing CI, clearing conflicts, replying to reviews — to cloud coding agents that run the loop and open a pull request. Think mission control for getting PRs to a mergeable state.",
+    a: "A desktop app that tracks your GitHub PRs and delegates the routine work — fixing CI, clearing conflicts, replying to reviews — to cloud coding agents that run the loop and push the fix back to your PR. Think mission control for getting PRs to a mergeable state.",
   },
   {
     q: "Which AI agents does it use?",

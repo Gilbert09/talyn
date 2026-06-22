@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Suspense } from "react";
 import "./globals.css";
 import { site } from "@/lib/content";
+import { Analytics } from "@/components/analytics/Analytics";
 
 const sans = Inter({
   subsets: ["latin"],
@@ -66,7 +68,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
-      <body className="font-sans antialiased">{children}</body>
+      <body className="font-sans antialiased">
+        <Suspense fallback={null}>
+          <Analytics />
+        </Suspense>
+        {children}
+      </body>
     </html>
   );
 }

@@ -23,8 +23,8 @@ export function Problem() {
                 delay={i * 0.06}
                 className="rounded-2xl border border-line bg-white p-5 shadow-soft"
               >
-                <div className="mb-3 inline-flex rounded-xl border border-status-red/20 bg-status-red/10 p-2.5">
-                  <Icon className="h-5 w-5 text-status-red" />
+                <div className="mb-3 inline-flex rounded-xl border border-clay/20 bg-clay/10 p-2.5">
+                  <Icon className="h-5 w-5 text-clay" />
                 </div>
                 <h3 className="text-sm font-semibold text-ink">{p.title}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-ink-500">

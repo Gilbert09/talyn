@@ -1,8 +1,9 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Download, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DownloadButton } from "@/components/ui/DownloadButton";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
 import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
@@ -39,12 +40,7 @@ export function Hero() {
           </p>
 
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <a href="/#download">
-              <Button size="lg">
-                <Download className="h-5 w-5" />
-                {hero.primaryCta}
-              </Button>
-            </a>
+            <DownloadButton size="lg">{hero.primaryCta}</DownloadButton>
             <a href="#how">
               <Button variant="secondary" size="lg">
                 {hero.secondaryCta}
