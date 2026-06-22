@@ -200,8 +200,9 @@ const createWindow = async () => {
     width: 1024,
     height: 728,
     icon: getAssetPath('icon.png'),
-    // Warm paper, matching the default light theme — avoids a white flash on launch.
-    backgroundColor: '#f8f5f0',
+    // Warm off-white, matching the default light theme's content surface —
+    // avoids a stark white flash on launch.
+    backgroundColor: '#fcfbf8',
     // macOS: drop the native title bar and float the inset traffic lights
     // over the renderer, which reserves a drag strip for them (sidebar top
     // in MainLayout, a fixed overlay on chrome-less screens).

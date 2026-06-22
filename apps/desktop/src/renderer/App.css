@@ -6,48 +6,53 @@
   /* Talyn — warm light theme (paper + ink + clay), carried over from the
      marketing site. Status colours (emerald/red/amber/blue) stay as-is. */
   :root {
-    --background: 40 33% 96%; /* paper #f8f5f0 */
+    /* Content surfaces (background/popover) are the LIGHTER warm white; the
+       sidebar + panels (card) are the DARKER paper — matching the marketing
+       mock where the sidebar is paper and the content is white. */
+    --background: 40 43% 98%; /* content — warm white #fcfbf8 */
     --foreground: 36 13% 12%; /* ink #23201b */
-    --card: 40 43% 98%; /* warm near-white #fcfbf8 */
+    --card: 37 32% 93%; /* sidebar + panels — paper #f2ede3 (darker) */
     --card-foreground: 36 13% 12%;
-    --popover: 40 43% 98%;
+    --popover: 40 44% 99%; /* menus — white, elevated */
     --popover-foreground: 36 13% 12%;
     --primary: 16 54% 49%; /* clay #c25e3a */
     --primary-foreground: 40 40% 98%;
-    --secondary: 40 30% 91%; /* paper-200 #efe9df */
+    --secondary: 38 27% 90%;
     --secondary-foreground: 36 13% 18%;
-    --muted: 40 30% 92%;
+    --muted: 38 27% 90%;
     --muted-foreground: 36 9% 46%; /* ink-500 #7a7264 */
-    --accent: 40 30% 91%;
+    --accent: 38 27% 90%;
     --accent-foreground: 36 13% 18%;
     --destructive: 0 72% 51%; /* red #dc2626 */
     --destructive-foreground: 0 0% 100%;
-    --border: 38 27% 87%; /* line #e8e1d6 */
-    --input: 38 27% 87%;
+    --border: 37 22% 85%; /* line #ddd4c6 */
+    --input: 37 22% 85%;
     --ring: 16 54% 49%; /* clay focus ring */
     --radius: 0.625rem;
   }
 
-  /* Warm dark variant — warm-black surfaces with the same clay accent. */
+  /* Warm dark variant — warm-black surfaces with the same clay accent. The
+     sidebar/panels (card) sit DARKER than the content (background), mirroring
+     the light theme's layering. */
   .dark {
-    --background: 32 18% 9%;
+    --background: 32 16% 11%; /* content (lighter) */
     --foreground: 40 33% 96%;
-    --card: 33 17% 12%;
+    --card: 30 16% 8%; /* sidebar + panels (darker) */
     --card-foreground: 40 33% 96%;
-    --popover: 33 17% 12%;
+    --popover: 32 15% 14%; /* menus — elevated lighter */
     --popover-foreground: 40 33% 96%;
     --primary: 18 58% 58%; /* clay-400 #cf7553 */
     --primary-foreground: 32 18% 9%;
-    --secondary: 35 14% 16%;
+    --secondary: 33 14% 17%;
     --secondary-foreground: 40 33% 96%;
-    --muted: 35 14% 16%;
+    --muted: 33 14% 17%;
     --muted-foreground: 38 15% 62%;
-    --accent: 35 14% 16%;
+    --accent: 33 14% 17%;
     --accent-foreground: 40 33% 96%;
     --destructive: 0 62% 45%;
     --destructive-foreground: 0 0% 100%;
-    --border: 34 14% 18%;
-    --input: 34 14% 18%;
+    --border: 33 13% 18%;
+    --input: 33 13% 18%;
     --ring: 18 58% 58%;
   }
 }
