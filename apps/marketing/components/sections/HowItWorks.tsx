@@ -14,8 +14,8 @@ export function HowItWorks() {
           {how.steps.map((step, i) => {
             const flip = i % 2 === 1;
             return (
-              <div key={step.n} className="grid items-center gap-10 lg:grid-cols-2">
-                <Reveal className={flip ? "lg:order-2" : ""}>
+              <div key={step.n} className="grid items-center gap-10 lg:grid-cols-5">
+                <Reveal className={flip ? "lg:order-2 lg:col-span-2" : "lg:col-span-2"}>
                   <div className="flex items-center gap-3">
                     <span className="font-display text-5xl font-semibold text-clay/20">
                       {step.n}
@@ -28,7 +28,10 @@ export function HowItWorks() {
                   <p className="mt-3 max-w-md text-ink-500">{step.body}</p>
                 </Reveal>
 
-                <Reveal delay={0.1} className={flip ? "lg:order-1" : ""}>
+                <Reveal
+                  delay={0.1}
+                  className={flip ? "lg:order-1 lg:col-span-3" : "lg:col-span-3"}
+                >
                   <ScreenshotPlaceholder shot={step.shot as MockId} glow={false} />
                 </Reveal>
               </div>

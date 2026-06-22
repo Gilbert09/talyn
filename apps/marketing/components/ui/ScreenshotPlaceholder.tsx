@@ -14,12 +14,15 @@ export function ScreenshotPlaceholder({
   title,
   className,
   glow = true,
+  filters = true,
 }: {
   shot: MockId;
   src?: string;
   title?: string;
   className?: string;
   glow?: boolean;
+  /** Show the triage filter bar on dashboard / merge-queue mocks. */
+  filters?: boolean;
 }) {
   const Mock = MOCKS[shot];
   return (
@@ -34,7 +37,7 @@ export function ScreenshotPlaceholder({
             className="w-full"
           />
         ) : (
-          <Mock />
+          <Mock filters={filters} />
         )}
       </AppFrame>
     </div>

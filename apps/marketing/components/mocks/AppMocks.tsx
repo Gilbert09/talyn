@@ -16,14 +16,15 @@ import {
   AlertTriangle,
   Loader2,
   ExternalLink,
-  ArrowUpDown,
-  Search,
   GitBranch,
   Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OwlMark } from "@/components/brand/Logo";
+
+/** Mock components accept this so callers can toggle the filter bar. */
+type MockProps = { filters?: boolean };
 
 /* ---------- status pill + rollup (mirrors widgets/PRStatusPill) ---------- */
 
@@ -95,10 +96,10 @@ function StatusPill({
 
 function Sidebar({ active = "prs" }: { active?: string }) {
   const items = [
-    { id: "prs", label: "My PRs", icon: GitPullRequest, badge: 3 },
+    { id: "prs", label: "My PRs", icon: GitPullRequest, badge: 4 },
     { id: "reviews", label: "Reviews", icon: Eye, badge: 5 },
-    { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 2 },
-    { id: "tasks", label: "Tasks", icon: ListTodo, badge: 1 },
+    { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 3 },
+    { id: "tasks", label: "Tasks", icon: ListTodo, badge: 2 },
   ];
   return (
     <div className="hidden w-48 shrink-0 flex-col border-r border-line bg-paper-100 sm:flex">
@@ -160,24 +161,18 @@ function Sidebar({ active = "prs" }: { active?: string }) {
 
 function FilterBar() {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2 text-[11px]">
-      <span className="rounded-md border border-line bg-white px-2 py-1 text-ink-500">
+    <div className="flex items-center gap-2 overflow-hidden border-b border-line px-4 py-2 text-[11px]">
+      <span className="shrink-0 rounded-md border border-line bg-white px-2 py-1 text-ink-500">
         All repos
       </span>
-      <span className="rounded-md border border-status-amber/30 bg-status-amber/10 px-2 py-1 text-status-amber">
+      <span className="shrink-0 rounded-md border border-status-amber/30 bg-status-amber/10 px-2 py-1 text-status-amber">
         Needs attention · 2
       </span>
-      <span className="rounded-md border border-line px-2 py-1 text-ink-500">
+      <span className="shrink-0 rounded-md border border-line px-2 py-1 text-ink-500">
         Needs review · 1
       </span>
-      <span className="rounded-md border border-line px-2 py-1 text-ink-500">
+      <span className="shrink-0 rounded-md border border-line px-2 py-1 text-ink-500">
         Ready to merge · 1
-      </span>
-      <span className="flex items-center gap-1 rounded-md border border-line px-2 py-1 text-ink-500">
-        <ArrowUpDown className="h-3 w-3" /> Newest
-      </span>
-      <span className="ml-auto flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-ink-400">
-        <Search className="h-3 w-3" /> Search
       </span>
     </div>
   );
@@ -201,7 +196,7 @@ const prRows = [
   {
     title: "perf: cache the search index",
     sub: "sundial/web#407 · @dana · opened 6h ago",
-    pill: { tone: "blue" as Tone, icon: Loader2, label: "3/12 running", spin: true, rollup: { passed: 9, running: 3 } },
+    pill: { tone: "amber" as Tone, icon: Eye, label: "Review", rollup: { passed: 12 } },
     updated: "3h",
   },
   {
@@ -212,12 +207,12 @@ const prRows = [
   },
 ];
 
-export function MockDashboard() {
+export function MockDashboard({ filters = true }: MockProps) {
   return (
     <div className="flex h-[360px] bg-white text-left">
       <Sidebar active="prs" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <FilterBar />
+        {filters && <FilterBar />}
         <div className="flex-1 overflow-hidden">
           {prRows.map((r) => (
             <div
@@ -250,7 +245,7 @@ const transcript = [
   { k: "ok", t: "✓ checks green — pushed fix to fix/webhook-retry" },
 ];
 
-export function MockTaskRunning() {
+export function MockTaskRunning(_props: MockProps) {
   return (
     <div className="flex h-[360px] bg-white text-left">
       <Sidebar active="tasks" />
@@ -337,7 +332,7 @@ export function MockTaskRunning() {
 
 /* ---------- merge queue (mirrors MergeQueuePanel) ---------- */
 
-export function MockMergeQueue() {
+export function MockMergeQueue({ filters = true }: MockProps) {
   const rows = [
     { n: 1, title: "chore: bump dependencies", state: "Merging", tone: "blue" as Tone, spin: true },
     { n: 2, title: "feat: dark mode toggle", state: "Waiting", tone: "grey" as Tone },
@@ -347,7 +342,7 @@ export function MockMergeQueue() {
     <div className="flex h-[360px] bg-white text-left">
       <Sidebar active="queue" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <FilterBar />
+        {filters && <FilterBar />}
         {/* group header */}
         <div className="flex items-center gap-1.5 border-b border-line bg-paper-100 px-4 py-1.5 text-[11px] font-medium text-ink-500">
           <GitMerge className="h-3.5 w-3.5" />
@@ -389,7 +384,7 @@ export function MockMergeQueue() {
 
 /* ---------- pr detail (sheet with Summary/Checks/Files/Conversation tabs) ---------- */
 
-export function MockPrDetail() {
+export function MockPrDetail(_props: MockProps) {
   return (
     <div className="flex h-[360px] bg-white text-left">
       <Sidebar active="prs" />
@@ -434,7 +429,7 @@ export function MockPrDetail() {
 
 /* ---------- onboarding ---------- */
 
-export function MockOnboarding() {
+export function MockOnboarding(_props: MockProps) {
   return (
     <div className="flex h-[360px] flex-col items-center justify-center gap-4 bg-white p-6 text-center">
       <OwlMark className="h-14 w-14 animate-blink text-clay" />
@@ -444,7 +439,7 @@ export function MockOnboarding() {
         <p className="mt-1 text-xs text-ink-500">Sign in with GitHub and pick the repos you live in.</p>
       </div>
       <div className="w-64 space-y-1.5">
-        {["sundial/web", "sundial/api", "your/side-project"].map((r, i) => (
+        {["sundial/web", "sundial/api", "sundial/mobile"].map((r, i) => (
           <div
             key={r}
             className={cn(

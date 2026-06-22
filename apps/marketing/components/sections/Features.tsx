@@ -39,7 +39,7 @@ export function Features() {
               </Reveal>
 
               <Reveal delay={0.1} className={f.flip ? "lg:order-1" : ""}>
-                <ScreenshotPlaceholder shot={f.shot as MockId} />
+                <ScreenshotPlaceholder shot={f.shot as MockId} filters={false} />
               </Reveal>
             </div>
           ))}
