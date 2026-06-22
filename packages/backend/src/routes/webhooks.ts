@@ -14,8 +14,23 @@ import { debugBus } from '../services/debugBus.js';
  */
 
 const SIGNATURE_PREFIX = 'sha256=';
-/** Cap stream length so a backlog can't grow without bound (~ = approximate trim). */
-const STREAM_MAXLEN = 10_000;
+/**
+ * Cap stream length so a backlog can't grow without bound. `~` makes the trim
+ * approximate — Redis keeps *at least* this many, evicting the oldest entries
+ * in whole nodes — so a sustained backlog drops the oldest unprocessed
+ * deliveries (the poll/reconcile loop backfills anything trimmed). A backlog
+ * only forms if the worker can't keep up; under normal load the stream stays
+ * near-empty, so this is a safety valve, not a steady-state limit.
+ *
+ * Default 50k (~5× the old 10k). Override with WEBHOOK_STREAM_MAXLEN — sized to
+ * your Redis memory, since each entry holds a full webhook payload (~10-30KB).
+ * A non-positive / unparseable value falls back to the default rather than
+ * disabling the cap.
+ */
+const STREAM_MAXLEN = (() => {
+  const fromEnv = Number(process.env.WEBHOOK_STREAM_MAXLEN);
+  return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : 50_000;
+})();
 
 /**
  * Verify GitHub's `X-Hub-Signature-256` against the raw body. Timing-safe.

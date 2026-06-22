@@ -168,6 +168,11 @@ re-connects via the install flow.
    `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`.
 8. Set `REDIS_URL` (webhooks are enqueued onto a Redis Stream; without it the
    receiver acks-and-drops and the reconcile sweep keeps PRs fresh).
+   - Optional: `WEBHOOK_STREAM_MAXLEN` caps the ingest stream length (default
+     `50000`, approximate trim). A backlog only forms if the worker can't keep
+     up; raise it for more runway before the oldest deliveries are dropped, but
+     size it to your Redis memory — each entry holds a full webhook payload
+     (~10-30KB), so 50k ≈ up to ~1GB worst case.
 
 **Connecting (two steps):**
 1. **Install** the App on each account/org whose repos you want to track —
