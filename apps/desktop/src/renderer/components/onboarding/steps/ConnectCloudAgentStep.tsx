@@ -19,7 +19,7 @@ const PROVIDERS: { type: SelectableProvider; label: string }[] = [
 ];
 
 /**
- * Final (optional) onboarding step — connect a cloud coding agent so FastOwl can
+ * Final (optional) onboarding step — connect a cloud coding agent so Talyn can
  * delegate fix/respond/review work. The user first picks a provider (PostHog Code
  * or Claude Code), then fills in just that provider's inputs — keeping the step
  * compact rather than stacking every provider's form. Skippable (PR tracking works

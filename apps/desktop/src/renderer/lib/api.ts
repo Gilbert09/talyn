@@ -189,7 +189,7 @@ export interface GitHubRepo {
 }
 
 // One GitHub App installation the connected user can access (per account/org).
-// Drives the "is the FastOwl app installed on this org?" coverage UI.
+// Drives the "is the Talyn app installed on this org?" coverage UI.
 export interface GitHubInstallation {
   accountLogin: string;
   accountType: 'User' | 'Organization';
@@ -416,7 +416,7 @@ export interface PRRow {
   /** Watcher guard state: consecutive failed auto-runs + whether it's paused
    *  (3 failures with no progress). Null when the watcher is off. */
   autoMergeState?: { attempts: number; paused: boolean } | null;
-  /** True when this PR is in the FastOwl merge queue (merges one-by-one per
+  /** True when this PR is in the Talyn merge queue (merges one-by-one per
    *  repo+base, auto-fixing conflicts via a cloud run). */
   mergeQueued: boolean;
   /** Merge method used when this PR's turn comes. */
@@ -558,7 +558,7 @@ export const pullRequests = {
   // "get this PR mergeable" cloud run until it's clean, then keeps watching).
   setAutoKeepMergeable: (id: string, enabled: boolean) =>
     request<null>('POST', `/pull-requests/${id}/auto-keep-mergeable`, { enabled }),
-  // Add/remove a PR from the FastOwl merge queue. When enabled, the backend
+  // Add/remove a PR from the Talyn merge queue. When enabled, the backend
   // merges it (per `method`, default squash) as soon as it's clean, serialized
   // per repo+base, auto-firing a cloud run to fix conflicts/behind branches.
   setMergeQueue: (

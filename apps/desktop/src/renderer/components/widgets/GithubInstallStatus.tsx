@@ -66,7 +66,7 @@ export function GithubInstallStatus({
     return (
       <p className={cn('flex items-center gap-2 text-xs text-muted-foreground', className)}>
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Checking which accounts have the FastOwl app…
+        Checking which accounts have the Talyn app…
       </p>
     );
   }
@@ -107,8 +107,8 @@ export function GithubInstallStatus({
           <div className="min-w-0 flex-1 space-y-2">
             <p>
               {noInstalls
-                ? 'The FastOwl GitHub App isn’t installed on any account yet. Install it on the org or account whose repositories you want to track.'
-                : `The FastOwl GitHub App isn’t installed on ${formatOwnerList(uncovered)}. ${
+                ? 'The Talyn GitHub App isn’t installed on any account yet. Install it on the org or account whose repositories you want to track.'
+                : `The Talyn GitHub App isn’t installed on ${formatOwnerList(uncovered)}. ${
                     watchedOwners.length === 1 || uncovered.length === 1
                       ? 'That repository won’t'
                       : 'Those repositories won’t'

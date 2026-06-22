@@ -571,7 +571,7 @@ function notifyMergeQueueBlocked(p: MergeQueueBlockedEvent): void {
   if (typeof Notification === 'undefined') return;
   const fire = () => {
     try {
-      const n = new Notification('FastOwl — merge queue blocked', { body, silent: false });
+      const n = new Notification('Talyn — merge queue blocked', { body, silent: false });
       n.onclick = () => {
         try {
           window.focus();

@@ -138,7 +138,7 @@ export function useGitHubActions() {
     [removeRow]
   );
 
-  // Add/remove a PR from the FastOwl merge queue. Optimistically patches the
+  // Add/remove a PR from the Talyn merge queue. Optimistically patches the
   // row so the badge flips instantly; the backend echoes the authoritative
   // state (incl. queue position) over WS. Rolls back on error.
   const setMergeQueue = useCallback(

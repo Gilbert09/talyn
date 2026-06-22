@@ -107,7 +107,7 @@ export function SystemStatusBanner() {
       rows.push(
         <BannerRow
           key="gh-app-uncovered"
-          message={`The FastOwl GitHub App isn't installed on ${formatOwnerList(
+          message={`The Talyn GitHub App isn't installed on ${formatOwnerList(
             uncovered
           )} — watched repos there aren't being tracked until you install it.`}
           action={

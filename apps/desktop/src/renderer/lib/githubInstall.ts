@@ -3,7 +3,7 @@ import { api, type GitHubInstallation } from './api';
 /**
  * Helpers shared by every surface that reasons about GitHub App *installation
  * coverage* — onboarding, Settings, and the global banner. A repo is only
- * tracked by FastOwl if its owner org/account has an active (non-suspended)
+ * tracked by Talyn if its owner org/account has an active (non-suspended)
  * App installation, so these turn the raw installation list into the
  * owner-level checks the UI needs, and start the install flow in the browser.
  */

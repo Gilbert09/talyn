@@ -59,7 +59,7 @@ export function OnboardingWizard() {
     <div className="flex h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-lg space-y-6 rounded-lg border bg-card p-8 shadow-sm">
         <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Welcome to FastOwl</h1>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">Welcome to Talyn</h1>
           <p className="text-sm text-muted-foreground">Let's get your workspace set up.</p>
         </div>
 

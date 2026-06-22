@@ -1434,7 +1434,7 @@ function AppearanceSettings() {
       <div>
         <h3 className="text-lg font-medium mb-1">Appearance</h3>
         <p className="text-sm text-muted-foreground">
-          Customize the look and feel of FastOwl
+          Customize the look and feel of Talyn
         </p>
       </div>
 
@@ -1489,7 +1489,7 @@ function AppearanceSettings() {
             </p>
             {notifyPermission === 'denied' && (
               <p className="text-xs text-yellow-500 mt-1">
-                Desktop notifications are blocked at the OS level — grant FastOwl
+                Desktop notifications are blocked at the OS level — grant Talyn
                 permission in your system settings to receive them. (The in-app alert
                 still shows.)
               </p>
@@ -1530,7 +1530,7 @@ function DeveloperSettings() {
       <div>
         <h3 className="text-lg font-medium mb-1">Developer</h3>
         <p className="text-sm text-muted-foreground">
-          Tools for looking under the hood of FastOwl
+          Tools for looking under the hood of Talyn
         </p>
       </div>
 
@@ -1688,7 +1688,7 @@ function MCPServerSettings() {
       <div>
         <h3 className="text-lg font-semibold mb-1">MCP server</h3>
         <p className="text-sm text-muted-foreground">
-          Drive FastOwl from a Claude client (Claude Code or Claude Desktop). Generate a
+          Drive Talyn from a Claude client (Claude Code or Claude Desktop). Generate a
           personal token, then run the command below to connect.
         </p>
       </div>
@@ -1899,7 +1899,7 @@ function AboutSettings() {
       <Card className="p-4 space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h4 className="font-medium">FastOwl</h4>
+            <h4 className="font-medium">Talyn</h4>
             <p className="text-sm text-muted-foreground mt-1">
               Version {version ?? '—'}
             </p>

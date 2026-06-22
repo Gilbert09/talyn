@@ -40,7 +40,7 @@ ipcMain.on('ipc-example', async (event, arg) => {
 const IS_DEV_BUILD = !!process.defaultApp;
 
 // Dev builds claim a distinct scheme so a `fastowl://auth-callback` deep link
-// isn't stolen by an installed *production* FastOwl.app (macOS LaunchServices
+// isn't stolen by an installed *production* Talyn.app (macOS LaunchServices
 // routes a shared scheme to whichever app it prefers — usually the one in
 // /Applications). The renderer reads the matching redirect URL back over IPC
 // so both sides always agree.
@@ -200,6 +200,8 @@ const createWindow = async () => {
     width: 1024,
     height: 728,
     icon: getAssetPath('icon.png'),
+    // Warm paper, matching the default light theme — avoids a white flash on launch.
+    backgroundColor: '#f8f5f0',
     // macOS: drop the native title bar and float the inset traffic lights
     // over the renderer, which reserves a drag strip for them (sidebar top
     // in MainLayout, a fixed overlay on chrome-less screens).

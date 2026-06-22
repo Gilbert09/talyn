@@ -101,7 +101,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Pick the repositories you want FastOwl to track. Their PRs, reviews, and CI status
+        Pick the repositories you want Talyn to track. Their PRs, reviews, and CI status
         show up in the GitHub panel.
       </p>
 

@@ -6,7 +6,7 @@ import { api, type GitHubStatus, type GitHubUser } from '../lib/api';
  * completion. The OAuth flow happens in the system browser (not the
  * renderer), so we can't read query params off window.location — instead we
  * re-check status whenever the app regains focus, since the user naturally
- * returns to FastOwl after authorizing in their browser. Shared by the
+ * returns to Talyn after authorizing in their browser. Shared by the
  * Settings integrations card and the onboarding GitHub step.
  */
 export function useGithubConnection(workspaceId: string | null) {

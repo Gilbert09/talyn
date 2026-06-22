@@ -1,19 +1,19 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#16203a"/>
-      <stop offset="0.55" stop-color="#0a1226"/>
-      <stop offset="1" stop-color="#030816"/>
+      <stop offset="0" stop-color="#cf7553"/>
+      <stop offset="0.5" stop-color="#c25e3a"/>
+      <stop offset="1" stop-color="#9a4524"/>
     </linearGradient>
-    <radialGradient id="halo" cx="512" cy="470" r="420" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#3b5a9a" stop-opacity="0.32"/>
-      <stop offset="0.6" stop-color="#22345e" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="#0a1226" stop-opacity="0"/>
+    <radialGradient id="halo" cx="512" cy="450" r="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe6cf" stop-opacity="0.35"/>
+      <stop offset="0.6" stop-color="#f3c8a8" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#9a4524" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="scan" x1="362" y1="0" x2="662" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#7da2e8" stop-opacity="0"/>
-      <stop offset="0.5" stop-color="#aac4f5" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#7da2e8" stop-opacity="0"/>
+      <stop offset="0" stop-color="#fff4e8" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#fff4e8" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#fff4e8" stop-opacity="0"/>
     </linearGradient>
     <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
       <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
@@ -27,23 +27,23 @@
   <!-- macOS squircle -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#halo)"/>
-  <rect x="102.5" y="102.5" width="819" height="819" rx="182.5" stroke="#ffffff" stroke-opacity="0.08" stroke-width="5"/>
+  <rect x="102.5" y="102.5" width="819" height="819" rx="182.5" stroke="#ffffff" stroke-opacity="0.12" stroke-width="5"/>
 
-  <!-- vector owl echoing the ASCII boot-screen owl -->
-  <g filter="url(#glow)" stroke="#eef3fb" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
-    <!-- .-"""-.  head dome -->
+  <!-- line-art owl in warm cream, echoing the marketing mark -->
+  <g filter="url(#glow)" stroke="#fdf4ea" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <!-- head dome -->
     <path d="M 322 316 C 366 216 658 216 702 316"/>
-    <!-- ( ... ) wings -->
+    <!-- wings -->
     <path d="M 302 366 C 234 442 234 642 320 726"/>
     <path d="M 722 366 C 790 442 790 642 704 726"/>
-    <!-- O   O eyes -->
+    <!-- eyes -->
     <circle cx="400" cy="446" r="62"/>
     <circle cx="624" cy="446" r="62"/>
-    <!-- v beak -->
+    <!-- beak -->
     <path d="M 464 546 L 512 608 L 560 546"/>
-    <!-- '-' belly -->
+    <!-- belly -->
     <path d="M 446 694 Q 512 736 578 694"/>
-    <!-- (_/   \_) feet -->
+    <!-- feet -->
     <path d="M 348 806 L 420 806 L 466 750"/>
     <path d="M 676 806 L 604 806 L 558 750"/>
   </g>

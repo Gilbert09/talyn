@@ -69,6 +69,9 @@
   "dependencies": {
     "@electron/notarize": "^3.0.0",
     "@fastowl/shared": "*",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/space-grotesk": "^5.2.10",
     "@pierre/diffs": "^1.1.17",
     "@supabase/supabase-js": "^2.103.3",
     "electron-debug": "^4.1.0",
@@ -161,7 +164,7 @@
     "webpack-merge": "^6.0.1"
   },
   "build": {
-    "productName": "FastOwl",
+    "productName": "Talyn",
     "appId": "com.fastowl.app",
     "asar": true,
     "asarUnpack": "**\\*.{node,dll}",

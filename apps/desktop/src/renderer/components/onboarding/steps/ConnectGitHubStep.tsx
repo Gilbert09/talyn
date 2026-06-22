@@ -45,7 +45,7 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        FastOwl tracks your pull requests, reviews, and CI status through GitHub. Connect
+        Talyn tracks your pull requests, reviews, and CI status through GitHub. Connect
         your account to continue — a browser window opens to authorize, then you're returned
         here.
       </p>
@@ -96,7 +96,7 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
         <p className="text-xs text-muted-foreground">
           After authorizing in your browser, return to this window — the connection is
           detected automatically. You’ll choose which org or account to install the
-          FastOwl app on as part of that flow.
+          Talyn app on as part of that flow.
         </p>
       )}
 

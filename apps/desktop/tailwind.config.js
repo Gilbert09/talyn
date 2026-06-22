@@ -4,8 +4,13 @@ module.exports = {
   darkMode: 'class',
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        display: ['Space Grotesk', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+      },
       colors: {
-        // Custom colors for FastOwl
+        // Custom colors for Talyn
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
         card: {
