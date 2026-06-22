@@ -15,13 +15,10 @@ import {
   XCircle,
   AlertTriangle,
   Loader2,
-  ListChecks,
-  Copy,
   ExternalLink,
   ArrowUpDown,
   Search,
   GitBranch,
-  Bot,
   Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -111,7 +108,7 @@ function Sidebar({ active = "prs" }: { active?: string }) {
           <OwlMark className="h-4 w-4 text-clay" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-ink">PostHog</p>
+          <p className="truncate text-sm font-medium text-ink">Sundial</p>
           <p className="text-[10px] text-ink-400">3 repos</p>
         </div>
         <ChevronsUpDown className="h-3.5 w-3.5 text-ink-400" />
@@ -150,9 +147,9 @@ function Sidebar({ active = "prs" }: { active?: string }) {
         </div>
         <div className="flex items-center gap-2 px-1">
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay text-[10px] font-semibold text-white">
-            G
+            D
           </span>
-          <span className="text-xs text-ink-600">@Gilbert09</span>
+          <span className="text-xs text-ink-600">@dana</span>
         </div>
       </div>
     </div>
@@ -190,26 +187,26 @@ function FilterBar() {
 
 const prRows = [
   {
-    title: "feat: streaming token usage in the composer",
-    sub: "posthog/posthog#65121 · @Gilbert09 · opened 2h ago",
+    title: "feat: streaming results in the dashboard",
+    sub: "sundial/web#412 · @dana · opened 2h ago",
     pill: { tone: "red" as Tone, icon: XCircle, label: "2/14 failing", rollup: { passed: 11, failed: 2, running: 1 } },
     updated: "12m",
   },
   {
-    title: "fix: debounce websocket reconnect storms",
-    sub: "Gilbert09/owl#482 · @Gilbert09 · opened 5h ago",
+    title: "fix: retry the flaky checkout webhook",
+    sub: "sundial/api#418 · @theo · opened 5h ago",
     pill: { tone: "amber" as Tone, icon: AlertTriangle, label: "Changes requested", rollup: { passed: 9 } },
     updated: "1h",
   },
   {
-    title: "perf: batch the GraphQL PR refresh",
-    sub: "posthog/posthog#64980 · @Gilbert09 · opened 6h ago",
+    title: "perf: cache the search index",
+    sub: "sundial/web#407 · @dana · opened 6h ago",
     pill: { tone: "blue" as Tone, icon: Loader2, label: "3/12 running", spin: true, rollup: { passed: 9, running: 3 } },
     updated: "3h",
   },
   {
-    title: "chore: bump drizzle-orm to 0.32",
-    sub: "Gilbert09/owl#479 · @Gilbert09 · opened 1d ago",
+    title: "chore: bump dependencies",
+    sub: "sundial/mobile#21 · @priya · opened 1d ago",
     pill: { tone: "green" as Tone, icon: CheckCircle2, label: "Ready", rollup: { passed: 11 } },
     updated: "8h",
   },
@@ -233,13 +230,6 @@ export function MockDashboard() {
               </div>
               <StatusPill {...r.pill} />
               <span className="w-8 shrink-0 text-right text-[10px] text-ink-400">{r.updated}</span>
-              <div className="hidden items-center gap-1 text-ink-300 lg:flex">
-                <ListChecks className="h-3.5 w-3.5" />
-                <GitMerge className="h-3.5 w-3.5" />
-                <Bot className="h-3.5 w-3.5" />
-                <Copy className="h-3.5 w-3.5" />
-                <ExternalLink className="h-3.5 w-3.5" />
-              </div>
             </div>
           ))}
         </div>
@@ -251,13 +241,13 @@ export function MockDashboard() {
 /* ---------- task running (mirrors QueuePanel + TaskTerminal) ---------- */
 
 const transcript = [
-  { k: "sys", t: "Cloud run started · Claude Code · sandbox owl-3f2a" },
+  { k: "sys", t: "Cloud run started · Claude Code · sandbox sundial-3f2a" },
   { k: "tool", t: "read  .github/workflows/ci.yml" },
-  { k: "tool", t: "run   npm test -- packages/backend" },
-  { k: "err", t: "× 2 failing: prMonitor.fastPoll egress assertion" },
-  { k: "txt", t: "Patching projection to drop lastSummary blob…" },
-  { k: "tool", t: "edit  services/prMonitor.ts" },
-  { k: "ok", t: "✓ checks green — pushed fix to feature/token-stream" },
+  { k: "tool", t: "run   npm test -- packages/api" },
+  { k: "err", t: "× 2 failing: checkout webhook retry timing" },
+  { k: "txt", t: "Patching the retry backoff in the webhook handler…" },
+  { k: "tool", t: "edit  services/checkout.ts" },
+  { k: "ok", t: "✓ checks green — pushed fix to fix/webhook-retry" },
 ];
 
 export function MockTaskRunning() {
@@ -275,7 +265,7 @@ export function MockTaskRunning() {
               <Loader2 className="h-3.5 w-3.5 animate-spin text-status-blue" />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-[11px] font-medium text-ink">Fix CI #65121</p>
+              <p className="truncate text-[11px] font-medium text-ink">Fix CI #412</p>
               <p className="font-mono text-[9px] text-ink-400">12s ago · Working</p>
             </div>
           </div>
@@ -284,7 +274,7 @@ export function MockTaskRunning() {
           Queued <span className="text-ink-300">1</span>
         </p>
         <div className="rounded-lg border border-line p-2">
-          <p className="truncate text-[11px] text-ink-600">Reply review #482</p>
+          <p className="truncate text-[11px] text-ink-600">Reply review #418</p>
           <p className="font-mono text-[9px] text-ink-400">PostHog Code</p>
         </div>
       </div>
@@ -304,7 +294,7 @@ export function MockTaskRunning() {
                 <Sparkles className="h-2.5 w-2.5" /> Claude Code
               </span>
               <span className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 font-mono text-[9px] text-ink-500">
-                <GitBranch className="h-2.5 w-2.5" /> feature/token-stream
+                <GitBranch className="h-2.5 w-2.5" /> fix/webhook-retry
               </span>
             </div>
           </div>
@@ -349,9 +339,9 @@ export function MockTaskRunning() {
 
 export function MockMergeQueue() {
   const rows = [
-    { n: 1, title: "chore: bump drizzle-orm to 0.32", state: "Merging", tone: "blue" as Tone, spin: true },
-    { n: 2, title: "feat: provider picker modal", state: "Waiting", tone: "grey" as Tone },
-    { n: 3, title: "fix: stale branch auto-rebase", state: "Fixing", tone: "purple" as Tone, spin: true },
+    { n: 1, title: "chore: bump dependencies", state: "Merging", tone: "blue" as Tone, spin: true },
+    { n: 2, title: "feat: dark mode toggle", state: "Waiting", tone: "grey" as Tone },
+    { n: 3, title: "fix: retry the flaky checkout webhook", state: "Fixing", tone: "purple" as Tone, spin: true },
   ];
   return (
     <div className="flex h-[360px] bg-white text-left">
@@ -361,7 +351,7 @@ export function MockMergeQueue() {
         {/* group header */}
         <div className="flex items-center gap-1.5 border-b border-line bg-paper-100 px-4 py-1.5 text-[11px] font-medium text-ink-500">
           <GitMerge className="h-3.5 w-3.5" />
-          Gilbert09/owl <span className="opacity-50">→</span> main
+          sundial/web <span className="opacity-50">→</span> main
         </div>
         {rows.map((r) => (
           <div
@@ -406,7 +396,7 @@ export function MockPrDetail() {
       <div className="flex min-w-0 flex-1 flex-col p-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="truncate text-xs font-semibold text-ink">
-            #65121 · Fix CI on token streaming
+            #412 · Retry the flaky checkout webhook
           </span>
           <StatusPill tone="green" icon={CheckCircle2} label="Ready" rollup={{ passed: 14 }} />
         </div>
@@ -421,12 +411,12 @@ export function MockPrDetail() {
           ))}
         </div>
         <div className="space-y-1 font-mono text-[10.5px] leading-relaxed">
-          <p className="text-ink-400">services/prMonitor.ts</p>
+          <p className="text-ink-400">services/checkout.ts</p>
           <p className="rounded bg-status-red/10 px-2 text-status-red">
-            - const rows = await db.select().from(pullRequests)
+            {"- await fetch(webhookUrl, payload)"}
           </p>
           <p className="rounded bg-status-green/10 px-2 text-status-green">
-            + const rows = await db.select(PR_FLAG_COLUMNS).from(pullRequests)
+            {"+ await fetchWithRetry(webhookUrl, payload, { tries: 3 })"}
           </p>
         </div>
         <div className="mt-3 flex items-center gap-3 font-sans">
@@ -454,7 +444,7 @@ export function MockOnboarding() {
         <p className="mt-1 text-xs text-ink-500">Sign in with GitHub and pick the repos you live in.</p>
       </div>
       <div className="w-64 space-y-1.5">
-        {["Gilbert09/owl", "posthog/posthog", "your/side-project"].map((r, i) => (
+        {["sundial/web", "sundial/api", "your/side-project"].map((r, i) => (
           <div
             key={r}
             className={cn(

@@ -24,7 +24,7 @@ export function ScreenshotPlaceholder({
   const Mock = MOCKS[shot];
   return (
     <div className={cn("relative", className)}>
-      <AppFrame title={title ?? `Talyn — ${shot}`} glow={glow}>
+      <AppFrame title={title ?? "Talyn"} glow={glow}>
         {src ? (
           <Image
             src={src}
@@ -37,11 +37,6 @@ export function ScreenshotPlaceholder({
           <Mock />
         )}
       </AppFrame>
-      {!src && (
-        <span className="absolute right-3 top-3 rounded-md border border-line bg-white/80 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-ink-400 backdrop-blur">
-          preview
-        </span>
-      )}
     </div>
   );
 }
