@@ -621,16 +621,18 @@ describe('summarizeCheckContexts', () => {
     expect(checks.total).toBe(2);
   });
 
-  it('forces a superseded failure back when GitHub\'s rollup is FAILURE', () => {
-    // PostHog/posthog#64614: each "Tests Pass" gate has an early FAILURE and a
-    // later SUCCESS of the same name. Latest-per-name would hide the failure, but
-    // GitHub still counts it (rollup FAILURE) — so the PR must NOT read as Ready.
+  it('restores a live (un-superseded) failure when GitHub\'s rollup is FAILURE', () => {
+    // PostHog/posthog#64614: a gate failed and its same-name re-run was CANCELLED
+    // (not a passing run), so latest-per-name shows the cancelled run and hides
+    // the failure — yet GitHub still counts it (rollup FAILURE). With no later
+    // same-name SUCCESS to supersede it, the failure is live and must be restored
+    // so the PR does NOT read as Ready.
     const { normalized, checks } = summarizeCheckContexts(
       [
         ctx({ name: 'Frontend Tests Pass', state: 'failure', ts: 100, url: 'http://fail/fe', required: true }),
-        ctx({ name: 'Frontend Tests Pass', state: 'success', ts: 200, required: true }),
+        ctx({ name: 'Frontend Tests Pass', state: 'cancelled', ts: 200, required: true }),
         ctx({ name: 'Django Tests Pass', state: 'failure', ts: 100, url: 'http://fail/be', required: true }),
-        ctx({ name: 'Django Tests Pass', state: 'success', ts: 300, required: true }),
+        ctx({ name: 'Django Tests Pass', state: 'cancelled', ts: 300, required: true }),
         ctx({ name: 'lint', state: 'success', ts: 50 }),
       ],
       'FAILURE'
@@ -641,6 +643,30 @@ describe('summarizeCheckContexts', () => {
     // The restored failures keep their failing detailsUrl (not the re-run's).
     expect(normalized.find((c) => c.name === 'Frontend Tests Pass')?.url).toBe('http://fail/fe');
     expect(normalized.find((c) => c.name === 'Django Tests Pass')?.url).toBe('http://fail/be');
+  });
+
+  it('does NOT restore a superseded failure when a later same-name run passed', () => {
+    // PostHog/posthog#65362: each "Tests Pass" gate failed early then PASSED on a
+    // same-name re-run on the same commit. GitHub's merge box shows the latest
+    // run per name (all green), but `statusCheckRollup.state` keeps counting the
+    // dead FAILURE and reads FAILURE. The resolved failures must NOT surface — a
+    // PR GitHub renders green must not show a phantom "N failing".
+    const { checks, normalized } = summarizeCheckContexts(
+      [
+        ctx({ name: 'Frontend Tests Pass', state: 'failure', ts: 100, url: 'http://fail/fe', required: true }),
+        ctx({ name: 'Frontend Tests Pass', state: 'success', ts: 200, required: true }),
+        ctx({ name: 'Visual regression tests pass', state: 'failure', ts: 100, required: true }),
+        ctx({ name: 'Visual regression tests pass', state: 'success', ts: 200, required: true }),
+        ctx({ name: 'Django Tests Pass', state: 'failure', ts: 100, url: 'http://fail/be', required: true }),
+        ctx({ name: 'Django Tests Pass', state: 'success', ts: 300, required: true }),
+        ctx({ name: 'lint', state: 'success', ts: 50 }),
+      ],
+      'FAILURE'
+    );
+    expect(checks.failed).toBe(0); // every failure was superseded by a passing re-run
+    expect(checks.passed).toBe(4); // 3 gates + lint
+    expect(checks.total).toBe(4);
+    expect(normalized.some((c) => c.state === 'failure')).toBe(false);
   });
 
   it('leaves a genuinely-failing rollup alone (no double counting)', () => {
@@ -767,9 +793,47 @@ describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
   });
 
   it('does NOT read as Ready when GitHub\'s rollup is FAILURE (posthog#64614)', () => {
-    // Each gate ran twice on the head commit: an early FAILURE and a later
-    // SUCCESS. Latest-per-name alone would report 0 failing → "Ready", but
-    // GitHub's rollup is FAILURE, so we must surface the failure.
+    // The gate ran twice on the head commit: an early FAILURE and a later
+    // CANCELLED re-run (no passing run). Latest-per-name shows the cancelled run
+    // and would report 0 failing → "Ready", but GitHub's rollup is FAILURE and
+    // no SUCCESS superseded the failure, so we must surface it.
+    const base = prWithContexts([
+      checkRun({
+        name: 'Django Tests Pass',
+        status: 'COMPLETED',
+        conclusion: 'FAILURE',
+        startedAt: '2026-06-18T15:21:40Z',
+        completedAt: '2026-06-18T15:21:45Z',
+        isRequired: true,
+      }),
+      checkRun({
+        name: 'Django Tests Pass',
+        status: 'COMPLETED',
+        conclusion: 'CANCELLED',
+        startedAt: '2026-06-18T15:41:31Z',
+        completedAt: '2026-06-18T15:41:36Z',
+        isRequired: true,
+      }),
+      checkRun({ name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true }),
+    ]) as { commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } } }> } };
+    // GitHub's authoritative aggregate for this commit.
+    base.commits.nodes[0].commit.statusCheckRollup.state = 'FAILURE';
+    const data = {
+      repository: { [aliasForBranch(0)]: { nodes: [base] } },
+    };
+    const [{ pr }] = decodeBatchResponse(['feature/x'], data, 'acme', 'widgets');
+    expect(pr).not.toBeNull();
+    expect(pr!.checks.failed).toBe(1); // the un-superseded gate failure, restored
+    expect(pr!.checks.passed).toBe(1); // lint
+    expect(pr!.checks.total).toBe(2); // de-duped distinct names
+    expect(pr!.blockingReason).toBe('checks_failed');
+  });
+
+  it('reads as Ready when a FAILURE rollup\'s failures were all re-run green (posthog#65362)', () => {
+    // Each gate failed early then PASSED on a same-name re-run on the same commit.
+    // GitHub's merge box shows the latest run per name (green), but the rollup
+    // keeps counting the dead FAILURE and reads FAILURE. We must not surface a
+    // phantom failure on a PR GitHub renders green.
     const base = prWithContexts([
       checkRun({
         name: 'Django Tests Pass',
@@ -788,18 +852,21 @@ describe('rawToSummary check de-duplication (via decodeBatchResponse)', () => {
         isRequired: true,
       }),
       checkRun({ name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: true }),
-    ]) as { commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } } }> } };
-    // GitHub's authoritative aggregate for this commit.
+    ]) as {
+      mergeStateStatus: string;
+      commits: { nodes: Array<{ commit: { statusCheckRollup: { state: string } } }> };
+    };
     base.commits.nodes[0].commit.statusCheckRollup.state = 'FAILURE';
+    base.mergeStateStatus = 'CLEAN';
     const data = {
       repository: { [aliasForBranch(0)]: { nodes: [base] } },
     };
     const [{ pr }] = decodeBatchResponse(['feature/x'], data, 'acme', 'widgets');
     expect(pr).not.toBeNull();
-    expect(pr!.checks.failed).toBe(1); // the superseded gate failure, restored
-    expect(pr!.checks.passed).toBe(1); // lint
+    expect(pr!.checks.failed).toBe(0); // superseded failure not restored
+    expect(pr!.checks.passed).toBe(2); // Django re-run + lint
     expect(pr!.checks.total).toBe(2); // de-duped distinct names
-    expect(pr!.blockingReason).toBe('checks_failed');
+    expect(pr!.blockingReason).not.toBe('checks_failed');
   });
 
   it('reads as Ready when GitHub\'s rollup is SUCCESS despite stale runs (posthog#65121)', () => {

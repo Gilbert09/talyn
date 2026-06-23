@@ -694,15 +694,25 @@ interface NormalizedCheck {
  *
  * We normally keep only the latest run per name (see {@link dedupeLatestCheckByName})
  * to drop stale re-runs. But that heuristic can erase a failure GitHub still
- * counts: when a gate check runs twice on the head commit — an early FAILURE
- * and a later SUCCESS, e.g. from two separate workflow runs — "latest per name"
- * keeps only the SUCCESS while GitHub's rollup stays FAILURE, leaving us showing
- * 0 failing and the PR "Ready" on a PR GitHub considers broken (seen on
- * PostHog/posthog#64614: the *Tests Pass gates each had a superseded FAILURE).
+ * counts: a gate check that runs twice on the head commit, where "latest per
+ * name" keeps a non-failing run while GitHub's rollup stays FAILURE, would leave
+ * us showing 0 failing and the PR "Ready" on a PR GitHub considers broken
+ * (PostHog/posthog#64614).
  *
- * So we defer to GitHub's rollup in both directions:
- *   - Rollup FAILURE but our latest-per-name view found no failure → any name
- *     with a failing raw run is forced back to `failure` (PostHog#64614).
+ * The catch: `statusCheckRollup.state` is NOT itself de-duped — it keeps counting
+ * a gate's early FAILURE even after a later same-name SUCCESS re-run resolves it,
+ * so the rollup reads FAILURE on a PR GitHub's own merge box renders green
+ * (PostHog/posthog#65362: every *Tests Pass gate failed early then passed on a
+ * re-run, yet the rollup stayed FAILURE). GitHub's UI shows the latest run per
+ * name, so a failure is only live if nothing later resolved it.
+ *
+ * So we defer to GitHub's rollup, but only restore failures it hasn't superseded:
+ *   - Rollup FAILURE but our latest-per-name view found no failure → restore a
+ *     name to `failure` only when it has a failing raw run with NO strictly-later
+ *     same-name SUCCESS. A failure followed by a same-name success is a resolved
+ *     re-run GitHub renders green, so we leave it alone (PostHog#65362); a
+ *     failure with no superseding success is one GitHub still counts, so it comes
+ *     back with its failing detailsUrl (PostHog#64614).
  *   - Rollup SUCCESS but our view still holds a failure → that run is one
  *     GitHub excludes from its green rollup (a superseded/STALE re-run, or a
  *     conclusion we map conservatively to `failure`), so we demote it to
@@ -722,14 +732,25 @@ export function summarizeCheckContexts(
   const rollupFailed = rollupState === 'FAILURE' || rollupState === 'ERROR';
   const dedupedFailed = normalized.some((c) => c.state === 'failure');
   if (rollupFailed && !dedupedFailed) {
-    // The latest-per-name view erased every failure GitHub is still counting.
-    // Force each name that has *any* failing raw run back to `failure`, keeping
-    // its failing detailsUrl so the pill links to the failure, not the re-run.
+    // The latest-per-name view erased a failure the rollup still reports. Only
+    // restore failures GitHub hasn't superseded: a gate that failed then passed
+    // on a same-name re-run is green in GitHub's merge box (the rollup just keeps
+    // counting the dead run — PostHog#65362), so we skip any failing run that has
+    // a strictly-later same-name SUCCESS. What's left is a genuinely-live failure
+    // (PostHog#64614); restore it with its failing detailsUrl so the pill links
+    // to the failure, not a re-run.
+    const latestSuccessTsByName = new Map<string, number>();
+    for (const c of contexts) {
+      if (c.state !== 'success') continue;
+      const prev = latestSuccessTsByName.get(c.name);
+      if (prev === undefined || c.ts > prev) latestSuccessTsByName.set(c.name, c.ts);
+    }
     const failingUrlByName = new Map<string, string | null>();
     for (const c of contexts) {
-      if (c.state === 'failure' && !failingUrlByName.has(c.name)) {
-        failingUrlByName.set(c.name, c.url);
-      }
+      if (c.state !== 'failure' || failingUrlByName.has(c.name)) continue;
+      const supersededAt = latestSuccessTsByName.get(c.name);
+      if (supersededAt !== undefined && supersededAt > c.ts) continue;
+      failingUrlByName.set(c.name, c.url);
     }
     if (failingUrlByName.size > 0) {
       normalized = normalized.map((c) =>
