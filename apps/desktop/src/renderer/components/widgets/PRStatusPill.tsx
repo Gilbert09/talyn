@@ -220,6 +220,15 @@ function pickVariant(
     case 'changes_requested':
       return { icon: AlertTriangle, label: 'Changes requested', tone: 'amber' };
     case 'checks_failed':
+      // 'checks_failed' means at least one check is failing. If the failing
+      // count is 0 the verdict is stale relative to the counts — the last
+      // failing check re-ran green and a partial summary update refreshed
+      // `checks` before `blockingReason` caught up (the row store shallow-merges
+      // summaries). A red "0/N failing" pill is self-contradictory; render the
+      // mergeable picture (Ready, or a running spinner) so label and tone agree.
+      if (checks.failed === 0) {
+        return pickVariant('mergeable', checks);
+      }
       return {
         icon: XCircle,
         label: `${checks.failed}/${checks.total} failing`,
