@@ -119,13 +119,14 @@ export const features = [
   },
   {
     id: "auto-merge",
-    eyebrow: "Set it and forget it",
-    title: "PRs that keep themselves mergeable.",
-    body: "Flag a PR keep-mergeable and Talyn watches it. Falls behind main? Hits a conflict? Goes red? It dispatches a fix automatically. The merge queue lands them in order the second they're green.",
+    eyebrow: "The merge queue",
+    title: "A merge queue that lands PRs for you.",
+    body: "Flag a PR keep-mergeable and Talyn watches it — falls behind main, hits a conflict, or goes red, and it dispatches a fix automatically. Then the merge queue takes over: it lands your PRs in order the second they're green, rebasing and clearing conflicts along the way, and drains independent PRs concurrently so one slow branch never holds up the rest.",
     bullets: [
-      "Auto-fix when a PR falls behind or breaks",
-      "Merge queue lands PRs in order, when green",
-      "The talons stay out so you don't have to",
+      "Lands ready PRs in order, the moment they go green",
+      "Rebases and resolves conflicts on the way in — no manual \"update branch\"",
+      "Independent PRs merge in parallel; one slow build can't stall the queue",
+      "Auto-fixes any PR that falls behind or breaks before it merges",
     ],
     shot: "merge-queue",
     flip: false,
@@ -189,8 +190,8 @@ export const why = {
       body: "Claude Code or PostHog Code — use the one you trust. No model lock-in, switch per task.",
     },
     {
-      title: "Lands them in order",
-      body: "The merge queue ships your ready PRs the second they're green — conflicts handled along the way.",
+      title: "A merge queue that lands them",
+      body: "Queue your ready PRs and Talyn merges them in order the second they're green — rebasing and clearing conflicts on the way, and landing independent ones in parallel.",
     },
     {
       title: "Built to live in",
