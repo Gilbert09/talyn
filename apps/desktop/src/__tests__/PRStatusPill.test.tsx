@@ -44,6 +44,27 @@ describe('PRStatusPill', () => {
     expect(cls).not.toContain('red-500');
   });
 
+  it('shows "N running" (not "Review") when blocked only by in-flight required checks', () => {
+    // Regression: an APPROVED PR reads mergeStateStatus BLOCKED while its check
+    // rollup is PENDING, so the backend returns blockingReason 'blocked'. The
+    // immediate gate is CI, not a review — show the running spinner.
+    render(
+      <PRStatusPill
+        blockingReason="blocked"
+        checks={checks({ total: 131, passed: 40, inProgress: 91 })}
+      />
+    );
+    expect(screen.getByText('91/131 running')).toBeInTheDocument();
+    expect(screen.queryByText('Review')).not.toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('blue-500');
+  });
+
+  it('still shows "Review" when blocked and no checks are running', () => {
+    render(<PRStatusPill blockingReason="blocked" checks={checks({ total: 5, passed: 5 })} />);
+    expect(screen.getByText('Review')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('amber-500');
+  });
+
   it('shows a running spinner when a stale checks_failed still has in-progress checks', () => {
     render(
       <PRStatusPill

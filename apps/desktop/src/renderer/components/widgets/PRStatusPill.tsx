@@ -267,8 +267,19 @@ function pickVariant(
       }
       return { icon: CheckCircle2, label: 'Ready', tone: 'green' };
     case 'blocked':
-      // Mergeable on its own — held only by branch protection, almost
-      // always a required review/approval that hasn't landed yet.
+      // Held by branch protection. If required checks are still running, that's
+      // the immediate gate — GitHub reports mergeStateStatus BLOCKED while the
+      // rollup is PENDING even on an already-approved PR — so show the running
+      // spinner rather than a misleading "Review". Once checks finish, a genuine
+      // review/approval hold falls through to "Review".
+      if (checks.inProgress > 0) {
+        return {
+          icon: Loader2,
+          label: `${checks.inProgress}/${checks.total} running`,
+          tone: 'blue',
+          spin: true,
+        };
+      }
       return { icon: Eye, label: 'Review', tone: 'amber' };
     case 'unknown':
     default:
