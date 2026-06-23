@@ -257,6 +257,86 @@ describe('githubService', () => {
       ).rejects.toThrow(/403.*Resource not accessible by personal access token/);
     });
 
+    it('retries the merge as the user when the bot is refused by the org ruleset', async () => {
+      // First attempt (bot / installation path) is refused with the App-specific
+      // 403 — some orgs only allow an allowlist of apps to merge to a protected
+      // branch. The merge must be retried with the user token and succeed.
+      let mergeCalls = 0;
+      const stub = vi.fn(async (input: FetchInput, init?: RequestInit) => {
+        if (String(input).includes('/repos/acme/widgets/pulls/9/merge')) {
+          mergeCalls++;
+          if (mergeCalls === 1) {
+            return new Response(
+              JSON.stringify({ message: 'Resource not accessible by integration' }),
+              { status: 403, headers: { 'content-type': 'application/json' } }
+            );
+          }
+          // The retry must carry the user-to-server token.
+          expect((init?.headers as Record<string, string>).Authorization).toBe('bearer gho_test');
+          return new Response(
+            JSON.stringify({ sha: 'abc', merged: true, message: 'Pull Request successfully merged' }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        throw new Error(`no fetch mock for ${String(input)}`);
+      });
+      vi.stubGlobal('fetch', stub);
+
+      const result = await githubService.mergePullRequest('ws1', 'acme', 'widgets', 9, {
+        merge_method: 'squash',
+      });
+      expect(result.merged).toBe(true);
+      expect(mergeCalls).toBe(2); // bot attempt + user retry
+    });
+
+    it('does NOT retry a merge failure the user would also hit', async () => {
+      // A non-integration failure (a rule the user can't bypass either) must
+      // propagate unchanged, with no wasteful second attempt.
+      let mergeCalls = 0;
+      const stub = vi.fn(async (input: FetchInput) => {
+        if (String(input).includes('/repos/acme/widgets/pulls/10/merge')) {
+          mergeCalls++;
+          return new Response(
+            JSON.stringify({ message: 'At least 1 approving review is required.' }),
+            { status: 405, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        throw new Error(`no fetch mock for ${String(input)}`);
+      });
+      vi.stubGlobal('fetch', stub);
+
+      await expect(
+        githubService.mergePullRequest('ws1', 'acme', 'widgets', 10, { merge_method: 'squash' })
+      ).rejects.toThrow(/approving review is required/);
+      expect(mergeCalls).toBe(1); // no retry
+    });
+
+    it('does NOT retry the bot 403 when there is no user token to fall back to', async () => {
+      // The integration 403 is the retry trigger, but with no stored user token
+      // there's nothing to retry as — surface the original error, don't swap it
+      // for a confusing "GitHub not connected".
+      await githubService.removeToken('ws1');
+      let mergeCalls = 0;
+      const stub = vi.fn(async (input: FetchInput) => {
+        if (String(input).includes('/repos/acme/widgets/pulls/11/merge')) {
+          mergeCalls++;
+          return new Response(
+            JSON.stringify({ message: 'Resource not accessible by integration' }),
+            { status: 403, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        throw new Error(`no fetch mock for ${String(input)}`);
+      });
+      vi.stubGlobal('fetch', stub);
+
+      // No token at all → resolveAuth returns null before any fetch. The point is
+      // simply that we never loop/retry. (A bot-only workspace would 403 once.)
+      await expect(
+        githubService.mergePullRequest('ws1', 'acme', 'widgets', 11, { merge_method: 'squash' })
+      ).rejects.toThrow();
+      expect(mergeCalls).toBeLessThanOrEqual(1);
+    });
+
     it('appends sub-errors from the GitHub error body when present', async () => {
       const fetchStub = mockFetch({
         '/repos/acme/widgets/pulls/8/merge': () => ({

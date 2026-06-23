@@ -1593,19 +1593,47 @@ class GitHubService extends EventEmitter {
       merge_method?: 'merge' | 'squash' | 'rebase';
     } = {}
   ): Promise<{ sha: string; merged: boolean; message: string }> {
-    return this.apiRequest(
-      workspaceId,
-      `/repos/${owner}/${repo}/pulls/${number}/merge`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          commit_title: options.commit_title,
-          commit_message: options.commit_message,
-          merge_method: options.merge_method || 'merge',
-        }),
+    const endpoint = `/repos/${owner}/${repo}/pulls/${number}/merge`;
+    const init: RequestInit = {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commit_title: options.commit_title,
+        commit_message: options.commit_message,
+        merge_method: options.merge_method || 'merge',
+      }),
+    };
+    try {
+      // Merge as the bot (installation token) first — keeps the merge attributed
+      // to FastOwl wherever the org allows it.
+      return await this.apiRequest(workspaceId, endpoint, init, 'auto');
+    } catch (err) {
+      // Some orgs' branch rulesets only let an allowlist of apps merge to a
+      // protected branch (PostHog's `master` is one). The installation token is
+      // then refused with 403 "Resource not accessible by integration" — a phrase
+      // only an App token produces. Retry as the user: a human with an approved,
+      // mergeable PR satisfies the ruleset where the bot can't. Guarded so we only
+      // do the extra call when a user token actually exists to retry with.
+      if (this.shouldRetryMergeAsUser(workspaceId, err)) {
+        return await this.apiRequest(workspaceId, endpoint, init, 'user');
       }
-    );
+      throw err;
+    }
+  }
+
+  /**
+   * True when a failed bot merge should be retried with the user's own token:
+   * the failure is the App-specific "Resource not accessible by integration"
+   * 403 (so the installation token was used and refused), and a user token
+   * exists to fall back to. Any other failure — a rule the user would also hit
+   * ("1 approving review required"), a rate limit, a user-token 403 — is left to
+   * propagate unchanged.
+   */
+  private shouldRetryMergeAsUser(workspaceId: string, err: unknown): boolean {
+    if (err instanceof GitHubRateLimitError) return false;
+    if (!(err instanceof Error)) return false;
+    if (!err.message.includes('Resource not accessible by integration')) return false;
+    return Boolean(this.tokens.get(workspaceId)?.accessToken);
   }
 
   async createPullRequest(
