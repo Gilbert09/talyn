@@ -226,6 +226,41 @@ describe('mergeQueueProcessor', () => {
     expect(pr.mergedAt).toBeTruthy();
   });
 
+  it('processes independent groups concurrently — a slow group never gates another', async () => {
+    // Two distinct (workspace, repo, base) groups. They must drain in parallel
+    // so one slow GitHub round-trip can't hold the re-entrancy guard while the
+    // other waits (the "stuck queue" symptom). Barrier proof: each merge blocks
+    // until BOTH have started — serial processing would await a second call that
+    // never starts and deadlock (test times out); parallel lets both proceed.
+    await db.insert(repositoriesTable).values({
+      id: 'repo2',
+      workspaceId: 'ws1',
+      name: 'a/c',
+      url: 'https://github.com/a/c',
+      defaultBranch: 'main',
+    });
+    const a = await insertPr(db, { summary: cleanSummary(), repositoryId: 'repo1' });
+    const b = await insertPr(db, { summary: cleanSummary(), repositoryId: 'repo2' });
+
+    let started = 0;
+    let release!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mergeSpy.mockImplementation((async () => {
+      started += 1;
+      if (started === 2) release();
+      await bothStarted;
+      return { sha: 'merged-sha', merged: true, message: 'ok' };
+    }) as never);
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(started).toBe(2); // both groups were in-flight at once
+    expect((await getPr(db, a)).mergeQueued).toBe(false);
+    expect((await getPr(db, b)).mergeQueued).toBe(false);
+  });
+
   it('merges with the configured merge method', async () => {
     await insertPr(db, { summary: cleanSummary(), mergeMethod: 'merge' });
 

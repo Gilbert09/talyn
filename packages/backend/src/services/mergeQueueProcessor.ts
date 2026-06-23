@@ -239,27 +239,14 @@ class MergeQueueProcessor {
       }
 
       headCount = groups.size;
-      for (const group of groups.values()) {
-        // Walk from the head, skipping past PRs that can't make progress
-        // ('advance': hard-blocked, or gone from the queue) so a blocked head
-        // never gates the PRs behind it. The first PR that takes an action
-        // ('hold': merge, fix run, in-flight run) consumes the group's turn —
-        // one same-base merge per tick, as before.
-        for (let i = 0; i < group.length; i++) {
-          const row = group[i];
-          let verdict: HeadVerdict = 'hold';
-          try {
-            verdict = await this.processHead(row, i + 1);
-          } catch (err) {
-            // One PR failing must never abort the tick — retry next time.
-            console.warn(
-              `[mergeQueueProcessor] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
-              err instanceof Error ? err.message : err
-            );
-          }
-          if (verdict === 'hold') break;
-        }
-      }
+      // Distinct groups are independent — a slow GitHub round-trip for one
+      // (workspace, repo, base) must not gate the others. Process groups
+      // concurrently so the tick's wall-time is the slowest single group, not
+      // the sum of all of them: serializing groups held the re-entrancy guard
+      // for minutes while a multi-PR backlog drained, so every 10s tick in
+      // between no-op'd on the guard and the queue looked frozen. Within a group
+      // we stay serial — one same-base merge per tick.
+      await Promise.all([...groups.values()].map((group) => this.processGroup(group)));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) {
@@ -288,6 +275,30 @@ class MergeQueueProcessor {
    * group (1 = head), echoed on the WS badge. Returns whether the group
    * should keep walking past this PR this tick (see `HeadVerdict`).
    */
+  /**
+   * Walk one group from its head, skipping past PRs that can't make progress
+   * ('advance': hard-blocked, or gone from the queue) so a blocked head never
+   * gates the PRs behind it. The first PR that takes an action ('hold': merge,
+   * fix run, in-flight run) consumes the group's turn — one same-base merge per
+   * tick. Never throws: a single PR's failure is logged and ends the group's turn.
+   */
+  private async processGroup(group: PRRow[]): Promise<void> {
+    for (let i = 0; i < group.length; i++) {
+      const row = group[i];
+      let verdict: HeadVerdict = 'hold';
+      try {
+        verdict = await this.processHead(row, i + 1);
+      } catch (err) {
+        // One PR failing must never abort the tick — retry next time.
+        console.warn(
+          `[mergeQueueProcessor] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+      if (verdict === 'hold') break;
+    }
+  }
+
   private async processHead(initialRow: PRRow, position = 1): Promise<HeadVerdict> {
     const db = getDbClient();
 
