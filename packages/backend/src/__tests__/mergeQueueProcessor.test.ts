@@ -76,6 +76,20 @@ function behindSummary(base = 'main') {
   };
 }
 
+/**
+ * Mergeable on GitHub's side but required checks are still queued/in-progress,
+ * so GitHub reports mergeStateStatus=BLOCKED with no *failed* check. The queue
+ * must wait for CI to settle here rather than treat it as a hard blocker.
+ */
+function pendingChecksSummary(base = 'main') {
+  return {
+    ...cleanSummary(base),
+    mergeStateStatus: 'BLOCKED',
+    blockingReason: 'blocked',
+    checks: { total: 2, passed: 1, failed: 0, inProgress: 1, skipped: 0 },
+  };
+}
+
 async function seedBase(db: Database): Promise<void> {
   await seedUser(db, { id: OWNER });
   await db.insert(workspacesTable).values({ id: 'ws1', ownerId: OWNER, name: 'ws', settings: {} });
@@ -303,6 +317,64 @@ describe('mergeQueueProcessor', () => {
 
     expect(mergeSpy).not.toHaveBeenCalled(); // would bounce with merged:false
     expect(await countTasks(db)).toBe(1);
+  });
+
+  it('waits (does not fire, merge, or block) while the head\'s CI is still in flight', async () => {
+    // GitHub reports a PR with queued/in-progress required checks as
+    // mergeStateStatus=BLOCKED — the queue must let CI settle, not treat the
+    // pending checks as a hard blocker and fire a doomed fix run.
+    const prId = await insertPr(db, { summary: pendingChecksSummary() });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect(await countTasks(db)).toBe(0); // no fix run
+    const pr = await getPr(db, prId);
+    const state = pr.mergeQueueState as QueueState;
+    expect(state.status).toBe('waiting');
+    expect(state.attempts).toBe(0); // no attempt counted against pending CI
+    expect(blockedSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not count an attempt or block a PR that is still running CI after a fix run', async () => {
+    // A fix run pushed commits and went terminal; CI re-triggered and is still
+    // in flight. The PR reads BLOCKED (pending checks), but that must NOT be
+    // accounted as another failed attempt or it would march toward `blocked`.
+    await insertTask(db, 'task-ci', 'completed', 'pr-x');
+    const prId = await insertPr(db, {
+      summary: pendingChecksSummary(),
+      mergeQueueState: {
+        status: 'fixing',
+        attempts: 2,
+        lastFixTaskId: 'task-ci',
+        accounted: false,
+      },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(await countTasks(db)).toBe(1); // only the pre-seeded task; none fired
+    const pr = await getPr(db, prId);
+    const state = pr.mergeQueueState as QueueState;
+    expect(state.status).toBe('waiting');
+    expect(state.attempts).toBe(2); // held, not incremented to the cap
+    expect(blockedSpy).not.toHaveBeenCalled();
+  });
+
+  it('still fires the fix path for a BEHIND PR even while its CI is in flight', async () => {
+    // Pending checks alone → wait; but a settled blocker (BEHIND) means a fix
+    // run should merge the base in now, regardless of in-flight checks.
+    await insertPr(db, {
+      summary: {
+        ...pendingChecksSummary(),
+        mergeStateStatus: 'BEHIND',
+      },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect(await countTasks(db)).toBe(1); // BEHIND wins — fix run fires
   });
 
   it('does not fire or merge while a fix run is in flight', async () => {

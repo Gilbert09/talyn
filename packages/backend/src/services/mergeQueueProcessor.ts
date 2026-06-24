@@ -136,6 +136,28 @@ function queueBlocked(row: PRRow, summary: PRMergeableSummary): boolean {
   return prNeedsFollowup(summary) || needsUpdate(row);
 }
 
+/**
+ * The head commit still has queued / in-progress checks reporting. GitHub
+ * surfaces such a PR as `mergeStateStatus = BLOCKED` — the same status it uses
+ * for a *failed* required check — so `needsUpdate`/`queueBlocked` can't tell
+ * "CI hasn't finished" apart from "CI failed" on their own.
+ */
+function ciInFlight(summary: PRMergeableSummary): boolean {
+  return (summary.checks?.inProgress ?? 0) > 0;
+}
+
+/**
+ * A *settled* reason the PR can't merge — one a fix run should act on now, even
+ * if other checks are still running: conflicts, changes requested, unresolved
+ * threads, or a failed REQUIRED check (all caught by `prNeedsFollowup`), or
+ * BEHIND the base. Deliberately excludes a bare `BLOCKED` state, which is what
+ * GitHub reports while required checks are merely pending — that case must wait
+ * for CI, not be treated as blocked.
+ */
+function hasSettledBlocker(row: PRRow, summary: PRMergeableSummary): boolean {
+  return prNeedsFollowup(summary) || mergeStateOf(row) === 'BEHIND';
+}
+
 function normalizeMethod(raw: unknown): MergeMethod {
   return raw === 'merge' || raw === 'rebase' ? raw : 'squash';
 }
@@ -369,6 +391,21 @@ class MergeQueueProcessor {
       (otherFix !== null && ACTIVE_STATUSES.has(otherFix));
     if (runActive && queueBlocked(row, summary)) {
       await this.ensureStatus(row, state, 'fixing', position);
+      return 'hold';
+    }
+
+    // 2b. CI still settling — required checks are queued/in-progress on the head
+    //     commit, which GitHub reports as mergeStateStatus=BLOCKED. Without this
+    //     guard `needsUpdate` treats that BLOCKED exactly like a hard blocker:
+    //     the queue fires a fix run and, after MAX_ATTEMPTS of CI-still-not-green,
+    //     declares the PR blocked — all while CI had simply not finished. Hold
+    //     the slot as 'waiting' and let the checks land, WITHOUT firing a run or
+    //     counting an attempt. We only wait when pending CI is the *sole*
+    //     obstacle: a settled blocker (conflict, behind, changes requested,
+    //     unresolved threads, or a failed required check) still funnels into the
+    //     fix path immediately below.
+    if (ciInFlight(summary) && !hasSettledBlocker(row, summary)) {
+      await this.ensureStatus(row, state, 'waiting', position);
       return 'hold';
     }
 

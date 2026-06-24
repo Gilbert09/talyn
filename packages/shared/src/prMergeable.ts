@@ -41,7 +41,7 @@ export interface PRMergeableSummary {
   mergeable: PRMergeableState;
   reviewDecision: PRReviewDecisionState;
   blockingReason: PRBlockingReason;
-  checks: { total: number; failed: number };
+  checks: { total: number; failed: number; inProgress?: number };
   unresolvedReviewThreads?: number;
 }
 
