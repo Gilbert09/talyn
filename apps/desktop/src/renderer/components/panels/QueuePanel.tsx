@@ -236,7 +236,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
   return (
     <Card
       className={cn(
-        'p-3 cursor-pointer transition-colors border-l-4 border-l-transparent',
+        'p-3 cursor-pointer transition-colors border-transparent bg-transparent shadow-none border-l-4 border-l-transparent',
         isSelected ? 'bg-accent' : 'hover:bg-accent/50'
       )}
       onClick={onSelect}
