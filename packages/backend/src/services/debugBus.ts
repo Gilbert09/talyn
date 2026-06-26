@@ -3,7 +3,6 @@ import type {
   DebugEvent,
   DebugOwner,
   DebugPollerState,
-  DebugRateLimitState,
   DebugSnapshot,
   DebugWebhookLag,
 } from '@fastowl/shared';
@@ -98,21 +97,12 @@ class DebugBus {
   private lastWebhookSlowProcessedAt: string | null = null;
   private static readonly WEBHOOK_LAG_WINDOW = 50;
   private pollers = new Map<string, DebugPollerState>();
-  private rateLimits = new Map<string, DebugRateLimitState>();
   // Attribution: which FastOwl account owns a workspace's activity, so events
-  // and rate-limit cards can be filtered by user in the admin panel. Populated
-  // by the github service as it loads/connects tokens.
+  // can be filtered by user in the admin panel. Populated by the github service
+  // as it loads/connects tokens.
   private workspaceOwners = new Map<string, { ownerId: string; label: string }>();
   // Distinct accounts seen, for the panel's user-filter dropdown.
   private owners = new Map<string, string>();
-
-  // Rate-limit cards are refreshed by their poller every ~30s. Drop any not
-  // observed within this window so a dead poller or a disconnected account
-  // ages out instead of showing frozen numbers forever — and so a card set
-  // that was relabelled (e.g. a workspace-label fallback once its GitHub login
-  // resolves) doesn't linger as a stale duplicate. Comfortably longer than the
-  // poll cadence so a healthy poller's cards never flicker out.
-  private static readonly RATE_LIMIT_STALE_MS = 3 * 60_000;
 
   /** Global kill-switch. Recording is a cheap no-op while disabled. */
   setEnabled(on: boolean): void {
@@ -436,39 +426,6 @@ class DebugBus {
     });
   }
 
-  // ---- Rate-limit registry ------------------------------------------------
-
-  /**
-   * Record the last-seen rate-limit budget for an API bucket, parsed from a
-   * provider's response headers. Overwrites the previous snapshot for `name`.
-   * A no-op while disabled, and silently ignores partial/garbage header sets.
-   */
-  recordRateLimit(input: {
-    name: string;
-    description: string;
-    limit: number;
-    remaining: number;
-    used: number;
-    resetAt: string;
-    resource?: string | null;
-    /** Workspace this account is connected through, for owner attribution. */
-    workspaceId?: string;
-  }): void {
-    if (!this.enabled) return;
-    if (!Number.isFinite(input.limit) || input.limit <= 0) return;
-    this.rateLimits.set(input.name, {
-      name: input.name,
-      description: input.description,
-      limit: input.limit,
-      remaining: input.remaining,
-      used: input.used,
-      resetAt: input.resetAt,
-      resource: input.resource ?? null,
-      observedAt: new Date().toISOString(),
-      ...this.resolveOwner(input.workspaceId),
-    });
-  }
-
   // ---- Read side ----------------------------------------------------------
 
   getEvents(filter?: {
@@ -489,11 +446,7 @@ class DebugBus {
     return events;
   }
 
-  snapshot(owner?: DebugOwnerFilter): DebugSnapshot {
-    this.pruneStaleRateLimits();
-    const rateLimits = [...this.rateLimits.values()].filter((rl) =>
-      matchesOwnerFilter(rl.ownerId, owner),
-    );
+  snapshot(): DebugSnapshot {
     const owners: DebugOwner[] = [...this.owners.entries()].map(([ownerId, label]) => ({
       ownerId,
       label,
@@ -503,7 +456,6 @@ class DebugBus {
       counters: { ...this.counters },
       bufferSize: this.buffer.length,
       wsClients: this.clientCounter?.() ?? 0,
-      rateLimits,
       owners,
       dbStats: { requests: this.dbRequestCount, egressBytes: this.dbEgressBytes },
       webhookLag: this.computeWebhookLag(this.webhookLatencies, this.lastWebhookProcessedAt),
@@ -530,14 +482,6 @@ class DebugBus {
     };
   }
 
-  /** Evict rate-limit cards whose last observation is older than the TTL. */
-  private pruneStaleRateLimits(): void {
-    const cutoff = Date.now() - DebugBus.RATE_LIMIT_STALE_MS;
-    for (const [name, rl] of this.rateLimits) {
-      if (new Date(rl.observedAt).getTime() < cutoff) this.rateLimits.delete(name);
-    }
-  }
-
   clear(): void {
     this.buffer = [];
     this.counters = {};
@@ -553,7 +497,6 @@ class DebugBus {
   _reset(): void {
     this.clear();
     this.pollers.clear();
-    this.rateLimits.clear();
     this.workspaceOwners.clear();
     this.owners.clear();
     this.seq = 0;

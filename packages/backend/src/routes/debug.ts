@@ -22,8 +22,8 @@ function ownerFilter(raw: unknown): DebugOwnerFilter {
  * poll ticks, WS traffic) across every account, so it's gated to admins.
  * `requireAuth` is applied by the parent router; `requireAdmin` (below) limits
  * everything except `/access` to operators. The desktop Debug panel is also
- * gated behind a Settings toggle. Events/cards can be filtered to one account
- * via `?owner=<id>` (or `system`).
+ * gated behind a Settings toggle. Events can be filtered to one account via
+ * `?owner=<id>` (or `system`).
  */
 export function debugRoutes(): Router {
   const router = Router();
@@ -52,9 +52,9 @@ export function debugRoutes(): Router {
     res.json({ success: true, data: events });
   });
 
-  // Point-in-time view: poller states, counters, WS client count, rate limits.
-  router.get('/snapshot', (req, res) => {
-    res.json({ success: true, data: debugBus.snapshot(ownerFilter(req.query.owner)) });
+  // Point-in-time view: poller states, counters, WS client count.
+  router.get('/snapshot', (_req, res) => {
+    res.json({ success: true, data: debugBus.snapshot() });
   });
 
   // Drop the buffer (and lifetime counters) for a clean view.

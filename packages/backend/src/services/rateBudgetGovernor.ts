@@ -4,10 +4,10 @@ import { githubRateGate } from './githubRateGate.js';
 /**
  * Adaptive-polling governor.
  *
- * Fed the authoritative `/rate_limit` snapshot per account (by the
- * {@link rateLimitPoller}), it computes how much to *stretch* poll cadence so we
- * glide under the per-account budget instead of slamming into it. The pollers
- * multiply their base interval by {@link delayFactor}.
+ * Fed the authoritative `/rate_limit` snapshot per account, it computes how much
+ * to *stretch* poll cadence so we glide under the per-account budget instead of
+ * slamming into it. The pollers multiply their base interval by
+ * {@link delayFactor}.
  *
  * The model is deliberately cost-free — it needs no estimate of how many
  * requests a tick spends. It compares the fraction of budget *consumed* against

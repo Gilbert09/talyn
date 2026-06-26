@@ -1166,8 +1166,7 @@ class GitHubService extends EventEmitter {
    * The authenticated user's current rate-limit budgets across every resource
    * bucket (`core`, `graphql`, `search`, …). Hitting `/rate_limit` itself does
    * NOT count against any budget, so it's the authoritative way to read the
-   * live state without depending on incidental traffic. Drives the Debug
-   * panel's rate-limit cards via {@link rateLimitPoller}.
+   * live state without depending on incidental traffic.
    */
   async getRateLimit(workspaceId: string): Promise<GitHubRateLimit> {
     return this.apiRequest<GitHubRateLimit>(workspaceId, '/rate_limit');

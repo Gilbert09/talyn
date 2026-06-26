@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { debugBus, redactUrl, matchesOwnerFilter } from '../services/debugBus.js';
 import type { DebugCategory } from '@fastowl/shared';
 
@@ -284,87 +284,6 @@ describe('poller registry', () => {
   });
 });
 
-describe('rate-limit registry', () => {
-  const sample = {
-    name: 'github',
-    description: 'GitHub REST API',
-    limit: 5000,
-    remaining: 4990,
-    used: 10,
-    resetAt: '2026-06-04T12:00:00.000Z',
-    resource: 'core',
-  };
-
-  it('records and exposes a bucket via the snapshot', () => {
-    debugBus.recordRateLimit(sample);
-    const rls = debugBus.snapshot().rateLimits;
-    expect(rls).toHaveLength(1);
-    expect(rls[0]).toMatchObject({ name: 'github', limit: 5000, remaining: 4990, used: 10, resource: 'core' });
-    expect(rls[0].observedAt).toBeTruthy();
-  });
-
-  it('overwrites the previous snapshot for the same bucket', () => {
-    debugBus.recordRateLimit(sample);
-    debugBus.recordRateLimit({ ...sample, remaining: 4000, used: 1000 });
-    const rls = debugBus.snapshot().rateLimits;
-    expect(rls).toHaveLength(1);
-    expect(rls[0].remaining).toBe(4000);
-    expect(rls[0].used).toBe(1000);
-  });
-
-  it('keeps REST and GraphQL as separate buckets', () => {
-    debugBus.recordRateLimit(sample);
-    debugBus.recordRateLimit({ ...sample, name: 'github_graphql', resource: 'graphql' });
-    expect(debugBus.snapshot().rateLimits).toHaveLength(2);
-  });
-
-  it('ignores a garbage/absent limit', () => {
-    debugBus.recordRateLimit({ ...sample, limit: Number.NaN });
-    debugBus.recordRateLimit({ ...sample, name: 'zero', limit: 0 });
-    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
-  });
-
-  it('is a no-op while disabled', () => {
-    debugBus.setEnabled(false);
-    debugBus.recordRateLimit(sample);
-    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
-  });
-
-  it('_reset() drops recorded buckets', () => {
-    debugBus.recordRateLimit(sample);
-    debugBus._reset();
-    expect(debugBus.snapshot().rateLimits).toHaveLength(0);
-  });
-
-  it('prunes a bucket not re-observed within the staleness window', () => {
-    vi.useFakeTimers();
-    try {
-      debugBus.recordRateLimit(sample);
-      // Still inside the 3-minute window.
-      vi.advanceTimersByTime(2 * 60_000);
-      expect(debugBus.snapshot().rateLimits).toHaveLength(1);
-      // Past it with no fresh observation → aged out.
-      vi.advanceTimersByTime(2 * 60_000);
-      expect(debugBus.snapshot().rateLimits).toHaveLength(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('a fresh observation resets the staleness clock', () => {
-    vi.useFakeTimers();
-    try {
-      debugBus.recordRateLimit(sample);
-      vi.advanceTimersByTime(2 * 60_000);
-      debugBus.recordRateLimit(sample); // re-observed
-      vi.advanceTimersByTime(2 * 60_000); // only 2 min since the last observation
-      expect(debugBus.snapshot().rateLimits).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
 describe('getEvents filtering', () => {
   beforeEach(() => {
     debugBus.recordHttp({ service: 'github', method: 'GET', url: 'https://x', status: 200, durationMs: 1, ok: true });
@@ -477,22 +396,15 @@ describe('owner attribution + filtering', () => {
     expect(debugBus.getEvents()).toHaveLength(3);
   });
 
-  it('lists owners and filters rate-limit cards in the snapshot', () => {
+  it('lists registered owners in the snapshot', () => {
     debugBus.registerOwner('ws1', 'owner-1', '@a');
-    debugBus.recordRateLimit({
-      name: '@a · core', description: 'd', limit: 5000, remaining: 4000, used: 1000,
-      resetAt: '2026-06-04T12:00:00.000Z', resource: 'core', workspaceId: 'ws1',
-    });
-    debugBus.recordRateLimit({
-      name: 'sys-bucket', description: 'd', limit: 10, remaining: 10, used: 0,
-      resetAt: '2026-06-04T12:00:00.000Z',
-    });
-
-    const all = debugBus.snapshot();
-    expect(all.owners).toContainEqual({ ownerId: 'owner-1', label: '@a' });
-    expect(all.rateLimits).toHaveLength(2);
-    expect(debugBus.snapshot('owner-1').rateLimits.map((r) => r.name)).toEqual(['@a · core']);
-    expect(debugBus.snapshot('system').rateLimits.map((r) => r.name)).toEqual(['sys-bucket']);
+    debugBus.registerOwner('ws2', 'owner-2', '@b');
+    expect(debugBus.snapshot().owners).toEqual(
+      expect.arrayContaining([
+        { ownerId: 'owner-1', label: '@a' },
+        { ownerId: 'owner-2', label: '@b' },
+      ]),
+    );
   });
 
   it('_reset() drops the owner directory', () => {

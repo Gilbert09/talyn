@@ -430,35 +430,6 @@ export interface DebugPollerState {
   lastError: string | null;
 }
 
-/**
- * Last-seen rate-limit budget for one external API bucket, parsed from a
- * provider's response headers (e.g. GitHub's `x-ratelimit-*`). Point-in-time
- * state — like {@link DebugPollerState}, it's refreshed in place rather than
- * streamed as events.
- */
-export interface DebugRateLimitState {
-  /** Bucket key, e.g. 'github' (REST) or 'github_graphql'. */
-  name: string;
-  /** Human-readable explanation of what this bucket covers (tooltip). */
-  description: string;
-  /** Max requests/points allowed in the current window. */
-  limit: number;
-  /** Requests/points remaining in the current window. */
-  remaining: number;
-  /** Requests/points used so far in the current window. */
-  used: number;
-  /** ISO timestamp when the window resets and `remaining` returns to `limit`. */
-  resetAt: string;
-  /** The GitHub resource this bucket maps to, e.g. 'core', 'graphql', 'search'. */
-  resource: string | null;
-  /** When this snapshot was last observed (ISO). */
-  observedAt: string;
-  /** The FastOwl account this account's budget belongs to, when attributable. */
-  ownerId?: string | null;
-  /** Display label for {@link ownerId} (email or GitHub username). */
-  ownerLabel?: string | null;
-}
-
 /** Point-in-time view of the backend's internals for the Debug panel. */
 export interface DebugSnapshot {
   pollers: DebugPollerState[];
@@ -468,8 +439,6 @@ export interface DebugSnapshot {
   bufferSize: number;
   /** Currently-connected WebSocket clients. */
   wsClients: number;
-  /** Last-seen API rate-limit budgets, keyed by bucket name. */
-  rateLimits: DebugRateLimitState[];
   /** Accounts with attributed debug activity, for the per-user filter. */
   owners: DebugOwner[];
   /** Cumulative Postgres query stats since the last clear. */

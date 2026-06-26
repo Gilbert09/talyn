@@ -20,7 +20,6 @@ import { environments as environmentsTable } from './db/schema.js';
 import { taskQueueService } from './services/taskQueue.js';
 import { githubService } from './services/github.js';
 import { prMonitorService } from './services/prMonitor.js';
-import { rateLimitPoller } from './services/rateLimitPoller.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
@@ -50,7 +49,6 @@ async function main() {
   await taskQueueService.init();
   await githubService.init();
   await prMonitorService.init();
-  rateLimitPoller.init();
   cloudTaskPoller.init();
   prAutoMergeWatcher.init();
   mergeQueueProcessor.init();
@@ -180,7 +178,6 @@ async function main() {
     prAutoMergeWatcher.shutdown();
     mergeQueueProcessor.shutdown();
     postHogCodeStreamer.shutdownAll();
-    rateLimitPoller.shutdown();
     prMonitorService.shutdown();
     taskQueueService.shutdown();
     webhookWorker.shutdown();
