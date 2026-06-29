@@ -1,6 +1,7 @@
 import { githubService } from './github.js';
 import { prMonitorService } from './prMonitor.js';
 import { debugBus } from './debugBus.js';
+import { graphqlBudget } from './graphqlBudget.js';
 import { TickGuard } from './tickGuard.js';
 import { pruneStaleCheckStates } from './checkCounts.js';
 
@@ -47,16 +48,34 @@ class PrReconcileSweep {
     if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let count = 0;
+    let deferred = 0;
     try {
       const workspaces = githubService.getConnectedWorkspaces();
       count = workspaces.length;
       for (const workspaceId of workspaces) {
+        // The sweep is the heaviest, least time-sensitive GraphQL consumer (it
+        // re-polls everything). When this account's points budget has fallen
+        // into the reserve, skip it this tick — webhooks, the merge queue, and
+        // manual refresh keep flowing on the reserved budget, and the next
+        // sweep (or the window reset) picks it back up. Prevents the sweep from
+        // being the thing that tips an account into a hard RATE_LIMIT error.
+        if (graphqlBudget.shouldDefer(githubService.accountKeyFor(workspaceId))) {
+          deferred++;
+          continue;
+        }
         try {
           await prMonitorService.refreshWorkspaceNow(workspaceId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'unknown error';
           console.error(`[reconcileSweep] workspace ${workspaceId.slice(0, 8)} failed:`, msg);
         }
+      }
+      if (deferred > 0) {
+        debugBus.recordEvent({
+          service: 'pr_reconcile_sweep',
+          action: 'deferred',
+          summary: `deferred ${deferred} workspace${deferred === 1 ? '' : 's'} — GraphQL budget in reserve`,
+        });
       }
       // TTL safety net for the incremental check-count table — drops any per-check
       // state orphaned by a missed close/force-push delivery so it can't grow
@@ -69,7 +88,9 @@ class PrReconcileSweep {
       debugBus.pollerTick('pr_reconcile_sweep', {
         durationMs: Date.now() - startedAt,
         ok: true,
-        summary: `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}`,
+        summary:
+          `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}` +
+          (deferred > 0 ? ` (${deferred} deferred: low GraphQL budget)` : ''),
       });
     }
   }

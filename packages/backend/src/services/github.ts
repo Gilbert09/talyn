@@ -21,6 +21,7 @@ import {
   GitHubRateLimitError,
   parseRateLimitResponse,
 } from './githubRateGate.js';
+import { graphqlBudget } from './graphqlBudget.js';
 import {
   getInstallationToken,
   clearInstallationToken,
@@ -1809,6 +1810,29 @@ class GitHubService extends EventEmitter {
           data?: T;
           errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
         }>(response.bodyText);
+        // The batched queries carry a free `rateLimit { … }` field — capture the
+        // points budget so non-urgent loops can defer before we hit the wall and
+        // the Debug panel can show how close to empty this account is. Read it
+        // off whatever data came back (present even on partial-error responses).
+        const budget = (
+          payload.data as
+            | { rateLimit?: { limit?: number; cost?: number; remaining?: number; resetAt?: string } }
+            | null
+            | undefined
+        )?.rateLimit;
+        if (
+          budget &&
+          typeof budget.limit === 'number' &&
+          typeof budget.remaining === 'number' &&
+          typeof budget.resetAt === 'string'
+        ) {
+          graphqlBudget.record(accountKey, {
+            limit: budget.limit,
+            remaining: budget.remaining,
+            resetAt: budget.resetAt,
+            cost: typeof budget.cost === 'number' ? budget.cost : 0,
+          });
+        }
         if (payload.errors && payload.errors.length > 0) {
           // GitHub returns *partial* data alongside errors scoped to a single
           // node or field inside the `repository` tree, and GraphQL guarantees

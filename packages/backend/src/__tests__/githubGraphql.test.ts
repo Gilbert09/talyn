@@ -432,6 +432,11 @@ describe('makeBatchPullRequestsQuery', () => {
     expect(q).toContain('isRequired(pullRequestNumber: 11)');
     expect(q).toContain('isRequired(pullRequestNumber: 22)');
   });
+
+  it('asks for the free rateLimit budget alongside the repository node', () => {
+    const q = makeBatchPullRequestsQuery(['main']);
+    expect(q).toContain('rateLimit { limit cost remaining resetAt }');
+  });
 });
 
 describe('makeBatchPullRequestsByNumberQuery', () => {
@@ -447,6 +452,11 @@ describe('makeBatchPullRequestsByNumberQuery', () => {
     const q = makeBatchPullRequestsByNumberQuery([60538, 60539]);
     expect(q).toContain('isRequired(pullRequestNumber: 60538)');
     expect(q).toContain('isRequired(pullRequestNumber: 60539)');
+  });
+
+  it('asks for the free rateLimit budget alongside the repository node', () => {
+    const q = makeBatchPullRequestsByNumberQuery([60538]);
+    expect(q).toContain('rateLimit { limit cost remaining resetAt }');
   });
 });
 

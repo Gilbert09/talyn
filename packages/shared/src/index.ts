@@ -430,6 +430,30 @@ export interface DebugPollerState {
   lastError: string | null;
 }
 
+/**
+ * GitHub GraphQL points budget for one rate-limit account, read off the free
+ * `rateLimit { … }` field on our batched queries. GraphQL is a per-account
+ * point bucket (≈5,000/hr, scaling to 12,500 / 15,000 on Enterprise Cloud);
+ * this surfaces how close an account is to empty and whether non-urgent loops
+ * are deferring to protect the reserve.
+ */
+export interface DebugGraphqlBudget {
+  /** Rate-limit account key, e.g. `inst:140694558` (App installation) or a login. */
+  accountKey: string;
+  /** Max GraphQL points per hour for this account. */
+  limit: number;
+  /** Points remaining in the current window (optimistically `limit` once it resets). */
+  remaining: number;
+  /** ISO timestamp when the points window resets to `limit`. */
+  resetAt: string;
+  /** Point cost of the most recently observed query. */
+  lastCost: number;
+  /** When this budget was last observed (ISO). */
+  observedAt: string;
+  /** True while non-urgent loops are deferring work for this account (budget in reserve). */
+  deferring: boolean;
+}
+
 /** Point-in-time view of the backend's internals for the Debug panel. */
 export interface DebugSnapshot {
   pollers: DebugPollerState[];
@@ -439,6 +463,8 @@ export interface DebugSnapshot {
   bufferSize: number;
   /** Currently-connected WebSocket clients. */
   wsClients: number;
+  /** GitHub GraphQL points budget per account, with deferral status. */
+  graphqlBudgets: DebugGraphqlBudget[];
   /** Accounts with attributed debug activity, for the per-user filter. */
   owners: DebugOwner[];
   /** Cumulative Postgres query stats since the last clear. */

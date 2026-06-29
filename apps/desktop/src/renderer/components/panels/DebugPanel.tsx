@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bug, Trash2, Pause, Play, Wifi, Info, Gauge, Database } from 'lucide-react';
-import type { DebugCategory, DebugEvent, DebugSnapshot } from '@fastowl/shared';
+import type {
+  DebugCategory,
+  DebugEvent,
+  DebugGraphqlBudget,
+  DebugSnapshot,
+} from '@fastowl/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -195,6 +200,85 @@ function ago(iso: string | null): string {
   if (sec < 60) return `${sec}s ago`;
   if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
   return `${Math.round(sec / 3600)}h ago`;
+}
+
+/** "in 42m" until a future reset timestamp, or "now" once it's elapsed. */
+function resetIn(iso: string): string {
+  const sec = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  if (sec <= 0) return 'now';
+  if (sec < 60) return `in ${sec}s`;
+  if (sec < 3600) return `in ${Math.round(sec / 60)}m`;
+  return `in ${Math.round(sec / 3600)}h`;
+}
+
+/** A GraphQL points-budget card for one rate-limit account. Bar reddens as the
+ *  budget runs low; an amber "deferring" state means non-urgent loops are being
+ *  held back to protect the reserve. Compact — there are only a few accounts. */
+function GraphqlBudgetCard({ b }: { b: DebugGraphqlBudget }) {
+  const pct = b.limit > 0 ? Math.max(0, Math.min(1, b.remaining / b.limit)) : 0;
+  const bar = b.deferring
+    ? 'bg-amber-500'
+    : pct > 0.5
+      ? 'bg-emerald-500'
+      : pct > 0.15
+        ? 'bg-amber-500'
+        : 'bg-red-500';
+  return (
+    <div
+      className={cn(
+        'rounded-md border bg-zinc-900/40 p-2',
+        b.deferring ? 'border-amber-500/50 bg-amber-500/5' : 'border-zinc-800'
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <Tip
+          side="bottom"
+          className="min-w-0"
+          content={
+            <span className="block">
+              <span className="font-mono font-medium text-zinc-100">{b.accountKey}</span>
+              <span className="mt-1 block">
+                GitHub GraphQL points budget for this account — {b.remaining.toLocaleString()} of{' '}
+                {b.limit.toLocaleString()} left, resets {resetIn(b.resetAt)}. Last query cost{' '}
+                {b.lastCost.toLocaleString()} point{b.lastCost === 1 ? '' : 's'}.
+              </span>
+              {b.deferring && (
+                <span className="mt-1 block text-amber-400">
+                  Budget in reserve — the reconcile sweep is deferring this account until the
+                  window resets.
+                </span>
+              )}
+              <span className="mt-1 block text-zinc-500">Last seen {ago(b.observedAt)}.</span>
+            </span>
+          }
+        >
+          <span className="flex items-center gap-1 truncate font-mono text-xs text-zinc-200">
+            {b.accountKey}
+            <Info className="h-3 w-3 shrink-0 text-zinc-600" />
+          </span>
+        </Tip>
+        {b.deferring && (
+          <span className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 font-mono text-[10px] font-medium text-amber-400">
+            deferring
+          </span>
+        )}
+      </div>
+      <div className="mt-1.5 flex items-baseline justify-between text-[11px] text-zinc-400">
+        <span>
+          <span className="font-medium text-zinc-200">{b.remaining.toLocaleString()}</span> /{' '}
+          {b.limit.toLocaleString()}
+        </span>
+        <span className="text-zinc-500">{Math.round(pct * 100)}%</span>
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+        <div className={cn('h-full rounded-full', bar)} style={{ width: `${pct * 100}%` }} />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[11px] text-zinc-500">
+        <span>resets {resetIn(b.resetAt)}</span>
+        <span>cost {b.lastCost.toLocaleString()}</span>
+      </div>
+    </div>
+  );
 }
 
 export function DebugPanel() {
@@ -569,6 +653,20 @@ export function DebugPanel() {
             );
           })}
         </div>
+
+        {(snapshot?.graphqlBudgets?.length ?? 0) > 0 && (
+          <>
+            <div className="mt-3 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+              <Gauge className="h-3.5 w-3.5" />
+              GraphQL budget
+            </div>
+            <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+              {(snapshot?.graphqlBudgets ?? []).map((b) => (
+                <GraphqlBudgetCard key={b.accountKey} b={b} />
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Filters */}

@@ -60,6 +60,8 @@ There's a developer-only **Debug** panel (Settings → Developer → "Debug tool
 - **New WebSocket message/broadcast or domain event** → `debugBus.recordWs(...)` / `debugBus.recordEvent(...)`. If it's a new outbound broadcast type, keep the `event.type !== 'debug:event'` loop-guard in `websocket.ts` intact.
 - **New `DebugCategory`** → extend the shared type, `CATEGORY_INFO`, `CATEGORY_LABEL`, `categoryClasses`, and the filter chips in `DebugPanel.tsx`.
 
+**GraphQL budget cards** ("GraphQL budget" row in the panel) show GitHub's per-account GraphQL points budget (`inst:<id>` for an App installation, else login), fed by `services/graphqlBudget.ts`. The budget is read off the free `rateLimit { limit cost remaining resetAt }` field spliced into every batched query (`githubGraphql.ts` `RATE_LIMIT_FIELD`); `github.ts` `executeGraphql` captures it via `graphqlBudget.record(accountKey, …)`. The tracker is **pure / debug-bus-independent on purpose** — it also drives a proactive deferral: the reconcile sweep (`prReconcileSweep.ts`) calls `graphqlBudget.shouldDefer(accountKey)` and skips an account whose remaining points are in the reserve (`RESERVE_POINTS`), so webhooks / merge queue / manual refresh keep flowing until the window resets. `debugBus.snapshot()` just reads `graphqlBudget.snapshot()` for display. Tests: `graphqlBudget.test.ts`.
+
 Tests live in `packages/backend/src/__tests__/debugBus.test.ts` — extend them alongside changes.
 
 ## Database Egress — keep queries lean

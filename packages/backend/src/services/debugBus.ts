@@ -6,6 +6,7 @@ import type {
   DebugSnapshot,
   DebugWebhookLag,
 } from '@fastowl/shared';
+import { graphqlBudget } from './graphqlBudget.js';
 
 /**
  * Owner filter for the admin Debug panel. A FastOwl account id shows only that
@@ -456,6 +457,7 @@ class DebugBus {
       counters: { ...this.counters },
       bufferSize: this.buffer.length,
       wsClients: this.clientCounter?.() ?? 0,
+      graphqlBudgets: graphqlBudget.snapshot(),
       owners,
       dbStats: { requests: this.dbRequestCount, egressBytes: this.dbEgressBytes },
       webhookLag: this.computeWebhookLag(this.webhookLatencies, this.lastWebhookProcessedAt),

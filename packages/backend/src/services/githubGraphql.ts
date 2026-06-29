@@ -338,6 +338,7 @@ function makeContextsPageQuery(): string {
       }
     }
   }
+${RATE_LIMIT_FIELD}
 }`;
 }
 
@@ -784,6 +785,12 @@ export function summarizeCheckContexts(
 
 // ---------- GraphQL query construction ----------
 
+// Root-level `rateLimit` block, spliced alongside `repository` in every query.
+// Asking for it costs 0 points and lets `executeGraphql` track the per-account
+// points budget off the response (see graphqlBudget). Indented two spaces to
+// sit as a sibling of `repository` inside the query body.
+const RATE_LIMIT_FIELD = '  rateLimit { limit cost remaining resetAt }';
+
 /**
  * Build the per-chunk query. Each branch becomes one aliased
  * sub-selection on `repository.pullRequests` (states: [OPEN], first: 1,
@@ -909,6 +916,7 @@ export function makeBatchPullRequestsQuery(
   repository(owner: $owner, name: $repo) {
 ${aliasFields}
   }
+${RATE_LIMIT_FIELD}
 }`;
 }
 
@@ -932,6 +940,7 @@ export function makeBatchPullRequestsByNumberQuery(numbers: number[]): string {
   repository(owner: $owner, name: $repo) {
 ${aliasFields}
   }
+${RATE_LIMIT_FIELD}
 }`;
 }
 
@@ -1354,6 +1363,7 @@ const REVIEW_DETAIL_QUERY = `query PRReviewDetail($owner: String!, $repo: String
       }
     }
   }
+${RATE_LIMIT_FIELD}
 }`;
 
 /**
