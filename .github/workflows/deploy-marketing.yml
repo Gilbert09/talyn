@@ -1,0 +1,79 @@
+name: Deploy marketing
+
+# Deploy the Talyn marketing site (apps/marketing, a standalone Next.js app
+# outside the npm workspace) to Vercel on every push to main that touches it.
+# Lint + typecheck gate the deploy so a broken build never ships. The desktop
+# app and backend deploy via their own workflows.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/marketing/**'
+      - '.github/workflows/deploy-marketing.yml'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Skip on forks — no secrets there and nothing to deploy.
+    if: github.repository == 'Gilbert09/owl'
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # The marketing app has its own lockfile (not in the workspace).
+          cache-dependency-path: apps/marketing/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    if: github.repository == 'Gilbert09/owl'
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm i -g vercel
+
+      # Run from the repo root — the Vercel project's Root Directory
+      # (apps/marketing) is pulled with the project settings, so build/deploy
+      # resolve the Next.js app from there.
+      - name: Pull Vercel project settings
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to production
+        run: vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
