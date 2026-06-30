@@ -20,7 +20,7 @@ export function Badge({
       {dot && (
         <span className="relative flex h-1.5 w-1.5">
           <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-clay" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-clay" />
+          <span className="relative inline-flex h-1.5 w-1.5 animate-dot-pulse rounded-full bg-clay" />
         </span>
       )}
       {children}

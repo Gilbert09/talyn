@@ -19,12 +19,17 @@ html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Never allow a stray wide element to scroll the page sideways on mobile.
+     `clip` (not `hidden`) doesn't create a scroll container, so it can't break
+     position: sticky or scroll-into-view. The nav is position: fixed. */
+  overflow-x: clip;
 }
 
 body {
   background-color: #f8f5f0;
   color: #23201b;
   font-feature-settings: "ss01", "cv11";
+  overflow-x: clip;
 }
 
 ::selection {

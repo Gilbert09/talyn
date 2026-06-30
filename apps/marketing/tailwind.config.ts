@@ -87,8 +87,12 @@ const config: Config = {
           "94%, 98%": { opacity: "0.2" },
         },
         "pulse-ring": {
-          "0%": { transform: "scale(0.9)", opacity: "0.55" },
-          "100%": { transform: "scale(1.7)", opacity: "0" },
+          "0%": { transform: "scale(0.8)", opacity: "0.7" },
+          "100%": { transform: "scale(2)", opacity: "0" },
+        },
+        "dot-pulse": {
+          "0%, 100%": { transform: "scale(1)", opacity: "1" },
+          "50%": { transform: "scale(1.25)", opacity: "0.8" },
         },
         scan: {
           "0%, 100%": { transform: "translateX(-40%)", opacity: "0" },
@@ -98,7 +102,8 @@ const config: Config = {
       animation: {
         "fade-up": "fade-up 0.6s ease both",
         blink: "blink 5s ease-in-out infinite",
-        "pulse-ring": "pulse-ring 2.4s ease-out infinite",
+        "pulse-ring": "pulse-ring 1.8s ease-out infinite",
+        "dot-pulse": "dot-pulse 1.8s ease-in-out infinite",
         scan: "scan 3.5s ease-in-out infinite",
       },
     },
