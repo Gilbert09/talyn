@@ -15,6 +15,7 @@ import {
   Settings,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
+import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
 import type { StackMeta } from './stacks';
 import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@fastowl/shared';
 import { ProviderIcon } from '../../../lib/providerMeta';
@@ -209,12 +210,16 @@ function PRTableRow({
   const canFollowUp =
     posthogEnabled && row.state === 'open' && prNeedsFollowup(summary) && !taskRunning;
 
-  function copyBranch(e: React.MouseEvent) {
+  async function copyMarkdownLink(e: React.MouseEvent) {
     e.stopPropagation();
-    void navigator.clipboard.writeText(summary.headBranch).then(() => {
+    const { markdown, html } = prMarkdownLink(summary.title, summary.url);
+    try {
+      await copyRich(html, markdown);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    } catch {
+      toast.error('Could not copy to clipboard');
+    }
   }
 
   async function runMerge(e: React.MouseEvent) {
@@ -633,10 +638,10 @@ function PRTableRow({
           )}
           <button
             type="button"
-            data-attr="pr-row-copy-branch"
-            onClick={copyBranch}
+            data-attr="pr-row-copy-link"
+            onClick={copyMarkdownLink}
             className="rounded p-1 text-muted-foreground hover:text-foreground"
-            title={copied ? 'Copied!' : `Copy branch: ${summary.headBranch}`}
+            title={copied ? 'Copied!' : 'Copy as Markdown link'}
           >
             {copied ? (
               <Check className="h-3.5 w-3.5 text-emerald-600" />

@@ -7,15 +7,7 @@ import { useTaskActions } from '../../../hooks/useApi';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
-
-/** Escape a string for safe interpolation into the copied HTML list. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+import { copyRich, escapeHtml } from '../../../lib/prClipboard';
 
 /**
  * The row/header action handlers shared by all three GitHub pages. They mutate
@@ -237,16 +229,7 @@ export function useGitHubActions() {
       .join('')}</ul>`;
     const count = `${items.length} PR${items.length === 1 ? '' : 's'}`;
     try {
-      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            'text/html': new Blob([html], { type: 'text/html' }),
-            'text/plain': new Blob([markdown], { type: 'text/plain' }),
-          }),
-        ]);
-      } else {
-        await navigator.clipboard.writeText(markdown);
-      }
+      await copyRich(html, markdown);
       toast.success(`Copied ${count}`, 'Paste into Slack to request approval.');
     } catch {
       try {
