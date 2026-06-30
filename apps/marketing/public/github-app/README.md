@@ -5,7 +5,7 @@ Avatars for the Talyn GitHub App, set under **GitHub → Settings → Developer 
 | File | Use | Look |
 | --- | --- | --- |
 | `logo-production.*` | Production app (`talyn`) | Brand owl on a flat terracotta tile (`#c25e3a`). |
-| `logo-development.*` | Development app (`talyn-dev`) | Same owl, terracotta-on-ink dark tile with a **DEV** pill — instantly distinct from production at avatar size. |
+| `logo-development.*` | Development app (`talyn-dev`) | Same owl, terracotta on a flat dark ink tile (`#2f2b24`) with a **DEV** pill — instantly distinct from production at avatar size. |
 
 Each comes as the SVG master plus rendered PNGs (`@1024` and the 512px upload size).
 GitHub requires a square raster image (PNG/JPG, ≥200×200, ≤1 MB) — upload the `.png`.
@@ -22,4 +22,4 @@ for v in production development; do
 done
 ```
 
-Palette (from `tailwind.config.ts` / `public/favicon.svg`): terracotta `#c25e3a`, accent `#cf7553`, ink `#3d3830 → #23201b`, cream `#fbf6ef`.
+Palette (from `tailwind.config.ts` / `public/favicon.svg`): terracotta `#c25e3a`, accent `#cf7553`, ink `#2f2b24`, cream `#fbf6ef`.
