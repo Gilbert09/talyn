@@ -22,6 +22,7 @@ import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { cn } from '../../../lib/utils';
+import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
 
 /**
@@ -295,7 +296,27 @@ function PRTableRow({
         isSelected && 'bg-muted/40'
       )}
       tabIndex={0}
-      onClick={onSelect}
+      onMouseDown={(e) => {
+        // Stop the OS autoscroll cursor from kicking in on middle-click; the
+        // open-in-browser action happens on the corresponding onAuxClick.
+        if (e.button === 1) e.preventDefault();
+      }}
+      onClick={(e) => {
+        // cmd/ctrl-click opens the PR in the browser instead of selecting it.
+        if (isOpenInBrowserClick(e)) {
+          e.preventDefault();
+          void openExternal(summary.url);
+          return;
+        }
+        onSelect();
+      }}
+      onAuxClick={(e) => {
+        // Middle/scroll-click also opens the PR in the browser.
+        if (e.button === 1) {
+          e.preventDefault();
+          void openExternal(summary.url);
+        }
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
