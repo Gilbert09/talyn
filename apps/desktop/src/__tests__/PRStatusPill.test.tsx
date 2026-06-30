@@ -65,6 +65,36 @@ describe('PRStatusPill', () => {
     expect(screen.getByRole('button').className).toContain('amber-500');
   });
 
+  it('does NOT render a green "Ready" pill when a stale mergeable hides failing checks', () => {
+    // The reported bug: an incremental {checks}-only update advanced `failed` to
+    // 26 while `blockingReason` lagged at 'mergeable', so the pill read a green
+    // "Ready" beside 26 failing checks. Required failures (non-UNSTABLE) must
+    // surface as red.
+    render(
+      <PRStatusPill
+        blockingReason="mergeable"
+        checks={checks({ total: 167, passed: 141, failed: 26 })}
+        mergeStateStatus="BLOCKED"
+      />
+    );
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+    expect(screen.getByText('26/167 failing')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('red-500');
+  });
+
+  it('reads non-required (green) for a stale mergeable when UNSTABLE', () => {
+    render(
+      <PRStatusPill
+        blockingReason="mergeable"
+        checks={checks({ total: 167, passed: 141, failed: 26 })}
+        mergeStateStatus="UNSTABLE"
+      />
+    );
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+    expect(screen.getByText('26 non-required')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('emerald-500');
+  });
+
   it('shows a running spinner when a stale checks_failed still has in-progress checks', () => {
     render(
       <PRStatusPill

@@ -581,6 +581,40 @@ export function computeBlockingReason(input: {
 }
 
 /**
+ * Reconcile a previously-derived {@link computeBlockingReason} verdict against a
+ * *fresher* check breakdown when the two were computed at different times.
+ *
+ * The incremental check-count path ({@link file://./checkCounts.ts}) advances
+ * `checks` on each `check_run` webhook WITHOUT re-running the full verdict, so a
+ * held `blockingReason` can contradict the live counts — the bug where a PR
+ * shows a green "Ready" pill while 26 checks are failing (`mergeable` is stale,
+ * `checks.failed` is fresh). `computeBlockingReason` provably never returns
+ * `mergeable` with failures, nor `checks_failed[_optional]` with zero failures,
+ * so ONLY those two combinations are stale and get corrected; an authoritative
+ * verdict (e.g. a required `checks_failed` that knows each check's
+ * `isRequired`) is left untouched, so there's no precision loss. UNSTABLE ⇒ the
+ * failing checks aren't required, mirroring the no-per-check-data heuristic.
+ */
+export function reconcileBlockingReason(
+  blockingReason: BlockingReason,
+  checks: Pick<CheckBreakdown, 'failed'>,
+  mergeStateStatus: string | null | undefined,
+): BlockingReason {
+  if (blockingReason === 'mergeable' && checks.failed > 0) {
+    return mergeStateStatus?.toUpperCase() === 'UNSTABLE'
+      ? 'checks_failed_optional'
+      : 'checks_failed';
+  }
+  if (
+    (blockingReason === 'checks_failed' || blockingReason === 'checks_failed_optional') &&
+    checks.failed === 0
+  ) {
+    return 'mergeable';
+  }
+  return blockingReason;
+}
+
+/**
  * Review state for the approval badge. When GitHub gives us a `reviewDecision`
  * (the base branch enforces required reviews) we trust it. Otherwise — repos
  * without branch protection return `null` — we derive the state ourselves from

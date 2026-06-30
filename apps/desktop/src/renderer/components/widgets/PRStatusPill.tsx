@@ -255,6 +255,23 @@ function pickVariant(
         optionalFailures: true,
       };
     case 'mergeable':
+      // A 'mergeable' verdict implies zero failing checks — the backend never
+      // derives 'mergeable' with failures. So `failed > 0` here is a stale
+      // verdict: an incremental {checks}-only update advanced the counts before
+      // the verdict caught up (mirror of the checks_failed/0-failing guard
+      // above). The backend reconciles this at the source; this is the render
+      // backstop so an already-loaded row can't flash a green "Ready" beside
+      // failing checks. UNSTABLE ⇒ the failures aren't required.
+      if (checks.failed > 0) {
+        return pickVariant(
+          mergeStateStatus?.toUpperCase() === 'UNSTABLE'
+            ? 'checks_failed_optional'
+            : 'checks_failed',
+          checks,
+          hideReviewState,
+          mergeStateStatus
+        );
+      }
       // Special-case in-progress checks even when overall verdict is
       // mergeable — the user wants to see "still running".
       if (checks.inProgress > 0) {

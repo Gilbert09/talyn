@@ -21,8 +21,10 @@ import {
 import {
   normalizeCheckState,
   computeCheckDigest,
+  reconcileBlockingReason,
   type CheckState,
   type CheckBreakdown,
+  type BlockingReason,
 } from './githubGraphql.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { targetsForRepo } from './webhookIndex.js';
@@ -104,9 +106,14 @@ interface AffectedPr {
   owner: string;
   repo: string;
   taskId: string | null;
+  /** Held verdict + mergeStateStatus, extracted as scalars so we can reconcile
+   *  the verdict against the fresh counts without shipping the jsonb blob. */
+  blockingReason: string | null;
+  mergeStateStatus: string | null;
 }
 
-/** Columns of an affected PR — never the `last_summary` blob. */
+/** Columns of an affected PR — scalars only, never the `last_summary` blob
+ *  (the two summary fields below are `->>`-extracted, so the blob never ships). */
 const AFFECTED_COLUMNS = {
   id: pullRequestsTable.id,
   workspaceId: pullRequestsTable.workspaceId,
@@ -115,6 +122,12 @@ const AFFECTED_COLUMNS = {
   owner: pullRequestsTable.owner,
   repo: pullRequestsTable.repo,
   taskId: pullRequestsTable.taskId,
+  blockingReason: sql<
+    string | null
+  >`${pullRequestsTable.lastSummary} ->> 'blockingReason'`,
+  mergeStateStatus: sql<
+    string | null
+  >`${pullRequestsTable.lastSummary} ->> 'mergeStateStatus'`,
 } as const;
 
 /**
@@ -199,19 +212,34 @@ async function recomputeAndBroadcast(
   );
 
   const now = new Date();
+  const countsJson = JSON.stringify(counts);
   for (const row of affected) {
+    // Keep the held verdict consistent with the fresh counts. This path only
+    // touches `checks`, so a verdict computed earlier can now contradict them
+    // (e.g. a `mergeable` "Ready" pill sitting on top of newly-failing checks).
+    // `reconcileBlockingReason` corrects only the provably-stale combinations.
+    const held = (row.blockingReason as BlockingReason | null) ?? 'unknown';
+    const reconciled = reconcileBlockingReason(held, counts, row.mergeStateStatus);
+    const verdictChanged = reconciled !== held;
+
     await db
       .update(pullRequestsTable)
       .set({
-        // jsonb_set patches just the `checks` key — never reads the blob back.
-        lastSummary: sql`jsonb_set(${pullRequestsTable.lastSummary}, '{checks}', ${JSON.stringify(
-          counts,
-        )}::jsonb)`,
+        // jsonb_set patches just the keys we touch — never reads the blob back.
+        // Nest a second set for `blockingReason` only when reconciliation
+        // actually changed it, so an authoritative verdict is left intact.
+        lastSummary: verdictChanged
+          ? sql`jsonb_set(jsonb_set(${pullRequestsTable.lastSummary}, '{checks}', ${countsJson}::jsonb), '{blockingReason}', ${JSON.stringify(
+              reconciled,
+            )}::jsonb)`
+          : sql`jsonb_set(${pullRequestsTable.lastSummary}, '{checks}', ${countsJson}::jsonb)`,
         lastCheckDigest: digest,
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, row.id));
-    // Partial broadcast — the desktop merges `checks` into its held summary.
+    // Partial broadcast — the desktop merges these keys into its held summary.
+    // Ride the reconciled verdict along when it changed so the pill never shows
+    // a green "Ready" next to failing checks.
     emitPullRequestUpdated(row.workspaceId, {
       id: row.id,
       taskId: row.taskId,
@@ -220,7 +248,9 @@ async function recomputeAndBroadcast(
       repo: row.repo,
       number: row.number,
       state: 'open',
-      lastSummary: { checks: counts },
+      lastSummary: verdictChanged
+        ? { checks: counts, blockingReason: reconciled }
+        : { checks: counts },
     });
   }
 }

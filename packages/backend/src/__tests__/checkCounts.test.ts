@@ -40,7 +40,11 @@ describe('checkCounts', () => {
 
   const ZERO = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
-  async function seedPr(number: number, headSha: string) {
+  async function seedPr(
+    number: number,
+    headSha: string,
+    summaryExtra: Record<string, unknown> = {},
+  ) {
     await db.insert(pullRequestsTable).values({
       id: `pr-${number}`,
       workspaceId: 'ws1',
@@ -49,8 +53,15 @@ describe('checkCounts', () => {
       repo: 'widget',
       number,
       state: 'open',
-      lastSummary: { headSha, checks: { ...ZERO } },
+      lastSummary: { headSha, checks: { ...ZERO }, ...summaryExtra },
     });
+  }
+  async function summaryOf(number: number) {
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, `pr-${number}`));
+    return rows[0].ls as { checks: Record<string, number>; blockingReason?: string };
   }
   const targets = [{ workspaceId: 'ws1', repositoryId: 'r1' }];
   const tracked = (nums: number[]) => new Map([['r1', new Set(nums)]]);
@@ -185,6 +196,38 @@ describe('checkCounts', () => {
       await ingestCheckRun(ev({ name: 'a', state: 'success' }), targets, [7], tracked([7]));
       await ingestCheckRun(ev({ name: 'b', state: 'cancelled' }), targets, [7], tracked([7]));
       expect(await checksOf(7)).toEqual({ total: 2, passed: 1, failed: 0, inProgress: 0, skipped: 0 });
+    });
+  });
+
+  describe('verdict reconciliation', () => {
+    // Guards the "green Ready pill next to N failing checks" bug: the incremental
+    // path patches `checks` only, so a stale verdict must be reconciled here.
+    it('corrects a stale mergeable verdict to non-required failing (UNSTABLE)', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'mergeable', mergeStateStatus: 'UNSTABLE' });
+      await ingestCheckRun(ev({ name: 'optional', state: 'failure' }), targets, [7], tracked([7]));
+      const ls = await summaryOf(7);
+      expect(ls.checks.failed).toBe(1);
+      expect(ls.blockingReason).toBe('checks_failed_optional');
+    });
+
+    it('corrects a stale mergeable verdict to checks_failed when not UNSTABLE', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'mergeable', mergeStateStatus: 'BLOCKED' });
+      await ingestCheckRun(ev({ name: 'gate', state: 'failure' }), targets, [7], tracked([7]));
+      expect((await summaryOf(7)).blockingReason).toBe('checks_failed');
+    });
+
+    it('flips a stale checks_failed back to mergeable once the failure clears', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'checks_failed', mergeStateStatus: 'BLOCKED' });
+      await ingestCheckRun(ev({ name: 'gate', state: 'success' }), targets, [7], tracked([7]));
+      const ls = await summaryOf(7);
+      expect(ls.checks.failed).toBe(0);
+      expect(ls.blockingReason).toBe('mergeable');
+    });
+
+    it('leaves a consistent verdict (checks_failed + a live failure) untouched', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'checks_failed', mergeStateStatus: 'BLOCKED' });
+      await ingestCheckRun(ev({ name: 'gate', state: 'failure' }), targets, [7], tracked([7]));
+      expect((await summaryOf(7)).blockingReason).toBe('checks_failed');
     });
   });
 

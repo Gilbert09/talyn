@@ -3,6 +3,7 @@ import {
   aliasForBranch,
   batchPullRequests,
   computeBlockingReason,
+  reconcileBlockingReason,
   computeCheckDigest,
   deriveEffectiveReviewDecision,
   decodeBatchResponse,
@@ -284,6 +285,45 @@ describe('computeBlockingReason', () => {
         checks: { ...baseChecks, total: 3, passed: 1, failed: 2 },
       })
     ).toBe('merge_conflicts');
+  });
+});
+
+describe('reconcileBlockingReason', () => {
+  // The bug this guards: an incremental {checks}-only update advances `failed`
+  // while a stale `mergeable` verdict still reads "Ready" — a green pill next
+  // to N failing checks.
+  it.each([
+    ['UNSTABLE', 'checks_failed_optional'],
+    ['unstable', 'checks_failed_optional'], // case-insensitive
+    ['BLOCKED', 'checks_failed'],
+    ['CLEAN', 'checks_failed'],
+    [undefined, 'checks_failed'],
+    [null, 'checks_failed'],
+  ])('stale mergeable + failures with mergeStateStatus=%s → %s', (mss, expected) => {
+    expect(
+      reconcileBlockingReason('mergeable', { failed: 26 }, mss as string | null | undefined)
+    ).toBe(expected);
+  });
+
+  it.each([
+    ['checks_failed' as const],
+    ['checks_failed_optional' as const],
+  ])('stale %s with zero failures → mergeable', (reason) => {
+    expect(reconcileBlockingReason(reason, { failed: 0 }, 'CLEAN')).toBe('mergeable');
+  });
+
+  it.each([
+    // Consistent verdicts are returned untouched — no precision loss.
+    ['mergeable' as const, 0],
+    ['checks_failed' as const, 3],
+    ['checks_failed_optional' as const, 3],
+    ['merge_conflicts' as const, 5],
+    ['changes_requested' as const, 0],
+    ['blocked' as const, 0],
+    ['blocked' as const, 2], // blocked can legitimately co-exist with non-required failures
+    ['unknown' as const, 4],
+  ])('leaves a consistent %s (failed=%s) untouched', (reason, failed) => {
+    expect(reconcileBlockingReason(reason, { failed }, 'UNSTABLE')).toBe(reason);
   });
 });
 
