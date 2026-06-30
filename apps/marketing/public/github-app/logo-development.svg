@@ -1,0 +1,22 @@
+<svg width="512" height="512" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="0" x2="32" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3d3830"/>
+      <stop offset="1" stop-color="#23201b"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#bg)"/>
+  <g stroke="#cf7553" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M18 20 C 21 8 43 8 46 20"/>
+    <path d="M16 23 C 11 31 11 44 18 51"/>
+    <path d="M48 23 C 53 31 53 44 46 51"/>
+    <circle cx="25.5" cy="28" r="4.4"/>
+    <circle cx="38.5" cy="28" r="4.4"/>
+    <path d="M29 35 L 32 41 L 35 35"/>
+    <path d="M27 47 Q 32 50 37 47"/>
+  </g>
+  <g>
+    <rect x="20.5" y="52" width="23" height="8.5" rx="4.25" fill="#cf6a43"/>
+    <text x="32" y="58.2" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="6.2" font-weight="700" letter-spacing="0.6" fill="#fbf6ef">DEV</text>
+  </g>
+</svg>
