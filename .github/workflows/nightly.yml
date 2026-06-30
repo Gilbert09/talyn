@@ -104,14 +104,19 @@ jobs:
         # deletes them from disk so they aren't packed into the shipped app.
         # Runs after the build and before packaging so electron-builder bundles
         # the injected JS. No-op until POSTHOG_CLI_API_KEY is configured, and
-        # never blocks a release — symbolication is auxiliary.
-        if: ${{ secrets.POSTHOG_CLI_API_KEY != '' }}
+        # never blocks a release — symbolication is auxiliary. (The skip is
+        # guarded inside the script, not via `if:` — the `secrets` context is
+        # not allowed in `if` conditions.)
         continue-on-error: true
         env:
           POSTHOG_CLI_HOST: https://us.posthog.com
           POSTHOG_CLI_PROJECT_ID: ${{ vars.POSTHOG_CLI_PROJECT_ID }}
           POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
         run: |
+          if [ -z "$POSTHOG_CLI_API_KEY" ]; then
+            echo "POSTHOG_CLI_API_KEY not set — skipping source map upload."
+            exit 0
+          fi
           npx --yes @posthog/cli@latest sourcemap inject \
             --directory apps/desktop/release/app/dist/renderer
           npx --yes @posthog/cli@latest sourcemap upload \
