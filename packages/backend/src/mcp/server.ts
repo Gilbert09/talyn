@@ -14,7 +14,7 @@ import { TOOLS } from './tools.js';
  */
 export function buildMcpServer(ownerId: string): Server {
   const server = new Server(
-    { name: 'fastowl', version: '0.1.0' },
+    { name: 'talyn', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
 

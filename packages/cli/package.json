@@ -1,7 +1,7 @@
 {
   "name": "@fastowl/cli",
   "version": "0.1.0",
-  "description": "Command-line client for FastOwl — create tasks, inspect backlog, etc.",
+  "description": "Command-line client for Talyn — create tasks, inspect backlog, etc.",
   "private": true,
   "type": "module",
   "main": "dist/index.js",

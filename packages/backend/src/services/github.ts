@@ -1086,7 +1086,7 @@ class GitHubService extends EventEmitter {
         headers: {
           Accept: 'application/vnd.github.v3+json',
           Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
-          'User-Agent': 'FastOwl',
+          'User-Agent': 'Talyn',
           ...options.headers,
         },
       });
@@ -1812,7 +1812,7 @@ class GitHubService extends EventEmitter {
             Accept: 'application/vnd.github+json',
             Authorization: `${resolved.tokenType} ${resolved.accessToken}`,
             'Content-Type': 'application/json',
-            'User-Agent': 'FastOwl',
+            'User-Agent': 'Talyn',
           },
           body: JSON.stringify({ query, variables }),
         });

@@ -12,7 +12,7 @@ function envDefaults() {
 export function registerTaskCommands(program: Command): void {
   const task = program
     .command('task')
-    .description('Create and inspect FastOwl tasks');
+    .description('Create and inspect Talyn tasks');
 
   task
     .command('create')

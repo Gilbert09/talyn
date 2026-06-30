@@ -156,7 +156,7 @@ async function ensureResources(
 
   if (!agentId) {
     const agent = await client.createAgent({
-      name: `FastOwl (${model})`,
+      name: `Talyn (${model})`,
       model,
       system: AGENT_SYSTEM_PROMPT,
     });
@@ -164,7 +164,7 @@ async function ensureResources(
     await cacheClaudeResourceIds(workspaceId, { model, agentId });
   }
   if (!environmentId) {
-    const environment = await client.createEnvironment('fastowl');
+    const environment = await client.createEnvironment('talyn');
     environmentId = environment.id;
     await cacheClaudeResourceIds(workspaceId, { environmentId });
   }

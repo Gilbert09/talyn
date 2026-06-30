@@ -9,7 +9,7 @@ import { TOOLS } from './tools.js';
 
 async function main(): Promise<void> {
   const server = new Server(
-    { name: 'fastowl', version: '0.1.0' },
+    { name: 'talyn', version: '0.1.0' },
     { capabilities: { tools: {} } }
   );
 

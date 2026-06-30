@@ -232,7 +232,7 @@ function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
       >
         <WorkspaceLogo
           logo={current?.logo}
-          fallbackSeed={current?.id ?? 'fastowl'}
+          fallbackSeed={current?.id ?? 'talyn'}
           size={32}
           className="flex-shrink-0"
         />

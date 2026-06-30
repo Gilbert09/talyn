@@ -140,7 +140,7 @@ async function mintInstallationToken(installationId: string): Promise<string> {
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${jwt}`,
-      'User-Agent': 'FastOwl',
+      'User-Agent': 'Talyn',
     },
   });
   debugBus.recordHttp({
@@ -190,7 +190,7 @@ export async function fetchInstallation(installationId: string): Promise<Install
     headers: {
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${jwt}`,
-      'User-Agent': 'FastOwl',
+      'User-Agent': 'Talyn',
     },
   });
   debugBus.recordHttp({
@@ -231,7 +231,7 @@ export async function fetchInstallationRepos(installationId: string): Promise<st
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `token ${token}`,
-        'User-Agent': 'FastOwl',
+        'User-Agent': 'Talyn',
       },
     });
     debugBus.recordHttp({
@@ -435,7 +435,7 @@ export async function fetchUserInstallations(userToken: string): Promise<UserIns
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `token ${userToken}`,
-        'User-Agent': 'FastOwl',
+        'User-Agent': 'Talyn',
       },
     });
     debugBus.recordHttp({

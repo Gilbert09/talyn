@@ -8,7 +8,7 @@ const program = new Command();
 
 program
   .name('fastowl')
-  .description('FastOwl command-line client')
+  .description('Talyn command-line client')
   .version('0.1.0')
   .option('-v, --verbose', 'Print additional diagnostics to stderr');
 
@@ -17,7 +17,7 @@ registerTokenCommands(program);
 
 program
   .command('ping')
-  .description('Check that the FastOwl backend is reachable')
+  .description('Check that the Talyn backend is reachable')
   .action(async () => {
     const url = `${baseUrl()}/health`;
     try {

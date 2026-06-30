@@ -178,7 +178,7 @@ describe('githubService', () => {
       const [, init] = fetchStub.mock.calls[0];
       const headers = (init as RequestInit).headers as Record<string, string>;
       expect(headers.Authorization).toBe('bearer gho_test');
-      expect(headers['User-Agent']).toBe('FastOwl');
+      expect(headers['User-Agent']).toBe('Talyn');
     });
 
     it('throws "GitHub not connected" when the workspace has no token', async () => {
