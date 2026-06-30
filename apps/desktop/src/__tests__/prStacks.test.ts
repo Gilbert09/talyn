@@ -1,0 +1,140 @@
+import type { PRRow, PRState } from '../renderer/lib/api';
+import { buildStackedRows } from '../renderer/components/panels/github/stacks';
+
+/**
+ * Minimal PRRow factory — the stack helper only reads `id`, `repositoryId`,
+ * `state`, `summary.headBranch`, `summary.baseBranch`, and the created-at used
+ * by the sort. Everything else is filler.
+ */
+function makeRow(opts: {
+  id: string;
+  head: string;
+  base: string;
+  repo?: string;
+  state?: PRState;
+  createdAt?: string;
+}): PRRow {
+  const createdAt = opts.createdAt ?? '2026-06-05T00:00:00Z';
+  return {
+    id: opts.id,
+    workspaceId: 'ws1',
+    repositoryId: opts.repo ?? 'repo1',
+    taskId: null,
+    owner: 'acme',
+    repo: 'app',
+    number: 1,
+    state: opts.state ?? 'open',
+    reviewRequested: false,
+    authored: true,
+    mergedAt: null,
+    lastPolledAt: createdAt,
+    summary: {
+      title: opts.id,
+      draft: false,
+      headBranch: opts.head,
+      baseBranch: opts.base,
+      createdAt,
+    } as PRRow['summary'],
+    autoKeepMergeable: false,
+    autoMergeState: null,
+    mergeQueued: false,
+    mergeMethod: 'squash',
+    mergeQueueState: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+/** Convenience: ordered ids out of buildStackedRows. */
+function order(rows: PRRow[], dir: 'asc' | 'desc' = 'desc'): string[] {
+  return buildStackedRows(rows, dir).ordered.map((r) => r.id);
+}
+
+describe('buildStackedRows', () => {
+  it('orders a simple chain root-first with increasing depth and one shared color', () => {
+    const a = makeRow({ id: 'A', head: 'a', base: 'main' });
+    const b = makeRow({ id: 'B', head: 'b', base: 'a' });
+    const c = makeRow({ id: 'C', head: 'c', base: 'b' });
+    // Deliberately shuffled input.
+    const { ordered, meta } = buildStackedRows([c, a, b], 'desc');
+
+    expect(ordered.map((r) => r.id)).toEqual(['A', 'B', 'C']);
+    expect(meta.get('A')).toMatchObject({ depth: 0, stacked: true });
+    expect(meta.get('B')).toMatchObject({ depth: 1, stacked: true });
+    expect(meta.get('C')).toMatchObject({ depth: 2, stacked: true });
+    const color = meta.get('A')!.colorIndex;
+    expect(color).toBeGreaterThanOrEqual(0);
+    expect(meta.get('B')!.colorIndex).toBe(color);
+    expect(meta.get('C')!.colorIndex).toBe(color);
+  });
+
+  it('handles a branching stack: two dependents share the parent depth and color', () => {
+    const a = makeRow({ id: 'A', head: 'a', base: 'main' });
+    const b = makeRow({ id: 'B', head: 'b', base: 'a', createdAt: '2026-06-05T01:00:00Z' });
+    const c = makeRow({ id: 'C', head: 'c', base: 'a', createdAt: '2026-06-05T02:00:00Z' });
+    const { ordered, meta } = buildStackedRows([a, b, c], 'desc');
+
+    expect(ordered[0].id).toBe('A');
+    // desc → newer sibling (C) first.
+    expect(ordered.map((r) => r.id)).toEqual(['A', 'C', 'B']);
+    expect(meta.get('B')).toMatchObject({ depth: 1 });
+    expect(meta.get('C')).toMatchObject({ depth: 1 });
+    expect(meta.get('B')!.colorIndex).toBe(meta.get('A')!.colorIndex);
+    expect(meta.get('C')!.colorIndex).toBe(meta.get('A')!.colorIndex);
+
+    // asc flips the sibling order.
+    expect(order([a, b, c], 'asc')).toEqual(['A', 'B', 'C']);
+  });
+
+  it('gives independent stacks distinct colors and keeps each contiguous', () => {
+    const a = makeRow({ id: 'A', head: 'a', base: 'main', createdAt: '2026-06-05T00:00:00Z' });
+    const a2 = makeRow({ id: 'A2', head: 'a2', base: 'a' });
+    const x = makeRow({ id: 'X', head: 'x', base: 'main', createdAt: '2026-06-06T00:00:00Z' });
+    const x2 = makeRow({ id: 'X2', head: 'x2', base: 'x' });
+    const { ordered, meta } = buildStackedRows([a, a2, x, x2], 'desc');
+
+    // Each stack stays together; newer root (X) first under desc.
+    expect(ordered.map((r) => r.id)).toEqual(['X', 'X2', 'A', 'A2']);
+    expect(meta.get('A')!.colorIndex).not.toBe(meta.get('X')!.colorIndex);
+  });
+
+  it('leaves standalone PRs unstacked and interleaved by sort', () => {
+    const a = makeRow({ id: 'A', head: 'a', base: 'main', createdAt: '2026-06-05T00:00:00Z' });
+    const b = makeRow({ id: 'B', head: 'b', base: 'main', createdAt: '2026-06-06T00:00:00Z' });
+    const { ordered, meta } = buildStackedRows([a, b], 'desc');
+
+    expect(ordered.map((r) => r.id)).toEqual(['B', 'A']);
+    expect(meta.get('A')).toMatchObject({ depth: 0, stacked: false, colorIndex: -1 });
+    expect(meta.get('B')).toMatchObject({ depth: 0, stacked: false, colorIndex: -1 });
+  });
+
+  it('does not link matching branch names across different repositories', () => {
+    const a = makeRow({ id: 'A', head: 'shared', base: 'main', repo: 'repo1' });
+    const b = makeRow({ id: 'B', head: 'b', base: 'shared', repo: 'repo2' });
+    const { meta } = buildStackedRows([a, b], 'desc');
+
+    expect(meta.get('A')).toMatchObject({ stacked: false });
+    expect(meta.get('B')).toMatchObject({ depth: 0, stacked: false });
+  });
+
+  it.each<PRState>(['merged', 'closed'])(
+    'treats a %s parent as absent so the child is a root',
+    (parentState) => {
+      const a = makeRow({ id: 'A', head: 'a', base: 'main', state: parentState });
+      const b = makeRow({ id: 'B', head: 'b', base: 'a' });
+      const { meta } = buildStackedRows([a, b], 'desc');
+
+      expect(meta.get('B')).toMatchObject({ depth: 0, stacked: false });
+    }
+  );
+
+  it('terminates on a base/head cycle without infinite recursion', () => {
+    const a = makeRow({ id: 'A', head: 'a', base: 'b' });
+    const b = makeRow({ id: 'B', head: 'b', base: 'a' });
+    const { ordered } = buildStackedRows([a, b], 'desc');
+
+    // Both rows are emitted exactly once regardless of the cycle.
+    expect(ordered.map((r) => r.id).sort()).toEqual(['A', 'B']);
+    expect(new Set(ordered.map((r) => r.id)).size).toBe(2);
+  });
+});

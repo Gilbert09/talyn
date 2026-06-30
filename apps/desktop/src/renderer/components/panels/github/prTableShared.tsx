@@ -15,6 +15,7 @@ import {
   Settings,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
+import type { StackMeta } from './stacks';
 import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@fastowl/shared';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
@@ -31,6 +32,21 @@ import { toast } from '../../../stores/toast';
  * Extracted from the old single GitHubPanel so the pages share one row layout.
  */
 export type PRTableVariant = 'mine' | 'review' | 'queue';
+
+/**
+ * Accent colors cycled per stack (My PRs). All members of a stack share one,
+ * indexed by `StackMeta.colorIndex % STACK_COLORS.length`.
+ */
+const STACK_COLORS = [
+  'bg-fuchsia-500',
+  'bg-emerald-500',
+  'bg-sky-500',
+  'bg-amber-500',
+  'bg-violet-500',
+] as const;
+
+/** Pixels of indentation per stack depth level. */
+const STACK_INDENT_PX = 16;
 
 interface PRTableProps {
   rows: PRRow[];
@@ -59,6 +75,8 @@ interface PRTableProps {
   taskProviderById?: Map<string, CloudProviderType | null>;
   variant: PRTableVariant;
   viewerLogin: string | null;
+  /** Stacked-PR placement per row id (My PRs only) — drives indent + accent. */
+  stackMeta?: Map<string, StackMeta>;
 }
 
 export function PRTable({
@@ -77,6 +95,7 @@ export function PRTable({
   taskProviderById,
   variant,
   viewerLogin,
+  stackMeta,
 }: PRTableProps) {
   // The queue tab splits its second column into Queue (position/state) + Status
   // (PR readiness pill); every other variant keeps a single second column.
@@ -100,6 +119,7 @@ export function PRTable({
             key={row.id}
             row={row}
             variant={variant}
+            stack={stackMeta?.get(row.id)}
             viewerLogin={viewerLogin}
             isSelected={row.id === selectedId}
             onSelect={() => onSelect(row.id)}
@@ -123,6 +143,7 @@ export function PRTable({
 function PRTableRow({
   row,
   variant,
+  stack,
   viewerLogin,
   isSelected,
   onSelect,
@@ -139,6 +160,8 @@ function PRTableRow({
 }: {
   row: PRRow;
   variant: PRTableVariant;
+  /** Stacked-PR placement for this row, when it belongs to a stack. */
+  stack?: StackMeta;
   viewerLogin: string | null;
   isSelected: boolean;
   onSelect: () => void;
@@ -175,6 +198,12 @@ function PRTableRow({
       summary.blockingReason === 'checks_failed_optional');
   const unresolved = summary.unresolvedReviewThreads ?? 0;
   const requested = variant === 'review' ? reviewRequestLabel(summary, viewerLogin) : null;
+
+  // Stacked-PR visuals: a shared accent bar at the cell's left edge plus left
+  // indentation by depth so dependents nest under their base PR.
+  const stacked = stack?.stacked ?? false;
+  const stackColor = stacked ? STACK_COLORS[stack!.colorIndex % STACK_COLORS.length] : null;
+  const stackIndent = stacked ? stack!.depth * STACK_INDENT_PX : 0;
 
   // A linked task is "active" while it's queued or running — i.e. not yet
   // fully done. Drives the spinner/label and suppresses the start-task
@@ -283,8 +312,14 @@ function PRTableRow({
         }
       }}
     >
-      <td className="px-4 py-2">
-        <div className="flex flex-col gap-0.5">
+      <td className={cn('px-4 py-2', stacked && 'relative')}>
+        {stackColor && (
+          <span
+            aria-hidden
+            className={cn('absolute inset-y-1 left-0 w-0.5 rounded-full', stackColor)}
+          />
+        )}
+        <div className="flex flex-col gap-0.5" style={stackIndent ? { paddingLeft: stackIndent } : undefined}>
           <span className="flex items-center gap-1.5 truncate font-medium">
             <span className="truncate">{summary.title || '(no title)'}</span>
           </span>

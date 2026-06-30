@@ -7,7 +7,8 @@ import { taskCloudProvider } from '../../../lib/providerMeta';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, isNeedsAttention, isAwaitingReview, isReadyToMerge } from './prTableShared';
-import { RepoFilter, SortToggle, compareByCreated, prMatchesText, type SortDir } from './filters';
+import { RepoFilter, SortToggle, prMatchesText, type SortDir } from './filters';
+import { buildStackedRows } from './stacks';
 import { useGitHubActions } from './useGitHubActions';
 
 /**
@@ -66,8 +67,15 @@ export function MyPRsPanel() {
     if (needsAttention) out = out.filter(isNeedsAttention);
     if (needsReview) out = out.filter(isAwaitingReview);
     if (readyToMerge) out = out.filter(isReadyToMerge);
-    return out.slice().sort((a, b) => compareByCreated(a, b, sortDir));
-  }, [rows, repoFilter, search, needsAttention, needsReview, readyToMerge, sortDir]);
+    return out;
+  }, [rows, repoFilter, search, needsAttention, needsReview, readyToMerge]);
+
+  // Group stacked PRs together (root-first, dependents indented) while keeping
+  // the active sort for roots. `meta` drives the per-row indent + accent bar.
+  const { ordered, meta: stackMeta } = useMemo(
+    () => buildStackedRows(filtered, sortDir),
+    [filtered, sortDir]
+  );
 
   return (
     <GitHubPageShell
@@ -76,7 +84,7 @@ export function MyPRsPanel() {
       activeView="mine"
       search={search}
       onSearch={setSearch}
-      rows={filtered}
+      rows={ordered}
       filters={
         <>
           <RepoFilter
@@ -132,8 +140,9 @@ export function MyPRsPanel() {
     >
       {({ selectedId, onSelect }) => (
         <PRTable
-          rows={filtered}
+          rows={ordered}
           variant="mine"
+          stackMeta={stackMeta}
           viewerLogin={viewerLogin}
           selectedId={selectedId}
           onSelect={onSelect}
