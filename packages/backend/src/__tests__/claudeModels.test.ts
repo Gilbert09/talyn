@@ -3,7 +3,7 @@ import {
   CLAUDE_MODELS,
   DEFAULT_CLAUDE_MODEL_ID,
   isClaudeModelId,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 
 describe('Claude model catalogue', () => {
   it('offers exactly Opus 4.8, Sonnet 4.6, and Haiku 4.5', () => {

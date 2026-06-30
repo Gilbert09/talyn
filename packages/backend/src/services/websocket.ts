@@ -8,7 +8,7 @@ import type {
   Task,
   TaskStatus,
   WSEvent,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { domainEvents } from './events.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
 import { setLocalDelivery, publishBroadcast, publishToWorkspace } from './wsBus.js';

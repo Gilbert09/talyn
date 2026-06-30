@@ -33,8 +33,8 @@ RUN npm ci --ignore-scripts
 COPY packages/shared ./packages/shared
 COPY packages/backend ./packages/backend
 
-RUN npm run build --workspace=@fastowl/shared \
- && npm run build --workspace=@fastowl/backend
+RUN npm run build --workspace=@talyn/shared \
+ && npm run build --workspace=@talyn/backend
 
 # Prune to production-only node_modules before the runtime stage picks
 # them up. `--omit=dev` drops devDependencies across the workspace;

@@ -18,7 +18,7 @@ import {
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
 import type { Database } from '../db/client.js';
-import type { AgentEvent } from '@fastowl/shared';
+import type { AgentEvent } from '@talyn/shared';
 
 const WS = 'ws-1';
 const TASK = 'task-1';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPostHogPrompt, buildMergeablePrompt, type PRMergeableSummary } from '@fastowl/shared';
+import { buildPostHogPrompt, buildMergeablePrompt, type PRMergeableSummary } from '@talyn/shared';
 
 /**
  * The cloud "make this PR mergeable" prompt must match the PostHog Code

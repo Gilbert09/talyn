@@ -33,8 +33,8 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask, readCloudTaskMeta } from '@fastowl/shared';
-import type { Task, TaskStatus, TaskType, TaskPriority } from '@fastowl/shared';
+import { isAgentTask, readCloudTaskMeta } from '@talyn/shared';
+import type { Task, TaskStatus, TaskType, TaskPriority } from '@talyn/shared';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
 
 const taskTypeConfig: Record<TaskType, { label: string; icon: React.ElementType }> = {

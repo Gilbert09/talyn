@@ -72,12 +72,12 @@ the new text as a fresh item. This is usually what you want.
 ## Task-spawns-task (the CLI escape hatch)
 
 A child Claude running inside a task can create follow-up tasks via the
-`fastowl` CLI. Agents inherit `FASTOWL_WORKSPACE_ID` (and `FASTOWL_TASK_ID`)
+`talyn` CLI. Agents inherit `FASTOWL_WORKSPACE_ID` (and `FASTOWL_TASK_ID`)
 from the parent, so:
 
 ```bash
 # inside a Claude session on the agent's env:
-fastowl task create --type code_writing \
+talyn task create --type code_writing \
     --prompt "Add tests for the new retry logic"
 ```
 

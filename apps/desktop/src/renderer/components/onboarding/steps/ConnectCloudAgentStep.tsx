@@ -5,7 +5,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { api, type PostHogCodeStatus } from '../../../lib/api';
 import { ProviderIcon } from '../../../lib/providerMeta';
-import type { CloudProviderType } from '@fastowl/shared';
+import type { CloudProviderType } from '@talyn/shared';
 
 interface ConnectCloudAgentStepProps {
   workspaceId: string;

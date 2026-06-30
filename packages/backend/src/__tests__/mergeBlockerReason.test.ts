@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeBlockerReason, type PRMergeableSummary } from '@fastowl/shared';
+import { mergeBlockerReason, type PRMergeableSummary } from '@talyn/shared';
 
 function summary(over: Partial<PRMergeableSummary> = {}): PRMergeableSummary {
   return {

@@ -1,4 +1,4 @@
-# @fastowl/cli
+# @talyn/cli
 
 Command-line client for the FastOwl backend. Lets you (or a child Claude
 running inside a FastOwl task) create tasks, inspect the backlog, and kick
@@ -10,8 +10,8 @@ From a checkout of the FastOwl monorepo:
 
 ```bash
 npm install        # from the repo root
-npm run build -w @fastowl/cli
-npm link -w @fastowl/cli
+npm run build -w @talyn/cli
+npm link -w @talyn/cli
 # now `fastowl` is on your PATH
 ```
 

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { Environment, PostHogCodeRuntimeAdapter, Task } from '@fastowl/shared';
+import type { Environment, PostHogCodeRuntimeAdapter, Task } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,

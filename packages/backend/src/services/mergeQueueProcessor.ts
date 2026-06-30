@@ -4,7 +4,7 @@ import {
   mergeBlockerReason,
   buildMergeablePrompt,
   type PRMergeableSummary,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';

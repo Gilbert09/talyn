@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { prNeedsFollowup, buildMergeablePrompt, type PRMergeableSummary } from '@fastowl/shared';
+import { prNeedsFollowup, buildMergeablePrompt, type PRMergeableSummary } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';

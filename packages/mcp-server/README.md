@@ -1,4 +1,4 @@
-# @fastowl/mcp-server
+# @talyn/mcp-server
 
 > **Superseded.** FastOwl now ships a **hosted** MCP server as an HTTP endpoint
 > on the backend (`/api/v1/mcp`) — nothing to install locally, connect a Claude
@@ -11,7 +11,7 @@
 
 MCP (Model Context Protocol) server exposing FastOwl task + backlog
 operations as first-class tools to Claude. Think of it as the typed,
-documented-schema version of `@fastowl/cli` — Claude sees it as tools
+documented-schema version of `@talyn/cli` — Claude sees it as tools
 rather than a shell binary to invoke.
 
 ## Tools exposed
@@ -34,7 +34,7 @@ when FastOwl spawned the Claude session.
 From the monorepo:
 
 ```bash
-npm run build -w @fastowl/mcp-server
+npm run build -w @talyn/mcp-server
 ```
 
 The binary lands at `packages/mcp-server/dist/index.js`. Register it in
@@ -64,6 +64,6 @@ workspace id.
 ## Dev
 
 ```bash
-npm run dev -w @fastowl/mcp-server     # tsx watch via stdio
-npm test -w @fastowl/mcp-server        # 7 vitest tests
+npm run dev -w @talyn/mcp-server     # tsx watch via stdio
+npm test -w @talyn/mcp-server        # 7 vitest tests
 ```

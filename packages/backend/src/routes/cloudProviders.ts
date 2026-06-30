@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { CloudProviderType, ApiResponse } from '@fastowl/shared';
+import type { CloudProviderType, ApiResponse } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { getCloudProvider, listCloudProviders } from '../services/cloudProviders/registry.js';
 import { ensureCloudEnvironment } from '../services/cloudProviders/environment.js';

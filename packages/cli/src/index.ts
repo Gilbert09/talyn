@@ -7,7 +7,7 @@ import { baseUrl } from './client.js';
 const program = new Command();
 
 program
-  .name('fastowl')
+  .name('talyn')
   .description('Talyn command-line client')
   .version('0.1.0')
   .option('-v, --verbose', 'Print additional diagnostics to stderr');

@@ -10,7 +10,7 @@ import {
   buildMergeablePrompt,
   type CloudProviderType,
   type PRMergeableSummary,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,

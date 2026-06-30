@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 import { getAuthToken } from './config.js';
 
 const DEFAULT_BASE = process.env.FASTOWL_API_URL || 'http://localhost:4747';

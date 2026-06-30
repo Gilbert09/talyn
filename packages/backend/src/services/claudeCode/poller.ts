@@ -4,8 +4,8 @@ import type {
   CloudTaskMetadata,
   TaskResult,
   TaskStatus,
-} from '@fastowl/shared';
-import { readCloudTaskMeta } from '@fastowl/shared';
+} from '@talyn/shared';
+import { readCloudTaskMeta } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,

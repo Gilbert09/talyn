@@ -94,7 +94,7 @@ Configured from **Settings → Integrations** inside the app:
 
 - **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui. Talks to the backend over HTTP + WebSocket; renders the PR dashboard and cloud task transcripts.
 - **`packages/backend/`** — TypeScript + Express + Postgres (Drizzle). Monitors GitHub, caches PRs, runs the merge queue + auto-keep-mergeable watcher, and delegates tasks to cloud providers via the `CloudTaskProvider` registry + poller.
-- **`packages/cli/`**, **`packages/mcp-server/`** — thin `fastowl` CLI + stdio MCP surface for tasks.
+- **`packages/cli/`**, **`packages/mcp-server/`** — thin `talyn` CLI + stdio MCP surface for tasks.
 - **`packages/shared/`** — shared TypeScript types.
 
 See [`CLAUDE.md`](./CLAUDE.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.

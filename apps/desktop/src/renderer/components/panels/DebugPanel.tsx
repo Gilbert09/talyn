@@ -6,7 +6,7 @@ import type {
   DebugEvent,
   DebugGraphqlBudget,
   DebugSnapshot,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';

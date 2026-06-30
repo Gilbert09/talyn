@@ -17,7 +17,7 @@ import {
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
 import type { StackMeta } from './stacks';
-import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@fastowl/shared';
+import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@talyn/shared';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { PRReviewPill } from '../../widgets/PRReviewPill';

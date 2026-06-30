@@ -9,7 +9,7 @@ import type {
   EnvironmentRenderer,
   EnvironmentStatus,
   ApiResponse,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 
 /**
  * Cloud-only environments are secret-free markers, one per connected

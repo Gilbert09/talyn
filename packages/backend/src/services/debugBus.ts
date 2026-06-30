@@ -5,7 +5,7 @@ import type {
   DebugPollerState,
   DebugSnapshot,
   DebugWebhookLag,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { graphqlBudget } from './graphqlBudget.js';
 
 /**

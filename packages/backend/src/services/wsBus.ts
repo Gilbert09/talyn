@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { WSEvent } from '@fastowl/shared';
+import type { WSEvent } from '@talyn/shared';
 import { createRedisConnection, isRedisEnabled } from './redis.js';
 
 /**

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { DebugCategory } from '@fastowl/shared';
+import type { DebugCategory } from '@talyn/shared';
 import { debugBus, type DebugOwnerFilter } from '../services/debugBus.js';
 import { requireAdmin } from '../middleware/auth.js';
 

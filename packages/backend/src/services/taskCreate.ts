@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { eq } from 'drizzle-orm';
-import type { TaskPriority, TaskType, PostHogCodeRuntimeAdapter } from '@fastowl/shared';
+import type { TaskPriority, TaskType, PostHogCodeRuntimeAdapter } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { tasks as tasksTable, pullRequests as pullRequestsTable } from '../db/schema.js';
 import { attachTaskToPullRequestRow } from './prCache.js';

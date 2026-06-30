@@ -8,7 +8,7 @@ import {
   emitTaskStatus,
   emitEnvironmentCreated,
 } from '../services/websocket.js';
-import type { Environment } from '@fastowl/shared';
+import type { Environment } from '@talyn/shared';
 import * as authModule from '../middleware/auth.js';
 import { debugBus } from '../services/debugBus.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';

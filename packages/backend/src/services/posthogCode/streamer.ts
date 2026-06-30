@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { AgentEvent } from '@fastowl/shared';
+import type { AgentEvent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { emitTaskEvent } from '../websocket.js';

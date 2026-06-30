@@ -1,4 +1,4 @@
-import type { CloudProviderType, Environment, Task } from '@fastowl/shared';
+import type { CloudProviderType, Environment, Task } from '@talyn/shared';
 
 /**
  * A cloud task provider delegates a FastOwl task to a vendor that runs the

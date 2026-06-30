@@ -7,7 +7,7 @@ import {
   type ClaudeModelId,
   type Environment,
   type Task,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,

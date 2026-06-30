@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import type { CreateTaskRequest, Task, TaskPriority, TaskType } from '@fastowl/shared';
+import type { CreateTaskRequest, Task, TaskPriority, TaskType } from '@talyn/shared';
 import { request } from '../client.js';
 
 function envDefaults() {

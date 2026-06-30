@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { debugBus, redactUrl, matchesOwnerFilter } from '../services/debugBus.js';
-import type { DebugCategory } from '@fastowl/shared';
+import type { DebugCategory } from '@talyn/shared';
 
 /**
  * Unit tests for the in-process debug bus that powers the developer Debug

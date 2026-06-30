@@ -1,5 +1,5 @@
 {
-  "name": "@fastowl/desktop",
+  "name": "@talyn/desktop",
   "version": "0.1.0",
   "description": "FastOwl Desktop Application",
   "private": true,
@@ -68,7 +68,7 @@
   },
   "dependencies": {
     "@electron/notarize": "^3.0.0",
-    "@fastowl/shared": "*",
+    "@talyn/shared": "*",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.10",

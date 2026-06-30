@@ -37,7 +37,7 @@ Architectural decisions, core concept deep-dives, and resolved questions. Histor
        └── child_process.spawn(claude …)
 ```
 
-Every environment — `local` or `remote` — is backed by a `@fastowl/daemon` process dialling into the backend over WebSocket. The daemon owns the child-process pipes, so a backend restart no longer SIGPIPEs running tasks.
+Every environment — `local` or `remote` — is backed by a `@talyn/daemon` process dialling into the backend over WebSocket. The daemon owns the child-process pipes, so a backend restart no longer SIGPIPEs running tasks.
 
 ## Tech Stack
 

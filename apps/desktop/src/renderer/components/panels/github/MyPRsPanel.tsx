@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { GitPullRequest } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus, CloudProviderType } from '@fastowl/shared';
+import type { TaskStatus, CloudProviderType } from '@talyn/shared';
 import { taskCloudProvider } from '../../../lib/providerMeta';
 import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';

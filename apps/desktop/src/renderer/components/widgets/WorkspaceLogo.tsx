@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { toSvg } from 'jdenticon';
-import type { WorkspaceLogo as WorkspaceLogoData } from '@fastowl/shared';
+import type { WorkspaceLogo as WorkspaceLogoData } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 
 interface WorkspaceLogoProps {

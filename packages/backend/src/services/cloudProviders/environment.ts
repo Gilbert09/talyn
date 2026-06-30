@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
-import type { CloudProviderType } from '@fastowl/shared';
+import type { CloudProviderType } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { environments as environmentsTable } from '../../db/schema.js';
 import { emitEnvironmentCreated } from '../websocket.js';

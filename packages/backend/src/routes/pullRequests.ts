@@ -26,7 +26,7 @@ import {
   broadcastMergeQueuePositions,
   QUEUE_RESET_COLUMNS,
 } from '../services/mergeQueueBroadcast.js';
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 
 /**
  * Routes for the PR/CI surface. Mostly read-only — the one write path is

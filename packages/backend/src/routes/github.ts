@@ -20,7 +20,7 @@ import {
 } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { debugBus } from '../services/debugBus.js';
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 
 // OAuth flows don't run more than a few times per user per hour. 20 per
 // 10 minutes per IP is generous for legitimate retries and blunts brute-

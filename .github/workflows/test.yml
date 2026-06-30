@@ -24,16 +24,16 @@ jobs:
         run: npm install
 
       - name: Build shared package
-        run: npm run build -w @fastowl/shared
+        run: npm run build -w @talyn/shared
 
       - name: Build backend
-        run: npm run build -w @fastowl/backend
+        run: npm run build -w @talyn/backend
 
       - name: Build desktop DLL
-        run: npm run build:dll -w @fastowl/desktop
+        run: npm run build:dll -w @talyn/desktop
 
       - name: Build desktop app
-        run: npm run build -w @fastowl/desktop
+        run: npm run build -w @talyn/desktop
 
       - name: Typecheck
         run: npm run typecheck

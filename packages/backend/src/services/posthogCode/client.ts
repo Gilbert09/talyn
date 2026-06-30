@@ -1,4 +1,4 @@
-import type { PostHogCodeRuntimeAdapter } from '@fastowl/shared';
+import type { PostHogCodeRuntimeAdapter } from '@talyn/shared';
 import type { AcpLogEntry } from './acpConverter.js';
 import { debugBus } from '../debugBus.js';
 

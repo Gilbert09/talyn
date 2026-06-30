@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@fastowl/shared';
+import type { AgentEvent } from '@talyn/shared';
 
 /**
  * Converts PostHog Code's ACP (Agent Client Protocol) log/stream entries

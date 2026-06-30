@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
-import { readCloudTaskProvider } from '@fastowl/shared';
+import { readCloudTaskProvider } from '@talyn/shared';
 import { getCloudProvider } from './registry.js';
 import { isWatched } from './taskWatch.js';
 import { debugBus } from '../debugBus.js';

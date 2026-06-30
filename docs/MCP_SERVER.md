@@ -11,7 +11,7 @@ backend (`/api/v1/mcp`, Streamable-HTTP transport), so there's nothing to
 install or run locally. You connect a Claude client straight to the URL with a
 personal token.
 
-> The legacy stdio package `@fastowl/mcp-server` (a local `node` subprocess) is
+> The legacy stdio package `@talyn/mcp-server` (a local `node` subprocess) is
 > **superseded** by this hosted endpoint and is no longer the recommended path.
 
 ## Install
@@ -22,7 +22,7 @@ personal token.
 3. Copy the prefilled **install command** and run it:
 
    ```bash
-   claude mcp add --transport http fastowl \
+   claude mcp add --transport http talyn \
      https://fastowl-backend-production.up.railway.app/api/v1/mcp \
      --header "Authorization: Bearer <your-token>"
    ```
@@ -34,7 +34,7 @@ personal token.
    ```jsonc
    {
      "mcpServers": {
-       "fastowl": {
+       "talyn": {
          "type": "http",
          "url": "https://fastowl-backend-production.up.railway.app/api/v1/mcp",
          "headers": { "Authorization": "Bearer <your-token>" }

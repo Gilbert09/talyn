@@ -1,5 +1,5 @@
 {
-  "name": "@fastowl/mcp-server",
+  "name": "@talyn/mcp-server",
   "version": "0.1.0",
   "description": "MCP server exposing FastOwl task + backlog operations as Claude tools",
   "private": true,
@@ -15,7 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fastowl/shared": "*",
+    "@talyn/shared": "*",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {

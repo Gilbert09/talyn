@@ -1,4 +1,4 @@
-import type { AgentEvent } from '@fastowl/shared';
+import type { AgentEvent } from '@talyn/shared';
 
 /**
  * Converts Claude Managed Agents **session events** into FastOwl `AgentEvent`s

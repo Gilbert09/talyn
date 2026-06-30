@@ -7,8 +7,8 @@ import { useTaskActions, mergeTaskTranscript } from '../../hooks/useApi';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { api } from '../../lib/api';
-import { readCloudTaskMeta } from '@fastowl/shared';
-import type { Task } from '@fastowl/shared';
+import { readCloudTaskMeta } from '@talyn/shared';
+import type { Task } from '@talyn/shared';
 
 interface TaskTerminalProps {
   task: Task;

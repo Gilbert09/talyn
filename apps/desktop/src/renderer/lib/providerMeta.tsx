@@ -1,4 +1,4 @@
-import { readCloudTaskProvider, type CloudProviderType } from '@fastowl/shared';
+import { readCloudTaskProvider, type CloudProviderType } from '@talyn/shared';
 import { cn } from './utils';
 import { POSTHOG_LOGO, CLAUDE_LOGO, CODEX_LOGO } from '../assets/providers/logos';
 

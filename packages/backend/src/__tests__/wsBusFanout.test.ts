@@ -6,7 +6,7 @@ import {
   publishBroadcast,
   publishToWorkspace,
 } from '../services/wsBus.js';
-import type { WSEvent } from '@fastowl/shared';
+import type { WSEvent } from '@talyn/shared';
 
 /**
  * Cross-replica WebSocket fan-out (wsBus). These tests cover the envelope

@@ -1,4 +1,4 @@
-# Railway service config for @fastowl/backend.
+# Railway service config for @talyn/backend.
 # Docs: https://docs.railway.com/reference/config-as-code
 
 [build]

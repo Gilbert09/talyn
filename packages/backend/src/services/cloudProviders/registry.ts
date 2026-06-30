@@ -1,4 +1,4 @@
-import type { CloudProviderType } from '@fastowl/shared';
+import type { CloudProviderType } from '@talyn/shared';
 import type { CloudTaskProvider } from './types.js';
 
 /**

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'crypto';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
-import type { CreateMcpTokenResponse, McpToken } from '@fastowl/shared';
+import type { CreateMcpTokenResponse, McpToken } from '@talyn/shared';
 import { getDbClient, getPoolDbClient } from '../db/client.js';
 import { mcpTokens as mcpTokensTable } from '../db/schema.js';
 

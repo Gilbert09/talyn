@@ -3,7 +3,7 @@ import type {
   Task,
   TaskPriority,
   TaskType,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { request, workspaceId as envWorkspaceId } from './client.js';
 
 export interface ToolDefinition {

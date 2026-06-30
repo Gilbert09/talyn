@@ -1,5 +1,5 @@
 {
-  "name": "@fastowl/backend",
+  "name": "@talyn/backend",
   "version": "0.1.0",
   "description": "FastOwl Backend Server",
   "private": true,
@@ -18,7 +18,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@fastowl/shared": "*",
+    "@talyn/shared": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@supabase/supabase-js": "^2.103.3",
     "cors": "^2.8.5",

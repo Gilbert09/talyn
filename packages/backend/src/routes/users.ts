@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { eq } from 'drizzle-orm';
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 import { githubService } from '../services/github.js';

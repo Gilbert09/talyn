@@ -1,4 +1,4 @@
-import type { CreateTaskRequest, Task, TaskType, Workspace } from '@fastowl/shared';
+import type { CreateTaskRequest, Task, TaskType, Workspace } from '@talyn/shared';
 import { callApi, type PrSummary, type PublicPr } from './api.js';
 
 /**

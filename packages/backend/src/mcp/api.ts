@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 import { internalProxyHeaders } from '../middleware/auth.js';
 
 /**

@@ -5,7 +5,7 @@ import type {
   EnvironmentConfig,
   Task,
   TaskPriority,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { captureWorkspaceEvent } from './analytics.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
 import { resolveCloudEnvId } from './prCloudFix.js';

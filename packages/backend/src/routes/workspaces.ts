@@ -16,7 +16,7 @@ import type {
   CreateWorkspaceRequest,
   UpdateWorkspaceRequest,
   ApiResponse,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 
 // Uploaded logos are stored inline as data URLs on the workspace row, so cap
 // them. The desktop downscales before sending, which lands well under this;

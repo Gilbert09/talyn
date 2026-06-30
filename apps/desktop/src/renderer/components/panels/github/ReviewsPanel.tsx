@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus, CloudProviderType } from '@fastowl/shared';
+import type { TaskStatus, CloudProviderType } from '@talyn/shared';
 import { taskCloudProvider } from '../../../lib/providerMeta';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, reviewRequestSearchText } from './prTableShared';

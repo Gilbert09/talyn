@@ -7,7 +7,7 @@ import {
 } from '../services/posthogCode/credentials.js';
 import { PostHogCodeClient } from '../services/posthogCode/client.js';
 import { ensureCloudEnvironment } from '../services/cloudProviders/environment.js';
-import type { ApiResponse } from '@fastowl/shared';
+import type { ApiResponse } from '@talyn/shared';
 
 /**
  * Per-workspace PostHog Code (cloud tasks) credentials. The personal

@@ -33,7 +33,7 @@ import {
   type ApiResponse,
   type GenerateTaskMetadataRequest,
   type GenerateTaskMetadataResponse,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 
 /**
  * Cloud-only task routes. Every task is delegated to a cloud provider

@@ -181,7 +181,7 @@ export const tasks = pgTable(
     }),
     branch: text('branch'),
     /**
-     * JSONL event log of `AgentEvent` objects (from @fastowl/shared) —
+     * JSONL event log of `AgentEvent` objects (from @talyn/shared) —
      * the cloud run's transcript, ingested by the provider's streamer.
      */
     transcript: jsonb('transcript'),

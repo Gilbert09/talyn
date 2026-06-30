@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { api, type PRRow } from '../../../lib/api';
-import { buildMergeablePrompt, type CloudProviderType } from '@fastowl/shared';
+import { buildMergeablePrompt, type CloudProviderType } from '@talyn/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';

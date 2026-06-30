@@ -15,7 +15,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
    - Phase 5: per-provider Settings cards, feature flags, docs.
 2. **Desktop generalisation** — Settings integration card + composer model/reasoning controls are hard-coded to PostHog Code; generalise per-provider once a second provider lands (on the Phase 3 critical path).
 3. **Multi-instance safety (advisory locks)** — see Known Gaps below; required before running more than one backend replica again.
-4. **Auth polish (Phase 18.2 leftovers)** — proper `fastowl login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `FASTOWL_ALLOWED_EMAILS`.
+4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `FASTOWL_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
 ## Backlog
@@ -597,8 +597,8 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 - [ ] **18.3 Split backend into server + daemon**
   - [~] New `packages/server` — hosted control plane. 18.3.A landed the daemon-on-the-other-side of the split; dropping ssh2/node-pty from the backend waits until legacy `local`/`ssh` env types are deprecated.
-  - [x] New `packages/daemon` — `@fastowl/daemon` workspace with `executor.ts`, `git.ts`, `wsClient.ts`, `config.ts`, `proxyServer.ts`. Session 15–16.
-  - [x] Wire protocol in `@fastowl/shared/daemonProtocol.ts`: hello / request-response / events + proxy_http_request. Session 15–16.
+  - [x] New `packages/daemon` — `@talyn/daemon` workspace with `executor.ts`, `git.ts`, `wsClient.ts`, `config.ts`, `proxyServer.ts`. Session 15–16.
+  - [x] Wire protocol in `@talyn/shared/daemonProtocol.ts`: hello / request-response / events + proxy_http_request. Session 15–16.
   - [x] Daemon auth: one-shot pairing token → long-lived device token (SHA-256 hash stored). Session 15.
   - [x] **Option-1 HTTP relay for CLI/MCP inside tasks**: daemon runs a localhost HTTP proxy; child processes' REST calls tunnel over the daemon's authenticated WS. Backend accepts internal-auth headers (randomBytes(48) secret, timingSafeEqual) alongside JWT. No user JWT ever lives on the VM. Session 16.
   - [x] **Scheduler/backlog recognise daemon envs**: `daemonRegistry` updates `environments.status` on connect/disconnect; backlog + continuousBuildScheduler treat connected daemon envs as eligible fallbacks. Session 16.
@@ -694,7 +694,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [x] "Run scheduler" button
 
 - [x] **20.4 FastOwl CLI (task-spawns-task)** (COMPLETED)
-  - [x] New `packages/cli` workspace publishing the `fastowl` binary
+  - [x] New `packages/cli` workspace publishing the `talyn` binary
   - [x] Commands: `task create/list/ready`, `backlog sources/sync/items/schedule`, `ping`
   - [x] Agent service injects `FASTOWL_API_URL` (local), `FASTOWL_WORKSPACE_ID`, `FASTOWL_TASK_ID` as inline env vars on spawn so child Claudes inherit context
   - [x] 3 CLI client tests + 4 backend env-prefix tests

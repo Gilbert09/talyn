@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Workspace, Environment, Task } from '@fastowl/shared';
+import type { Workspace, Environment, Task } from '@talyn/shared';
 import type {
   GitHubStatus,
   GitHubUser,

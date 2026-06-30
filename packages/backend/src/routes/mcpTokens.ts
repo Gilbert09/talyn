@@ -4,7 +4,7 @@ import type {
   CreateMcpTokenRequest,
   CreateMcpTokenResponse,
   McpToken,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { assertUser } from '../middleware/auth.js';
 import { createToken, listTokens, revokeToken } from '../services/mcpToken.js';
 

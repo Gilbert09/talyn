@@ -1,4 +1,4 @@
-import type { DebugGraphqlBudget } from '@fastowl/shared';
+import type { DebugGraphqlBudget } from '@talyn/shared';
 
 /** One observation read off GitHub's `rateLimit { … }` GraphQL field. */
 export interface GraphqlBudgetObservation {

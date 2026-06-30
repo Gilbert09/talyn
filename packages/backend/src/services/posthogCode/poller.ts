@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { TaskResult, TaskStatus } from '@fastowl/shared';
+import type { TaskResult, TaskStatus } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,

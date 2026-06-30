@@ -1,4 +1,4 @@
-import type { Task, TaskType, TaskStatus, TaskPriority } from '@fastowl/shared';
+import type { Task, TaskType, TaskStatus, TaskPriority } from '@talyn/shared';
 import { tasks as tasksTable } from '../db/schema.js';
 
 /**

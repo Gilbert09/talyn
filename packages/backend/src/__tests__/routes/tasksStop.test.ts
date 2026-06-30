@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
-import type { Task } from '@fastowl/shared';
+import type { Task } from '@talyn/shared';
 import { taskRoutes } from '../../routes/tasks.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import {

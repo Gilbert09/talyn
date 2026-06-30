@@ -5,7 +5,7 @@
 # Installs, in order:
 #   1. Node.js 22 (via nvm if user doesn't have Node ≥ 18)
 #   2. Claude CLI
-#   3. FastOwl repo checkout + @fastowl/cli (linked as `fastowl`)
+#   3. FastOwl repo checkout + @talyn/cli (linked as `fastowl`)
 #   4. Environment variables in ~/.bashrc (FASTOWL_API_URL)
 #
 # Does NOT handle:
@@ -125,11 +125,11 @@ fi
 
 log "Installing FastOwl dependencies..."
 run bash -c "cd \"$INSTALL_DIR\" && npm install"
-run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @fastowl/shared"
-run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @fastowl/cli"
-run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @fastowl/mcp-server"
+run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @talyn/shared"
+run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @talyn/cli"
+run bash -c "cd \"$INSTALL_DIR\" && npm run build -w @talyn/mcp-server"
 
-log "Linking fastowl CLI globally..."
+log "Linking talyn CLI globally..."
 # npm link -w works when the workspace directory is the cwd in some npm versions
 run bash -c "cd \"$INSTALL_DIR/packages/cli\" && npm link"
 
@@ -165,7 +165,7 @@ fi
 log "Verifying install..."
 run bash -lc 'command -v node && node --version'
 run bash -lc 'command -v claude && claude --version 2>&1 | head -1'
-run bash -lc 'command -v fastowl && fastowl --version'
+run bash -lc 'command -v talyn && talyn --version'
 
 log ""
 log "✓ VM bootstrap complete."
@@ -178,4 +178,4 @@ log "       git clone git@github.com:your-org/your-repo.git ~/projects/your-repo
 log "  3. On your laptop, open FastOwl → Settings → Environments → Add SSH"
 log "     and point it at this host."
 log ""
-log "To verify end-to-end: ssh back in, \`fastowl ping\` should print 'ok'."
+log "To verify end-to-end: ssh back in, \`talyn ping\` should print 'ok'."

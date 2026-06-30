@@ -12,7 +12,7 @@ import type {
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
   WorkspaceSettings,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 import { toast } from '../stores/toast';
 import { trackEvent } from '../lib/analytics';
 

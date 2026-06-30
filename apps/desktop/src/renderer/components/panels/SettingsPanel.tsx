@@ -44,8 +44,8 @@ import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { isOwnerCovered } from '../../lib/githubInstall';
 import { openExternal } from '../../lib/openExternal';
-import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@fastowl/shared';
-import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@fastowl/shared';
+import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@talyn/shared';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@talyn/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import {
   useWorkspaceActions,

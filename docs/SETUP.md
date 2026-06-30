@@ -306,7 +306,7 @@ Exposes FastOwl's own task + backlog operations as Claude tools. Useful for lett
 
 ```bash
 # build first
-npm run build -w @fastowl/shared -w @fastowl/mcp-server
+npm run build -w @talyn/shared -w @talyn/mcp-server
 
 # register
 claude mcp add fastowl -- node "$(pwd)/packages/mcp-server/dist/index.js"

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { TaskStatus } from '@fastowl/shared';
+import type { TaskStatus } from '@talyn/shared';
 import { debugBus } from './debugBus.js';
 
 export interface DomainTaskStatusEvent {

@@ -1,4 +1,4 @@
-import { readCloudTaskMeta, type Environment, type Task } from '@fastowl/shared';
+import { readCloudTaskMeta, type Environment, type Task } from '@talyn/shared';
 import { ClaudeManagedAgentsClient } from '../../claudeCode/client.js';
 import {
   getClaudeCodeCredentials,

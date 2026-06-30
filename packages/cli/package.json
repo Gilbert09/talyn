@@ -1,12 +1,12 @@
 {
-  "name": "@fastowl/cli",
+  "name": "@talyn/cli",
   "version": "0.1.0",
   "description": "Command-line client for Talyn — create tasks, inspect backlog, etc.",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "fastowl": "dist/index.js"
+    "talyn": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -15,7 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fastowl/shared": "*",
+    "@talyn/shared": "*",
     "commander": "^12.1.0"
   },
   "devDependencies": {

@@ -1,4 +1,4 @@
-import type { Task } from '@fastowl/shared';
+import type { Task } from '@talyn/shared';
 import { useWorkspaceStore } from '../renderer/stores/workspace';
 
 function makeTask(id: string, over: Partial<Task> = {}): Task {

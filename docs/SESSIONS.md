@@ -486,13 +486,13 @@ Explicitly deferred: git worktrees (would drop the single-slot constraint but ea
 
 ## Session 19 — Daemon everywhere (Phase 18.5)
 
-One-session refactor that collapses `local`/`ssh`/`daemon`/`coder` env types into `local | remote` with a single transport: every environment is backed by a `@fastowl/daemon` process dialling the backend over WebSocket. The immediate trigger: backend restart was SIGPIPE-killing local tasks because the child's stdin was piped directly to the backend process. The daemon now owns those pipes, so backend deploys don't take down in-flight work.
+One-session refactor that collapses `local`/`ssh`/`daemon`/`coder` env types into `local | remote` with a single transport: every environment is backed by a `@talyn/daemon` process dialling the backend over WebSocket. The immediate trigger: backend restart was SIGPIPE-killing local tasks because the child's stdin was piped directly to the backend process. The daemon now owns those pipes, so backend deploys don't take down in-flight work.
 
 Eight slices, each a landable git push to `main`. Design doc: [`DAEMON_EVERYWHERE.md`](./DAEMON_EVERYWHERE.md) — kept as the live task list throughout.
 
 - **Slice 1 — single-file daemon binary** (`8b26059`): `packages/daemon/scripts/build-binary.sh` + `.github/workflows/build-daemon-binaries.yml` cross-compile `bun build --compile` to five targets (darwin-arm64/x64, linux-x64/arm64, windows-x64) on one Ubuntu runner. `ws` + workspace imports work under `bun --compile`, verified by the smoke test that runs the linux binary with no args and checks the config-resolution error message.
 
-- **Slice 2 — bundle binary in the Electron `.app`** (`4518746`): platform-specific `extraResources` entries in `apps/desktop/package.json` using `${arch}` macros; each packaged build pulls the matching binary from `packages/daemon/dist/fastowl-daemon-*` and drops it at `Contents/Resources/daemon/fastowl-daemon`. Root `npm run package` runs `build:binary:all -w @fastowl/daemon` before invoking electron-builder. `publish.yml` gains a `setup-bun` step.
+- **Slice 2 — bundle binary in the Electron `.app`** (`4518746`): platform-specific `extraResources` entries in `apps/desktop/package.json` using `${arch}` macros; each packaged build pulls the matching binary from `packages/daemon/dist/fastowl-daemon-*` and drops it at `Contents/Resources/daemon/fastowl-daemon`. Root `npm run package` runs `build:binary:all -w @talyn/daemon` before invoking electron-builder. `publish.yml` gains a `setup-bun` step.
 
 - **Slice 3 — localDaemon install module** (`81bfb4a`): new `apps/desktop/src/main/localDaemon.ts`. macOS writes `~/Library/LaunchAgents/com.fastowl.daemon.plist` (`KeepAlive=true`, `RunAtLoad=true`, logs to `~/Library/Logs/FastOwl/`) and calls `launchctl bootstrap gui/<uid>` — `bootout` first so re-install is idempotent. Linux writes `~/.config/systemd/user/fastowl-daemon.service` with `Restart=always` and runs `systemctl --user daemon-reload && enable --now`. Windows deferred. Dev mode spawns `tsx packages/daemon/src/index.ts` under Electron's lifetime for fast iteration.
 
@@ -650,7 +650,7 @@ Pass over the Continuous Build scheduler + task queue to close the "runs unatten
 
 - **Why these three and not others from the failure-path audit**: the audit (via explore subagent) turned up more — orphaned git branches, fire-and-forget promise paths in agent status updates, approval-reject flow — but these three were the direct blockers for "unattended overnight": an infinite loop is catastrophic, a stuck task needs periodic rescue, and a sync-race is a silent data-loss bug. The others are quality-of-life and can land when they land.
 
-- **Schema note**: `BacklogItem` gains two fields in `@fastowl/shared` — `consecutiveFailures: number` + `lastFailureAt?: string`. Renderer components that destructure backlog items keep working (new fields are additive); the UI doesn't render them yet, but they're available for a future "this item has failed N times" badge.
+- **Schema note**: `BacklogItem` gains two fields in `@talyn/shared` — `consecutiveFailures: number` + `lastFailureAt?: string`. Renderer components that destructure backlog items keep working (new fields are additive); the UI doesn't render them yet, but they're available for a future "this item has failed N times" badge.
 
 - **Files**: `packages/backend/src/services/continuousBuild.ts`, `packages/backend/src/services/backlog/service.ts`, `packages/backend/src/services/taskQueue.ts`, `packages/backend/src/db/schema.ts`, `packages/backend/src/db/migrations/0004_backlog_failure_tracking.sql` (new), `packages/shared/src/index.ts`, tests across three files.
 
@@ -667,7 +667,7 @@ CI (and local `npm test`) had been timing out in `daemonRegistry.test.ts`. Diagn
 The "give me SSH creds and I'll do the rest" path. Desktop's Add Environment dialog now has a **Remote VM (FastOwl daemon)** type with two modes: **auto-install over SSH** (backend SSHes in and runs a hosted install script) or **manual** (shows a copy-paste one-liner). Either way, a daemon env is created, a pairing token is minted, and the env flips to `connected` as soon as the daemon dials back — no user JWT ever touches the VM.
 
 - **Shared types**: added `DaemonEnvironmentConfig` (`type: 'daemon'`, `hostname?`, `workingDirectory?`) to the `EnvironmentConfig` union + `InstallDaemonOverSshRequest`/`Response`. Keeps the Environment type honest now that daemon envs are first-class.
-- **`scripts/install-daemon.sh`** (new): OS-aware provisioning script served via the backend. Installs Node 22 (NodeSource on Debian/Ubuntu, yum-nodesource on RHEL, `brew` on macOS, nvm fallback), installs `build-essential` + `python3` on Linux for node-pty, clones `Gilbert09/owl`, builds `@fastowl/shared` + `@fastowl/daemon`, runs the daemon once in foreground with `--pairing-token` to exchange for a device token (watches the on-disk config file for `deviceToken` to appear, times out at 60s), then writes a systemd unit at `/etc/systemd/system/fastowl-daemon.service` (Linux) or a launchd plist at `~/Library/LaunchAgents/dev.fastowl.daemon.plist` (darwin). Idempotent — safe to re-run.
+- **`scripts/install-daemon.sh`** (new): OS-aware provisioning script served via the backend. Installs Node 22 (NodeSource on Debian/Ubuntu, yum-nodesource on RHEL, `brew` on macOS, nvm fallback), installs `build-essential` + `python3` on Linux for node-pty, clones `Gilbert09/owl`, builds `@talyn/shared` + `@talyn/daemon`, runs the daemon once in foreground with `--pairing-token` to exchange for a device token (watches the on-disk config file for `deviceToken` to appear, times out at 60s), then writes a systemd unit at `/etc/systemd/system/fastowl-daemon.service` (Linux) or a launchd plist at `~/Library/LaunchAgents/dev.fastowl.daemon.plist` (darwin). Idempotent — safe to re-run.
 - **Backend public route** (`routes/daemon.ts`): `GET /daemon/install.sh` serves the script. Unauthenticated by design — the credential is the pairing token, not the HTTP request. Dockerfile now `COPY scripts ./scripts` so the script is on disk at runtime.
 - **Backend SSH installer** (`services/daemonInstaller.ts`): uses ssh2 to dial the target, supports `password` + `privateKey` auth (raw PEM content, not file paths — the private key gets pasted into the desktop UI and is used once per install), exec's `curl -fsSL <backend>/daemon/install.sh | bash -s -- --backend-url ... --pairing-token ...`, captures stdout+stderr, returns the log. 5-minute timeout.
 - **Backend route**: `POST /api/v1/environments/:id/install-daemon` — owner-scoped, validates env type is `daemon`, mints a fresh pairing token on every call, resolves the backend URL from `FASTOWL_PUBLIC_BACKEND_URL` env var (falls back to `req.protocol://req.host`), hands off to `installDaemonOverSsh`. Returns `{ success, log, exitCode, backendUrl }`.
@@ -689,7 +689,7 @@ The "give me SSH creds and I'll do the rest" path. Desktop's Add Environment dia
 - **Files touched**: `packages/shared/src/index.ts` (DaemonEnvironmentConfig + install API types); `scripts/install-daemon.sh` (new); `packages/backend/src/routes/daemon.ts` (new); `packages/backend/src/routes/index.ts` (mount `/daemon`); `packages/backend/src/services/daemonInstaller.ts` (new); `packages/backend/src/routes/environments.ts` (install-daemon endpoint); `Dockerfile` (COPY scripts); `apps/desktop/src/renderer/lib/api.ts` (pairingToken + installDaemon helpers); `apps/desktop/src/renderer/components/modals/AddEnvironmentModal.tsx` (rewritten).
 
 - **How to exercise it locally**:
-  1. `npm run dev -w @fastowl/backend` (local backend on 4747)
+  1. `npm run dev -w @talyn/backend` (local backend on 4747)
   2. Open desktop, Settings → Environments → Add
   3. Pick **Remote VM (FastOwl daemon)** → **Show me the install command** (the SSH path requires a real VM)
   4. Name it, Generate → copy the one-liner
@@ -726,7 +726,7 @@ Option-1 relay shipped. Child processes spawned by a daemon (`claude` running a 
   - Ownership propagation: provisioning an env + dispatching a proxy request both hinge on `env.owner_id`; need a regression test that covers user-A-VM cannot proxy as user-B.
 
 - **How to exercise the relay today**:
-  1. `npm run dev -w @fastowl/backend`
+  1. `npm run dev -w @talyn/backend`
   2. Create a daemon env + pairing token via REST (auth'd with your CLI token as before).
   3. `node packages/daemon/dist/index.js --pairing-token <x> --backend-url http://localhost:4747`
   4. Daemon logs `listening on http://127.0.0.1:<port>`.
@@ -734,12 +734,12 @@ Option-1 relay shipped. Child processes spawned by a daemon (`claude` running a 
 
 - **Follow-up commits landed same session**:
   - `a0000ea` Daemon envs are first-class in scheduling: daemonRegistry updates `environments.status` on register/unregister; `backlogService` and `continuousBuildScheduler` fall back to any connected daemon when no env is pinned; `connectSavedEnvironments` on startup marks daemon envs disconnected until they dial back.
-  - `9e82bc7` CI hygiene: `@fastowl/daemon` gets `--passWithNoTests` so an empty suite doesn't fail CI; `taskQueueService` gains a `shuttingDown` flag + `runProcessQueue` wrapper that swallows the "DATABASE_URL is not set" noise triggered by floating promises after a test's DB reset; AuthProvider no longer `console.error`s when Supabase env vars are missing (LoginScreen already surfaces a visible warning).
+  - `9e82bc7` CI hygiene: `@talyn/daemon` gets `--passWithNoTests` so an empty suite doesn't fail CI; `taskQueueService` gains a `shuttingDown` flag + `runProcessQueue` wrapper that swallows the "DATABASE_URL is not set" noise triggered by floating promises after a test's DB reset; AuthProvider no longer `console.error`s when Supabase env vars are missing (LoginScreen already surfaces a visible warning).
 
 ## Session 15 (Phase 18.3.A — daemon package + WS transport)
 Foundation for the SSH auto-install flow. Daemon package exists and can dial the hosted backend; backend has a `/daemon-ws` endpoint, a registry that tracks live daemons, and a `daemon` env type that proxies commands through. No UX change yet — Phase 18.3.B bolts the "Install daemon" checkbox onto the Add-SSH-env dialog.
 
-- **Wire protocol** in `@fastowl/shared/daemonProtocol.ts`: JSON-framed WS envelopes with `hello` / `hello_ack` / `request` / `response` / `event`. Correlation IDs on request/response. Close codes in the 4xxx range for a daemon to log a clear reason (4401 unauthorized, 4409 duplicate, 4500 server shutdown). Encoded as `JSON.stringify(envelope)` so the same types also work over stdio if we ever need a local test daemon.
+- **Wire protocol** in `@talyn/shared/daemonProtocol.ts`: JSON-framed WS envelopes with `hello` / `hello_ack` / `request` / `response` / `event`. Correlation IDs on request/response. Close codes in the 4xxx range for a daemon to log a clear reason (4401 unauthorized, 4409 duplicate, 4500 server shutdown). Encoded as `JSON.stringify(envelope)` so the same types also work over stdio if we ever need a local test daemon.
 - **`packages/daemon`** (new workspace): `executor.ts` wraps `child_process.spawn` + `node-pty`, `git.ts` mirrors backend `gitService` via exec, `wsClient.ts` handles the dial/hello/reconnect loop (exponential backoff capped at 30 s), `config.ts` resolves CLI args / env vars / `~/.fastowl/daemon.json` with that precedence. Bin is `fastowl-daemon`.
 - **Schema**: `environments` gets `device_token_hash` (SHA-256 of the long-lived daemon token) and `last_seen_at`, plus a new env type `daemon`. Migration 0003. `0002_snapshot.json` got re-ided because Stage 5's manual copy had a duplicate id that collided with drizzle-kit on regen.
 - **Backend**:
@@ -758,7 +758,7 @@ Foundation for the SSH auto-install flow. Daemon package exists and can dial the
 
 - **How to try it locally** (dev loop):
   1. Point desktop at local backend: `FASTOWL_API_URL=http://localhost:4747` in `apps/desktop/.env`, rebuild.
-  2. Start the backend (`npm run dev -w @fastowl/backend`).
+  2. Start the backend (`npm run dev -w @talyn/backend`).
   3. Create a daemon env via API: `POST /api/v1/environments` with `{ "type": "daemon", "name": "My Mac", "config": {} }` (requires bearer token from desktop login → Copy CLI token).
   4. Mint a pairing token: `POST /api/v1/environments/:id/pairing-token`.
   5. Run the daemon: `node packages/daemon/dist/index.js --pairing-token <token> --backend-url http://localhost:4747`.
@@ -906,7 +906,7 @@ Shipped the whole "point FastOwl at a TODO doc and it builds it" feature end-to-
   - Items preview with status chips.
   - "Run scheduler" button kicks `POST /backlog/schedule` for the current workspace.
 
-- **`@fastowl/cli`** (new workspace `packages/cli`):
+- **`@talyn/cli`** (new workspace `packages/cli`):
   - `fastowl task create|list|ready` + `fastowl backlog sources|sync|items|schedule` + `fastowl ping`.
   - Thin fetch client (`src/client.ts`) using native fetch, unwraps `ApiResponse<T>`, throws typed `ApiError` on failure.
   - Commander-based command setup. Env-aware defaults read `FASTOWL_API_URL`, `FASTOWL_WORKSPACE_ID`, `FASTOWL_TASK_ID`.
@@ -1086,7 +1086,7 @@ Deferred for 20.6: FastOwl MCP server. Deferred for 20.7: GitHub/Linear sources,
 
 ## Session 2 (Foundation + Backend Services)
 - Restructured to monorepo: `apps/desktop`, `packages/backend`, `packages/shared`
-- Created all core types in `@fastowl/shared`
+- Created all core types in `@talyn/shared`
 - Built backend server with Express + WebSocket, SQLite database with migrations, REST API routes for all entities, WebSocket service for real-time events
 - Added Tailwind CSS + PostCSS to renderer
 - Created shadcn/ui style components (Button, Card, Badge, ScrollArea)

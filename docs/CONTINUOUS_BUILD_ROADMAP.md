@@ -15,7 +15,7 @@ no manual CLI installs, no reverse tunnels, no bashrc edits.
 - **Continuous Build feature end-to-end in the code**: backlog model,
   scheduler, desktop UI, per-workspace toggle. See
   [`CONTINUOUS_BUILD.md`](./CONTINUOUS_BUILD.md).
-- **Task-spawns-task**: `@fastowl/cli` and `@fastowl/mcp-server` both wired
+- **Task-spawns-task**: `@talyn/cli` and `@talyn/mcp-server` both wired
   up. Child agents inherit `FASTOWL_*` env vars.
 - **Option 3 (deterministic completion)**: scheduler-spawned tasks run
   `claude --print --permission-mode acceptEdits`. Process exit = task done.

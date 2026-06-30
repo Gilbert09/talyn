@@ -13,7 +13,7 @@ import type {
   DebugEvent,
   DebugCategory,
   DebugSnapshot,
-} from '@fastowl/shared';
+} from '@talyn/shared';
 
 // Resolve the backend URL from the build-time env (see webpack configs).
 // Falls back to local dev so a fresh checkout Just Works.

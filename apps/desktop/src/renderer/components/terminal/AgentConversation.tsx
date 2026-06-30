@@ -8,7 +8,7 @@ import React, {
 import { ChevronDown, ChevronRight, Check, X, Shield, Wrench, Brain } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
-import type { AgentEvent } from '@fastowl/shared';
+import type { AgentEvent } from '@talyn/shared';
 
 interface AgentConversationProps {
   transcript: AgentEvent[] | undefined;
