@@ -45,6 +45,34 @@ async function getAuthToken(): Promise<string | null> {
   return data.session?.access_token ?? null;
 }
 
+/**
+ * A transport-level failure reaching the backend: `fetch` itself rejected
+ * (offline, DNS, TLS, connection refused, or the hosted backend down / cold-
+ * starting) rather than returning an HTTP error status. The native rejection is
+ * an opaque `TypeError: Failed to fetch` with a minified stack and no hint of
+ * which call failed — this wraps it with the method, path, and online state so a
+ * captured exception is actually identifiable.
+ */
+export class ApiNetworkError extends Error {
+  readonly method: string;
+  readonly path: string;
+  readonly online: boolean;
+
+  constructor(method: string, path: string, cause: unknown) {
+    const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    super(
+      `Could not reach backend: ${method} ${path} — ${
+        online ? 'backend unreachable' : 'browser is offline'
+      }`,
+      { cause }
+    );
+    this.name = 'ApiNetworkError';
+    this.method = method;
+    this.path = path;
+    this.online = online;
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -56,11 +84,19 @@ async function request<T>(
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    // fetch only rejects on a transport failure (never on an HTTP error
+    // status). Rethrow with context so an outage/offline blip is identifiable
+    // instead of a bare, un-symbolicated "TypeError: Failed to fetch".
+    throw new ApiNetworkError(method, path, err);
+  }
 
   if (response.status === 401 && token) {
     // We sent a token and the backend rejected it — the auth user was

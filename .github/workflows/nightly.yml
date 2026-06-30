@@ -97,6 +97,26 @@ jobs:
           FASTOWL_POSTHOG_HOST: https://us.i.posthog.com
         run: npm run build -w @fastowl/desktop
 
+      - name: Upload renderer source maps to PostHog
+        # Symbolicates renderer exceptions in PostHog. `inject` stamps chunk IDs
+        # into the built JS + maps so PostHog can match a minified frame back to
+        # its source; `upload --delete-after` ships the maps to PostHog then
+        # deletes them from disk so they aren't packed into the shipped app.
+        # Runs after the build and before packaging so electron-builder bundles
+        # the injected JS. No-op until POSTHOG_CLI_API_KEY is configured, and
+        # never blocks a release — symbolication is auxiliary.
+        if: ${{ secrets.POSTHOG_CLI_API_KEY != '' }}
+        continue-on-error: true
+        env:
+          POSTHOG_CLI_HOST: https://us.posthog.com
+          POSTHOG_CLI_PROJECT_ID: ${{ vars.POSTHOG_CLI_PROJECT_ID }}
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+        run: |
+          npx --yes @posthog/cli@latest sourcemap inject \
+            --directory apps/desktop/release/app/dist/renderer
+          npx --yes @posthog/cli@latest sourcemap upload \
+            --directory apps/desktop/release/app/dist/renderer --delete-after
+
       - name: Publish nightly pre-release
         env:
           # Code-signing + notarization — required or Squirrel.Mac refuses

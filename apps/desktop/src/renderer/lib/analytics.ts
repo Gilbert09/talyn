@@ -59,6 +59,30 @@ export function initAnalytics(): void {
           capture_unhandled_rejections: true,
           capture_console_errors: true,
         },
+    // Enrich every captured exception with connectivity context. The renderer's
+    // most common exception is a transport-level "Failed to fetch" against the
+    // hosted backend; tagging each with the online state and a connectivity flag
+    // makes that noise separable from real bugs in PostHog — online:false ⇒ the
+    // machine was offline, online:true + connectivity_error ⇒ the backend itself
+    // was unreachable (down / cold-starting).
+    before_send: (event) => {
+      if (event && event.event === '$exception') {
+        const list = event.properties?.$exception_list as
+          | Array<{ value?: string }>
+          | undefined;
+        const message = list?.map((e) => e?.value ?? '').join(' ') ?? '';
+        const connectivity =
+          /failed to fetch|could not reach backend|networkerror|load failed/i.test(
+            message,
+          );
+        event.properties = {
+          ...event.properties,
+          online: typeof navigator !== 'undefined' ? navigator.onLine : null,
+          connectivity_error: connectivity,
+        };
+      }
+      return event;
+    },
     loaded: (ph) => {
       ph.startSessionRecording();
     },
