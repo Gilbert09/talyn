@@ -28,12 +28,12 @@ export function Nav() {
           : "border-b border-transparent"
       )}
     >
-      <nav className="container flex h-16 items-center justify-between">
+      <nav className="container relative flex h-16 items-center justify-between">
         <a href="/#top" aria-label="Talyn home">
           <Logo />
         </a>
 
-        <div className="hidden items-center gap-1 md:flex">
+        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 md:flex">
           {nav.map((item) => (
             <a
               key={item.href}
