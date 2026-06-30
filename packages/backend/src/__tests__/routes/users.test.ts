@@ -73,7 +73,7 @@ describe('routes/users', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(async () => {
-    process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     const testDb = await createTestDb();

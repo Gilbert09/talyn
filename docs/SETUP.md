@@ -19,7 +19,7 @@ Legend:
 > OAuth app until GitHub's 10-tokens-per-user/app/scope cap revoked the oldest,
 > and any backend still holding the revoked token in memory would 401 and delete
 > the shared `integrations` row. Dev and prod must never share a DB, an OAuth
-> app, or a `FASTOWL_TOKEN_KEY`.
+> app, or a `TALYN_TOKEN_KEY`.
 
 Local dev runs the full stack on your machine via the Supabase CLI (Docker required):
 
@@ -223,7 +223,7 @@ For Postgres + auth when Phase 18.1/18.2 lands.
 FastOwl doesn't ship an invite flow yet — anyone with a GitHub account can sign in to an instance. To lock a self-hosted instance to just you, set on the backend:
 
 ```
-FASTOWL_ALLOWED_EMAILS=you@example.com
+TALYN_ALLOWED_EMAILS=you@example.com
 ```
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
@@ -268,8 +268,8 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 
 **Where the write key goes (both use the same project key):**
 
-- **Desktop** — `FASTOWL_POSTHOG_KEY` / `FASTOWL_POSTHOG_HOST`, baked in at webpack build time (CI secret). The renderer also bakes `FASTOWL_APP_VERSION` from `release/app/package.json` automatically so every event carries `app_version`.
-- **Backend** (Railway env) — `FASTOWL_POSTHOG_KEY` / `FASTOWL_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`).
+- **Desktop** — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST`, baked in at webpack build time (CI secret). The renderer also bakes `TALYN_APP_VERSION` from `release/app/package.json` automatically so every event carries `app_version`.
+- **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`).
 
 ---
 
@@ -320,13 +320,13 @@ Or add to `~/.claude/mcp_servers.json` manually:
     "fastowl": {
       "command": "node",
       "args": ["/absolute/path/to/fastowl/packages/mcp-server/dist/index.js"],
-      "env": { "FASTOWL_API_URL": "http://localhost:4747" }
+      "env": { "TALYN_API_URL": "http://localhost:4747" }
     }
   }
 }
 ```
 
-No external account needed — it talks to your local FastOwl backend. For agents FastOwl spawns, parent-injected env vars (`FASTOWL_WORKSPACE_ID`, `FASTOWL_TASK_ID`) mean the tools work argument-free.
+No external account needed — it talks to your local FastOwl backend. For agents FastOwl spawns, parent-injected env vars (`TALYN_WORKSPACE_ID`, `TALYN_TASK_ID`) mean the tools work argument-free.
 
 After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prompt.
 
@@ -365,7 +365,7 @@ GITHUB_REDIRECT_URI=http://localhost:4747/api/v1/github/callback
 DATABASE_URL=postgres://...supabase.co:6543/postgres?pgbouncer=true
 SUPABASE_URL=https://<ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
-# FASTOWL_ALLOWED_EMAILS=you@example.com   # optional single-user lock
+# TALYN_ALLOWED_EMAILS=you@example.com   # optional single-user lock
 
 # Redis — cross-replica WebSocket fan-out + the GitHub webhook ingest queue.
 # Optional: leave unset to run single-process; the app degrades to local-only
@@ -390,12 +390,12 @@ POSTHOG_HOST=https://us.i.posthog.com
 Desktop app env (set in the shell before `npm run build` or `npm start`):
 
 ```
-FASTOWL_SUPABASE_URL=https://<ref>.supabase.co
-FASTOWL_SUPABASE_ANON_KEY=eyJ...    # anon key, safe to bundle
-FASTOWL_API_URL=http://localhost:4747   # default if unset
+TALYN_SUPABASE_URL=https://<ref>.supabase.co
+TALYN_SUPABASE_ANON_KEY=eyJ...    # anon key, safe to bundle
+TALYN_API_URL=http://localhost:4747   # default if unset
 ```
 
-CLI uses `~/.fastowl/token` (populated via `fastowl token set` — copy the current token from desktop → Settings → Account → Copy CLI token). MCP server expects `FASTOWL_AUTH_TOKEN` in its spawn env.
+CLI uses `~/.fastowl/token` (populated via `fastowl token set` — copy the current token from desktop → Settings → Account → Copy CLI token). MCP server expects `TALYN_AUTH_TOKEN` in its spawn env.
 
 And ensure `.gitignore` has `packages/backend/.env`. (If the backend doesn't yet load `.env` automatically, we'll add a `dotenv` import in Phase 18 cleanup — not critical yet.)
 

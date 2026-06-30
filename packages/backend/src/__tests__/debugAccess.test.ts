@@ -5,7 +5,7 @@ import { requireAdmin } from '../middleware/auth.js';
 /**
  * The Debug surface is a cross-tenant operator view (it streams backend
  * internals across every account), so it must stay gated to the single
- * `is_admin` account — set via FASTOWL_ADMIN_EMAILS, never self-promotable
+ * `is_admin` account — set via TALYN_ADMIN_EMAILS, never self-promotable
  * through a route. This locks that gate.
  */
 function makeRes() {

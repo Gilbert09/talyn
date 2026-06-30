@@ -3,20 +3,20 @@ import { TOOLS } from '../tools.js';
 
 describe('fastowl MCP tools', () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch');
-  const originalWs = process.env.FASTOWL_WORKSPACE_ID;
-  const originalTask = process.env.FASTOWL_TASK_ID;
+  const originalWs = process.env.TALYN_WORKSPACE_ID;
+  const originalTask = process.env.TALYN_TASK_ID;
 
   beforeEach(() => {
     fetchSpy.mockReset();
-    process.env.FASTOWL_WORKSPACE_ID = 'ws-env';
-    process.env.FASTOWL_TASK_ID = 't-env';
+    process.env.TALYN_WORKSPACE_ID = 'ws-env';
+    process.env.TALYN_TASK_ID = 't-env';
   });
 
   afterEach(() => {
-    if (originalWs === undefined) delete process.env.FASTOWL_WORKSPACE_ID;
-    else process.env.FASTOWL_WORKSPACE_ID = originalWs;
-    if (originalTask === undefined) delete process.env.FASTOWL_TASK_ID;
-    else process.env.FASTOWL_TASK_ID = originalTask;
+    if (originalWs === undefined) delete process.env.TALYN_WORKSPACE_ID;
+    else process.env.TALYN_WORKSPACE_ID = originalWs;
+    if (originalTask === undefined) delete process.env.TALYN_TASK_ID;
+    else process.env.TALYN_TASK_ID = originalTask;
   });
 
   function findTool(name: string) {

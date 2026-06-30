@@ -1,6 +1,6 @@
 import type { ApiResponse } from '@talyn/shared';
 
-const DEFAULT_BASE = process.env.FASTOWL_API_URL || 'http://localhost:4747';
+const DEFAULT_BASE = process.env.TALYN_API_URL || 'http://localhost:4747';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -11,11 +11,11 @@ export class ApiError extends Error {
 
 /**
  * MCP runs inside a child Claude process; the parent is responsible for
- * setting FASTOWL_AUTH_TOKEN on spawn. We don't fall back to the CLI's
+ * setting TALYN_AUTH_TOKEN on spawn. We don't fall back to the CLI's
  * on-disk token file because MCP servers aren't tied to a shell user.
  */
 function getAuthToken(): string | null {
-  const t = process.env.FASTOWL_AUTH_TOKEN;
+  const t = process.env.TALYN_AUTH_TOKEN;
   return t && t.trim() ? t.trim() : null;
 }
 
@@ -38,7 +38,7 @@ export async function request<T>(
 
   if (res.status === 401) {
     throw new ApiError(
-      'Not authenticated. FASTOWL_AUTH_TOKEN is missing — the parent agent process must set it on spawn.',
+      'Not authenticated. TALYN_AUTH_TOKEN is missing — the parent agent process must set it on spawn.',
       401
     );
   }
@@ -60,9 +60,9 @@ export function baseUrl(): string {
 }
 
 export function workspaceId(): string | undefined {
-  return process.env.FASTOWL_WORKSPACE_ID;
+  return process.env.TALYN_WORKSPACE_ID;
 }
 
 export function taskId(): string | undefined {
-  return process.env.FASTOWL_TASK_ID;
+  return process.env.TALYN_TASK_ID;
 }

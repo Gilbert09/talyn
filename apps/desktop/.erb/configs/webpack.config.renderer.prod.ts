@@ -3,7 +3,7 @@
  */
 
 // Load apps/desktop/.env into process.env so EnvironmentPlugin below can
-// see FASTOWL_SUPABASE_URL etc. without the operator needing to `export`
+// see TALYN_SUPABASE_URL etc. without the operator needing to `export`
 // them in every shell.
 import 'dotenv/config';
 import path from 'path';
@@ -115,18 +115,18 @@ const configuration: webpack.Configuration = {
       NODE_ENV: 'production',
       DEBUG_PROD: false,
       // See the dev config for why these default to empty strings.
-      FASTOWL_SUPABASE_URL: '',
-      FASTOWL_SUPABASE_ANON_KEY: '',
-      FASTOWL_API_URL: 'http://localhost:4747',
+      TALYN_SUPABASE_URL: '',
+      TALYN_SUPABASE_ANON_KEY: '',
+      TALYN_API_URL: 'http://localhost:4747',
       // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
-      FASTOWL_POSTHOG_KEY: '',
-      FASTOWL_POSTHOG_HOST: 'https://us.i.posthog.com',
+      TALYN_POSTHOG_KEY: '',
+      TALYN_POSTHOG_HOST: 'https://us.i.posthog.com',
       // App version baked at build time so analytics can register it as a
       // super property synchronously (the IPC getVersion round-trip raced
       // event capture and the property never landed). CI stamps
       // release/app/package.json before building, so this matches
       // app.getVersion().
-      FASTOWL_APP_VERSION:
+      TALYN_APP_VERSION:
         // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
         require('../../release/app/package.json').version,
     }),

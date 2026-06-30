@@ -428,7 +428,7 @@ class GitHubService extends EventEmitter {
         const accessToken = config ? readAccessToken(config) : null;
         if (!config || !accessToken) {
           // A row exists but yields no usable token — almost always a decrypt
-          // failure (FASTOWL_TOKEN_KEY differs from when it was saved). This is
+          // failure (TALYN_TOKEN_KEY differs from when it was saved). This is
           // the silent killer: 0 loaded tokens → every GitHub poller no-ops with
           // no HTTP, so the Debug panel goes quiet. Surface it loudly.
           failed++;
@@ -463,7 +463,7 @@ class GitHubService extends EventEmitter {
         ` (oauth app ${GITHUB_CLIENT_ID || 'unconfigured'})` +
         (fingerprints ? ` ${fingerprints}` : '') +
         (failed
-          ? ` — ${failed} could not be read (likely a FASTOWL_TOKEN_KEY mismatch; reconnect GitHub to re-save).`
+          ? ` — ${failed} could not be read (likely a TALYN_TOKEN_KEY mismatch; reconnect GitHub to re-save).`
           : '');
       console.log(summary);
       debugBus.recordEvent({

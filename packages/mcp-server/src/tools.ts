@@ -17,7 +17,7 @@ function resolveWorkspace(args: Record<string, unknown>): string {
   const id = (args.workspace_id as string | undefined) ?? envWorkspaceId();
   if (!id) {
     throw new Error(
-      'workspace_id is required (or set FASTOWL_WORKSPACE_ID in the MCP server env)'
+      'workspace_id is required (or set TALYN_WORKSPACE_ID in the MCP server env)'
     );
   }
   return id;
@@ -25,7 +25,7 @@ function resolveWorkspace(args: Record<string, unknown>): string {
 
 /**
  * All FastOwl MCP tools. Each one talks to the FastOwl backend HTTP API
- * (at FASTOWL_API_URL) using the same calling convention as the CLI.
+ * (at TALYN_API_URL) using the same calling convention as the CLI.
  */
 export const TOOLS: ToolDefinition[] = [
   {
@@ -69,7 +69,7 @@ export const TOOLS: ToolDefinition[] = [
         workspace_id: {
           type: 'string',
           description:
-            'Workspace id. Defaults to $FASTOWL_WORKSPACE_ID from the MCP server env.',
+            'Workspace id. Defaults to $TALYN_WORKSPACE_ID from the MCP server env.',
         },
       },
       required: ['prompt'],
@@ -99,7 +99,7 @@ export const TOOLS: ToolDefinition[] = [
       properties: {
         workspace_id: {
           type: 'string',
-          description: 'Workspace id. Defaults to $FASTOWL_WORKSPACE_ID.',
+          description: 'Workspace id. Defaults to $TALYN_WORKSPACE_ID.',
         },
         status: {
           type: 'string',

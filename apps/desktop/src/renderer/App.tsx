@@ -81,7 +81,7 @@ function StartingSpinner() {
   );
 }
 
-const API_BASE = process.env.FASTOWL_API_URL || 'http://localhost:4747';
+const API_BASE = process.env.TALYN_API_URL || 'http://localhost:4747';
 
 async function checkBackend(): Promise<boolean> {
   try {

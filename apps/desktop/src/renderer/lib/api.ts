@@ -17,7 +17,7 @@ import type {
 
 // Resolve the backend URL from the build-time env (see webpack configs).
 // Falls back to local dev so a fresh checkout Just Works.
-const BASE_URL = process.env.FASTOWL_API_URL || 'http://localhost:4747';
+const BASE_URL = process.env.TALYN_API_URL || 'http://localhost:4747';
 const API_BASE = `${BASE_URL}/api/v1`;
 const WS_URL = BASE_URL.replace(/^http/, 'ws') + '/ws';
 

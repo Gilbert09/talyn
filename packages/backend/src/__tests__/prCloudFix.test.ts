@@ -106,12 +106,12 @@ describe('prCloudFix helpers', () => {
     let priorKey: string | undefined;
     beforeAll(() => {
       // Seeding a Claude credential needs the token-encryption key.
-      priorKey = process.env.FASTOWL_TOKEN_KEY;
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      priorKey = process.env.TALYN_TOKEN_KEY;
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     });
     afterAll(() => {
-      if (priorKey === undefined) delete process.env.FASTOWL_TOKEN_KEY;
-      else process.env.FASTOWL_TOKEN_KEY = priorKey;
+      if (priorKey === undefined) delete process.env.TALYN_TOKEN_KEY;
+      else process.env.TALYN_TOKEN_KEY = priorKey;
     });
 
     async function connectPostHog() {

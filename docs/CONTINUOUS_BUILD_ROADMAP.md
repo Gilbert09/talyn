@@ -16,7 +16,7 @@ no manual CLI installs, no reverse tunnels, no bashrc edits.
   scheduler, desktop UI, per-workspace toggle. See
   [`CONTINUOUS_BUILD.md`](./CONTINUOUS_BUILD.md).
 - **Task-spawns-task**: `@talyn/cli` and `@talyn/mcp-server` both wired
-  up. Child agents inherit `FASTOWL_*` env vars.
+  up. Child agents inherit `TALYN_*` env vars.
 - **Option 3 (deterministic completion)**: scheduler-spawned tasks run
   `claude --print --permission-mode acceptEdits`. Process exit = task done.
   No prompt trickery, no hook, no output parsing. Interactive tasks still

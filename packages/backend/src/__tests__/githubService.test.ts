@@ -58,7 +58,7 @@ describe('githubService', () => {
     // Put the service in a known state: a 32-byte token key so
     // storeToken can encrypt, and known client id/secret so the
     // auth-URL + token-exchange URLs are deterministic.
-    process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     process.env.GITHUB_CLIENT_ID = 'gh-client-id';
     process.env.GITHUB_CLIENT_SECRET = 'gh-client-secret';
 

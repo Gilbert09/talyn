@@ -24,10 +24,10 @@ export function isEncryptedEnvelope(x: unknown): x is EncryptedEnvelope {
 }
 
 function loadKey(): Buffer {
-  const raw = process.env.FASTOWL_TOKEN_KEY;
+  const raw = process.env.TALYN_TOKEN_KEY;
   if (!raw) {
     throw new Error(
-      'FASTOWL_TOKEN_KEY is not set. Generate 32 random bytes in base64 (e.g. ' +
+      'TALYN_TOKEN_KEY is not set. Generate 32 random bytes in base64 (e.g. ' +
         '`node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"`) ' +
         'and set it in the backend environment before using integration-token encryption.'
     );

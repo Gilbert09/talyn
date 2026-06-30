@@ -1,7 +1,7 @@
 import type { ApiResponse } from '@talyn/shared';
 import { getAuthToken } from './config.js';
 
-const DEFAULT_BASE = process.env.FASTOWL_API_URL || 'http://localhost:4747';
+const DEFAULT_BASE = process.env.TALYN_API_URL || 'http://localhost:4747';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -30,7 +30,7 @@ export async function request<T>(
 
   if (res.status === 401) {
     throw new ApiError(
-      'Not authenticated. Run `fastowl token set` (paste the token from the desktop app → Settings → Copy CLI token) or set FASTOWL_AUTH_TOKEN.',
+      'Not authenticated. Run `fastowl token set` (paste the token from the desktop app → Settings → Copy CLI token) or set TALYN_AUTH_TOKEN.',
       401
     );
   }

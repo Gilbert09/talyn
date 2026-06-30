@@ -36,11 +36,11 @@ jobs:
         # this step. Without them the app defaults to http://localhost:4747
         # with no auth. Supabase anon key is publishable, hence repo variables.
         env:
-          FASTOWL_API_URL: https://fastowl-backend-production.up.railway.app
-          FASTOWL_SUPABASE_URL: ${{ vars.FASTOWL_SUPABASE_URL }}
-          FASTOWL_SUPABASE_ANON_KEY: ${{ vars.FASTOWL_SUPABASE_ANON_KEY }}
-          FASTOWL_POSTHOG_KEY: ${{ vars.FASTOWL_POSTHOG_KEY }}
-          FASTOWL_POSTHOG_HOST: https://us.i.posthog.com
+          TALYN_API_URL: https://fastowl-backend-production.up.railway.app
+          TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL }}
+          TALYN_SUPABASE_ANON_KEY: ${{ vars.TALYN_SUPABASE_ANON_KEY }}
+          TALYN_POSTHOG_KEY: ${{ vars.TALYN_POSTHOG_KEY }}
+          TALYN_POSTHOG_HOST: https://us.i.posthog.com
         run: |
           npm run build -w @talyn/desktop
 

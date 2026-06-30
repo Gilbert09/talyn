@@ -18,15 +18,15 @@ import { debugBus } from './debugBus.js';
  * rules, and we need none of the SDK's flag/batching machinery at this
  * volume (a few events per task).
  *
- * Disabled unless FASTOWL_POSTHOG_KEY is set (same project key the
+ * Disabled unless TALYN_POSTHOG_KEY is set (same project key the
  * desktop build bakes in). Failures are swallowed — analytics must never
  * break task processing.
  */
 
 function config(): { key: string; host: string } | null {
-  const key = process.env.FASTOWL_POSTHOG_KEY || '';
+  const key = process.env.TALYN_POSTHOG_KEY || '';
   if (!key) return null;
-  const host = (process.env.FASTOWL_POSTHOG_HOST || 'https://us.i.posthog.com').replace(
+  const host = (process.env.TALYN_POSTHOG_HOST || 'https://us.i.posthog.com').replace(
     /\/+$/,
     '',
   );

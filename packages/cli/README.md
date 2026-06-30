@@ -19,9 +19,9 @@ npm link -w @talyn/cli
 
 The CLI reads two env vars that agents spawned by FastOwl get automatically:
 
-- `FASTOWL_API_URL` — defaults to `http://localhost:4747`
-- `FASTOWL_WORKSPACE_ID` — default workspace for commands that need one
-- `FASTOWL_TASK_ID` — current task id (used by `task ready`)
+- `TALYN_API_URL` — defaults to `http://localhost:4747`
+- `TALYN_WORKSPACE_ID` — default workspace for commands that need one
+- `TALYN_TASK_ID` — current task id (used by `task ready`)
 
 When Claude is running inside a FastOwl task, all three are already set, so
 most commands work without flags.

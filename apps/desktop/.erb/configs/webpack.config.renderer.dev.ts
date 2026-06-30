@@ -1,6 +1,6 @@
 import 'webpack-dev-server';
 // Load apps/desktop/.env into process.env so EnvironmentPlugin below can
-// see FASTOWL_SUPABASE_URL etc. without the operator needing to `export`
+// see TALYN_SUPABASE_URL etc. without the operator needing to `export`
 // them in every shell.
 import 'dotenv/config';
 import path from 'path';
@@ -149,14 +149,14 @@ const configuration: webpack.Configuration = {
       // Supabase auth config is injected from the shell env at build time.
       // Defaults let the renderer bundle without the vars set; runtime
       // checks surface a useful error instead of a cryptic undefined.
-      FASTOWL_SUPABASE_URL: '',
-      FASTOWL_SUPABASE_ANON_KEY: '',
-      FASTOWL_API_URL: 'http://localhost:4747',
+      TALYN_SUPABASE_URL: '',
+      TALYN_SUPABASE_ANON_KEY: '',
+      TALYN_API_URL: 'http://localhost:4747',
       // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
-      FASTOWL_POSTHOG_KEY: '',
-      FASTOWL_POSTHOG_HOST: 'https://us.i.posthog.com',
+      TALYN_POSTHOG_KEY: '',
+      TALYN_POSTHOG_HOST: 'https://us.i.posthog.com',
       // Baked app version for analytics — see the prod config note.
-      FASTOWL_APP_VERSION:
+      TALYN_APP_VERSION:
         // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
         require('../../release/app/package.json').version,
     }),

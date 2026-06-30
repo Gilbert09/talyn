@@ -8,14 +8,14 @@ import path from 'path';
  * backup syncs don't pick it up. We don't encrypt: Supabase access tokens
  * are short-lived and rotate on every sign-in.
  *
- * FASTOWL_AUTH_TOKEN env var wins when set — useful for automation (CI,
+ * TALYN_AUTH_TOKEN env var wins when set — useful for automation (CI,
  * MCP server invoked by a parent process that already has a token).
  */
 const CONFIG_DIR = path.join(os.homedir(), '.fastowl');
 const TOKEN_FILE = path.join(CONFIG_DIR, 'token');
 
 export function getAuthToken(): string | null {
-  const envToken = process.env.FASTOWL_AUTH_TOKEN;
+  const envToken = process.env.TALYN_AUTH_TOKEN;
   if (envToken && envToken.trim()) return envToken.trim();
 
   try {

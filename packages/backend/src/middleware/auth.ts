@@ -97,9 +97,9 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
   };
 }
 
-/** Emails in FASTOWL_ADMIN_EMAILS (comma-separated) are bootstrapped to admin. */
+/** Emails in TALYN_ADMIN_EMAILS (comma-separated) are bootstrapped to admin. */
 function isBootstrapAdminEmail(email: string): boolean {
-  const raw = process.env.FASTOWL_ADMIN_EMAILS;
+  const raw = process.env.TALYN_ADMIN_EMAILS;
   if (!raw || !email) return false;
   return raw
     .split(',')
@@ -109,14 +109,14 @@ function isBootstrapAdminEmail(email: string): boolean {
 }
 
 /**
- * Optional email allow-list. If FASTOWL_ALLOWED_EMAILS is set (comma-separated),
+ * Optional email allow-list. If TALYN_ALLOWED_EMAILS is set (comma-separated),
  * only those emails are permitted — convenient for the single-user phase.
  * Unset == everyone.
  *
  * Throws AuthError so the middleware turns it into a 403.
  */
 async function enforceAllowList(email: string): Promise<void> {
-  const raw = process.env.FASTOWL_ALLOWED_EMAILS;
+  const raw = process.env.TALYN_ALLOWED_EMAILS;
   if (!raw) return;
   const allowed = raw
     .split(',')

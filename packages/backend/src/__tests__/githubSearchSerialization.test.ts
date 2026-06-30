@@ -22,7 +22,7 @@ describe('searchPullRequestNumbers serialization', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(async () => {
-    process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     const testDb = await createTestDb();
     db = testDb.db;
     cleanup = testDb.cleanup;

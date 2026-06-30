@@ -11,20 +11,20 @@
  *  - A small guarded helper module (rather than the React provider), so calls
  *    are safe no-ops until PostHog is initialised.
  *
- * Analytics is disabled entirely until `FASTOWL_POSTHOG_KEY` is baked in at
+ * Analytics is disabled entirely until `TALYN_POSTHOG_KEY` is baked in at
  * build time (see the webpack EnvironmentPlugin configs).
  */
 import posthog from 'posthog-js/dist/module.full.no-external';
 // Inlines the session-replay recorder so it never needs to load from the CDN.
 import 'posthog-js/dist/posthog-recorder';
 
-const KEY = process.env.FASTOWL_POSTHOG_KEY || '';
-const HOST = process.env.FASTOWL_POSTHOG_HOST || 'https://us.i.posthog.com';
+const KEY = process.env.TALYN_POSTHOG_KEY || '';
+const HOST = process.env.TALYN_POSTHOG_HOST || 'https://us.i.posthog.com';
 const IS_DEV = process.env.NODE_ENV !== 'production';
 // Baked at build time from release/app/package.json (see the webpack
 // renderer configs) so it can be registered synchronously — the old IPC
 // getVersion round-trip silently never landed on any event.
-const APP_VERSION = process.env.FASTOWL_APP_VERSION || '';
+const APP_VERSION = process.env.TALYN_APP_VERSION || '';
 
 let initialized = false;
 

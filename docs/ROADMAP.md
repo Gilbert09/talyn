@@ -15,7 +15,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
    - Phase 5: per-provider Settings cards, feature flags, docs.
 2. **Desktop generalisation** — Settings integration card + composer model/reasoning controls are hard-coded to PostHog Code; generalise per-provider once a second provider lands (on the Phase 3 critical path).
 3. **Multi-instance safety (advisory locks)** — see Known Gaps below; required before running more than one backend replica again.
-4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `FASTOWL_ALLOWED_EMAILS`.
+4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
 ## Backlog
@@ -47,7 +47,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 - **MacOS notarization**: `afterSign: .erb/scripts/notarize.js` is wired up but untested in the fastowl repo specifically.
 
 **Resolved:**
-- ~~Credential encryption at rest~~ — integration tokens are AES-GCM envelopes via `services/tokenCrypto.ts` (`FASTOWL_TOKEN_KEY`); used by GitHub + PostHog Code credentials.
+- ~~Credential encryption at rest~~ — integration tokens are AES-GCM envelopes via `services/tokenCrypto.ts` (`TALYN_TOKEN_KEY`); used by GitHub + PostHog Code credentials.
 - ~~Backend bundling for release~~ / ~~Release packaging~~ — the backend is hosted (Railway, Phase 18.4); the desktop artifact doesn't need to ship it.
 - ~~Multi-step agent state recovery~~ — no local agents to recover; cloud providers own run durability, the poller reconciles status.
 
@@ -411,7 +411,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [x] Data isolation (owner_id scoping via workspaces/environments, RLS as defense in depth)
   - [ ] API rate limiting
   - [ ] Deployment configuration
-  - [ ] **Invite flow (TODO)** — today anyone with a GitHub account can sign up to a fresh instance; self-hosters use `FASTOWL_ALLOWED_EMAILS` to lock down. Need a proper `workspaces_users` join table, invitation tokens, and UI for inviting teammates before this is truly multi-tenant.
+  - [ ] **Invite flow (TODO)** — today anyone with a GitHub account can sign up to a fresh instance; self-hosters use `TALYN_ALLOWED_EMAILS` to lock down. Need a proper `workspaces_users` join table, invitation tokens, and UI for inviting teammates before this is truly multi-tenant.
 
 - [x] **12.8 Appearance** (COMPLETED)
   - [x] Light mode theme
@@ -616,7 +616,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [x] Multi-stage Dockerfile at repo root — Node 22 slim, copies pre-built node_modules from builder to avoid re-running install-scripts (keeps node-pty/ssh2 native bindings without runtime build tools)
   - [x] `railway.toml` — DOCKERFILE builder, `/health` healthcheck, on-failure restart
   - [x] Hosted at `https://fastowl-backend-production.up.railway.app`, project `FastOwl`, service `fastowl-backend`
-  - [x] Service variables: `DATABASE_URL` (transaction pooler, not direct — Railway has no IPv6), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FASTOWL_ALLOWED_EMAILS`, `NODE_ENV`
+  - [x] Service variables: `DATABASE_URL` (transaction pooler, not direct — Railway has no IPv6), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TALYN_ALLOWED_EMAILS`, `NODE_ENV`
   - [x] Migrations run on startup via drizzle-orm migrator; `build:copy-migrations` postbuild script puts `.sql` files into `dist/`
   - [ ] Rate limiting on public API (per-user) — future
 
@@ -627,7 +627,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [ ] Rollback procedure documented — future
 
 - [x] **18.6 Desktop app integration** (mostly Session 13 + 14)
-  - [x] Replace hardcoded `http://localhost:4747` with configurable server URL (`FASTOWL_API_URL` env, webpack EnvironmentPlugin, loaded via dotenv)
+  - [x] Replace hardcoded `http://localhost:4747` with configurable server URL (`TALYN_API_URL` env, webpack EnvironmentPlugin, loaded via dotenv)
   - [x] Desktop points at Railway by default; local fallback via `.env` override
   - [x] Graceful degradation when backend unreachable (App.tsx renders "Backend is unreachable" screen)
   - [ ] First-run flow: choose "Cloud (hosted)" vs "Self-hosted/local" mode — future, not required for production
@@ -696,11 +696,11 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 - [x] **20.4 FastOwl CLI (task-spawns-task)** (COMPLETED)
   - [x] New `packages/cli` workspace publishing the `talyn` binary
   - [x] Commands: `task create/list/ready`, `backlog sources/sync/items/schedule`, `ping`
-  - [x] Agent service injects `FASTOWL_API_URL` (local), `FASTOWL_WORKSPACE_ID`, `FASTOWL_TASK_ID` as inline env vars on spawn so child Claudes inherit context
+  - [x] Agent service injects `TALYN_API_URL` (local), `TALYN_WORKSPACE_ID`, `TALYN_TASK_ID` as inline env vars on spawn so child Claudes inherit context
   - [x] 3 CLI client tests + 4 backend env-prefix tests
 
 - [x] **20.5 SSH VM support** (COMPLETED — documentation, code path, and one-command bootstrap)
-  - [x] Env prefix skips `FASTOWL_API_URL` for SSH environments (remote `.bashrc` sets it instead)
+  - [x] Env prefix skips `TALYN_API_URL` for SSH environments (remote `.bashrc` sets it instead)
   - [x] `docs/SSH_VM_SETUP.md` with three networking options (SSH reverse tunnel, LAN bind, backend-on-VM) and troubleshooting
   - [x] `scripts/bootstrap-vm.sh` — idempotent one-command VM install
   - [ ] End-to-end user verification on the real VM (requires user action)
@@ -716,7 +716,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 - [x] **20.6 FastOwl MCP server** (COMPLETED)
   - [x] New `packages/mcp-server` workspace using `@modelcontextprotocol/sdk` over stdio
   - [x] Seven tools: `fastowl_create_task`, `fastowl_list_tasks`, `fastowl_mark_ready_for_review`, `fastowl_list_backlog_items`, `fastowl_list_backlog_sources`, `fastowl_sync_backlog_source`, `fastowl_schedule`
-  - [x] Tools pick up `FASTOWL_WORKSPACE_ID` / `FASTOWL_TASK_ID` from env so child Claudes call them argument-free
+  - [x] Tools pick up `TALYN_WORKSPACE_ID` / `TALYN_TASK_ID` from env so child Claudes call them argument-free
   - [x] Registration instructions in `docs/SETUP.md` (FastOwl MCP section)
   - [x] 7 handler tests
 

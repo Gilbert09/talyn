@@ -74,7 +74,7 @@ export function posthogRoutes(): Router {
       await storePostHogCodeCredentials(workspaceId, { apiKey, projectId, host: resolvedHost });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Most likely FASTOWL_TOKEN_KEY isn't set — surface it as a clean
+      // Most likely TALYN_TOKEN_KEY isn't set — surface it as a clean
       // 500 instead of letting the throw take down the dev process.
       console.error('[posthog] failed to store credentials:', msg);
       return res.status(500).json({

@@ -4,8 +4,8 @@ import { request } from '../client.js';
 
 function envDefaults() {
   return {
-    workspaceId: process.env.FASTOWL_WORKSPACE_ID,
-    taskId: process.env.FASTOWL_TASK_ID,
+    workspaceId: process.env.TALYN_WORKSPACE_ID,
+    taskId: process.env.TALYN_TASK_ID,
   };
 }
 
@@ -17,7 +17,7 @@ export function registerTaskCommands(program: Command): void {
   task
     .command('create')
     .description('Create a new task')
-    .option('--workspace <id>', 'Workspace id (default: $FASTOWL_WORKSPACE_ID)')
+    .option('--workspace <id>', 'Workspace id (default: $TALYN_WORKSPACE_ID)')
     .option(
       '--type <type>',
       'Task type: code_writing | pr_response | pr_review | manual',
@@ -34,7 +34,7 @@ export function registerTaskCommands(program: Command): void {
       const { workspaceId: fallbackWs } = envDefaults();
       const workspaceId = opts.workspace || fallbackWs;
       if (!workspaceId) {
-        console.error('error: --workspace is required (or set $FASTOWL_WORKSPACE_ID)');
+        console.error('error: --workspace is required (or set $TALYN_WORKSPACE_ID)');
         process.exit(2);
       }
 

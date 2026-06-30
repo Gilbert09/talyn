@@ -11,14 +11,14 @@ describe('tokenCrypto', () => {
   let originalKey: string | undefined;
 
   beforeEach(() => {
-    originalKey = process.env.FASTOWL_TOKEN_KEY;
+    originalKey = process.env.TALYN_TOKEN_KEY;
   });
 
   afterEach(() => {
     if (originalKey === undefined) {
-      delete process.env.FASTOWL_TOKEN_KEY;
+      delete process.env.TALYN_TOKEN_KEY;
     } else {
-      process.env.FASTOWL_TOKEN_KEY = originalKey;
+      process.env.TALYN_TOKEN_KEY = originalKey;
     }
   });
 
@@ -49,13 +49,13 @@ describe('tokenCrypto', () => {
   });
 
   describe('encrypt/decrypt round-trip', () => {
-    it('throws a clear error when FASTOWL_TOKEN_KEY is not set', () => {
-      delete process.env.FASTOWL_TOKEN_KEY;
-      expect(() => encryptString('hello')).toThrow(/FASTOWL_TOKEN_KEY/);
+    it('throws a clear error when TALYN_TOKEN_KEY is not set', () => {
+      delete process.env.TALYN_TOKEN_KEY;
+      expect(() => encryptString('hello')).toThrow(/TALYN_TOKEN_KEY/);
     });
 
     it('round-trips an ASCII string with a base64-32-byte key', () => {
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       const plain = 'gho_abcdef1234567890';
       const env = encryptString(plain);
       expect(isEncryptedEnvelope(env)).toBe(true);
@@ -64,7 +64,7 @@ describe('tokenCrypto', () => {
 
     it('round-trips a UTF-8 string with the SHA-256 fallback key', () => {
       // Non-base64 key — loadKey falls back to SHA-256(key).
-      process.env.FASTOWL_TOKEN_KEY = 'dev-secret';
+      process.env.TALYN_TOKEN_KEY = 'dev-secret';
       const plain = 'résumé · 日本語 · 🦉';
       const env = encryptString(plain);
       expect(decryptString(env)).toBe(plain);
@@ -73,7 +73,7 @@ describe('tokenCrypto', () => {
     it('accepts a base64 key shorter than 32 bytes via SHA-256 fallback', () => {
       // "short-key" base64-decodes to < 32 bytes, so loadKey falls
       // through to the SHA-256 path rather than truncating.
-      process.env.FASTOWL_TOKEN_KEY = 'short-key';
+      process.env.TALYN_TOKEN_KEY = 'short-key';
       expect(() => {
         const env = encryptString('hello');
         decryptString(env);
@@ -81,7 +81,7 @@ describe('tokenCrypto', () => {
     });
 
     it('uses a fresh random IV on each call (no ciphertext reuse)', () => {
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       const a = encryptString('same plaintext');
       const b = encryptString('same plaintext');
       expect(a.iv).not.toBe(b.iv);
@@ -92,13 +92,13 @@ describe('tokenCrypto', () => {
     });
 
     it('handles empty string round-trip', () => {
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       const env = encryptString('');
       expect(decryptString(env)).toBe('');
     });
 
     it('refuses to decrypt a tampered ciphertext (auth tag check)', () => {
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       const env = encryptString('secret');
       // Flip the first byte of the ciphertext.
       const ctBytes = Buffer.from(env.ct, 'base64');
@@ -108,9 +108,9 @@ describe('tokenCrypto', () => {
     });
 
     it('refuses to decrypt with a different key', () => {
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       const env = encryptString('secret');
-      process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+      process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
       expect(() => decryptString(env)).toThrow();
     });
   });

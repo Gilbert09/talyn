@@ -6,7 +6,7 @@
 #   1. Node.js 22 (via nvm if user doesn't have Node ≥ 18)
 #   2. Claude CLI
 #   3. FastOwl repo checkout + @talyn/cli (linked as `fastowl`)
-#   4. Environment variables in ~/.bashrc (FASTOWL_API_URL)
+#   4. Environment variables in ~/.bashrc (TALYN_API_URL)
 #
 # Does NOT handle:
 #   - Claude authentication (interactive browser flow — run `claude auth login`
@@ -35,7 +35,7 @@
 set -euo pipefail
 
 # ---------- defaults ----------
-API_URL="${FASTOWL_API_URL:-http://localhost:4747}"
+API_URL="${TALYN_API_URL:-http://localhost:4747}"
 BRANCH="main"
 INSTALL_DIR="$HOME/fastowl"
 SKIP_NODE="false"
@@ -156,7 +156,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
   cat >> "$BASHRC" <<EOF
 $MARK_BEGIN
 # Managed by fastowl bootstrap-vm.sh — safe to remove or re-run the script.
-export FASTOWL_API_URL="$API_URL"
+export TALYN_API_URL="$API_URL"
 $MARK_END
 EOF
 fi

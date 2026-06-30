@@ -34,8 +34,8 @@ describe('server analytics', () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     resetAnalyticsCacheForTests();
-    delete process.env.FASTOWL_POSTHOG_KEY;
-    delete process.env.FASTOWL_POSTHOG_HOST;
+    delete process.env.TALYN_POSTHOG_KEY;
+    delete process.env.TALYN_POSTHOG_HOST;
 
     const testDb = await createTestDb();
     db = testDb.db;
@@ -51,13 +51,13 @@ describe('server analytics', () => {
 
   afterEach(async () => {
     globalThis.fetch = origFetch;
-    delete process.env.FASTOWL_POSTHOG_KEY;
-    delete process.env.FASTOWL_POSTHOG_HOST;
+    delete process.env.TALYN_POSTHOG_KEY;
+    delete process.env.TALYN_POSTHOG_HOST;
     await cleanup?.();
     cleanup = null;
   });
 
-  it('is disabled without FASTOWL_POSTHOG_KEY — no HTTP at all', async () => {
+  it('is disabled without TALYN_POSTHOG_KEY — no HTTP at all', async () => {
     expect(isServerAnalyticsConfigured()).toBe(false);
     await captureServerEvent('user-1', 'task_completed', { a: 1 });
     captureWorkspaceEvent('ws1', 'task_dispatched');
@@ -66,7 +66,7 @@ describe('server analytics', () => {
   });
 
   it('captures with the documented payload shape', async () => {
-    process.env.FASTOWL_POSTHOG_KEY = 'phc_test';
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
     await captureServerEvent('user-1', 'task_completed', {
       task_id: 't1',
       opened_pr: true,
@@ -88,15 +88,15 @@ describe('server analytics', () => {
     expect(body.properties.environment).toBeTruthy();
   });
 
-  it('respects a custom FASTOWL_POSTHOG_HOST (trailing slash stripped)', async () => {
-    process.env.FASTOWL_POSTHOG_KEY = 'phc_test';
-    process.env.FASTOWL_POSTHOG_HOST = 'https://eu.i.posthog.com/';
+  it('respects a custom TALYN_POSTHOG_HOST (trailing slash stripped)', async () => {
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    process.env.TALYN_POSTHOG_HOST = 'https://eu.i.posthog.com/';
     await captureServerEvent('user-1', 'task_failed');
     expect(fetchMock.mock.calls[0][0]).toBe('https://eu.i.posthog.com/i/v0/e/');
   });
 
   it('captureWorkspaceEvent resolves the workspace owner and stamps workspace_id', async () => {
-    process.env.FASTOWL_POSTHOG_KEY = 'phc_test';
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
     captureWorkspaceEvent('ws1', 'task_dispatched', { provider: 'posthog_code' });
     await flushMicrotasks();
 
@@ -110,7 +110,7 @@ describe('server analytics', () => {
   });
 
   it('captureWorkspaceEvent drops events for unknown workspaces', async () => {
-    process.env.FASTOWL_POSTHOG_KEY = 'phc_test';
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
     captureWorkspaceEvent('nope', 'task_dispatched');
     await flushMicrotasks();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -120,7 +120,7 @@ describe('server analytics', () => {
     ['rejected fetch', () => fetchMock.mockRejectedValue(new Error('boom'))],
     ['non-2xx response', () => fetchMock.mockResolvedValue({ ok: false, status: 500 } as Response)],
   ])('swallows failures: %s', async (_name, arm) => {
-    process.env.FASTOWL_POSTHOG_KEY = 'phc_test';
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
     arm();
     await expect(
       captureServerEvent('user-1', 'task_completed'),

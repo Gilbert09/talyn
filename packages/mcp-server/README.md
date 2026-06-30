@@ -25,7 +25,7 @@ rather than a shell binary to invoke.
 - `fastowl_sync_backlog_source` — re-read a source file to pick up edits
 - `fastowl_schedule` — kick the Continuous Build scheduler
 
-Tool inputs default to `$FASTOWL_WORKSPACE_ID` / `$FASTOWL_TASK_ID` from
+Tool inputs default to `$TALYN_WORKSPACE_ID` / `$TALYN_TASK_ID` from
 the MCP server's process environment, so most commands work argument-free
 when FastOwl spawned the Claude session.
 
@@ -48,7 +48,7 @@ Claude's MCP config (macOS path shown; see Anthropic docs for other OSes):
       "command": "node",
       "args": ["/absolute/path/to/packages/mcp-server/dist/index.js"],
       "env": {
-        "FASTOWL_API_URL": "http://localhost:4747"
+        "TALYN_API_URL": "http://localhost:4747"
       }
     }
   }
@@ -56,7 +56,7 @@ Claude's MCP config (macOS path shown; see Anthropic docs for other OSes):
 ```
 
 For agents FastOwl spawns, the parent backend injects
-`FASTOWL_API_URL`, `FASTOWL_WORKSPACE_ID`, and `FASTOWL_TASK_ID` as inline
+`TALYN_API_URL`, `TALYN_WORKSPACE_ID`, and `TALYN_TASK_ID` as inline
 env vars on the command, so the MCP tools pick them up automatically —
 Claude can just call `fastowl_create_task({ prompt: "..." })` with no
 workspace id.

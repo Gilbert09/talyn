@@ -50,7 +50,7 @@ describe('github expiring user-token rotation', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(async () => {
-    process.env.FASTOWL_TOKEN_KEY = randomBytes(32).toString('base64');
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     process.env.GITHUB_APP_ID = '777';
     process.env.GITHUB_APP_PRIVATE_KEY = Buffer.from(privateKey).toString('base64');
     process.env.GITHUB_APP_CLIENT_ID = 'Iv1.app';

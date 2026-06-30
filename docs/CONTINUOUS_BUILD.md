@@ -72,7 +72,7 @@ the new text as a fresh item. This is usually what you want.
 ## Task-spawns-task (the CLI escape hatch)
 
 A child Claude running inside a task can create follow-up tasks via the
-`talyn` CLI. Agents inherit `FASTOWL_WORKSPACE_ID` (and `FASTOWL_TASK_ID`)
+`talyn` CLI. Agents inherit `TALYN_WORKSPACE_ID` (and `TALYN_TASK_ID`)
 from the parent, so:
 
 ```bash
