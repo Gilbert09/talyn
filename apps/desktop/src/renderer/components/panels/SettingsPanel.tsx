@@ -22,6 +22,7 @@ import {
   Pencil,
   Bug,
   Info,
+  Globe,
   Download,
   Bot,
   Plug,
@@ -42,6 +43,7 @@ import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { isOwnerCovered } from '../../lib/githubInstall';
+import { openExternal } from '../../lib/openExternal';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@fastowl/shared';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@fastowl/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
@@ -1818,6 +1820,7 @@ function MCPServerSettings() {
 }
 
 const REPO_URL = 'https://github.com/Gilbert09/owl';
+const SITE_URL = 'https://talyn.dev';
 
 function openRepo() {
   if (window.electron?.auth?.openExternal) {
@@ -1941,7 +1944,15 @@ function AboutSettings() {
           </p>
         )}
 
-        <div className="border-t pt-3">
+        <div className="border-t pt-3 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => void openExternal(SITE_URL)}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Globe className="w-4 h-4" />
+            talyn.dev
+          </button>
           <button
             type="button"
             onClick={openRepo}
