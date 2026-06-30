@@ -29,7 +29,7 @@ function resolveWorkspace(args: Record<string, unknown>): string {
  */
 export const TOOLS: ToolDefinition[] = [
   {
-    name: 'fastowl_create_task',
+    name: 'talyn_create_task',
     description:
       'Create a new task in FastOwl. Use this to queue follow-up work that another Claude should pick up, without interrupting the current session.',
     inputSchema: {
@@ -91,7 +91,7 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_list_tasks',
+    name: 'talyn_list_tasks',
     description:
       'List tasks in a workspace. Useful for checking what is queued, in-flight, or finished.',
     inputSchema: {

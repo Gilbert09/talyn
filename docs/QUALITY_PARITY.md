@@ -1,6 +1,6 @@
 # Quality Parity — closing the gap to Conductor
 
-A working assessment of where the FastOwl desktop experience trails a
+A working assessment of where the Talyn desktop experience trails a
 polished agent IDE ([Conductor](https://www.conductor.build/)), and the
 plan to close it. Started Session 24. The recurring complaint that
 "everything feels a little buggy" is mostly **desktop polish debt**, not
@@ -15,7 +15,7 @@ quality frontier is the renderer.
 3. **High-fidelity transcript rendering** — markdown, collapsible tool
    calls, inline diffs.
 
-FastOwl already had good bones for (3) (collapsible tool calls with smart
+Talyn already had good bones for (3) (collapsible tool calls with smart
 summaries, permission cards, live streaming). Sessions 24+ attack (1) and
 (2) and finish (3).
 

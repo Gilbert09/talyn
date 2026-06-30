@@ -66,11 +66,11 @@ function pr(overrides: Record<string, unknown> = {}) {
 }
 
 describe('mcp tool registry', () => {
-  it('every tool has a unique fastowl_ name and an object input schema', () => {
+  it('every tool has a unique talyn_ name and an object input schema', () => {
     const names = TOOLS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const t of TOOLS) {
-      expect(t.name).toMatch(/^fastowl_/);
+      expect(t.name).toMatch(/^talyn_/);
       expect(t.description.length).toBeGreaterThan(0);
       expect((t.inputSchema as { type?: string }).type).toBe('object');
     }
@@ -79,19 +79,19 @@ describe('mcp tool registry', () => {
   it('covers the full surface (listing, context, actions, tasks)', () => {
     const names = TOOLS.map((t) => t.name);
     for (const expected of [
-      'fastowl_list_workspaces',
-      'fastowl_list_pull_requests',
-      'fastowl_get_pull_request',
-      'fastowl_get_pull_request_diff',
-      'fastowl_get_pull_request_reviews',
-      'fastowl_set_auto_keep_mergeable',
-      'fastowl_set_merge_queue',
-      'fastowl_merge_pull_request',
-      'fastowl_fix_pull_request',
-      'fastowl_create_task',
-      'fastowl_get_task',
-      'fastowl_stop_task',
-      'fastowl_retry_task',
+      'talyn_list_workspaces',
+      'talyn_list_pull_requests',
+      'talyn_get_pull_request',
+      'talyn_get_pull_request_diff',
+      'talyn_get_pull_request_reviews',
+      'talyn_set_auto_keep_mergeable',
+      'talyn_set_merge_queue',
+      'talyn_merge_pull_request',
+      'talyn_fix_pull_request',
+      'talyn_create_task',
+      'talyn_get_task',
+      'talyn_stop_task',
+      'talyn_retry_task',
     ]) {
       expect(names).toContain(expected);
     }
@@ -105,7 +105,7 @@ describe('mcp tool handlers', () => {
 
   it('list_pull_requests maps bucket → relationship and includes state', async () => {
     const { calls } = mockApi({ 'GET /api/v1/pull-requests': () => [pr()] });
-    await tool('fastowl_list_pull_requests').handler(OWNER, {
+    await tool('talyn_list_pull_requests').handler(OWNER, {
       workspace_id: 'ws1',
       bucket: 'review_requested',
     });
@@ -123,7 +123,7 @@ describe('mcp tool handlers', () => {
       summary: { ...pr().summary, checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 } },
     });
     mockApi({ 'GET /api/v1/pull-requests': () => [clean, failing] });
-    const out = await tool('fastowl_list_pull_requests').handler(OWNER, {
+    const out = await tool('talyn_list_pull_requests').handler(OWNER, {
       workspace_id: 'ws1',
       bucket: 'needs_attention',
     });
@@ -135,13 +135,13 @@ describe('mcp tool handlers', () => {
     const files = [{ filename: 'a.ts', status: 'modified', additions: 2, deletions: 1, patch: 'PATCHTEXT' }];
     mockApi({ 'GET /api/v1/pull-requests/pr1/files': () => files });
 
-    const without = await tool('fastowl_get_pull_request_diff').handler(OWNER, {
+    const without = await tool('talyn_get_pull_request_diff').handler(OWNER, {
       pull_request_id: 'pr1',
     });
     expect(without).toContain('a.ts');
     expect(without).not.toContain('PATCHTEXT');
 
-    const withPatch = await tool('fastowl_get_pull_request_diff').handler(OWNER, {
+    const withPatch = await tool('talyn_get_pull_request_diff').handler(OWNER, {
       pull_request_id: 'pr1',
       include_patch: true,
     });
@@ -158,7 +158,7 @@ describe('mcp tool handlers', () => {
       }),
     });
 
-    const out = await tool('fastowl_fix_pull_request').handler(OWNER, {
+    const out = await tool('talyn_fix_pull_request').handler(OWNER, {
       pull_request_id: 'pr1',
       model: 'claude-opus-4-8',
     });
@@ -182,7 +182,7 @@ describe('mcp tool handlers', () => {
         return { ok: true, status: 200, json: async () => ({ success: true, data: [] }) } as Response;
       })
     );
-    await tool('fastowl_list_workspaces').handler(OWNER, {});
+    await tool('talyn_list_workspaces').handler(OWNER, {});
     expect(seenHeaders['x-fastowl-internal-user']).toBe(OWNER);
     expect(seenHeaders['x-fastowl-internal-token']).toBeTruthy();
   });

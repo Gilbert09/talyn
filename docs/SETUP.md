@@ -1,4 +1,4 @@
-# FastOwl Setup Checklist
+# Talyn Setup Checklist
 
 Actions you (Tom) need to take outside this repo. Everything that *can* be automated by Claude Code is being automated — this doc covers the things that require your credentials, accounts, or browser approval.
 
@@ -38,7 +38,7 @@ Local endpoints (stable across restarts):
 Two **dev-only** classic GitHub OAuth apps back this (create once in the browser —
 GitHub has no API for it):
 
-1. **`FastOwl Login (Local Dev)`** — desktop login via local Supabase auth.
+1. **`Talyn Login (Local Dev)`** — desktop login via local Supabase auth.
    - Homepage: `http://127.0.0.1:54321`
    - Callback: `http://127.0.0.1:54321/auth/v1/callback`
    - Client id + secret go in `supabase/.env` (gitignored) as
@@ -47,7 +47,7 @@ GitHub has no API for it):
      `fastowl-dev://auth-callback` is already in `additional_redirect_urls`
      (dev builds use the `fastowl-dev://` scheme so the OAuth callback reopens
      your dev build instead of an installed production FastOwl.app).
-2. **`FastOwl (Local Dev)`** — the workspace GitHub integration (PR monitoring etc.).
+2. **`Talyn (Local Dev)`** — the workspace GitHub integration (PR monitoring etc.).
    - Homepage: `http://localhost:4747`
    - Callback: `http://localhost:4747/api/v1/github/callback`
    - Client id + secret go in `packages/backend/.env` as `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`.
@@ -71,16 +71,16 @@ Without this, task metadata falls back to first-60-chars heuristic, which is fun
 
 ### 2. `claude` CLI on every environment
 
-FastOwl spawns `claude` (interactive mode) via node-pty on the chosen environment. The binary must be in the PATH of whichever shell gets spawned.
+Talyn spawns `claude` (interactive mode) via node-pty on the chosen environment. The binary must be in the PATH of whichever shell gets spawned.
 
 - **Local**: `npm install -g @anthropic-ai/claude-cli` (or whatever the current install command is), log in via `claude login`
 - **VMs**: same, on the remote user's shell
 
-Verify by running `claude --version` as the shell user FastOwl will use.
+Verify by running `claude --version` as the shell user Talyn will use.
 
 **One-time MCP trust approval** (only if you run autonomous tasks in **strict** mode on this environment — i.e., the env's "Allow unattended Claude runs to bypass permission prompts" toggle is OFF):
 
-FastOwl's repo root ships a `.mcp.json` registering the Supabase MCP server. On first encounter, Claude Code prompts you to trust it. Autonomous runs can't answer that prompt, so do it once interactively:
+Talyn's repo root ships a `.mcp.json` registering the Supabase MCP server. On first encounter, Claude Code prompts you to trust it. Autonomous runs can't answer that prompt, so do it once interactively:
 
 ```bash
 cd ~/path/to/fastowl    # or wherever the clone lives on this env
@@ -110,7 +110,7 @@ Used by the GitHub integration (connect GitHub → PR monitoring, PR actions, re
 > wrong app type.
 
 1. https://github.com/settings/developers → **OAuth Apps** tab → **New OAuth App** (do *not* use the "GitHub Apps" tab)
-2. Application name: `FastOwl (Dev)` (make a separate prod one later)
+2. Application name: `Talyn (Dev)` (make a separate prod one later)
 3. Homepage URL: `http://localhost:4747`
 4. Authorization callback URL: `http://localhost:4747/api/v1/github/callback` (must match `GITHUB_REDIRECT_URI` exactly)
 5. Create, then **Generate a new client secret**
@@ -218,9 +218,9 @@ For Postgres + auth when Phase 18.1/18.2 lands.
    - Paste the client ID/secret into Supabase Authentication → Providers → GitHub
 5. Add `fastowl://auth-callback` to **Redirect URLs** in Supabase (Authentication → URL Configuration → Redirect URLs). Without this, the desktop deep-link flow fails silently with an "invalid redirect URL" error.
 
-### Single-user allow-list (optional, recommended while FastOwl is pre-invites)
+### Single-user allow-list (optional, recommended while Talyn is pre-invites)
 
-FastOwl doesn't ship an invite flow yet — anyone with a GitHub account can sign in to an instance. To lock a self-hosted instance to just you, set on the backend:
+Talyn doesn't ship an invite flow yet — anyone with a GitHub account can sign in to an instance. To lock a self-hosted instance to just you, set on the backend:
 
 ```
 TALYN_ALLOWED_EMAILS=you@example.com
@@ -231,7 +231,7 @@ Multiple emails are comma-separated. Unauthorised callers get a 403 on first req
 ### 5. Railway account (deployed)
 
 Hosted backend lives at **https://fastowl-backend-production.up.railway.app**
-(project `FastOwl`, service `fastowl-backend`, env `production`).
+(project `Talyn`, service `fastowl-backend`, env `production`).
 Auto-deploy on push to main via `.github/workflows/deploy-backend.yml` —
 needs a `RAILWAY_TOKEN` GitHub secret:
 
@@ -300,9 +300,9 @@ install command. Uses a Railway account token (same one you minted in #5).
 Lets Claude Code create projects, deploy services, read logs, and manage
 variables without leaving the editor.
 
-### FastOwl MCP (local)
+### Talyn MCP (local)
 
-Exposes FastOwl's own task + backlog operations as Claude tools. Useful for letting a Claude Code session (or a child agent running inside a FastOwl task) create tasks, sync backlog sources, and kick the Continuous Build scheduler without dropping to a shell.
+Exposes Talyn's own task + backlog operations as Claude tools. Useful for letting a Claude Code session (or a child agent running inside a Talyn task) create tasks, sync backlog sources, and kick the Continuous Build scheduler without dropping to a shell.
 
 ```bash
 # build first
@@ -326,7 +326,7 @@ Or add to `~/.claude/mcp_servers.json` manually:
 }
 ```
 
-No external account needed — it talks to your local FastOwl backend. For agents FastOwl spawns, parent-injected env vars (`TALYN_WORKSPACE_ID`, `TALYN_TASK_ID`) mean the tools work argument-free.
+No external account needed — it talks to your local Talyn backend. For agents Talyn spawns, parent-injected env vars (`TALYN_WORKSPACE_ID`, `TALYN_TASK_ID`) mean the tools work argument-free.
 
 After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prompt.
 

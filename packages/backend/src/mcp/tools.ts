@@ -79,7 +79,7 @@ const BUCKET_TO_RELATIONSHIP: Record<string, string> = {
 
 export const TOOLS: McpToolDefinition[] = [
   {
-    name: 'fastowl_list_workspaces',
+    name: 'talyn_list_workspaces',
     description:
       'List your FastOwl workspaces (each groups GitHub repos + integrations). Use this to discover workspace ids for the other tools.',
     inputSchema: { type: 'object', properties: {} },
@@ -95,7 +95,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_list_pull_requests',
+    name: 'talyn_list_pull_requests',
     description:
       'List pull requests in a workspace by bucket: "mine" (you authored), "review_requested" (awaiting your review), "needs_attention" (your PRs failing checks / conflicting / with change-requests or unresolved threads), or "all". Returns one compact line per PR including its FastOwl id (needed for the other PR tools).',
     inputSchema: {
@@ -131,9 +131,9 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_get_pull_request',
+    name: 'talyn_get_pull_request',
     description:
-      'Get a single PR\'s status and context: title, author, branches, mergeable state, review decision, blocking reason, checks breakdown, unresolved review threads, and merge-queue / auto-keep flags. Does not include the diff (use fastowl_get_pull_request_diff) or full review threads (use fastowl_get_pull_request_reviews).',
+      'Get a single PR\'s status and context: title, author, branches, mergeable state, review decision, blocking reason, checks breakdown, unresolved review threads, and merge-queue / auto-keep flags. Does not include the diff (use talyn_get_pull_request_diff) or full review threads (use talyn_get_pull_request_reviews).',
     inputSchema: {
       type: 'object',
       properties: { pull_request_id: { type: 'string', description: 'FastOwl PR id.' } },
@@ -158,7 +158,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_get_pull_request_diff',
+    name: 'talyn_get_pull_request_diff',
     description:
       'List the changed files in a PR with per-file +/- stats. By default returns only the file list; set include_patch to also return the unified diff (optionally scoped to a single path).',
     inputSchema: {
@@ -194,7 +194,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_get_pull_request_reviews',
+    name: 'talyn_get_pull_request_reviews',
     description:
       'Get the review context an agent needs to respond: submitted reviews (with verdict + body), inline review threads grouped by file/line (with the comment body), and top-level conversation comments. Defaults to unresolved threads only.',
     inputSchema: {
@@ -250,7 +250,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_refresh_pull_request',
+    name: 'talyn_refresh_pull_request',
     description: 'Force a fresh fetch of a PR from GitHub (bypassing the cache) and return its updated summary line.',
     inputSchema: {
       type: 'object',
@@ -264,7 +264,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_set_auto_keep_mergeable',
+    name: 'talyn_set_auto_keep_mergeable',
     description:
       'Enable or disable "auto keep mergeable" on a PR. When enabled, FastOwl repeatedly fires a cloud fix run whenever the PR develops a blocker (conflicts, failing checks) so it stays mergeable.',
     inputSchema: {
@@ -283,7 +283,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_set_merge_queue',
+    name: 'talyn_set_merge_queue',
     description:
       'Add a PR to (or remove it from) the FastOwl merge queue. Queued PRs are merged automatically — serialized per base branch — as soon as they are clean, with cloud fix runs fired on conflict/behind/blocked.',
     inputSchema: {
@@ -307,7 +307,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_merge_pull_request',
+    name: 'talyn_merge_pull_request',
     description: 'Merge a PR now (merge | squash | rebase). Fails if GitHub reports the PR is not mergeable.',
     inputSchema: {
       type: 'object',
@@ -330,9 +330,9 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_fix_pull_request',
+    name: 'talyn_fix_pull_request',
     description:
-      "Start the standard FastOwl \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using FastOwl's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use fastowl_create_task for freeform work).",
+      "Start the standard FastOwl \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using FastOwl's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use talyn_create_task for freeform work).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -354,7 +354,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_create_task',
+    name: 'talyn_create_task',
     description:
       'Create a freeform cloud coding task on a repository (not tied to an existing PR). The agent runs on the workspace provider and opens a PR.',
     inputSchema: {
@@ -391,7 +391,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_list_tasks',
+    name: 'talyn_list_tasks',
     description: 'List cloud tasks in a workspace, optionally filtered by status or type.',
     inputSchema: {
       type: 'object',
@@ -411,7 +411,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_get_task',
+    name: 'talyn_get_task',
     description:
       'Get a cloud task\'s status, result summary, and linked PR. Set include_transcript to also return the raw run transcript (can be large).',
     inputSchema: {
@@ -441,7 +441,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_stop_task',
+    name: 'talyn_stop_task',
     description: 'Cancel a running cloud task (best-effort remote cancel; the task lands in "cancelled").',
     inputSchema: {
       type: 'object',
@@ -455,7 +455,7 @@ export const TOOLS: McpToolDefinition[] = [
     },
   },
   {
-    name: 'fastowl_retry_task',
+    name: 'talyn_retry_task',
     description: 'Re-queue a failed or cancelled cloud task for another run.',
     inputSchema: {
       type: 'object',

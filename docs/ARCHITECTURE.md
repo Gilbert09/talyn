@@ -1,4 +1,4 @@
-# FastOwl Architecture
+# Talyn Architecture
 
 Architectural decisions, core concept deep-dives, and resolved questions. Historical — updated when a decision is revisited. For active work see [`ROADMAP.md`](./ROADMAP.md).
 
@@ -12,7 +12,7 @@ Architectural decisions, core concept deep-dives, and resolved questions. Histor
 │  │  Panel   │ │  Panel   │ │  Panel   │ │                  │    │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘    │
 │                                                                  │
-│   Also in the main process: FastOwl daemon (launchd/systemd      │
+│   Also in the main process: Talyn daemon (launchd/systemd      │
 │   user service). Bundled binary. Survives app quit; only a       │
 │   "Uninstall & quit" or reboot removes it.                       │
 └─────────────────────────────────────────────────────────────────┘
@@ -66,7 +66,7 @@ A machine where work executes. Two types, both daemon-backed:
 - **Local**: the daemon bundled with the desktop app, running on your own Mac / Linux box. Installed as a user-level OS service on first app launch; survives the app being quit.
 - **Remote**: a daemon installed on a separate machine (VM, workstation, GPU rig) via the pairing flow. Add one from Settings → Environments → Add.
 
-The backend only speaks the daemon WS protocol — there is no in-process spawn path and no ssh2 path anymore. Git uses the machine's configured git user — no special FastOwl config.
+The backend only speaks the daemon WS protocol — there is no in-process spawn path and no ssh2 path anymore. Git uses the machine's configured git user — no special Talyn config.
 
 ### Tasks
 Primary unit of work. Types: `code_writing`, `pr_response`, `pr_review`, `manual`.

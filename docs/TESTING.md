@@ -1,11 +1,11 @@
-# FastOwl Testing Plan
+# Talyn Testing Plan
 
-FastOwl is changing quickly across three packages (Electron desktop, Node backend, shared types) and several runtime surfaces (SSH, PTY, Claude CLI, GitHub API, SQLite). This document is the single source of truth for *how we test*, *what we test*, and *when it runs*. It's meant to be followed incrementally — we don't need 100% coverage on day one, we need a foundation we can grow.
+Talyn is changing quickly across three packages (Electron desktop, Node backend, shared types) and several runtime surfaces (SSH, PTY, Claude CLI, GitHub API, SQLite). This document is the single source of truth for *how we test*, *what we test*, and *when it runs*. It's meant to be followed incrementally — we don't need 100% coverage on day one, we need a foundation we can grow.
 
 ## Principles
 
 1. **Every change that ships gets type-checked in CI.** Already in place (`npm run typecheck`). Non-negotiable.
-2. **Favour integration-style tests over unit tests.** FastOwl is mostly orchestration (routes → services → DB, environments → PTY, WebSocket events). Pure unit tests rarely catch the failures that actually bite us; integration tests do.
+2. **Favour integration-style tests over unit tests.** Talyn is mostly orchestration (routes → services → DB, environments → PTY, WebSocket events). Pure unit tests rarely catch the failures that actually bite us; integration tests do.
 3. **No mocking the DB.** Use a real in-memory SQLite (`better-sqlite3` with `:memory:`). The DB is fast, deterministic, and one of the most bug-prone surfaces — mocking it defeats the purpose.
 4. **Mock only I/O we can't control locally.** `claude` CLI, SSH, GitHub API, WebSocket clients. Wrap these in thin service interfaces so tests can inject stubs.
 5. **CI runs fast enough to be part of the inner loop.** Target: < 2 minutes total on ubuntu for typecheck + lint + unit + integration. E2E tests can be slower but are gated to main.
@@ -46,7 +46,7 @@ Target the services and routes that hold the most state. Examples of first-wave 
 
 ### Layer 3: Frontend unit + hook tests
 
-Keep this layer small. React components in FastOwl are mostly presentational — they read from Zustand store + call typed API functions. Test where logic lives:
+Keep this layer small. React components in Talyn are mostly presentational — they read from Zustand store + call typed API functions. Test where logic lives:
 
 - `useApi.test.ts` — hooks like `useTaskActions` wrap the `api` client. Test that `readyForReview` calls the right endpoint + updates the store.
 - `TerminalHistory.test.tsx` — fetches on mount, handles loading / error / empty / populated states.

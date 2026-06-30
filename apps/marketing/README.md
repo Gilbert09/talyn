@@ -1,6 +1,6 @@
 # Talyn — marketing site
 
-The public marketing site for **Talyn** (`talyn.dev`): mission control for your GitHub PRs, powered by cloud coding agents. Light & warm aesthetic, single rich landing page. Independent of the FastOwl backend/desktop — its own Next.js app, deploys to Vercel.
+The public marketing site for **Talyn** (`talyn.dev`): mission control for your GitHub PRs, powered by cloud coding agents. Light & warm aesthetic, single rich landing page. Independent of the Talyn backend/desktop — its own Next.js app, deploys to Vercel.
 
 ## Stack
 

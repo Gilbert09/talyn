@@ -1,8 +1,8 @@
 # Continuous Build
 
-> Point FastOwl at a TODO document, and it works through the list for you.
+> Point Talyn at a TODO document, and it works through the list for you.
 > Each item becomes its own `code_writing` task with its own git branch.
-> You review and approve; FastOwl queues the next one.
+> You review and approve; Talyn queues the next one.
 
 ## Mental model
 
@@ -88,16 +88,16 @@ work while implementing the current backlog item.
 See [packages/cli/README.md](../packages/cli/README.md) for the full CLI
 reference.
 
-## Turning it on for FastOwl itself
+## Turning it on for Talyn itself
 
-The meta-case: configure a FastOwl workspace to continuously build the
+The meta-case: configure a Talyn workspace to continuously build the
 `Priority Queue` section of the project's own [`docs/ROADMAP.md`](./ROADMAP.md).
-This is "FastOwl eats its own dog food" (Option C in
+This is "Talyn eats its own dog food" (Option C in
 [AUTONOMOUS_BUILD.md](./AUTONOMOUS_BUILD.md)).
 
 Exact steps once your SSH VM is set up (see [SSH_VM_SETUP.md](./SSH_VM_SETUP.md)):
 
-1. Clone the FastOwl repo on the VM and make sure `npm install` succeeds.
+1. Clone the Talyn repo on the VM and make sure `npm install` succeeds.
 2. In the desktop app, create a workspace named `fastowl-self` (or reuse
    an existing workspace).
 3. Add your SSH environment to it (Settings → Environments).
@@ -115,7 +115,7 @@ Exact steps once your SSH VM is set up (see [SSH_VM_SETUP.md](./SSH_VM_SETUP.md)
    unblocked item, and starts Claude on it. Review when it hits
    `awaiting_review`. Approve. The next item fires.
 
-Because the tasks run *on the VM* against a checkout of FastOwl, the
+Because the tasks run *on the VM* against a checkout of Talyn, the
 review/approve cycle is ~exactly what any external user would see. You're
 dog-fooding your own product.
 

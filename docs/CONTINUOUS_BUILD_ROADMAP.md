@@ -5,7 +5,7 @@
 
 ## Goal
 
-FastOwl runs autonomously on a hosted backend + a user's VM, works through
+Talyn runs autonomously on a hosted backend + a user's VM, works through
 TODOs without hand-holding, and the user approves (or rejects) each result
 from a single inbox. Setting up a new VM takes one click + SSH creds —
 no manual CLI installs, no reverse tunnels, no bashrc edits.
@@ -67,7 +67,7 @@ behalf, not something the user copy-pastes from a doc.
 - Pairing flow: desktop UI mints a one-time token, daemon registers with
   hosted server on first run using that token.
 - **Auto-install over SSH** (the thing the user actually cares about):
-  - Desktop "Add SSH environment" dialog gets an **"Install FastOwl daemon"**
+  - Desktop "Add SSH environment" dialog gets an **"Install Talyn daemon"**
     checkbox (default on).
   - On confirm, the backend SSH-es in, detects arch/OS, downloads the
     right binary, drops a systemd unit (or launchd plist), writes the
@@ -80,7 +80,7 @@ behalf, not something the user copy-pastes from a doc.
     tears down the VM daemon + service.
 
 **Why this is second**: depends on #1. But it's the killer feature —
-"give me SSH creds and I'll do the rest" is the moment FastOwl feels
+"give me SSH creds and I'll do the rest" is the moment Talyn feels
 like a real product.
 
 ### 3. Agent SDK migration (optional, quality-of-life)

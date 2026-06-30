@@ -1,6 +1,6 @@
-# FastOwl — Claude Context
+# Talyn — Claude Context
 
-FastOwl is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs in a prioritized GitHub panel, and delegates fix/respond/review work to cloud providers (PostHog Code + Claude Code live; Codex Cloud deferred) that run the agent loop on their own sandbox and open a PR.
+Talyn is a desktop "mission control" app for **GitHub PR management**, powered by **cloud coding agents**. It tracks your open/review-requested PRs in a prioritized GitHub panel, and delegates fix/respond/review work to cloud providers (PostHog Code + Claude Code live; Codex Cloud deferred) that run the agent loop on their own sandbox and open a PR.
 
 **As of the cloud-only refactor (June 2026)** the app no longer runs anything locally: the bundled daemon, local/remote environments, in-process Claude agents, permission gates, backlog/continuous-build, and the per-task git working tree are all gone. Every task is a cloud task. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
@@ -10,7 +10,7 @@ FastOwl is a desktop "mission control" app for **GitHub PR management**, powered
 
 **Repository**: `git@github.com:Gilbert09/owl.git` (main branch)
 
-After completing each task: stage relevant files, commit with a descriptive message, push to main. No branches or PRs for FastOwl itself. Keep commits focused and atomic.
+After completing each task: stage relevant files, commit with a descriptive message, push to main. No branches or PRs for Talyn itself. Keep commits focused and atomic.
 
 **Commit authorship**: commits should be authored by Tom directly. Do NOT append `Co-Authored-By: Claude …` trailers or any other AI-attribution lines to commit messages in this repo.
 
@@ -84,7 +84,7 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 
 > Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Definition of done for "production ready" is in [`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md).
 
-> **Superseded (June 2026):** the daemon-everywhere / continuous-build / local-execution roadmap is retired. FastOwl is now a cloud-only PR-management app. The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
+> **Superseded (June 2026):** the daemon-everywhere / continuous-build / local-execution roadmap is retired. Talyn is now a cloud-only PR-management app. The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
 1. **Cloud provider abstraction** — Phases 1–2 (registry + interface, PostHog Code under it, generic credentials/routes) are **done**. **Claude Code (Managed Agents) shipped** as the 2nd provider (`services/claudeCode/*` + `cloudProviders/claude/provider.ts`). **Codex Cloud is deferred** — OpenAI exposes no server-to-server cloud-task API (only the `codex cloud` CLI or `@codex` GitHub mentions). Each provider is a self-contained `client + credentials + converter + executor + poller + provider` module — no core changes. Provider selection is generic: a workspace `defaultCloudProvider` setting (`posthog_code | claude_code | ask`) drives both the backend auto-fix resolver (`resolveCloudEnvId`) and the desktop, with an "Ask every time" per-task **provider picker** (`providerPicker` store + `CloudProviderPickerModal`). Follow-ups: the Claude `checkout` object shape for `pr_response`/`pr_review` head-branch mounting; executor/poller DB-mocked reconcile tests; migrating the bespoke PostHog Settings card onto the generic `CloudProviderCard`.
 2. **Desktop polish** — generalise the Settings card + composer to render per-provider once a 2nd provider lands. (The dead local-task UI — TaskFilesPanel/TaskGitPanel/awaiting_review flow — was removed in Session 52.)
@@ -95,7 +95,7 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 - Session 43 (Inbox removal): ripped out the standalone Inbox end-to-end — `inbox_items` table (migration `0023`), `routes/inbox.ts`, `InboxPanel`, sidebar nav, shared `InboxItem*` types + `inbox:*` WS events, and the per-PR "unread updates" badges it powered (incl. `POST /pull-requests/:id/seen`). `prCache` still computes PR-event deltas + advances cursors; it just no longer materializes inbox rows. PRs needing attention now live only in the GitHub panel.
 - Cloud-only refactor (June 2026): stripped the daemon, local/remote envs, in-process agents, permissions, backlog/continuous-build, and per-task git working tree. Built the pluggable `CloudTaskProvider` seam; made the task queue + poller cloud-only; collapsed the DB schema (dropped agents/backlog tables, slimmed environments to a marker, wiped tasks); removed the `@talyn/daemon` package. The app is now: PR dashboard + cloud task delegation.
 - Session 17 (Phase 17.3 — notifications quick win): desktop OS notification fires when a task transitions into `awaiting_review`. Toggle + permission hint in Settings → Appearance → Notifications. Uses renderer `Notification` API — Electron bridges to the native OS surface.
-- Session 17 (Phase 18.3.B): SSH auto-install. Desktop "Add Environment → Remote VM (FastOwl daemon)" with two modes (auto-install over SSH, manual one-liner). Backend dials the target via ssh2, pipes `curl /daemon/install.sh | bash`, the script builds `@talyn/daemon` + writes a systemd/launchd unit, daemon pairs + dials back, modal polls for `connected`.
+- Session 17 (Phase 18.3.B): SSH auto-install. Desktop "Add Environment → Remote VM (Talyn daemon)" with two modes (auto-install over SSH, manual one-liner). Backend dials the target via ssh2, pipes `curl /daemon/install.sh | bash`, the script builds `@talyn/daemon` + writes a systemd/launchd unit, daemon pairs + dials back, modal polls for `connected`.
 - Session 16 (Phase 18.3.B foundation): daemon relay layer + daemon envs first-class in scheduling + CI hygiene. Daemon runs a local HTTP proxy; child processes' REST calls tunnel over its WS. Backend accepts internal-auth headers in parallel with JWT. No user JWT on the VM. Scheduler/backlog fall back to any connected daemon when no env is pinned.
 - Session 15 (Phase 18.3.A): daemon split foundation — new `packages/daemon`, `/daemon-ws` endpoint, `daemon` env type. Daemon can pair with the backend and proxy exec/spawn/git.
 - Session 14 (Phase 18.4): backend deployed to Railway at `https://fastowl-backend-production.up.railway.app`. Dockerfile + railway.toml + CI workflow. Desktop `.env` now points at hosted backend.

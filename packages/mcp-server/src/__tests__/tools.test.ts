@@ -31,17 +31,17 @@ describe('fastowl MCP tools', () => {
 
   it('exposes every expected tool with an object inputSchema', () => {
     const names = TOOLS.map((t) => t.name).sort();
-    expect(names).toEqual(['fastowl_create_task', 'fastowl_list_tasks'].sort());
+    expect(names).toEqual(['talyn_create_task', 'talyn_list_tasks'].sort());
     for (const t of TOOLS) {
       expect(t.inputSchema).toHaveProperty('type', 'object');
     }
   });
 
-  it('fastowl_create_task posts to /tasks with env-default workspace', async () => {
+  it('talyn_create_task posts to /tasks with env-default workspace', async () => {
     fetchSpy.mockResolvedValueOnce(
       okResponse({ id: 't-1', title: 'Ship it', status: 'queued' })
     );
-    const tool = findTool('fastowl_create_task');
+    const tool = findTool('talyn_create_task');
     const result = await tool.handler({ prompt: 'Ship it' });
     expect(result).toContain('t-1');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -56,22 +56,22 @@ describe('fastowl MCP tools', () => {
     });
   });
 
-  it('fastowl_create_task surfaces backend error as thrown Error', async () => {
+  it('talyn_create_task surfaces backend error as thrown Error', async () => {
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ success: false, error: 'bad prompt' }), { status: 400 })
     );
-    const tool = findTool('fastowl_create_task');
+    const tool = findTool('talyn_create_task');
     await expect(tool.handler({ prompt: 'x' })).rejects.toThrow('bad prompt');
   });
 
-  it('fastowl_list_tasks formats lines predictably', async () => {
+  it('talyn_list_tasks formats lines predictably', async () => {
     fetchSpy.mockResolvedValueOnce(
       okResponse([
         { id: 't1', status: 'queued', type: 'code_writing', title: 'A' },
         { id: 't2', status: 'completed', type: 'manual', title: 'B' },
       ])
     );
-    const tool = findTool('fastowl_list_tasks');
+    const tool = findTool('talyn_list_tasks');
     const result = await tool.handler({});
     expect(result).toContain('t1');
     expect(result).toContain('[queued]');

@@ -145,7 +145,7 @@ function buildBlocks(events: AgentEvent[]): Block[] {
   for (const event of events) {
     const seqKey = String(event.seq);
 
-    if (event.type === 'fastowl_permission_request') {
+    if (event.type === 'talyn_permission_request') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
       const idx = blocks.length;
       permissionByRequestId.set(reqId, idx);
@@ -160,7 +160,7 @@ function buildBlocks(events: AgentEvent[]): Block[] {
       continue;
     }
 
-    if (event.type === 'fastowl_permission_auto_allowed') {
+    if (event.type === 'talyn_permission_auto_allowed') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
       blocks.push({
         kind: 'permission',
@@ -173,7 +173,7 @@ function buildBlocks(events: AgentEvent[]): Block[] {
       continue;
     }
 
-    if (event.type === 'fastowl_permission_response') {
+    if (event.type === 'talyn_permission_response') {
       const reqId = String((event as { requestId?: unknown }).requestId ?? '');
       const idx = permissionByRequestId.get(reqId);
       if (idx !== undefined) {

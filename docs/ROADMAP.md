@@ -1,8 +1,8 @@
-# FastOwl Roadmap
+# Talyn Roadmap
 
 Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan is [`CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
-> **Cloud-only refactor (June 2026)**: FastOwl is now a GitHub PR-management app that delegates work to cloud coding agents. The bundled daemon, local/remote environments, in-process agents, permission gates, and continuous build are gone. The phased history below (Phases 1–20) describes the app that was — kept for the record, **not a TODO list**. Current work is tracked in the Priority Queue / Backlog / Known Gaps sections only.
+> **Cloud-only refactor (June 2026)**: Talyn is now a GitHub PR-management app that delegates work to cloud coding agents. The bundled daemon, local/remote environments, in-process agents, permission gates, and continuous build are gone. The phased history below (Phases 1–20) describes the app that was — kept for the record, **not a TODO list**. Current work is tracked in the Priority Queue / Backlog / Known Gaps sections only.
 
 > **Instructions**: Update this list as work progresses. Mark items completed with `[x]`. Add new items as discovered.
 
@@ -610,12 +610,12 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [~] **Remote install flow**: originally shipped as SSH auto-install (Session 17); replaced in Session 19 Slice 5 with a "paste this one-liner on the VM" pairing flow when env types collapsed to `local | remote` and ssh2 was dropped.
     - [x] Desktop UI: simplified pairing modal — name the env, mint pairing token, show install one-liner, poll until daemon dials in
     - [x] Health check: desktop polls env status after install, flips to "connected" when the daemon dials back via `daemonRegistry.register`
-    - [x] Uninstall flow: symmetric — app menu → "Uninstall FastOwl daemon and quit…" for the local daemon; bundled `scripts/fastowl-uninstall.sh` for the `.app` (Session 19 Slice 7).
+    - [x] Uninstall flow: symmetric — app menu → "Uninstall Talyn daemon and quit…" for the local daemon; bundled `scripts/fastowl-uninstall.sh` for the `.app` (Session 19 Slice 7).
 
 - [x] **18.4 Deployment** (Session 14)
   - [x] Multi-stage Dockerfile at repo root — Node 22 slim, copies pre-built node_modules from builder to avoid re-running install-scripts (keeps node-pty/ssh2 native bindings without runtime build tools)
   - [x] `railway.toml` — DOCKERFILE builder, `/health` healthcheck, on-failure restart
-  - [x] Hosted at `https://fastowl-backend-production.up.railway.app`, project `FastOwl`, service `fastowl-backend`
+  - [x] Hosted at `https://fastowl-backend-production.up.railway.app`, project `Talyn`, service `fastowl-backend`
   - [x] Service variables: `DATABASE_URL` (transaction pooler, not direct — Railway has no IPv6), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TALYN_ALLOWED_EMAILS`, `NODE_ENV`
   - [x] Migrations run on startup via drizzle-orm migrator; `build:copy-migrations` postbuild script puts `.sql` files into `dist/`
   - [ ] Rate limiting on public API (per-user) — future
@@ -638,7 +638,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [ ] Preserve task history, inbox items, workspace config
 
 - [ ] **18.8 Observability — PostHog**
-  - PostHog is the single product analytics + error tracking + logs platform for FastOwl; no separate Sentry/Datadog/etc.
+  - PostHog is the single product analytics + error tracking + logs platform for Talyn; no separate Sentry/Datadog/etc.
   - [ ] Structured logging on server (pino), shipped to PostHog via log-to-events
   - [ ] Error tracking via PostHog error tracking (server + daemon + Electron renderer + main process)
   - [ ] Product analytics events: task created, task approved/rejected, env added, integration connected, time-to-first-agent
@@ -669,7 +669,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ## Phase 20: Continuous Build
 
-> Point FastOwl at a TODO document and it works through the list — one task per item, each with its own git branch, each gated by human approval. See [`docs/CONTINUOUS_BUILD.md`](./CONTINUOUS_BUILD.md) for the full feature doc.
+> Point Talyn at a TODO document and it works through the list — one task per item, each with its own git branch, each gated by human approval. See [`docs/CONTINUOUS_BUILD.md`](./CONTINUOUS_BUILD.md) for the full feature doc.
 
 - [x] **20.1 Backlog data model + markdown parser** (COMPLETED)
   - [x] `backlog_sources` + `backlog_items` tables (migrations 006, 007)
@@ -693,7 +693,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [x] Backlog items view with live status chips (pending/in-flight/done/blocked)
   - [x] "Run scheduler" button
 
-- [x] **20.4 FastOwl CLI (task-spawns-task)** (COMPLETED)
+- [x] **20.4 Talyn CLI (task-spawns-task)** (COMPLETED)
   - [x] New `packages/cli` workspace publishing the `talyn` binary
   - [x] Commands: `task create/list/ready`, `backlog sources/sync/items/schedule`, `ping`
   - [x] Agent service injects `TALYN_API_URL` (local), `TALYN_WORKSPACE_ID`, `TALYN_TASK_ID` as inline env vars on spawn so child Claudes inherit context
@@ -713,11 +713,11 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
   - [x] Fix: SSH `pty:close` now carries the real exit code; agent close handler forwards it
   - [x] Fix: scheduler skips sources whose target environment isn't connected
 
-- [x] **20.6 FastOwl MCP server** (COMPLETED)
+- [x] **20.6 Talyn MCP server** (COMPLETED)
   - [x] New `packages/mcp-server` workspace using `@modelcontextprotocol/sdk` over stdio
-  - [x] Seven tools: `fastowl_create_task`, `fastowl_list_tasks`, `fastowl_mark_ready_for_review`, `fastowl_list_backlog_items`, `fastowl_list_backlog_sources`, `fastowl_sync_backlog_source`, `fastowl_schedule`
+  - [x] Seven tools: `talyn_create_task`, `talyn_list_tasks`, `talyn_mark_ready_for_review`, `talyn_list_backlog_items`, `talyn_list_backlog_sources`, `talyn_sync_backlog_source`, `talyn_schedule`
   - [x] Tools pick up `TALYN_WORKSPACE_ID` / `TALYN_TASK_ID` from env so child Claudes call them argument-free
-  - [x] Registration instructions in `docs/SETUP.md` (FastOwl MCP section)
+  - [x] Registration instructions in `docs/SETUP.md` (Talyn MCP section)
   - [x] 7 handler tests
 
 - [ ] **20.7 Nice-to-haves (deferred)**

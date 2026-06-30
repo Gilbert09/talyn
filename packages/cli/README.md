@@ -1,12 +1,12 @@
 # @talyn/cli
 
-Command-line client for the FastOwl backend. Lets you (or a child Claude
-running inside a FastOwl task) create tasks, inspect the backlog, and kick
+Command-line client for the Talyn backend. Lets you (or a child Claude
+running inside a Talyn task) create tasks, inspect the backlog, and kick
 the Continuous Build scheduler without touching the UI.
 
 ## Install
 
-From a checkout of the FastOwl monorepo:
+From a checkout of the Talyn monorepo:
 
 ```bash
 npm install        # from the repo root
@@ -17,13 +17,13 @@ npm link -w @talyn/cli
 
 ## Environment
 
-The CLI reads two env vars that agents spawned by FastOwl get automatically:
+The CLI reads two env vars that agents spawned by Talyn get automatically:
 
 - `TALYN_API_URL` — defaults to `http://localhost:4747`
 - `TALYN_WORKSPACE_ID` — default workspace for commands that need one
 - `TALYN_TASK_ID` — current task id (used by `task ready`)
 
-When Claude is running inside a FastOwl task, all three are already set, so
+When Claude is running inside a Talyn task, all three are already set, so
 most commands work without flags.
 
 ## Commands
