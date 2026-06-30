@@ -12,8 +12,6 @@ export interface StackMeta {
   depth: number;
   /** True when the row belongs to a stack of more than one PR. */
   stacked: boolean;
-  /** Palette index shared by every member of a stack; -1 when not stacked. */
-  colorIndex: number;
 }
 
 /**
@@ -70,36 +68,34 @@ export function buildStackedRows(
   const ordered: PRRow[] = [];
   const meta = new Map<string, StackMeta>();
   const visited = new Set<string>();
-  let nextColor = 0;
 
-  const walk = (row: PRRow, depth: number, colorIndex: number) => {
+  const walk = (row: PRRow, depth: number, stacked: boolean) => {
     if (visited.has(row.id)) return; // cycle / diamond guard
     visited.add(row.id);
     ordered.push(row);
-    meta.set(row.id, { depth, stacked: colorIndex >= 0, colorIndex });
+    meta.set(row.id, { depth, stacked });
     for (const child of children.get(row.id) ?? []) {
-      walk(child, depth + 1, colorIndex);
+      walk(child, depth + 1, stacked);
     }
   };
 
   for (const root of roots) {
     if (visited.has(root.id)) continue;
-    // A root only opens a stack (and claims a color) when it has dependents.
+    // A root only opens a stack when it has dependents.
     const isStack = (children.get(root.id)?.length ?? 0) > 0;
-    walk(root, 0, isStack ? nextColor++ : -1);
+    walk(root, 0, isStack);
   }
 
   // Fallback: any row not reachable from a root (only possible via a base/head
-  // cycle) is emitted as its own root so PRs never silently vanish. Preserves
-  // input order, which `roots` already sorted upstream isn't guaranteed to, so
-  // re-sort by the active direction.
+  // cycle) is emitted as its own root so PRs never silently vanish. Re-sort by
+  // the active direction.
   if (visited.size < rows.length) {
     const leftovers = rows
       .filter((r) => !visited.has(r.id))
       .sort((a, b) => compareByCreated(a, b, sortDir));
     for (const r of leftovers) {
       if (visited.has(r.id)) continue;
-      walk(r, 0, -1);
+      walk(r, 0, false);
     }
   }
 

@@ -51,7 +51,7 @@ function order(rows: PRRow[], dir: 'asc' | 'desc' = 'desc'): string[] {
 }
 
 describe('buildStackedRows', () => {
-  it('orders a simple chain root-first with increasing depth and one shared color', () => {
+  it('orders a simple chain root-first with increasing depth, all stacked', () => {
     const a = makeRow({ id: 'A', head: 'a', base: 'main' });
     const b = makeRow({ id: 'B', head: 'b', base: 'a' });
     const c = makeRow({ id: 'C', head: 'c', base: 'b' });
@@ -59,16 +59,12 @@ describe('buildStackedRows', () => {
     const { ordered, meta } = buildStackedRows([c, a, b], 'desc');
 
     expect(ordered.map((r) => r.id)).toEqual(['A', 'B', 'C']);
-    expect(meta.get('A')).toMatchObject({ depth: 0, stacked: true });
-    expect(meta.get('B')).toMatchObject({ depth: 1, stacked: true });
-    expect(meta.get('C')).toMatchObject({ depth: 2, stacked: true });
-    const color = meta.get('A')!.colorIndex;
-    expect(color).toBeGreaterThanOrEqual(0);
-    expect(meta.get('B')!.colorIndex).toBe(color);
-    expect(meta.get('C')!.colorIndex).toBe(color);
+    expect(meta.get('A')).toEqual({ depth: 0, stacked: true });
+    expect(meta.get('B')).toEqual({ depth: 1, stacked: true });
+    expect(meta.get('C')).toEqual({ depth: 2, stacked: true });
   });
 
-  it('handles a branching stack: two dependents share the parent depth and color', () => {
+  it('handles a branching stack: two dependents share the parent depth', () => {
     const a = makeRow({ id: 'A', head: 'a', base: 'main' });
     const b = makeRow({ id: 'B', head: 'b', base: 'a', createdAt: '2026-06-05T01:00:00Z' });
     const c = makeRow({ id: 'C', head: 'c', base: 'a', createdAt: '2026-06-05T02:00:00Z' });
@@ -77,25 +73,21 @@ describe('buildStackedRows', () => {
     expect(ordered[0].id).toBe('A');
     // desc → newer sibling (C) first.
     expect(ordered.map((r) => r.id)).toEqual(['A', 'C', 'B']);
-    expect(meta.get('B')).toMatchObject({ depth: 1 });
-    expect(meta.get('C')).toMatchObject({ depth: 1 });
-    expect(meta.get('B')!.colorIndex).toBe(meta.get('A')!.colorIndex);
-    expect(meta.get('C')!.colorIndex).toBe(meta.get('A')!.colorIndex);
+    expect(meta.get('B')).toEqual({ depth: 1, stacked: true });
+    expect(meta.get('C')).toEqual({ depth: 1, stacked: true });
 
     // asc flips the sibling order.
     expect(order([a, b, c], 'asc')).toEqual(['A', 'B', 'C']);
   });
 
-  it('gives independent stacks distinct colors and keeps each contiguous', () => {
+  it('keeps independent stacks contiguous, newer root first under desc', () => {
     const a = makeRow({ id: 'A', head: 'a', base: 'main', createdAt: '2026-06-05T00:00:00Z' });
     const a2 = makeRow({ id: 'A2', head: 'a2', base: 'a' });
     const x = makeRow({ id: 'X', head: 'x', base: 'main', createdAt: '2026-06-06T00:00:00Z' });
     const x2 = makeRow({ id: 'X2', head: 'x2', base: 'x' });
-    const { ordered, meta } = buildStackedRows([a, a2, x, x2], 'desc');
+    const { ordered } = buildStackedRows([a, a2, x, x2], 'desc');
 
-    // Each stack stays together; newer root (X) first under desc.
     expect(ordered.map((r) => r.id)).toEqual(['X', 'X2', 'A', 'A2']);
-    expect(meta.get('A')!.colorIndex).not.toBe(meta.get('X')!.colorIndex);
   });
 
   it('leaves standalone PRs unstacked and interleaved by sort', () => {
@@ -104,8 +96,8 @@ describe('buildStackedRows', () => {
     const { ordered, meta } = buildStackedRows([a, b], 'desc');
 
     expect(ordered.map((r) => r.id)).toEqual(['B', 'A']);
-    expect(meta.get('A')).toMatchObject({ depth: 0, stacked: false, colorIndex: -1 });
-    expect(meta.get('B')).toMatchObject({ depth: 0, stacked: false, colorIndex: -1 });
+    expect(meta.get('A')).toEqual({ depth: 0, stacked: false });
+    expect(meta.get('B')).toEqual({ depth: 0, stacked: false });
   });
 
   it('does not link matching branch names across different repositories', () => {
