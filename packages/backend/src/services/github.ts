@@ -1603,6 +1603,21 @@ class GitHubService extends EventEmitter {
         merge_method: options.merge_method || 'merge',
       }),
     };
+    // Log the credential picture up front so a failed merge is diagnosable from
+    // the logs alone: which token the first ('auto') attempt will actually use
+    // (installation when one covers the repo owner, else the user token), and
+    // whether a user token even exists to fall back to. No secrets — just kinds.
+    const ref = `${owner}/${repo}#${number}`;
+    const stored = this.tokens.get(workspaceId);
+    const login = this.viewerLoginCache.get(workspaceId);
+    const ownerInstallation = this.installationForOwner(owner) ?? stored?.installationId;
+    const firstAttemptToken =
+      ownerInstallation && isGitHubAppConfigured() ? `installation(${ownerInstallation})` : 'user';
+    console.log(
+      `[github] merge ${ref} ws=${workspaceId}${login ? ` login=${login}` : ''} ` +
+        `method=${options.merge_method || 'merge'} firstAttempt=${firstAttemptToken} ` +
+        `userToken=${stored?.accessToken ? 'present' : 'MISSING'}`
+    );
     try {
       // Merge as the bot (installation token) first — keeps the merge attributed
       // to FastOwl wherever the org allows it.
@@ -1614,26 +1629,53 @@ class GitHubService extends EventEmitter {
       // only an App token produces. Retry as the user: a human with an approved,
       // mergeable PR satisfies the ruleset where the bot can't. Guarded so we only
       // do the extra call when a user token actually exists to retry with.
-      if (this.shouldRetryMergeAsUser(workspaceId, err)) {
-        return await this.apiRequest(workspaceId, endpoint, init, 'user');
+      const decision = this.mergeFallbackDecision(workspaceId, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[github] merge ${ref} first attempt failed: ${msg} — ` +
+          (decision.retry ? 'retrying as user' : `not retrying (${decision.reason})`)
+      );
+      if (decision.retry) {
+        try {
+          const result = await this.apiRequest<{ sha: string; merged: boolean; message: string }>(
+            workspaceId,
+            endpoint,
+            init,
+            'user'
+          );
+          console.log(`[github] merge ${ref} succeeded on user-token retry`);
+          return result;
+        } catch (userErr) {
+          const umsg = userErr instanceof Error ? userErr.message : String(userErr);
+          console.warn(`[github] merge ${ref} user-token retry also failed: ${umsg}`);
+          throw userErr;
+        }
       }
       throw err;
     }
   }
 
   /**
-   * True when a failed bot merge should be retried with the user's own token:
-   * the failure is the App-specific "Resource not accessible by integration"
-   * 403 (so the installation token was used and refused), and a user token
-   * exists to fall back to. Any other failure — a rule the user would also hit
-   * ("1 approving review required"), a rate limit, a user-token 403 — is left to
-   * propagate unchanged.
+   * Whether a failed bot merge should be retried with the user's own token, plus
+   * a human-readable reason for the logs. Retry only when the failure is the
+   * App-specific "Resource not accessible by integration" 403 (so the
+   * installation token was used and refused) AND a user token exists to fall
+   * back to. Any other failure — a rule the user would also hit ("1 approving
+   * review required"), a rate limit, a user-token 403 — is left to propagate.
    */
-  private shouldRetryMergeAsUser(workspaceId: string, err: unknown): boolean {
-    if (err instanceof GitHubRateLimitError) return false;
-    if (!(err instanceof Error)) return false;
-    if (!err.message.includes('Resource not accessible by integration')) return false;
-    return Boolean(this.tokens.get(workspaceId)?.accessToken);
+  private mergeFallbackDecision(
+    workspaceId: string,
+    err: unknown
+  ): { retry: boolean; reason: string } {
+    if (err instanceof GitHubRateLimitError) return { retry: false, reason: 'rate-limited' };
+    if (!(err instanceof Error)) return { retry: false, reason: 'non-Error throw' };
+    if (!err.message.includes('Resource not accessible by integration')) {
+      return { retry: false, reason: 'not the App integration-403 — a user token would hit the same rule' };
+    }
+    if (!this.tokens.get(workspaceId)?.accessToken) {
+      return { retry: false, reason: 'no user access token stored for this workspace' };
+    }
+    return { retry: true, reason: 'App integration-403 with a user token available' };
   }
 
   async createPullRequest(
