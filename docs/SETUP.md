@@ -135,7 +135,8 @@ install) resolves the viewer's login + authored/review-requested buckets. The
 classic OAuth App above still works; the App lights up per workspace as each one
 re-connects via the install flow.
 
-> **Make TWO Apps — "FastOwl (Dev)" and "FastOwl (Prod)".** A GitHub App has
+> **Make TWO Apps — "Talyn App Dev" (slug `talyn-app-dev`) and "Talyn App"
+> (slug `talyn-app`).** A GitHub App has
 > exactly **one** webhook URL, so it can't serve localhost and Railway at once.
 > Dev's creds go in `packages/backend/.env`; prod's go in Railway variables. The
 > backend just reads whatever `GITHUB_APP_*` / `GITHUB_WEBHOOK_SECRET` env it
@@ -376,7 +377,7 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
 # when unset, the app stays on the OAuth connect flow. See the GitHub App
 # section below. GITHUB_APP_PRIVATE_KEY is the .pem, base64-encoded.
 # GITHUB_APP_ID=123456
-# GITHUB_APP_SLUG=fastowl
+# GITHUB_APP_SLUG=talyn-app
 # GITHUB_APP_CLIENT_ID=Iv1.xxxxxxxx
 # GITHUB_APP_CLIENT_SECRET=xxxxxxxx
 # GITHUB_APP_PRIVATE_KEY=<base64 of the downloaded .pem>
