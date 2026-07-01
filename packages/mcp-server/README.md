@@ -61,9 +61,29 @@ env vars on the command, so the MCP tools pick them up automatically —
 Claude can just call `talyn_create_task({ prompt: "..." })` with no
 workspace id.
 
+## Analytics (optional)
+
+The server can emit one PostHog product-analytics event per tool call
+(`mcp_tool_called` — tool name, `ok`, `duration_ms`, and, on failure, a
+truncated `error`) so you can see which tools child Claudes use and how often
+they fail. It's **metadata-only** — tool arguments, prompts, and response
+bodies are never sent — and **off by default**: with no key configured the
+whole path is an inert no-op.
+
+Opt in with env vars (the target project is explicit, not the app's connected
+PostHog):
+
+| Var | Purpose | Default |
+| --- | --- | --- |
+| `TALYN_POSTHOG_KEY` | Project write key (falls back to `POSTHOG_API_KEY`) | — (disabled) |
+| `TALYN_POSTHOG_HOST` | Ingest host (falls back to `POSTHOG_HOST`) | `https://us.i.posthog.com` |
+
+Events are attributed to `TALYN_TASK_ID`, else `TALYN_WORKSPACE_ID`, else
+`mcp-anonymous`, with both ids also sent as properties.
+
 ## Dev
 
 ```bash
 npm run dev -w @talyn/mcp-server     # tsx watch via stdio
-npm test -w @talyn/mcp-server        # 7 vitest tests
+npm test -w @talyn/mcp-server        # vitest
 ```

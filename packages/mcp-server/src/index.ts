@@ -6,6 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { TOOLS } from './tools.js';
+import { captureToolCall, shutdownAnalytics } from './analytics.js';
 
 async function main(): Promise<void> {
   const server = new Server(
@@ -25,25 +26,49 @@ async function main(): Promise<void> {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const tool = TOOLS.find((t) => t.name === req.params.name);
+    const startedAt = Date.now();
+    const toolName = req.params.name;
+    const tool = TOOLS.find((t) => t.name === toolName);
     if (!tool) {
+      captureToolCall({
+        tool: toolName,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        error: 'unknown tool',
+      });
       return {
         isError: true,
-        content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }],
+        content: [{ type: 'text', text: `unknown tool: ${toolName}` }],
       };
     }
     try {
       const text = await tool.handler(
         (req.params.arguments ?? {}) as Record<string, unknown>
       );
+      captureToolCall({ tool: toolName, ok: true, durationMs: Date.now() - startedAt });
       return { content: [{ type: 'text', text }] };
     } catch (err) {
+      const message = (err as Error).message;
+      captureToolCall({
+        tool: toolName,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        error: message,
+      });
       return {
         isError: true,
-        content: [{ type: 'text', text: (err as Error).message }],
+        content: [{ type: 'text', text: message }],
       };
     }
   });
+
+  // Flush buffered analytics before the process goes away.
+  const shutdown = async (): Promise<void> => {
+    await shutdownAnalytics();
+    process.exit(0);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
