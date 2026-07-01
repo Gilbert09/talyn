@@ -1,9 +1,10 @@
 import type { Redis } from 'ioredis';
 import { createRedisConnection, isRedisEnabled } from './redis.js';
 import { REPLICA_ID } from './wsBus.js';
-import { targetsForRepo, refreshWebhookIndex } from './webhookIndex.js';
+import { targetsForRepo, refreshWebhookIndex, type WatchTarget } from './webhookIndex.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
+import { GitHubRateLimitError } from './githubRateGate.js';
 import { debugBus } from './debugBus.js';
 import {
   checkCountCoalescer,
@@ -270,11 +271,19 @@ export async function processWebhookDelivery(
 
   // Everything else (pull_request actions, reviews, comments): a full refresh
   // that materialises/updates the row (mergeable, reviews, authoritative counts).
+  // ONE shared GitHub fetch per PR number across all watching workspaces — the
+  // old per-(workspace, PR) fan-out made N identical GraphQL calls against the
+  // installation's single shared point budget and drained it (the prod
+  // rate-limit storm). See prMonitor.refreshPrAcrossWorkspaces.
   let dispatched = 0;
-  for (const target of targets) {
-    for (const number of numbers) {
-      dispatched += await refreshTarget(target, number, delivery.repoFullName, nowMs, delivery.eventType);
-    }
+  for (const number of numbers) {
+    dispatched += await refreshNumberAcrossTargets(
+      targets,
+      number,
+      delivery.repoFullName,
+      nowMs,
+      delivery.eventType,
+    );
   }
   return dispatched;
 }
@@ -356,51 +365,78 @@ async function tryIncrementalPrMetadata(
   }
 }
 
-/** Coalesced single-PR refresh for one watching workspace. Returns 1 if dispatched, 0 if coalesced. */
-async function refreshTarget(
-  target: { workspaceId: string; owner: string; repo: string; repositoryId: string },
+/**
+ * Refresh one PR number across every watching workspace with a SINGLE shared
+ * GitHub fetch. Per-workspace coalescing still applies (a workspace refreshed
+ * <COALESCE_WINDOW_MS ago is skipped); the fetch runs once for the workspaces
+ * that survive it. Returns how many (workspace) refreshes were dispatched
+ * post-coalescing. A fetch failure is logged ONCE here — not once per workspace,
+ * as the old per-target fan-out did.
+ *
+ * The index-resolved repositoryId flows through so the refresh skips its
+ * getWatchedRepos DB round-trip; refreshPrAcrossWorkspaces never blocks on
+ * `mergeable: UNKNOWN` (the sweep / a follow-up event settles it).
+ */
+async function refreshNumberAcrossTargets(
+  targets: WatchTarget[],
   number: number,
   repoFullName: string,
   nowMs: number,
   eventType: string,
 ): Promise<number> {
-  const key = `${target.workspaceId}:${repoFullName.toLowerCase()}:${number}`;
-  if (!shouldRefresh(key, nowMs)) {
-    whTrace(`    coalesced ${repoFullName}#${number} (${eventType}) — refreshed <${COALESCE_WINDOW_MS}ms ago`);
+  const fresh = targets.filter((t) =>
+    shouldRefresh(`${t.workspaceId}:${repoFullName.toLowerCase()}:${number}`, nowMs),
+  );
+  if (fresh.length === 0) {
+    whTrace(
+      `    coalesced ${repoFullName}#${number} (${eventType}) — all workspaces refreshed <${COALESCE_WINDOW_MS}ms ago`,
+    );
     return 0;
   }
-  // Pass the index-resolved repositoryId so refreshPr skips its getWatchedRepos
-  // DB round-trip. Webhook refreshes never block on `mergeable: UNKNOWN` — the
-  // sweep / a follow-up event settles it (keeps the consumer draining fast).
-  whTrace(`    dispatch ${repoFullName}#${number} (${eventType}) → refreshPr`);
-  await prMonitorService
-    .refreshPr(target.workspaceId, target.owner, target.repo, number, {
-      repositoryId: target.repositoryId,
-      resolveMergeable: false,
-    })
-    .then(() => whTrace(`    done ${repoFullName}#${number} (${eventType})`))
-    .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Benign on busy repos: the number is an ISSUE (issues + PRs share a
-      // numbering space, and a check_run/check_suite/comment can reference one)
-      // or a transferred/deleted PR. Not an error — record where it came from on
-      // the Debug bus (not stdout) so the source is traceable without spam.
-      if (/Could not resolve to a PullRequest/i.test(msg)) {
-        debugBus.recordWebhook({
-          action: 'processed',
-          eventType,
-          repo: repoFullName,
-          prNumbers: [number],
-          ok: true,
-          fanout: 0,
-          dropReason: 'not_a_pr',
-        });
-        return;
-      }
-      // One concise line, no stack — operational, not a crash.
-      console.warn(`[webhookWorker] refreshPr (${eventType}) ${repoFullName}#${number}: ${msg}`);
-    });
-  return 1;
+  whTrace(
+    `    dispatch ${repoFullName}#${number} (${eventType}) → refreshPrAcrossWorkspaces ×${fresh.length}`,
+  );
+  try {
+    await prMonitorService.refreshPrAcrossWorkspaces(fresh, number);
+    whTrace(`    done ${repoFullName}#${number} (${eventType})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Benign on busy repos: the number is an ISSUE (issues + PRs share a
+    // numbering space, and a check_run/check_suite/comment can reference one)
+    // or a transferred/deleted PR. Not an error — record where it came from on
+    // the Debug bus (not stdout) so the source is traceable without spam.
+    if (/Could not resolve to a PullRequest/i.test(msg)) {
+      debugBus.recordWebhook({
+        action: 'processed',
+        eventType,
+        repo: repoFullName,
+        prNumbers: [number],
+        ok: true,
+        fanout: 0,
+        dropReason: 'not_a_pr',
+      });
+      return fresh.length;
+    }
+    // The account's GraphQL budget is gated (githubRateGate) — an expected,
+    // self-clearing condition the gate already logged ONCE when it engaged.
+    // Don't re-log per delivery (that was part of the storm); record it on the
+    // Debug bus and move on. The reconcile sweep catches up once the window resets.
+    if (err instanceof GitHubRateLimitError) {
+      debugBus.recordWebhook({
+        action: 'processed',
+        eventType,
+        repo: repoFullName,
+        prNumbers: [number],
+        ok: false,
+        fanout: 0,
+        error: 'rate-limited (gated)',
+      });
+      return fresh.length;
+    }
+    // One concise line, no stack — operational, not a crash.
+    console.warn(`[webhookWorker] refreshPr (${eventType}) ${repoFullName}#${number}: ${msg}`);
+  }
+  return fresh.length;
 }
 
 // ---- Stream consumer ------------------------------------------------------

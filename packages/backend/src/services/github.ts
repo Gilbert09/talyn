@@ -20,6 +20,8 @@ import {
   githubRateGate,
   GitHubRateLimitError,
   parseRateLimitResponse,
+  graphqlPrimaryLimitResetMs,
+  PRIMARY_LIMIT_FALLBACK_MS,
 } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import {
@@ -840,6 +842,27 @@ class GitHubService extends EventEmitter {
     return (
       this.viewerLoginCache.get(workspaceId) ??
       stored?.accessToken ??
+      workspaceId
+    );
+  }
+
+  /**
+   * The account key that a data-plane call for `owner` will actually
+   * authenticate as from this workspace. `resolveAuth` resolves the token by the
+   * repo OWNER (an App install covering it), so this can differ from
+   * {@link accountKeyFor} for a workspace whose *primary* installation isn't the
+   * one covering `owner`. The webhook fan-out groups its targets by this key:
+   * every workspace that resolves to the same key shares one identical fetch, so
+   * we make a single GraphQL call for the group instead of one per workspace.
+   */
+  graphqlAccountKeyForOwner(workspaceId: string, owner: string): string {
+    const installationId = this.installationForOwner(owner);
+    if (installationId && isGitHubAppConfigured()) return `inst:${installationId}`;
+    // No installation covers this owner → the call falls back to the workspace's
+    // own user token; those are per-workspace, so each is its own group.
+    return (
+      this.viewerLoginCache.get(workspaceId) ??
+      this.tokens.get(workspaceId)?.accessToken ??
       workspaceId
     );
   }
@@ -1916,7 +1939,25 @@ class GitHubService extends EventEmitter {
               (e.type ? ` [${e.type}]` : '') +
               (e.path ? ` at ${e.path.join('.')}` : '');
             recordGql(false, `GraphQL: ${e.message}${detail}`);
-            throw new Error(`GitHub GraphQL: ${e.message}${detail}`);
+            const message = `GitHub GraphQL: ${e.message}${detail}`;
+            // A top-level RATE_LIMITED error (HTTP 200 body) means the account's
+            // hourly GraphQL POINT budget is exhausted — distinct from the
+            // secondary-abuse 403/429 the `!response.ok` path handles below.
+            // GitHub keeps returning it for the rest of the window, so engage the
+            // shared gate: every subsequent call on this account skips until the
+            // budget resets, instead of each caller re-hitting it (the sustained
+            // rate-limit "storm" seen in prod). Surface as a GitHubRateLimitError
+            // so pollers treat it as skip-this-tick, like the secondary path.
+            const isPrimaryLimit =
+              /RATE_LIMIT/i.test(e.type ?? '') || /rate limit/i.test(e.message);
+            if (isPrimaryLimit) {
+              const until =
+                graphqlPrimaryLimitResetMs(response.headers) ||
+                Date.now() + PRIMARY_LIMIT_FALLBACK_MS;
+              githubRateGate.block(accountKey, until, 'graphql primary point-budget exhausted');
+              throw new GitHubRateLimitError(message, Math.max(0, until - Date.now()));
+            }
+            throw new Error(message);
           }
           // Partial success — record the scoped errors so the Debug panel
           // isn't blind to them, but don't fail the request.

@@ -785,29 +785,106 @@ class PRMonitorService extends EventEmitter {
     // from the in-memory watch index), so it passes `repositoryId` to skip the
     // getWatchedRepos DB round-trip + URL parse on the hot path. Other callers
     // (merge queue, auto-merge) omit it and resolve from the DB.
-    let watched: WatchedRepo | undefined;
-    if (opts.repositoryId) {
-      watched = {
-        id: opts.repositoryId,
-        workspaceId,
-        owner,
-        repo,
-        fullName: `${owner}/${repo}`,
-        defaultBranch: '',
-      };
-    } else {
-      watched = (await this.getWatchedRepos(workspaceId)).find(
-        (r) =>
-          r.owner.toLowerCase() === owner.toLowerCase() &&
-          r.repo.toLowerCase() === repo.toLowerCase()
-      );
-    }
+    const watched = await this.resolveWatchedForRefresh(workspaceId, owner, repo, opts.repositoryId);
     if (!watched) return;
+    const results = await this.fetchPrSummaries(workspaceId, watched, [number], opts);
+    await this.applyPrResults(
+      { workspaceId, repositoryId: watched.id, fullName: watched.fullName },
+      number,
+      results
+    );
+  }
+
+  /**
+   * Refresh one PR across EVERY workspace watching it while making a SINGLE
+   * GitHub fetch. `resolveAuth` resolves the data-plane token by the repo
+   * OWNER, so every workspace on the same installation gets a byte-identical
+   * GraphQL result — fetching per-workspace (the old webhook fan-out) was pure
+   * amplification: N identical calls against ONE shared GraphQL point budget,
+   * which exhausted installation 140694558 in prod and produced the sustained
+   * rate-limit storm. We group targets by the account their call actually
+   * authenticates as, fetch once per group, then run only the cheap
+   * per-workspace post-processing (viewer relationship flags + upsert).
+   *
+   * Webhook-only, so `resolveMergeable` is always false (a follow-up event or
+   * the reconcile sweep settles UNKNOWN). A fetch error propagates to the caller
+   * so a rate-limit is logged ONCE for the group, not once per workspace.
+   */
+  async refreshPrAcrossWorkspaces(
+    targets: Array<{ workspaceId: string; owner: string; repo: string; repositoryId: string }>,
+    number: number
+  ): Promise<void> {
+    if (targets.length === 0) return;
+    // Group by the account the fetch will authenticate as. Normally every target
+    // shares one installation → a single group → a single fetch; only owner-less
+    // user-token fallbacks (no installation covers the owner) split per workspace.
+    const groups = new Map<string, typeof targets>();
+    for (const t of targets) {
+      const key = githubService.graphqlAccountKeyForOwner(t.workspaceId, t.owner);
+      const list = groups.get(key) ?? [];
+      list.push(t);
+      groups.set(key, list);
+    }
+    for (const group of groups.values()) {
+      const lead = group[0];
+      const watched = this.watchedFromTarget(lead);
+      const results = await this.fetchPrSummaries(lead.workspaceId, watched, [number], {
+        resolveMergeable: false,
+      });
+      for (const target of group) {
+        await this.applyPrResults(
+          { workspaceId: target.workspaceId, repositoryId: target.repositoryId, fullName: watched.fullName },
+          number,
+          results
+        );
+      }
+    }
+  }
+
+  /** Resolve the WatchedRepo for a refresh — from a passed repositoryId (hot path) or the DB. */
+  private async resolveWatchedForRefresh(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    repositoryId?: string
+  ): Promise<WatchedRepo | undefined> {
+    if (repositoryId) return this.watchedFromTarget({ workspaceId, owner, repo, repositoryId });
+    return (await this.getWatchedRepos(workspaceId)).find(
+      (r) =>
+        r.owner.toLowerCase() === owner.toLowerCase() &&
+        r.repo.toLowerCase() === repo.toLowerCase()
+    );
+  }
+
+  /** Build the minimal WatchedRepo the fetch/apply path needs from an index target. */
+  private watchedFromTarget(t: {
+    workspaceId: string;
+    owner: string;
+    repo: string;
+    repositoryId: string;
+  }): WatchedRepo {
+    return {
+      id: t.repositoryId,
+      workspaceId: t.workspaceId,
+      owner: t.owner,
+      repo: t.repo,
+      fullName: `${t.owner}/${t.repo}`,
+      defaultBranch: '',
+    };
+  }
+
+  /** GraphQL fetch for a set of PR numbers, optionally resolving UNKNOWN mergeable. */
+  private async fetchPrSummaries(
+    workspaceId: string,
+    watched: WatchedRepo,
+    numbers: number[],
+    opts: { resolveMergeable?: boolean }
+  ): Promise<BatchPRByNumberResult[]> {
     const fetched = await batchPullRequestsByNumber({
       workspaceId,
       owner: watched.owner,
       repo: watched.repo,
-      numbers: [number],
+      numbers,
     });
     // GitHub returns `mergeable: UNKNOWN` on a fresh fetch and recomputes it in
     // the background. Resolving it inline is a 3×1.5s blocking retry — fine for
@@ -815,36 +892,55 @@ class PRMonitorService extends EventEmitter {
     // (default), but a major backlog source on the webhook hot path. Webhook
     // refreshes pass resolveMergeable:false and let a follow-up event or the
     // reconcile sweep settle UNKNOWN.
-    const results =
-      opts.resolveMergeable === false
-        ? fetched
-        : await this.resolveUnknownMergeable(workspaceId, watched, fetched);
-    const login = await this.resolveCurrentUser(workspaceId);
-    if (WEBHOOK_TRACE && results.every((r) => !r.pr)) {
-      whTrace(
-        `      refreshPr ${watched.fullName}#${number}: GitHub returned no PR ` +
-          `(deleted/transferred or not visible) — nothing to update`,
-      );
-    }
+    return opts.resolveMergeable === false
+      ? fetched
+      : this.resolveUnknownMergeable(workspaceId, watched, fetched);
+  }
+
+  /**
+   * Per-workspace post-processing for already-fetched PR summaries: derive the
+   * viewer relationship and upsert+broadcast when the PR is relevant (or a row
+   * already exists). Clones each summary so the shared fetched object isn't
+   * mutated across workspaces (`annotateReviewRequest` writes `reviewRequestVia`).
+   */
+  private async applyPrResults(
+    target: { workspaceId: string; repositoryId: string; fullName: string },
+    number: number,
+    results: BatchPRByNumberResult[]
+  ): Promise<void> {
+    const login = await this.resolveCurrentUser(target.workspaceId);
     for (const result of results) {
-      if (!result.pr) continue;
-      await this.annotateReviewRequest(workspaceId, result.pr);
-      const { authored, reviewRequested } = relationshipFlags(result.pr, login);
+      if (!result.pr) {
+        if (WEBHOOK_TRACE) {
+          whTrace(
+            `      refreshPr ${target.fullName}#${number}: GitHub returned no PR ` +
+              `(deleted/transferred or not visible) — nothing to update`
+          );
+        }
+        continue;
+      }
+      // Isolate per-workspace mutation: annotateReviewRequest writes
+      // reviewRequestVia onto the summary, and the same fetched object is shared
+      // across every workspace in the group.
+      const summary = structuredClone(result.pr);
+      await this.annotateReviewRequest(target.workspaceId, summary);
+      const { authored, reviewRequested } = relationshipFlags(summary, login);
       // Keep the cache scoped to PRs the viewer actually cares about: only
       // materialize a row if there's a relationship now, or one already exists
       // (so a PR that just lost its relationship still gets updated/cleared).
       const relevant = authored || reviewRequested;
-      const exists = relevant || (await this.prRowExists(workspaceId, watched.id, number));
+      const exists =
+        relevant || (await this.prRowExists(target.workspaceId, target.repositoryId, summary.number));
       whTrace(
-        `      refreshPr ${watched.fullName}#${result.pr.number}: state=${result.pr.state} ` +
+        `      refreshPr ${target.fullName}#${summary.number}: state=${summary.state} ` +
           `authored=${authored} reviewRequested=${reviewRequested} ` +
-          `${exists ? 'upsert+emit' : 'skip (no relationship, untracked)'}`,
+          `${exists ? 'upsert+emit' : 'skip (no relationship, untracked)'}`
       );
       if (!exists) continue;
       await upsertFromBatchResult({
-        workspaceId,
-        repositoryId: watched.id,
-        summary: result.pr,
+        workspaceId: target.workspaceId,
+        repositoryId: target.repositoryId,
+        summary,
         reviewRequested,
         authored,
       });

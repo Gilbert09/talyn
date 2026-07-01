@@ -9,6 +9,7 @@ import {
   integrations as integrationsTable,
 } from '../db/schema.js';
 import { isEncryptedEnvelope } from '../services/tokenCrypto.js';
+import { githubRateGate, GitHubRateLimitError } from '../services/githubRateGate.js';
 
 /**
  * githubService talks to Supabase + github.com. We don't have either
@@ -80,6 +81,9 @@ describe('githubService', () => {
     await cleanup();
     process.env = { ...originalEnv };
     vi.restoreAllMocks();
+    // The rate gate is a module singleton — clear any block a test engaged so it
+    // can't leak into an unrelated test that shares the account key.
+    githubRateGate._reset();
   });
 
   describe('isConfigured', () => {
@@ -626,6 +630,59 @@ describe('githubService', () => {
       await expect(githubService.init()).resolves.toBeUndefined();
       // No token gets cached for ws1 because decrypt failed.
       expect(githubService.isConnected('ws1')).toBe(false);
+    });
+  });
+
+  describe('executeGraphql — primary rate-limit circuit breaker', () => {
+    beforeEach(async () => {
+      githubRateGate._reset();
+      await githubService.storeToken('ws1', 'gho_test', 'bearer', 'repo');
+    });
+    afterEach(() => githubRateGate._reset());
+
+    // GitHub returns the PRIMARY point-budget exhaustion as a top-level
+    // RATE_LIMITED error on an HTTP 200 body. Without the breaker every caller
+    // just re-hits it (the prod storm). We must engage the shared gate (so
+    // subsequent calls skip until reset) AND surface a GitHubRateLimitError.
+    it('blocks the account and throws GitHubRateLimitError on RATE_LIMITED', async () => {
+      const resetSec = Math.floor(Date.now() / 1000) + 300;
+      const fetchStub = vi.fn(async (input: FetchInput) => {
+        if (!String(input).includes('/graphql')) throw new Error(`unexpected ${String(input)}`);
+        return new Response(
+          JSON.stringify({
+            errors: [
+              { type: 'RATE_LIMITED', message: 'API rate limit already exceeded for installation ID 140694558.' },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json', 'x-ratelimit-reset': String(resetSec) } },
+        );
+      });
+      vi.stubGlobal('fetch', fetchStub);
+
+      await expect(
+        githubService.executeGraphql('ws1', 'query { viewer { login } }', {}),
+      ).rejects.toBeInstanceOf(GitHubRateLimitError);
+
+      const accountKey = githubService.accountKeyFor('ws1');
+      expect(githubRateGate.isBlocked(accountKey)).toBe(true);
+      // Blocked until roughly the reset instant the header advertised.
+      expect(githubRateGate.blockedUntil(accountKey)).toBe(resetSec * 1000);
+    });
+
+    it('short-circuits a second call while the gate is engaged (no second fetch)', async () => {
+      const resetSec = Math.floor(Date.now() / 1000) + 3000; // > MAX_GATE_WAIT → skip, don't sleep
+      const fetchStub = vi.fn(async () =>
+        new Response(
+          JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit already exceeded' }] }),
+          { status: 200, headers: { 'content-type': 'application/json', 'x-ratelimit-reset': String(resetSec) } },
+        ),
+      );
+      vi.stubGlobal('fetch', fetchStub);
+
+      await expect(githubService.executeGraphql('ws1', 'q', {})).rejects.toBeInstanceOf(GitHubRateLimitError);
+      await expect(githubService.executeGraphql('ws1', 'q', {})).rejects.toBeInstanceOf(GitHubRateLimitError);
+      // The 2nd call is refused at the gate (waitIfBlocked) before any network I/O.
+      expect(fetchStub).toHaveBeenCalledTimes(1);
     });
   });
 });

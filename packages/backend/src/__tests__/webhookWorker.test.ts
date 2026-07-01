@@ -129,8 +129,21 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     _resetWebhookIndex();
     await refreshWebhookIndex();
     _resetCoalesce();
-    // Stub the actual refresh so we assert dispatch without hitting GitHub.
-    refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
+    // Stub the shared cross-workspace refresh so we assert dispatch without
+    // hitting GitHub. The webhook fan-out now makes ONE call per PR number with
+    // every watching workspace as a target (deduped fetch), not one refreshPr
+    // per workspace.
+    refreshSpy = vi
+      .spyOn(prMonitorService, 'refreshPrAcrossWorkspaces')
+      .mockResolvedValue(undefined);
+  });
+
+  /** The (workspace, repo) target the fan-out passes for a watched repo row. */
+  const target = (workspaceId: string, repositoryId: string) => ({
+    workspaceId,
+    owner: 'acme',
+    repo: 'widget',
+    repositoryId,
   });
 
   // A tracked open PR row (with a known head sha for the incremental check path).
@@ -151,10 +164,6 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       lastSummary: { headSha, checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 } },
     });
   }
-  // refreshPr opts the webhook fan-out always passes: the index-resolved repo id
-  // (skips getWatchedRepos) + resolveMergeable:false (never block the consumer).
-  const opts = (repositoryId: string) => ({ repositoryId, resolveMergeable: false });
-
   afterEach(async () => {
     _resetWebhookIndex();
     _resetCoalesce();
@@ -163,16 +172,21 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     vi.restoreAllMocks();
   });
 
-  it('fans one PR event out to every workspace watching the repo', async () => {
+  it('fans one PR event out to every workspace in a SINGLE shared refresh call', async () => {
     const n = await processWebhookDelivery(
       delivery({ payload: { pull_request: { number: 7 } } }),
       1_000,
     );
     expect(n).toBe(2);
-    // pull_request is not a check event → not pre-filtered; webhook always passes
-    // the index-resolved repositoryId + resolveMergeable:false.
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
-    expect(refreshSpy).toHaveBeenCalledWith('wsB', 'acme', 'widget', 7, opts('rB'));
+    // The dedup: ONE refreshPrAcrossWorkspaces call carrying both targets (they
+    // share an installation → one identical GraphQL fetch), not one per workspace.
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    const [targets, number] = refreshSpy.mock.calls[0];
+    expect(number).toBe(7);
+    expect(targets).toEqual(
+      expect.arrayContaining([target('wsA', 'rA'), target('wsB', 'rB')]),
+    );
+    expect(targets).toHaveLength(2);
   });
 
   // Read the cached summary of the seeded PR row.
@@ -241,7 +255,10 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       1_000,
     );
     // base change affects mergeability → must refetch, not patch.
-    expect(refreshSpy).toHaveBeenCalledWith('wsA', 'acme', 'widget', 7, opts('rA'));
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    const [targets, number] = refreshSpy.mock.calls[0];
+    expect(number).toBe(7);
+    expect(targets).toEqual(expect.arrayContaining([target('wsA', 'rA')]));
     expect(n).toBeGreaterThanOrEqual(1);
   });
 
@@ -396,7 +413,12 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     );
 
     expect(n).toBe(1);
-    expect(refreshSpy).toHaveBeenCalledWith('wsPH', 'PostHog', 'posthog', 64026, opts('rPH'));
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    const [targets, number] = refreshSpy.mock.calls[0];
+    expect(number).toBe(64026);
+    expect(targets).toEqual([
+      { workspaceId: 'wsPH', owner: 'PostHog', repo: 'posthog', repositoryId: 'rPH' },
+    ]);
   });
 
   it('coalesces a burst for the same (workspace, PR) within the window', async () => {
@@ -421,7 +443,9 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       2_000, // > 750ms later
     );
     expect(n).toBe(2);
-    expect(refreshSpy).toHaveBeenCalledTimes(2);
+    // Both workspaces are past the coalescing window → one shared refresh, both targets.
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(refreshSpy.mock.calls[0][0]).toHaveLength(2);
   });
 
   it('drops events for a repo nobody watches', async () => {

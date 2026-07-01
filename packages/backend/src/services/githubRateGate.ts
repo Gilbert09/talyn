@@ -89,6 +89,39 @@ export function parseRateLimitResponse(
   return { isRateLimited: true, retryAfterMs };
 }
 
+/**
+ * Fallback backoff for a primary GraphQL point-budget exhaustion when the
+ * response carries no usable `x-ratelimit-reset`. The primary budget refills on
+ * an hourly window, so a short pause would just re-trip; back off a few minutes
+ * and let the next gated tick re-probe.
+ */
+export const PRIMARY_LIMIT_FALLBACK_MS = 5 * 60_000;
+
+/** Never hold a primary-limit block longer than this, even if `reset` is bogus. */
+const MAX_PRIMARY_BLOCK_MS = 65 * 60_000;
+
+/**
+ * Epoch-ms until a GraphQL *primary* point-budget exhaustion clears, read off
+ * the `x-ratelimit-reset` header GitHub sends on the (HTTP 200) response whose
+ * body carries a top-level `RATE_LIMITED` error. Unlike {@link
+ * parseRateLimitResponse} (which only trusts a failed 403/429), this reads the
+ * header off a 200 GraphQL response. Returns 0 when the header is missing,
+ * unparseable, or already past — the caller then falls back to
+ * {@link PRIMARY_LIMIT_FALLBACK_MS}. Clamped to at most {@link
+ * MAX_PRIMARY_BLOCK_MS} ahead so a garbage `reset` can't pause an account for
+ * hours. Pure, for unit tests.
+ */
+export function graphqlPrimaryLimitResetMs(
+  headers: Pick<Headers, 'get'>,
+  now: number = Date.now(),
+): number {
+  const reset = headers.get('x-ratelimit-reset');
+  if (reset === null) return 0;
+  const resetMs = Number.parseInt(reset, 10) * 1000;
+  if (!Number.isFinite(resetMs) || resetMs <= now) return 0;
+  return Math.min(resetMs, now + MAX_PRIMARY_BLOCK_MS);
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 class GitHubRateGate {

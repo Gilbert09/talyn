@@ -10,6 +10,7 @@ import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
+import { graphqlBudget } from './graphqlBudget.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
 import {
   broadcastMergeQueuePositions,
@@ -328,7 +329,13 @@ class MergeQueueProcessor {
     //    current. A stale BEHIND head would otherwise be merge-attempted and
     //    bounce with `merged:false`.
     let row = initialRow;
-    if (Date.now() - new Date(row.lastPolledAt).getTime() > FRESHNESS_MS) {
+    const freshnessStale = Date.now() - new Date(row.lastPolledAt).getTime() > FRESHNESS_MS;
+    // Skip this opportunistic re-poll when the account's GraphQL budget is in the
+    // reserve (same guard the reconcile sweep uses). We proceed on the existing
+    // row: a stale BEHIND head just bounces with merged:false and re-queues,
+    // which the next tick (post budget-reset) refetches cleanly — cheaper than
+    // burning a scarce point and hard-tripping the rate limit.
+    if (freshnessStale && !graphqlBudget.shouldDefer(githubService.accountKeyFor(row.workspaceId))) {
       await prMonitorService
         .refreshPr(row.workspaceId, row.owner, row.repo, row.number)
         .catch((err) => {

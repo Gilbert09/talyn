@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { githubService } from '../services/github.js';
+import { graphqlBudget } from '../services/graphqlBudget.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import * as websocketModule from '../services/websocket.js';
 import {
@@ -983,6 +984,39 @@ describe('mergeQueueProcessor', () => {
       await internals.processHead(staleSnapshot);
 
       expect(mergeSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // The top-of-tick freshness refetch is an opportunistic GraphQL poll. When the
+  // account's points budget is in the reserve it must back off (like the
+  // reconcile sweep) and proceed on the existing row — burning the last points
+  // here is what hard-trips the rate limit. When the budget is healthy it runs.
+  describe('freshness refetch — GraphQL budget deferral', () => {
+    async function staleQueuedPr() {
+      const prId = await insertPr(db, { summary: cleanSummary() });
+      await db
+        .update(pullRequestsTable)
+        .set({ lastPolledAt: new Date(Date.now() - 10 * 60_000) }) // well past FRESHNESS_MS
+        .where(eq(pullRequestsTable.id, prId));
+      return getPr(db, prId);
+    }
+    const runProcessHead = async (row: unknown) => {
+      const internals = mergeQueueProcessor as unknown as { processHead(r: unknown): Promise<unknown> };
+      await internals.processHead(row);
+    };
+
+    it('refetches a stale row when the budget is healthy', async () => {
+      vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(false);
+      const row = await staleQueuedPr();
+      await runProcessHead(row);
+      expect(refreshSpy).toHaveBeenCalledWith('ws1', 'a', 'b', row.number);
+    });
+
+    it('skips the stale refetch when the budget is in the reserve', async () => {
+      vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(true);
+      const row = await staleQueuedPr();
+      await runProcessHead(row);
+      expect(refreshSpy).not.toHaveBeenCalled();
     });
   });
 

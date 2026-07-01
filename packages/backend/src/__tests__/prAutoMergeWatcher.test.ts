@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { prAutoMergeWatcher } from '../services/prAutoMergeWatcher.js';
+import { prMonitorService } from '../services/prMonitor.js';
+import { graphqlBudget } from '../services/graphqlBudget.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -171,6 +173,39 @@ describe('prAutoMergeWatcher', () => {
   afterEach(async () => {
     await cleanup();
     vi.restoreAllMocks();
+  });
+
+  // The top-of-tick freshness refetch is an opportunistic GraphQL poll — it must
+  // back off when the account's points budget is in the reserve (like the
+  // reconcile sweep) and proceed on the existing row, rather than burning the
+  // last points and hard-tripping the rate limit.
+  describe('freshness refetch — GraphQL budget deferral', () => {
+    let refreshSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
+    });
+    async function staleBlockedPr() {
+      const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+      await db
+        .update(pullRequestsTable)
+        .set({ lastPolledAt: new Date(Date.now() - 10 * 60_000) }) // well past FRESHNESS_MS
+        .where(eq(pullRequestsTable.id, prId));
+      return prId;
+    }
+
+    it('refetches a stale PR when the budget is healthy', async () => {
+      vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(false);
+      await staleBlockedPr();
+      await prAutoMergeWatcher.runOnce();
+      expect(refreshSpy).toHaveBeenCalledWith('ws1', 'a', 'b', expect.any(Number));
+    });
+
+    it('skips the stale refetch when the budget is in the reserve', async () => {
+      vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(true);
+      await staleBlockedPr();
+      await prAutoMergeWatcher.runOnce();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('fires one cloud task for a blocked PR with no run in flight', async () => {

@@ -175,3 +175,114 @@ describe('refreshPr (webhook-driven flags + relevance guard)', () => {
     expect(nums.sort((a, b) => a - b)).toEqual([1, 4]); // #2 wrong base, #3 closed
   });
 });
+
+/**
+ * The webhook fan-out dedup: N workspaces on the SAME installation share ONE
+ * GitHub fetch (resolveAuth keys the token on the repo owner, so every
+ * workspace gets an identical result). This is the fix for the prod rate-limit
+ * storm — the old path made N identical GraphQL calls against one shared point
+ * budget. The cheap per-workspace post-processing (viewer flags + upsert) still
+ * runs once per workspace, independently.
+ */
+describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  const targets = [
+    { workspaceId: 'ws1', owner: 'acme', repo: 'widgets', repositoryId: 'repo1' },
+    { workspaceId: 'ws2', owner: 'acme', repo: 'widgets', repositoryId: 'repo2' },
+  ];
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seedUser(db, { id: TEST_USER_ID });
+    await db.insert(workspacesTable).values([
+      { id: 'ws1', ownerId: TEST_USER_ID, name: 'a', settings: {} },
+      { id: 'ws2', ownerId: TEST_USER_ID, name: 'b', settings: {} },
+    ]);
+    await db.insert(repositoriesTable).values([
+      { id: 'repo1', workspaceId: 'ws1', name: 'acme/widgets', url: 'https://github.com/acme/widgets', defaultBranch: 'main', createdAt: new Date() },
+      { id: 'repo2', workspaceId: 'ws2', name: 'acme/widgets', url: 'https://github.com/acme/widgets', defaultBranch: 'main', createdAt: new Date() },
+    ]);
+    // Both workspaces resolve to the SAME installation account → one group, one fetch.
+    vi.spyOn(githubService, 'graphqlAccountKeyForOwner').mockReturnValue('inst:shared');
+    vi.spyOn(githubService, 'getViewerTeamSlugs').mockResolvedValue(new Set());
+    // Distinct viewer per workspace, so per-workspace relationship derivation is
+    // exercised off the ONE shared summary.
+    vi.spyOn(githubService, 'getUser').mockImplementation(
+      async (ws: string) => ({ login: ws === 'ws1' ? 'octocat' : 'dev2' }) as never,
+    );
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const rowFor = async (workspaceId: string, number: number) => {
+    const rows = await db
+      .select()
+      .from(pullRequestsTable)
+      .where(and(eq(pullRequestsTable.workspaceId, workspaceId), eq(pullRequestsTable.number, number)));
+    return rows[0];
+  };
+
+  it('makes ONE GitHub fetch for all workspaces yet upserts each independently', async () => {
+    // author=dev2 (so ws2 is the author); ws1 is review-requested directly.
+    const shared = summary({
+      number: 7,
+      author: 'dev2',
+      reviewRequests: { users: ['octocat'], teams: [] },
+    } as Partial<PRSummary>);
+    fetchSpy = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 7, pr: shared },
+    ]);
+
+    await prMonitorService.refreshPrAcrossWorkspaces(targets, 7);
+
+    // The whole point: a single shared fetch, not one per workspace.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // ws1 (review-requested) and ws2 (author) each get their OWN row with the
+    // relationship derived from their own viewer identity.
+    const r1 = await rowFor('ws1', 7);
+    const r2 = await rowFor('ws2', 7);
+    expect(r1).toBeDefined();
+    expect(r1?.reviewRequested).toBe(true);
+    expect(r1?.authored).toBe(false);
+    expect(r2).toBeDefined();
+    expect(r2?.authored).toBe(true);
+    expect(r2?.reviewRequested).toBe(false);
+  });
+
+  it('does not bleed reviewRequestVia across workspaces (clones the shared summary)', async () => {
+    const shared = summary({
+      number: 8,
+      author: 'dev2',
+      reviewRequests: { users: ['octocat'], teams: [] },
+    } as Partial<PRSummary>);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([{ number: 8, pr: shared }]);
+
+    await prMonitorService.refreshPrAcrossWorkspaces(targets, 8);
+
+    // The shared fetched object must be left untouched — annotateReviewRequest
+    // writes reviewRequestVia onto a per-workspace CLONE, never the original.
+    expect((shared as PRSummary).reviewRequestVia).toBeUndefined();
+  });
+
+  it('splits into separate fetches when workspaces resolve to different accounts', async () => {
+    // No shared installation (user-token fallback) → each workspace is its own
+    // group → one fetch each (still correct, just no dedup benefit).
+    vi.spyOn(githubService, 'graphqlAccountKeyForOwner').mockImplementation(
+      (ws: string) => `user:${ws}`,
+    );
+    const fetch2 = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 9, pr: summary({ number: 9, author: 'octocat' }) },
+    ]);
+    await prMonitorService.refreshPrAcrossWorkspaces(targets, 9);
+    expect(fetch2).toHaveBeenCalledTimes(2);
+  });
+});

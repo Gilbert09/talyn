@@ -3,6 +3,7 @@ import {
   githubRateGate,
   GitHubRateLimitError,
   parseRateLimitResponse,
+  graphqlPrimaryLimitResetMs,
   MAX_GATE_WAIT_MS,
 } from '../services/githubRateGate.js';
 import { debugBus } from '../services/debugBus.js';
@@ -94,6 +95,36 @@ describe('parseRateLimitResponse', () => {
       NOW,
     );
     expect(r.retryAfterMs).toBe(0);
+  });
+});
+
+describe('graphqlPrimaryLimitResetMs', () => {
+  // The primary GraphQL point-budget error comes on an HTTP 200 body, so the
+  // reset time is read straight off the headers (parseRateLimitResponse only
+  // trusts a failed 403/429). This is what the circuit breaker blocks until.
+  it('returns the x-ratelimit-reset instant when it is in the future', () => {
+    const reset = Math.floor(NOW / 1000) + 600; // 10 min out
+    const until = graphqlPrimaryLimitResetMs(new Headers({ 'x-ratelimit-reset': String(reset) }), NOW);
+    expect(until).toBe(reset * 1000);
+  });
+
+  it('returns 0 when the header is missing (caller falls back to a default backoff)', () => {
+    expect(graphqlPrimaryLimitResetMs(new Headers({}), NOW)).toBe(0);
+  });
+
+  it('returns 0 when the reset is already in the past', () => {
+    const reset = Math.floor(NOW / 1000) - 30;
+    expect(graphqlPrimaryLimitResetMs(new Headers({ 'x-ratelimit-reset': String(reset) }), NOW)).toBe(0);
+  });
+
+  it('returns 0 on an unparseable header', () => {
+    expect(graphqlPrimaryLimitResetMs(new Headers({ 'x-ratelimit-reset': 'nope' }), NOW)).toBe(0);
+  });
+
+  it('clamps a bogus far-future reset to at most ~65min ahead', () => {
+    const reset = Math.floor(NOW / 1000) + 24 * 3600; // a day out (garbage)
+    const until = graphqlPrimaryLimitResetMs(new Headers({ 'x-ratelimit-reset': String(reset) }), NOW);
+    expect(until).toBe(NOW + 65 * 60_000);
   });
 });
 
