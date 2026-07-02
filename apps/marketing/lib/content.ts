@@ -278,6 +278,7 @@ export const footer = {
       links: [
         { label: "FAQ", href: "/#faq" },
         { label: "GitHub", href: "https://github.com/Gilbert09/owl" },
+        { label: "Support", href: `mailto:${site.email}` },
       ],
     },
     {
