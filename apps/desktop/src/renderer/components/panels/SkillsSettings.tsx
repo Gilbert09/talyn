@@ -4,6 +4,8 @@
 
 import React, { useMemo, useState } from 'react';
 import {
+  Check,
+  ChevronDown,
   FolderGit2,
   Laptop,
   Loader2,
@@ -16,7 +18,6 @@ import {
   Wand2,
 } from 'lucide-react';
 import type { PlatformSkill, SkillSummary } from '@talyn/shared';
-import { SKILL_MAX_BYTES } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -27,11 +28,6 @@ import { Card } from '../ui/card';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
-}
 
 interface SkillDraft {
   id?: string;
@@ -201,9 +197,6 @@ export function SkillsSettings() {
                     </div>
                   )}
                 </div>
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {formatBytes(skill.contentSize ?? 0)}
-                </span>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -246,8 +239,9 @@ export function SkillsSettings() {
           Local skills (this machine)
         </h4>
         <p className="text-xs text-muted-foreground mb-3">
-          Read from <code>~/.claude/skills</code>. Local skills run as-is from this machine;
-          save one to Talyn to use it anywhere.
+          Read from <code>~/.claude/skills</code> — ready to run on any PR straight from the
+          picker, nothing to set up. Saving one to Talyn is optional and only makes it
+          available from other machines.
         </p>
         {localSkills.length === 0 ? (
           <p className="text-sm text-muted-foreground">No local skills found.</p>
@@ -258,7 +252,7 @@ export function SkillsSettings() {
               return (
                 <div
                   key={skill.key}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                  className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium truncate">{skill.name}</div>
@@ -268,26 +262,30 @@ export function SkillsSettings() {
                       </div>
                     )}
                   </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatBytes(skill.contentSize ?? 0)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 px-2 text-xs"
-                    disabled={alreadyOnTalyn || importingPath === skill.localPath}
-                    title={
-                      alreadyOnTalyn ? 'A Talyn skill with this name already exists' : undefined
-                    }
-                    onClick={() => void saveLocalToTalyn(skill)}
-                  >
-                    {importingPath === skill.localPath ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <Upload className="w-3 h-3" />
-                    )}
-                    {alreadyOnTalyn ? 'On Talyn' : 'Save to Talyn'}
-                  </Button>
+                  {alreadyOnTalyn ? (
+                    <span
+                      className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+                      title="Also saved to Talyn"
+                    >
+                      <Check className="w-3 h-3" /> On Talyn
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs text-muted-foreground opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                      disabled={importingPath === skill.localPath}
+                      title="Optional — copies this skill to Talyn so it's available from other machines"
+                      onClick={() => void saveLocalToTalyn(skill)}
+                    >
+                      {importingPath === skill.localPath ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Upload className="w-3 h-3" />
+                      )}
+                      Save to Talyn
+                    </Button>
+                  )}
                 </div>
               );
             })}
@@ -303,18 +301,24 @@ export function SkillsSettings() {
             Repo skills
           </h4>
           <div className="flex items-center gap-2">
-            {workspaceRepos.length > 0 && (
-              <select
-                value={repoId ?? ''}
-                onChange={(e) => setSelectedRepoId(e.target.value || null)}
-                className="h-7 rounded-md border bg-background px-2 text-xs"
-              >
-                {workspaceRepos.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.fullName}
-                  </option>
-                ))}
-              </select>
+            {workspaceRepos.length > 1 && (
+              <div className="relative">
+                <select
+                  value={repoId ?? ''}
+                  onChange={(e) => setSelectedRepoId(e.target.value || null)}
+                  className="h-7 max-w-[220px] appearance-none truncate rounded-md border bg-background pl-2 pr-7 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {workspaceRepos.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.fullName}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 opacity-50" />
+              </div>
+            )}
+            {workspaceRepos.length === 1 && (
+              <span className="text-xs text-muted-foreground">{workspaceRepos[0].fullName}</span>
             )}
             <Button
               size="sm"
@@ -384,7 +388,7 @@ export function SkillsSettings() {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">
-                  Content (SKILL.md, max {formatBytes(SKILL_MAX_BYTES)})
+                  Content (SKILL.md)
                 </label>
                 <Textarea
                   value={draft.content}
