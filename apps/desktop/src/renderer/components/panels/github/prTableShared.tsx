@@ -706,7 +706,7 @@ function PRTableRow({
                 onOpenSkillPicker();
               }}
               disabled={taskRunning || busy !== null}
-              className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-violet-500/10 hover:text-violet-600 focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:text-violet-400"
+              className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
               title={
                 taskRunning
                   ? 'A task is already working this PR — open it from the Working badge'
