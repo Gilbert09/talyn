@@ -17,6 +17,7 @@ import { handleGithubWebhook } from './routes/webhooks.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv } from './services/validateEnv.js';
+import { migrateLegacyPlaintextCredentials } from './services/credentialMigration.js';
 import { environments as environmentsTable } from './db/schema.js';
 import { taskQueueService } from './services/taskQueue.js';
 import { githubService } from './services/github.js';
@@ -64,6 +65,13 @@ async function main() {
   // slots in here with no other changes (see docs/CLOUD_PROVIDERS.md).
   registerCloudProvider(postHogCodeProvider);
   registerCloudProvider(claudeCodeProvider);
+
+  // One-time sweep: re-encrypt any legacy plaintext credentials before the
+  // services read them (the plaintext read fallbacks are gone). Per-row
+  // failures are logged inside; a total failure must not block the boot.
+  await migrateLegacyPlaintextCredentials().catch((err) =>
+    console.error('credential migration sweep failed:', err)
+  );
 
   // Initialize services. Each init is idempotent and DB-aware.
   console.log('Initializing services...');

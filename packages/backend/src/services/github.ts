@@ -338,12 +338,12 @@ export interface TokenHealthCheck {
 }
 
 /**
- * Persisted shape. `accessToken` used to be a plaintext string; new
- * rows write an `EncryptedEnvelope` under `accessTokenEnc` instead and
- * leave `accessToken` unset. Legacy rows are migrated to the encrypted
- * shape transparently on next write.
+ * Persisted shape. `accessToken` used to be a plaintext string; rows write an
+ * `EncryptedEnvelope` under `accessTokenEnc` instead. Legacy plaintext rows
+ * are re-encrypted once at boot (services/credentialMigration.ts).
  */
 interface GitHubIntegrationConfig {
+  /** Legacy plaintext field — migrated + nulled at boot, never read/written. */
   accessToken?: string;
   accessTokenEnc?: EncryptedEnvelope;
   tokenType?: string;
@@ -393,9 +393,9 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
       return null;
     }
   }
-  if (typeof config.accessToken === 'string' && config.accessToken.length > 0) {
-    return config.accessToken;
-  }
+  // No plaintext fallback: legacy `config.accessToken` rows are re-encrypted
+  // by the boot sweep (services/credentialMigration.ts), so anything without
+  // an envelope here is genuinely unreadable and needs a reconnect.
   return null;
 }
 

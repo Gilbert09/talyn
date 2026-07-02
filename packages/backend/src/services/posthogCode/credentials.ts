@@ -20,7 +20,8 @@ const DEFAULT_HOST = 'https://us.posthog.com';
  */
 interface PostHogIntegrationConfig {
   apiKeyEnc?: EncryptedEnvelope;
-  /** Legacy plaintext field — read, but never written. */
+  /** Legacy plaintext field — migrated + nulled at boot
+   *  (services/credentialMigration.ts), never read/written. */
   apiKey?: string;
   projectId?: string;
   host?: string;
@@ -41,9 +42,8 @@ function readApiKey(config: PostHogIntegrationConfig): string | null {
       return null;
     }
   }
-  if (typeof config.apiKey === 'string' && config.apiKey.length > 0) {
-    return config.apiKey;
-  }
+  // No plaintext fallback: legacy `config.apiKey` rows are re-encrypted by
+  // the boot sweep (services/credentialMigration.ts).
   return null;
 }
 
