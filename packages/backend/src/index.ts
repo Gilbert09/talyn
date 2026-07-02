@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { setupRoutes } from './routes/index.js';
 import { setupWebSocket } from './services/websocket.js';
 import { initWsBus, shutdownWsBus } from './services/wsBus.js';
@@ -15,7 +15,8 @@ import { webhookWorker } from './services/webhookWorker.js';
 import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
 import { initDatabase } from './db/index.js';
-import { getDbClient, closeDbClient } from './db/client.js';
+import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
+import { assertValidEnv } from './services/validateEnv.js';
 import { environments as environmentsTable } from './db/schema.js';
 import { taskQueueService } from './services/taskQueue.js';
 import { githubService } from './services/github.js';
@@ -48,6 +49,10 @@ process.on('uncaughtException', (err) => {
 
 async function main() {
   console.log('Starting FastOwl backend...');
+
+  // Fail fast on missing/misconfigured env instead of lazy throws on the
+  // first request that needs it. Reports every problem at once.
+  assertValidEnv();
 
   // Initialize database + run migrations. Must complete before services
   // read any state.
@@ -134,17 +139,42 @@ async function main() {
   // the real guard.
   app.use(express.json({ limit: '2mb' }));
 
+  // Flipped by shutdown() so the load balancer stops routing to a draining
+  // replica before its sockets are torn down.
+  let draining = false;
+
   app.get('/health', (_req, res) => {
-    res.json({
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      services: {
-        database: 'connected',
-        taskQueue: 'ready',
-        cloudPoller: 'ready',
-        prMonitor: 'ready',
-      },
-    });
+    void (async () => {
+      if (draining) {
+        res.status(503).json({ status: 'draining', timestamp: new Date().toISOString() });
+        return;
+      }
+      // Real connectivity probe (was a hardcoded 'connected'): a cheap
+      // SELECT 1 on the pool, bounded so a wedged pooler can't hang the
+      // health endpoint past the platform's probe timeout.
+      let database = 'connected';
+      try {
+        await Promise.race([
+          getPoolDbClient().execute(sql`select 1`),
+          new Promise((_resolve, reject) =>
+            setTimeout(() => reject(new Error('health db probe timed out')), 3_000).unref()
+          ),
+        ]);
+      } catch (err) {
+        console.error('health: database probe failed:', err instanceof Error ? err.message : err);
+        database = 'error';
+      }
+      res.status(database === 'connected' ? 200 : 503).json({
+        status: database === 'connected' ? 'ok' : 'degraded',
+        timestamp: new Date().toISOString(),
+        services: {
+          database,
+          taskQueue: 'ready',
+          cloudPoller: 'ready',
+          prMonitor: 'ready',
+        },
+      });
+    })();
   });
 
   setupRoutes(app);
@@ -189,6 +219,8 @@ async function main() {
   });
 
   const shutdown = async () => {
+    if (draining) return; // double SIGTERM/SIGINT — first one is already draining
+    draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
     cloudTaskPoller.shutdown();
     prAutoMergeWatcher.shutdown();
@@ -203,6 +235,23 @@ async function main() {
     await checkCountCoalescer.flushAllNow().catch(() => undefined);
     prReconcileSweep.shutdown();
 
+    // `server.close(cb)` only fires once every connection is gone — and live
+    // WebSocket clients (the desktop app) never hang up on their own, so
+    // without this every deploy sat out the full force-exit timeout below.
+    // Ask clients to close cleanly (1001 = going away), terminate stragglers
+    // shortly after, and drop idle HTTP keep-alive sockets.
+    for (const client of wss.clients) {
+      try {
+        client.close(1001, 'server shutting down');
+      } catch {
+        client.terminate();
+      }
+    }
+    setTimeout(() => {
+      for (const client of wss.clients) client.terminate();
+    }, 2000).unref();
+    server.closeIdleConnections();
+
     server.close(async () => {
       await shutdownWsBus();
       await closeRedis();
@@ -213,6 +262,7 @@ async function main() {
 
     setTimeout(() => {
       console.log('Forcing exit...');
+      server.closeAllConnections();
       process.exit(1);
     }, 10000);
   };

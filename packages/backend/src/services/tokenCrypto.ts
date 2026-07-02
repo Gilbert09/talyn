@@ -41,6 +41,16 @@ function loadKey(): Buffer {
   } catch {
     // fall through
   }
+  // In production the stretch fallback would silently accept a low-entropy
+  // passphrase as the master key for every stored credential. Refuse —
+  // validateEnv catches this at boot, this guard is defense in depth for
+  // any path that reaches crypto without booting through index.ts.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'TALYN_TOKEN_KEY must be >= 32 random bytes base64-encoded in production; ' +
+        'the SHA-256 passphrase fallback is dev-only.'
+    );
+  }
   return createHash('sha256').update(raw, 'utf8').digest();
 }
 
