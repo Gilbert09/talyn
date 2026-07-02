@@ -6,6 +6,8 @@
 export const site = {
   name: "Talyn",
   domain: "talyn.dev",
+  /** Canonical origin — the apex 308-redirects to www at the Vercel level. */
+  url: "https://www.talyn.dev",
   tagline: "Merge more. Babysit less.",
   description:
     "Talyn watches every pull request, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews — so they land without you babysitting them.",

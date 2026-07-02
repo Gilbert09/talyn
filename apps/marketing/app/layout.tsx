@@ -24,12 +24,15 @@ const mono = JetBrains_Mono({
 const title = `${site.name} — Merge more. Babysit less.`;
 
 export const metadata: Metadata = {
-  metadataBase: new URL(`https://${site.domain}`),
+  metadataBase: new URL(site.url),
   title: {
     default: title,
     template: `%s · ${site.name}`,
   },
   description: site.description,
+  alternates: {
+    canonical: "/",
+  },
   keywords: [
     "GitHub PR management",
     "CI fixes",
@@ -42,7 +45,7 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     type: "website",
-    url: `https://${site.domain}`,
+    url: site.url,
     title,
     description: site.description,
     siteName: site.name,
