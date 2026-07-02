@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { and, desc, eq, SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, SQL, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,
@@ -64,7 +64,7 @@ export function taskRoutes(): Router {
   router.get('/', async (req, res) => {
     const user = assertUser(req);
     const db = getDbClient();
-    const { workspaceId, status, type } = req.query;
+    const { workspaceId, status, type, limit, before } = req.query;
 
     if (workspaceId) {
       try {
@@ -76,8 +76,25 @@ export function taskRoutes(): Router {
 
     const conditions: SQL[] = [eq(workspacesTable.ownerId, user.id)];
     if (workspaceId) conditions.push(eq(tasksTable.workspaceId, workspaceId as string));
-    if (status) conditions.push(eq(tasksTable.status, status as string));
+    // `status` accepts a single value or a comma-separated list, so the desktop
+    // can fetch all active statuses (pending,queued,in_progress) in one call and
+    // paginate the finished history (completed,failed,cancelled) in another.
+    if (status) {
+      const statuses = String(status)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length === 1) conditions.push(eq(tasksTable.status, statuses[0]));
+      else if (statuses.length > 1) conditions.push(inArray(tasksTable.status, statuses));
+    }
     if (type) conditions.push(eq(tasksTable.type, type as string));
+
+    // `before` is a createdAt cursor (ISO) — return only rows strictly older, so
+    // "load more" walks back through history without duplicating the boundary.
+    const beforeDate = before ? new Date(String(before)) : null;
+    if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
+      conditions.push(lt(tasksTable.createdAt, beforeDate));
+    }
 
     const priorityCase = sql<number>`CASE ${tasksTable.priority}
       WHEN 'urgent' THEN 1
@@ -86,14 +103,23 @@ export function taskRoutes(): Router {
       ELSE 4
     END`;
 
+    // A limit switches the query into cursor-pagination mode: order purely by
+    // createdAt desc so the `before` cursor is stable (the priority ordering,
+    // useful for the active queue, would make a createdAt cursor skip rows). A
+    // sane cap keeps a bogus ?limit from pulling the whole table.
+    const pageLimit = limit ? Math.min(Math.max(1, Number(limit) || 0), 100) : null;
+
     // Project away the `transcript` blob — the list never returns it, so
     // selecting it just pulled MBs out of Postgres to be discarded.
-    const rows = await db
+    const base = db
       .select(taskColumnsNoTranscript)
       .from(tasksTable)
       .innerJoin(workspacesTable, eq(tasksTable.workspaceId, workspacesTable.id))
-      .where(and(...conditions))
-      .orderBy(priorityCase, desc(tasksTable.createdAt));
+      .where(and(...conditions));
+
+    const rows = pageLimit
+      ? await base.orderBy(desc(tasksTable.createdAt), desc(tasksTable.id)).limit(pageLimit)
+      : await base.orderBy(priorityCase, desc(tasksTable.createdAt));
 
     res.json({
       success: true,

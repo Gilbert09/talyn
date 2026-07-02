@@ -167,11 +167,22 @@ export interface TaskMetadata {
 
 // Tasks
 export const tasks = {
-  list: (params?: { workspaceId?: string; status?: string; type?: string }) => {
+  list: (params?: {
+    workspaceId?: string;
+    // Single status or a comma-separated list (e.g. "completed,failed,cancelled").
+    status?: string;
+    type?: string;
+    // Cursor pagination: at most `limit` rows, ordered createdAt desc, older
+    // than the `before` createdAt (ISO). Used for the finished-task history.
+    limit?: number;
+    before?: string;
+  }) => {
     const query = new URLSearchParams();
     if (params?.workspaceId) query.set('workspaceId', params.workspaceId);
     if (params?.status) query.set('status', params.status);
     if (params?.type) query.set('type', params.type);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.before) query.set('before', params.before);
     const queryStr = query.toString();
     return request<Task[]>('GET', `/tasks${queryStr ? `?${queryStr}` : ''}`);
   },

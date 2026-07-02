@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ListTodo,
   Play,
@@ -22,7 +22,7 @@ import { Badge } from '../ui/badge';
 import { Card } from '../ui/card';
 import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { useTaskActions } from '../../hooks/useApi';
+import { useTaskActions, loadMoreTasks } from '../../hooks/useApi';
 import { api } from '../../lib/api';
 import { TaskTerminal } from './TaskTerminal';
 import { PRStatusPill } from '../widgets/PRStatusPill';
@@ -95,15 +95,39 @@ function formatRelativeTime(iso: string): string {
 
 export function QueuePanel() {
   const { tasks, selectedTaskId, selectTask } = useWorkspaceStore();
+  const tasksHasMore = useWorkspaceStore((s) => s.tasksHasMore);
+  const tasksLoadingMore = useWorkspaceStore((s) => s.tasksLoadingMore);
 
   const queuedTasks = tasks.filter((t) =>
     ['pending', 'queued'].includes(t.status)
   );
   // In-flight: the cloud run is live.
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress');
-  const completedTasks = tasks.filter((t) =>
-    ['completed', 'failed', 'cancelled'].includes(t.status)
-  );
+  // Finished history, newest first — matches the server's cursor order so a
+  // lazily-loaded older page slots in below without reshuffling.
+  const completedTasks = tasks
+    .filter((t) => ['completed', 'failed', 'cancelled'].includes(t.status))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  // Infinite scroll: observe a sentinel at the end of the history list within
+  // the scroll viewport, and pull the next page as it comes into view. Only
+  // mounted while more history exists; loadMoreTasks itself guards against
+  // concurrent/exhausted calls, so a burst of intersection callbacks is safe.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMoreTasks();
+      },
+      { root, rootMargin: '200px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [tasksHasMore, completedTasks.length]);
 
   return (
     <div className="flex h-full">
@@ -113,7 +137,7 @@ export function QueuePanel() {
           <h2 className="text-lg font-semibold">Task Queue</h2>
         </div>
 
-        <ScrollArea className="flex-1">
+        <ScrollArea ref={scrollRef} className="flex-1">
           {tasks.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-center p-4">
               <ListTodo className="w-10 h-10 text-muted-foreground/50 mb-3" />
@@ -184,6 +208,16 @@ export function QueuePanel() {
                       />
                     ))}
                   </div>
+                  {/* Infinite-scroll sentinel — mounted only while more history
+                      remains; sliding it into view pulls the next page. */}
+                  {(tasksHasMore || tasksLoadingMore) && (
+                    <div
+                      ref={sentinelRef}
+                      className="flex items-center justify-center py-3 text-muted-foreground"
+                    >
+                      {tasksLoadingMore && <Loader2 className="w-4 h-4 animate-spin" />}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

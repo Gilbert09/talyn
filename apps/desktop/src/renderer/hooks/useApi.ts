@@ -1,7 +1,13 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { api, wsClient } from '../lib/api';
 import { useOnReconnect } from './useOnReconnect';
-import { useWorkspaceStore } from '../stores/workspace';
+import {
+  useWorkspaceStore,
+  ACTIVE_STATUS_PARAM,
+  HISTORY_STATUS_PARAM,
+  HISTORY_TASK_STATUSES,
+} from '../stores/workspace';
+import type { Task } from '@talyn/shared';
 import type {
   AgentEvent,
   TaskStatusEvent,
@@ -94,20 +100,89 @@ function scheduleTaskEventFlush() {
   taskEventFlushTimer = window.setTimeout(flushTaskEvents, 40);
 }
 
+// How many finished-history tasks to fetch per page (initial load + each
+// infinite-scroll "load more"). Active tasks are always fetched in full.
+export const TASK_HISTORY_PAGE_SIZE = 30;
+
+const HISTORY_STATUS_SET = new Set<string>(HISTORY_TASK_STATUSES);
+
+/**
+ * Load a workspace's task working set: EVERY active task (pending/queued/
+ * in_progress — few and always relevant) plus the first page of finished
+ * history (completed/failed/cancelled, newest first). Returns the combined
+ * list and whether more history exists beyond this page. The two fetches are
+ * independent, so they run in parallel.
+ */
+async function fetchInitialTasks(
+  workspaceId: string,
+): Promise<{ tasks: Task[]; hasMore: boolean }> {
+  const [active, history] = await Promise.all([
+    api.tasks.list({ workspaceId, status: ACTIVE_STATUS_PARAM }),
+    api.tasks.list({
+      workspaceId,
+      status: HISTORY_STATUS_PARAM,
+      limit: TASK_HISTORY_PAGE_SIZE,
+    }),
+  ]);
+  return { tasks: [...active, ...history], hasMore: history.length === TASK_HISTORY_PAGE_SIZE };
+}
+
 /**
  * Refetch the active workspace's task list and reconcile it into the store.
  * WS broadcasts are fire-and-forget to currently-open sockets only, so any
  * status change (e.g. a cloud run auto-finalising) that lands while the app is
  * asleep / disconnected is lost. Run this on reconnect to catch those up.
+ *
+ * Only fetches active tasks + the first history page (not the whole table) —
+ * reconcileTasks keeps already-loaded older history, so pagination survives a
+ * reconnect.
  */
 async function reconcileTasksFromServer(): Promise<void> {
-  const workspaceId = useWorkspaceStore.getState().currentWorkspaceId;
+  const store = useWorkspaceStore.getState();
+  const workspaceId = store.currentWorkspaceId;
   if (!workspaceId) return;
   try {
-    const tasks = await api.tasks.list({ workspaceId });
-    useWorkspaceStore.getState().reconcileTasks(tasks, workspaceId);
+    const { tasks, hasMore } = await fetchInitialTasks(workspaceId);
+    store.reconcileTasks(tasks, workspaceId);
+    // Only relax hasMore→false; if the user had already paged past the first
+    // page, keep their "more available" state rather than resetting it.
+    if (!hasMore) store.setTasksHasMore(false);
   } catch (err) {
     console.error('Failed to reconcile tasks after reconnect:', err);
+  }
+}
+
+/**
+ * Infinite-scroll "load more": fetch the next page of finished history older
+ * than the oldest history task currently loaded, and append it. Guards against
+ * concurrent calls (scroll fires repeatedly) and stops once exhausted.
+ */
+export async function loadMoreTasks(): Promise<void> {
+  const store = useWorkspaceStore.getState();
+  const workspaceId = store.currentWorkspaceId;
+  if (!workspaceId || store.tasksLoadingMore || !store.tasksHasMore) return;
+
+  // Cursor = the oldest loaded history task's createdAt for this workspace.
+  let before: string | undefined;
+  for (const t of store.tasks) {
+    if (t.workspaceId !== workspaceId || !HISTORY_STATUS_SET.has(t.status)) continue;
+    if (before === undefined || t.createdAt < before) before = t.createdAt;
+  }
+
+  store.setTasksLoadingMore(true);
+  try {
+    const older = await api.tasks.list({
+      workspaceId,
+      status: HISTORY_STATUS_PARAM,
+      limit: TASK_HISTORY_PAGE_SIZE,
+      before,
+    });
+    useWorkspaceStore.getState().appendOlderTasks(older);
+    useWorkspaceStore.getState().setTasksHasMore(older.length === TASK_HISTORY_PAGE_SIZE);
+  } catch (err) {
+    console.error('Failed to load more tasks:', err);
+  } finally {
+    useWorkspaceStore.getState().setTasksLoadingMore(false);
   }
 }
 
@@ -273,6 +348,7 @@ export function useInitialDataLoad() {
     setWorkspaces,
     setEnvironments,
     setTasks,
+    setTasksHasMore,
     setRepositories,
     setOnboardingComplete,
   } = useWorkspaceStore();
@@ -335,14 +411,16 @@ export function useInitialDataLoad() {
         setCurrentWorkspace(null);
       }
 
-      // Load workspace-specific data
+      // Load workspace-specific data. Tasks come as active (all) + the first
+      // page of finished history; the queue panel lazy-loads older history.
       if (activeWorkspaceId) {
-        const [tasks, repositories] = await Promise.all([
-          api.tasks.list({ workspaceId: activeWorkspaceId }),
+        const [taskPage, repositories] = await Promise.all([
+          fetchInitialTasks(activeWorkspaceId),
           api.repositories.list(activeWorkspaceId).catch(() => []), // May not exist
         ]);
 
-        setTasks(tasks);
+        setTasks(taskPage.tasks);
+        setTasksHasMore(taskPage.hasMore);
         setRepositories(repositories);
       }
     } catch (err) {
@@ -356,6 +434,7 @@ export function useInitialDataLoad() {
     setWorkspaces,
     setEnvironments,
     setTasks,
+    setTasksHasMore,
     setRepositories,
     setOnboardingComplete,
   ]);

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Workspace, Environment, Task } from '@talyn/shared';
+import type { Workspace, Environment, Task, TaskStatus } from '@talyn/shared';
 import type {
   GitHubStatus,
   GitHubUser,
@@ -7,6 +7,25 @@ import type {
   PostHogCodeStatus,
   CloudProviderInfo,
 } from '../lib/api';
+
+/**
+ * Task status groups. Active tasks are few and always fully loaded; the finished
+ * history is unbounded and paginated. Kept here as the single source of truth so
+ * the store, the initial load, and the queue panel agree on the split. Both are
+ * exported as comma-joined strings for the `?status=` list the API accepts.
+ */
+export const ACTIVE_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set([
+  'pending',
+  'queued',
+  'in_progress',
+]);
+export const HISTORY_TASK_STATUSES: readonly TaskStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+];
+export const ACTIVE_STATUS_PARAM = [...ACTIVE_TASK_STATUSES].join(',');
+export const HISTORY_STATUS_PARAM = HISTORY_TASK_STATUSES.join(',');
 
 /** Settings sub-sections — kept in the store so other surfaces (the sidebar
  *  provider status, the per-task "Set default" action) can deep-link into a
@@ -120,8 +139,14 @@ interface WorkspaceState {
   // Environments
   environments: Environment[];
 
-  // Tasks
+  // Tasks. Active tasks (pending/queued/in_progress) are always fully loaded;
+  // the finished history (completed/failed/cancelled) is paginated — the first
+  // page loads with the workspace and `appendOlderTasks` walks further back.
   tasks: Task[];
+  // Whether more finished-history tasks exist server-side beyond what's loaded.
+  tasksHasMore: boolean;
+  // A "load older history" page fetch is in flight (guards the infinite scroll).
+  tasksLoadingMore: boolean;
 
   // Repositories (watched repos)
   repositories: WatchedRepo[];
@@ -194,6 +219,11 @@ interface WorkspaceState {
   updateTask: (id: string, updates: Partial<Task>) => void;
   addTask: (task: Task) => void;
   removeTask: (id: string) => void;
+  // Append an older page of finished-history tasks (deduped by id) fetched by
+  // the infinite-scroll "load more".
+  appendOlderTasks: (tasks: Task[]) => void;
+  setTasksHasMore: (hasMore: boolean) => void;
+  setTasksLoadingMore: (loading: boolean) => void;
 
   setRepositories: (repos: WatchedRepo[]) => void;
 
@@ -212,6 +242,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   workspaces: [],
   environments: [],
   tasks: [],
+  tasksHasMore: false,
+  tasksLoadingMore: false,
   repositories: [],
   sidebarCollapsed: false,
   activePanel: 'my_prs',
@@ -302,12 +334,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
           transcript: local.transcript ?? fresh.transcript,
         };
       });
-      // Keep local tasks the fetch didn't cover (a different workspace's load);
-      // tasks of *this* workspace absent from the fetch were deleted offline.
+      // Decide what to keep among local tasks the fetch didn't return. The
+      // reconnect fetch only covers all ACTIVE tasks + the first page of
+      // finished history, so "missing" is ambiguous:
+      //   - a different workspace's task → keep (not in scope);
+      //   - a this-workspace ACTIVE task absent from the fetch → it changed
+      //     server-side (finished/deleted) → drop;
+      //   - a this-workspace FINISHED task absent → it's just older history
+      //     paginated out of the first page, NOT deleted → keep.
       for (const local of state.tasks) {
-        if (local.workspaceId !== workspaceId && !incomingIds.has(local.id)) {
-          next.push(local);
-        }
+        if (incomingIds.has(local.id)) continue;
+        const otherWorkspace = local.workspaceId !== workspaceId;
+        const active = ACTIVE_TASK_STATUSES.has(local.status);
+        if (otherWorkspace || !active) next.push(local);
       }
       return {
         tasks: next,
@@ -361,6 +400,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
       selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId,
     })),
+
+  appendOlderTasks: (older) =>
+    set((state) => {
+      const have = new Set(state.tasks.map((t) => t.id));
+      const add = older.filter((t) => !have.has(t.id));
+      return add.length ? { tasks: [...state.tasks, ...add] } : {};
+    }),
+
+  setTasksHasMore: (hasMore) => set({ tasksHasMore: hasMore }),
+  setTasksLoadingMore: (loading) => set({ tasksLoadingMore: loading }),
 
   setRepositories: (repos) => set({ repositories: repos }),
 

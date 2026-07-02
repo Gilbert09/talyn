@@ -98,3 +98,90 @@ describe('GET /tasks — list never returns the transcript', () => {
     expect(body.data.transcript).toEqual(TRANSCRIPT);
   });
 });
+
+/**
+ * Pagination for the desktop task list: a comma-separated `status` filter (so
+ * the client fetches all active statuses in one call), and `limit` + `before`
+ * cursor to lazily page the finished history newest-first.
+ */
+describe('GET /tasks — status filter + cursor pagination', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+  let url: string;
+  let close: () => Promise<void>;
+
+  const day = (n: number) => new Date(`2026-06-${String(n).padStart(2, '0')}T00:00:00Z`);
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seedUser(db, { id: TEST_USER_ID });
+    await db.insert(workspacesTable).values({ id: 'ws1', ownerId: TEST_USER_ID, name: 'mine', settings: {} });
+    const mk = (id: string, status: string, d: number) => ({
+      id,
+      workspaceId: 'ws1',
+      type: 'code_writing',
+      status,
+      priority: 'medium',
+      title: id,
+      description: '',
+      createdAt: day(d),
+    });
+    // 5 finished (days 1–5) + 2 active (days 6–7).
+    await db.insert(tasksTable).values([
+      mk('c1', 'completed', 1),
+      mk('c2', 'completed', 2),
+      mk('c3', 'completed', 3),
+      mk('c4', 'failed', 4),
+      mk('c5', 'cancelled', 5),
+      mk('a1', 'in_progress', 6),
+      mk('a2', 'queued', 7),
+    ]);
+    ({ url, close } = await makeServer());
+  });
+
+  afterEach(async () => {
+    await close();
+    await cleanup();
+  });
+
+  const list = async (qs: string): Promise<Task[]> => {
+    const res = await fetch(`${url}/tasks?${qs}`, { headers });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { data: Task[] }).data;
+  };
+  const HISTORY = 'status=completed,failed,cancelled';
+
+  it('filters by a comma-separated status list', async () => {
+    const active = await list('workspaceId=ws1&status=pending,queued,in_progress');
+    expect(active.map((t) => t.id).sort()).toEqual(['a1', 'a2']);
+  });
+
+  it('returns a createdAt-desc page capped at limit', async () => {
+    const page = await list(`workspaceId=ws1&${HISTORY}&limit=2`);
+    expect(page.map((t) => t.id)).toEqual(['c5', 'c4']); // newest first
+  });
+
+  it('walks older history with the before cursor (strictly older)', async () => {
+    const page2 = await list(
+      `workspaceId=ws1&${HISTORY}&limit=2&before=${encodeURIComponent(day(4).toISOString())}`,
+    );
+    expect(page2.map((t) => t.id)).toEqual(['c3', 'c2']);
+  });
+
+  it('a full page means more may remain; a short/empty page ends the walk', async () => {
+    const first = await list(`workspaceId=ws1&${HISTORY}&limit=5`);
+    expect(first).toHaveLength(5); // exactly the history rows
+    const beyond = await list(
+      `workspaceId=ws1&${HISTORY}&limit=5&before=${encodeURIComponent(day(1).toISOString())}`,
+    );
+    expect(beyond).toHaveLength(0); // nothing older than the oldest
+  });
+
+  it('clamps an oversized limit rather than dumping the table', async () => {
+    // limit is capped at 100 — a bogus huge value still returns at most the rows.
+    const page = await list(`workspaceId=ws1&${HISTORY}&limit=99999`);
+    expect(page).toHaveLength(5);
+  });
+});
