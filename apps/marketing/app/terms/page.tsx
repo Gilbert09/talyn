@@ -10,12 +10,6 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return (
     <LegalPage title="Terms of Service" updated="June 2026">
-      <p className="rounded-xl border border-clay/30 bg-clay/[0.06] px-4 py-3 text-sm text-ink-600">
-        <strong>Template notice:</strong> These terms are a good-faith starting
-        template for a beta product, not legal advice. Have them reviewed by
-        qualified counsel and set your governing law (§13) before relying on them.
-      </p>
-
       <p>
         These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use
         of {site.name} (&ldquo;Talyn&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;),
@@ -119,9 +113,9 @@ export default function TermsPage() {
 
       <h2>13. Governing law</h2>
       <p>
-        These Terms are governed by the laws of the jurisdiction in which
-        Talyn&apos;s operator is established.{" "}
-        <em>(Set your specific governing law and venue before launch.)</em>
+        These Terms are governed by the laws of England and Wales, and any
+        dispute arising out of or in connection with them is subject to the
+        exclusive jurisdiction of the courts of England and Wales.
       </p>
 
       <h2>14. Contact</h2>

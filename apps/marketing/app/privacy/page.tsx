@@ -10,13 +10,6 @@ export const metadata: Metadata = {
 export default function PrivacyPage() {
   return (
     <LegalPage title="Privacy Policy" updated="June 2026">
-      <p className="rounded-xl border border-clay/30 bg-clay/[0.06] px-4 py-3 text-sm text-ink-600">
-        <strong>Template notice:</strong> Talyn is in beta and this policy is a
-        good-faith starting template, not legal advice. Have it reviewed by
-        qualified counsel and confirm it reflects your actual data practices and
-        jurisdiction before relying on it.
-      </p>
-
       <p>
         This Privacy Policy explains what information {site.name}
         (&ldquo;Talyn&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) collects when you
