@@ -30,6 +30,22 @@ import { mergeQueueProcessor } from './services/mergeQueueProcessor.js';
 
 const PORT = process.env.PORT || 4747;
 
+// Crash-class guards. An unhandled rejection (e.g. an un-awaited promise in a
+// poll loop) kills a default Node process — log it and keep serving instead;
+// the loops are all self-rearming so losing one tick is recoverable. An
+// uncaught synchronous exception leaves the process in an undefined state,
+// so per Node guidance we log it and exit (with a short delay so stdio
+// flushes and Railway captures the stack) — Railway restarts the service.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception — exiting:', err);
+  setTimeout(() => process.exit(1), 1000).unref();
+  process.exitCode = 1;
+});
+
 async function main() {
   console.log('Starting FastOwl backend...');
 
