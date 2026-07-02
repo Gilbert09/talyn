@@ -1,7 +1,13 @@
 import posthog from "posthog-js";
 
-/** PostHog is opt-in: inert unless NEXT_PUBLIC_POSTHOG_KEY is set at build. */
-const POSTHOG_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+/**
+ * Publishable (write-only) project key, safe to ship in client code.
+ * NEXT_PUBLIC_POSTHOG_KEY overrides it at build time (e.g. to point a
+ * preview deploy elsewhere, or set it empty to disable capture).
+ */
+const POSTHOG_KEY =
+  process.env.NEXT_PUBLIC_POSTHOG_KEY ??
+  "phc_n7cmPaZ8BZkgnBV9seBGqaJTtcjd9NYbKTUhcLXTohwX";
 const POSTHOG_HOST =
   process.env.NEXT_PUBLIC_POSTHOG_HOST || "https://us.i.posthog.com";
 
