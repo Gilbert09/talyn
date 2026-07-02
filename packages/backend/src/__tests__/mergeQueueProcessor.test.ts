@@ -517,11 +517,56 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toBe('merge conflicts with the base branch');
   });
 
-  it('blocks terminally when GitHub refuses the App outright, and never re-attempts', async () => {
-    // The PostHog/master case: the PR is clean and human-mergeable, but every
-    // token Talyn holds is "the integration" to GitHub and the branch ruleset
-    // refuses it. Without terminal handling the clean path re-attempts the
-    // doomed merge every tick, forever.
+  it('blocks on an App-refused merge over a failing optional check, then self-heals when it goes green', async () => {
+    // The PostHog/posthog#67815 case: the PR is human-mergeable, but the head
+    // has a FAILING optional check — GitHub refuses App tokens (installation
+    // and user-to-server alike) with the integration-403 while a human could
+    // merge straight past it. The queue must stop hammering the doomed merge,
+    // say why, and retry by itself once the check goes green.
+    mergeSpy.mockRejectedValueOnce(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    const failingOptional = {
+      ...cleanSummary(),
+      checks: { total: 5, failed: 1, inProgress: 0 },
+    };
+    const prId = await insertPr(db, { summary: failingOptional });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+      mergeForbidden?: string;
+    };
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe('blocked');
+    expect(state.mergeForbidden).toBe('failing-checks');
+    expect(state.blockReason).toContain('check is failing');
+    expect(await countTasks(db)).toBe(0); // an optional check is not fix-run material
+    expect(blockedSpy).toHaveBeenCalledTimes(1); // human is told once, with the reason
+
+    // Re-tick while the check is still red: no merge attempt, no re-notify.
+    await mergeQueueProcessor.runOnce();
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+
+    // The check gets re-run and passes (webhook refreshes the summary) — the
+    // gate clears itself and the very next tick merges.
+    await db
+      .update(pullRequestsTable)
+      .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+      .where(eq(pullRequestsTable.id, prId));
+    await mergeQueueProcessor.runOnce();
+
+    expect(mergeSpy).toHaveBeenCalledTimes(2);
+    const pr = await getPr(db, prId);
+    expect(pr.state).toBe('merged');
+    expect(pr.mergeQueued).toBe(false);
+  });
+
+  it('stays blocked until requeue when the App is refused with no failing check to blame', async () => {
+    // Unknown-cause refusal (nothing red on the head): retrying every tick
+    // can't help, so the gate is sticky — a human merges or requeues.
     mergeSpy.mockRejectedValue(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
@@ -531,25 +576,18 @@ describe('mergeQueueProcessor', () => {
 
     const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
       blockReason?: string;
-      mergeForbidden?: boolean;
+      mergeForbidden?: string;
     };
     expect(mergeSpy).toHaveBeenCalledTimes(1);
     expect(state.status).toBe('blocked');
-    expect(state.mergeForbidden).toBe(true);
-    expect(state.blockReason).toContain('bypass list');
-    expect(await countTasks(db)).toBe(0); // never funnels into a fix run
-    expect(blockedSpy).toHaveBeenCalledTimes(1); // human is told once, with the reason
-    expect(blockedSpy.mock.calls[0][1]).toMatchObject({
-      reason: expect.stringContaining("doesn't allow the Talyn App to merge"),
-    });
-
-    // Re-ticks: still queued, still clean-looking — but no merge attempt, no
-    // re-notify, no fix run. The turn is given away (terminal until requeue).
-    await mergeQueueProcessor.runOnce();
-    await mergeQueueProcessor.runOnce();
-    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(state.mergeForbidden).toBe('hard');
+    expect(state.blockReason).toContain('Merge manually');
     expect(blockedSpy).toHaveBeenCalledTimes(1);
-    expect(await countTasks(db)).toBe(0);
+
+    await mergeQueueProcessor.runOnce();
+    await mergeQueueProcessor.runOnce();
+    expect(mergeSpy).toHaveBeenCalledTimes(1); // never re-attempted
+    expect(blockedSpy).toHaveBeenCalledTimes(1); // never re-notified
     expect((await getPr(db, prId)).mergeQueued).toBe(true); // stays queued for the badge
   });
 

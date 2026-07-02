@@ -328,18 +328,19 @@ export function isIntegrationForbiddenMessage(message: string): boolean {
 /**
  * GitHub refused the merge for EVERY token Talyn can mint — the installation
  * (bot) token and the user-to-server token are both "the integration" to
- * GitHub, and the target branch's rules don't let this App merge (e.g.
- * PostHog's `master` ruleset only bypasses an allowlist of integrations).
- * Terminal for automation: re-attempting can never succeed until the org adds
- * the App to the ruleset's bypass list or a human merges by hand. Callers
- * (the merge queue) should stop retrying and surface the message.
+ * GitHub. Observed cause (PostHog/posthog#67815 vs #67814, July 2026): a
+ * FAILING check on the head commit — even an "optional, does not block
+ * merge" one a human can merge straight past — makes GitHub refuse App
+ * tokens with this 403, while the same App merges a fully-green PR on the
+ * same protected branch fine. Re-attempting is pointless until the PR's
+ * state changes (check goes green, new head commit) or a human merges;
+ * callers decide retry semantics from the PR state, not by hammering.
  */
 export class MergeNotPermittedForAppError extends Error {
   constructor(owner: string, repo: string, cause: unknown) {
     super(
-      `GitHub doesn't allow the Talyn App to merge to ${owner}/${repo}'s protected branch ` +
-        `(both the bot and your GitHub connection act as the App). Merge it on GitHub, or ` +
-        `ask an org admin to add "Talyn App" to the branch ruleset's bypass list.`
+      `GitHub refused to let the Talyn App merge ${owner}/${repo} ` +
+        `(every token Talyn holds counts as the App — the user-token retry gets the same 403).`
     );
     this.name = 'MergeNotPermittedForAppError';
     this.cause = cause;

@@ -57,13 +57,16 @@ interface MergeQueueState {
   /** Why the PR is blocked, captured at the transition into `blocked`. */
   blockReason?: string;
   /**
-   * GitHub refuses to let the App merge this repo's protected branch
-   * (MergeNotPermittedForAppError) — terminal until the org allows the App
-   * or a human merges. Gates the clean-path merge so the queue doesn't
-   * re-attempt a doomed merge every tick. Cleared by dequeue (QUEUE_RESET),
-   * so requeueing retries fresh after the org-side fix.
+   * GitHub refused the merge for the App's tokens (MergeNotPermittedForAppError).
+   * `'failing-checks'` — the head had a failing check at refusal time (even an
+   * "optional" one humans can merge past, Apps can't); the gate self-clears
+   * and the merge retries once the summary shows no failing checks (rerun
+   * went green, or a new head reset them). `'hard'` — refused with no failing
+   * check to blame; unknown cause, so stay blocked until dequeue/requeue
+   * (QUEUE_RESET) rather than re-attempt a doomed merge every tick.
+   * Legacy `true` (one deploy's worth) is normalized at the gate.
    */
-  mergeForbidden?: boolean;
+  mergeForbidden?: 'failing-checks' | 'hard' | boolean;
 }
 
 // Only the columns this processor touches — avoids `select()`-ing every PR
@@ -511,12 +514,30 @@ class MergeQueueProcessor {
       return 'advance';
     }
 
-    // 4b. GitHub won't let the App merge this branch at all (terminal — the
-    //     PR looks clean, so without this gate the clean path below would
-    //     re-attempt the doomed merge every tick, forever). Stay blocked and
-    //     give the turn away; dequeue/requeue resets the flag.
+    // 4b. GitHub refused the App's tokens on the last merge attempt. The PR
+    //     reads clean to the queue (a failing OPTIONAL check isn't a queue
+    //     blocker), so without this gate the clean path below would re-attempt
+    //     the doomed merge every tick, forever.
     if (state.mergeForbidden) {
-      return 'advance';
+      const checksFailing = (summary?.checks?.failed ?? 0) > 0;
+      // Legacy boolean rows (one deploy's worth) carry no cause — classify
+      // them by the live summary, same as the catch below would have.
+      const kind =
+        state.mergeForbidden === true
+          ? checksFailing
+            ? 'failing-checks'
+            : 'hard'
+          : state.mergeForbidden;
+      if (kind === 'hard' || checksFailing) {
+        return 'advance';
+      }
+      // The failing check that GitHub refused us over has gone green (rerun
+      // passed or a new head reset it) — the refusal condition is gone.
+      // Clear the gate and fall through to the merge for a fresh attempt.
+      state.mergeForbidden = undefined;
+      state.blockReason = undefined;
+      state.status = 'waiting';
+      await this.persist(row, state, position);
     }
 
     // 5. Clean path — mergeable AND up-to-date → merge it.
@@ -571,13 +592,21 @@ class MergeQueueProcessor {
           await this.recordMerged(row);
           return 'hold';
         }
-        // GitHub refuses the App outright on this branch (every token Talyn
-        // holds counts as the integration). No refetch or retry can change
-        // that — block with the actionable reason and give the turn away.
+        // GitHub refused the App's tokens (installation AND user-to-server —
+        // both count as the integration). Observed cause: a failing check on
+        // the head, even an "optional" one a human can merge past. Block with
+        // the actionable reason; the 4b gate retries automatically once the
+        // checks go green, or stays blocked (until requeue) when there's no
+        // failing check to blame.
         if (err instanceof MergeNotPermittedForAppError) {
+          const checksFailing = (summary?.checks?.failed ?? 0) > 0;
           state.status = 'blocked';
-          state.mergeForbidden = true;
-          state.blockReason = err.message;
+          state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
+          state.blockReason = checksFailing
+            ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
+              `commit — even an "optional" one a human can merge past. Re-run or fix the ` +
+              `failing check and the queue will retry automatically, or merge manually on GitHub.`
+            : `${err.message} Merge manually on GitHub, or re-queue the PR to retry.`;
           state.lastError = err.message;
           state.lastErrorAt = new Date().toISOString();
           await this.persist(row, state, position);
