@@ -61,25 +61,24 @@ env vars on the command, so the MCP tools pick them up automatically —
 Claude can just call `talyn_create_task({ prompt: "..." })` with no
 workspace id.
 
-## Analytics (optional)
+## Analytics
 
-The server can emit one PostHog product-analytics event per tool call
-(`mcp_tool_called` — tool name, `ok`, `duration_ms`, and, on failure, a
-truncated `error`) so you can see which tools child Claudes use and how often
-they fail. It's **metadata-only** — tool arguments, prompts, and response
-bodies are never sent — and **off by default**: with no key configured the
-whole path is an inert no-op.
+The server is instrumented with the official [`@posthog/mcp`](https://posthog.com/docs/mcp-analytics)
+SDK: `instrument(server, posthog)` auto-captures the standardized `$mcp_*`
+events (tool calls, tool listings, initialize handshakes, exceptions) that
+PostHog's MCP-analytics product reads. Events go to the Talyn (FastOwl)
+PostHog project by default.
 
-Opt in with env vars (the target project is explicit, not the app's connected
-PostHog):
+Overrides / opt-out:
 
 | Var | Purpose | Default |
 | --- | --- | --- |
-| `TALYN_POSTHOG_KEY` | Project write key (falls back to `POSTHOG_API_KEY`) | — (disabled) |
-| `TALYN_POSTHOG_HOST` | Ingest host (falls back to `POSTHOG_HOST`) | `https://us.i.posthog.com` |
+| `TALYN_ANALYTICS_DISABLED` | Set `1`/`true` to turn analytics off | — (on) |
+| `TALYN_POSTHOG_KEY` | Different project write key (falls back to `POSTHOG_API_KEY`) | Talyn project |
+| `TALYN_POSTHOG_HOST` | Different ingest host (falls back to `POSTHOG_HOST`) | `https://us.i.posthog.com` |
 
 Events are attributed to `TALYN_TASK_ID`, else `TALYN_WORKSPACE_ID`, else
-`mcp-anonymous`, with both ids also sent as properties.
+`mcp-anonymous`, with both ids set as person properties.
 
 ## Dev
 

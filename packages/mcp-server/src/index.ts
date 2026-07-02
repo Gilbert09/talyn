@@ -5,8 +5,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { instrument } from '@posthog/mcp';
 import { TOOLS } from './tools.js';
-import { captureToolCall, shutdownAnalytics } from './analytics.js';
+import { createAnalyticsClient, analyticsIdentity } from './analytics.js';
 
 async function main(): Promise<void> {
   const server = new Server(
@@ -26,16 +27,9 @@ async function main(): Promise<void> {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const startedAt = Date.now();
     const toolName = req.params.name;
     const tool = TOOLS.find((t) => t.name === toolName);
     if (!tool) {
-      captureToolCall({
-        tool: toolName,
-        ok: false,
-        durationMs: Date.now() - startedAt,
-        error: 'unknown tool',
-      });
       return {
         isError: true,
         content: [{ type: 'text', text: `unknown tool: ${toolName}` }],
@@ -45,26 +39,26 @@ async function main(): Promise<void> {
       const text = await tool.handler(
         (req.params.arguments ?? {}) as Record<string, unknown>
       );
-      captureToolCall({ tool: toolName, ok: true, durationMs: Date.now() - startedAt });
       return { content: [{ type: 'text', text }] };
     } catch (err) {
-      const message = (err as Error).message;
-      captureToolCall({
-        tool: toolName,
-        ok: false,
-        durationMs: Date.now() - startedAt,
-        error: message,
-      });
       return {
         isError: true,
-        content: [{ type: 'text', text: message }],
+        content: [{ type: 'text', text: (err as Error).message }],
       };
     }
   });
 
+  // PostHog MCP analytics (`$mcp_*` auto-capture) — instrument() wraps the
+  // EXISTING tools/call handler, so it must run after the handlers above are
+  // registered. No-op when analytics is disabled.
+  const posthog = createAnalyticsClient();
+  if (posthog) {
+    instrument(server, posthog, { identify: analyticsIdentity() });
+  }
+
   // Flush buffered analytics before the process goes away.
   const shutdown = async (): Promise<void> => {
-    await shutdownAnalytics();
+    if (posthog) await posthog.shutdown().catch(() => undefined);
     process.exit(0);
   };
   process.once('SIGINT', shutdown);

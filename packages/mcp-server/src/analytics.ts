@@ -1,104 +1,69 @@
 import { PostHog } from 'posthog-node';
+import type { UserIdentity } from '@posthog/mcp';
 
 /**
- * PostHog product-analytics for the MCP server. We capture ONE event per tool
- * call — `mcp_tool_called` with the tool name, whether it succeeded, and how
- * long it took — so we can see which tools child Claudes actually use and how
- * often they fail.
+ * PostHog MCP analytics for the Talyn MCP server, via the official
+ * `@posthog/mcp` SDK (`instrument(server, posthog)` in index.ts). The SDK
+ * auto-captures the standardized `$mcp_*` events (tool calls, tool listings,
+ * initialize, exceptions) that PostHog's MCP-analytics product reads — the
+ * previous hand-rolled `mcp_tool_called` event never fed those surfaces.
  *
- * Config is env-driven and OPTIONAL: with no key the whole module is an inert
- * no-op, so the MCP server runs identically for anyone who hasn't opted in. The
- * target project is deliberately NOT the app's connected PostHog — set it
- * explicitly:
- *   - TALYN_POSTHOG_KEY   (falls back to POSTHOG_API_KEY) — project write key
- *   - TALYN_POSTHOG_HOST  (falls back to POSTHOG_HOST)    — defaults to US cloud
+ * Events go to the Talyn (FastOwl) PostHog project by default (a project
+ * write key is public by design — same practice as any client SDK snippet).
+ * Overrides / opt-out:
+ *   - TALYN_POSTHOG_KEY  (falls back to POSTHOG_API_KEY)  — different project
+ *   - TALYN_POSTHOG_HOST (falls back to POSTHOG_HOST)     — different host
+ *   - TALYN_ANALYTICS_DISABLED=1                          — turn it off
  *
- * Privacy: metadata only. We never send tool arguments, prompts, or response
- * bodies — the same discipline as the backend's debug bus. Error messages are
- * truncated defensively.
+ * Privacy note: tool ARGUMENTS are captured by the SDK's `$mcp_tool_call`
+ * events; Talyn's tools take ids/prompts the user already sends to Talyn's
+ * own backend, so there is no third-party data leak — but keep this in mind
+ * when adding tools with sensitive inputs.
  */
 
-const MCP_SERVER_NAME = 'talyn';
-const MCP_SERVER_VERSION = '0.1.0';
+// Talyn's "FastOwl" PostHog project (id 459813) — set up via
+// `npx @posthog/wizard mcp-analytics --project-id=459813`.
+const DEFAULT_KEY = 'phc_n7cmPaZ8BZkgnBV9seBGqaJTtcjd9NYbKTUhcLXTohwX';
 const DEFAULT_HOST = 'https://us.i.posthog.com';
-const MAX_ERROR_CHARS = 200;
 
-// `undefined` = not yet resolved; `null` = resolved-but-disabled (no key). This
-// three-state cache means we build the client at most once and, when unset,
-// never re-read the env on every call.
-let client: PostHog | null | undefined;
+function disabled(): boolean {
+  const flag = (process.env.TALYN_ANALYTICS_DISABLED ?? '').trim().toLowerCase();
+  return flag === '1' || flag === 'true';
+}
 
-function resolveClient(): PostHog | null {
-  if (client !== undefined) return client;
-  const key = (process.env.TALYN_POSTHOG_KEY ?? process.env.POSTHOG_API_KEY ?? '').trim();
-  if (!key) {
-    client = null;
-    return client;
-  }
+/**
+ * Build the posthog-node client `instrument()` consumes, or null when
+ * analytics is disabled. Fully defensive — a bad env shape degrades to off,
+ * never takes the MCP server down.
+ */
+export function createAnalyticsClient(): PostHog | null {
+  if (disabled()) return null;
+  const key = (process.env.TALYN_POSTHOG_KEY ?? process.env.POSTHOG_API_KEY ?? DEFAULT_KEY).trim();
+  if (!key) return null;
   const host = (process.env.TALYN_POSTHOG_HOST ?? process.env.POSTHOG_HOST ?? DEFAULT_HOST).trim();
   try {
     // flushAt:1 sends each event promptly — this is a low-volume stdio server,
-    // not a hot request path, and prompt delivery means we don't lose events if
-    // the child process is killed before the shutdown flush runs.
-    client = new PostHog(key, { host, flushAt: 1, flushInterval: 0 });
+    // and prompt delivery means events survive the child process being killed
+    // before the shutdown flush runs.
+    return new PostHog(key, { host, flushAt: 1, flushInterval: 0 });
   } catch {
-    // A bad key/host shape must never take the MCP server down — degrade to off.
-    client = null;
+    return null;
   }
-  return client;
-}
-
-/** The entity a tool call is attributed to — the task, else its workspace. */
-function distinctId(): string {
-  return (
-    process.env.TALYN_TASK_ID ??
-    process.env.TALYN_WORKSPACE_ID ??
-    'mcp-anonymous'
-  );
 }
 
 /**
- * Record one MCP tool invocation. Fire-and-forget and fully defensive: any
- * failure here is swallowed so analytics can never break a tool call.
+ * Who the MCP session belongs to: the task it serves, else its workspace.
+ * Static identity passed to `instrument({ identify })` — every `$mcp_*`
+ * event carries this `distinct_id`.
  */
-export function captureToolCall(input: {
-  tool: string;
-  ok: boolean;
-  durationMs: number;
-  error?: string;
-}): void {
-  try {
-    const ph = resolveClient();
-    if (!ph) return;
-    const workspaceId = process.env.TALYN_WORKSPACE_ID;
-    const taskId = process.env.TALYN_TASK_ID;
-    ph.capture({
-      distinctId: distinctId(),
-      event: 'mcp_tool_called',
-      properties: {
-        tool: input.tool,
-        ok: input.ok,
-        duration_ms: input.durationMs,
-        ...(input.error ? { error: input.error.slice(0, MAX_ERROR_CHARS) } : {}),
-        workspace_id: workspaceId,
-        task_id: taskId,
-        mcp_server: MCP_SERVER_NAME,
-        mcp_server_version: MCP_SERVER_VERSION,
-      },
-    });
-  } catch {
-    // never throw from analytics
-  }
-}
-
-/** Flush and close the client on shutdown so buffered events aren't lost. */
-export async function shutdownAnalytics(): Promise<void> {
-  const ph = client;
-  client = undefined;
-  if (ph) await ph.shutdown().catch(() => undefined);
-}
-
-/** Test helper — drop the cached client so env changes take effect. */
-export function _resetAnalytics(): void {
-  client = undefined;
+export function analyticsIdentity(): UserIdentity {
+  const workspaceId = process.env.TALYN_WORKSPACE_ID;
+  const taskId = process.env.TALYN_TASK_ID;
+  return {
+    distinctId: taskId ?? workspaceId ?? 'mcp-anonymous',
+    properties: {
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      ...(taskId ? { task_id: taskId } : {}),
+    },
+  };
 }

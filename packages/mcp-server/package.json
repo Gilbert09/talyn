@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@posthog/mcp": "^0.7.0",
     "@talyn/shared": "*",
     "posthog-node": "^5.39.2"
   },
