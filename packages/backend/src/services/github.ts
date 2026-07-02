@@ -157,12 +157,37 @@ export interface GitHubContentsEntry {
   /** Present on single-file responses only. */
   content?: string;
   encoding?: string;
+  /** Symlink responses only — the link target, relative to the symlink's dir. */
+  target?: string;
 }
 
 /** Percent-encode a repo path per segment (keeps the `/` separators). */
 function encodeGitHubPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
+
+/**
+ * Resolve a symlink `target` against the symlink's own repo path (e.g.
+ * `.claude/skills` + `../.agents/skills` → `.agents/skills`). Returns null
+ * for absolute targets or ones that escape the repo root.
+ */
+export function resolveRepoRelativePath(symlinkPath: string, target: string): string | null {
+  if (target.startsWith('/')) return null;
+  const parts = symlinkPath.split('/').slice(0, -1); // dirname of the symlink
+  for (const seg of target.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (parts.length === 0) return null; // escapes the repo root
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return parts.length > 0 ? parts.join('/') : null;
+}
+
+/** How many chained symlinks the contents helpers will traverse. */
+const SYMLINK_FOLLOW_DEPTH = 3;
 
 /**
  * apiRequest throws message strings (see describeApiErrorFromText); a 404 is
@@ -1223,14 +1248,18 @@ class GitHubService extends EventEmitter {
   /**
    * List a directory via the contents API. Returns null when the path
    * doesn't exist at that ref (404) — a meaningful state for callers (e.g.
-   * "this repo has no .claude/skills"), not an error.
+   * "this repo has no .claude/skills"), not an error. Directory symlinks are
+   * followed (depth-limited): e.g. posthog/posthog's `.claude/skills` is a
+   * symlink to `.agents/skills`, which the API reports as a single
+   * `type: 'symlink'` object rather than a listing.
    */
   async getDirectoryListing(
     workspaceId: string,
     owner: string,
     repo: string,
     path: string,
-    ref?: string
+    ref?: string,
+    followDepth: number = SYMLINK_FOLLOW_DEPTH
   ): Promise<GitHubContentsEntry[] | null> {
     const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : '';
     try {
@@ -1238,8 +1267,15 @@ class GitHubService extends EventEmitter {
         workspaceId,
         `/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}${refQuery}`
       );
-      // A file path returns a single object; callers asked for a directory.
-      return Array.isArray(entries) ? entries : null;
+      if (Array.isArray(entries)) return entries;
+      if (entries.type === 'symlink' && entries.target && followDepth > 0) {
+        const resolved = resolveRepoRelativePath(entries.path ?? path, entries.target);
+        if (resolved) {
+          return this.getDirectoryListing(workspaceId, owner, repo, resolved, ref, followDepth - 1);
+        }
+      }
+      // A plain file path — callers asked for a directory.
+      return null;
     } catch (err) {
       if (isGitHubNotFound(err)) return null;
       throw err;
@@ -1248,9 +1284,9 @@ class GitHubService extends EventEmitter {
 
   /**
    * Fetch a single file's text via the contents API. Returns null on 404.
-   * `maxBytes` guards decode/transfer of oversized files: over it, the
-   * entry's size is returned with `content: null` so the caller can still
-   * surface the file's existence.
+   * File symlinks are followed (depth-limited). `maxBytes` guards decode/
+   * transfer of oversized files: over it, the entry's size is returned with
+   * `content: null` so the caller can still surface the file's existence.
    */
   async getFileContent(
     workspaceId: string,
@@ -1258,7 +1294,8 @@ class GitHubService extends EventEmitter {
     repo: string,
     path: string,
     ref: string | undefined,
-    maxBytes: number
+    maxBytes: number,
+    followDepth: number = SYMLINK_FOLLOW_DEPTH
   ): Promise<{ content: string | null; size: number } | null> {
     const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : '';
     let entry: GitHubContentsEntry;
@@ -1272,6 +1309,12 @@ class GitHubService extends EventEmitter {
     } catch (err) {
       if (isGitHubNotFound(err)) return null;
       throw err;
+    }
+    if (entry.type === 'symlink' && entry.target && followDepth > 0) {
+      const resolved = resolveRepoRelativePath(entry.path ?? path, entry.target);
+      if (resolved) {
+        return this.getFileContent(workspaceId, owner, repo, resolved, ref, maxBytes, followDepth - 1);
+      }
     }
     const size = entry.size ?? 0;
     if (size > maxBytes) return { content: null, size };

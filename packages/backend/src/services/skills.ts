@@ -96,7 +96,9 @@ async function fetchRepoSkills(
   );
   if (listing === null) return { status: 'none', skills: [] };
 
-  const dirs = listing.filter((e) => e.type === 'dir');
+  // Symlinked entries can be skill dirs too (getDirectoryListing follows
+  // them; if one turns out to be a file, its listing is null and it's skipped).
+  const dirs = listing.filter((e) => e.type === 'dir' || e.type === 'symlink');
   const skills = await Promise.all(
     dirs.map(async (dir): Promise<RepoSkill | null> => {
       const dirListing = await githubService.getDirectoryListing(
