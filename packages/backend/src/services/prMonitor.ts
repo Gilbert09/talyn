@@ -31,6 +31,32 @@ interface WatchedRepo {
   defaultBranch: string;
 }
 
+/** The minimal tracked-open row shape the close-out paths carry (no lastSummary blob). */
+interface TrackedOpenRow {
+  id: string;
+  taskId: string | null;
+  owner: string;
+  repo: string;
+  number: number;
+  mergeQueued: boolean;
+}
+
+/**
+ * Tick-scoped cache for `sweepClosedViaRest`, shared across every workspace in
+ * one reconcile-sweep tick: N workspaces watching the same repo reuse ONE
+ * open-list fetch and ONE per-PR lookup (promises, so concurrent callers
+ * coalesce too). Create a fresh one per tick — a stale open list must not
+ * outlive the tick that fetched it.
+ */
+export interface RestSweepCache {
+  openLists: Map<string, Promise<Set<number> | null>>;
+  prLookups: Map<string, Promise<{ state: 'open' | 'closed'; mergedAt: string | null } | null>>;
+}
+
+export function createRestSweepCache(): RestSweepCache {
+  return { openLists: new Map(), prLookups: new Map() };
+}
+
 // GitHub computes `mergeable` lazily: the first query kicks off a
 // background job and returns UNKNOWN, and every base-branch push resets it
 // to UNKNOWN until recomputed. On a busy repo a single poll usually lands
@@ -572,24 +598,7 @@ class PRMonitorService extends EventEmitter {
     repo: WatchedRepo,
     seenNumbers: number[]
   ): Promise<void> {
-    const rows = await this.db
-      .select({
-        number: pullRequestsTable.number,
-        id: pullRequestsTable.id,
-        taskId: pullRequestsTable.taskId,
-        owner: pullRequestsTable.owner,
-        repo: pullRequestsTable.repo,
-        lastSummary: pullRequestsTable.lastSummary,
-        mergeQueued: pullRequestsTable.mergeQueued,
-      })
-      .from(pullRequestsTable)
-      .where(
-        and(
-          eq(pullRequestsTable.workspaceId, workspaceId),
-          eq(pullRequestsTable.repositoryId, repo.id),
-          eq(pullRequestsTable.state, 'open')
-        )
-      );
+    const rows = await this.getTrackedOpenRows(workspaceId, repo.id);
     const seen = new Set(seenNumbers);
     const stale = rows.filter((r) => !seen.has(r.number));
     if (stale.length === 0) return;
@@ -629,40 +638,150 @@ class PRMonitorService extends EventEmitter {
       // `pr == null` here is a number GitHub returned no node for while others
       // resolved — treat it as closed so a vanished PR doesn't re-poll forever.
       const merged = Boolean(pr && (pr.mergedAt || pr.state === 'merged'));
-      const nextState: 'merged' | 'closed' = merged ? 'merged' : 'closed';
       const mergedAt: Date | null = merged
         ? pr?.mergedAt
           ? new Date(pr.mergedAt)
           : new Date()
         : null;
-      // A PR that left `open` can't be merged by the queue — clear its queue
-      // bookkeeping in the same write. Leaving the flags set once stalled the
-      // whole (repo, base) group: the merged head kept its "#1" slot while
-      // being invisible to the processor's open-only select.
-      await this.db
-        .update(pullRequestsTable)
-        .set({ state: nextState, mergedAt, updatedAt: new Date(), ...QUEUE_RESET_COLUMNS })
-        .where(eq(pullRequestsTable.id, row.id));
+      await this.closeTrackedRow(workspaceId, repo.id, row, merged ? 'merged' : 'closed', mergedAt);
       if (row.mergeQueued) sweptQueued = true;
-      // Tell the desktop the PR left "open" (merged/closed upstream, incl.
-      // auto-merge) so the open-only GitHub list drops the row live, instead
-      // of waiting for the user to open or refresh it.
-      emitPullRequestUpdated(workspaceId, {
-        id: row.id,
-        taskId: row.taskId,
-        repositoryId: repo.id,
-        owner: row.owner,
-        repo: row.repo,
-        number: row.number,
-        state: nextState,
-        lastSummary: (row.lastSummary as Record<string, unknown> | null) ?? {},
-        mergeQueued: false,
-        mergeQueueState: null,
-      });
     }
     // A queued PR left the group — reshuffle the survivors' "#N" badges now
     // rather than waiting for the next processor action or a manual refresh.
     if (sweptQueued) await broadcastMergeQueuePositions(workspaceId);
+  }
+
+  /**
+   * REST-only closed-PR reconcile for one workspace — the sweep's cheap
+   * fallback when the account's GraphQL budget is in reserve and the full
+   * (GraphQL) re-poll is deferred. Without it, a merged/closed PR whose
+   * webhook delivery was dropped stays "open" in the UI until a manual
+   * refresh (June 2026: an ~8-min GitHub delivery outage during a
+   * budget-reserve window left merged PRs stuck on the open list).
+   *
+   * Diffs the tracked-open rows against the repo's REST open-PR list, then
+   * confirms each candidate with a direct per-PR REST fetch before closing —
+   * the list is a cheap prefilter, the direct fetch is authoritative (it also
+   * guards against pagination races and gives merged-vs-closed via
+   * `merged_at`). A failed list or lookup skips the repo/row; we never close
+   * on missing data. Spends core REST budget only, zero GraphQL points.
+   *
+   * `cache` is shared across one sweep tick so the N workspaces watching the
+   * same repo make ONE list call and ONE lookup per closed PR (the same
+   * dedup principle as refreshPrAcrossWorkspaces). Returns rows closed.
+   */
+  async sweepClosedViaRest(workspaceId: string, cache: RestSweepCache): Promise<number> {
+    const repos = await this.getWatchedRepos(workspaceId);
+    let closedCount = 0;
+    for (const repo of repos) {
+      const rows = await this.getTrackedOpenRows(workspaceId, repo.id);
+      if (rows.length === 0) continue;
+      const repoKey = repo.fullName.toLowerCase();
+      let listPromise = cache.openLists.get(repoKey);
+      if (!listPromise) {
+        listPromise = githubService
+          .listOpenPullRequestNumbers(workspaceId, repo.owner, repo.repo)
+          .then((nums) => new Set(nums))
+          .catch(() => null);
+        cache.openLists.set(repoKey, listPromise);
+      }
+      const openSet = await listPromise;
+      if (!openSet) continue;
+      let sweptQueued = false;
+      for (const row of rows) {
+        if (openSet.has(row.number)) continue;
+        const prKey = `${repoKey}#${row.number}`;
+        let lookup = cache.prLookups.get(prKey);
+        if (!lookup) {
+          lookup = githubService
+            .getPullRequest(workspaceId, repo.owner, repo.repo, row.number)
+            .then((pr) => ({ state: pr.state, mergedAt: pr.merged_at ?? null }))
+            .catch(() => null);
+          cache.prLookups.set(prKey, lookup);
+        }
+        const pr = await lookup;
+        if (!pr || pr.state === 'open') continue;
+        const mergedAt = pr.mergedAt ? new Date(pr.mergedAt) : null;
+        await this.closeTrackedRow(
+          workspaceId,
+          repo.id,
+          row,
+          mergedAt ? 'merged' : 'closed',
+          mergedAt
+        );
+        if (row.mergeQueued) sweptQueued = true;
+        closedCount++;
+      }
+      if (sweptQueued) await broadcastMergeQueuePositions(workspaceId);
+    }
+    return closedCount;
+  }
+
+  /**
+   * Tracked-open rows for a repo, in the minimal shape the close-out paths
+   * need. `lastSummary` is deliberately NOT selected — most ticks close zero
+   * rows, so shipping the ~2KB jsonb for every open row was pure egress waste;
+   * closeTrackedRow re-fetches it for the rare row that actually closes.
+   */
+  private async getTrackedOpenRows(
+    workspaceId: string,
+    repositoryId: string
+  ): Promise<TrackedOpenRow[]> {
+    return this.db
+      .select({
+        number: pullRequestsTable.number,
+        id: pullRequestsTable.id,
+        taskId: pullRequestsTable.taskId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        mergeQueued: pullRequestsTable.mergeQueued,
+      })
+      .from(pullRequestsTable)
+      .where(
+        and(
+          eq(pullRequestsTable.workspaceId, workspaceId),
+          eq(pullRequestsTable.repositoryId, repositoryId),
+          eq(pullRequestsTable.state, 'open')
+        )
+      );
+  }
+
+  /**
+   * Mark one tracked row merged/closed and tell the desktop, clearing the
+   * merge-queue bookkeeping in the same write — a PR that left `open` can't
+   * be merged by the queue, and leaving the flags set once stalled the whole
+   * (repo, base) group: the merged head kept its "#1" slot while being
+   * invisible to the processor's open-only select. The broadcast lets the
+   * open-only GitHub list drop the row live instead of waiting for a refresh.
+   */
+  private async closeTrackedRow(
+    workspaceId: string,
+    repositoryId: string,
+    row: TrackedOpenRow,
+    nextState: 'merged' | 'closed',
+    mergedAt: Date | null
+  ): Promise<void> {
+    const prev = await this.db
+      .select({ lastSummary: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, row.id))
+      .limit(1);
+    await this.db
+      .update(pullRequestsTable)
+      .set({ state: nextState, mergedAt, updatedAt: new Date(), ...QUEUE_RESET_COLUMNS })
+      .where(eq(pullRequestsTable.id, row.id));
+    emitPullRequestUpdated(workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: nextState,
+      lastSummary: (prev[0]?.lastSummary as Record<string, unknown> | null) ?? {},
+      mergeQueued: false,
+      mergeQueueState: null,
+    });
   }
 
   /**

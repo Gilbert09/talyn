@@ -1418,6 +1418,24 @@ class GitHubService extends EventEmitter {
     );
   }
 
+  /**
+   * Every open PR number in a repo, via the paginated REST list. GraphQL-free
+   * on purpose: the reconcile sweep's cheap closed-PR pass runs exactly when
+   * the account's GraphQL point budget is in reserve, so it must spend core
+   * REST budget only (a separate, much larger bucket).
+   */
+  async listOpenPullRequestNumbers(
+    workspaceId: string,
+    owner: string,
+    repo: string
+  ): Promise<number[]> {
+    const prs = await this.paginate<GitHubPullRequest>(
+      workspaceId,
+      (page) => `/repos/${owner}/${repo}/pulls?state=open&per_page=100&page=${page}`
+    );
+    return prs.map((p) => p.number);
+  }
+
   async getPullRequest(
     workspaceId: string,
     owner: string,

@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 63 — Webhook-outage postmortem + REST-only close-out backstop
+
+**Incident (July 2, ~08:50–08:58 UTC):** a merged PR (PostHog/posthog#67377) stayed "open" in the UI until a manual refresh. Root cause was NOT the fan-out dedup shipped the day before: Railway logs show a **total inbound-webhook gap** — received-webhook counts per 2-min window went ~1,100 → 327 → 0 ×4 → ~1,050 — while the backend stayed healthy (pollers, SSE, outbound all fine). Nine posthog PRs merged in the gap; none of their `pull_request/closed` deliveries ever arrived (GitHub doesn't auto-redeliver). The safety net (reconcile sweep) didn't catch it because the tick can be **deferred wholesale** when the account's GraphQL budget is in reserve — and the window had rate-limit pressure (inst 140693949's REST search budget exhausted at the same minute).
+
+**Landed — REST-only close-out for deferred sweeps:**
+- `prMonitor.sweepClosedViaRest(workspaceId, cache)` — diffs tracked-open rows against the repo's REST open-PR list (`githubService.listOpenPullRequestNumbers`, paginated `/pulls?state=open`), then confirms each candidate with a direct per-PR REST fetch before closing (authoritative state + `merged_at`; guards list-pagination races). Never closes on missing data (failed list/lookup → skip, retry next tick). Spends core REST budget only — zero GraphQL points, which is the whole point: it runs exactly when the GraphQL budget is in reserve.
+- `prReconcileSweep` deferred branch now runs it instead of skipping outright; a tick-scoped `RestSweepCache` dedupes across workspaces (N workspaces watching one repo → ONE list call, ONE lookup per closed PR — same principle as `refreshPrAcrossWorkspaces`).
+- Extracted `closeTrackedRow` (shared by `sweepClosed` + the REST pass): state/mergedAt/queue-reset write + `pull_request:updated` emit. Egress win while there: the bulk tracked-open select no longer ships `lastSummary` (~2KB × every open row × every sweep); the blob is fetched per actually-closed row (usually 0).
+- Debug: deferred-event + pollerTick summaries report REST close-out counts; the REST calls ride the existing `apiRequest` recordHttp funnel.
+- Tests: `prMonitorRestSweep.test.ts` (8) — merged/closed writes + broadcast, queue reset, never-close-on-failure (list fail, lookup fail, lookup-says-open), cross-workspace cache dedup, no-op fast paths.
+
+**Known limitation:** a *hard* rate gate (`githubRateGate` engaged by an actual RATE_LIMITED response) blocks REST too via `apiRequest`, so the pass covers the budget-*reserve* deferral (the chronic state), not a hard gate. Also shipped: task-history pagination (`e9c944b`, separate commit — active statuses fetched in full, finished history cursor-paginated 30/page with infinite scroll).
+
 ## Session 62 — GitHub App + webhooks (replace polling) + Redis cross-replica backbone
 
 Began the migration from GitHub-API polling to **GitHub-App webhooks**, with **Redis** as the cross-replica backbone. Built additively so the whole suite stays green and nothing is observable until the App + `REDIS_URL` are configured; the destructive parts (removing OAuth-only paths, deleting the now-redundant pollers) are explicit follow-ups gated on the live App. Plan: `~/.claude/plans/could-you-spec-out-harmonic-cookie.md`.

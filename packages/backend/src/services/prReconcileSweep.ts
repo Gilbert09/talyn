@@ -1,5 +1,5 @@
 import { githubService } from './github.js';
-import { prMonitorService } from './prMonitor.js';
+import { prMonitorService, createRestSweepCache } from './prMonitor.js';
 import { debugBus } from './debugBus.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { TickGuard } from './tickGuard.js';
@@ -49,9 +49,13 @@ class PrReconcileSweep {
     const startedAt = Date.now();
     let count = 0;
     let deferred = 0;
+    let restClosed = 0;
     try {
       const workspaces = githubService.getConnectedWorkspaces();
       count = workspaces.length;
+      // Shared across every deferred workspace this tick, so N workspaces
+      // watching the same repo make ONE REST open-list call between them.
+      const restCache = createRestSweepCache();
       for (const workspaceId of workspaces) {
         // The sweep is the heaviest, least time-sensitive GraphQL consumer (it
         // re-polls everything). When this account's points budget has fallen
@@ -61,6 +65,20 @@ class PrReconcileSweep {
         // being the thing that tips an account into a hard RATE_LIMIT error.
         if (graphqlBudget.shouldDefer(githubService.accountKeyFor(workspaceId))) {
           deferred++;
+          // Deferral must not mean "no safety net at all": a merged/closed PR
+          // whose webhook was dropped would stay on the open list until a
+          // manual refresh (this is how an ~8-min GitHub delivery outage in a
+          // budget-reserve window played out). Run the REST-only close-out —
+          // core REST budget, zero GraphQL points — so those rows still clear.
+          try {
+            restClosed += await prMonitorService.sweepClosedViaRest(workspaceId, restCache);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'unknown error';
+            console.error(
+              `[reconcileSweep] REST close-out for ${workspaceId.slice(0, 8)} failed:`,
+              msg
+            );
+          }
           continue;
         }
         try {
@@ -74,7 +92,9 @@ class PrReconcileSweep {
         debugBus.recordEvent({
           service: 'pr_reconcile_sweep',
           action: 'deferred',
-          summary: `deferred ${deferred} workspace${deferred === 1 ? '' : 's'} — GraphQL budget in reserve`,
+          summary:
+            `deferred ${deferred} workspace${deferred === 1 ? '' : 's'} — GraphQL budget in reserve` +
+            (restClosed > 0 ? `; REST close-out swept ${restClosed} row(s)` : ''),
         });
       }
       // TTL safety net for the incremental check-count table — drops any per-check
@@ -90,7 +110,8 @@ class PrReconcileSweep {
         ok: true,
         summary:
           `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}` +
-          (deferred > 0 ? ` (${deferred} deferred: low GraphQL budget)` : ''),
+          (deferred > 0 ? ` (${deferred} deferred: low GraphQL budget)` : '') +
+          (restClosed > 0 ? ` (REST close-out: ${restClosed} row(s))` : ''),
       });
     }
   }
