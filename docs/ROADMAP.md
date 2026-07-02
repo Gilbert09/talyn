@@ -40,13 +40,15 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ## Known Gaps (tracked but not yet phased)
 
-- **Multi-instance safety (advisory locks)**: the task dispatchers (`mergeQueueProcessor`, `prAutoMergeWatcher`) are read-check-dispatch with only an in-process tick guard — two backends on the same DB double-fire cloud fix tasks (observed June 2026 running local + Railway against one Supabase DB; the dispatch HTTP call makes the race window seconds wide, and the loser's task id is overwritten on persist, orphaning it from the active-run guard). Fix before running multiple replicas: `pg_try_advisory_xact_lock(hashtext('merge-queue:' || pr.id))` around `processHead` (and equivalent in the watcher), skipping silently when another instance holds the lock.
-- **API rate limiting on the hosted backend**: the Railway deployment has no per-user/IP throttle in front of the REST surface.
-- **Backend-down UX**: no graceful offline indicator beyond the WebSocket auto-reconnect loop when the hosted backend is unreachable.
 - **Desktop testing**: ~3 trivial renderer test files vs 240+ backend tests. Full plan in `docs/TESTING.md` (Phases D/E: component/hook tests + Playwright E2E).
-- **MacOS notarization**: `afterSign: .erb/scripts/notarize.js` is wired up but untested in the fastowl repo specifically.
+- **Launch decisions (Session 65 audit)**: access model (allowlist vs invites — no invite flow exists); public `Gilbert09/owl` repo exposure via the marketing GitHub links; stable vs prerelease update channel (nightlies are arm64-only — an Intel install can hit updater errors when the newest release is a nightly); error-tracking/uptime alerting (process handlers log, nothing pages); `docs/SETUP.md` rewrite (predates the cloud-only refactor).
+- **Scale-out follow-ups (pre ~50 workspaces)**: the reconcile sweep iterates workspaces serially and outgrows its 5-min interval; no cross-workspace GraphQL dedupe for shared-org installations (Search budget saturation); no task/transcript retention sweep; `requireAuth` does an uncached Supabase round-trip per request.
 
 **Resolved:**
+- ~~Multi-instance safety (advisory locks)~~ — Session 65: xact-scoped `pg_try_advisory_xact_lock` guards (`services/advisoryLock.ts`) on all five side-effectful loops + a blocking lock on the drizzle migrator; xact-scoped because session locks break through Supabase's transaction pooler.
+- ~~API rate limiting on the hosted backend~~ — Session 65: `trust proxy` + per-IP limits on `/mcp` (300/min) and the authenticated API surface (1000/min, ~10x the densest legit desktop poll).
+- ~~Backend-down UX~~ — Session 65: the desktop's backend-unreachable screen auto-retries with capped backoff + manual retry, and transitions in on recovery.
+- ~~MacOS notarization~~ — verified working (Session 65 audit): shipped Talyn.app checks out as Developer ID-signed, hardened-runtime, `spctl` notarized/accepted.
 - ~~Credential encryption at rest~~ — integration tokens are AES-GCM envelopes via `services/tokenCrypto.ts` (`TALYN_TOKEN_KEY`); used by GitHub + PostHog Code credentials.
 - ~~Backend bundling for release~~ / ~~Release packaging~~ — the backend is hosted (Railway, Phase 18.4); the desktop artifact doesn't need to ship it.
 - ~~Multi-step agent state recovery~~ — no local agents to recover; cloud providers own run durability, the poller reconciles status.
