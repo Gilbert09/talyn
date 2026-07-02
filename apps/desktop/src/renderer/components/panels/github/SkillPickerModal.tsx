@@ -204,7 +204,7 @@ export function SkillPickerModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md p-4" onClose={onClose}>
+      <DialogContent className="max-w-xl p-4" onClose={onClose}>
         <DialogHeader className="mb-2">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Wand2 className="h-4 w-4 text-violet-500" />
@@ -279,7 +279,7 @@ export function SkillPickerModal({
               </div>
             )}
 
-            <div className="max-h-72 overflow-y-auto">
+            <div className="max-h-[26rem] overflow-y-auto">
               {loading && navOrder.length === 0 ? (
                 <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading skills…

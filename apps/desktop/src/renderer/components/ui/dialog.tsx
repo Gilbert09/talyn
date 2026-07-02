@@ -39,7 +39,10 @@ export function DialogContent({
   return (
     <div
       className={cn(
-        'bg-background border rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-auto',
+        // `relative` anchors the absolute close button below INSIDE the card —
+        // without it the X positions against the full-width dialog wrapper and
+        // floats at the viewport edge.
+        'relative bg-background border rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-auto',
         className
       )}
       {...props}
