@@ -260,6 +260,13 @@ export const faq = [
   },
 ];
 
+export const finalCta = {
+  titleLead: "Stop babysitting CI.",
+  titleAccent: "Let the talons out.",
+  sub: "In public beta. Bring your own agent. Clear your PR backlog tonight.",
+  cta: "Download for Mac",
+};
+
 export const footer = {
   blurb: "Mission control for your GitHub PRs, powered by cloud coding agents.",
   madeBy: "Made by night owls who were tired of babysitting CI.",

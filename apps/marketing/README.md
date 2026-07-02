@@ -56,7 +56,7 @@ The hero and feature visuals render **in-browser mockups** of the real app (`com
 <ScreenshotPlaceholder shot="dashboard" src="/screenshots/dashboard.png" />
 ```
 
-Shot ids: `dashboard`, `task-running`, `merge-queue`, `pr-detail`, `onboarding`.
+Shot ids: `dashboard`, `task-running`, `merge-queue`, `skill-picker`, `pr-detail`, `onboarding`.
 
 ### 3. Email capture — `components/sections/Beta.tsx`
 

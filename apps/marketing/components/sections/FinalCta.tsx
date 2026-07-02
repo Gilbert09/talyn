@@ -1,6 +1,7 @@
 import { Reveal } from "@/components/ui/Reveal";
 import { DownloadButton } from "@/components/ui/DownloadButton";
 import { OwlMark } from "@/components/brand/Logo";
+import { finalCta } from "@/lib/content";
 
 export function FinalCta() {
   return (
@@ -13,15 +14,13 @@ export function FinalCta() {
         <Reveal>
           <OwlMark className="mx-auto h-12 w-12 animate-blink text-clay" />
           <h2 className="mx-auto mt-6 max-w-2xl font-display text-4xl font-semibold leading-tight tracking-tight text-ink sm:text-5xl">
-            Stop babysitting CI.
+            {finalCta.titleLead}
             <br />
-            <span className="text-clay">Let the talons out.</span>
+            <span className="text-clay">{finalCta.titleAccent}</span>
           </h2>
-          <p className="mx-auto mt-5 max-w-md text-ink-500">
-            In public beta. Bring your own agent. Clear your PR backlog tonight.
-          </p>
+          <p className="mx-auto mt-5 max-w-md text-ink-500">{finalCta.sub}</p>
           <div className="mt-8 flex justify-center">
-            <DownloadButton size="lg">Download for Mac</DownloadButton>
+            <DownloadButton size="lg">{finalCta.cta}</DownloadButton>
           </div>
         </Reveal>
       </div>
