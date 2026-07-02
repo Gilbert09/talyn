@@ -23,6 +23,23 @@ import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * Only ever hand http(s) URLs to the OS. Renderer-supplied input (IPC,
+ * window.open, link clicks) could otherwise smuggle file:, javascript: or
+ * arbitrary app-scheme payloads into shell.openExternal. Anything else is
+ * silently ignored.
+ */
+function openExternalGuarded(url: string): void {
+  try {
+    const { protocol } = new URL(url);
+    if (protocol === 'https:' || protocol === 'http:') {
+      void shell.openExternal(url);
+    }
+  } catch {
+    // Not a parseable URL — drop it.
+  }
+}
 // Buffer callbacks that arrive before the renderer is ready — macOS
 // open-url can fire during app launch, before any window exists.
 let pendingAuthCallbackUrl: string | null = null;
@@ -105,9 +122,10 @@ if (!gotLock) {
   });
 }
 
-// Renderer asks us to open OAuth URLs in the default browser.
+// Renderer asks us to open OAuth URLs in the default browser. The URL is
+// renderer-supplied, so it goes through the http(s)-only guard.
 ipcMain.handle('auth:open-external', async (_event, url: string) => {
-  await shell.openExternal(url);
+  openExternalGuarded(url);
 });
 
 // The deep-link redirect URL the renderer should hand to Supabase's OAuth
@@ -324,11 +342,27 @@ const createWindow = async () => {
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
 
-  // Open urls in the user's browser
+  // Open urls in the user's browser (http/https only — see the guard).
   mainWindow.webContents.setWindowOpenHandler((edata) => {
-    shell.openExternal(edata.url);
+    openExternalGuarded(edata.url);
     return { action: 'deny' };
   });
+
+  // The window must never navigate away from the app's own index — a
+  // compromised or misbehaving renderer following an <a href> (or a
+  // redirect) would otherwise load remote content with our preload bridge
+  // attached. Block everything else; http(s) targets open in the browser.
+  const appIndexUrl = resolveHtmlPath('index.html');
+  const guardNavigation = (
+    event: { preventDefault: () => void },
+    url: string
+  ) => {
+    if (url.split('#')[0] === appIndexUrl) return;
+    event.preventDefault();
+    openExternalGuarded(url);
+  };
+  mainWindow.webContents.on('will-navigate', guardNavigation);
+  mainWindow.webContents.on('will-redirect', guardNavigation);
 };
 
 /**
