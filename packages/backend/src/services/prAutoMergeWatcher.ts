@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { prNeedsFollowup, buildMergeablePrompt, type PRMergeableSummary } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
+import { guardCrossReplica } from './advisoryLock.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { githubService } from './github.js';
@@ -112,30 +113,36 @@ class PRAutoMergeWatcher {
     let watched = 0;
     let tickError: string | undefined;
     let skipRecord = false;
+    let lockSkipped = false;
     try {
-      const db = getDbClient();
-      const rows = await db
-        .select(WATCH_COLUMNS)
-        .from(pullRequestsTable)
-        .where(
-          and(
-            eq(pullRequestsTable.autoKeepMergeable, true),
-            eq(pullRequestsTable.state, 'open')
-          )
-        );
-      watched = rows.length;
-
-      for (const row of rows) {
-        try {
-          await this.processPr(row);
-        } catch (err) {
-          // One PR failing must never abort the tick — retry next time.
-          console.warn(
-            `[prAutoMergeWatcher] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
-            err instanceof Error ? err.message : err
+      // Cross-replica mutex: two overlapping instances would both fire a
+      // cloud fix run for the same un-mergeable PR.
+      const lock = await guardCrossReplica('prAutoMergeWatcher:tick', async () => {
+        const db = getDbClient();
+        const rows = await db
+          .select(WATCH_COLUMNS)
+          .from(pullRequestsTable)
+          .where(
+            and(
+              eq(pullRequestsTable.autoKeepMergeable, true),
+              eq(pullRequestsTable.state, 'open')
+            )
           );
+        watched = rows.length;
+
+        for (const row of rows) {
+          try {
+            await this.processPr(row);
+          } catch (err) {
+            // One PR failing must never abort the tick — retry next time.
+            console.warn(
+              `[prAutoMergeWatcher] failed for PR ${row.owner}/${row.repo}#${row.number}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
         }
-      }
+      });
+      lockSkipped = !lock.acquired;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) {
@@ -152,7 +159,9 @@ class PRAutoMergeWatcher {
           ok: !tickError,
           summary: tickError
             ? `auto_merge tick failed: ${tickError}`
-            : `auto_merge tick — ${watched} watched`,
+            : lockSkipped
+              ? 'auto_merge tick skipped — advisory lock held by another instance'
+              : `auto_merge tick — ${watched} watched`,
           error: tickError,
         });
       }

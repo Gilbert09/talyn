@@ -6,6 +6,7 @@ import {
   type PRMergeableSummary,
 } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
+import { guardCrossReplica } from './advisoryLock.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
@@ -240,61 +241,67 @@ class MergeQueueProcessor {
     let deferredCount = 0;
     let tickError: string | undefined;
     let skipRecord = false;
+    let lockSkipped = false;
     try {
-      const db = getDbClient();
+      // Cross-replica mutex: a deploy overlap runs two instances, and two
+      // concurrent ticks can both try to merge the same head PR.
+      const lock = await guardCrossReplica('mergeQueue:tick', async () => {
+        const db = getDbClient();
 
-      // Self-heal: clear queue bookkeeping on rows that left `open` while
-      // still flagged queued (a sweep/refresh path flipped the state without
-      // the reset). Such rows are invisible to the open-only select below, so
-      // their stale flags would otherwise live forever — and pollute the
-      // position math anywhere that doesn't filter on state.
-      const healed = await db
-        .update(pullRequestsTable)
-        .set({ ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })
-        .where(
-          and(
-            eq(pullRequestsTable.mergeQueued, true),
-            ne(pullRequestsTable.state, 'open')
+        // Self-heal: clear queue bookkeeping on rows that left `open` while
+        // still flagged queued (a sweep/refresh path flipped the state without
+        // the reset). Such rows are invisible to the open-only select below, so
+        // their stale flags would otherwise live forever — and pollute the
+        // position math anywhere that doesn't filter on state.
+        const healed = await db
+          .update(pullRequestsTable)
+          .set({ ...QUEUE_RESET_COLUMNS, updatedAt: new Date() })
+          .where(
+            and(
+              eq(pullRequestsTable.mergeQueued, true),
+              ne(pullRequestsTable.state, 'open')
+            )
           )
-        )
-        .returning({ workspaceId: pullRequestsTable.workspaceId });
-      for (const workspaceId of new Set(healed.map((r) => r.workspaceId))) {
-        await broadcastMergeQueuePositions(workspaceId);
-      }
+          .returning({ workspaceId: pullRequestsTable.workspaceId });
+        for (const workspaceId of new Set(healed.map((r) => r.workspaceId))) {
+          await broadcastMergeQueuePositions(workspaceId);
+        }
 
-      const rows = await db
-        .select(QUEUE_COLUMNS)
-        .from(pullRequestsTable)
-        .where(
-          and(
-            eq(pullRequestsTable.mergeQueued, true),
-            eq(pullRequestsTable.state, 'open')
+        const rows = await db
+          .select(QUEUE_COLUMNS)
+          .from(pullRequestsTable)
+          .where(
+            and(
+              eq(pullRequestsTable.mergeQueued, true),
+              eq(pullRequestsTable.state, 'open')
+            )
           )
-        )
-        .orderBy(pullRequestsTable.mergeQueuedAt);
+          .orderBy(pullRequestsTable.mergeQueuedAt);
 
-      // Group by (workspace, repo, base) — `rows` is already FIFO-ordered, so
-      // each group's array is its queue order, head first.
-      const groups = new Map<string, PRRow[]>();
-      for (const row of rows) {
-        const key = `${row.workspaceId}|${row.repositoryId}|${baseBranchOf(row)}`;
-        const group = groups.get(key);
-        if (group) group.push(row);
-        else groups.set(key, [row]);
-      }
+        // Group by (workspace, repo, base) — `rows` is already FIFO-ordered, so
+        // each group's array is its queue order, head first.
+        const groups = new Map<string, PRRow[]>();
+        for (const row of rows) {
+          const key = `${row.workspaceId}|${row.repositoryId}|${baseBranchOf(row)}`;
+          const group = groups.get(key);
+          if (group) group.push(row);
+          else groups.set(key, [row]);
+        }
 
-      headCount = groups.size;
-      // Distinct groups are independent — a slow GitHub round-trip for one
-      // (workspace, repo, base) must not gate the others. Process groups
-      // concurrently so the tick's wall-time is the slowest single group, not
-      // the sum of all of them: serializing groups held the re-entrancy guard
-      // for minutes while a multi-PR backlog drained, so every 10s tick in
-      // between no-op'd on the guard and the queue looked frozen. Within a group
-      // we stay serial — one same-base merge per tick.
-      const outcomes = await Promise.all(
-        [...groups.values()].map((group) => this.processGroup(group, deadline))
-      );
-      deferredCount = outcomes.filter((o) => o !== 'ok').length;
+        headCount = groups.size;
+        // Distinct groups are independent — a slow GitHub round-trip for one
+        // (workspace, repo, base) must not gate the others. Process groups
+        // concurrently so the tick's wall-time is the slowest single group, not
+        // the sum of all of them: serializing groups held the re-entrancy guard
+        // for minutes while a multi-PR backlog drained, so every 10s tick in
+        // between no-op'd on the guard and the queue looked frozen. Within a group
+        // we stay serial — one same-base merge per tick.
+        const outcomes = await Promise.all(
+          [...groups.values()].map((group) => this.processGroup(group, deadline))
+        );
+        deferredCount = outcomes.filter((o) => o !== 'ok').length;
+      });
+      lockSkipped = !lock.acquired;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) {
@@ -311,7 +318,9 @@ class MergeQueueProcessor {
           ok: !tickError,
           summary: tickError
             ? `merge_queue tick failed: ${tickError}`
-            : `merge_queue tick — ${headCount} head${headCount === 1 ? '' : 's'}` +
+            : lockSkipped
+              ? 'merge_queue tick skipped — advisory lock held by another instance'
+              : `merge_queue tick — ${headCount} head${headCount === 1 ? '' : 's'}` +
               (deferredCount > 0
                 ? `, ${deferredCount} group${deferredCount === 1 ? '' : 's'} deferred (rate-limited / deadline)`
                 : ''),

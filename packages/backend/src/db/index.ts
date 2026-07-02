@@ -1,6 +1,7 @@
 import path from 'path';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { getDbClient, type Database } from './client.js';
+import { getDbClient, isRealPostgres, type Database } from './client.js';
+import { withBlockingAdvisoryLock } from '../services/advisoryLock.js';
 
 /**
  * Resolve the absolute path to the Drizzle migrations folder. It ships at
@@ -13,12 +14,22 @@ const MIGRATIONS_FOLDER = path.resolve(__dirname, 'migrations');
  * Initialize the database: connect, run pending migrations, return the
  * Drizzle client. Every service/route consumes this return value.
  *
+ * Migrations run under a blocking advisory lock so overlapping boots (every
+ * Railway deploy runs old + new instances concurrently) queue instead of
+ * racing DDL — the second boot waits, then finds nothing left to apply.
+ *
  * Throws if `DATABASE_URL` is unset or migrations fail — both are fatal
  * for boot so callers shouldn't try to recover.
  */
 export async function initDatabase(): Promise<Database> {
   const db = getDbClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  if (isRealPostgres()) {
+    await withBlockingAdvisoryLock(db, 'db:migrate', () =>
+      migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
+    );
+  } else {
+    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  }
   return db;
 }
 

@@ -1,5 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
+import { guardCrossReplica } from '../advisoryLock.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { readCloudTaskProvider } from '@talyn/shared';
 import { getCloudProvider } from './registry.js';
@@ -47,56 +48,62 @@ class CloudTaskPoller {
     let reconciled = 0;
     let tickError: string | undefined;
     let skipRecord = false;
+    let lockSkipped = false;
     try {
-      const db = getDbClient();
-      // Only the columns the scheduler needs. Crucially we compute the
-      // transcript's emptiness in Postgres rather than selecting the
-      // `transcript` jsonb — that blob is the cloud-run conversation log
-      // (often MBs) and pulling it every 10s for every in-flight task was the
-      // dominant source of database egress. The CASE mirrors the old JS check
-      // `!Array.isArray(t) || t.length === 0`: only an array runs through
-      // `jsonb_array_length` (so it never throws on a non-array), and null /
-      // non-array values fall to the `ELSE true` (empty) branch.
-      const rows = await db
-        .select({
-          id: tasksTable.id,
-          workspaceId: tasksTable.workspaceId,
-          title: tasksTable.title,
-          repositoryId: tasksTable.repositoryId,
-          metadata: tasksTable.metadata,
-          transcriptEmpty: sql<boolean>`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
-        })
-        .from(tasksTable)
-        .where(eq(tasksTable.status, 'in_progress'));
-      reconciled = rows.length;
+      // Cross-replica mutex: overlapping instances double-reconcile the same
+      // run (duplicate transcript ingests / finalizations) without it.
+      const lock = await guardCrossReplica('cloudPoller:tick', async () => {
+        const db = getDbClient();
+        // Only the columns the scheduler needs. Crucially we compute the
+        // transcript's emptiness in Postgres rather than selecting the
+        // `transcript` jsonb — that blob is the cloud-run conversation log
+        // (often MBs) and pulling it every 10s for every in-flight task was the
+        // dominant source of database egress. The CASE mirrors the old JS check
+        // `!Array.isArray(t) || t.length === 0`: only an array runs through
+        // `jsonb_array_length` (so it never throws on a non-array), and null /
+        // non-array values fall to the `ELSE true` (empty) branch.
+        const rows = await db
+          .select({
+            id: tasksTable.id,
+            workspaceId: tasksTable.workspaceId,
+            title: tasksTable.title,
+            repositoryId: tasksTable.repositoryId,
+            metadata: tasksTable.metadata,
+            transcriptEmpty: sql<boolean>`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
+          })
+          .from(tasksTable)
+          .where(eq(tasksTable.status, 'in_progress'));
+        reconciled = rows.length;
 
-      for (const row of rows) {
-        const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
-        const providerType = readCloudTaskProvider({ metadata });
-        const provider = getCloudProvider(providerType);
-        if (!provider) continue;
+        for (const row of rows) {
+          const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
+          const providerType = readCloudTaskProvider({ metadata });
+          const provider = getCloudProvider(providerType);
+          if (!provider) continue;
 
-        const taskRow: CloudTaskRow = {
-          id: row.id,
-          workspaceId: row.workspaceId,
-          title: row.title,
-          repositoryId: row.repositoryId,
-          metadata,
-          transcriptEmpty: row.transcriptEmpty,
-          watched: isWatched(row.id),
-        };
+          const taskRow: CloudTaskRow = {
+            id: row.id,
+            workspaceId: row.workspaceId,
+            title: row.title,
+            repositoryId: row.repositoryId,
+            metadata,
+            transcriptEmpty: row.transcriptEmpty,
+            watched: isWatched(row.id),
+          };
 
-        try {
-          await provider.reconcile(taskRow);
-        } catch (err) {
-          // Transient API hiccups are fine — retry next tick. A single
-          // failed poll must never fail the task.
-          console.warn(
-            `[cloudPoller] reconcile failed for task ${row.id.slice(0, 8)}:`,
-            err instanceof Error ? err.message : err,
-          );
+          try {
+            await provider.reconcile(taskRow);
+          } catch (err) {
+            // Transient API hiccups are fine — retry next tick. A single
+            // failed poll must never fail the task.
+            console.warn(
+              `[cloudPoller] reconcile failed for task ${row.id.slice(0, 8)}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
         }
-      }
+      });
+      lockSkipped = !lock.acquired;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) {
@@ -113,7 +120,9 @@ class CloudTaskPoller {
           ok: !tickError,
           summary: tickError
             ? `cloud_task tick failed: ${tickError}`
-            : `cloud_task tick — ${reconciled} in-flight`,
+            : lockSkipped
+              ? 'cloud_task tick skipped — advisory lock held by another instance'
+              : `cloud_task tick — ${reconciled} in-flight`,
           error: tickError,
         });
       }

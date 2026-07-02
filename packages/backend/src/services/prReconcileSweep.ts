@@ -1,3 +1,4 @@
+import { guardCrossReplica } from './advisoryLock.js';
 import { githubService } from './github.js';
 import { prMonitorService, createRestSweepCache } from './prMonitor.js';
 import { debugBus } from './debugBus.js';
@@ -50,66 +51,75 @@ class PrReconcileSweep {
     let count = 0;
     let deferred = 0;
     let restClosed = 0;
+    let lockSkipped = false;
     try {
-      const workspaces = githubService.getConnectedWorkspaces();
-      count = workspaces.length;
-      // Shared across every deferred workspace this tick, so N workspaces
-      // watching the same repo make ONE REST open-list call between them.
-      const restCache = createRestSweepCache();
-      for (const workspaceId of workspaces) {
-        // The sweep is the heaviest, least time-sensitive GraphQL consumer (it
-        // re-polls everything). When this account's points budget has fallen
-        // into the reserve, skip it this tick — webhooks, the merge queue, and
-        // manual refresh keep flowing on the reserved budget, and the next
-        // sweep (or the window reset) picks it back up. Prevents the sweep from
-        // being the thing that tips an account into a hard RATE_LIMIT error.
-        if (graphqlBudget.shouldDefer(githubService.accountKeyFor(workspaceId))) {
-          deferred++;
-          // Deferral must not mean "no safety net at all": a merged/closed PR
-          // whose webhook was dropped would stay on the open list until a
-          // manual refresh (this is how an ~8-min GitHub delivery outage in a
-          // budget-reserve window played out). Run the REST-only close-out —
-          // core REST budget, zero GraphQL points — so those rows still clear.
+      // Cross-replica mutex: two overlapping instances re-polling every
+      // workspace at once doubles the heaviest GraphQL consumer for nothing.
+      const lock = await guardCrossReplica('prReconcileSweep:tick', async () => {
+        const workspaces = githubService.getConnectedWorkspaces();
+        count = workspaces.length;
+        // Shared across every deferred workspace this tick, so N workspaces
+        // watching the same repo make ONE REST open-list call between them.
+        const restCache = createRestSweepCache();
+        for (const workspaceId of workspaces) {
+          // The sweep is the heaviest, least time-sensitive GraphQL consumer (it
+          // re-polls everything). When this account's points budget has fallen
+          // into the reserve, skip it this tick — webhooks, the merge queue, and
+          // manual refresh keep flowing on the reserved budget, and the next
+          // sweep (or the window reset) picks it back up. Prevents the sweep from
+          // being the thing that tips an account into a hard RATE_LIMIT error.
+          if (graphqlBudget.shouldDefer(githubService.accountKeyFor(workspaceId))) {
+            deferred++;
+            // Deferral must not mean "no safety net at all": a merged/closed PR
+            // whose webhook was dropped would stay on the open list until a
+            // manual refresh (this is how an ~8-min GitHub delivery outage in a
+            // budget-reserve window played out). Run the REST-only close-out —
+            // core REST budget, zero GraphQL points — so those rows still clear.
+            try {
+              restClosed += await prMonitorService.sweepClosedViaRest(workspaceId, restCache);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : 'unknown error';
+              console.error(
+                `[reconcileSweep] REST close-out for ${workspaceId.slice(0, 8)} failed:`,
+                msg
+              );
+            }
+            continue;
+          }
           try {
-            restClosed += await prMonitorService.sweepClosedViaRest(workspaceId, restCache);
+            await prMonitorService.refreshWorkspaceNow(workspaceId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'unknown error';
-            console.error(
-              `[reconcileSweep] REST close-out for ${workspaceId.slice(0, 8)} failed:`,
-              msg
-            );
+            console.error(`[reconcileSweep] workspace ${workspaceId.slice(0, 8)} failed:`, msg);
           }
-          continue;
         }
-        try {
-          await prMonitorService.refreshWorkspaceNow(workspaceId);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : 'unknown error';
-          console.error(`[reconcileSweep] workspace ${workspaceId.slice(0, 8)} failed:`, msg);
+        if (deferred > 0) {
+          debugBus.recordEvent({
+            service: 'pr_reconcile_sweep',
+            action: 'deferred',
+            summary:
+              `deferred ${deferred} workspace${deferred === 1 ? '' : 's'} — GraphQL budget in reserve` +
+              (restClosed > 0 ? `; REST close-out swept ${restClosed} row(s)` : ''),
+          });
         }
-      }
-      if (deferred > 0) {
-        debugBus.recordEvent({
-          service: 'pr_reconcile_sweep',
-          action: 'deferred',
-          summary:
-            `deferred ${deferred} workspace${deferred === 1 ? '' : 's'} — GraphQL budget in reserve` +
-            (restClosed > 0 ? `; REST close-out swept ${restClosed} row(s)` : ''),
+        // TTL safety net for the incremental check-count table — drops any per-check
+        // state orphaned by a missed close/force-push delivery so it can't grow
+        // unbounded. Close/merge/synchronize prune precisely; this is the backstop.
+        await pruneStaleCheckStates().catch((err) => {
+          console.error('[reconcileSweep] pruneStaleCheckStates failed:', err);
         });
-      }
-      // TTL safety net for the incremental check-count table — drops any per-check
-      // state orphaned by a missed close/force-push delivery so it can't grow
-      // unbounded. Close/merge/synchronize prune precisely; this is the backstop.
-      await pruneStaleCheckStates().catch((err) => {
-        console.error('[reconcileSweep] pruneStaleCheckStates failed:', err);
       });
+      lockSkipped = !lock.acquired;
+    } catch (err) {
+      console.error('[reconcileSweep] tick error:', err instanceof Error ? err.message : err);
     } finally {
       this.guard.end();
       debugBus.pollerTick('pr_reconcile_sweep', {
         durationMs: Date.now() - startedAt,
         ok: true,
-        summary:
-          `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}` +
+        summary: lockSkipped
+          ? 'pr_reconcile_sweep skipped — advisory lock held by another instance'
+          : `pr_reconcile_sweep — ${count} workspace${count === 1 ? '' : 's'}` +
           (deferred > 0 ? ` (${deferred} deferred: low GraphQL budget)` : '') +
           (restClosed > 0 ? ` (REST close-out: ${restClosed} row(s))` : ''),
       });
