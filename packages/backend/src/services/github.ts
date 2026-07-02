@@ -320,6 +320,32 @@ export interface GitHubInstallationInfo {
   repositorySelection: 'all' | 'selected';
 }
 
+/** GitHub's App-token-specific 403 — only integration-flavoured tokens produce it. */
+export function isIntegrationForbiddenMessage(message: string): boolean {
+  return message.includes('Resource not accessible by integration');
+}
+
+/**
+ * GitHub refused the merge for EVERY token Talyn can mint — the installation
+ * (bot) token and the user-to-server token are both "the integration" to
+ * GitHub, and the target branch's rules don't let this App merge (e.g.
+ * PostHog's `master` ruleset only bypasses an allowlist of integrations).
+ * Terminal for automation: re-attempting can never succeed until the org adds
+ * the App to the ruleset's bypass list or a human merges by hand. Callers
+ * (the merge queue) should stop retrying and surface the message.
+ */
+export class MergeNotPermittedForAppError extends Error {
+  constructor(owner: string, repo: string, cause: unknown) {
+    super(
+      `GitHub doesn't allow the Talyn App to merge to ${owner}/${repo}'s protected branch ` +
+        `(both the bot and your GitHub connection act as the App). Merge it on GitHub, or ` +
+        `ask an org admin to add "Talyn App" to the branch ruleset's bypass list.`
+    );
+    this.name = 'MergeNotPermittedForAppError';
+    this.cause = cause;
+  }
+}
+
 /** Result of GitHub's app-authenticated `POST /applications/{client_id}/token` check. */
 export interface TokenHealthCheck {
   workspaceId: string;
@@ -1819,8 +1845,25 @@ class GitHubService extends EventEmitter {
         } catch (userErr) {
           const umsg = userErr instanceof Error ? userErr.message : String(userErr);
           console.warn(`[github] merge ${ref} user-token retry also failed: ${umsg}`);
+          // The stored user token is (since the App-only cutover) a
+          // user-to-server App token — GitHub counts it as the SAME
+          // integration, so wherever the bot is refused, this retry is
+          // refused identically. Only a legacy classic-OAuth token (which
+          // isn't an integration) could still pass here. When both flavours
+          // get the integration-403, no token Talyn can mint will ever merge
+          // this PR — surface that as a distinct, terminal error class.
+          if (isIntegrationForbiddenMessage(umsg)) {
+            throw new MergeNotPermittedForAppError(owner, repo, userErr);
+          }
           throw userErr;
         }
+      }
+      if (
+        err instanceof Error &&
+        isIntegrationForbiddenMessage(err.message) &&
+        decision.reason === 'no user access token stored for this workspace'
+      ) {
+        throw new MergeNotPermittedForAppError(owner, repo, err);
       }
       throw err;
     }
@@ -1840,7 +1883,7 @@ class GitHubService extends EventEmitter {
   ): { retry: boolean; reason: string } {
     if (err instanceof GitHubRateLimitError) return { retry: false, reason: 'rate-limited' };
     if (!(err instanceof Error)) return { retry: false, reason: 'non-Error throw' };
-    if (!err.message.includes('Resource not accessible by integration')) {
+    if (!isIntegrationForbiddenMessage(err.message)) {
       return { retry: false, reason: 'not the App integration-403 — a user token would hit the same rule' };
     }
     if (!this.tokens.get(workspaceId)?.accessToken) {

@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { encryptString } from '../services/tokenCrypto.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
-import { githubService } from '../services/github.js';
+import { githubService, MergeNotPermittedForAppError } from '../services/github.js';
 import { githubRateGate } from '../services/githubRateGate.js';
 import { debugBus } from '../services/debugBus.js';
 import { graphqlBudget } from '../services/graphqlBudget.js';
@@ -515,6 +515,42 @@ describe('mergeQueueProcessor', () => {
 
     const state = (await getPr(db, prId)).mergeQueueState as QueueState & { blockReason?: string };
     expect(state.blockReason).toBe('merge conflicts with the base branch');
+  });
+
+  it('blocks terminally when GitHub refuses the App outright, and never re-attempts', async () => {
+    // The PostHog/master case: the PR is clean and human-mergeable, but every
+    // token Talyn holds is "the integration" to GitHub and the branch ruleset
+    // refuses it. Without terminal handling the clean path re-attempts the
+    // doomed merge every tick, forever.
+    mergeSpy.mockRejectedValue(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    const prId = await insertPr(db, { summary: cleanSummary() });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+      mergeForbidden?: boolean;
+    };
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe('blocked');
+    expect(state.mergeForbidden).toBe(true);
+    expect(state.blockReason).toContain('bypass list');
+    expect(await countTasks(db)).toBe(0); // never funnels into a fix run
+    expect(blockedSpy).toHaveBeenCalledTimes(1); // human is told once, with the reason
+    expect(blockedSpy.mock.calls[0][1]).toMatchObject({
+      reason: expect.stringContaining("doesn't allow the Talyn App to merge"),
+    });
+
+    // Re-ticks: still queued, still clean-looking — but no merge attempt, no
+    // re-notify, no fix run. The turn is given away (terminal until requeue).
+    await mergeQueueProcessor.runOnce();
+    await mergeQueueProcessor.runOnce();
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    expect(await countTasks(db)).toBe(0);
+    expect((await getPr(db, prId)).mergeQueued).toBe(true); // stays queued for the badge
   });
 
   it('does not reset the attempt counter on a transient clean reading (cap-evasion)', async () => {

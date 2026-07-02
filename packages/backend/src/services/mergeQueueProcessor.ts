@@ -10,7 +10,7 @@ import { guardCrossReplica } from './advisoryLock.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
-import { githubService } from './github.js';
+import { githubService, MergeNotPermittedForAppError } from './github.js';
 import { githubRateGate } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
@@ -56,6 +56,14 @@ interface MergeQueueState {
   lastErrorAt?: string;
   /** Why the PR is blocked, captured at the transition into `blocked`. */
   blockReason?: string;
+  /**
+   * GitHub refuses to let the App merge this repo's protected branch
+   * (MergeNotPermittedForAppError) — terminal until the org allows the App
+   * or a human merges. Gates the clean-path merge so the queue doesn't
+   * re-attempt a doomed merge every tick. Cleared by dequeue (QUEUE_RESET),
+   * so requeueing retries fresh after the org-side fix.
+   */
+  mergeForbidden?: boolean;
 }
 
 // Only the columns this processor touches — avoids `select()`-ing every PR
@@ -90,6 +98,7 @@ function readState(row: PRRow): MergeQueueState {
     lastError: s?.lastError,
     lastErrorAt: s?.lastErrorAt,
     blockReason: s?.blockReason,
+    mergeForbidden: s?.mergeForbidden,
   };
 }
 
@@ -502,6 +511,14 @@ class MergeQueueProcessor {
       return 'advance';
     }
 
+    // 4b. GitHub won't let the App merge this branch at all (terminal — the
+    //     PR looks clean, so without this gate the clean path below would
+    //     re-attempt the doomed merge every tick, forever). Stay blocked and
+    //     give the turn away; dequeue/requeue resets the flag.
+    if (state.mergeForbidden) {
+      return 'advance';
+    }
+
     // 5. Clean path — mergeable AND up-to-date → merge it.
     if (!queueBlocked(row, summary)) {
       // Last-moment re-check: a force-released wedged tick can resume here
@@ -553,6 +570,19 @@ class MergeQueueProcessor {
         if (await this.verifyMerged(row)) {
           await this.recordMerged(row);
           return 'hold';
+        }
+        // GitHub refuses the App outright on this branch (every token Talyn
+        // holds counts as the integration). No refetch or retry can change
+        // that — block with the actionable reason and give the turn away.
+        if (err instanceof MergeNotPermittedForAppError) {
+          state.status = 'blocked';
+          state.mergeForbidden = true;
+          state.blockReason = err.message;
+          state.lastError = err.message;
+          state.lastErrorAt = new Date().toISOString();
+          await this.persist(row, state, position);
+          this.notifyBlocked(row, state);
+          return 'advance';
         }
         // A real rejection (e.g. 405 "Pull Request has merge conflicts") means
         // our cached mergeability was stale. Record the error, then refetch the
