@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState, useRef } from 'react';
 import { api, wsClient } from '../lib/api';
+import { prefetchSkills } from '../lib/skillsData';
 import { useOnReconnect } from './useOnReconnect';
 import {
   useWorkspaceStore,
@@ -422,6 +423,13 @@ export function useInitialDataLoad() {
         setTasks(taskPage.tasks);
         setTasksHasMore(taskPage.hasMore);
         setRepositories(repositories);
+
+        // Warm the skills cache (local + per-repo discovery) so the per-PR
+        // skill picker opens instantly populated. Fire-and-forget.
+        void prefetchSkills(
+          activeWorkspaceId,
+          repositories.map((r) => r.id)
+        ).catch(() => {});
       }
     } catch (err) {
       console.error('Failed to load initial data:', err);
