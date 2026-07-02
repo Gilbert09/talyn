@@ -207,6 +207,16 @@ export function taskRoutes(): Router {
       metadata?: Record<string, unknown>;
     };
 
+    // Re-pinning a task to an environment must prove the caller owns that
+    // env — POST /tasks already enforces this; PATCH previously didn't.
+    if (body.assignedEnvironmentId) {
+      try {
+        await requireEnvironmentAccess(req, body.assignedEnvironmentId);
+      } catch (err) {
+        return handleAccessError(err, res);
+      }
+    }
+
     const existing = await db
       .select({ id: tasksTable.id })
       .from(tasksTable)

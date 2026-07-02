@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { request, ApiError } from '../client.js';
+import { request, ApiError, assertTokenSafeBase } from '../client.js';
+
+// Controllable stand-in for the on-disk/env token so tests can flip between
+// authenticated and anonymous requests.
+const mocks = vi.hoisted(() => ({ token: null as string | null }));
+vi.mock('../config.js', () => ({ getAuthToken: () => mocks.token }));
 
 describe('cli client', () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -10,6 +15,7 @@ describe('cli client', () => {
 
   afterEach(() => {
     fetchSpy.mockReset();
+    mocks.token = null;
   });
 
   it('unwraps ApiResponse.data on success', async () => {
@@ -47,5 +53,33 @@ describe('cli client', () => {
         body: JSON.stringify({ title: 'hi' }),
       })
     );
+  });
+
+  describe('token transport safety', () => {
+    it('assertTokenSafeBase accepts https anywhere and http on loopback only', () => {
+      expect(() => assertTokenSafeBase('https://api.talyn.dev')).not.toThrow();
+      expect(() => assertTokenSafeBase('http://localhost:4747')).not.toThrow();
+      expect(() => assertTokenSafeBase('http://127.0.0.1:4747')).not.toThrow();
+      expect(() => assertTokenSafeBase('http://evil.example.com')).toThrow(/Refusing to send/);
+      expect(() => assertTokenSafeBase('not a url')).toThrow(/Invalid TALYN_API_URL/);
+    });
+
+    it('refuses to send the bearer token over http to a non-local host', async () => {
+      mocks.token = 'secret-token';
+      await expect(
+        request('GET', '/tasks', undefined, 'http://evil.example.com')
+      ).rejects.toThrow(/Refusing to send/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('still allows unauthenticated requests to any base (no token to leak)', async () => {
+      mocks.token = null;
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: true, data: {} }), { status: 200 })
+      );
+      await expect(
+        request('GET', '/health-ish', undefined, 'http://evil.example.com')
+      ).resolves.toEqual({});
+    });
   });
 });
