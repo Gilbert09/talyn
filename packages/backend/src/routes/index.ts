@@ -6,6 +6,7 @@ import { githubRoutes, githubPublicRoutes } from './github.js';
 import { posthogRoutes } from './posthog.js';
 import { cloudProviderRoutes } from './cloudProviders.js';
 import { repositoryRoutes } from './repositories.js';
+import { skillRoutes } from './skills.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { userRoutes } from './users.js';
@@ -60,6 +61,7 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/posthog`, posthogRoutes());
   app.use(`${api}/repositories`, repositoryRoutes());
   app.use(`${api}/pull-requests`, pullRequestRoutes());
+  app.use(`${api}/skills`, skillRoutes());
   // Personal MCP-token management (mint/list/revoke). The tokens authenticate
   // the `/mcp` endpoint mounted above.
   app.use(`${api}/mcp-tokens`, mcpTokenRoutes());

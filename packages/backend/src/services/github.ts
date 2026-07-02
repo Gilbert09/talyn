@@ -148,6 +148,30 @@ export interface GitHubRateLimit {
   resources: Record<string, GitHubRateLimitResource>;
 }
 
+/** An entry from `GET /repos/{owner}/{repo}/contents/{path}`. */
+export interface GitHubContentsEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'dir' | 'symlink' | 'submodule';
+  size: number;
+  /** Present on single-file responses only. */
+  content?: string;
+  encoding?: string;
+}
+
+/** Percent-encode a repo path per segment (keeps the `/` separators). */
+function encodeGitHubPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * apiRequest throws message strings (see describeApiErrorFromText); a 404 is
+ * the only status some callers treat as a meaningful "doesn't exist".
+ */
+function isGitHubNotFound(err: unknown): boolean {
+  return err instanceof Error && /GitHub API error 404\b/.test(err.message);
+}
+
 interface GitHubUser {
   id: number;
   login: string;
@@ -1194,6 +1218,69 @@ class GitHubService extends EventEmitter {
    */
   async getRateLimit(workspaceId: string): Promise<GitHubRateLimit> {
     return this.apiRequest<GitHubRateLimit>(workspaceId, '/rate_limit');
+  }
+
+  /**
+   * List a directory via the contents API. Returns null when the path
+   * doesn't exist at that ref (404) — a meaningful state for callers (e.g.
+   * "this repo has no .claude/skills"), not an error.
+   */
+  async getDirectoryListing(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    path: string,
+    ref?: string
+  ): Promise<GitHubContentsEntry[] | null> {
+    const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    try {
+      const entries = await this.apiRequest<GitHubContentsEntry[] | GitHubContentsEntry>(
+        workspaceId,
+        `/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}${refQuery}`
+      );
+      // A file path returns a single object; callers asked for a directory.
+      return Array.isArray(entries) ? entries : null;
+    } catch (err) {
+      if (isGitHubNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Fetch a single file's text via the contents API. Returns null on 404.
+   * `maxBytes` guards decode/transfer of oversized files: over it, the
+   * entry's size is returned with `content: null` so the caller can still
+   * surface the file's existence.
+   */
+  async getFileContent(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string | undefined,
+    maxBytes: number
+  ): Promise<{ content: string | null; size: number } | null> {
+    const refQuery = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    let entry: GitHubContentsEntry;
+    try {
+      const result = await this.apiRequest<GitHubContentsEntry | GitHubContentsEntry[]>(
+        workspaceId,
+        `/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}${refQuery}`
+      );
+      if (Array.isArray(result)) return null; // a directory, not a file
+      entry = result;
+    } catch (err) {
+      if (isGitHubNotFound(err)) return null;
+      throw err;
+    }
+    const size = entry.size ?? 0;
+    if (size > maxBytes) return { content: null, size };
+    // The contents API base64-encodes files up to 1MB; larger files come back
+    // with encoding 'none', but those are over any maxBytes we pass anyway.
+    if (entry.encoding !== 'base64' || typeof entry.content !== 'string') {
+      return { content: null, size };
+    }
+    return { content: Buffer.from(entry.content, 'base64').toString('utf8'), size };
   }
 
   /**

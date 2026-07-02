@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createCloudTask } from '../services/taskCreate.js';
+import { getSkillUsage } from '../services/skills.js';
+import * as skillsModule from '../services/skills.js';
 import * as prCacheModule from '../services/prCache.js';
 import * as websocketModule from '../services/websocket.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -189,6 +191,56 @@ describe('createCloudTask', () => {
 
     expect(row.status).toBe('queued');
     expect(errSpy).toHaveBeenCalled();
+  });
+
+  it('persists metadata.skill and bumps the workspace skill-usage counter', async () => {
+    const skill = {
+      key: 'repo:acme/widgets:reviewer',
+      name: 'reviewer',
+      source: 'repo' as const,
+      repositoryId: 'repo1',
+    };
+
+    const first = await createCloudTask({
+      workspaceId: 'ws1',
+      type: 'pr_response',
+      title: 't',
+      description: '',
+      repositoryId: 'repo1',
+      skill,
+    });
+    expect((first.metadata as { skill?: unknown }).skill).toEqual(skill);
+
+    await createCloudTask({
+      workspaceId: 'ws1',
+      type: 'pr_response',
+      title: 't2',
+      description: '',
+      repositoryId: 'repo1',
+      skill,
+    });
+
+    // The bump is fire-and-forget; give the microtask a beat to land.
+    await vi.waitFor(async () => {
+      const usage = await getSkillUsage('ws1');
+      expect(usage[skill.key]?.count).toBe(2);
+    });
+  });
+
+  it('creates the task even when the usage bump fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(skillsModule, 'bumpSkillUsage').mockRejectedValue(new Error('db down'));
+
+    const row = await createCloudTask({
+      workspaceId: 'ws1',
+      type: 'pr_response',
+      title: 't',
+      description: '',
+      repositoryId: 'repo1',
+      skill: { key: 'local:x', name: 'x', source: 'local' },
+    });
+    expect(row.status).toBe('queued');
+    await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled());
   });
 
   it('announces the new task over the workspace WS room', async () => {

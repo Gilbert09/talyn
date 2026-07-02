@@ -28,7 +28,9 @@ import {
   Plug,
   Copy,
   KeyRound,
+  Wand2,
 } from 'lucide-react';
+import { SkillsSettings } from './SkillsSettings';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -70,6 +72,7 @@ export function SettingsPanel() {
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
+    { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
@@ -108,6 +111,7 @@ export function SettingsPanel() {
           <div className="p-6 max-w-2xl">
             {activeSection === 'workspace' && <WorkspaceSettings />}
             {activeSection === 'integrations' && <IntegrationsSettings />}
+            {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}

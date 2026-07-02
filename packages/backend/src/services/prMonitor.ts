@@ -8,6 +8,7 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { githubService } from './github.js';
+import { parseRepoUrl } from './repoIdentity.js';
 import {
   batchPullRequestsByNumber,
   type BatchPRByNumberResult,
@@ -134,14 +135,14 @@ class PRMonitorService extends EventEmitter {
 
     return rows
       .map((row): WatchedRepo | null => {
-        const match = row.url.match(/github\.com[/:]([\w-]+)\/([\w.-]+)/);
-        if (!match) return null;
+        const identity = parseRepoUrl(row.url);
+        if (!identity) return null;
         return {
           id: row.id,
           workspaceId: row.workspaceId,
-          owner: match[1],
-          repo: match[2].replace(/\.git$/, ''),
-          fullName: `${match[1]}/${match[2].replace(/\.git$/, '')}`,
+          owner: identity.owner,
+          repo: identity.repo,
+          fullName: identity.fullName,
           defaultBranch: row.defaultBranch,
         };
       })

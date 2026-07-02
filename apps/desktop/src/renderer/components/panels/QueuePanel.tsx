@@ -15,6 +15,7 @@ import {
   Trash2,
   ExternalLink,
   GitPullRequest,
+  Wand2,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -537,6 +538,16 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                     {providerLabel(provider)}
                   </Badge>
                 )}
+                {(() => {
+                  // Set when the task ran an agent skill (metadata.skill).
+                  const skill = task.metadata?.skill as { name?: string } | undefined;
+                  return skill?.name ? (
+                    <Badge variant="outline" className="gap-1">
+                      <Wand2 className="h-3 w-3" />
+                      {skill.name}
+                    </Badge>
+                  ) : null;
+                })()}
                 <Badge
                   variant={
                     task.priority === 'urgent'

@@ -13,11 +13,18 @@ import {
   AlertTriangle,
   ListChecks,
   Settings,
+  Wand2,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
 import type { StackMeta } from './stacks';
-import { type TaskStatus, type CloudProviderType, prNeedsFollowup } from '@talyn/shared';
+import {
+  type TaskStatus,
+  type CloudProviderType,
+  type SkillSummary,
+  prNeedsFollowup,
+} from '@talyn/shared';
+import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
@@ -50,6 +57,13 @@ interface PRTableProps {
    *  so the button only flashes its confirmation on a real start. An explicit
    *  `providerType` is passed from the per-task dropdown. */
   onCreatePostHogTask: (row: PRRow, providerType?: string) => Promise<boolean>;
+  /** Run an agent skill on the row as a cloud task (see useGitHubActions.runSkillTask).
+   *  Presence enables the per-row skill button + picker modal. */
+  onRunSkill?: (
+    row: PRRow,
+    skill: SkillSummary,
+    opts: { providerType?: string; localContent?: string }
+  ) => Promise<boolean>;
   /** PostHog Code is configured + a cloud env exists to dispatch to. */
   posthogEnabled: boolean;
   /** Default is "Ask every time" with >1 provider connected → the Task button
@@ -77,6 +91,7 @@ export function PRTable({
   onMerge,
   onSetMergeQueue,
   onCreatePostHogTask,
+  onRunSkill,
   posthogEnabled,
   taskAsk,
   taskProviders,
@@ -90,7 +105,12 @@ export function PRTable({
   // The queue tab splits its second column into Queue (position/state) + Status
   // (PR readiness pill); every other variant keeps a single second column.
   const secondColLabel = variant === 'review' ? 'Requested' : 'Status';
+  // The skill picker is hoisted here so one dialog mounts per table, not one
+  // per row — a row just records its id as "open".
+  const [skillPickerRowId, setSkillPickerRowId] = useState<string | null>(null);
+  const skillPickerRow = skillPickerRowId ? rows.find((r) => r.id === skillPickerRowId) : null;
   return (
+    <>
     <table className="w-full text-sm">
       <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
         <tr>
@@ -117,6 +137,7 @@ export function PRTable({
             onMerge={onMerge}
             onSetMergeQueue={onSetMergeQueue}
             onCreatePostHogTask={onCreatePostHogTask}
+            onOpenSkillPicker={onRunSkill ? () => setSkillPickerRowId(row.id) : undefined}
             posthogEnabled={posthogEnabled}
             taskAsk={taskAsk}
             taskProviders={taskProviders}
@@ -127,6 +148,18 @@ export function PRTable({
         ))}
       </tbody>
     </table>
+    {onRunSkill && skillPickerRow && (
+      <SkillPickerModal
+        row={skillPickerRow}
+        open
+        onClose={() => setSkillPickerRowId(null)}
+        onLaunch={onRunSkill}
+        taskAsk={taskAsk}
+        taskProviders={taskProviders}
+        onOpenIntegrations={onOpenIntegrations}
+      />
+    )}
+    </>
   );
 }
 
@@ -141,6 +174,7 @@ function PRTableRow({
   onMerge,
   onSetMergeQueue,
   onCreatePostHogTask,
+  onOpenSkillPicker,
   posthogEnabled,
   taskAsk,
   taskProviders,
@@ -159,6 +193,8 @@ function PRTableRow({
   onMerge: (row: PRRow) => Promise<void>;
   onSetMergeQueue: (row: PRRow, enabled: boolean) => Promise<void>;
   onCreatePostHogTask: (row: PRRow, providerType?: string) => Promise<boolean>;
+  /** Open the table-level skill picker for this row (absent → no skill button). */
+  onOpenSkillPicker?: () => void;
   posthogEnabled: boolean;
   taskAsk?: boolean;
   taskProviders?: { type: string; displayName: string }[];
@@ -656,6 +692,29 @@ function PRTableRow({
                 </>
               )}
             </div>
+          )}
+          {/* Run a skill on this PR. Unlike the fix button this shows on the
+              Reviews page too — running a review skill on a PR you were asked
+              to review is the headline use case — and doesn't require the PR
+              to "need" anything. */}
+          {onOpenSkillPicker && posthogEnabled && row.state === 'open' && (
+            <button
+              type="button"
+              data-attr="pr-row-run-skill"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenSkillPicker();
+              }}
+              disabled={taskRunning || busy !== null}
+              className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-violet-500/10 hover:text-violet-600 focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:text-violet-400"
+              title={
+                taskRunning
+                  ? 'A task is already working this PR — open it from the Working badge'
+                  : 'Run a skill on this PR with a cloud agent'
+              }
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+            </button>
           )}
           <button
             type="button"

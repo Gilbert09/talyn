@@ -3,6 +3,17 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
 
+/** A SKILL.md found under ~/.claude/skills/<dirName>/. */
+export interface LocalSkillFile {
+  dirName: string;
+  /** Absolute path of SKILL.md on this machine. */
+  path: string;
+  size: number;
+  mtimeMs: number;
+  /** Raw file text; null when the file exceeds the size guard. */
+  content: string | null;
+}
+
 export type Channels = 'ipc-example';
 
 const electronHandler = {
@@ -96,6 +107,15 @@ const electronHandler = {
     /** True for a local dev build — the renderer flags the UI with a DEV badge. */
     isDev(): Promise<boolean> {
       return ipcRenderer.invoke('app:is-dev');
+    },
+  },
+  skills: {
+    /**
+     * List local agent skills (each ~/.claude/skills/&lt;dir&gt;/SKILL.md),
+     * content included. Re-read from disk on every call — no cache, no watcher.
+     */
+    listLocal(): Promise<LocalSkillFile[]> {
+      return ipcRenderer.invoke('skills:list-local');
     },
   },
 };

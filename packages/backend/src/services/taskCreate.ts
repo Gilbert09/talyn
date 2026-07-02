@@ -1,9 +1,10 @@
 import { v4 as uuid } from 'uuid';
 import { eq } from 'drizzle-orm';
-import type { TaskPriority, TaskType, PostHogCodeRuntimeAdapter } from '@talyn/shared';
+import type { TaskPriority, TaskType, TaskSkillInfo, PostHogCodeRuntimeAdapter } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { tasks as tasksTable, pullRequests as pullRequestsTable } from '../db/schema.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
+import { bumpSkillUsage } from './skills.js';
 import { rowToTask } from './taskSerialize.js';
 import { emitTaskCreated } from './websocket.js';
 
@@ -21,6 +22,12 @@ export interface CreateCloudTaskInput {
   pullRequestId?: string | null;
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   model?: string;
+  /**
+   * The agent skill this task runs, if any. The skill's content is already
+   * inlined into `prompt`; this descriptor is persisted to `metadata.skill`
+   * for display and bumps the workspace's usage stats.
+   */
+  skill?: TaskSkillInfo;
 }
 
 /**
@@ -43,6 +50,14 @@ export async function createCloudTask(
   const initialMetadata: Record<string, unknown> = {};
   if (input.runtimeAdapter) initialMetadata.runtimeAdapter = input.runtimeAdapter;
   if (input.model) initialMetadata.model = input.model;
+  if (input.skill) {
+    initialMetadata.skill = input.skill;
+    // Best-effort usage bump for the picker's "frequently used" ordering —
+    // never blocks or fails task creation.
+    void bumpSkillUsage(input.workspaceId, input.skill.key).catch((err) => {
+      console.warn('[taskCreate] failed to bump skill usage:', err);
+    });
+  }
 
   // When started FROM a PR, stash a pullRequest pointer up front so the task
   // screen renders its PR pill immediately.

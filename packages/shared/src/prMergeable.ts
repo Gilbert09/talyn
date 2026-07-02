@@ -116,6 +116,37 @@ export function buildIssuesSummary(s: PRMergeableSummary): string {
     : '- (Re-fetch the PR to confirm the current issues.)';
 }
 
+/**
+ * The PostHog Code sandbox's non-negotiable git/publishing rules (signed-git
+ * MCP tools; raw push blocked). Shared verbatim by the mergeable prompt and
+ * the skill-run prompt so the two can never drift.
+ */
+export function postHogCodeGitRules(baseBranch: string): string {
+  return `NON-NEGOTIABLE GIT RULES — read these first, they apply to EVERYTHING below:
+  - This environment publishes through SIGNED GIT TOOLS. Raw \`git commit\`, \`git push\`, and any force-push are blocked. Changes reach the remote ONLY through:
+      - \`git_signed_commit\` — publishes your staged changes (\`git add\` first) as a new commit on the PR branch. Use this for all ordinary work: review fixes, CI fixes, etc.
+      - \`git_signed_merge\` — brings the base branch (${baseBranch}) into the PR branch SERVER-SIDE, as a true two-parent Verified merge commit (the same machinery as GitHub's "Update branch" button). No local merge, no history rewriting.
+      - \`git_signed_rewrite\` — republishes the branch after a LOCAL rebase. This is the only sanctioned force-update, and the rebase-for-conflicts flow below is its only sanctioned use here.
+  - To incorporate changes from ${baseBranch}, ALWAYS call \`git_signed_merge\` first. NEVER run a local \`git merge origin/${baseBranch}\` and then \`git_signed_commit\`: the commit tool refuses while a merge is in progress, because publishing through it would LINEARIZE the merge into a single-parent commit — the base never becomes an ancestor, so the PR diff attributes EVERY file the base changed to your branch (hundreds of unrelated files leaking into the PR). This has actually happened.
+  - Rebase is ONLY for conflicts, and only after \`git_signed_merge\` has reported one: \`git fetch origin ${baseBranch}\`, \`git rebase origin/${baseBranch}\`, resolve each conflict, \`git add\` the resolutions, \`git rebase --continue\` (NOT \`git commit\`), then publish with \`git_signed_rewrite\`. Never rebase for any other reason, and never try to publish a rebase any other way.
+  - NEVER bring the base's changes in as a single-parent imitation of a merge: no \`git merge --squash\`, \`git read-tree\`, \`git checkout ${baseBranch} -- .\`, \`git diff base | git apply\`, etc. The base must become an ANCESTOR of your branch — via \`git_signed_merge\`'s two-parent merge commit, or via a rebase ONTO it. Naming a single-parent commit "Merge branch '${baseBranch}'" does not make it a merge.
+  - A signed git tool's REFUSAL is authoritative ("merge in progress", "base leak", merge commits in a rewrite range, …). Read its error and follow the recovery path it describes — do not retry the same call and do not work around it. If you're stuck mid-operation, \`git merge --abort\` / \`git rebase --abort\` returns you to a clean state to start over from.`;
+}
+
+/**
+ * The Claude Code (Managed Agents) sandbox's non-negotiable publishing rules
+ * (`github` MCP server only; no `gh` CLI, no raw push). Shared verbatim by the
+ * mergeable prompt and the skill-run prompt so the two can never drift.
+ */
+export function claudeCodeGitRules(baseBranch: string): string {
+  return `NON-NEGOTIABLE PUBLISHING RULES — read these first, they apply to EVERYTHING below:
+  - The repository is mounted in your sandbox, but you have NO \`gh\` CLI and NO outbound \`git push\`. Every change that must reach GitHub — commits to the PR branch, updating the branch from its base, PR comments, resolving review threads — goes through the connected \`github\` MCP server's tools. Use those tools to publish.
+  - Local git is available for READ-ONLY inspection and for preparing changes: \`git fetch\`, \`git status\`, \`git diff\`, \`git log\`, \`git merge-base\`, \`git rev-list\`, and a LOCAL \`git rebase\` to resolve conflicts. None of that reaches GitHub on its own — only the \`github\` MCP tools publish.
+  - To incorporate changes from ${baseBranch}, bring the base in as a TRUE MERGE so it becomes an ANCESTOR of the PR branch — prefer GitHub's "update branch" / merge-base-into-head operation via the \`github\` MCP server (the same machinery as GitHub's "Update branch" button). Do NOT fabricate a single-parent imitation of a merge (no \`git merge --squash\`, no \`git checkout ${baseBranch} -- .\`, no \`git read-tree\`, no "apply the base's diff"): that makes the base look like your work and leaks every file the base changed into the PR's diff (hundreds of unrelated files). Naming a single-parent commit "Merge branch '${baseBranch}'" does not make it a merge.
+  - If GitHub can't auto-update the branch because of CONFLICTS, resolve them LOCALLY (\`git fetch origin ${baseBranch}\` then \`git rebase origin/${baseBranch}\`, resolving each conflict), then publish the resolved branch by pushing it through the \`github\` MCP server. Rebase is ONLY for conflict resolution onto the PR's own base — never rebase for any other reason or onto any other branch.
+  - If a \`github\` MCP tool rejects an operation, its error is authoritative — read it and follow the recovery path it describes rather than retrying the same call or working around it.`;
+}
+
 /** Inputs shared by every provider variant of the "make this PR mergeable" prompt. */
 export interface MergeablePromptInput {
   owner: string;
@@ -163,15 +194,7 @@ Repository: ${owner}/${repo}
 PR number: #${number}
 Branch: ${s.headBranch}
 
-NON-NEGOTIABLE GIT RULES — read these first, they apply to EVERYTHING below:
-  - This environment publishes through SIGNED GIT TOOLS. Raw \`git commit\`, \`git push\`, and any force-push are blocked. Changes reach the remote ONLY through:
-      - \`git_signed_commit\` — publishes your staged changes (\`git add\` first) as a new commit on the PR branch. Use this for all ordinary work: review fixes, CI fixes, etc.
-      - \`git_signed_merge\` — brings the base branch (${s.baseBranch}) into the PR branch SERVER-SIDE, as a true two-parent Verified merge commit (the same machinery as GitHub's "Update branch" button). No local merge, no history rewriting.
-      - \`git_signed_rewrite\` — republishes the branch after a LOCAL rebase. This is the only sanctioned force-update, and the rebase-for-conflicts flow below is its only sanctioned use here.
-  - To incorporate changes from ${s.baseBranch}, ALWAYS call \`git_signed_merge\` first. NEVER run a local \`git merge origin/${s.baseBranch}\` and then \`git_signed_commit\`: the commit tool refuses while a merge is in progress, because publishing through it would LINEARIZE the merge into a single-parent commit — the base never becomes an ancestor, so the PR diff attributes EVERY file the base changed to your branch (hundreds of unrelated files leaking into the PR). This has actually happened.
-  - Rebase is ONLY for conflicts, and only after \`git_signed_merge\` has reported one: \`git fetch origin ${s.baseBranch}\`, \`git rebase origin/${s.baseBranch}\`, resolve each conflict, \`git add\` the resolutions, \`git rebase --continue\` (NOT \`git commit\`), then publish with \`git_signed_rewrite\`. Never rebase for any other reason, and never try to publish a rebase any other way.
-  - NEVER bring the base's changes in as a single-parent imitation of a merge: no \`git merge --squash\`, \`git read-tree\`, \`git checkout ${s.baseBranch} -- .\`, \`git diff base | git apply\`, etc. The base must become an ANCESTOR of your branch — via \`git_signed_merge\`'s two-parent merge commit, or via a rebase ONTO it. Naming a single-parent commit "Merge branch '${s.baseBranch}'" does not make it a merge.
-  - A signed git tool's REFUSAL is authoritative ("merge in progress", "base leak", merge commits in a rewrite range, …). Read its error and follow the recovery path it describes — do not retry the same call and do not work around it. If you're stuck mid-operation, \`git merge --abort\` / \`git rebase --abort\` returns you to a clean state to start over from.
+${postHogCodeGitRules(s.baseBranch)}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
 ${buildIssuesSummary(s)}
@@ -241,12 +264,7 @@ Repository: ${owner}/${repo}
 PR number: #${number}
 Branch: ${s.headBranch}
 
-NON-NEGOTIABLE PUBLISHING RULES — read these first, they apply to EVERYTHING below:
-  - The repository is mounted in your sandbox, but you have NO \`gh\` CLI and NO outbound \`git push\`. Every change that must reach GitHub — commits to the PR branch, updating the branch from its base, PR comments, resolving review threads — goes through the connected \`github\` MCP server's tools. Use those tools to publish.
-  - Local git is available for READ-ONLY inspection and for preparing changes: \`git fetch\`, \`git status\`, \`git diff\`, \`git log\`, \`git merge-base\`, \`git rev-list\`, and a LOCAL \`git rebase\` to resolve conflicts. None of that reaches GitHub on its own — only the \`github\` MCP tools publish.
-  - To incorporate changes from ${s.baseBranch}, bring the base in as a TRUE MERGE so it becomes an ANCESTOR of the PR branch — prefer GitHub's "update branch" / merge-base-into-head operation via the \`github\` MCP server (the same machinery as GitHub's "Update branch" button). Do NOT fabricate a single-parent imitation of a merge (no \`git merge --squash\`, no \`git checkout ${s.baseBranch} -- .\`, no \`git read-tree\`, no "apply the base's diff"): that makes the base look like your work and leaks every file the base changed into the PR's diff (hundreds of unrelated files). Naming a single-parent commit "Merge branch '${s.baseBranch}'" does not make it a merge.
-  - If GitHub can't auto-update the branch because of CONFLICTS, resolve them LOCALLY (\`git fetch origin ${s.baseBranch}\` then \`git rebase origin/${s.baseBranch}\`, resolving each conflict), then publish the resolved branch by pushing it through the \`github\` MCP server. Rebase is ONLY for conflict resolution onto the PR's own base — never rebase for any other reason or onto any other branch.
-  - If a \`github\` MCP tool rejects an operation, its error is authoritative — read it and follow the recovery path it describes rather than retrying the same call or working around it.
+${claudeCodeGitRules(s.baseBranch)}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
 ${buildIssuesSummary(s)}

@@ -1,6 +1,11 @@
 import { useCallback, useMemo } from 'react';
 import { api, type PRRow } from '../../../lib/api';
-import { buildMergeablePrompt, type CloudProviderType } from '@talyn/shared';
+import {
+  buildMergeablePrompt,
+  buildSkillPrompt,
+  type CloudProviderType,
+  type SkillSummary,
+} from '@talyn/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
@@ -201,6 +206,89 @@ export function useGitHubActions() {
     [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
   );
 
+  // Run an agent skill against a PR as a cloud task. Resolves the skill's
+  // content by source (platform / repo via the API; local content is read on
+  // this machine and passed in), inlines it into a provider-aware prompt, and
+  // creates a normal cloud task linked to the PR. Returns false when no
+  // provider env resolves; throws on fetch/create failure (caller toasts).
+  const runSkillTask = useCallback(
+    async (
+      row: PRRow,
+      skill: SkillSummary,
+      opts: { providerType?: string; localContent?: string } = {}
+    ): Promise<boolean> => {
+      if (!currentWorkspaceId) return false;
+      const envId = resolveTaskEnvId(opts.providerType);
+      if (!envId) return false;
+      const provider = (environments.find((e) => e.id === envId)?.type ??
+        'posthog_code') as CloudProviderType;
+      const ref = `${row.owner}/${row.repo}#${row.number}`;
+
+      let content: string;
+      let repoPath: string | undefined;
+      if (skill.source === 'local') {
+        if (!opts.localContent) throw new Error(`Local skill "${skill.name}" has no content`);
+        content = opts.localContent;
+      } else if (skill.source === 'platform') {
+        if (!skill.id) throw new Error(`Platform skill "${skill.name}" has no id`);
+        content = (await api.skills.get(skill.id)).content;
+      } else {
+        if (!skill.repositoryId) throw new Error(`Repo skill "${skill.name}" has no repository`);
+        const fetched = await api.skills.repoContent(
+          currentWorkspaceId,
+          skill.repositoryId,
+          skill.name
+        );
+        content = fetched.content;
+        repoPath = fetched.repoPath;
+      }
+
+      const created = await createTask({
+        workspaceId: currentWorkspaceId,
+        type: 'pr_response',
+        title: `Run skill "${skill.name}" on ${ref}`,
+        description: `Run the "${skill.name}" skill against ${ref} ("${row.summary.title}").`,
+        prompt: buildSkillPrompt({
+          owner: row.owner,
+          repo: row.repo,
+          number: row.number,
+          pr: {
+            url: row.summary.url,
+            title: row.summary.title,
+            headBranch: row.summary.headBranch,
+            baseBranch: row.summary.baseBranch,
+          },
+          skill: {
+            name: skill.name,
+            description: skill.description,
+            content,
+            source: skill.source,
+            repoPath,
+          },
+          provider,
+        }),
+        repositoryId: row.repositoryId,
+        assignedEnvironmentId: envId,
+        pullRequestId: row.id,
+        skill: {
+          key: skill.key,
+          name: skill.name,
+          source: skill.source,
+          repositoryId: skill.repositoryId,
+          platformSkillId: skill.id,
+        },
+      });
+      trackEvent('pr_skill_task_started', {
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+        skill_source: skill.source,
+      });
+      patchRow(row.id, { taskId: created.id });
+      return true;
+    },
+    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
+  );
+
   // Connect GitHub for the workspace via the GitHub App install flow.
   const connect = useCallback(async () => {
     if (!currentWorkspaceId) return;
@@ -247,6 +335,7 @@ export function useGitHubActions() {
     mergeRow,
     setMergeQueue,
     createPostHogTask,
+    runSkillTask,
     connect,
     copyList,
     // Per-task provider selection (drives the Task-button dropdown when the

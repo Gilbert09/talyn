@@ -22,6 +22,7 @@ import {
   integer,
   uniqueIndex,
   index,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 
 // ---------- Users ----------
@@ -439,5 +440,55 @@ export const prCheckStates = pgTable(
     ),
     // Drives the count aggregate + sha-scoped pruning.
     repoShaIdx: index('idx_pr_check_states_repo_sha').on(t.repoFullName, t.headSha),
+  })
+);
+
+// ---------- Skills ----------
+//
+// Agent skills (SKILL.md) saved to the Talyn platform, workspace-scoped.
+// Repo skills are discovered live from GitHub and local skills live on the
+// user's machine — neither is stored here. `content` is the table's big
+// column: list queries must project it away (see SKILL_LIST_COLUMNS in
+// routes/skills.ts) per the DB-egress rules.
+
+export const skills = pgTable(
+  'skills',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    /** Full SKILL.md text. Capped at SKILL_MAX_BYTES by the routes. */
+    content: text('content').notNull(),
+    /** Provenance when imported: { importedFrom: 'local'|'repo', originPath? }. */
+    sourceInfo: jsonb('source_info'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceIdx: index('idx_skills_workspace').on(t.workspaceId),
+    workspaceNameUq: uniqueIndex('uq_skills_workspace_name').on(t.workspaceId, t.name),
+  })
+);
+
+// Per-workspace usage counters that drive the skill picker's
+// "frequently used" ordering. Keyed by the canonical SkillKey
+// (repo:<owner>/<repo>:<name> | local:<name> | platform:<id>) so all three
+// skill sources share one stats store.
+
+export const skillUsage = pgTable(
+  'skill_usage',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    skillKey: text('skill_key').notNull(),
+    usageCount: integer('usage_count').notNull().default(0),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspaceId, t.skillKey] }),
   })
 );

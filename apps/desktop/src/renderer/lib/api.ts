@@ -13,6 +13,10 @@ import type {
   DebugEvent,
   DebugCategory,
   DebugSnapshot,
+  ListSkillsResponse,
+  PlatformSkill,
+  CreatePlatformSkillRequest,
+  UpdatePlatformSkillRequest,
 } from '@talyn/shared';
 
 // Resolve the backend URL from the build-time env (see webpack configs).
@@ -344,6 +348,28 @@ export const cloudProviders = {
     }),
   disconnect: (type: string, workspaceId: string) =>
     request<void>('DELETE', `/cloud-providers/${type}/config?workspaceId=${workspaceId}`),
+};
+
+// Skills — platform CRUD, repo discovery, usage stats.
+export const skills = {
+  list: (workspaceId: string, repositoryId?: string, refresh?: boolean) => {
+    const query = new URLSearchParams({ workspaceId });
+    if (repositoryId) query.set('repositoryId', repositoryId);
+    if (refresh) query.set('refresh', '1');
+    return request<ListSkillsResponse>('GET', `/skills?${query.toString()}`);
+  },
+  get: (id: string) => request<PlatformSkill>('GET', `/skills/${id}`),
+  repoContent: (workspaceId: string, repositoryId: string, name: string) => {
+    const query = new URLSearchParams({ workspaceId, repositoryId, name });
+    return request<{ content: string; repoPath: string }>(
+      'GET',
+      `/skills/repo/content?${query.toString()}`
+    );
+  },
+  create: (data: CreatePlatformSkillRequest) => request<PlatformSkill>('POST', '/skills', data),
+  update: (id: string, data: UpdatePlatformSkillRequest) =>
+    request<PlatformSkill>('PATCH', `/skills/${id}`, data),
+  remove: (id: string) => request<void>('DELETE', `/skills/${id}`),
 };
 
 // Watched Repositories
@@ -952,6 +978,7 @@ export const api = {
   cloudProviders,
   repositories,
   pullRequests,
+  skills,
   mcpTokens,
   debug,
   users,

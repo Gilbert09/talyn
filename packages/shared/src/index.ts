@@ -3,6 +3,12 @@
 // PR mergeable helpers (shared by the desktop button + backend watcher).
 export * from './prMergeable';
 
+// Agent skills (SKILL.md) + the run-skill-on-PR prompt builder.
+export * from './skills';
+export * from './skillPrompt';
+
+import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills';
+
 // ============================================================================
 // Workspace
 // ============================================================================
@@ -666,6 +672,58 @@ export interface CreateTaskRequest {
    */
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   model?: string;
+  /**
+   * Set when the task runs an agent skill. The skill's content is already
+   * inlined into `prompt` by the caller (see buildSkillPrompt); this small
+   * descriptor is persisted to `metadata.skill` for display and bumps the
+   * workspace's skill-usage stats. Content is deliberately NOT stored here.
+   */
+  skill?: TaskSkillInfo;
+}
+
+/** Which skill a task ran — stored on `task.metadata.skill`. */
+export interface TaskSkillInfo {
+  key: SkillKey;
+  name: string;
+  source: SkillSource;
+  /** repo skills — the repository the skill came from. */
+  repositoryId?: string;
+  /** platform skills — the `skills` row id. */
+  platformSkillId?: string;
+}
+
+// Skills API
+export interface ListSkillsResponse {
+  /** Workspace (Talyn) skills — no content (fetch via GET /skills/:id). */
+  platform: SkillSummary[];
+  /** Skills discovered in the requested repo — empty when no repositoryId given. */
+  repo: SkillSummary[];
+  /** 'none' = repo has no .claude/skills dir; 'error' = GitHub fetch failed. */
+  repoStatus: 'ok' | 'none' | 'error';
+  /** Usage stats for every skill key the workspace has ever run. */
+  usage: Record<SkillKey, SkillUsageEntry>;
+}
+
+export interface PlatformSkill extends SkillSummary {
+  id: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePlatformSkillRequest {
+  workspaceId: string;
+  name: string;
+  description?: string;
+  content: string;
+  /** Where the skill was imported from, if not written in-app. */
+  sourceInfo?: { importedFrom: SkillSource; originPath?: string };
+}
+
+export interface UpdatePlatformSkillRequest {
+  name?: string;
+  description?: string;
+  content?: string;
 }
 
 /**

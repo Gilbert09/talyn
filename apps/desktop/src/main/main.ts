@@ -7,6 +7,8 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
+import os from 'os';
+import { promises as fs } from 'fs';
 import { app, BrowserWindow, shell, ipcMain, safeStorage } from 'electron';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
@@ -144,6 +146,43 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 // Whether this is a local dev build — the renderer uses it to flag the UI
 // (e.g. a "DEV" badge on the profile) so a dev build is unmistakable.
 ipcMain.handle('app:is-dev', () => IS_DEV_BUILD);
+
+// Local agent skills: ~/.claude/skills/<dir>/SKILL.md. Content rides the
+// listing (skills are small); frontmatter parsing happens renderer-side with
+// the shared parser. Over the size guard, content is omitted but the entry
+// still surfaces so the UI can say "too large to run".
+const LOCAL_SKILL_MAX_BYTES = 256 * 1024; // == @talyn/shared SKILL_MAX_BYTES (main can't import the workspace package)
+ipcMain.handle('skills:list-local', async () => {
+  const skillsRoot = path.join(os.homedir(), '.claude', 'skills');
+  let dirs: import('fs').Dirent[];
+  try {
+    dirs = await fs.readdir(skillsRoot, { withFileTypes: true });
+  } catch {
+    return []; // no ~/.claude/skills — nothing local
+  }
+  const results = await Promise.all(
+    dirs
+      .filter((d) => d.isDirectory())
+      .map(async (dir) => {
+        const skillPath = path.join(skillsRoot, dir.name, 'SKILL.md');
+        try {
+          const stat = await fs.stat(skillPath);
+          if (!stat.isFile()) return null;
+          const entry = {
+            dirName: dir.name,
+            path: skillPath,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+          };
+          if (stat.size > LOCAL_SKILL_MAX_BYTES) return { ...entry, content: null };
+          return { ...entry, content: await fs.readFile(skillPath, 'utf8') };
+        } catch {
+          return null; // dir without SKILL.md, or unreadable
+        }
+      })
+  );
+  return results.filter((r) => r !== null);
+});
 
 registerDeepLinkProtocol();
 

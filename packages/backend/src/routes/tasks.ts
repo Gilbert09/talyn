@@ -183,6 +183,7 @@ export function taskRoutes(): Router {
       pullRequestId: body.pullRequestId,
       runtimeAdapter: body.runtimeAdapter,
       model: body.model,
+      skill: body.skill,
     });
     res.status(201).json({ success: true, data: rowToTask(row) } as ApiResponse<Task>);
   });

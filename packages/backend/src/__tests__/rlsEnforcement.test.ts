@@ -32,6 +32,14 @@ describe('RLS enforcement (authenticated role)', () => {
       { id: 'task-a', workspaceId: 'ws-a', type: 'code_writing', title: 'A', description: 'a' },
       { id: 'task-b', workspaceId: 'ws-b', type: 'code_writing', title: 'B', description: 'b' },
     ]);
+    await db.insert(schema.skills).values([
+      { id: 'skill-a', workspaceId: 'ws-a', name: 'a-skill', content: 'a' },
+      { id: 'skill-b', workspaceId: 'ws-b', name: 'b-skill', content: 'b' },
+    ]);
+    await db.insert(schema.skillUsage).values([
+      { workspaceId: 'ws-a', skillKey: 'platform:skill-a', usageCount: 1 },
+      { workspaceId: 'ws-b', skillKey: 'platform:skill-b', usageCount: 1 },
+    ]);
   }
 
   it('scopes SELECTs to the claim owner across owner- and workspace-keyed tables', async () => {
@@ -46,12 +54,18 @@ describe('RLS enforcement (authenticated role)', () => {
     const ws = await testDb.pglite.query<{ id: string }>(`SELECT id FROM workspaces ORDER BY id`);
     const tasks = await testDb.pglite.query<{ id: string }>(`SELECT id FROM tasks ORDER BY id`);
     const users = await testDb.pglite.query<{ id: string }>(`SELECT id FROM users ORDER BY id`);
+    const skills = await testDb.pglite.query<{ id: string }>(`SELECT id FROM skills ORDER BY id`);
+    const usage = await testDb.pglite.query<{ skill_key: string }>(
+      `SELECT skill_key FROM skill_usage ORDER BY skill_key`
+    );
 
     await testDb.pglite.exec(`RESET ROLE`);
 
     expect(ws.rows.map((r) => r.id)).toEqual(['ws-a']);
     expect(tasks.rows.map((r) => r.id)).toEqual(['task-a']); // workspace-keyed policy
     expect(users.rows.map((r) => r.id)).toEqual(['owner-a']); // self-policy
+    expect(skills.rows.map((r) => r.id)).toEqual(['skill-a']); // 0029 policy
+    expect(usage.rows.map((r) => r.skill_key)).toEqual(['platform:skill-a']);
   });
 
   it('rejects writing a row into another owner workspace (WITH CHECK)', async () => {
