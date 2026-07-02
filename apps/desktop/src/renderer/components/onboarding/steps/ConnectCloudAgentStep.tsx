@@ -5,6 +5,12 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { api, type PostHogCodeStatus } from '../../../lib/api';
 import { ProviderIcon } from '../../../lib/providerMeta';
+import {
+  GetKeyLink,
+  POSTHOG_API_KEYS_URL,
+  ANTHROPIC_API_KEYS_URL,
+  POSTHOG_KEY_SCOPE_NOTE,
+} from '../../widgets/GetKeyLink';
 import type { CloudProviderType } from '@talyn/shared';
 
 interface ConnectCloudAgentStepProps {
@@ -150,6 +156,7 @@ function PostHogForm({
         onChange={(e) => setApiKey(e.target.value)}
         disabled={saving}
       />
+      <GetKeyLink url={POSTHOG_API_KEYS_URL} note={POSTHOG_KEY_SCOPE_NOTE} />
       <div className="grid grid-cols-2 gap-3">
         <Input
           label="Project (team) id"
@@ -233,6 +240,7 @@ function ClaudeForm({
         onChange={(e) => setApiKey(e.target.value)}
         disabled={saving}
       />
+      <GetKeyLink url={ANTHROPIC_API_KEYS_URL} />
       {error && (
         <p className="flex items-start gap-2 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />

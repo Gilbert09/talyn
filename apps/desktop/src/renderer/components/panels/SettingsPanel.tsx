@@ -42,6 +42,12 @@ import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
+import {
+  GetKeyLink,
+  POSTHOG_API_KEYS_URL,
+  ANTHROPIC_API_KEYS_URL,
+  POSTHOG_KEY_SCOPE_NOTE,
+} from '../widgets/GetKeyLink';
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { isOwnerCovered } from '../../lib/githubInstall';
@@ -886,6 +892,7 @@ function IntegrationsSettings() {
           fields={[
             { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
           ]}
+          keyHelp={{ url: ANTHROPIC_API_KEYS_URL }}
         />
 
         <ClaudeModelSelector />
@@ -1060,6 +1067,7 @@ function CloudProviderCard({
   blurb,
   connectedBlurb,
   fields,
+  keyHelp,
 }: {
   type: string;
   displayName: string;
@@ -1067,6 +1075,8 @@ function CloudProviderCard({
   blurb: string;
   connectedBlurb: string;
   fields: CloudProviderField[];
+  /** Optional "Get a key ↗" link (+ scope note) shown under the form. */
+  keyHelp?: { url: string; note?: string };
 }) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // Connection status comes from the shared store (preloaded + kept fresh by
@@ -1179,6 +1189,7 @@ function CloudProviderCard({
                   disabled={isSaving}
                 />
               ))}
+              {keyHelp && <GetKeyLink url={keyHelp.url} note={keyHelp.note} />}
               {error && (
                 <div className="text-sm text-destructive flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1333,6 +1344,7 @@ function PostHogCodeCard() {
                 onChange={(e) => setApiKey(e.target.value)}
                 disabled={isSaving}
               />
+              <GetKeyLink url={POSTHOG_API_KEYS_URL} note={POSTHOG_KEY_SCOPE_NOTE} />
               <div className="grid grid-cols-2 gap-3">
                 <Input
                   label="Project (team) id"
