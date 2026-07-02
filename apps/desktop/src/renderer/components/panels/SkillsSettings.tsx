@@ -43,7 +43,7 @@ export function SkillsSettings() {
   );
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const repoId = selectedRepoId ?? workspaceRepos[0]?.id ?? null;
-  const { skills, localFiles, repoStatus, loading, refresh } = useSkills(
+  const { skills, localFiles, repoStatus, refreshing, refresh } = useSkills(
     currentWorkspaceId,
     repoId
   );
@@ -321,10 +321,10 @@ export function SkillsSettings() {
               variant="ghost"
               className="h-7 w-7 p-0"
               title="Re-fetch from GitHub"
-              disabled={loading || !repoId}
+              disabled={refreshing || !repoId}
               onClick={() => void refresh({ refreshRepo: true })}
             >
-              {loading ? (
+              {refreshing ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <RefreshCw className="w-3.5 h-3.5" />
