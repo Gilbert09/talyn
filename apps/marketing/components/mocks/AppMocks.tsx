@@ -16,8 +16,12 @@ import {
   AlertTriangle,
   Loader2,
   ExternalLink,
+  FolderGit2,
   GitBranch,
+  Laptop,
+  Search,
   Sparkles,
+  Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -427,6 +431,103 @@ export function MockPrDetail(_props: MockProps) {
   );
 }
 
+/* ---------- skill picker (mirrors SkillPickerModal over the PR list) ---------- */
+
+const skillRows = [
+  {
+    name: "pr-review",
+    desc: "Deep review: correctness, tests, and API surface",
+    source: "Repo",
+    icon: FolderGit2,
+    uses: "×12",
+    hot: true,
+  },
+  {
+    name: "security-sweep",
+    desc: "Scan the diff for authz gaps and injection risks",
+    source: "Talyn",
+    icon: Sparkles,
+    uses: "×7",
+    hot: true,
+  },
+  {
+    name: "changelog-entry",
+    desc: "Draft the changelog entry from the diff",
+    source: "Local",
+    icon: Laptop,
+    uses: "",
+    hot: false,
+  },
+  {
+    name: "perf-audit",
+    desc: "Flag N+1s and hot-path allocations in the change",
+    source: "Repo",
+    icon: FolderGit2,
+    uses: "",
+    hot: false,
+  },
+];
+
+export function MockSkillPicker(_props: MockProps) {
+  return (
+    <div className="relative flex h-[360px] bg-white text-left">
+      <Sidebar active="prs" />
+      {/* dimmed PR list behind the modal */}
+      <div className="flex min-w-0 flex-1 flex-col opacity-40">
+        <FilterBar />
+        {prRows.slice(0, 3).map((r) => (
+          <div key={r.title} className="flex items-center gap-3 border-b border-line px-4 py-2.5">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-ink">{r.title}</p>
+              <p className="truncate font-mono text-[10px] text-ink-400">{r.sub}</p>
+            </div>
+            <StatusPill {...r.pill} />
+          </div>
+        ))}
+      </div>
+
+      {/* the picker */}
+      <div className="absolute inset-0 flex items-center justify-center bg-ink/10 p-4">
+        <div className="w-full max-w-xs rounded-xl border border-line bg-white p-3 shadow-soft">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+            <Wand2 className="h-3.5 w-3.5 text-clay" />
+            Run a skill on sundial/web#412
+          </p>
+          <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-line bg-paper-50 px-2 py-1.5 text-[11px] text-ink-400">
+            <Search className="h-3 w-3" /> Search skills…
+          </div>
+          <p className="mt-2.5 px-1 text-[9px] font-medium uppercase tracking-wide text-ink-400">
+            Frequently used
+          </p>
+          <div className="mt-1 space-y-0.5">
+            {skillRows.map((s, i) => (
+              <div
+                key={s.name}
+                className={cn(
+                  "flex items-start gap-2 rounded-lg px-2 py-1.5",
+                  i === 0 && "bg-paper-200"
+                )}
+              >
+                <s.icon className="mt-0.5 h-3 w-3 shrink-0 text-ink-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink">
+                    {s.name}
+                    <span className="rounded border border-line px-1 py-px text-[8px] font-normal uppercase tracking-wide text-ink-400">
+                      {s.source}
+                    </span>
+                    {s.uses && <span className="text-[9px] font-normal text-ink-400">{s.uses}</span>}
+                  </p>
+                  <p className="truncate text-[10px] text-ink-400">{s.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------- onboarding ---------- */
 
 export function MockOnboarding(_props: MockProps) {
@@ -464,6 +565,7 @@ export const MOCKS = {
   "task-running": MockTaskRunning,
   "merge-queue": MockMergeQueue,
   "pr-detail": MockPrDetail,
+  "skill-picker": MockSkillPicker,
   onboarding: MockOnboarding,
 } as const;
 

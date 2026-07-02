@@ -12,7 +12,7 @@ export function Features() {
         <SectionHeading
           kicker="Features"
           title="The PR busywork, handled."
-          sub="Four things Talyn does so you can stay in flow."
+          sub="Five things Talyn does so you can stay in flow."
         />
 
         <div className="mt-16 space-y-24">

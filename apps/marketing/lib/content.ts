@@ -84,7 +84,7 @@ export const how = {
     {
       n: "03",
       title: "Delegate, or let it auto-fix",
-      body: "Hit \"fix this PR\" and a cloud agent resolves CI and pushes the fix to the branch. Or flag it keep-mergeable and Talyn does it the moment things go red.",
+      body: "Hit \"fix this PR\" and a cloud agent resolves CI and pushes the fix to the branch. Run one of your skills on it — a review pass, a security sweep. Or flag it keep-mergeable and Talyn does it the moment things go red.",
       shot: "task-running",
     },
   ],
@@ -132,6 +132,19 @@ export const features = [
     flip: false,
   },
   {
+    id: "skills",
+    eyebrow: "Skills",
+    title: "Your playbooks, runnable on any PR.",
+    body: "Skills are reusable agent playbooks — a security sweep, your team's review checklist, a changelog writer. Talyn finds them everywhere they already live: committed to the repo, sitting in ~/.claude/skills on your machine, or saved to your workspace. Hit the wand on any PR, pick one, and a cloud agent runs it against that PR — posting the review or pushing the fix.",
+    bullets: [
+      "Picks up SKILL.md files from the repo, your machine, and your workspace — zero setup",
+      "Searchable picker with your most-used skills on top",
+      "Output lands on the PR: a single review comment, or commits to the branch",
+    ],
+    shot: "skill-picker",
+    flip: true,
+  },
+  {
     id: "context",
     eyebrow: "Full context, zero tabs",
     title: "Know what's blocking. Know what's ready.",
@@ -142,7 +155,7 @@ export const features = [
       "Queue the ready ones straight to merge",
     ],
     shot: "pr-detail",
-    flip: true,
+    flip: false,
   },
 ];
 
@@ -222,6 +235,10 @@ export const faq = [
   {
     q: "Where does the work actually happen?",
     a: "Agent runs happen in your provider's cloud, under your account. Talyn is the desktop control surface that kicks them off, streams the progress live, and links the resulting PR back onto your dashboard.",
+  },
+  {
+    q: "What are skills?",
+    a: "Reusable agent playbooks — SKILL.md files, the same format Claude Code uses. Talyn discovers them in the PR's repo (.claude/skills), on your machine (~/.claude/skills), and in your workspace, and lets you run any of them against a PR with one click. The agent follows the skill and posts its output back to the PR — as a review comment or as commits to the branch.",
   },
   {
     q: "How does auto-keep-mergeable work?",
