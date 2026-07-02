@@ -5,7 +5,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   Check,
-  ChevronDown,
   FolderGit2,
   Laptop,
   Loader2,
@@ -302,20 +301,17 @@ export function SkillsSettings() {
           </h4>
           <div className="flex items-center gap-2">
             {workspaceRepos.length > 1 && (
-              <div className="relative">
-                <select
-                  value={repoId ?? ''}
-                  onChange={(e) => setSelectedRepoId(e.target.value || null)}
-                  className="h-7 max-w-[220px] appearance-none truncate rounded-md border bg-background pl-2 pr-7 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                >
-                  {workspaceRepos.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.fullName}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 opacity-50" />
-              </div>
+              <select
+                value={repoId ?? ''}
+                onChange={(e) => setSelectedRepoId(e.target.value || null)}
+                className="max-w-[240px] shrink-0 rounded-md border bg-background px-2 py-1 text-xs"
+              >
+                {workspaceRepos.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.fullName}
+                  </option>
+                ))}
+              </select>
             )}
             {workspaceRepos.length === 1 && (
               <span className="text-xs text-muted-foreground">{workspaceRepos[0].fullName}</span>

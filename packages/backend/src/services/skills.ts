@@ -3,9 +3,13 @@
 // order the desktop's skill picker.
 //
 // Repo skills live at `.claude/skills/<dir>/SKILL.md` on the repo's default
-// branch. Fork PRs need no special handling: a task's repositoryId always
-// points at the watched base repo, so discovery reads the base repo's
-// defaultBranch.
+// branch. Discovery passes NO ref to the contents API on purpose — GitHub
+// then resolves the repo's actual default branch. The repositories row's
+// `defaultBranch` column is untrustworthy here: addWatchedRepo hardcodes
+// 'main' and nothing corrects it, so a master-defaulted repo (e.g.
+// posthog/posthog) would 404 on ?ref=main and report "no skills".
+// Fork PRs need no special handling: a task's repositoryId always points at
+// the watched base repo.
 
 import { eq, sql } from 'drizzle-orm';
 import {
@@ -56,14 +60,13 @@ export function clearRepoSkillCache(): void {
 async function loadRepoIdentity(
   repositoryId: string,
   workspaceId: string
-): Promise<{ owner: string; repo: string; defaultBranch: string } | null> {
+): Promise<{ owner: string; repo: string } | null> {
   const db = getDbClient();
   const rows = await db
     .select({
       id: repositoriesTable.id,
       workspaceId: repositoriesTable.workspaceId,
       url: repositoriesTable.url,
-      defaultBranch: repositoriesTable.defaultBranch,
     })
     .from(repositoriesTable)
     .where(eq(repositoriesTable.id, repositoryId))
@@ -72,7 +75,7 @@ async function loadRepoIdentity(
   if (!row || row.workspaceId !== workspaceId) return null;
   const identity = parseRepoUrl(row.url);
   if (!identity) return null;
-  return { owner: identity.owner, repo: identity.repo, defaultBranch: row.defaultBranch };
+  return { owner: identity.owner, repo: identity.repo };
 }
 
 async function fetchRepoSkills(
@@ -82,12 +85,14 @@ async function fetchRepoSkills(
   const repo = await loadRepoIdentity(repositoryId, workspaceId);
   if (!repo) return { status: 'error', skills: [] };
 
+  // ref deliberately omitted throughout — GitHub resolves the repo's real
+  // default branch (see the header comment).
   const listing = await githubService.getDirectoryListing(
     workspaceId,
     repo.owner,
     repo.repo,
     SKILLS_DIR,
-    repo.defaultBranch
+    undefined
   );
   if (listing === null) return { status: 'none', skills: [] };
 
@@ -99,7 +104,7 @@ async function fetchRepoSkills(
         repo.owner,
         repo.repo,
         dir.path,
-        repo.defaultBranch
+        undefined
       );
       const skillFile = dirListing?.find((e) => e.type === 'file' && e.name === 'SKILL.md');
       if (!dirListing || !skillFile) return null;
@@ -109,7 +114,7 @@ async function fetchRepoSkills(
         repo.owner,
         repo.repo,
         skillFile.path,
-        repo.defaultBranch,
+        undefined,
         SKILL_MAX_BYTES
       );
       if (!file) return null;

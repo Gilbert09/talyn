@@ -85,8 +85,9 @@ describe('skills service', () => {
       expect(skill.repoPath).toBe('.claude/skills/reviewer/SKILL.md');
       expect(skill.hasSupportingFiles).toBe(true);
       expect(skill.content).toBe(SKILL_MD);
-      // Discovery must use the repo's default branch as the ref.
-      expect(mockListing).toHaveBeenCalledWith('ws1', 'acme', 'widgets', '.claude/skills', 'develop');
+      // No ref on purpose: the stored defaultBranch is unreliable (hardcoded
+      // 'main' at addWatchedRepo) — GitHub resolves the real default branch.
+      expect(mockListing).toHaveBeenCalledWith('ws1', 'acme', 'widgets', '.claude/skills', undefined);
     });
 
     it('returns status none when the skills dir is missing (404)', async () => {
