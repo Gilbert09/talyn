@@ -16,9 +16,26 @@ import { requireMcpToken } from '../mcp/requireMcpToken.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler, wrapAsyncRoutes } from '../middleware/asyncHandler.js';
 import { ownerScope } from '../middleware/ownerScope.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export function setupRoutes(app: Express): void {
   const api = '/api/v1';
+
+  // Broad per-IP ceiling over the whole API. The desktop client is
+  // poll-happy — its densest legitimate consumer is the Debug panel's 3s
+  // snapshot (~20 req/min) plus WS-driven refetch bursts on reconnect, so
+  // real usage peaks around ~100 req/min from one IP. 1000/min is ~10x that
+  // headroom: it never touches a normal desktop but stops a runaway client
+  // or scripted abuse from monopolising the backend. (GitHub webhooks mount
+  // on the app BEFORE these routes and are not affected.)
+  app.use(
+    `${api}`,
+    rateLimit({
+      windowMs: 60_000,
+      max: 1000,
+      message: 'Too many API requests — slow down.',
+    })
+  );
 
   // Every router is wrapped so async handler rejections flow into the
   // arity-4 error middleware below (Express 4 doesn't catch them itself —
@@ -34,7 +51,20 @@ export function setupRoutes(app: Express): void {
   // Supabase JWT), so it mounts BEFORE requireAuth with its own gate. The
   // tool handlers call the authenticated REST API below over loopback with
   // internal-proxy headers, so owner scoping still applies end-to-end.
-  app.use(`${api}/mcp`, asyncHandler(requireMcpToken), mount(mcpRoutes()));
+  // Every auth attempt on this mount is a DB round-trip (token lookup), so a
+  // tighter per-IP limiter sits in FRONT of the gate: 300/min (5/s sustained)
+  // is far above what a legitimate MCP client's tool-call cadence needs, but
+  // stops an unauthenticated brute force from turning into a DB hammer.
+  app.use(
+    `${api}/mcp`,
+    rateLimit({
+      windowMs: 60_000,
+      max: 300,
+      message: 'Too many MCP requests — slow down.',
+    }),
+    asyncHandler(requireMcpToken),
+    mount(mcpRoutes())
+  );
 
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.

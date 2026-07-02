@@ -88,6 +88,12 @@ async function main() {
   await markCloudEnvironmentsConnected();
 
   const app = express();
+  // Railway terminates TLS one proxy hop in front of us. Without this,
+  // `req.ip` is the proxy's address for every request, so any per-IP rate
+  // limiter collapses into one global bucket (and one abuser rate-limits
+  // everyone). Exactly 1 hop — trusting more would let clients spoof
+  // X-Forwarded-For.
+  app.set('trust proxy', 1);
   // Only real browser origins need CORS. Desktop/CLI/MCP clients send no
   // Origin header (or `null`), so they're always allowed. Env-override
   // `ALLOWED_ORIGINS` is a comma-separated allowlist — keep it empty in

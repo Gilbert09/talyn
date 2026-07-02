@@ -14,8 +14,10 @@ async function makeServer(opts: {
   max: number;
   keyFn?: (req: express.Request) => string;
   message?: string;
+  trustProxy?: number;
 }): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
+  if (opts.trustProxy !== undefined) app.set('trust proxy', opts.trustProxy);
   app.use(express.json());
   app.get('/probe', rateLimit(opts), (_req, res) => {
     res.json({ ok: true });
@@ -147,5 +149,33 @@ describe('rateLimit middleware', () => {
     // /unlimited has no limiter attached — all good.
     expect((await fetch(`${s.url}/unlimited`)).status).toBe(200);
     expect((await fetch(`${s.url}/unlimited`)).status).toBe(200);
+  });
+
+  it('with trust proxy = 1, distinct X-Forwarded-For clients get independent buckets', async () => {
+    // Production runs behind exactly one Railway proxy hop — req.ip must be
+    // the forwarded client address, not the proxy's, or every client shares
+    // one bucket.
+    const s = await makeServer({ windowMs: 60_000, max: 2, trustProxy: 1 });
+    close = s.close;
+
+    const clientA = { 'x-forwarded-for': '203.0.113.10' };
+    const clientB = { 'x-forwarded-for': '203.0.113.20' };
+
+    await hitN(`${s.url}/probe`, 2, clientA);
+    expect((await fetch(`${s.url}/probe`, { headers: clientA })).status).toBe(429);
+    // A different forwarded client is untouched.
+    expect((await fetch(`${s.url}/probe`, { headers: clientB })).status).toBe(200);
+  });
+
+  it('without trust proxy, X-Forwarded-For is ignored (no spoofable bypass)', async () => {
+    const s = await makeServer({ windowMs: 60_000, max: 2 });
+    close = s.close;
+
+    // Both "clients" resolve to the socket IP — one shared bucket, so a
+    // spoofed header cannot mint fresh quota.
+    await hitN(`${s.url}/probe`, 2, { 'x-forwarded-for': '203.0.113.10' });
+    expect(
+      (await fetch(`${s.url}/probe`, { headers: { 'x-forwarded-for': '203.0.113.20' } })).status
+    ).toBe(429);
   });
 });
