@@ -26,7 +26,7 @@ export function LoginScreen() {
           </div>
           <h1 className="font-display text-2xl font-semibold tracking-tight">Talyn</h1>
           <p className="text-sm text-muted-foreground">
-            Sign in to continue. Your tasks, workspaces, and environments stay on your account.
+            Sign in to continue. Your tasks, workspaces, and connections stay on your account.
           </p>
         </div>
 

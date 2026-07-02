@@ -8,9 +8,8 @@
  * triggers a manual check or the restart via the `updater:check` /
  * `updater:quit-and-install` invoke handlers.
  *
- * macOS note: Squirrel.Mac only applies updates from a signed + notarized
- * build. Until an Apple Developer ID cert is wired (see package.json
- * build.mac.notarize), this runs but never successfully installs on mac.
+ * macOS: builds are signed + notarized (package.json build.mac), so
+ * Squirrel.Mac applies updates end-to-end — verified working.
  */
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';

@@ -44,12 +44,6 @@ function openExternalGuarded(url: string): void {
 // open-url can fire during app launch, before any window exists.
 let pendingAuthCallbackUrl: string | null = null;
 
-ipcMain.on('ipc-example', async (event, arg) => {
-  const msgTemplate = (pingPong: string) => `IPC test: ${pingPong}`;
-  console.log(msgTemplate(arg));
-  event.reply('ipc-example', msgTemplate('pong'));
-});
-
 // ============================================================================
 // Auth deep-link handling
 // ============================================================================

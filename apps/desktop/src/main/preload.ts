@@ -14,28 +14,9 @@ export interface LocalSkillFile {
   content: string | null;
 }
 
-export type Channels = 'ipc-example';
-
 const electronHandler = {
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,
-  ipcRenderer: {
-    sendMessage(channel: Channels, ...args: unknown[]) {
-      ipcRenderer.send(channel, ...args);
-    },
-    on(channel: Channels, func: (...args: unknown[]) => void) {
-      const subscription = (_event: IpcRendererEvent, ...args: unknown[]) =>
-        func(...args);
-      ipcRenderer.on(channel, subscription);
-
-      return () => {
-        ipcRenderer.removeListener(channel, subscription);
-      };
-    },
-    once(channel: Channels, func: (...args: unknown[]) => void) {
-      ipcRenderer.once(channel, (_event, ...args) => func(...args));
-    },
-  },
   auth: {
     /** Open an OAuth URL in the user's default browser. */
     openExternal(url: string): Promise<void> {
