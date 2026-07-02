@@ -20,8 +20,12 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
       />
       {/* Content. The wrapper must provide width context (w-full + centering)
           or DialogContent's `w-full max-w-*` collapses to intrinsic width and
-          every dialog renders as narrow as its widest child. */}
-      <div className="relative z-50 flex w-full justify-center px-4">{children}</div>
+          every dialog renders as narrow as its widest child. It's also
+          pointer-events-none (with DialogContent re-enabling them) so clicks
+          beside the card fall through to the backdrop and close the dialog. */}
+      <div className="pointer-events-none relative z-50 flex w-full justify-center px-4">
+        {children}
+      </div>
     </div>
   );
 }
@@ -42,7 +46,7 @@ export function DialogContent({
         // `relative` anchors the absolute close button below INSIDE the card —
         // without it the X positions against the full-width dialog wrapper and
         // floats at the viewport edge.
-        'relative bg-background border rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-auto',
+        'pointer-events-auto relative bg-background border rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-auto',
         className
       )}
       {...props}
