@@ -1,6 +1,11 @@
 import type { PostHogCodeRuntimeAdapter } from '@talyn/shared';
 import type { AcpLogEntry } from './acpConverter.js';
 import { debugBus } from '../debugBus.js';
+import { fetchWithTimeout, type TimedFetchResponse } from '../httpTimeout.js';
+
+/** Headers-in deadline for opening the SSE stream (the body then streams
+ *  unbounded — idle detection lives in streamer.ts). */
+const STREAM_OPEN_TIMEOUT_MS = 30_000;
 
 /**
  * Default model for PostHog Code runs. The API requires a model on every
@@ -125,7 +130,27 @@ export class PostHogCodeClient {
       Accept: 'text/event-stream',
     };
     if (opts.lastEventId) headers['Last-Event-ID'] = opts.lastEventId;
-    const res = await fetch(url, { method: 'GET', headers, signal: opts.signal });
+    // Bound only the connect (headers-in): a stalled handshake must not hang
+    // the streamer forever, but the SSE body itself is long-lived. The
+    // caller's signal is bridged onto our controller so `stop()` still
+    // aborts mid-body after the connect timer is disarmed.
+    const controller = new AbortController();
+    if (opts.signal?.aborted) controller.abort();
+    opts.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    const connectTimer = setTimeout(() => controller.abort(), STREAM_OPEN_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted && !opts.signal?.aborted) {
+        throw new Error(
+          `PostHog Code stream open timed out after ${STREAM_OPEN_TIMEOUT_MS}ms: ${url}`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(connectTimer);
+    }
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => '');
       throw new Error(
@@ -147,16 +172,20 @@ export class PostHogCodeClient {
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const startedAt = Date.now();
-    let res: Response;
+    let res: TimedFetchResponse;
     try {
-      res = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
+      res = await fetchWithTimeout(
+        url,
+        {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+        { label: 'PostHog Code' },
+      );
     } catch (err) {
       debugBus.recordHttp({
         service: 'posthog_code',
@@ -168,7 +197,7 @@ export class PostHogCodeClient {
       });
       throw err;
     }
-    const text = await res.text();
+    const text = res.bodyText;
     debugBus.recordHttp({
       service: 'posthog_code',
       method,

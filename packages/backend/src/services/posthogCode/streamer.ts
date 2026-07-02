@@ -45,6 +45,12 @@ const MAX_EMPTY_RECONNECTS = 4;
 /** session_logs page size (the API caps `limit` at 5000) and a safety bound. */
 const SESSION_LOG_PAGE = 5000;
 const SESSION_LOG_MAX_PAGES = 50;
+// A connected SSE that goes completely silent (no frames, not even
+// keepalives) means the socket is dead but undici never noticed — without a
+// bound, `reader.read()` blocks forever and the stream entry leaks. PostHog
+// sends keepalive frames well inside this window on a healthy connection,
+// so 120s of true silence is a wedge, not a quiet run.
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 interface ActiveStream {
   taskId: string;
@@ -255,7 +261,17 @@ class PostHogCodeStreamer {
 
     try {
       for (;;) {
-        const { done, value } = await reader.read();
+        const read = await raceWithIdleTimeout(reader.read(), STREAM_IDLE_TIMEOUT_MS);
+        if (read === IDLE_TIMED_OUT) {
+          // Clean error path: cancel the dead reader and surface a stream
+          // error — run()'s catch counts it as a reconnect attempt and
+          // eventually falls back to the durable session_logs backfill.
+          void reader.cancel().catch(() => undefined);
+          throw new StreamError(
+            `SSE stream idle for ${STREAM_IDLE_TIMEOUT_MS}ms — aborting dead connection`,
+          );
+        }
+        const { done, value } = read;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
@@ -411,6 +427,29 @@ export function parseSseFrame(frame: string): {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Sentinel returned by {@link raceWithIdleTimeout} when the timer wins. */
+export const IDLE_TIMED_OUT = Symbol('idle-timed-out');
+
+/**
+ * Race a promise against an idle timer. Resolves with the promise's value,
+ * or with {@link IDLE_TIMED_OUT} once `ms` elapses first. The timer is
+ * cleared when the promise settles, so it never keeps the process alive.
+ * Exported for tests.
+ */
+export function raceWithIdleTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | typeof IDLE_TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<typeof IDLE_TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(IDLE_TIMED_OUT), ms);
+  });
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    timeout,
+  ]);
 }
 
 /**

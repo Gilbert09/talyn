@@ -1,5 +1,6 @@
 import { DEFAULT_CLAUDE_MODEL_ID } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
+import { fetchWithTimeout, type TimedFetchResponse } from '../httpTimeout.js';
 
 /**
  * Thin typed wrapper over Anthropic's **Managed Agents API** — the hosted
@@ -151,18 +152,22 @@ export class ClaudeManagedAgentsClient {
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const startedAt = Date.now();
-    let res: Response;
+    let res: TimedFetchResponse;
     try {
-      res = await fetch(url, {
-        method,
-        headers: {
-          'x-api-key': this.apiKey,
-          'anthropic-version': ANTHROPIC_VERSION,
-          'anthropic-beta': MANAGED_AGENTS_BETA,
-          'content-type': 'application/json',
+      res = await fetchWithTimeout(
+        url,
+        {
+          method,
+          headers: {
+            'x-api-key': this.apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+            'anthropic-beta': MANAGED_AGENTS_BETA,
+            'content-type': 'application/json',
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+        { label: 'Claude Managed Agents' },
+      );
     } catch (err) {
       debugBus.recordHttp({
         service: 'claude_managed_agents',
@@ -174,7 +179,7 @@ export class ClaudeManagedAgentsClient {
       });
       throw err;
     }
-    const text = await res.text();
+    const text = res.bodyText;
     debugBus.recordHttp({
       service: 'claude_managed_agents',
       method,

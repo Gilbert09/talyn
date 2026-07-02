@@ -11,6 +11,7 @@ import { getCloudProvider } from './cloudProviders/registry.js';
 import { resolveCloudEnvId } from './prCloudFix.js';
 import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
+import { TickGuard } from './tickGuard.js';
 import { emitTaskStatus } from './websocket.js';
 import { getDbClient, type Database } from '../db/client.js';
 import {
@@ -39,7 +40,10 @@ void PRIORITY_WEIGHTS;
  */
 class TaskQueueService extends EventEmitter {
   private processingInterval: NodeJS.Timeout | null = null;
-  private isProcessing = false;
+  // Re-entry guard with a wedge watchdog: a plain boolean flag stays held
+  // forever if one dispatch await never settles, silently freezing the queue
+  // (see tickGuard.ts for the prod incidents behind this pattern).
+  private guard = new TickGuard('taskQueue');
   private shuttingDown = false;
 
   private get db(): Database {
@@ -128,8 +132,7 @@ class TaskQueueService extends EventEmitter {
   }
 
   async processQueue(): Promise<void> {
-    if (this.isProcessing) return;
-    this.isProcessing = true;
+    if (!this.guard.tryBegin()) return;
 
     try {
       const queuedTasks = await this.getQueuedTasks();
@@ -201,7 +204,7 @@ class TaskQueueService extends EventEmitter {
         }
       }
     } finally {
-      this.isProcessing = false;
+      this.guard.end();
     }
   }
 
