@@ -28,6 +28,42 @@ const APP_VERSION = process.env.TALYN_APP_VERSION || '';
 
 let initialized = false;
 
+// Mirror of the user's analytics opt-out. posthog-js persists its own
+// opt-out flag, but we keep this app-owned copy so the Settings toggle can
+// render synchronously (and before analytics is even initialised).
+const OPT_OUT_KEY = 'fastowl-analytics-opt-out';
+
+/** Whether the user opted out of usage analytics + session replay. */
+export function getAnalyticsOptOut(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(OPT_OUT_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Toggle analytics + session replay. Persists the choice and applies it to
+ * the live PostHog client immediately (stop/start recording, opt in/out of
+ * event capture).
+ */
+export function setAnalyticsOptOut(optedOut: boolean): void {
+  try {
+    localStorage.setItem(OPT_OUT_KEY, String(optedOut));
+  } catch {
+    // Privacy mode — the in-memory client state below still applies.
+  }
+  if (!initialized) return;
+  if (optedOut) {
+    posthog.stopSessionRecording();
+    posthog.opt_out_capturing();
+  } else {
+    posthog.opt_in_capturing();
+    posthog.startSessionRecording();
+  }
+}
+
 /** Whether a PostHog project key was baked into this build. */
 export function isAnalyticsConfigured(): boolean {
   return Boolean(KEY);
@@ -37,6 +73,8 @@ export function isAnalyticsConfigured(): boolean {
 export function initAnalytics(): void {
   if (initialized || !KEY) return;
   initialized = true;
+
+  const optedOut = getAnalyticsOptOut();
 
   posthog.init(KEY, {
     api_host: HOST,
@@ -50,6 +88,9 @@ export function initAnalytics(): void {
     capture_pageview: false,
     autocapture: true,
     disable_session_recording: false,
+    // Honour a previously-persisted opt-out from the very first event —
+    // don't wait for the Settings toggle to mount.
+    opt_out_capturing_by_default: optedOut,
     // Exception autocapture is noisy against a dev server; enable it in
     // packaged builds only.
     capture_exceptions: IS_DEV
@@ -84,7 +125,9 @@ export function initAnalytics(): void {
       return event;
     },
     loaded: (ph) => {
-      ph.startSessionRecording();
+      // Session replay is on by default but respects the opt-out toggle
+      // (Settings → Account → Privacy).
+      if (!getAnalyticsOptOut()) ph.startSessionRecording();
     },
   });
 

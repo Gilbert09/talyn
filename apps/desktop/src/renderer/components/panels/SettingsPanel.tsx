@@ -55,7 +55,12 @@ import {
   setMergeBlockedNotifyEnabled,
 } from '../../hooks/useApi';
 import { useAuth } from '../auth/AuthProvider';
-import { trackEvent } from '../../lib/analytics';
+import {
+  trackEvent,
+  isAnalyticsConfigured,
+  getAnalyticsOptOut,
+  setAnalyticsOptOut,
+} from '../../lib/analytics';
 import {
   REPO_CACHE_TTL_MS,
   readRepoCache,
@@ -1973,6 +1978,14 @@ function AboutSettings() {
 
 function AccountSettings() {
   const { user, signOut } = useAuth();
+  const analyticsConfigured = isAnalyticsConfigured();
+  // Toggle semantics: checked = sharing enabled = NOT opted out.
+  const [shareAnalytics, setShareAnalytics] = useState(!getAnalyticsOptOut());
+
+  const toggleShareAnalytics = (next: boolean) => {
+    setAnalyticsOptOut(!next);
+    setShareAnalytics(next);
+  };
 
   return (
     <div className="space-y-6">
@@ -1986,6 +1999,48 @@ function AccountSettings() {
           <Button variant="outline" onClick={signOut} className="gap-2">
             <LogOut className="w-4 h-4" /> Sign out
           </Button>
+        </Card>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-4">Privacy</h3>
+        <Card className="p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h4 className="font-medium">Share usage data &amp; session replays</h4>
+              <p className="text-sm text-muted-foreground mt-1">
+                Helps us improve Talyn by collecting usage events, errors, and
+                session replays of the app UI.
+              </p>
+              {!analyticsConfigured && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Analytics isn&apos;t enabled in this build — nothing is
+                  collected either way.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={shareAnalytics}
+              disabled={!analyticsConfigured}
+              onClick={() => toggleShareAnalytics(!shareAnalytics)}
+              className={cn(
+                'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors',
+                shareAnalytics && analyticsConfigured ? 'bg-primary' : 'bg-muted',
+                !analyticsConfigured && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform',
+                  shareAnalytics && analyticsConfigured
+                    ? 'translate-x-5'
+                    : 'translate-x-0.5'
+                )}
+              />
+            </button>
+          </div>
         </Card>
       </div>
     </div>

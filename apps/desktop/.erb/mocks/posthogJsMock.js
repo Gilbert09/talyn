@@ -17,6 +17,8 @@ const posthog = {
   setPersonProperties: noop,
   opt_in_capturing: noop,
   opt_out_capturing: noop,
+  startSessionRecording: noop,
+  stopSessionRecording: noop,
 };
 
 module.exports = posthog;
