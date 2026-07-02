@@ -11,7 +11,7 @@ import type {
 } from '@talyn/shared';
 import { domainEvents } from './events.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
-import { setLocalDelivery, publishBroadcast, publishToWorkspace } from './wsBus.js';
+import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser } from './wsBus.js';
 import { verifyTokenAndGetUser, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
@@ -66,7 +66,11 @@ export function setupWebSocket(
   // Let wsBus deliver events that arrive from OTHER replicas to our local
   // clients. We hand it the local-only delivery functions (not the public
   // broadcasters) so a remote event isn't re-published into a loop.
-  setLocalDelivery({ all: deliverBroadcastLocal, workspace: deliverToWorkspaceLocal });
+  setLocalDelivery({
+    all: deliverBroadcastLocal,
+    workspace: deliverToWorkspaceLocal,
+    user: deliverToUserLocal,
+  });
 
   wss.on('connection', async (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
@@ -258,6 +262,24 @@ function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
   }
 }
 
+function deliverToUserLocal(userId: string, event: WSEvent): void {
+  const message = JSON.stringify(event);
+  let sent = 0;
+  for (const [client, user] of connectionUsers) {
+    if (user.id === userId && client.readyState === WebSocket.OPEN) {
+      client.send(message);
+      sent++;
+    }
+  }
+  if (event.type !== 'debug:event') {
+    debugBus.recordWs({
+      action: 'broadcast',
+      summary: `broadcast ${event.type} → user:${userId.slice(0, 8)} (${sent})`,
+      meta: { type: event.type, userId, recipients: sent },
+    });
+  }
+}
+
 // Broadcast to all clients — local, then fan out to the other replicas.
 export function broadcast(event: WSEvent): void {
   deliverBroadcastLocal(event);
@@ -268,6 +290,14 @@ export function broadcast(event: WSEvent): void {
 export function broadcastToWorkspace(workspaceId: string, event: WSEvent): void {
   deliverToWorkspaceLocal(workspaceId, event);
   publishToWorkspace(workspaceId, event);
+}
+
+// Broadcast to every connection authenticated as `userId` — local, then fan
+// out. For owner-level (not workspace-level) resources like environment
+// markers, where a global broadcast would leak rows across tenants.
+export function broadcastToUser(userId: string, event: WSEvent): void {
+  deliverToUserLocal(userId, event);
+  publishToUser(userId, event);
 }
 
 // Helper functions for common events
@@ -418,16 +448,23 @@ export function emitMergeQueueBlocked(
   });
 }
 
-export function emitEnvironmentStatus(environmentId: string, status: string, error?: string): void {
-  broadcast({
+// Environments are owner-level rows, so these emits are scoped to the owning
+// user — a global broadcast() here sent user A's environment rows to user B.
+export function emitEnvironmentStatus(
+  ownerId: string,
+  environmentId: string,
+  status: string,
+  error?: string
+): void {
+  broadcastToUser(ownerId, {
     type: 'environment:status',
     payload: { environmentId, status, error },
     timestamp: new Date().toISOString(),
   });
 }
 
-export function emitEnvironmentCreated(environment: Environment): void {
-  broadcast({
+export function emitEnvironmentCreated(ownerId: string, environment: Environment): void {
+  broadcastToUser(ownerId, {
     type: 'environment:created',
     payload: { environment },
     timestamp: new Date().toISOString(),

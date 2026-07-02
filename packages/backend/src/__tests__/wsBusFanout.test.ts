@@ -23,13 +23,16 @@ const evt: WSEvent = {
 
 let allDeliveries: WSEvent[];
 let workspaceDeliveries: Array<{ workspaceId: string; event: WSEvent }>;
+let userDeliveries: Array<{ userId: string; event: WSEvent }>;
 
 beforeEach(() => {
   allDeliveries = [];
   workspaceDeliveries = [];
+  userDeliveries = [];
   setLocalDelivery({
     all: (event) => allDeliveries.push(event),
     workspace: (workspaceId, event) => workspaceDeliveries.push({ workspaceId, event }),
+    user: (userId, event) => userDeliveries.push({ userId, event }),
   });
 });
 
@@ -68,6 +71,21 @@ describe('dispatchIncoming', () => {
     expect(result).toBe('delivered');
     expect(workspaceDeliveries).toEqual([{ workspaceId: 'ws-42', event: evt }]);
     expect(allDeliveries).toHaveLength(0);
+  });
+
+  it('delivers a user-scope envelope to the user sink only', () => {
+    const result = dispatchIncoming(
+      envelope({
+        replicaId: 'other-replica:1:abcd',
+        scope: 'user',
+        userId: 'user-a',
+        event: evt,
+      })
+    );
+    expect(result).toBe('delivered');
+    expect(userDeliveries).toEqual([{ userId: 'user-a', event: evt }]);
+    expect(allDeliveries).toHaveLength(0);
+    expect(workspaceDeliveries).toHaveLength(0);
   });
 
   it('ignores malformed JSON without throwing', () => {

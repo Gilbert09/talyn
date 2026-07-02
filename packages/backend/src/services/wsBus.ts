@@ -32,7 +32,8 @@ export const REPLICA_ID = `${process.env.HOSTNAME || 'local'}:${process.pid}:${r
 
 type Envelope =
   | { replicaId: string; scope: 'all'; event: WSEvent }
-  | { replicaId: string; scope: 'workspace'; workspaceId: string; event: WSEvent };
+  | { replicaId: string; scope: 'workspace'; workspaceId: string; event: WSEvent }
+  | { replicaId: string; scope: 'user'; userId: string; event: WSEvent };
 
 /**
  * How wsBus delivers a remotely-received event to THIS replica's local clients.
@@ -44,6 +45,7 @@ type Envelope =
 export interface LocalDelivery {
   all: (event: WSEvent) => void;
   workspace: (workspaceId: string, event: WSEvent) => void;
+  user: (userId: string, event: WSEvent) => void;
 }
 
 let pub: Redis | null = null;
@@ -89,6 +91,7 @@ export function dispatchIncoming(raw: string): 'self' | 'delivered' | 'invalid' 
   if (env.replicaId === REPLICA_ID) return 'self';
   if (!localDeliver) return 'no-sink';
   if (env.scope === 'all') localDeliver.all(env.event);
+  else if (env.scope === 'user') localDeliver.user(env.userId, env.event);
   else localDeliver.workspace(env.workspaceId, env.event);
   return 'delivered';
 }
@@ -104,6 +107,13 @@ export function publishBroadcast(event: WSEvent): void {
 export function publishToWorkspace(workspaceId: string, event: WSEvent): void {
   if (!pub || event.type === 'debug:event') return;
   const env: Envelope = { replicaId: REPLICA_ID, scope: 'workspace', workspaceId, event };
+  void pub.publish(CHANNEL, JSON.stringify(env)).catch(() => undefined);
+}
+
+/** Publish a user-scoped broadcast to the other replicas. No-op when disabled. */
+export function publishToUser(userId: string, event: WSEvent): void {
+  if (!pub || event.type === 'debug:event') return;
+  const env: Envelope = { replicaId: REPLICA_ID, scope: 'user', userId, event };
   void pub.publish(CHANNEL, JSON.stringify(env)).catch(() => undefined);
 }
 

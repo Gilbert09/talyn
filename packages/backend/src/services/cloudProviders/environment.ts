@@ -45,6 +45,7 @@ export async function ensureCloudEnvironment(
   };
   const [inserted] = await db.insert(environmentsTable).values(row).returning();
 
-  // Tell connected clients live so the env appears without an app restart.
-  emitEnvironmentCreated(rowToEnvironment(inserted ?? (row as typeof inserted)));
+  // Tell the owner's connected clients live so the env appears without an
+  // app restart (scoped — other tenants must not see this row).
+  emitEnvironmentCreated(userId, rowToEnvironment(inserted ?? (row as typeof inserted)));
 }

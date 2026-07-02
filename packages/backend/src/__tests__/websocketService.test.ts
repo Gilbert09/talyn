@@ -7,6 +7,7 @@ import {
   broadcastToWorkspace,
   emitTaskStatus,
   emitEnvironmentCreated,
+  emitEnvironmentStatus,
 } from '../services/websocket.js';
 import type { Environment } from '@talyn/shared';
 import * as authModule from '../middleware/auth.js';
@@ -313,9 +314,12 @@ describe('websocket service', () => {
     await closeClient(client);
   });
 
-  it('emitEnvironmentCreated broadcasts the new environment to connected clients', async () => {
-    const client = await authed(serverUrl, 'token-mine');
-    await client.waitFor('connection:status');
+  it('emitEnvironmentCreated reaches only the owning user (no cross-tenant leak)', async () => {
+    const mine = await authed(serverUrl, 'token-mine');
+    const theirs = await authed(serverUrl, 'token-theirs');
+    await mine.waitFor('connection:status');
+    await theirs.waitFor('connection:status');
+    const theirsBaseline = theirs.messages.length;
 
     const env: Environment = {
       id: 'env-ph',
@@ -327,15 +331,48 @@ describe('websocket service', () => {
       renderer: 'structured',
       toolAllowlist: [],
     };
-    emitEnvironmentCreated(env);
+    emitEnvironmentCreated(TEST_USER_ID, env);
 
-    const msg = (await client.waitFor('environment:created')) as {
+    const msg = (await mine.waitFor('environment:created')) as {
       payload: { environment: Environment };
     };
     expect(msg.payload.environment.id).toBe('env-ph');
     expect(msg.payload.environment.type).toBe('posthog_code');
 
-    await closeClient(client);
+    // The other tenant must receive NOTHING for this environment.
+    await new Promise((r) => setTimeout(r, 200));
+    const leaked = theirs.messages
+      .slice(theirsBaseline)
+      .filter((m) => (m as { type?: string }).type === 'environment:created');
+    expect(leaked).toHaveLength(0);
+
+    await closeClient(mine);
+    await closeClient(theirs);
+  });
+
+  it('emitEnvironmentStatus is scoped to the owning user', async () => {
+    const mine = await authed(serverUrl, 'token-mine');
+    const theirs = await authed(serverUrl, 'token-theirs');
+    await mine.waitFor('connection:status');
+    await theirs.waitFor('connection:status');
+    const theirsBaseline = theirs.messages.length;
+
+    emitEnvironmentStatus(TEST_USER_ID, 'env-ph', 'connected');
+
+    const msg = (await mine.waitFor('environment:status')) as {
+      payload: { environmentId: string; status: string };
+    };
+    expect(msg.payload.environmentId).toBe('env-ph');
+    expect(msg.payload.status).toBe('connected');
+
+    await new Promise((r) => setTimeout(r, 200));
+    const leaked = theirs.messages
+      .slice(theirsBaseline)
+      .filter((m) => (m as { type?: string }).type === 'environment:status');
+    expect(leaked).toHaveLength(0);
+
+    await closeClient(mine);
+    await closeClient(theirs);
   });
 
   describe('debug stream gating', () => {
