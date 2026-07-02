@@ -10,6 +10,7 @@ import '@fontsource/space-grotesk/700.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { initAnalytics } from './lib/analytics';
 
 // Initialise PostHog before first render so session replay + autocapture
@@ -18,7 +19,11 @@ initAnalytics();
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
-root.render(<App />);
+root.render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
 
 // calling IPC exposed from preload script
 window.electron?.ipcRenderer.once('ipc-example', (arg) => {

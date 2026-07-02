@@ -9,7 +9,14 @@
 import path from 'path';
 import os from 'os';
 import { promises as fs } from 'fs';
-import { app, BrowserWindow, shell, ipcMain, safeStorage } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  shell,
+  ipcMain,
+  safeStorage,
+} from 'electron';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
@@ -282,6 +289,36 @@ const createWindow = async () => {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Renderer crash recovery: reload the window instead of leaving a dead
+  // white pane. Guard against a tight crash loop — if the renderer dies more
+  // than RENDER_CRASH_MAX times inside RENDER_CRASH_WINDOW_MS, stop reloading
+  // and surface a native dialog instead.
+  const RENDER_CRASH_MAX = 3;
+  const RENDER_CRASH_WINDOW_MS = 60_000;
+  const crashTimestamps: number[] = [];
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    // A deliberate teardown (window close, app quit) isn't a crash.
+    if (details.reason === 'clean-exit') return;
+    const now = Date.now();
+    crashTimestamps.push(now);
+    while (
+      crashTimestamps.length &&
+      now - crashTimestamps[0] > RENDER_CRASH_WINDOW_MS
+    ) {
+      crashTimestamps.shift();
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (crashTimestamps.length > RENDER_CRASH_MAX) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        message: 'Talyn keeps crashing.',
+        detail: `The app window crashed repeatedly (${details.reason}). Try restarting Talyn; if it persists, contact hey@talyn.dev.`,
+      });
+      return;
+    }
+    mainWindow.webContents.reload();
   });
 
   const menuBuilder = new MenuBuilder(mainWindow);
