@@ -5,11 +5,10 @@ import {
   BrowserWindow,
   MenuItemConstructorOptions,
 } from 'electron';
+import { checkForUpdatesInteractively } from './updater';
 
-interface DarwinMenuItemConstructorOptions extends MenuItemConstructorOptions {
-  selector?: string;
-  submenu?: DarwinMenuItemConstructorOptions[] | Menu;
-}
+const SITE_URL = 'https://talyn.dev';
+const SUPPORT_EMAIL_URL = 'mailto:hey@talyn.dev';
 
 export default class MenuBuilder {
   mainWindow: BrowserWindow;
@@ -53,51 +52,36 @@ export default class MenuBuilder {
   }
 
   buildDarwinTemplate(): MenuItemConstructorOptions[] {
-    const subMenuAbout: DarwinMenuItemConstructorOptions = {
-      label: 'Electron',
+    const subMenuApp: MenuItemConstructorOptions = {
+      label: app.name,
       submenu: [
+        { role: 'about' },
         {
-          label: 'About ElectronReact',
-          selector: 'orderFrontStandardAboutPanel:',
-        },
-        { type: 'separator' },
-        { label: 'Services', submenu: [] },
-        { type: 'separator' },
-        {
-          label: 'Hide ElectronReact',
-          accelerator: 'Command+H',
-          selector: 'hide:',
-        },
-        {
-          label: 'Hide Others',
-          accelerator: 'Command+Shift+H',
-          selector: 'hideOtherApplications:',
-        },
-        { label: 'Show All', selector: 'unhideAllApplications:' },
-        { type: 'separator' },
-        {
-          label: 'Quit',
-          accelerator: 'Command+Q',
+          label: 'Check for Updates…',
           click: () => {
-            app.quit();
+            void checkForUpdatesInteractively();
           },
         },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
       ],
     };
-    const subMenuEdit: DarwinMenuItemConstructorOptions = {
+    const subMenuEdit: MenuItemConstructorOptions = {
       label: 'Edit',
       submenu: [
-        { label: 'Undo', accelerator: 'Command+Z', selector: 'undo:' },
-        { label: 'Redo', accelerator: 'Shift+Command+Z', selector: 'redo:' },
+        { role: 'undo' },
+        { role: 'redo' },
         { type: 'separator' },
-        { label: 'Cut', accelerator: 'Command+X', selector: 'cut:' },
-        { label: 'Copy', accelerator: 'Command+C', selector: 'copy:' },
-        { label: 'Paste', accelerator: 'Command+V', selector: 'paste:' },
-        {
-          label: 'Select All',
-          accelerator: 'Command+A',
-          selector: 'selectAll:',
-        },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
       ],
     };
     const subMenuViewDev: MenuItemConstructorOptions = {
@@ -138,46 +122,28 @@ export default class MenuBuilder {
         },
       ],
     };
-    const subMenuWindow: DarwinMenuItemConstructorOptions = {
+    const subMenuWindow: MenuItemConstructorOptions = {
       label: 'Window',
       submenu: [
-        {
-          label: 'Minimize',
-          accelerator: 'Command+M',
-          selector: 'performMiniaturize:',
-        },
-        { label: 'Close', accelerator: 'Command+W', selector: 'performClose:' },
+        { role: 'minimize' },
+        { role: 'close' },
         { type: 'separator' },
-        { label: 'Bring All to Front', selector: 'arrangeInFront:' },
+        { role: 'front' },
       ],
     };
     const subMenuHelp: MenuItemConstructorOptions = {
       label: 'Help',
       submenu: [
         {
-          label: 'Learn More',
+          label: 'Talyn Website',
           click() {
-            shell.openExternal('https://electronjs.org');
+            shell.openExternal(SITE_URL);
           },
         },
         {
-          label: 'Documentation',
+          label: 'Contact Support',
           click() {
-            shell.openExternal(
-              'https://github.com/electron/electron/tree/main/docs#readme',
-            );
-          },
-        },
-        {
-          label: 'Community Discussions',
-          click() {
-            shell.openExternal('https://www.electronjs.org/community');
-          },
-        },
-        {
-          label: 'Search Issues',
-          click() {
-            shell.openExternal('https://github.com/electron/electron/issues');
+            shell.openExternal(SUPPORT_EMAIL_URL);
           },
         },
       ],
@@ -189,13 +155,7 @@ export default class MenuBuilder {
         ? subMenuViewDev
         : subMenuViewProd;
 
-    return [
-      subMenuAbout,
-      subMenuEdit,
-      subMenuView,
-      subMenuWindow,
-      subMenuHelp,
-    ];
+    return [subMenuApp, subMenuEdit, subMenuView, subMenuWindow, subMenuHelp];
   }
 
   buildDefaultTemplate(): MenuItemConstructorOptions[] {
@@ -203,10 +163,6 @@ export default class MenuBuilder {
       {
         label: '&File',
         submenu: [
-          {
-            label: '&Open',
-            accelerator: 'Ctrl+O',
-          },
           {
             label: '&Close',
             accelerator: 'Ctrl+W',
@@ -262,29 +218,22 @@ export default class MenuBuilder {
         label: 'Help',
         submenu: [
           {
-            label: 'Learn More',
+            label: 'Talyn Website',
             click() {
-              shell.openExternal('https://electronjs.org');
+              shell.openExternal(SITE_URL);
             },
           },
           {
-            label: 'Documentation',
+            label: 'Contact Support',
             click() {
-              shell.openExternal(
-                'https://github.com/electron/electron/tree/main/docs#readme',
-              );
+              shell.openExternal(SUPPORT_EMAIL_URL);
             },
           },
+          { type: 'separator' },
           {
-            label: 'Community Discussions',
+            label: 'Check for Updates…',
             click() {
-              shell.openExternal('https://www.electronjs.org/community');
-            },
-          },
-          {
-            label: 'Search Issues',
-            click() {
-              shell.openExternal('https://github.com/electron/electron/issues');
+              void checkForUpdatesInteractively();
             },
           },
         ],

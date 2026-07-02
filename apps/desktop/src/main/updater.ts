@@ -12,7 +12,7 @@
  * build. Until an Apple Developer ID cert is wired (see package.json
  * build.mac.notarize), this runs but never successfully installs on mac.
  */
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
@@ -38,6 +38,55 @@ function isPendingReleaseArtifact(err: unknown): boolean {
     /Cannot find .*\.yml in the latest release artifacts/i.test(raw) ||
     (/latest(-mac|-linux|-arm64)?\.yml/i.test(raw) && /\b404\b/.test(raw))
   );
+}
+
+/**
+ * Menu-bar "Check for Updates…" — same autoUpdater flow the Settings → About
+ * check uses (so the renderer's updater events still stream as usual), but
+ * with native-dialog feedback since there's no panel open to show status.
+ */
+export async function checkForUpdatesInteractively(): Promise<void> {
+  if (!app.isPackaged) {
+    await dialog.showMessageBox({
+      type: 'info',
+      message: 'Auto-update only runs in the installed app.',
+      detail: 'Development builds cannot check for updates.',
+    });
+    return;
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    // With autoDownload on, a non-null downloadPromise means an update was
+    // found and is already downloading.
+    if (result?.downloadPromise) {
+      await dialog.showMessageBox({
+        type: 'info',
+        message: `Update ${result.updateInfo.version} is downloading.`,
+        detail:
+          'It installs automatically the next time Talyn restarts — or restart right away from Settings → About once the download finishes.',
+      });
+    } else {
+      await dialog.showMessageBox({
+        type: 'info',
+        message: "You're on the latest version.",
+        detail: `Talyn ${app.getVersion()}`,
+      });
+    }
+  } catch (err) {
+    if (isPendingReleaseArtifact(err)) {
+      await dialog.showMessageBox({
+        type: 'info',
+        message: "You're on the latest version.",
+        detail: `Talyn ${app.getVersion()}`,
+      });
+      return;
+    }
+    await dialog.showMessageBox({
+      type: 'error',
+      message: "Couldn't check for updates.",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
