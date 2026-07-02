@@ -50,6 +50,7 @@ import {
 } from '../widgets/GetKeyLink';
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
+import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered } from '../../lib/githubInstall';
 import { openExternal } from '../../lib/openExternal';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@talyn/shared';
@@ -1526,6 +1527,9 @@ function AppearanceSettings() {
 
 function DeveloperSettings() {
   const { debugMode, setDebugMode } = useWorkspaceStore();
+  // The account wipe is a dev-workflow tool (reset to a first-run state);
+  // production users should never see a one-click "delete everything".
+  const isDevBuild = useIsDevBuild();
   const [wipeArmed, setWipeArmed] = useState(false);
   const [wiping, setWiping] = useState(false);
 
@@ -1590,6 +1594,7 @@ function DeveloperSettings() {
         </div>
       </Card>
 
+      {isDevBuild && (
       <Card className="p-4 border-destructive/50">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -1638,6 +1643,7 @@ function DeveloperSettings() {
           )}
         </div>
       </Card>
+      )}
     </div>
   );
 }
