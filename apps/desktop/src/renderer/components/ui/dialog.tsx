@@ -18,8 +18,10 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
         className="fixed inset-0 bg-black/50 backdrop-blur-sm"
         onClick={() => onOpenChange(false)}
       />
-      {/* Content */}
-      <div className="relative z-50">{children}</div>
+      {/* Content. The wrapper must provide width context (w-full + centering)
+          or DialogContent's `w-full max-w-*` collapses to intrinsic width and
+          every dialog renders as narrow as its widest child. */}
+      <div className="relative z-50 flex w-full justify-center px-4">{children}</div>
     </div>
   );
 }

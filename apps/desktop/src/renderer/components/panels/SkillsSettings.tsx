@@ -363,7 +363,7 @@ export function SkillsSettings() {
       {/* Create / edit dialog */}
       {draft && (
         <Dialog open onOpenChange={(o) => !o && setDraft(null)}>
-          <DialogContent className="max-w-xl" onClose={() => setDraft(null)}>
+          <DialogContent className="max-w-2xl" onClose={() => setDraft(null)}>
             <DialogHeader>
               <DialogTitle>{draft.id ? 'Edit skill' : 'New skill'}</DialogTitle>
             </DialogHeader>
