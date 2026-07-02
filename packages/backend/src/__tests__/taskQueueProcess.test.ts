@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { taskQueueService } from '../services/taskQueue.js';
+import {
+  taskQueueService,
+  dispatchBackoffMs,
+  isBackingOff,
+  MAX_DISPATCH_ATTEMPTS,
+} from '../services/taskQueue.js';
 import {
   registerCloudProvider,
   getCloudProvider,
@@ -68,6 +73,7 @@ async function insertQueuedTask(
     status: string;
     repositoryId: string | null;
     assignedEnvironmentId: string | null;
+    metadata: Record<string, unknown>;
   }> = {}
 ): Promise<string> {
   const id = overrides.id ?? `t-${Math.random().toString(36).slice(2, 8)}`;
@@ -87,10 +93,30 @@ async function insertQueuedTask(
       overrides.assignedEnvironmentId === undefined
         ? 'cloud1'
         : overrides.assignedEnvironmentId,
+    metadata: overrides.metadata,
     createdAt: now,
     updatedAt: now,
   });
   return id;
+}
+
+async function readTask(
+  db: Database,
+  id: string
+): Promise<{ status: string; completedAt: Date | null; metadata: Record<string, unknown> }> {
+  const rows = await db
+    .select({
+      status: tasksTable.status,
+      completedAt: tasksTable.completedAt,
+      metadata: tasksTable.metadata,
+    })
+    .from(tasksTable)
+    .where(eq(tasksTable.id, id));
+  return {
+    status: rows[0].status,
+    completedAt: rows[0].completedAt,
+    metadata: (rows[0].metadata as Record<string, unknown>) ?? {},
+  };
 }
 
 describe('taskQueueService.processQueue (cloud dispatch)', () => {
@@ -180,5 +206,114 @@ describe('taskQueueService.processQueue (cloud dispatch)', () => {
 
     await taskQueueService.processQueue();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('backs off after a failed dispatch — the immediate next tick skips the task', async () => {
+    const id = await insertQueuedTask(db);
+    const dispatch = vi.fn(async () => ({ ok: false as const, error: 'provider down' }));
+    registerCloudProvider(fakeProvider(dispatch));
+
+    await taskQueueService.processQueue();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const after = await readTask(db, id);
+    expect(after.status).toBe('queued');
+    expect(after.metadata.dispatchAttempts).toBe(1);
+    const nextAt = Date.parse(String(after.metadata.nextDispatchAttemptAt));
+    expect(nextAt).toBeGreaterThan(Date.now());
+
+    // The 5s tick fires again immediately — the backoff window must hold.
+    await taskQueueService.processQueue();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('lands the task in terminal failed after MAX_DISPATCH_ATTEMPTS', async () => {
+    const id = await insertQueuedTask(db, {
+      metadata: { dispatchAttempts: MAX_DISPATCH_ATTEMPTS - 1 },
+    });
+    const dispatch = vi.fn(async () => ({ ok: false as const, error: 'still down' }));
+    registerCloudProvider(fakeProvider(dispatch));
+
+    await taskQueueService.processQueue();
+
+    const after = await readTask(db, id);
+    expect(after.status).toBe('failed');
+    expect(after.completedAt).not.toBeNull();
+    expect(after.metadata.dispatchAttempts).toBe(MAX_DISPATCH_ATTEMPTS);
+    expect(after.metadata.nextDispatchAttemptAt).toBeUndefined();
+    const lastError = after.metadata.lastScheduleError as { reason?: string };
+    expect(lastError.reason).toMatch(/still down/);
+
+    // Terminal — the next tick must not touch it again.
+    await taskQueueService.processQueue();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing dispatch is contained: the failure is recorded and other tasks still run', async () => {
+    const poisonId = await insertQueuedTask(db, { id: 'poison' });
+    const healthyId = await insertQueuedTask(db, { id: 'healthy' });
+    const dispatch = vi.fn(async (task: { id: string }) => {
+      if (task.id === poisonId) throw new Error('converter blew up');
+      return { ok: true as const };
+    });
+    registerCloudProvider(fakeProvider(dispatch as CloudTaskProvider['dispatch']));
+
+    await taskQueueService.processQueue();
+
+    // Both tasks were attempted despite the first one throwing.
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    const poisoned = await readTask(db, poisonId);
+    expect(poisoned.status).toBe('queued');
+    expect(poisoned.metadata.dispatchAttempts).toBe(1);
+    expect(String((poisoned.metadata.lastScheduleError as { reason: string }).reason)).toMatch(
+      /converter blew up/
+    );
+    const healthy = await readTask(db, healthyId);
+    expect(healthy.metadata.dispatchedAt).toBeDefined();
+  });
+
+  it('a successful dispatch clears the retry bookkeeping', async () => {
+    const id = await insertQueuedTask(db, {
+      metadata: {
+        dispatchAttempts: 3,
+        nextDispatchAttemptAt: new Date(Date.now() - 1000).toISOString(),
+      },
+    });
+    registerCloudProvider(fakeProvider(vi.fn(async () => ({ ok: true as const }))));
+
+    await taskQueueService.processQueue();
+
+    const after = await readTask(db, id);
+    expect(after.metadata.dispatchAttempts).toBeUndefined();
+    expect(after.metadata.nextDispatchAttemptAt).toBeUndefined();
+    expect(after.metadata.dispatchedAt).toBeDefined();
+  });
+});
+
+describe('dispatch backoff policy', () => {
+  it.each([
+    [1, 10_000],
+    [2, 20_000],
+    [3, 40_000],
+    [7, 600_000], // 640s uncapped — hits the 10-minute cap
+    [10, 600_000],
+    [40, 600_000],
+  ])('attempt %i backs off %ims', (attempts, expected) => {
+    expect(dispatchBackoffMs(attempts)).toBe(expected);
+  });
+
+  it('caps at 10 minutes', () => {
+    expect(dispatchBackoffMs(1000)).toBe(600_000);
+  });
+
+  it('isBackingOff respects the window and tolerates junk metadata', () => {
+    const base = { id: 't', workspaceId: 'w' } as never;
+    const task = (metadata: unknown) => ({ ...(base as object), metadata }) as never;
+    const now = Date.now();
+    expect(isBackingOff(task({ nextDispatchAttemptAt: new Date(now + 5000).toISOString() }), now)).toBe(true);
+    expect(isBackingOff(task({ nextDispatchAttemptAt: new Date(now - 5000).toISOString() }), now)).toBe(false);
+    expect(isBackingOff(task({ nextDispatchAttemptAt: 'not-a-date' }), now)).toBe(false);
+    expect(isBackingOff(task({}), now)).toBe(false);
+    expect(isBackingOff(task(undefined), now)).toBe(false);
   });
 });

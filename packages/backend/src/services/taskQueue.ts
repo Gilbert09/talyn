@@ -31,6 +31,38 @@ const PRIORITY_WEIGHTS: Record<TaskPriority, number> = {
 void PRIORITY_WEIGHTS;
 
 /**
+ * Retry policy for failed dispatches. A failure here is usually provider-side
+ * (outage, bad credentials, quota) — worth retrying, but the old behaviour
+ * (reset to `queued`, retry every 5s tick, forever) meant one poisoned task
+ * hammered the provider indefinitely. Exponential backoff from 10s doubling
+ * to a 10-minute cap; 40 attempts spends ~20 minutes ramping then ~34 × 10min
+ * ≈ 6 hours at the cap — enough to ride out a multi-hour provider outage
+ * unattended, while a genuinely broken task reaches a visible terminal
+ * `failed` the same day instead of spinning forever.
+ */
+export const MAX_DISPATCH_ATTEMPTS = 40;
+const DISPATCH_BACKOFF_BASE_MS = 10_000;
+const DISPATCH_BACKOFF_CAP_MS = 10 * 60_000;
+
+/** Backoff before attempt `attempts + 1` (exported for tests). */
+export function dispatchBackoffMs(attempts: number): number {
+  return Math.min(
+    DISPATCH_BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1),
+    DISPATCH_BACKOFF_CAP_MS
+  );
+}
+
+/** True while a previously-failed task's backoff window is still open. */
+export function isBackingOff(task: Task, now: number): boolean {
+  const meta = (task.metadata ?? {}) as Record<string, unknown>;
+  const nextAt =
+    typeof meta.nextDispatchAttemptAt === 'string'
+      ? Date.parse(meta.nextDispatchAttemptAt)
+      : NaN;
+  return Number.isFinite(nextAt) && nextAt > now;
+}
+
+/**
  * Cloud-only task scheduler. Every task is delegated to a cloud provider
  * (PostHog Code today). The queue's whole job is: pick up pending/queued
  * tasks, resolve the provider from the task's assigned cloud-marker env,
@@ -153,71 +185,136 @@ class TaskQueueService extends EventEmitter {
     const queuedTasks = await this.getQueuedTasks();
     if (queuedTasks.length === 0) return;
 
-    console.log(`[TaskQueue] Processing ${queuedTasks.length} queued task(s)`);
+    const now = Date.now();
+    const due = queuedTasks.filter((task) => !isBackingOff(task, now));
+    if (due.length === 0) return;
 
-    for (const task of queuedTasks) {
-      const env = await this.resolveCloudEnv(task);
-      if (!env) {
-        // resolveCloudEnv already tried the workspace's configured provider,
-        // so reaching here means the workspace has NO connected cloud
-        // provider at all — nothing can run it. Leave it queued (visible,
-        // not lost) until a provider is connected.
-        console.warn(
-          `[TaskQueue] task "${task.title}" has no connected cloud provider; skipping`
-        );
-        continue;
-      }
+    console.log(`[TaskQueue] Processing ${due.length} queued task(s)`);
 
-      const provider = getCloudProvider(env.type);
-      if (!provider) {
-        console.warn(
-          `[TaskQueue] no provider registered for env type "${env.type}"; skipping "${task.title}"`
+    for (const task of due) {
+      // Per-task isolation: one task whose dispatch pipeline throws (bad
+      // metadata, provider bug, DB hiccup) must not starve the rest of the
+      // tick — mirrors the per-row try/catch in cloudProviders/poller.ts.
+      try {
+        await this.dispatchTask(task);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(`[TaskQueue] dispatch threw for "${task.title}": ${reason}`);
+        await this.recordDispatchFailure(task, reason).catch((recordErr) =>
+          console.error(
+            `[TaskQueue] failed to record dispatch failure for "${task.title}":`,
+            recordErr
+          )
         );
-        continue;
-      }
-
-      console.log(
-        `[TaskQueue] Dispatching task "${task.title}" to ${provider.displayName}`
-      );
-      const result = await provider.dispatch(task, env);
-      if (!result.ok) {
-        console.error(
-          `[TaskQueue] dispatch failed for "${task.title}": ${result.error}`
-        );
-        captureWorkspaceEvent(task.workspaceId, 'task_dispatch_failed', {
-          task_id: task.id,
-          task_type: task.type,
-          provider: env.type,
-          reason: result.error,
-        });
-        await patchTaskMetadata(task.id, (existing) => ({
-          ...existing,
-          lastScheduleError: {
-            at: new Date().toISOString(),
-            reason: result.error,
-          },
-        }));
-        await this.db
-          .update(tasksTable)
-          .set({ status: 'queued', updatedAt: new Date() })
-          .where(eq(tasksTable.id, task.id));
-        emitTaskStatus(task.workspaceId, task.id, 'queued');
-      } else {
-        // Stamp when the remote run started so finalize can report the
-        // actual run duration (vs total time incl. queueing).
-        await patchTaskMetadata(task.id, (existing) => ({
-          ...existing,
-          dispatchedAt: new Date().toISOString(),
-        }));
-        captureWorkspaceEvent(task.workspaceId, 'task_dispatched', {
-          task_id: task.id,
-          task_type: task.type,
-          provider: env.type,
-          priority: task.priority,
-          duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
-        });
       }
     }
+  }
+
+  private async dispatchTask(task: Task): Promise<void> {
+    const env = await this.resolveCloudEnv(task);
+    if (!env) {
+      // resolveCloudEnv already tried the workspace's configured provider,
+      // so reaching here means the workspace has NO connected cloud
+      // provider at all — nothing can run it. Leave it queued (visible,
+      // not lost) until a provider is connected.
+      console.warn(
+        `[TaskQueue] task "${task.title}" has no connected cloud provider; skipping`
+      );
+      return;
+    }
+
+    const provider = getCloudProvider(env.type);
+    if (!provider) {
+      console.warn(
+        `[TaskQueue] no provider registered for env type "${env.type}"; skipping "${task.title}"`
+      );
+      return;
+    }
+
+    console.log(
+      `[TaskQueue] Dispatching task "${task.title}" to ${provider.displayName}`
+    );
+    const result = await provider.dispatch(task, env);
+    if (!result.ok) {
+      await this.recordDispatchFailure(task, result.error, env.type);
+    } else {
+      // Stamp when the remote run started so finalize can report the
+      // actual run duration (vs total time incl. queueing) — and clear the
+      // retry bookkeeping so a later re-queue starts a fresh attempt budget.
+      await patchTaskMetadata(task.id, (existing) => {
+        const {
+          dispatchAttempts: _attempts,
+          nextDispatchAttemptAt: _nextAt,
+          ...rest
+        } = existing;
+        return { ...rest, dispatchedAt: new Date().toISOString() };
+      });
+      captureWorkspaceEvent(task.workspaceId, 'task_dispatched', {
+        task_id: task.id,
+        task_type: task.type,
+        provider: env.type,
+        priority: task.priority,
+        duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
+      });
+    }
+  }
+
+  /**
+   * Count a failed dispatch attempt: back off exponentially, and after
+   * MAX_DISPATCH_ATTEMPTS land the task in a terminal `failed` instead of
+   * retrying forever.
+   */
+  private async recordDispatchFailure(
+    task: Task,
+    reason: string,
+    providerType?: string
+  ): Promise<void> {
+    const meta = (task.metadata ?? {}) as Record<string, unknown>;
+    const attempts = (Number(meta.dispatchAttempts) || 0) + 1;
+    const terminal = attempts >= MAX_DISPATCH_ATTEMPTS;
+    console.error(
+      `[TaskQueue] dispatch failed for "${task.title}" ` +
+        `(attempt ${attempts}/${MAX_DISPATCH_ATTEMPTS}): ${reason}`
+    );
+    captureWorkspaceEvent(task.workspaceId, 'task_dispatch_failed', {
+      task_id: task.id,
+      task_type: task.type,
+      provider: providerType,
+      reason,
+      attempts,
+      terminal,
+    });
+
+    await patchTaskMetadata(task.id, (existing) => {
+      const { nextDispatchAttemptAt: _nextAt, ...rest } = existing;
+      return {
+        ...rest,
+        dispatchAttempts: attempts,
+        ...(terminal
+          ? {}
+          : {
+              nextDispatchAttemptAt: new Date(
+                Date.now() + dispatchBackoffMs(attempts)
+              ).toISOString(),
+            }),
+        lastScheduleError: {
+          at: new Date().toISOString(),
+          reason,
+          attempts,
+        },
+      };
+    });
+
+    const now = new Date();
+    await this.db
+      .update(tasksTable)
+      .set(
+        terminal
+          ? { status: 'failed', updatedAt: now, completedAt: now }
+          : { status: 'queued', updatedAt: now }
+      )
+      .where(eq(tasksTable.id, task.id));
+    emitTaskStatus(task.workspaceId, task.id, terminal ? 'failed' : 'queued');
   }
 
   /**
