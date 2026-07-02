@@ -10,6 +10,7 @@ import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService } from './github.js';
+import { githubRateGate } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
 import {
@@ -21,6 +22,12 @@ import { TickGuard } from './tickGuard.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnv } from './prCloudFix.js';
 
 const POLL_INTERVAL_MS = 10_000;
+/**
+ * Hard bound on how long one tick may spend walking queue groups. Heads not
+ * reached by the deadline simply wait for the next tick — FIFO order is
+ * preserved. Exported for tests.
+ */
+export const TICK_DEADLINE_MS = 60_000;
 /** Re-poll a queued PR if its cached summary is older than this. */
 const FRESHNESS_MS = 90_000;
 /** Stop auto-firing fix runs after this many consecutive un-mergeable runs. */
@@ -213,9 +220,24 @@ class MergeQueueProcessor {
   }
 
   private async tick(): Promise<void> {
-    if (!this.guard.tryBegin()) return;
+    if (!this.guard.tryBegin()) {
+      // Make the busy state visible: without this the panel's "last tick" just
+      // ages while a slow tick holds the guard and the loop looks dead.
+      debugBus.pollerTick('merge_queue', {
+        durationMs: 0,
+        ok: true,
+        summary: `merge_queue tick skipped — previous tick still in flight (${Math.round(this.guard.heldMs / 1000)}s)`,
+      });
+      return;
+    }
     const startedAt = Date.now();
+    // Hard bound on a tick's group-walking: heads not reached by the deadline
+    // wait for the next tick (the queue is FIFO — nothing is lost). Keeps the
+    // guard from being held for minutes by a large backlog, which starved the
+    // 10s cadence and made per-merge latency look like multi-minute stalls.
+    const deadline = startedAt + TICK_DEADLINE_MS;
     let headCount = 0;
+    let deferredCount = 0;
     let tickError: string | undefined;
     let skipRecord = false;
     try {
@@ -269,7 +291,10 @@ class MergeQueueProcessor {
       // for minutes while a multi-PR backlog drained, so every 10s tick in
       // between no-op'd on the guard and the queue looked frozen. Within a group
       // we stay serial — one same-base merge per tick.
-      await Promise.all([...groups.values()].map((group) => this.processGroup(group)));
+      const outcomes = await Promise.all(
+        [...groups.values()].map((group) => this.processGroup(group, deadline))
+      );
+      deferredCount = outcomes.filter((o) => o !== 'ok').length;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('DATABASE_URL is not set')) {
@@ -286,7 +311,10 @@ class MergeQueueProcessor {
           ok: !tickError,
           summary: tickError
             ? `merge_queue tick failed: ${tickError}`
-            : `merge_queue tick — ${headCount} head${headCount === 1 ? '' : 's'}`,
+            : `merge_queue tick — ${headCount} head${headCount === 1 ? '' : 's'}` +
+              (deferredCount > 0
+                ? `, ${deferredCount} group${deferredCount === 1 ? '' : 's'} deferred (rate-limited / deadline)`
+                : ''),
           error: tickError,
         });
       }
@@ -304,9 +332,22 @@ class MergeQueueProcessor {
    * gates the PRs behind it. The first PR that takes an action ('hold': merge,
    * fix run, in-flight run) consumes the group's turn — one same-base merge per
    * tick. Never throws: a single PR's failure is logged and ends the group's turn.
+   *
+   * Two bounds keep a group's walk from holding the tick guard for minutes
+   * (which starved the 10s cadence and read as multi-minute merge stalls):
+   *   - Rate gate: while the group's GitHub account is in a secondary-rate-limit
+   *     backoff, every API call inside the walk would sleep up to 60s behind
+   *     `waitIfBlocked`. Instead of paying that per call, the group defers to a
+   *     later tick — checked up front AND between heads, so a 403 mid-walk stops
+   *     the group instead of turning each remaining call into a sleep.
+   *   - Deadline: heads not reached by the tick's deadline wait for the next
+   *     tick. FIFO order means they lose nothing but their turn's timing.
    */
-  private async processGroup(group: PRRow[]): Promise<void> {
+  private async processGroup(group: PRRow[], deadline: number): Promise<'ok' | 'deferred'> {
+    const accountKey = githubService.accountKeyFor(group[0].workspaceId);
     for (let i = 0; i < group.length; i++) {
+      if (githubRateGate.isBlocked(accountKey)) return 'deferred';
+      if (Date.now() > deadline) return 'deferred';
       const row = group[i];
       let verdict: HeadVerdict = 'hold';
       try {
@@ -320,6 +361,7 @@ class MergeQueueProcessor {
       }
       if (verdict === 'hold') break;
     }
+    return 'ok';
   }
 
   private async processHead(initialRow: PRRow, position = 1): Promise<HeadVerdict> {

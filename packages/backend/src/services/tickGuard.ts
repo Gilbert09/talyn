@@ -31,6 +31,11 @@ export class TickGuard {
     return this.running;
   }
 
+  /** How long the current holder has been running (0 when idle) — for skip reporting. */
+  get heldMs(): number {
+    return this.running ? Date.now() - this.startedAt : 0;
+  }
+
   /**
    * Claim the guard for a new tick. Returns false while a previous tick is
    * still legitimately running; force-releases (with a loud log) when the

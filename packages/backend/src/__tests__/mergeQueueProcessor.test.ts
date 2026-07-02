@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { githubService } from '../services/github.js';
+import { githubRateGate } from '../services/githubRateGate.js';
+import { debugBus } from '../services/debugBus.js';
 import { graphqlBudget } from '../services/graphqlBudget.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import * as websocketModule from '../services/websocket.js';
@@ -225,6 +227,7 @@ describe('mergeQueueProcessor', () => {
   afterEach(async () => {
     await cleanup();
     vi.restoreAllMocks();
+    githubRateGate._reset();
   });
 
   it('merges a clean queued PR and drops it off the queue', async () => {
@@ -1135,6 +1138,50 @@ describe('mergeQueueProcessor', () => {
       expect(lastPositionFor(emitSpy, b)).toEqual({ mergeQueued: true, position: 1 });
       expect(lastPositionFor(emitSpy, c)).toEqual({ mergeQueued: true, position: 2 });
       expect(lastPositionFor(emitSpy, a)).toEqual({ mergeQueued: true, position: 3 });
+    });
+  });
+  describe('tick bounding', () => {
+    it('defers a group while its account is rate-gate blocked, then resumes', async () => {
+      const prId = await insertPr(db, { summary: cleanSummary() });
+      const accountKey = githubService.accountKeyFor('ws1');
+      githubRateGate.block(accountKey, Date.now() + 60_000, 'test backoff');
+
+      await mergeQueueProcessor.runOnce();
+
+      // No GitHub call was even attempted — the group deferred instead of
+      // sleeping up to 60s behind waitIfBlocked inside every API call.
+      expect(mergeSpy).not.toHaveBeenCalled();
+      const still = await getPr(db, prId);
+      expect(still.mergeQueued).toBe(true);
+      expect(still.state).toBe('open');
+
+      githubRateGate._reset();
+      await mergeQueueProcessor.runOnce();
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, prId)).state).toBe('merged');
+    });
+
+    it('records a debug-bus tick when skipping because the guard is held', async () => {
+      const tickSpy = vi.spyOn(debugBus, 'pollerTick');
+      const guard = (mergeQueueProcessor as unknown as { guard: { tryBegin(): boolean; end(): void } })
+        .guard;
+      expect(guard.tryBegin()).toBe(true); // simulate a long tick in flight
+      try {
+        await insertPr(db, { summary: cleanSummary() });
+        await mergeQueueProcessor.runOnce();
+        // The skip itself must be visible — previously the early return
+        // recorded nothing and the poller card just aged.
+        expect(mergeSpy).not.toHaveBeenCalled();
+        expect(tickSpy).toHaveBeenCalledWith(
+          'merge_queue',
+          expect.objectContaining({
+            ok: true,
+            summary: expect.stringContaining('skipped — previous tick still in flight'),
+          })
+        );
+      } finally {
+        guard.end();
+      }
     });
   });
 });
