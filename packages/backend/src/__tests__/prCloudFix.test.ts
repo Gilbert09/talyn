@@ -120,7 +120,7 @@ describe('prCloudFix helpers', () => {
       });
       await db.insert(integrationsTable).values({
         id: 'int-ph', workspaceId: 'ws1', type: 'posthog', enabled: true,
-        config: { apiKey: 'k', projectId: '1' },
+        config: { apiKeyEnc: encryptString('k'), projectId: '1' },
       });
     }
     async function connectClaude() {

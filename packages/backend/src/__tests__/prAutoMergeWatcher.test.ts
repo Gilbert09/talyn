@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { encryptString } from '../services/tokenCrypto.js';
 import { prAutoMergeWatcher } from '../services/prAutoMergeWatcher.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { graphqlBudget } from '../services/graphqlBudget.js';
@@ -15,6 +17,9 @@ import {
 } from '../db/schema.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
+
+// Seeding the encrypted PostHog credential needs the token-encryption key.
+process.env.TALYN_TOKEN_KEY ??= randomBytes(32).toString('base64');
 
 // resolveCloudEnvId checks the provider has stored credentials, so register the
 // provider + give the workspace a posthog integration row in seedBase.
@@ -80,7 +85,8 @@ async function seedBase(db: Database): Promise<void> {
     workspaceId: 'ws1',
     type: 'posthog',
     enabled: true,
-    config: { apiKey: 'test-key', projectId: '1' },
+    // Encrypted at rest — the legacy plaintext `apiKey` read path was removed.
+    config: { apiKeyEnc: encryptString('test-key'), projectId: '1' },
   });
   await db.insert(repositoriesTable).values({
     id: 'repo1',
