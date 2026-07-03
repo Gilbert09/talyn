@@ -797,17 +797,20 @@ class WebSocketClient {
 
     this.ws.onerror = () => {
       // The browser Event carries no diagnostics ("[object Event]") —
-      // describe the socket state instead. Only the FIRST failure of an
-      // outage goes to console.error (PostHog exception autocapture turns
-      // console.error into $exception events; a backend outage used to
-      // flood the project with one identical event per reconnect attempt).
-      // Subsequent attempts downgrade to console.warn.
+      // describe the socket state instead. console.error becomes a PostHog
+      // $exception via autocapture, so it's reserved for a REAL outage: the
+      // connection still failing on the 3rd+ reconnect attempt (~7s of
+      // backoff). Single-blip drops — every backend deploy disconnects each
+      // client once — stay at console.warn and never reach error tracking.
+      // errorLoggedSinceOpen keeps it to one $exception per outage (an
+      // extended outage used to flood the project with one identical event
+      // per retry).
       const detail = `WebSocket error on ${WS_URL} (readyState=${this.ws?.readyState}, reconnectAttempts=${this.reconnectAttempts})`;
-      if (this.errorLoggedSinceOpen) {
-        console.warn(detail);
-      } else {
+      if (this.reconnectAttempts >= 3 && !this.errorLoggedSinceOpen) {
         this.errorLoggedSinceOpen = true;
         console.error(detail);
+      } else {
+        console.warn(detail);
       }
     };
   }
