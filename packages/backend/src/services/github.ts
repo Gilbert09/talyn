@@ -1606,6 +1606,68 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * Re-request every failed check run on a PR's head commit — the API twin of
+   * the checks tab's "Re-run" button. GitHub delivers `check_run.rerequested`
+   * to whichever app CREATED each check (GitHub Actions, Depot, …), which then
+   * re-runs it, so this works regardless of the CI provider. Requires the
+   * Talyn App's `checks: write` permission — without it GitHub answers 403/404
+   * and we report `missing-permission` instead of throwing, so callers can
+   * fall back to asking a human.
+   */
+  async rerequestFailedCheckRuns(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number
+  ): Promise<{ requested: number; reason?: 'no-failing-check-runs' | 'missing-permission' }> {
+    const pr = await this.getPullRequest(workspaceId, owner, repo, number);
+    const headSha = pr.head?.sha;
+    if (!headSha) return { requested: 0, reason: 'no-failing-check-runs' };
+
+    // `filter=latest` returns only the newest attempt of each check; a big
+    // repo (posthog: ~120 checks per head) spans two pages.
+    const failing: Array<{ id: number; name: string }> = [];
+    for (let page = 1; page <= 3; page++) {
+      const res = await this.apiRequest<{
+        check_runs: Array<{ id: number; name: string; conclusion: string | null }>;
+      }>(
+        workspaceId,
+        `/repos/${owner}/${repo}/commits/${headSha}/check-runs?filter=latest&per_page=100&page=${page}`
+      );
+      const runs = res.check_runs ?? [];
+      failing.push(
+        ...runs
+          .filter((c) => c.conclusion === 'failure' || c.conclusion === 'timed_out')
+          .map((c) => ({ id: c.id, name: c.name }))
+      );
+      if (runs.length < 100) break;
+    }
+    if (failing.length === 0) return { requested: 0, reason: 'no-failing-check-runs' };
+
+    let requested = 0;
+    for (const run of failing) {
+      try {
+        await this.apiRequest(
+          workspaceId,
+          `/repos/${owner}/${repo}/check-runs/${run.id}/rerequest`,
+          { method: 'POST' }
+        );
+        requested++;
+        console.log(`[github] re-ran failing check "${run.name}" on ${owner}/${repo}#${number}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[github] rerequest of check "${run.name}" on ${owner}/${repo}#${number} failed: ${msg}`
+        );
+      }
+    }
+    // All rerequests bounced with nothing re-run: in practice that's the
+    // checks:write permission missing (GitHub 403s — or 404s the endpoint
+    // outright for tokens that can't see it).
+    return requested > 0 ? { requested } : { requested: 0, reason: 'missing-permission' };
+  }
+
+  /**
    * Find PR numbers via the search API. Used instead of listing a repo's
    * open PRs and filtering client-side: in a huge repo (hundreds of open
    * PRs) the user's own PRs fall outside the first page, so listing

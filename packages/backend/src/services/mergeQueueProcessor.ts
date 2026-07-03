@@ -67,6 +67,13 @@ interface MergeQueueState {
    * Legacy `true` (one deploy's worth) is normalized at the gate.
    */
   mergeForbidden?: 'failing-checks' | 'hard' | boolean;
+  /**
+   * How many times the queue has re-run this head's failing checks after an
+   * App-refused merge (its own budget, separate from the fix-run `attempts`;
+   * both share the MAX_ATTEMPTS cap). Reset when the gate self-clears (new
+   * head / checks green) and by dequeue.
+   */
+  rerunAttempts?: number;
 }
 
 // Only the columns this processor touches — avoids `select()`-ing every PR
@@ -102,6 +109,7 @@ function readState(row: PRRow): MergeQueueState {
     lastErrorAt: s?.lastErrorAt,
     blockReason: s?.blockReason,
     mergeForbidden: s?.mergeForbidden,
+    rerunAttempts: s?.rerunAttempts,
   };
 }
 
@@ -533,9 +541,11 @@ class MergeQueueProcessor {
       }
       // The failing check that GitHub refused us over has gone green (rerun
       // passed or a new head reset it) — the refusal condition is gone.
-      // Clear the gate and fall through to the merge for a fresh attempt.
+      // Clear the gate (and the rerun budget, so a fresh failure on a new
+      // head gets its own retries) and fall through to a fresh merge attempt.
       state.mergeForbidden = undefined;
       state.blockReason = undefined;
+      state.rerunAttempts = undefined;
       state.status = 'waiting';
       await this.persist(row, state, position);
     }
@@ -594,19 +604,66 @@ class MergeQueueProcessor {
         }
         // GitHub refused the App's tokens (installation AND user-to-server —
         // both count as the integration). Observed cause: a failing check on
-        // the head, even an "optional" one a human can merge past. Block with
-        // the actionable reason; the 4b gate retries automatically once the
-        // checks go green, or stays blocked (until requeue) when there's no
-        // failing check to blame.
+        // the head, even an "optional" one a human can merge past. First
+        // response: re-run the failing checks ourselves (bounded by
+        // MAX_ATTEMPTS, same budget philosophy as fix runs) — a green rerun
+        // makes the clean path merge on a later tick. Block only when the
+        // rerun budget is spent, the rerun isn't possible (checks:write not
+        // granted), or there's no failing check to blame; the 4b gate still
+        // self-heals `failing-checks` blocks the moment the checks go green.
         if (err instanceof MergeNotPermittedForAppError) {
           const checksFailing = (summary?.checks?.failed ?? 0) > 0;
+          let rerunReason: 'no-failing-check-runs' | 'missing-permission' | undefined;
+          if (checksFailing && (state.rerunAttempts ?? 0) < MAX_ATTEMPTS) {
+            let rerun: Awaited<ReturnType<typeof githubService.rerequestFailedCheckRuns>> = {
+              requested: 0,
+              reason: 'no-failing-check-runs',
+            };
+            try {
+              rerun = await githubService.rerequestFailedCheckRuns(
+                row.workspaceId,
+                row.owner,
+                row.repo,
+                row.number
+              );
+            } catch (rerunErr) {
+              console.warn(
+                `[mergeQueue] failed-check rerun for ${row.owner}/${row.repo}#${row.number} errored:`,
+                rerunErr instanceof Error ? rerunErr.message : rerunErr
+              );
+            }
+            if (rerun.requested > 0) {
+              state.rerunAttempts = (state.rerunAttempts ?? 0) + 1;
+              state.status = 'waiting';
+              state.lastError =
+                `GitHub refused the App merge over failing check(s); re-ran ` +
+                `${rerun.requested} of them (attempt ${state.rerunAttempts}/${MAX_ATTEMPTS})`;
+              state.lastErrorAt = new Date().toISOString();
+              await this.persist(row, state, position);
+              // Refetch so the re-run shows up as in-flight CI — step 2b then
+              // holds the slot as 'waiting' until the checks settle.
+              await this.refreshAfterFailedMerge(row);
+              return 'hold';
+            }
+            rerunReason = rerun.reason;
+          }
           state.status = 'blocked';
           state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
-          state.blockReason = checksFailing
-            ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
-              `commit — even an "optional" one a human can merge past. Re-run or fix the ` +
-              `failing check and the queue will retry automatically, or merge manually on GitHub.`
-            : `${err.message} Merge manually on GitHub, or re-queue the PR to retry.`;
+          state.blockReason = !checksFailing
+            ? `${err.message} Merge manually on GitHub, or re-queue the PR to retry.`
+            : rerunReason === 'missing-permission'
+              ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
+                `commit — even an "optional" one a human can merge past — and Talyn couldn't ` +
+                `re-run it (the App needs the "Checks: Read & write" permission). Re-run or ` +
+                `fix the failing check and the queue will retry, or merge manually on GitHub.`
+              : (state.rerunAttempts ?? 0) >= MAX_ATTEMPTS
+                ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
+                  `commit. Talyn re-ran the failing checks ${MAX_ATTEMPTS}× and they kept ` +
+                  `failing — fix the check (or merge manually on GitHub); the queue retries ` +
+                  `once it's green.`
+                : `GitHub won't let the Talyn App merge while a check is failing on the head ` +
+                  `commit — even an "optional" one a human can merge past. Re-run or fix the ` +
+                  `failing check and the queue will retry automatically, or merge manually on GitHub.`;
           state.lastError = err.message;
           state.lastErrorAt = new Date().toISOString();
           await this.persist(row, state, position);

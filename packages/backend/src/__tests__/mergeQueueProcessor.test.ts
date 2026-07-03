@@ -206,6 +206,7 @@ describe('mergeQueueProcessor', () => {
   let refreshSpy: ReturnType<typeof vi.spyOn>;
   let blockedSpy: ReturnType<typeof vi.spyOn>;
   let getPrSpy: ReturnType<typeof vi.spyOn>;
+  let rerunSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const testDb = await createTestDb();
@@ -222,6 +223,11 @@ describe('mergeQueueProcessor', () => {
     getPrSpy = vi
       .spyOn(githubService, 'getPullRequest')
       .mockResolvedValue({ state: 'open', merged: false, merged_at: null } as never);
+    // Failed-check rerun after an App-refused merge. Default: nothing could
+    // be re-run, so refusal paths land in `blocked` unless a test grants it.
+    rerunSpy = vi
+      .spyOn(githubService, 'rerequestFailedCheckRuns')
+      .mockResolvedValue({ requested: 0, reason: 'no-failing-check-runs' });
     // Stub the post-failure refetch so it doesn't hit GitHub; tests assert it
     // fires. The top-of-tick freshness refresh is skipped (fresh lastPolledAt).
     refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
@@ -562,6 +568,82 @@ describe('mergeQueueProcessor', () => {
     const pr = await getPr(db, prId);
     expect(pr.state).toBe('merged');
     expect(pr.mergeQueued).toBe(false);
+  });
+
+  it('re-runs the failing checks on an App-refused merge instead of blocking, then merges when green', async () => {
+    // The user-preferred path: GitHub refuses the App over a failing optional
+    // check → re-run that check (bounded), wait for it, merge when green.
+    mergeSpy.mockRejectedValueOnce(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    rerunSpy.mockResolvedValueOnce({ requested: 1 });
+    const failingOptional = {
+      ...cleanSummary(),
+      checks: { total: 5, failed: 1, inProgress: 0 },
+    };
+    const prId = await insertPr(db, { summary: failingOptional });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      rerunAttempts?: number;
+    };
+    expect(rerunSpy).toHaveBeenCalledTimes(1);
+    expect(state.status).toBe('waiting'); // NOT blocked — the rerun is in flight
+    expect(state.rerunAttempts).toBe(1);
+    expect(blockedSpy).not.toHaveBeenCalled();
+    expect(refreshSpy).toHaveBeenCalled(); // refetched so the rerun reads as in-flight CI
+
+    // The re-run passes (summary refreshes green) — next tick merges.
+    await db
+      .update(pullRequestsTable)
+      .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+      .where(eq(pullRequestsTable.id, prId));
+    await mergeQueueProcessor.runOnce();
+
+    expect((await getPr(db, prId)).state).toBe('merged');
+  });
+
+  it('blocks with a permission hint when the rerun needs checks:write the App lacks', async () => {
+    mergeSpy.mockRejectedValueOnce(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    rerunSpy.mockResolvedValueOnce({ requested: 0, reason: 'missing-permission' });
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+      mergeForbidden?: string;
+    };
+    expect(state.status).toBe('blocked');
+    expect(state.mergeForbidden).toBe('failing-checks');
+    expect(state.blockReason).toContain('Checks: Read & write');
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops re-running after the cap and blocks with the exhausted reason', async () => {
+    mergeSpy.mockRejectedValue(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      mergeQueueState: { status: 'waiting', attempts: 0, rerunAttempts: 3 },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+      rerunAttempts?: number;
+    };
+    expect(rerunSpy).not.toHaveBeenCalled(); // budget spent — no more reruns
+    expect(state.status).toBe('blocked');
+    expect(state.rerunAttempts).toBe(3);
+    expect(state.blockReason).toContain('kept failing');
   });
 
   it('stays blocked until requeue when the App is refused with no failing check to blame', async () => {
