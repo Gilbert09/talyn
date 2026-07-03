@@ -12,7 +12,8 @@ export const site = {
   description:
     "Talyn watches every pull request, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews — so they land without you babysitting them.",
   githubUrl: "https://github.com/Gilbert09/talyn",
-  email: "hey@talyn.dev",
+  /** Support/contact channel — every Talyn user has a GitHub account. */
+  supportUrl: "https://github.com/Gilbert09/talyn/issues",
 };
 
 export const nav = [
@@ -284,8 +285,8 @@ export const footer = {
       title: "Company",
       links: [
         { label: "FAQ", href: "/#faq" },
-        { label: "GitHub", href: "https://github.com/Gilbert09/talyn" },
-        { label: "Support", href: `mailto:${site.email}` },
+        { label: "GitHub", href: site.githubUrl },
+        { label: "Support", href: site.supportUrl },
       ],
     },
     {

@@ -106,8 +106,8 @@ export default function PrivacyPage() {
         Depending on where you live, you may have rights to access, correct,
         delete, export, or restrict processing of your personal data, and to
         withdraw consent. You can revoke Talyn&apos;s GitHub access anytime from
-        your GitHub settings, or email us at{" "}
-        <a href={`mailto:${site.email}`}>{site.email}</a> to exercise any right.
+        your GitHub settings, or contact us via{" "}
+        <a href={site.supportUrl}>GitHub</a> to exercise any right.
       </p>
 
       <h2>9. International transfers</h2>
@@ -130,8 +130,8 @@ export default function PrivacyPage() {
 
       <h2>12. Contact</h2>
       <p>
-        Questions or requests? Email{" "}
-        <a href={`mailto:${site.email}`}>{site.email}</a>.
+        Questions or requests? Reach us on{" "}
+        <a href={site.supportUrl}>GitHub</a>.
       </p>
     </LegalPage>
   );

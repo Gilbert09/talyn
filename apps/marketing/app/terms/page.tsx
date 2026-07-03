@@ -123,7 +123,7 @@ export default function TermsPage() {
 
       <h2>14. Contact</h2>
       <p>
-        Questions? Email <a href={`mailto:${site.email}`}>{site.email}</a>.
+        Questions? Reach us on <a href={site.supportUrl}>GitHub</a>.
       </p>
     </LegalPage>
   );
