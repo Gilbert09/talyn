@@ -135,9 +135,10 @@ function buildFailingChecksBlockReason(
   if (rerunReason === 'not-rerequestable') {
     return (
       preamble +
-      `Talyn can't re-run this check via the API — GitHub only lets the app that created ` +
-      `it (or a human on github.com) re-run it. Re-run the check on GitHub and the queue ` +
-      `will retry, or merge manually.`
+      `Talyn can't re-run this check (GitHub only lets the app that created it — or a ` +
+      `human on github.com — re-run it), and the branch is already up to date with its ` +
+      `base, so re-triggering the checks via a branch update wasn't possible either. ` +
+      `Re-run the check on GitHub and the queue will retry, or merge manually.`
     );
   }
   if (rerunAttempts >= MAX_ATTEMPTS) {

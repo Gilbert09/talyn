@@ -1718,6 +1718,33 @@ class GitHubService extends EventEmitter {
       }
     }
     if (requested > 0) return { requested };
+
+    // Last resort: every rerequest flavour was refused (verified live: the
+    // Checks API is owner-app-only at both run and suite level). Updating the
+    // PR branch with the base pushes a merge commit to the head, which
+    // re-triggers EVERY check from scratch — Depot's included — using only
+    // contents:write. The "Update branch" button, in API form. Only possible
+    // while the PR is behind its base; `expected_head_sha` guards against
+    // racing a concurrent push.
+    try {
+      await this.apiRequest(
+        workspaceId,
+        `/repos/${owner}/${repo}/pulls/${number}/update-branch`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_head_sha: headSha }),
+        }
+      );
+      console.log(
+        `[github] updated ${owner}/${repo}#${number} branch to re-trigger its checks ` +
+          `(failing check(s) not re-runnable directly)`
+      );
+      return { requested: 1 };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[github] update-branch fallback on ${owner}/${repo}#${number} failed: ${msg}`);
+    }
     return {
       requested: 0,
       reason: actionsPermFailure ? 'needs-actions-permission' : 'not-rerequestable',
