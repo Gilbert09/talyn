@@ -39,6 +39,6 @@ export async function requireMcpToken(
 }
 
 function unauthorized(res: Response, error: string): void {
-  res.setHeader('WWW-Authenticate', 'Bearer realm="fastowl-mcp"');
+  res.setHeader('WWW-Authenticate', 'Bearer realm="talyn-mcp"');
   res.status(401).json({ success: false, error });
 }

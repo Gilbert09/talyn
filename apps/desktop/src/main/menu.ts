@@ -1,5 +1,4 @@
 import {
-  app,
   Menu,
   shell,
   BrowserWindow,
@@ -52,10 +51,13 @@ export default class MenuBuilder {
   }
 
   buildDarwinTemplate(): MenuItemConstructorOptions[] {
+    // Explicit labels on the role items: bare roles interpolate `app.name`,
+    // which is the package.json `name` ("fastowl" — kept for the userData
+    // path and deep-link scheme), not the user-facing product name.
     const subMenuApp: MenuItemConstructorOptions = {
-      label: app.name,
+      label: 'Talyn',
       submenu: [
-        { role: 'about' },
+        { role: 'about', label: 'About Talyn' },
         {
           label: 'Check for Updates…',
           click: () => {
@@ -65,11 +67,11 @@ export default class MenuBuilder {
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
-        { role: 'hide' },
+        { role: 'hide', label: 'Hide Talyn' },
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        { role: 'quit', label: 'Quit Talyn' },
       ],
     };
     const subMenuEdit: MenuItemConstructorOptions = {

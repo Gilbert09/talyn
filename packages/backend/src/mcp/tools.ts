@@ -25,7 +25,7 @@ async function resolveWorkspace(ownerId: string, args: Record<string, unknown>):
   const workspaces = await callApi<Workspace[]>(ownerId, 'GET', '/workspaces');
   if (workspaces.length === 1) return workspaces[0].id;
   if (workspaces.length === 0) {
-    throw new Error('No workspaces found — create one in the FastOwl app first.');
+    throw new Error('No workspaces found — create one in the Talyn app first.');
   }
   const list = workspaces.map((w) => `  ${w.id} — ${w.name}`).join('\n');
   throw new Error(`Multiple workspaces — pass workspace_id. Available:\n${list}`);
@@ -81,7 +81,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'talyn_list_workspaces',
     description:
-      'List your FastOwl workspaces (each groups GitHub repos + integrations). Use this to discover workspace ids for the other tools.',
+      'List your Talyn workspaces (each groups GitHub repos + integrations). Use this to discover workspace ids for the other tools.',
     inputSchema: { type: 'object', properties: {} },
     handler: async (ownerId) => {
       const workspaces = await callApi<Workspace[]>(ownerId, 'GET', '/workspaces');
@@ -97,7 +97,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'talyn_list_pull_requests',
     description:
-      'List pull requests in a workspace by bucket: "mine" (you authored), "review_requested" (awaiting your review), "needs_attention" (your PRs failing checks / conflicting / with change-requests or unresolved threads), or "all". Returns one compact line per PR including its FastOwl id (needed for the other PR tools).',
+      'List pull requests in a workspace by bucket: "mine" (you authored), "review_requested" (awaiting your review), "needs_attention" (your PRs failing checks / conflicting / with change-requests or unresolved threads), or "all". Returns one compact line per PR including its Talyn id (needed for the other PR tools).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,7 +112,7 @@ export const TOOLS: McpToolDefinition[] = [
           enum: ['open', 'closed', 'merged', 'all'],
           description: 'PR state filter. Default: open.',
         },
-        repo: { type: 'string', description: 'Filter by FastOwl repository id.' },
+        repo: { type: 'string', description: 'Filter by Talyn repository id.' },
         search: { type: 'string', description: 'Substring match on title or owner/repo.' },
       },
     },
@@ -136,7 +136,7 @@ export const TOOLS: McpToolDefinition[] = [
       'Get a single PR\'s status and context: title, author, branches, mergeable state, review decision, blocking reason, checks breakdown, unresolved review threads, and merge-queue / auto-keep flags. Does not include the diff (use talyn_get_pull_request_diff) or full review threads (use talyn_get_pull_request_reviews).',
     inputSchema: {
       type: 'object',
-      properties: { pull_request_id: { type: 'string', description: 'FastOwl PR id.' } },
+      properties: { pull_request_id: { type: 'string', description: 'Talyn PR id.' } },
       required: ['pull_request_id'],
     },
     handler: async (ownerId, args) => {
@@ -266,7 +266,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'talyn_set_auto_keep_mergeable',
     description:
-      'Enable or disable "auto keep mergeable" on a PR. When enabled, FastOwl repeatedly fires a cloud fix run whenever the PR develops a blocker (conflicts, failing checks) so it stays mergeable.',
+      'Enable or disable "auto keep mergeable" on a PR. When enabled, Talyn repeatedly fires a cloud fix run whenever the PR develops a blocker (conflicts, failing checks) so it stays mergeable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -285,7 +285,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'talyn_set_merge_queue',
     description:
-      'Add a PR to (or remove it from) the FastOwl merge queue. Queued PRs are merged automatically — serialized per base branch — as soon as they are clean, with cloud fix runs fired on conflict/behind/blocked.',
+      'Add a PR to (or remove it from) the Talyn merge queue. Queued PRs are merged automatically — serialized per base branch — as soon as they are clean, with cloud fix runs fired on conflict/behind/blocked.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,7 +332,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'talyn_fix_pull_request',
     description:
-      "Start the standard FastOwl \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using FastOwl's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use talyn_create_task for freeform work).",
+      "Start the standard Talyn \"get this PR mergeable\" cloud run — the exact action behind the app's fix button. Using Talyn's standard prompt and the workspace's configured provider, the agent resolves reviewer comments, gets CI green, and cleanly merges the base branch, then opens/updates the PR. Takes only the PR id — no instructions needed (use talyn_create_task for freeform work).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -361,7 +361,7 @@ export const TOOLS: McpToolDefinition[] = [
       type: 'object',
       properties: {
         workspace_id: { type: 'string', description: 'Defaults to your only workspace.' },
-        repository_id: { type: 'string', description: 'FastOwl repository id to target (required).' },
+        repository_id: { type: 'string', description: 'Talyn repository id to target (required).' },
         prompt: { type: 'string', description: 'What the agent should build.' },
         title: { type: 'string', description: 'Auto-derived from the prompt if omitted.' },
         description: { type: 'string' },
