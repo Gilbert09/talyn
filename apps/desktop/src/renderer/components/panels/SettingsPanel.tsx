@@ -895,24 +895,16 @@ function IntegrationsSettings() {
             { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
           ]}
           keyHelp={{ url: ANTHROPIC_API_KEYS_URL }}
-        />
-
-        <WorkspaceModelSelector
-          providerType="posthog_code"
-          title="PostHog Code model"
-          description="Which model PostHog Code runs use. Opus 4.8 is the most capable of the Claude 4 line; Fable 5 is the newest."
-          models={POSTHOG_CODE_MODELS}
-          defaultId={DEFAULT_POSTHOG_CODE_MODEL_ID}
-          settingKey="posthogCodeModel"
-        />
-
-        <WorkspaceModelSelector
-          providerType="claude_code"
-          title="Claude model"
-          description="Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable but costs more."
-          models={CLAUDE_MODELS}
-          defaultId={DEFAULT_CLAUDE_MODEL_ID}
-          settingKey="claudeModel"
+          connectedExtras={
+            <WorkspaceModelSelector
+              providerType="claude_code"
+              title="Model"
+              description="Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable but costs more."
+              models={CLAUDE_MODELS}
+              defaultId={DEFAULT_CLAUDE_MODEL_ID}
+              settingKey="claudeModel"
+            />
+          }
         />
 
         <CloudProviderDefaultSelector />
@@ -995,28 +987,23 @@ function WorkspaceModelSelector({
   };
 
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-secondary shrink-0">
-          <Bot className="w-5 h-5" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h4 className="font-medium">{title}</h4>
-          <p className="text-sm text-muted-foreground mt-1">{description}</p>
-        </div>
-        <SettingsSelect
-          value={current}
-          disabled={saving}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </SettingsSelect>
+    <div className="flex items-center gap-4">
+      <div className="flex-1 min-w-0">
+        <h4 className="text-sm font-medium">{title}</h4>
+        <p className="text-sm text-muted-foreground mt-0.5">{description}</p>
       </div>
-    </Card>
+      <SettingsSelect
+        value={current}
+        disabled={saving}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </SettingsSelect>
+    </div>
   );
 }
 
@@ -1112,6 +1099,7 @@ function CloudProviderCard({
   connectedBlurb,
   fields,
   keyHelp,
+  connectedExtras,
 }: {
   type: string;
   displayName: string;
@@ -1121,6 +1109,9 @@ function CloudProviderCard({
   fields: CloudProviderField[];
   /** Optional "Get a key ↗" link (+ scope note) shown under the form. */
   keyHelp?: { url: string; note?: string };
+  /** Extra per-provider settings (e.g. the model row) rendered inside the
+   *  card, under a divider, only while connected. */
+  connectedExtras?: React.ReactNode;
 }) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // Connection status comes from the shared store (preloaded + kept fresh by
@@ -1279,6 +1270,10 @@ function CloudProviderCard({
           </div>
         )}
       </div>
+
+      {connected && connectedExtras && (
+        <div className="mt-4 border-t pt-4">{connectedExtras}</div>
+      )}
     </Card>
   );
 }
@@ -1450,6 +1445,21 @@ function PostHogCodeCard() {
           </div>
         )}
       </div>
+
+      {/* Per-provider model choice lives with its provider, mirroring the
+          generic CloudProviderCard's connectedExtras slot. */}
+      {connected && (
+        <div className="mt-4 border-t pt-4">
+          <WorkspaceModelSelector
+            providerType="posthog_code"
+            title="Model"
+            description="Which model PostHog Code runs use. Opus 4.8 is the most capable of the Claude 4 line; Fable 5 is the newest."
+            models={POSTHOG_CODE_MODELS}
+            defaultId={DEFAULT_POSTHOG_CODE_MODEL_ID}
+            settingKey="posthogCodeModel"
+          />
+        </div>
+      )}
     </Card>
   );
 }
