@@ -85,6 +85,7 @@ export function MyPRsPanel() {
       search={search}
       onSearch={setSearch}
       rows={ordered}
+      stackMeta={stackMeta}
       filters={
         <>
           <RepoFilter

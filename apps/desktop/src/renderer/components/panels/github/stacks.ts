@@ -1,4 +1,5 @@
 import type { PRRow } from '../../../lib/api';
+import { escapeHtml } from '../../../lib/prClipboard';
 import { compareByCreated, type SortDir } from './filters';
 
 /**
@@ -100,4 +101,63 @@ export function buildStackedRows(
   }
 
   return { ordered, meta };
+}
+
+/**
+ * Build the "Copy list" clipboard payload from the displayed rows: a markdown
+ * bullet list (plain-text flavour) plus an HTML list (rich flavour, what Slack
+ * pastes). Stacked PRs are indented under their parent — two spaces per level
+ * in markdown, nested `<ul>`s in HTML — using the same {@link StackMeta} that
+ * drives the table's indentation. Filtering can hide a parent while showing
+ * its child, so each item's depth is clamped to one deeper than the item above
+ * it, keeping both flavours well-formed. Returns null when nothing has a URL.
+ */
+export function buildCopyListPayload(
+  rows: PRRow[],
+  meta?: Map<string, StackMeta>
+): { markdown: string; html: string; count: number } | null {
+  const items: Array<{ title: string; url: string; depth: number }> = [];
+  for (const r of rows) {
+    if (!r.summary.url) continue;
+    const raw = meta?.get(r.id)?.depth ?? 0;
+    const prev = items.length > 0 ? items[items.length - 1].depth : -1;
+    items.push({
+      title: r.summary.title || '(no title)',
+      url: r.summary.url,
+      depth: Math.min(raw, prev + 1),
+    });
+  }
+  if (items.length === 0) return null;
+
+  const markdown = items
+    .map((i) => `${'  '.repeat(i.depth)}- [${i.title}](${i.url})`)
+    .join('\n');
+
+  let html = '<ul>';
+  let depth = 0;
+  let liOpen = false;
+  for (const it of items) {
+    if (liOpen && it.depth > depth) {
+      // Clamped depths only ever step down or go one deeper, so a deeper item
+      // opens exactly one nested list inside the still-open parent <li>.
+      html += '<ul>';
+      depth++;
+    } else {
+      while (depth > it.depth) {
+        html += '</li></ul>';
+        depth--;
+      }
+      if (liOpen) html += '</li>';
+    }
+    html += `<li><a href="${escapeHtml(it.url)}">${escapeHtml(it.title)}</a>`;
+    liOpen = true;
+  }
+  while (depth > 0) {
+    html += '</li></ul>';
+    depth--;
+  }
+  if (liOpen) html += '</li>';
+  html += '</ul>';
+
+  return { markdown, html, count: items.length };
 }

@@ -8,6 +8,7 @@ import { api, type PRRow } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useGitHubActions } from './useGitHubActions';
+import type { StackMeta } from './stacks';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 
 /**
@@ -32,6 +33,9 @@ interface GitHubPageShellProps {
   filters?: React.ReactNode;
   /** The page's filtered + sorted rows — drives Copy list + empty states. */
   rows: PRRow[];
+  /** Per-row stack placement (when the page stacks PRs) — Copy list uses it
+   *  to indent stacked PRs under their parent. */
+  stackMeta?: Map<string, StackMeta>;
   /** Empty-state copy shown when GitHub is connected but the page has no rows.
    *  Defaults to the generic "no PRs match the current filters" message. */
   emptyIcon?: React.ReactNode;
@@ -49,6 +53,7 @@ export function GitHubPageShell({
   searchPlaceholder = 'Search title, repo or #number… (⌘F)',
   filters,
   rows,
+  stackMeta,
   emptyIcon,
   emptyTitle = 'No pull requests match the current filters.',
   emptyHint,
@@ -110,7 +115,7 @@ export function GitHubPageShell({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => void copyList(rows)}
+            onClick={() => void copyList(rows, stackMeta)}
             disabled={rows.length === 0}
             title="Copy the filtered PRs as a list for Slack"
           >

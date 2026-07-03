@@ -1,5 +1,5 @@
 import type { PRRow, PRState } from '../renderer/lib/api';
-import { buildStackedRows } from '../renderer/components/panels/github/stacks';
+import { buildStackedRows, buildCopyListPayload } from '../renderer/components/panels/github/stacks';
 
 /**
  * Minimal PRRow factory — the stack helper only reads `id`, `repositoryId`,
@@ -128,5 +128,85 @@ describe('buildStackedRows', () => {
     // Both rows are emitted exactly once regardless of the cycle.
     expect(ordered.map((r) => r.id).sort()).toEqual(['A', 'B']);
     expect(new Set(ordered.map((r) => r.id)).size).toBe(2);
+  });
+});
+
+/** makeRow + a URL so the row participates in Copy list. */
+function makeLinkedRow(opts: Parameters<typeof makeRow>[0]): PRRow {
+  const row = makeRow(opts);
+  row.summary = { ...row.summary, url: `https://github.com/acme/app/pull/${opts.id}` };
+  return row;
+}
+
+describe('buildCopyListPayload', () => {
+  it('renders a flat list when no stack meta is given', () => {
+    const rows = [makeLinkedRow({ id: 'A', head: 'a', base: 'main' })];
+    const payload = buildCopyListPayload(rows);
+
+    expect(payload?.count).toBe(1);
+    expect(payload?.markdown).toBe('- [A](https://github.com/acme/app/pull/A)');
+    expect(payload?.html).toBe(
+      '<ul><li><a href="https://github.com/acme/app/pull/A">A</a></li></ul>'
+    );
+  });
+
+  it('indents stacked PRs under their parent in both flavours', () => {
+    // A ← B ← C is a stack; D is an older independent root (so desc keeps
+    // the A stack first).
+    const a = makeLinkedRow({ id: 'A', head: 'a', base: 'main', createdAt: '2026-06-06T00:00:00Z' });
+    const b = makeLinkedRow({ id: 'B', head: 'b', base: 'a' });
+    const c = makeLinkedRow({ id: 'C', head: 'c', base: 'b' });
+    const d = makeLinkedRow({ id: 'D', head: 'd', base: 'main', createdAt: '2026-06-05T00:00:00Z' });
+    const { ordered, meta } = buildStackedRows([d, c, b, a], 'desc');
+    const payload = buildCopyListPayload(ordered, meta);
+
+    expect(payload?.markdown.split('\n')).toEqual([
+      '- [A](https://github.com/acme/app/pull/A)',
+      '  - [B](https://github.com/acme/app/pull/B)',
+      '    - [C](https://github.com/acme/app/pull/C)',
+      '- [D](https://github.com/acme/app/pull/D)',
+    ]);
+    expect(payload?.html).toBe(
+      '<ul>' +
+        '<li><a href="https://github.com/acme/app/pull/A">A</a>' +
+        '<ul><li><a href="https://github.com/acme/app/pull/B">B</a>' +
+        '<ul><li><a href="https://github.com/acme/app/pull/C">C</a></li></ul>' +
+        '</li></ul>' +
+        '</li>' +
+        '<li><a href="https://github.com/acme/app/pull/D">D</a></li>' +
+        '</ul>'
+    );
+  });
+
+  it('clamps depth when filtering hid a parent, keeping the output well-formed', () => {
+    // Meta says B sits at depth 2, but its ancestors were filtered out of the
+    // displayed rows — it must render as a root, and E (depth 3 in meta) as
+    // its direct child, never skipping list levels.
+    const b = makeLinkedRow({ id: 'B', head: 'b', base: 'a' });
+    const e = makeLinkedRow({ id: 'E', head: 'e', base: 'b' });
+    const meta = new Map([
+      ['B', { depth: 2, stacked: true }],
+      ['E', { depth: 3, stacked: true }],
+    ]);
+    const payload = buildCopyListPayload([b, e], meta);
+
+    expect(payload?.markdown.split('\n')).toEqual([
+      '- [B](https://github.com/acme/app/pull/B)',
+      '  - [E](https://github.com/acme/app/pull/E)',
+    ]);
+    expect(payload?.html).toBe(
+      '<ul><li><a href="https://github.com/acme/app/pull/B">B</a>' +
+        '<ul><li><a href="https://github.com/acme/app/pull/E">E</a></li></ul>' +
+        '</li></ul>'
+    );
+  });
+
+  it('skips rows without a URL and returns null when nothing is copyable', () => {
+    const noUrl = makeRow({ id: 'X', head: 'x', base: 'main' }); // no url
+    const linked = makeLinkedRow({ id: 'A', head: 'a', base: 'main' });
+
+    expect(buildCopyListPayload([noUrl, linked])?.count).toBe(1);
+    expect(buildCopyListPayload([noUrl])).toBeNull();
+    expect(buildCopyListPayload([])).toBeNull();
   });
 });

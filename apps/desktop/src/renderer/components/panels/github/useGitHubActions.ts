@@ -12,7 +12,8 @@ import { useTaskActions } from '../../../hooks/useApi';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
-import { copyRich, escapeHtml } from '../../../lib/prClipboard';
+import { copyRich } from '../../../lib/prClipboard';
+import { buildCopyListPayload, type StackMeta } from './stacks';
 
 /**
  * The row/header action handlers shared by all three GitHub pages. They mutate
@@ -302,20 +303,16 @@ export function useGitHubActions() {
   }, [currentWorkspaceId]);
 
   // Copy the given PRs as a list for pasting into Slack (etc.). Writes a rich
-  // `text/html` bullet list of hyperlinks plus a plain-text markdown fallback.
-  const copyList = useCallback(async (rows: PRRow[]) => {
-    const items = rows
-      .map((r) => ({ title: r.summary.title || '(no title)', url: r.summary.url }))
-      .filter((i) => i.url);
-    if (items.length === 0) {
+  // `text/html` bullet list of hyperlinks plus a plain-text markdown fallback;
+  // stacked PRs are indented under their parent when stack meta is provided.
+  const copyList = useCallback(async (rows: PRRow[], stackMeta?: Map<string, StackMeta>) => {
+    const payload = buildCopyListPayload(rows, stackMeta);
+    if (!payload) {
       toast.info('Nothing to copy', 'No pull requests match the current filters.');
       return;
     }
-    const markdown = items.map((i) => `- [${i.title}](${i.url})`).join('\n');
-    const html = `<ul>${items
-      .map((i) => `<li><a href="${escapeHtml(i.url)}">${escapeHtml(i.title)}</a></li>`)
-      .join('')}</ul>`;
-    const count = `${items.length} PR${items.length === 1 ? '' : 's'}`;
+    const { markdown, html } = payload;
+    const count = `${payload.count} PR${payload.count === 1 ? '' : 's'}`;
     try {
       await copyRich(html, markdown);
       toast.success(`Copied ${count}`, 'Paste into Slack to request approval.');
