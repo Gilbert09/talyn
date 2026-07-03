@@ -14,6 +14,18 @@ After completing each task: stage relevant files, commit with a descriptive mess
 
 **Commit authorship**: commits should be authored by Tom directly. Do NOT append `Co-Authored-By: Claude …` trailers or any other AI-attribution lines to commit messages in this repo.
 
+## CI & Releases (`.github/workflows/`)
+
+Every push to main deploys — treat a push as a production release. All deploy/publish workflows are fork-guarded with `if: github.repository == 'Gilbert09/talyn'` (these guards compare against the CURRENT repo name; update them if the repo is ever renamed, in the same push, or deploys silently skip).
+
+- **`test.yml`** — every push + PR. 3-OS matrix (macOS/Windows/Ubuntu): full builds → `typecheck` → `lint` → `npm test`. The only gate — nothing blocks a deploy on it, so don't push red.
+- **`deploy-backend.yml`** — push to main touching `packages/backend|shared`, `Dockerfile`, `railway.toml` (+ `workflow_dispatch`). Deploys to Railway via CLI token; cutover is health-gated (`/health` does a real DB check and 503s while draining), so a boot-refusing build keeps the old one serving. NOTE: every deploy briefly overlaps old+new instances — the pg advisory locks (`services/advisoryLock.ts`) exist for exactly that window.
+- **`deploy-marketing.yml`** — push to main touching `apps/marketing/**`. Lint + typecheck gate, then Vercel prebuilt deploy to www.talyn.dev.
+- **`nightly.yml`** — 03:00 UTC daily (+ manual), arm64-only, skipped when nothing changed since the last build. Publishes a GitHub **pre-release**, version auto-bumped to the next patch above the highest release ever published. Only **nightly-channel** users (Settings → About → Update channel) receive these.
+- **`publish.yml`** — the **stable release**. Two triggers: push a `vX.Y.Z` tag, or Actions → Publish → "Run workflow" (version input optional — empty auto-picks the next patch; electron-builder creates the release AND the tag, so no local git needed). Builds arm64+x64, signs, notarizes, publishes a **full release** — what stable-channel updaters and the talyn.dev download button follow. The tag/input is the single source of truth for the app version (baked into `release/app/package.json` at build time, never committed).
+
+**Update channels**: nightlies = pre-releases; stable = full releases. The desktop picker (Settings → About; persisted in userData via `src/main/updateChannel.ts`, default `stable`) maps to electron-updater's `allowPrerelease`. Keep `nightly.yml` publishing with `-c.publish.releaseType=prerelease` and `publish.yml` on the package.json default (`release`) — that split IS the channel mechanism.
+
 ## Testing — run only the relevant tests while iterating
 
 **Do NOT run the whole test suite on every change.** It's slow (many backend suites spin up a real pglite Postgres per file) and wastes the loop. Run only the tests that cover what you actually touched, picked by what the change can plausibly break — not by habit:
