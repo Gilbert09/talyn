@@ -1636,7 +1636,7 @@ class GitHubService extends EventEmitter {
 
     // `filter=latest` returns only the newest attempt of each check; a big
     // repo (posthog: ~200 checks per head) spans multiple pages.
-    const failing: Array<{ id: number; name: string; appSlug: string }> = [];
+    const failing: Array<{ id: number; name: string; appSlug: string; suiteId?: number }> = [];
     for (let page = 1; page <= 3; page++) {
       const res = await this.apiRequest<{
         check_runs: Array<{
@@ -1644,6 +1644,7 @@ class GitHubService extends EventEmitter {
           name: string;
           conclusion: string | null;
           app?: { slug?: string } | null;
+          check_suite?: { id?: number } | null;
         }>;
       }>(
         workspaceId,
@@ -1653,7 +1654,12 @@ class GitHubService extends EventEmitter {
       failing.push(
         ...runs
           .filter((c) => c.conclusion === 'failure' || c.conclusion === 'timed_out')
-          .map((c) => ({ id: c.id, name: c.name, appSlug: c.app?.slug ?? '' }))
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            appSlug: c.app?.slug ?? '',
+            suiteId: c.check_suite?.id,
+          }))
       );
       if (runs.length < 100) break;
     }
@@ -1661,27 +1667,50 @@ class GitHubService extends EventEmitter {
 
     let requested = 0;
     let actionsPermFailure = false;
+    const rerequestedSuites = new Set<number>();
     for (const run of failing) {
       const ref = `check "${run.name}" (${run.appSlug || 'unknown app'}) on ${owner}/${repo}#${number}`;
       try {
         if (run.appSlug === 'github-actions') {
+          // A GitHub-Actions check run's id IS its job id. Needs actions:write.
           await this.apiRequest(
             workspaceId,
             `/repos/${owner}/${repo}/actions/jobs/${run.id}/rerun`,
             { method: 'POST' }
           );
-        } else {
-          const endpoint = `/repos/${owner}/${repo}/check-runs/${run.id}/rerequest`;
-          try {
-            await this.apiRequest(workspaceId, endpoint, { method: 'POST' });
-          } catch {
-            // The installation token is rejected for checks other apps own;
-            // the user token flavour acts closer to a human — worth one shot.
-            await this.apiRequest(workspaceId, endpoint, { method: 'POST' }, 'user');
-          }
+          requested++;
+          console.log(`[github] re-ran failing ${ref} (actions job)`);
+          continue;
         }
-        requested++;
-        console.log(`[github] re-ran failing ${ref}`);
+        // Third-party checks (Depot, …): run-level rerequest is owner-app-only
+        // (403 "Invalid check_run_id" for us — verified live), so escalate
+        // through the flavours that might be allowed: run-rerequest as the
+        // user, then SUITE-level rerequest (the API behind "Re-run all
+        // checks") as bot then user. A suite rerequest re-runs every check in
+        // that app's suite — coarser than one run, but it's the difference
+        // between self-driving and waiting for a human.
+        const runEndpoint = `/repos/${owner}/${repo}/check-runs/${run.id}/rerequest`;
+        try {
+          await this.apiRequest(workspaceId, runEndpoint, { method: 'POST' }, 'user');
+          requested++;
+          console.log(`[github] re-ran failing ${ref} (user rerequest)`);
+          continue;
+        } catch {
+          /* escalate to the suite */
+        }
+        if (run.suiteId && !rerequestedSuites.has(run.suiteId)) {
+          rerequestedSuites.add(run.suiteId);
+          const suiteEndpoint = `/repos/${owner}/${repo}/check-suites/${run.suiteId}/rerequest`;
+          try {
+            await this.apiRequest(workspaceId, suiteEndpoint, { method: 'POST' });
+          } catch {
+            await this.apiRequest(workspaceId, suiteEndpoint, { method: 'POST' }, 'user');
+          }
+          requested++;
+          console.log(`[github] re-ran failing ${ref} (suite ${run.suiteId} rerequest)`);
+          continue;
+        }
+        throw new Error('no rerequest flavour accepted');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (run.appSlug === 'github-actions') actionsPermFailure = true;
