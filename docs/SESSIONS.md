@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 66 — Launch prep: repo rename, release channels, v0.2.0, docs purge
+
+- **Repo renamed** `Gilbert09/owl` → `Gilbert09/talyn` (GitHub App unaffected; 301 redirects keep old clones + shipped auto-updaters working — never reuse the `owl` name). All references, workflow guards, and the electron-builder publish target updated the same push.
+- **Stable/nightly update channels**: nightlies stay pre-releases; tagged builds are full releases. New in-app picker (Settings → About, persisted in userData, default **stable**); the marketing DownloadButton prefers `/releases/latest`. Fixed publish.yml to bake the tag version into the build (was shipping the static 0.1.0 regardless of tag) and added `workflow_dispatch` so a stable release is one click in Actions (version optional — auto-next-patch above the highest release). **v0.2.0 shipped** as the first stable release (dual-arch, notarized, verified on the feed).
+- **README launch pass** (download pointer, live providers, GitHub App, skills; task-types + daemon/SSH history removed) and **docs purge**: deleted AUTONOMOUS_BUILD / CONTINUOUS_BUILD(-ROADMAP) / DAEMON_EVERYWHERE / SUPACODE_COMPARISON / bootstrap-vm.sh; ARCHITECTURE.md rewritten for the cloud-only system (old decisions kept, marked superseded).
+- **Contact email removed** site-wide + desktop (Help → "Report an Issue", crash dialog) — support channel is GitHub issues. Site email capture remains only as non-Mac "get notified".
+- Merge-queue follow-ups: fix button enabled for failing non-required checks (`prHasFixableIssues`, manual-only — auto paths unchanged); WS disconnects only reach error tracking after 3 failed reconnects; PR-row actions cleared of the scrollbar; Copy list indents stacked PRs (nested markdown/HTML).
+- Notable: signups were **always open** (`TALYN_ALLOWED_EMAILS` is an unset optional gate; `TALYN_ADMIN_EMAILS` only grants admin). `EnvironmentType` in shared types flagged stale (`claude_code` missing, dead `local`/`remote` members) — cleanup candidate. Still open: uptime alerting on `/health`.
+
 ## Session 65 — Pre-launch audit + hardening sweep (marketing, desktop, backend)
 
 Full launch-readiness audit (5 parallel audit agents: security, backend scaling, desktop UX, marketing site, docs/gaps), then 24 fix commits landed across three parallel streams. Highlights:
