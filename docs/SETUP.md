@@ -144,7 +144,7 @@ re-connects via the install flow.
 
 1. https://github.com/settings/apps → **New GitHub App**.
 2. **Webhook URL**: `https://<your-backend>/api/v1/webhooks/github`.
-   - Prod: `https://fastowl-backend-production.up.railway.app/api/v1/webhooks/github`.
+   - Prod: `https://prod.talyn.dev/api/v1/webhooks/github`.
    - Local: tunnel it — `npx smee-client --url https://smee.io/<channel> --target http://localhost:4747/api/v1/webhooks/github`, and use the `smee.io/<channel>` URL here.
    **Webhook secret**: generate one → `GITHUB_WEBHOOK_SECRET`.
 3. **Permissions** (read-only unless noted): Pull requests **R/W** (merge/auto-merge
@@ -230,7 +230,7 @@ Multiple emails are comma-separated. Unauthorised callers get a 403 on first req
 
 ### 5. Railway account (deployed)
 
-Hosted backend lives at **https://fastowl-backend-production.up.railway.app**
+Hosted backend lives at **https://prod.talyn.dev**
 (project `Talyn`, service `fastowl-backend`, env `production`).
 Auto-deploy on push to main via `.github/workflows/deploy-backend.yml` —
 needs a `RAILWAY_TOKEN` GitHub secret:
@@ -250,7 +250,7 @@ not the direct connection. If you rotate the DB password, update
 authorization callback URL pointing at localhost. Once you actually
 start using GitHub integration against the hosted backend, update the
 OAuth app's callback to
-`https://fastowl-backend-production.up.railway.app/api/v1/github/callback`.
+`https://prod.talyn.dev/api/v1/github/callback`.
 The Supabase-auth GitHub OAuth app (for user sign-in) is separate and
 already points at Supabase's domain, not ours.
 

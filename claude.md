@@ -105,7 +105,7 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 - Session 17 (Phase 18.3.B): SSH auto-install. Desktop "Add Environment → Remote VM (Talyn daemon)" with two modes (auto-install over SSH, manual one-liner). Backend dials the target via ssh2, pipes `curl /daemon/install.sh | bash`, the script builds `@talyn/daemon` + writes a systemd/launchd unit, daemon pairs + dials back, modal polls for `connected`.
 - Session 16 (Phase 18.3.B foundation): daemon relay layer + daemon envs first-class in scheduling + CI hygiene. Daemon runs a local HTTP proxy; child processes' REST calls tunnel over its WS. Backend accepts internal-auth headers in parallel with JWT. No user JWT on the VM. Scheduler/backlog fall back to any connected daemon when no env is pinned.
 - Session 15 (Phase 18.3.A): daemon split foundation — new `packages/daemon`, `/daemon-ws` endpoint, `daemon` env type. Daemon can pair with the backend and proxy exec/spawn/git.
-- Session 14 (Phase 18.4): backend deployed to Railway at `https://fastowl-backend-production.up.railway.app`. Dockerfile + railway.toml + CI workflow. Desktop `.env` now points at hosted backend.
+- Session 14 (Phase 18.4): backend deployed to Railway at `https://prod.talyn.dev`. Dockerfile + railway.toml + CI workflow. Desktop `.env` now points at hosted backend.
 - Session 13 (Phase 18.2): end-to-end auth — Supabase GitHub OAuth, JWT middleware, `owner_id` scoping, RLS defense in depth, desktop login + CLI/MCP bearer tokens.
 
 ## File Structure

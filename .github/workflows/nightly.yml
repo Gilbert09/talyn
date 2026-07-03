@@ -90,7 +90,7 @@ jobs:
         # auth config. The Supabase anon key is publishable (client-embedded
         # by design), so it lives in repo variables, not secrets.
         env:
-          TALYN_API_URL: https://fastowl-backend-production.up.railway.app
+          TALYN_API_URL: https://prod.talyn.dev
           TALYN_SUPABASE_URL: ${{ vars.TALYN_SUPABASE_URL }}
           TALYN_SUPABASE_ANON_KEY: ${{ vars.TALYN_SUPABASE_ANON_KEY }}
           TALYN_POSTHOG_KEY: ${{ vars.TALYN_POSTHOG_KEY }}

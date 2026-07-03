@@ -617,7 +617,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 - [x] **18.4 Deployment** (Session 14)
   - [x] Multi-stage Dockerfile at repo root — Node 22 slim, copies pre-built node_modules from builder to avoid re-running install-scripts (keeps node-pty/ssh2 native bindings without runtime build tools)
   - [x] `railway.toml` — DOCKERFILE builder, `/health` healthcheck, on-failure restart
-  - [x] Hosted at `https://fastowl-backend-production.up.railway.app`, project `Talyn`, service `fastowl-backend`
+  - [x] Hosted at `https://prod.talyn.dev`, project `Talyn`, service `fastowl-backend`
   - [x] Service variables: `DATABASE_URL` (transaction pooler, not direct — Railway has no IPv6), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TALYN_ALLOWED_EMAILS`, `NODE_ENV`
   - [x] Migrations run on startup via drizzle-orm migrator; `build:copy-migrations` postbuild script puts `.sql` files into `dist/`
   - [ ] Rate limiting on public API (per-user) — future

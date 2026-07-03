@@ -23,7 +23,7 @@ personal token.
 
    ```bash
    claude mcp add --transport http talyn \
-     https://fastowl-backend-production.up.railway.app/api/v1/mcp \
+     https://prod.talyn.dev/api/v1/mcp \
      --header "Authorization: Bearer <your-token>"
    ```
 
@@ -36,7 +36,7 @@ personal token.
      "mcpServers": {
        "talyn": {
          "type": "http",
-         "url": "https://fastowl-backend-production.up.railway.app/api/v1/mcp",
+         "url": "https://prod.talyn.dev/api/v1/mcp",
          "headers": { "Authorization": "Bearer <your-token>" }
        }
      }
