@@ -366,12 +366,20 @@ function PRTableRow({
         }
       }}
     >
-      <td className="px-4 py-2">
-        <div className="flex flex-col gap-0.5" style={stackIndent ? { paddingLeft: stackIndent } : undefined}>
+      {/* w-full + max-w-0: the title column takes all leftover width but is
+          excluded from the table's min-content sizing, so a long title can't
+          widen the table past the viewport (pushing the other columns out) —
+          it truncates to one line instead. Without max-w-0 an auto-layout
+          table refuses to shrink below the full text width and `truncate`
+          never engages. */}
+      <td className="w-full max-w-0 px-4 py-2">
+        <div className="flex min-w-0 flex-col gap-0.5" style={stackIndent ? { paddingLeft: stackIndent } : undefined}>
           <span className="flex items-center gap-1.5 truncate font-medium">
-            <span className="truncate">{summary.title || '(no title)'}</span>
+            <span className="truncate" title={summary.title || undefined}>
+              {summary.title || '(no title)'}
+            </span>
           </span>
-          <span className="text-xs text-muted-foreground">
+          <span className="truncate text-xs text-muted-foreground">
             {row.owner}/{row.repo}#{row.number} · @{summary.author || 'unknown'}
             {(summary.createdAt || row.createdAt) && (
               <span title={`Opened ${new Date(summary.createdAt || row.createdAt).toLocaleString()}`}>
