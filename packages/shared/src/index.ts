@@ -108,24 +108,17 @@ export interface ContinuousBuildSettings {
 // ============================================================================
 
 /**
- * Environment type. Both types transport exec/stream/git over the
- * daemon WS protocol; they only differ in where the daemon is running:
- *   - `local`  — the daemon bundled with the desktop app, running on
- *               the user's own machine (installed as a launchd/systemd
- *               user service by the desktop app).
- *   - `remote` — a daemon the user installed on a separate machine
- *               (VM, workstation, etc.) via the pairing flow.
+ * Environment type. Post cloud-only refactor an environment is a
+ * secret-free delegation marker — a task assigned to it is handed to the
+ * matching cloud provider, which runs the whole agent loop on its own
+ * sandbox and opens a PR. Credentials live on the workspace's
+ * `integrations` row, not on the env.
  *
- * Legacy types ('ssh', 'coder', 'daemon') were removed in the "daemon
- * everywhere" refactor (docs/DAEMON_EVERYWHERE.md).
- *
- *   - `posthog_code` — not daemon-backed at all. A delegation marker: a
- *               task assigned to this env is handed off to PostHog Code,
- *               which runs the whole agent loop on its own sandboxed
- *               machine and opens a PR. FastOwl creates the remote task,
- *               polls its run, and ingests the resulting PR. Credentials
- *               live on the task's workspace (`PostHogIntegration`), not
- *               on the env. See services/posthogCode/*.
+ * STALE UNION: rows are actually created with `CloudProviderType` values
+ * (see services/cloudProviders/environment.ts — `claude_code` exists in
+ * the DB but not here), and `local`/`remote` are dead daemon-era members
+ * nothing creates anymore. Cleanup candidate: collapse this onto
+ * `CloudProviderType`.
  */
 export type EnvironmentType = 'local' | 'remote' | 'posthog_code';
 

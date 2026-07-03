@@ -8,7 +8,7 @@ Talyn is a desktop "mission control" app for **GitHub PR management**, powered b
 
 ## Git Workflow
 
-**Repository**: `git@github.com:Gilbert09/owl.git` (main branch)
+**Repository**: `git@github.com:Gilbert09/talyn.git` (main branch)
 
 After completing each task: stage relevant files, commit with a descriptive message, push to main. No branches or PRs for Talyn itself. Keep commits focused and atomic.
 
@@ -28,15 +28,12 @@ Run the **full** package suite (`npm test`) only when wrapping up a change, or w
 - **[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)** — system diagram, tech stack, core concept details, key decisions, resolved questions
 - **[`docs/ROADMAP.md`](./docs/ROADMAP.md)** — full phased TODO (Phase 1–20), backlog, known gaps, full priority queue
 - **[`docs/SESSIONS.md`](./docs/SESSIONS.md)** — chronological session notes
-- **[`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md)** — active "production ready" plan (hosted backend, daemon split, etc.)
-- **[`docs/DAEMON_EVERYWHERE.md`](./docs/DAEMON_EVERYWHERE.md)** — active refactor: daemon becomes a bundled OS-level user service; collapses local/ssh/daemon into one transport; fixes backend-restart session loss
+- **[`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)** — the cloud task provider abstraction (registry, per-provider modules, roadmap)
 - **[`docs/QUALITY_PARITY.md`](./docs/QUALITY_PARITY.md)** — desktop polish/parity assessment vs Conductor; what's done + prioritized backlog (feed perf, PR diffs/merge, composer, tests)
-- **[`docs/CONTINUOUS_BUILD.md`](./docs/CONTINUOUS_BUILD.md)** — user-facing feature doc
-- **[`docs/SSH_VM_SETUP.md`](./docs/SSH_VM_SETUP.md)** — running against a remote VM
+- **[`docs/INCREMENTAL_CHECK_COUNTS.md`](./docs/INCREMENTAL_CHECK_COUNTS.md)** — webhook-driven incremental check counting design
+- **[`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md)** — the `@talyn/mcp-server` package
 - **[`docs/SETUP.md`](./docs/SETUP.md)** — env vars / account setup
 - **[`docs/TESTING.md`](./docs/TESTING.md)** — testing strategy + coverage
-- **[`docs/AUTONOMOUS_BUILD.md`](./docs/AUTONOMOUS_BUILD.md)** — design doc for self-building loops
-- **[`docs/SUPACODE_COMPARISON.md`](./docs/SUPACODE_COMPARISON.md)** — internals comparison vs supabitapp/supacode (worktrees, gh-CLI auth, batched GraphQL, adaptive polling)
 
 When a session lands non-trivial work, append a note to `docs/SESSIONS.md`. When a phase item changes status, update `docs/ROADMAP.md`. When a decision is revisited, update `docs/ARCHITECTURE.md`.
 
@@ -82,9 +79,7 @@ When in doubt, add a `.toSQL()` assertion (`expect(query.toSQL().sql).not.toCont
 
 ## Active Priorities
 
-> Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). Definition of done for "production ready" is in [`docs/CONTINUOUS_BUILD_ROADMAP.md`](./docs/CONTINUOUS_BUILD_ROADMAP.md).
-
-> **Superseded (June 2026):** the daemon-everywhere / continuous-build / local-execution roadmap is retired. Talyn is now a cloud-only PR-management app. The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
+> Full list in [`docs/ROADMAP.md`](./docs/ROADMAP.md). The active direction is the cloud-provider abstraction in [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md). (The daemon-everywhere / continuous-build / local-execution era docs were deleted in July 2026 — see `docs/SESSIONS.md` history if you need them.)
 
 1. **Cloud provider abstraction** — Phases 1–2 (registry + interface, PostHog Code under it, generic credentials/routes) are **done**. **Claude Code (Managed Agents) shipped** as the 2nd provider (`services/claudeCode/*` + `cloudProviders/claude/provider.ts`). **Codex Cloud is deferred** — OpenAI exposes no server-to-server cloud-task API (only the `codex cloud` CLI or `@codex` GitHub mentions). Each provider is a self-contained `client + credentials + converter + executor + poller + provider` module — no core changes. Provider selection is generic: a workspace `defaultCloudProvider` setting (`posthog_code | claude_code | ask`) drives both the backend auto-fix resolver (`resolveCloudEnvId`) and the desktop, with an "Ask every time" per-task **provider picker** (`providerPicker` store + `CloudProviderPickerModal`). Follow-ups: the Claude `checkout` object shape for `pr_response`/`pr_review` head-branch mounting; executor/poller DB-mocked reconcile tests; migrating the bespoke PostHog Settings card onto the generic `CloudProviderCard`.
 2. **Desktop polish** — generalise the Settings card + composer to render per-provider once a 2nd provider lands. (The dead local-task UI — TaskFilesPanel/TaskGitPanel/awaiting_review flow — was removed in Session 52.)
@@ -116,12 +111,10 @@ fastowl/
 │   ├── mcp-server/               # @talyn/mcp-server — stdio MCP for child Claudes
 │   └── shared/                   # Shared TS types
 │   # (packages/daemon removed in the cloud-only refactor)
-├── docs/                         # ARCHITECTURE, ROADMAP, SESSIONS, CONTINUOUS_BUILD*, SETUP, etc.
+├── docs/                         # ARCHITECTURE, ROADMAP, SESSIONS, CLOUD_PROVIDERS, SETUP, etc.
 ├── supabase/                     # Local dev Supabase stack: `npm run dev:db` (config.toml +
 │                                 # gitignored .env). Local dev must NEVER point at the prod
 │                                 # DB / GitHub OAuth app — see docs/SETUP.md §0 for the why.
-├── scripts/
-│   └── bootstrap-vm.sh           # One-command SSH VM install
 ├── CLAUDE.md                     # This file
 └── package.json                  # npm workspace root
 ```

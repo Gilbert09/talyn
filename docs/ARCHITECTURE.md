@@ -1,139 +1,102 @@
 # Talyn Architecture
 
-Architectural decisions, core concept deep-dives, and resolved questions. Historical — updated when a decision is revisited. For active work see [`ROADMAP.md`](./ROADMAP.md).
+Architectural decisions, core concept deep-dives, and resolved questions. Updated when a decision is revisited. For active work see [`ROADMAP.md`](./ROADMAP.md); for the provider abstraction see [`CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
 ## System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Electron App (Frontend)                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
-│  │  Inbox   │ │  Tasks   │ │  GitHub  │ │    Settings      │    │
-│  │  Panel   │ │  Panel   │ │  Panel   │ │                  │    │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘    │
-│                                                                  │
-│   Also in the main process: Talyn daemon (launchd/systemd      │
-│   user service). Bundled binary. Survives app quit; only a       │
-│   "Uninstall & quit" or reboot removes it.                       │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                     Electron App (Desktop)                       │
+│  ┌───────────────┐ ┌──────────┐ ┌───────────────┐ ┌───────────┐  │
+│  │ GitHub panel  │ │  Tasks   │ │  Merge queue  │ │ Settings  │  │
+│  │ (Mine/Review) │ │          │ │               │ │           │  │
+│  └───────────────┘ └──────────┘ └───────────────┘ └───────────┘  │
+└──────────────────────────────────────────────────────────────────┘
                                │
-                    WebSocket/REST API (user-facing)
+                 WebSocket + REST (Supabase JWT)
                                │
-┌─────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────┐
 │                   Backend (hosted on Railway)                    │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
-│  │  Agent   │ │ Environ- │ │   Task   │ │   Integration    │    │
-│  │ Service  │ │   ment   │ │  Queue   │ │     Manager      │    │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                   │                │
-           WS /daemon-ws       GitHub / Slack APIs
-                   │
-       ┌───────────┴────────────┐
-       │                        │
-  Local daemon             Remote daemon
-  (bundled, this Mac)      (paired VM)
-       │                        │
-       └── child_process.spawn(claude …)
+│  PR monitor / cache · merge queue · auto-keep-mergeable watcher  │
+│  task queue · CloudTaskProvider registry + poller · skills       │
+│  webhook receiver (HMAC) → Redis queue → webhook worker          │
+└──────────────────────────────────────────────────────────────────┘
+        │                      │                        │
+  GitHub App             Cloud providers          Supabase Postgres
+  (webhooks in,          (PostHog Code,           + Supabase Auth
+  REST/GraphQL out)      Anthropic Managed        (RLS), Redis
+                         Agents)
 ```
 
-Every environment — `local` or `remote` — is backed by a `@talyn/daemon` process dialling into the backend over WebSocket. The daemon owns the child-process pipes, so a backend restart no longer SIGPIPEs running tasks.
+Nothing executes on the user's machine. Every task is delegated to a **cloud provider** that runs the agent loop on its own sandbox and opens a PR; the backend creates the remote run, polls it, and ingests the transcript.
 
 ## Tech Stack
 
 **Frontend (Electron)**
 - React 19 + TypeScript
 - Zustand (state), Tailwind + shadcn/ui (UI)
-- Electron contextBridge for IPC (typed channels)
+- Electron contextBridge for IPC (typed channels); PKCE OAuth via the system browser with a deep-link return
 
 **Backend**
 - TypeScript on Node.js, Express + WebSocket
-- Supabase Postgres via Drizzle ORM; migrations applied at boot
-- Zero native deps after the "daemon everywhere" refactor (node-pty dropped in Phase 13.2 Slice 4c; ssh2 dropped in Phase 18.5 Slice 5)
-
-**Daemon**
-- TypeScript, `ws`, compiled to a self-contained binary with `bun build --compile`
-- Runs as a launchd user agent (macOS) or `systemd --user` unit (Linux) — installed by the desktop app on first launch
-- See [`DAEMON_EVERYWHERE.md`](./DAEMON_EVERYWHERE.md) for the design
+- Supabase Postgres via Drizzle ORM; migrations applied at boot (advisory-locked)
+- Supabase Auth (GitHub OAuth) → JWT middleware → per-request RLS scoping
+- Redis consumer group for the webhook queue (fleet-safe)
+- GitHub connectivity via a single shared **GitHub App**: per-user installations, webhook-first PR state, installation tokens for bot actions + user-to-server tokens for user-attributed ones
+- Cloud delegation via the `CloudTaskProvider` registry (`services/cloudProviders/`) — each provider is a self-contained client/credentials/converter/executor/poller module
 
 ## Core Concepts (Detail)
 
 ### Workspaces
-Groups related repositories and configuration (integrations, repo paths per environment, auto-clone settings). Example: a "PostHog" workspace with `posthog/posthog`, `posthog/posthog.com`, `posthog/charts`.
+Groups related repositories and integrations. Example: a "PostHog" workspace with `posthog/posthog`, `posthog/posthog.com`, `posthog/charts`. Strictly single-owner; per-workspace provider credentials are AES-GCM-encrypted on the `integrations` row.
 
 ### Environments
-A machine where work executes. Two types, both daemon-backed:
-- **Local**: the daemon bundled with the desktop app, running on your own Mac / Linux box. Installed as a user-level OS service on first app launch; survives the app being quit.
-- **Remote**: a daemon installed on a separate machine (VM, workstation, GPU rig) via the pairing flow. Add one from Settings → Environments → Add.
-
-The backend only speaks the daemon WS protocol — there is no in-process spawn path and no ssh2 path anymore. Git uses the machine's configured git user — no special Talyn config.
+A secret-free **marker row**, one auto-provisioned per connected cloud provider. Its `type` is how a task resolves its provider — nothing more. (The daemon/SSH-backed execution environments this concept once described were removed in the June 2026 cloud-only refactor.)
 
 ### Tasks
-Primary unit of work. Types: `code_writing`, `pr_response`, `pr_review`, `manual`.
+Primary unit of work, always delegated to a cloud provider. Types: `code_writing` (freeform prompt on a repo), `pr_response`, `pr_review`; skill runs dispatch as tasks with the `SKILL.md` inlined into the prompt.
 
-Lifecycle: `pending` → `queued` → `in_progress` → `awaiting_review` → `completed` (or `failed` / `cancelled`).
+Lifecycle: `queued` → `in_progress` → `completed` / `failed` / `cancelled`. The cloud poller drives status and ingests the transcript; review happens on the provider's PR (no local approval gate).
 
-Design principles:
-1. **Tasks own agents.** Users manage tasks; agents are internal.
-2. **Approval gates.** Automated tasks do work then wait for approval before pushing.
-3. **One active task per repo per environment.** Branch isolation.
-4. **Session persistence.** Task history and conversation persist; sessions can be paused/resumed.
-
-### Git Branch Management (code_writing)
-Each task gets a dedicated branch (`fastowl/task-<id>-<slug>`). Work commits/stashes before another task runs on the same repo. Resume auto-checks out the branch. User approves before merging/pushing.
-
-### Interactive Terminal
-Full Claude CLI experience: streaming output, bidirectional input, native UI overlays for options/approvals (planned), full history persistence.
-
-### Inbox
-Prioritized list of items requiring human attention: awaiting-approval tasks, awaiting-input tasks, PR reviews received, CI failures, Slack mentions, completed work needing review.
+### GitHub / PR core
+The heart of the app: webhook-first PR monitoring (with polling reconciliation as the safety net), a per-workspace PR cache, the prioritized GitHub panel (Needs attention / Mine / Review, stacked PRs), the merge queue (auto-fix runs for conflicts/failed checks, bounded check re-runs and branch updates where GitHub allows), and the auto-keep-mergeable watcher.
 
 ## Key Decisions
 
+### 0. Cloud-only pivot — 2026-06
+The local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates, per-task git working trees) was removed wholesale. Every task runs on a cloud provider's sandbox; Talyn is a PR dashboard + delegation layer. This supersedes decisions 2–7 below, which are kept as history.
+
 ### 1. TypeScript Backend (not Python) — 2024-01
-Single language across the stack, shared types with frontend, good SSH library ecosystem on Node.
+Single language across the stack, shared types with frontend.
 
-### 2. Local-first Architecture — 2024-01
-Backend runs alongside the Electron app; SQLite for persistence; cloud services are optional. Hosted backend is a later addition, not a replacement (see Phase 18).
+### 2. Local-first Architecture — 2024-01 *(superseded by 0)*
+Backend ran alongside the Electron app. The hosted Railway backend replaced this (Phase 18).
 
-### 3. Environment-agnostic Agent Execution — 2024-01
-Start with SSH (user already has `ssh vm1`); abstract the "environment" so Coder, dev containers, cloud VMs can be added later.
+### 3. Environment-agnostic Agent Execution — 2024-01 *(superseded by 0)*
+SSH/Coder/daemon execution environments — all removed.
 
-### 4. Use Claude CLI (not API directly) — 2024-01
-User already has the CLI set up on environments; CLI handles auth/context; provides the terminal view naturally; output can be parsed for status.
+### 4. Use Claude CLI (not API directly) — 2024-01 *(superseded by 0)*
+No CLI runs anywhere now; providers own their agent loop.
 
-### 5. Tasks Own Agents — 2024-04
-Users think in tasks, not agents. Each task spawns its own Claude agent. Terminal output is part of the task. Simpler UI (no separate Terminals panel). Per-environment concurrency preserved.
+### 5. Tasks Own Agents — 2024-04 *(superseded by 0)*
+Agents are now entirely internal to the provider.
 
-### 6. Git-Centric Task Workflow — 2024-04
-Each code_writing task gets a dedicated branch for isolation, rollback, pause/resume (stash/checkout). One active task per repo per env. Approval before pushing.
+### 6. Git-Centric Task Workflow — 2024-04 *(superseded by 0)*
+Branch management moved to the provider sandbox; Talyn tracks the resulting PR.
 
-### 7. Approval-Based Automation — 2024-04
-Automated tasks do work then wait for approval. Different gates per type:
-- PR Response: work → show diff → approval → push
-- Feature Build: work → await input → user marks complete
-- PR Review: suggest comments → approval → post
+### 7. Approval-Based Automation — 2024-04 *(superseded by 0)*
+The provider opens a normal PR; GitHub review IS the approval gate.
 
 ### 8. Reference Architecture: PostHog Code — 2024-04
-Reference: https://github.com/PostHog/code
+Reference: https://github.com/PostHog/code — informed session persistence, permission modes, and store/service layering; today PostHog Code is a live provider rather than a pattern source.
 
-Patterns adopted/studied:
-- Session persistence via conversation log replay (`resumeFromLog()`)
-- TreeTracker for git working tree snapshots
-- Permission modes (default, acceptEdits, plan, bypassPermissions)
-- tRPC over Electron IPC for type-safe communication
-- Zustand stores for UI state, services for business logic
-- Saga pattern for atomic operations with rollback
+### 9. Pluggable cloud providers — 2026-06
+One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. PostHog Code and Claude Code (Anthropic Managed Agents) are live; Codex Cloud is deferred until OpenAI ships a server-to-server API.
 
-## Resolved Questions
-
-1. **Claude integration** — Use the CLI on each environment, not the API directly. Natural terminal view, CLI handles auth, output can be parsed.
-2. **Authentication** — OAuth flows for GitHub/Slack/PostHog. Better UX than manual tokens; future-proofed for productionization.
-3. **Backend architecture** — Deployable design, local-first development. Runs locally for dev, architected to be deployable later, multi-tenant ready.
-4. **Implementation order** — Terminal/agent orchestration first (core value); integrations layered on top.
+### 10. GitHub App over OAuth — 2026-06/07
+A single shared GitHub App with per-user installations replaced the classic OAuth app: webhook-first updates, per-installation rate budgets, installation tokens for bot-attributed actions with user-to-server tokens for user-attributed ones (and a documented constraint: GitHub treats both as "the integration" for merge gating).
 
 ## References
 
-- **PostHog Code** — https://github.com/PostHog/code — best-in-class patterns for agentic dev environments. See `packages/agent/`, `packages/core/`, `packages/electron-trpc/`.
-- **PostHog Devbox** — `/Users/tomowers/dev/posthog/posthog/common/hogli/devbox/` — Coder devbox reference implementation.
+- **PostHog Code** — https://github.com/PostHog/code
 - **Electron React Boilerplate** — https://github.com/electron-react-boilerplate/electron-react-boilerplate
