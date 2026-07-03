@@ -39,20 +39,6 @@ There is **no local execution** — no daemon, no SSH, no `claude` CLI to instal
 
 ---
 
-## Task types
-
-Every task is delegated to a cloud provider.
-
-| Type           | Typical use                                                        |
-| -------------- | ------------------------------------------------------------------ |
-| `code_writing` | Freeform: pick a repo, write a prompt. The agent opens a PR.       |
-| `pr_response`  | Fix failing CI / address review comments on one of your open PRs.  |
-| `pr_review`    | Draft review comments on a PR.                                     |
-
-Skill runs (the wand button on a PR row) dispatch as tasks too, with the skill's `SKILL.md` inlined into the prompt.
-
----
-
 ## Cloud providers
 
 Talyn delegates work through a pluggable **cloud task provider** interface (`packages/backend/src/services/cloudProviders/`). A provider runs the agent loop on its own sandbox and opens a PR; Talyn creates the remote run, polls its status, and ingests the transcript.
