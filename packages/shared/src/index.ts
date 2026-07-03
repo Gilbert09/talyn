@@ -82,6 +82,29 @@ export function isClaudeModelId(value: unknown): value is ClaudeModelId {
   return typeof value === 'string' && CLAUDE_MODELS.some((m) => m.id === value);
 }
 
+/**
+ * Models a workspace can run PostHog Code tasks on. PostHog's run API takes
+ * `runtime_adapter` + `model` together (Talyn always sends the `claude`
+ * adapter); these are the canonical Claude ids its task processor knows.
+ * Opus 4.8 is the default — it's what Talyn has always sent.
+ */
+export const POSTHOG_CODE_MODELS = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', blurb: 'Most capable of the Claude 4 line — the default.' },
+  { id: 'claude-fable-5', label: 'Fable 5', blurb: 'Newest and most capable overall.' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', blurb: 'Strong and fast.' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', blurb: 'Cheapest of the supported set.' },
+] as const;
+
+export type PostHogCodeModelId = (typeof POSTHOG_CODE_MODELS)[number]['id'];
+
+/** Default model for PostHog Code runs when the workspace hasn't picked one. */
+export const DEFAULT_POSTHOG_CODE_MODEL_ID: PostHogCodeModelId = 'claude-opus-4-8';
+
+/** Type guard for a stored/incoming value being a known PostHog Code model id. */
+export function isPostHogCodeModelId(value: unknown): value is PostHogCodeModelId {
+  return typeof value === 'string' && POSTHOG_CODE_MODELS.some((m) => m.id === value);
+}
+
 export interface WorkspaceSettings {
   continuousBuild?: ContinuousBuildSettings;
   /**
@@ -93,6 +116,8 @@ export interface WorkspaceSettings {
   defaultCloudProvider?: CloudProviderType | 'ask';
   /** Which Claude model Claude Code tasks run on. Unset = {@link DEFAULT_CLAUDE_MODEL_ID}. */
   claudeModel?: ClaudeModelId;
+  /** Which model PostHog Code runs use. Unset = {@link DEFAULT_POSTHOG_CODE_MODEL_ID}. */
+  posthogCodeModel?: PostHogCodeModelId;
 }
 
 export interface ContinuousBuildSettings {

@@ -55,7 +55,7 @@ import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered } from '../../lib/githubInstall';
 import { openExternal } from '../../lib/openExternal';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@talyn/shared';
-import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, type ClaudeModelId } from '@talyn/shared';
+import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, POSTHOG_CODE_MODELS, DEFAULT_POSTHOG_CODE_MODEL_ID } from '@talyn/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import {
   useWorkspaceActions,
@@ -897,7 +897,23 @@ function IntegrationsSettings() {
           keyHelp={{ url: ANTHROPIC_API_KEYS_URL }}
         />
 
-        <ClaudeModelSelector />
+        <WorkspaceModelSelector
+          providerType="posthog_code"
+          title="PostHog Code model"
+          description="Which model PostHog Code runs use. Opus 4.8 is the most capable of the Claude 4 line; Fable 5 is the newest."
+          models={POSTHOG_CODE_MODELS}
+          defaultId={DEFAULT_POSTHOG_CODE_MODEL_ID}
+          settingKey="posthogCodeModel"
+        />
+
+        <WorkspaceModelSelector
+          providerType="claude_code"
+          title="Claude model"
+          description="Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable but costs more."
+          models={CLAUDE_MODELS}
+          defaultId={DEFAULT_CLAUDE_MODEL_ID}
+          settingKey="claudeModel"
+        />
 
         <CloudProviderDefaultSelector />
       </div>
@@ -926,39 +942,50 @@ function SettingsSelect({
 }
 
 /**
- * Which Claude model Claude Code tasks run on. Shown only when Claude Code is
- * connected. Defaults to Sonnet — PR fix/respond/review work doesn't warrant
- * Opus pricing. Persists to `workspace.settings.claudeModel`; editable without
- * re-entering the API key. Switching models just makes the next run use (and,
- * on first use, create) a reusable agent for that model.
+ * Which model a cloud provider's tasks run on. Shown only while that provider
+ * is connected. Persists to the given `workspace.settings` key; editable
+ * without re-entering credentials — switching just makes the next run use the
+ * new model.
  */
-function ClaudeModelSelector() {
+function WorkspaceModelSelector({
+  providerType,
+  title,
+  description,
+  models,
+  defaultId,
+  settingKey,
+}: {
+  providerType: 'claude_code' | 'posthog_code';
+  title: string;
+  description: string;
+  models: ReadonlyArray<{ id: string; label: string }>;
+  defaultId: string;
+  settingKey: 'claudeModel' | 'posthogCodeModel';
+}) {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const cloudProviders = useWorkspaceStore((s) => s.cloudProviders);
   const [saving, setSaving] = useState(false);
 
-  const claudeConnected = (cloudProviders ?? []).some(
-    (p) => p.type === 'claude_code' && p.connected,
+  const connected = (cloudProviders ?? []).some(
+    (p) => p.type === providerType && p.connected,
   );
-  if (!claudeConnected) return null;
+  if (!connected) return null;
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
-  const current = workspace?.settings?.claudeModel ?? DEFAULT_CLAUDE_MODEL_ID;
+  const current = workspace?.settings?.[settingKey] ?? defaultId;
 
   const onChange = async (value: string) => {
     if (!currentWorkspaceId) return;
     setSaving(true);
     try {
-      const claudeModel = value as ClaudeModelId;
-      await api.workspaces.update(currentWorkspaceId, {
-        settings: { claudeModel } as Workspace['settings'],
-      });
+      const settings = { [settingKey]: value } as Workspace['settings'];
+      await api.workspaces.update(currentWorkspaceId, { settings });
       setWorkspaces(
         workspaces.map((w) =>
           w.id === currentWorkspaceId
-            ? { ...w, settings: { ...w.settings, claudeModel } as Workspace['settings'] }
+            ? { ...w, settings: { ...w.settings, ...settings } as Workspace['settings'] }
             : w,
         ),
       );
@@ -974,18 +1001,15 @@ function ClaudeModelSelector() {
           <Bot className="w-5 h-5" />
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="font-medium">Claude model</h4>
-          <p className="text-sm text-muted-foreground mt-1">
-            Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable
-            but costs more.
-          </p>
+          <h4 className="font-medium">{title}</h4>
+          <p className="text-sm text-muted-foreground mt-1">{description}</p>
         </div>
         <SettingsSelect
           value={current}
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
         >
-          {CLAUDE_MODELS.map((m) => (
+          {models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
             </option>

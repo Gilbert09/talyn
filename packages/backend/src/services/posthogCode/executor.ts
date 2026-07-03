@@ -1,9 +1,11 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Environment, PostHogCodeRuntimeAdapter, Task } from '@talyn/shared';
+import { isPostHogCodeModelId } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,
   repositories as repositoriesTable,
+  workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus } from '../websocket.js';
@@ -71,9 +73,10 @@ export async function dispatchTaskToPostHogCode(
     runtimeAdapterFromEnv(env) ??
     DEFAULT_RUNTIME_ADAPTER;
   // The API requires a model on every cloud run, so resolve to a concrete one:
-  // task-level (UI) → env default → the backend default.
+  // task-level (UI) → workspace setting → env default → the backend default.
   const model =
     (typeof meta.model === 'string' && meta.model) ||
+    (await workspacePostHogCodeModel(task.workspaceId)) ||
     modelFromEnv(env) ||
     DEFAULT_POSTHOG_CODE_MODEL;
 
@@ -171,4 +174,20 @@ function runtimeAdapterFromEnv(env: Environment): PostHogCodeRuntimeAdapter | un
 function modelFromEnv(env: Environment): string | undefined {
   const config = env.config as { model?: string };
   return config?.model;
+}
+
+/**
+ * The workspace's Settings → PostHog Code model choice, or undefined when
+ * unset/unknown. Extracted in SQL so the settings jsonb never ships.
+ */
+async function workspacePostHogCodeModel(workspaceId: string): Promise<string | undefined> {
+  const db = getDbClient();
+  const [row] = await db
+    .select({
+      model: sql<string | null>`${workspacesTable.settings} ->> 'posthogCodeModel'`,
+    })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  return isPostHogCodeModelId(row?.model) ? row.model : undefined;
 }
