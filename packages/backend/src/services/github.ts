@@ -1606,30 +1606,45 @@ class GitHubService extends EventEmitter {
   }
 
   /**
-   * Re-request every failed check run on a PR's head commit — the API twin of
-   * the checks tab's "Re-run" button. GitHub delivers `check_run.rerequested`
-   * to whichever app CREATED each check (GitHub Actions, Depot, …), which then
-   * re-runs it, so this works regardless of the CI provider. Requires the
-   * Talyn App's `checks: write` permission — without it GitHub answers 403/404
-   * and we report `missing-permission` instead of throwing, so callers can
-   * fall back to asking a human.
+   * Re-run every failed check on a PR's head commit, routed by which app
+   * CREATED each check — GitHub has no single cross-app re-run API:
+   *
+   * - `github-actions` checks: the Actions jobs API (a check run's id IS its
+   *   job id) — works across apps but needs the `actions: write` permission.
+   * - Anything else (Depot, third-party CI): `POST /check-runs/{id}/rerequest`
+   *   is documented to 403 unless the check "belongs to the authenticated
+   *   GitHub App", so the installation token can never re-run another app's
+   *   check; we try it, then retry with the user token flavour, and accept
+   *   that some checks are simply not re-runnable by us — only the creating
+   *   app or a human on github.com can.
+   *
+   * Never throws for per-run failures; the `reason` tells the caller what to
+   * put in front of the user when nothing could be re-run.
    */
   async rerequestFailedCheckRuns(
     workspaceId: string,
     owner: string,
     repo: string,
     number: number
-  ): Promise<{ requested: number; reason?: 'no-failing-check-runs' | 'missing-permission' }> {
+  ): Promise<{
+    requested: number;
+    reason?: 'no-failing-check-runs' | 'needs-actions-permission' | 'not-rerequestable';
+  }> {
     const pr = await this.getPullRequest(workspaceId, owner, repo, number);
     const headSha = pr.head?.sha;
     if (!headSha) return { requested: 0, reason: 'no-failing-check-runs' };
 
     // `filter=latest` returns only the newest attempt of each check; a big
-    // repo (posthog: ~120 checks per head) spans two pages.
-    const failing: Array<{ id: number; name: string }> = [];
+    // repo (posthog: ~200 checks per head) spans multiple pages.
+    const failing: Array<{ id: number; name: string; appSlug: string }> = [];
     for (let page = 1; page <= 3; page++) {
       const res = await this.apiRequest<{
-        check_runs: Array<{ id: number; name: string; conclusion: string | null }>;
+        check_runs: Array<{
+          id: number;
+          name: string;
+          conclusion: string | null;
+          app?: { slug?: string } | null;
+        }>;
       }>(
         workspaceId,
         `/repos/${owner}/${repo}/commits/${headSha}/check-runs?filter=latest&per_page=100&page=${page}`
@@ -1638,33 +1653,46 @@ class GitHubService extends EventEmitter {
       failing.push(
         ...runs
           .filter((c) => c.conclusion === 'failure' || c.conclusion === 'timed_out')
-          .map((c) => ({ id: c.id, name: c.name }))
+          .map((c) => ({ id: c.id, name: c.name, appSlug: c.app?.slug ?? '' }))
       );
       if (runs.length < 100) break;
     }
     if (failing.length === 0) return { requested: 0, reason: 'no-failing-check-runs' };
 
     let requested = 0;
+    let actionsPermFailure = false;
     for (const run of failing) {
+      const ref = `check "${run.name}" (${run.appSlug || 'unknown app'}) on ${owner}/${repo}#${number}`;
       try {
-        await this.apiRequest(
-          workspaceId,
-          `/repos/${owner}/${repo}/check-runs/${run.id}/rerequest`,
-          { method: 'POST' }
-        );
+        if (run.appSlug === 'github-actions') {
+          await this.apiRequest(
+            workspaceId,
+            `/repos/${owner}/${repo}/actions/jobs/${run.id}/rerun`,
+            { method: 'POST' }
+          );
+        } else {
+          const endpoint = `/repos/${owner}/${repo}/check-runs/${run.id}/rerequest`;
+          try {
+            await this.apiRequest(workspaceId, endpoint, { method: 'POST' });
+          } catch {
+            // The installation token is rejected for checks other apps own;
+            // the user token flavour acts closer to a human — worth one shot.
+            await this.apiRequest(workspaceId, endpoint, { method: 'POST' }, 'user');
+          }
+        }
         requested++;
-        console.log(`[github] re-ran failing check "${run.name}" on ${owner}/${repo}#${number}`);
+        console.log(`[github] re-ran failing ${ref}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[github] rerequest of check "${run.name}" on ${owner}/${repo}#${number} failed: ${msg}`
-        );
+        if (run.appSlug === 'github-actions') actionsPermFailure = true;
+        console.warn(`[github] re-run of ${ref} failed: ${msg}`);
       }
     }
-    // All rerequests bounced with nothing re-run: in practice that's the
-    // checks:write permission missing (GitHub 403s — or 404s the endpoint
-    // outright for tokens that can't see it).
-    return requested > 0 ? { requested } : { requested: 0, reason: 'missing-permission' };
+    if (requested > 0) return { requested };
+    return {
+      requested: 0,
+      reason: actionsPermFailure ? 'needs-actions-permission' : 'not-rerequestable',
+    };
   }
 
   /**

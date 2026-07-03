@@ -604,11 +604,15 @@ describe('mergeQueueProcessor', () => {
     expect((await getPr(db, prId)).state).toBe('merged');
   });
 
-  it('blocks with a permission hint when the rerun needs checks:write the App lacks', async () => {
+  it('blocks with the ownership explanation when the failing check cannot be re-run via API', async () => {
+    // The Depot case: rerequest only works for checks the calling app created,
+    // so a third-party CI check is simply not re-runnable by Talyn. The budget
+    // must be spent immediately — retrying an ownership refusal every tick
+    // hammers GitHub for nothing.
     mergeSpy.mockRejectedValueOnce(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
-    rerunSpy.mockResolvedValueOnce({ requested: 0, reason: 'missing-permission' });
+    rerunSpy.mockResolvedValue({ requested: 0, reason: 'not-rerequestable' });
     const prId = await insertPr(db, {
       summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
     });
@@ -618,11 +622,38 @@ describe('mergeQueueProcessor', () => {
     const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
       blockReason?: string;
       mergeForbidden?: string;
+      rerunAttempts?: number;
     };
     expect(state.status).toBe('blocked');
     expect(state.mergeForbidden).toBe('failing-checks');
-    expect(state.blockReason).toContain('Checks: Read & write');
+    expect(state.blockReason).toContain('only lets the app that created');
+    expect(state.rerunAttempts).toBe(3); // budget spent — no per-tick hammering
     expect(blockedSpy).toHaveBeenCalledTimes(1);
+
+    // Re-ticks: no further rerun sweeps, no merge attempts, no re-notify.
+    rerunSpy.mockClear();
+    await mergeQueueProcessor.runOnce();
+    expect(rerunSpy).not.toHaveBeenCalled();
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks with the actions-permission hint when a failing Actions check cannot be re-run', async () => {
+    mergeSpy.mockRejectedValueOnce(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    rerunSpy.mockResolvedValueOnce({ requested: 0, reason: 'needs-actions-permission' });
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+    };
+    expect(state.status).toBe('blocked');
+    expect(state.blockReason).toContain('Actions: Read & write');
   });
 
   it('stops re-running after the cap and blocks with the exhausted reason', async () => {

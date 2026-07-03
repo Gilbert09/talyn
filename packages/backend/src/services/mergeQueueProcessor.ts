@@ -113,6 +113,47 @@ function readState(row: PRRow): MergeQueueState {
   };
 }
 
+/**
+ * The blocked-badge reason for an App-refused merge over failing head checks,
+ * matched to why the automatic re-run couldn't save it.
+ */
+function buildFailingChecksBlockReason(
+  rerunReason: 'no-failing-check-runs' | 'needs-actions-permission' | 'not-rerequestable' | undefined,
+  rerunAttempts: number
+): string {
+  const preamble =
+    `GitHub won't let the Talyn App merge while a check is failing on the head ` +
+    `commit — even an "optional" one a human can merge past. `;
+  if (rerunReason === 'needs-actions-permission') {
+    return (
+      preamble +
+      `Talyn couldn't re-run it (the App needs the "Actions: Read & write" permission ` +
+      `for GitHub-Actions checks). Re-run the check on GitHub and the queue will retry, ` +
+      `or merge manually.`
+    );
+  }
+  if (rerunReason === 'not-rerequestable') {
+    return (
+      preamble +
+      `Talyn can't re-run this check via the API — GitHub only lets the app that created ` +
+      `it (or a human on github.com) re-run it. Re-run the check on GitHub and the queue ` +
+      `will retry, or merge manually.`
+    );
+  }
+  if (rerunAttempts >= MAX_ATTEMPTS) {
+    return (
+      preamble +
+      `Talyn re-ran the failing checks ${MAX_ATTEMPTS}× and they kept failing — fix the ` +
+      `check (or merge manually on GitHub); the queue retries once it's green.`
+    );
+  }
+  return (
+    preamble +
+    `Re-run or fix the failing check and the queue will retry automatically, or merge ` +
+    `manually on GitHub.`
+  );
+}
+
 /** Compact queue state for the desktop (toggle + badge). `position` is 1-based. */
 function publicState(s: MergeQueueState, position: number): {
   status: QueueStatus;
@@ -564,6 +605,15 @@ class MergeQueueProcessor {
               await this.refreshAfterFailedMerge(row);
               return 'hold';
             }
+            // Nothing could be re-run, and nothing will change on a re-tick
+            // (permission / check ownership are static for this head) — spend
+            // the budget so we don't hammer GitHub every tick, and put the
+            // precise cause on the badge.
+            if (rerun.reason && rerun.reason !== 'no-failing-check-runs') {
+              state.rerunAttempts = MAX_ATTEMPTS;
+              state.blockReason = buildFailingChecksBlockReason(rerun.reason, MAX_ATTEMPTS);
+              await this.persist(row, state, position);
+            }
           } catch (rerunErr) {
             console.warn(
               `[mergeQueue] blocked-state check rerun for ${row.owner}/${row.repo}#${row.number} errored:`,
@@ -647,7 +697,11 @@ class MergeQueueProcessor {
         // self-heals `failing-checks` blocks the moment the checks go green.
         if (err instanceof MergeNotPermittedForAppError) {
           const checksFailing = (summary?.checks?.failed ?? 0) > 0;
-          let rerunReason: 'no-failing-check-runs' | 'missing-permission' | undefined;
+          let rerunReason:
+            | 'no-failing-check-runs'
+            | 'needs-actions-permission'
+            | 'not-rerequestable'
+            | undefined;
           if (checksFailing && (state.rerunAttempts ?? 0) < MAX_ATTEMPTS) {
             let rerun: Awaited<ReturnType<typeof githubService.rerequestFailedCheckRuns>> = {
               requested: 0,
@@ -683,21 +737,15 @@ class MergeQueueProcessor {
           }
           state.status = 'blocked';
           state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
+          // A rerun that produced nothing can never produce anything on a
+          // re-tick either (permission / ownership are static per head) —
+          // spend the budget so the gate doesn't re-attempt it every tick.
+          if (checksFailing && rerunReason && rerunReason !== 'no-failing-check-runs') {
+            state.rerunAttempts = MAX_ATTEMPTS;
+          }
           state.blockReason = !checksFailing
             ? `${err.message} Merge manually on GitHub, or re-queue the PR to retry.`
-            : rerunReason === 'missing-permission'
-              ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
-                `commit — even an "optional" one a human can merge past — and Talyn couldn't ` +
-                `re-run it (the App needs the "Checks: Read & write" permission). Re-run or ` +
-                `fix the failing check and the queue will retry, or merge manually on GitHub.`
-              : (state.rerunAttempts ?? 0) >= MAX_ATTEMPTS
-                ? `GitHub won't let the Talyn App merge while a check is failing on the head ` +
-                  `commit. Talyn re-ran the failing checks ${MAX_ATTEMPTS}× and they kept ` +
-                  `failing — fix the check (or merge manually on GitHub); the queue retries ` +
-                  `once it's green.`
-                : `GitHub won't let the Talyn App merge while a check is failing on the head ` +
-                  `commit — even an "optional" one a human can merge past. Re-run or fix the ` +
-                  `failing check and the queue will retry automatically, or merge manually on GitHub.`;
+            : buildFailingChecksBlockReason(rerunReason, state.rerunAttempts ?? 0);
           state.lastError = err.message;
           state.lastErrorAt = new Date().toISOString();
           await this.persist(row, state, position);
