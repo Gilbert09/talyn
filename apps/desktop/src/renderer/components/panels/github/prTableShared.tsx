@@ -120,7 +120,10 @@ export function PRTable({
           )}
           <th className="px-2 py-2 text-left font-medium">{secondColLabel}</th>
           <th className="px-2 py-2 text-left font-medium">Updated</th>
-          <th className="w-8 px-2 py-2"></th>
+          {/* Extra right padding: the list scrolls under an 8px overlay-ish
+              scrollbar and an auto-layout table can exceed the viewport by
+              that much — the gutter keeps the row actions clear of it. */}
+          <th className="w-10 py-2 pl-2 pr-4"></th>
         </tr>
       </thead>
       <tbody>
@@ -556,7 +559,7 @@ function PRTableRow({
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>
-      <td className="px-2 py-2" title={rowError ?? undefined}>
+      <td className="py-2 pl-2 pr-4" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
           {/* Row actions reveal on hover/focus to keep the table calm.
               Merge, merge-queue, and "get mergeable" are owner actions, so
