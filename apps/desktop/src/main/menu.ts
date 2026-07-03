@@ -8,7 +8,7 @@ import {
 import { checkForUpdatesInteractively } from './updater';
 
 const SITE_URL = 'https://talyn.dev';
-const SUPPORT_EMAIL_URL = 'mailto:hey@talyn.dev';
+const SUPPORT_URL = 'https://github.com/Gilbert09/talyn/issues';
 
 export default class MenuBuilder {
   mainWindow: BrowserWindow;
@@ -141,9 +141,9 @@ export default class MenuBuilder {
           },
         },
         {
-          label: 'Contact Support',
+          label: 'Report an Issue',
           click() {
-            shell.openExternal(SUPPORT_EMAIL_URL);
+            shell.openExternal(SUPPORT_URL);
           },
         },
       ],
@@ -224,9 +224,9 @@ export default class MenuBuilder {
             },
           },
           {
-            label: 'Contact Support',
+            label: 'Report an Issue',
             click() {
-              shell.openExternal(SUPPORT_EMAIL_URL);
+              shell.openExternal(SUPPORT_URL);
             },
           },
           { type: 'separator' },

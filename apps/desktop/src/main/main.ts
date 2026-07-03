@@ -326,7 +326,7 @@ const createWindow = async () => {
       dialog.showMessageBox(mainWindow, {
         type: 'error',
         message: 'Talyn keeps crashing.',
-        detail: `The app window crashed repeatedly (${details.reason}). Try restarting Talyn; if it persists, contact hey@talyn.dev.`,
+        detail: `The app window crashed repeatedly (${details.reason}). Try restarting Talyn; if it persists, report it at github.com/Gilbert09/talyn/issues.`,
       });
       return;
     }
