@@ -1,7 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
+import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
 export interface LocalSkillFile {
@@ -78,6 +78,14 @@ const electronHandler = {
     /** Quit and apply a downloaded update. */
     quitAndInstall(): Promise<void> {
       return ipcRenderer.invoke('updater:quit-and-install');
+    },
+    /** The persisted update channel ('stable' | 'nightly'). */
+    getChannel(): Promise<UpdateChannel> {
+      return ipcRenderer.invoke('updater:get-channel');
+    },
+    /** Switch update channel; triggers an immediate re-check when packaged. */
+    setChannel(channel: UpdateChannel): Promise<UpdateChannel> {
+      return ipcRenderer.invoke('updater:set-channel', channel);
     },
   },
   app: {

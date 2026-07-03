@@ -14,7 +14,8 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
-import type { UpdaterEvent, UpdaterCheckResult } from './updaterEvents';
+import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
+import { getUpdateChannel, setUpdateChannel } from './updateChannel';
 
 // Re-check this often while the app stays open, so long-running sessions
 // still pick up releases without a restart.
@@ -35,7 +36,11 @@ function isPendingReleaseArtifact(err: unknown): boolean {
   const raw = err instanceof Error ? err.message : String(err);
   return (
     /Cannot find .*\.yml in the latest release artifacts/i.test(raw) ||
-    (/latest(-mac|-linux|-arm64)?\.yml/i.test(raw) && /\b404\b/.test(raw))
+    (/latest(-mac|-linux|-arm64)?\.yml/i.test(raw) && /\b404\b/.test(raw)) ||
+    // Stable channel while every existing release is still a pre-release:
+    // there's no stable build to offer yet, which is "you're up to date",
+    // not an error. Goes away after the first tagged (full) release.
+    /Unable to find latest version/i.test(raw)
   );
 }
 
@@ -93,9 +98,10 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   log.transports.file.level = 'info';
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  // Releases ship as nightly pre-releases; without this the GitHub feed
-  // only ever resolves the latest *stable* release and clients never update.
-  autoUpdater.allowPrerelease = true;
+  // Channel: `stable` (default) follows tagged full releases only; `nightly`
+  // (allowPrerelease) also follows the nightly pre-releases. Persisted in
+  // userData; switchable from Settings → About.
+  autoUpdater.allowPrerelease = getUpdateChannel() === 'nightly';
 
   const send = (event: UpdaterEvent) => {
     const win = getWindow();
@@ -135,6 +141,20 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   });
   ipcMain.handle('updater:quit-and-install', () => {
     autoUpdater.quitAndInstall();
+  });
+  ipcMain.handle('updater:get-channel', (): UpdateChannel => getUpdateChannel());
+  ipcMain.handle('updater:set-channel', async (_e, channel: UpdateChannel) => {
+    const next: UpdateChannel = channel === 'nightly' ? 'nightly' : 'stable';
+    setUpdateChannel(next);
+    autoUpdater.allowPrerelease = next === 'nightly';
+    log.info(`[updater] channel set to ${next}`);
+    // Re-check right away so switching to nightly offers the newest nightly
+    // (and switching to stable settles on the latest tagged build) without
+    // waiting for the 4h timer.
+    if (app.isPackaged) {
+      autoUpdater.checkForUpdates().catch((err) => log.error('[updater]', err));
+    }
+    return next;
   });
 
   // electron-updater can't resolve an update from an unpackaged dev tree

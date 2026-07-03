@@ -1864,13 +1864,29 @@ function AboutSettings() {
   // Set when a check runs in dev / an unpackaged build, where auto-update
   // can't operate and no events fire.
   const [unsupported, setUnsupported] = useState(false);
+  const [channel, setChannel] = useState<'stable' | 'nightly'>('stable');
 
   useEffect(() => {
     window.electron?.app
       ?.getVersion()
       .then(setVersion)
       .catch(() => setVersion(null));
+    window.electron?.updater
+      ?.getChannel()
+      .then(setChannel)
+      .catch(() => {});
   }, []);
+
+  const switchChannel = async (next: 'stable' | 'nightly') => {
+    if (next === channel) return;
+    setChannel(next); // optimistic — the main process write is near-infallible
+    try {
+      const applied = await window.electron?.updater?.setChannel(next);
+      if (applied) setChannel(applied);
+    } catch {
+      setChannel(channel);
+    }
+  };
 
   useEffect(() => {
     return window.electron?.updater?.onEvent((e) => {
@@ -1970,6 +1986,36 @@ function AboutSettings() {
             {statusText}
           </p>
         )}
+
+        <div className="border-t pt-3">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Update channel</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {channel === 'nightly'
+                  ? 'Nightly — every build as it lands. Expect rough edges.'
+                  : 'Stable — tested, tagged releases. Recommended.'}
+              </p>
+            </div>
+            <div className="flex rounded-md border p-0.5">
+              {(['stable', 'nightly'] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => void switchChannel(c)}
+                  className={cn(
+                    'rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors',
+                    channel === c
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
 
         <div className="border-t pt-3 flex flex-col gap-2">
           <button

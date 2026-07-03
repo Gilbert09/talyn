@@ -9,26 +9,47 @@ import { cn } from "@/lib/utils";
 const REPO = "Gilbert09/talyn";
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
+type Release = {
+  assets?: Array<{ name: string; browser_download_url: string }>;
+};
+
+function pickDmg(release: Release | null | undefined): string | null {
+  const assets = release?.assets ?? [];
+  const arm = assets.find((a) => /arm64.*\.dmg$/i.test(a.name));
+  const anyDmg = assets.find((a) => /\.dmg$/i.test(a.name));
+  return (arm ?? anyDmg)?.browser_download_url ?? null;
+}
+
 /**
- * Resolve the newest release's Apple-silicon .dmg via the public GitHub API.
- * `/releases?per_page=1` (not `/releases/latest`) because every build is
- * currently a pre-release, which `/latest` excludes. Falls back to any .dmg,
- * then to null so the caller can open the releases page.
+ * Resolve the Apple-silicon .dmg to download via the public GitHub API.
+ * Prefer the latest STABLE release (`/releases/latest` excludes
+ * pre-releases — nightlies ship as pre-releases and shouldn't be a
+ * visitor's first install); fall back to the newest release of any kind
+ * while no stable tag exists yet, then to null so the caller can open the
+ * releases page.
  */
 async function resolveLatestDmg(): Promise<string | null> {
+  const headers = { Accept: "application/vnd.github+json" };
+  try {
+    const stable = await fetch(
+      `https://api.github.com/repos/${REPO}/releases/latest`,
+      { headers }
+    );
+    if (stable.ok) {
+      const url = pickDmg((await stable.json()) as Release);
+      if (url) return url;
+    }
+  } catch {
+    /* fall through to the newest-release fallback */
+  }
   try {
     const res = await fetch(
       `https://api.github.com/repos/${REPO}/releases?per_page=1`,
-      { headers: { Accept: "application/vnd.github+json" } }
+      { headers }
     );
     if (!res.ok) return null;
-    const releases = (await res.json()) as Array<{
-      assets?: Array<{ name: string; browser_download_url: string }>;
-    }>;
-    const assets = releases?.[0]?.assets ?? [];
-    const arm = assets.find((a) => /arm64.*\.dmg$/i.test(a.name));
-    const anyDmg = assets.find((a) => /\.dmg$/i.test(a.name));
-    return (arm ?? anyDmg)?.browser_download_url ?? null;
+    const releases = (await res.json()) as Release[];
+    return pickDmg(releases?.[0]);
   } catch {
     return null;
   }

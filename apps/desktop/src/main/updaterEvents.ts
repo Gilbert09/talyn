@@ -16,3 +16,10 @@ export type UpdaterEvent =
 export type UpdaterCheckResult =
   | { started: true }
   | { started: false; reason: 'not-packaged' };
+
+/**
+ * Which release feed the updater follows. `stable` (the default) only sees
+ * full GitHub releases — the tagged builds; `nightly` also sees pre-releases
+ * (the nightly channel).
+ */
+export type UpdateChannel = 'stable' | 'nightly';
