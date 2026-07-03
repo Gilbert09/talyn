@@ -27,6 +27,28 @@ jobs:
         run: |
           npm install
 
+      - name: Set version from tag
+        # Build-time only — not committed. electron-builder packages from
+        # directories.app (release/app), so the version it bakes in (and what
+        # app.getVersion() / the update feed report) comes from
+        # release/app/package.json. Without this, every tagged build would
+        # ship as the stale static version (0.1.0) and updaters would never
+        # take it. The tag is the single source of truth: tag v0.2.0 → app
+        # 0.2.0.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd apps/desktop/release/app
+          node -e "
+            const fs = require('fs');
+            const p = require('./package.json');
+            if (!/^\d+\.\d+\.\d+$/.test('$VERSION')) {
+              throw new Error('Tag must be vX.Y.Z, got: $VERSION');
+            }
+            p.version = '$VERSION';
+            fs.writeFileSync('./package.json', JSON.stringify(p, null, 2) + '\n');
+            console.log('Building release', p.version);
+          "
+
       - name: Build shared package
         run: |
           npm run build -w @talyn/shared
