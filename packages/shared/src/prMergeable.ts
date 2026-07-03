@@ -48,8 +48,8 @@ export interface PRMergeableSummary {
 /**
  * A PR has something a cloud follow-up run could fix: merge conflicts,
  * requested changes, failing required CI, or unresolved review threads.
- * Drives both the "Get PR mergeable" button's enabled state and the
- * watcher's decision to fire a run.
+ * This is the AUTO-fire predicate (the keep-mergeable watcher and merge
+ * queue); the manual fix button uses the broader {@link prHasFixableIssues}.
  */
 export function prNeedsFollowup(s: PRMergeableSummary): boolean {
   return (
@@ -57,14 +57,25 @@ export function prNeedsFollowup(s: PRMergeableSummary): boolean {
     s.blockingReason === 'changes_requested' ||
     // 'checks_failed' already means a *required* check is red (the backend
     // resolves required-ness authoritatively, falling back to a heuristic).
-    // We deliberately don't fire on raw `checks.failed > 0`: a non-required
-    // failing check (e.g. on a PR otherwise only waiting on a review) is not
-    // something a cloud follow-up can or should "fix".
+    // We deliberately don't AUTO-fire on raw `checks.failed > 0`: a
+    // non-required failing check is not worth an unattended paid run.
     s.blockingReason === 'checks_failed' ||
     s.mergeable === 'CONFLICTING' ||
     s.reviewDecision === 'CHANGES_REQUESTED' ||
     (s.unresolvedReviewThreads ?? 0) > 0
   );
+}
+
+/**
+ * Whether the MANUAL "get PR mergeable" fix button has something to point an
+ * agent at. Broader than {@link prNeedsFollowup}: also true when only
+ * NON-required checks are failing. Those never auto-fire (a human merge
+ * doesn't need them, so an unattended run isn't worth paying for), but they
+ * do block Talyn's own App-token merge and are often a real signal the user
+ * wants investigated — so the button stays live and the choice is theirs.
+ */
+export function prHasFixableIssues(s: PRMergeableSummary): boolean {
+  return prNeedsFollowup(s) || s.checks.failed > 0;
 }
 
 /**

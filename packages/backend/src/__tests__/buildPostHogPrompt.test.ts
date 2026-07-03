@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPostHogPrompt, buildMergeablePrompt, type PRMergeableSummary } from '@talyn/shared';
+import { buildPostHogPrompt, buildMergeablePrompt, prNeedsFollowup, prHasFixableIssues, type PRMergeableSummary } from '@talyn/shared';
 
 /**
  * The cloud "make this PR mergeable" prompt must match the PostHog Code
@@ -142,5 +142,42 @@ describe('buildMergeablePrompt — claude_code variant (GitHub MCP, no signed-gi
     expect(prompt).toContain('git rebase origin/main');
     expect(prompt).toContain('git merge --squash');
     expect(prompt.toLowerCase()).toContain('single-parent');
+  });
+});
+
+describe('prHasFixableIssues vs prNeedsFollowup (manual button vs auto-fire)', () => {
+  const base: PRMergeableSummary = {
+    url: 'https://github.com/acme/app/pull/1',
+    headBranch: 'feat',
+    baseBranch: 'main',
+    mergeable: 'MERGEABLE',
+    reviewDecision: 'APPROVED',
+    blockingReason: 'mergeable',
+    checks: { total: 5, failed: 0 },
+  };
+
+  it('non-required failing checks enable the manual button but never auto-fire', () => {
+    const s: PRMergeableSummary = {
+      ...base,
+      blockingReason: 'checks_failed_optional',
+      checks: { total: 5, failed: 1 },
+    };
+    expect(prNeedsFollowup(s)).toBe(false); // watcher/queue stay quiet
+    expect(prHasFixableIssues(s)).toBe(true); // human can still launch a run
+  });
+
+  it.each([
+    ['merge conflicts', { ...base, blockingReason: 'merge_conflicts' } as PRMergeableSummary],
+    ['required checks failed', { ...base, blockingReason: 'checks_failed', checks: { total: 5, failed: 2 } } as PRMergeableSummary],
+    ['changes requested', { ...base, reviewDecision: 'CHANGES_REQUESTED' } as PRMergeableSummary],
+    ['unresolved threads', { ...base, unresolvedReviewThreads: 2 } as PRMergeableSummary],
+  ])('%s: both predicates agree (auto-fixable ⊆ manually-fixable)', (_label, s) => {
+    expect(prNeedsFollowup(s)).toBe(true);
+    expect(prHasFixableIssues(s)).toBe(true);
+  });
+
+  it('a clean PR enables neither', () => {
+    expect(prNeedsFollowup(base)).toBe(false);
+    expect(prHasFixableIssues(base)).toBe(false);
   });
 });

@@ -22,7 +22,7 @@ import {
   type TaskStatus,
   type CloudProviderType,
   type SkillSummary,
-  prNeedsFollowup,
+  prHasFixableIssues,
 } from '@talyn/shared';
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
@@ -247,8 +247,11 @@ function PRTableRow({
 
   // A follow-up run only makes sense on an open PR with something to fix, and
   // not while one is already working it (a completed/failed task can be re-run).
+  // Failing NON-required checks count here (the manual button, unlike the
+  // auto-watcher, lets the user choose to spend a run on them — they block
+  // Talyn's own App-token merge even though a human could merge past them).
   const canFollowUp =
-    posthogEnabled && row.state === 'open' && prNeedsFollowup(summary) && !taskRunning;
+    posthogEnabled && row.state === 'open' && prHasFixableIssues(summary) && !taskRunning;
 
   async function copyMarkdownLink(e: React.MouseEvent) {
     e.stopPropagation();
