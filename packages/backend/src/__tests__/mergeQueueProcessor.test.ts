@@ -646,6 +646,42 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toContain('kept failing');
   });
 
+  it('re-runs failing checks from an already-blocked row (pre-permission-grant rows self-drive)', async () => {
+    // A row blocked by an earlier deploy (or before checks:write was granted)
+    // never attempts merges, so the merge-refusal rerun can't fire. The gate
+    // itself must spend the rerun budget.
+    rerunSpy.mockResolvedValueOnce({ requested: 1 });
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      mergeQueueState: {
+        status: 'blocked',
+        attempts: 0,
+        mergeForbidden: 'failing-checks',
+        blockReason: 'previously blocked',
+      },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      rerunAttempts?: number;
+      mergeForbidden?: string;
+    };
+    expect(rerunSpy).toHaveBeenCalledTimes(1);
+    expect(mergeSpy).not.toHaveBeenCalled(); // still gated — no doomed merge attempt
+    expect(state.status).toBe('waiting');
+    expect(state.rerunAttempts).toBe(1);
+    expect(blockedSpy).not.toHaveBeenCalled(); // no re-notify
+
+    // Rerun passes → summary green → gate self-clears and the PR merges.
+    await db
+      .update(pullRequestsTable)
+      .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+      .where(eq(pullRequestsTable.id, prId));
+    await mergeQueueProcessor.runOnce();
+    expect((await getPr(db, prId)).state).toBe('merged');
+  });
+
   it('stays blocked until requeue when the App is refused with no failing check to blame', async () => {
     // Unknown-cause refusal (nothing red on the head): retrying every tick
     // can't help, so the gate is sticky — a human merges or requeues.

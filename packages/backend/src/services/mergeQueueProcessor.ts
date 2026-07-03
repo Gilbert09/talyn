@@ -536,7 +536,41 @@ class MergeQueueProcessor {
             ? 'failing-checks'
             : 'hard'
           : state.mergeForbidden;
-      if (kind === 'hard' || checksFailing) {
+      if (kind === 'hard') {
+        return 'advance';
+      }
+      if (checksFailing) {
+        // Proactively re-run the failing checks from the blocked state too —
+        // a row blocked before the rerun budget existed (or before the App
+        // had checks:write) would otherwise sit here waiting for a human even
+        // though the queue could get itself to green. Same budget as the
+        // merge-refusal path; in-flight reruns are held by the CI guard (2b).
+        if ((state.rerunAttempts ?? 0) < MAX_ATTEMPTS) {
+          try {
+            const rerun = await githubService.rerequestFailedCheckRuns(
+              row.workspaceId,
+              row.owner,
+              row.repo,
+              row.number
+            );
+            if (rerun.requested > 0) {
+              state.rerunAttempts = (state.rerunAttempts ?? 0) + 1;
+              state.status = 'waiting';
+              state.lastError =
+                `re-ran ${rerun.requested} failing check(s) from the blocked state ` +
+                `(attempt ${state.rerunAttempts}/${MAX_ATTEMPTS})`;
+              state.lastErrorAt = new Date().toISOString();
+              await this.persist(row, state, position);
+              await this.refreshAfterFailedMerge(row);
+              return 'hold';
+            }
+          } catch (rerunErr) {
+            console.warn(
+              `[mergeQueue] blocked-state check rerun for ${row.owner}/${row.repo}#${row.number} errored:`,
+              rerunErr instanceof Error ? rerunErr.message : rerunErr
+            );
+          }
+        }
         return 'advance';
       }
       // The failing check that GitHub refused us over has gone green (rerun
