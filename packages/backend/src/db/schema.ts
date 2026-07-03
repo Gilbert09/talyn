@@ -208,7 +208,7 @@ export const tasks = pgTable(
 //
 // We store only a SHA-256 hash of the token — the plaintext is shown to the
 // user exactly once at creation. `token_prefix` is the human-readable head
-// (e.g. `fowl_mcp_ab12`) kept for the settings list so a user can tell their
+// (e.g. `talyn_mcp_ab12`) kept for the settings list so a user can tell their
 // tokens apart without us holding the secret.
 export const mcpTokens = pgTable(
   'mcp_tokens',

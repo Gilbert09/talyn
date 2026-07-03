@@ -29,9 +29,9 @@ describe('services/mcpToken', () => {
   it('mints a token: returns plaintext once, stores only the hash, derives a prefix', async () => {
     const res = await createToken(TEST_USER_ID, { name: 'Laptop' });
 
-    expect(res.token).toMatch(/^fowl_mcp_/);
+    expect(res.token).toMatch(/^talyn_mcp_/);
     expect(res.token_meta.name).toBe('Laptop');
-    expect(res.token_meta.tokenPrefix.startsWith('fowl_mcp_')).toBe(true);
+    expect(res.token_meta.tokenPrefix.startsWith('talyn_mcp_')).toBe(true);
     // The prefix is a short head — never the whole secret.
     expect(res.token.startsWith(res.token_meta.tokenPrefix)).toBe(true);
     expect(res.token_meta.tokenPrefix.length).toBeLessThan(res.token.length);
@@ -71,7 +71,7 @@ describe('services/mcpToken', () => {
     expect(afterUse.lastUsedAt).toBeTruthy();
 
     // Unknown token.
-    expect(await validateToken('fowl_mcp_does-not-exist')).toBeNull();
+    expect(await validateToken('talyn_mcp_does-not-exist')).toBeNull();
     // Not even our prefix.
     expect(await validateToken('nope')).toBeNull();
 
@@ -86,6 +86,24 @@ describe('services/mcpToken', () => {
       .set({ expiresAt: new Date(Date.now() - 1000) })
       .where(eq(mcpTokensTable.id, expired.token_meta.id));
     expect(await validateToken(expired.token)).toBeNull();
+  });
+
+  it('still accepts legacy fowl_mcp_ tokens minted before the rename', async () => {
+    // Simulate a pre-rename row: same storage shape, old prefix. Only the
+    // hash is persisted, so validation is prefix-gate + hash lookup.
+    const legacyToken = 'fowl_mcp_legacy-body-abc123';
+    const { createHash } = await import('node:crypto');
+    await db.insert(mcpTokensTable).values({
+      id: 'legacy-token-id',
+      ownerId: TEST_USER_ID,
+      name: 'Pre-rename token',
+      tokenPrefix: 'fowl_mcp_legacy',
+      tokenHash: createHash('sha256').update(legacyToken).digest('hex'),
+      createdAt: new Date(),
+      expiresAt: null,
+    });
+
+    expect(await validateToken(legacyToken)).toEqual({ ownerId: TEST_USER_ID });
   });
 
   it('lists only the caller\'s active tokens and never returns the hash', async () => {

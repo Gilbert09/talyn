@@ -1677,7 +1677,12 @@ function MCPServerSettings() {
   }, [reload]);
 
   const installCommand = (token: string) =>
-    `claude mcp add --transport http fastowl ${endpoint} --header "Authorization: Bearer ${token}"`;
+    `claude mcp add --transport http talyn ${endpoint} --header "Authorization: Bearer ${token}"`;
+
+  // The secret never renders in full — head + tail is enough to recognise it;
+  // the Copy buttons carry the real value.
+  const maskToken = (token: string) =>
+    `${token.slice(0, 14)}${'•'.repeat(12)}${token.slice(-4)}`;
 
   const copy = async (text: string, label: string) => {
     try {
@@ -1772,26 +1777,32 @@ function MCPServerSettings() {
             <div>
               <label className="text-xs text-muted-foreground">Token</label>
               <div className="flex items-center gap-2 mt-1">
+                {/* Displayed masked (head + tail only) so the secret never sits
+                    readable on screen; the Copy button carries the real value. */}
                 <code className="flex-1 text-xs bg-muted rounded px-2 py-1.5 truncate">
-                  {freshToken}
+                  {maskToken(freshToken)}
                 </code>
                 <Button size="sm" variant="outline" onClick={() => void copy(freshToken, 'Token')}>
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3.5 h-3.5 mr-1" />
+                  Copy token
                 </Button>
               </div>
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Install command</label>
+              <label className="text-xs text-muted-foreground">
+                Install command (includes the token)
+              </label>
               <div className="flex items-start gap-2 mt-1">
                 <code className="flex-1 text-xs bg-muted rounded px-2 py-1.5 break-all whitespace-pre-wrap">
-                  {installCommand(freshToken)}
+                  {installCommand(maskToken(freshToken))}
                 </code>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => void copy(installCommand(freshToken), 'Command')}
                 >
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3.5 h-3.5 mr-1" />
+                  Copy command
                 </Button>
               </div>
             </div>
@@ -1812,33 +1823,62 @@ function MCPServerSettings() {
         ) : tokens.length === 0 ? (
           <p className="text-xs text-muted-foreground">No tokens yet.</p>
         ) : (
-          <div className="space-y-2">
-            {tokens.map((t) => (
-              <div
-                key={t.id}
-                className="flex items-center gap-3 text-sm border-b last:border-b-0 pb-2 last:pb-0"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{t.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    <code>{t.tokenPrefix}…</code> · created{' '}
-                    {new Date(t.createdAt).toLocaleDateString()}
-                    {t.lastUsedAt
-                      ? ` · last used ${new Date(t.lastUsedAt).toLocaleDateString()}`
-                      : ' · never used'}
-                    {t.expiresAt ? ` · expires ${new Date(t.expiresAt).toLocaleDateString()}` : ''}
+          <div className="divide-y">
+            {tokens.map((t) => {
+              const fmt = (iso: string) =>
+                new Date(iso).toLocaleDateString(undefined, {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric',
+                });
+              const expiringSoon =
+                t.expiresAt &&
+                new Date(t.expiresAt).getTime() - Date.now() < 14 * 86_400_000;
+              return (
+                <div key={t.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-sm truncate">{t.name}</span>
+                      <code className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                        {t.tokenPrefix}…
+                      </code>
+                    </div>
+                    <div className="grid grid-cols-3 gap-x-6 text-xs">
+                      <div>
+                        <div className="text-muted-foreground/70">Created</div>
+                        <div className="text-muted-foreground">{fmt(t.createdAt)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground/70">Last used</div>
+                        <div className="text-muted-foreground">
+                          {t.lastUsedAt ? fmt(t.lastUsedAt) : 'Never'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground/70">Expires</div>
+                        <div
+                          className={cn(
+                            'text-muted-foreground',
+                            expiringSoon && 'text-amber-600 dark:text-amber-400'
+                          )}
+                        >
+                          {t.expiresAt ? fmt(t.expiresAt) : 'Never'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    title="Revoke this token"
+                    onClick={() => void handleRevoke(t.id)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-destructive hover:text-destructive"
-                  onClick={() => void handleRevoke(t.id)}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>

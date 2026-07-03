@@ -64,7 +64,7 @@ describe('routes/mcp-tokens', () => {
     });
     expect(createRes.status).toBe(201);
     const created = await createRes.json();
-    expect(created.data.token).toMatch(/^fowl_mcp_/);
+    expect(created.data.token).toMatch(/^talyn_mcp_/);
     const id = created.data.token_meta.id;
 
     // List — secret is gone, prefix remains.
@@ -109,7 +109,7 @@ describe('routes/mcp-tokens', () => {
     it('rejects an invalid token', async () => {
       const res = await fetch(`${server.url}/api/v1/mcp`, {
         method: 'POST',
-        headers: { authorization: 'Bearer fowl_mcp_nope' },
+        headers: { authorization: 'Bearer talyn_mcp_nope' },
       });
       expect(res.status).toBe(401);
     });

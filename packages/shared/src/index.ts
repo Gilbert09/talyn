@@ -603,7 +603,7 @@ export interface PaginatedResponse<T> {
 export interface McpToken {
   id: string;
   name: string;
-  /** Human-readable head, e.g. `fowl_mcp_ab12cd` — for disambiguation only. */
+  /** Human-readable head, e.g. `talyn_mcp_ab12cd` — for disambiguation only. */
   tokenPrefix: string;
   createdAt: string;
   lastUsedAt: string | null;

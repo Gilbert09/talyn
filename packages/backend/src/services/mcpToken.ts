@@ -6,7 +6,13 @@ import { getDbClient, getPoolDbClient } from '../db/client.js';
 import { mcpTokens as mcpTokensTable } from '../db/schema.js';
 
 const TOKEN_BYTES = 32;
-const TOKEN_PREFIX = 'fowl_mcp_';
+const TOKEN_PREFIX = 'talyn_mcp_';
+/**
+ * Pre-rename prefix. Never minted anymore, but tokens created before the
+ * Talyn rename stay valid until they expire or are revoked — validation
+ * accepts both.
+ */
+const LEGACY_TOKEN_PREFIX = 'fowl_mcp_';
 /** Chars of the random body kept in `token_prefix` for display disambiguation. */
 const DISPLAY_BODY_CHARS = 6;
 const DEFAULT_EXPIRY_DAYS = 90;
@@ -123,7 +129,9 @@ export async function revokeToken(ownerId: string, id: string): Promise<boolean>
  */
 export async function validateToken(rawToken: string): Promise<{ ownerId: string } | null> {
   const trimmed = rawToken.trim();
-  if (!trimmed.startsWith(TOKEN_PREFIX)) return null;
+  if (!trimmed.startsWith(TOKEN_PREFIX) && !trimmed.startsWith(LEGACY_TOKEN_PREFIX)) {
+    return null;
+  }
 
   const db = getPoolDbClient();
   const [row] = await db
