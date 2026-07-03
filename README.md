@@ -25,7 +25,7 @@ Talyn consolidates that:
 - **Self-fixing PRs.** Queue a PR for merge or flag it *keep mergeable*, and Talyn watches it: when it falls behind, hits a conflict, or fails CI, it automatically dispatches a cloud fix run — and the merge queue lands it once it's green (re-running flaky checks and updating the branch itself where GitHub allows).
 - **Run skills on a PR.** Point an agent skill (a `SKILL.md`) at any PR — discovered from the PR's repo (`.claude/skills/`), your machine (`~/.claude/skills`), or skills saved to your Talyn workspace.
 
-There is **no local execution** — no daemon, no SSH, no `claude` CLI to install, nothing running on your machine. The agent runs in the cloud.
+Nothing runs on your machine — no CLI to install, no sandbox to babysit. The agent runs in the cloud.
 
 ---
 
@@ -114,7 +114,7 @@ See [`CLAUDE.md`](./CLAUDE.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.
 
 ## Project status
 
-Talyn is under active development. In June 2026 it pivoted to a **cloud-only PR-management** app — the previous local-execution model (bundled daemon, local/SSH environments, in-process Claude agents, approval gates) was removed. See [`CLAUDE.md`](./CLAUDE.md) for orientation and active priorities, [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) for the provider abstraction + roadmap, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
+Talyn is under active development. See [`CLAUDE.md`](./CLAUDE.md) for orientation and active priorities, [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) for the provider abstraction + roadmap, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
 
 Shipped: GitHub App connection with webhook-first PR monitoring, the PR dashboard (status pills, stacked PRs, detail sheet, merge), merge queue + auto-keep-mergeable self-fix runs (including flaky-check re-runs and branch updates), two cloud providers behind the `CloudTaskProvider` abstraction (PostHog Code + Claude Code) with a per-task provider picker, agent skills on PRs, live transcript streaming, PR linking, OS notifications, signed + notarized macOS builds with auto-update.
 
