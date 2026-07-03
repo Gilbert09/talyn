@@ -10,6 +10,7 @@ import {
   Upload,
   Check,
   AlertCircle,
+  ChevronDown,
   Loader2,
   Unlink,
   RefreshCw,
@@ -905,6 +906,26 @@ function IntegrationsSettings() {
 }
 
 /**
+ * Native <select> with room to breathe: the global appearance reset strips
+ * the platform chevron, which left option text jammed against (and clipping
+ * under) the border. Explicit right padding + our own chevron instead.
+ */
+function SettingsSelect({
+  className,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <div className={cn('relative shrink-0', className)}>
+      <select
+        {...props}
+        className="w-full appearance-none rounded-md border bg-background py-1.5 pl-3 pr-8 text-sm disabled:opacity-60"
+      />
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    </div>
+  );
+}
+
+/**
  * Which Claude model Claude Code tasks run on. Shown only when Claude Code is
  * connected. Defaults to Sonnet — PR fix/respond/review work doesn't warrant
  * Opus pricing. Persists to `workspace.settings.claudeModel`; editable without
@@ -959,18 +980,17 @@ function ClaudeModelSelector() {
             but costs more.
           </p>
         </div>
-        <select
+        <SettingsSelect
           value={current}
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
-          className="shrink-0 rounded-md border bg-background px-2 py-1.5 text-sm"
         >
           {CLAUDE_MODELS.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
             </option>
           ))}
-        </select>
+        </SettingsSelect>
       </div>
     </Card>
   );
@@ -1028,11 +1048,10 @@ function CloudProviderDefaultSelector() {
             when more than one is connected.
           </p>
         </div>
-        <select
+        <SettingsSelect
           value={current}
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
-          className="shrink-0 rounded-md border bg-background px-2 py-1.5 text-sm"
         >
           <option value="">Auto (prefer PostHog Code)</option>
           {connected.map((p) => (
@@ -1041,7 +1060,7 @@ function CloudProviderDefaultSelector() {
             </option>
           ))}
           <option value="ask">Ask every time</option>
-        </select>
+        </SettingsSelect>
       </div>
     </Card>
   );
