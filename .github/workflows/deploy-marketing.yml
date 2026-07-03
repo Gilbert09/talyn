@@ -16,7 +16,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # Skip on forks — no secrets there and nothing to deploy.
-    if: github.repository == 'Gilbert09/owl'
+    if: github.repository == 'Gilbert09/talyn'
     defaults:
       run:
         working-directory: apps/marketing
@@ -44,7 +44,7 @@ jobs:
   deploy:
     needs: check
     runs-on: ubuntu-latest
-    if: github.repository == 'Gilbert09/owl'
+    if: github.repository == 'Gilbert09/talyn'
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

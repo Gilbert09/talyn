@@ -62,7 +62,7 @@ Talyn delegates work through a pluggable **cloud task provider** interface (`pac
 Clone and install (monorepo — npm workspaces):
 
 ```bash
-git clone git@github.com:Gilbert09/owl.git fastowl
+git clone git@github.com:Gilbert09/talyn.git fastowl
 cd fastowl
 npm install
 ```

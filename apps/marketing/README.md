@@ -35,7 +35,7 @@ All headlines, feature blurbs, FAQ, nav, and footer text. Edit here to retune vo
 ### Download button — live
 
 `components/ui/DownloadButton.tsx` fetches the newest release from the public
-GitHub API (`Gilbert09/owl`) on click and downloads the Apple-silicon `.dmg`,
+GitHub API (`Gilbert09/talyn`) on click and downloads the Apple-silicon `.dmg`,
 falling back to the releases page. It uses `/releases?per_page=1` (not
 `/releases/latest`) because all current builds are pre-releases. Change `REPO`
 there if the repo moves. A `download_click` event is sent to PostHog.

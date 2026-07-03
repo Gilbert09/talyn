@@ -6,7 +6,7 @@ import { buttonVariants, type ButtonProps } from "@/components/ui/button";
 import { capture } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
-const REPO = "Gilbert09/owl";
+const REPO = "Gilbert09/talyn";
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 /**

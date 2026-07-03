@@ -101,7 +101,7 @@ Exact steps once your SSH VM is set up (see [SSH_VM_SETUP.md](./SSH_VM_SETUP.md)
 2. In the desktop app, create a workspace named `fastowl-self` (or reuse
    an existing workspace).
 3. Add your SSH environment to it (Settings → Environments).
-4. Add a watched repository pointing at `Gilbert09/owl` (Settings → Workspace).
+4. Add a watched repository pointing at `Gilbert09/talyn` (Settings → Workspace).
 5. Go to **Settings → Continuous Build**:
    - Toggle **enabled**
    - `maxConcurrent: 1`, `requireApproval: On` — don't let it stampede

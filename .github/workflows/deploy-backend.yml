@@ -19,7 +19,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     # Guard so forks / PRs from forks can't burn Railway credits.
-    if: github.repository == 'Gilbert09/owl'
+    if: github.repository == 'Gilbert09/talyn'
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4

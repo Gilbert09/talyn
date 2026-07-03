@@ -1846,7 +1846,7 @@ function MCPServerSettings() {
   );
 }
 
-const REPO_URL = 'https://github.com/Gilbert09/owl';
+const REPO_URL = 'https://github.com/Gilbert09/talyn';
 const SITE_URL = 'https://talyn.dev';
 
 function openRepo() {

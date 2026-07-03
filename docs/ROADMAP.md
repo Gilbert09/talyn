@@ -41,7 +41,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 ## Known Gaps (tracked but not yet phased)
 
 - **Desktop testing**: ~3 trivial renderer test files vs 240+ backend tests. Full plan in `docs/TESTING.md` (Phases D/E: component/hook tests + Playwright E2E).
-- **Launch decisions (Session 65 audit)**: access model (allowlist vs invites — no invite flow exists); public `Gilbert09/owl` repo exposure via the marketing GitHub links; stable vs prerelease update channel (nightlies are arm64-only — an Intel install can hit updater errors when the newest release is a nightly); error-tracking/uptime alerting (process handlers log, nothing pages); `docs/SETUP.md` rewrite (predates the cloud-only refactor).
+- **Launch decisions (Session 65 audit)**: access model (allowlist vs invites — no invite flow exists); stable vs prerelease update channel (nightlies are arm64-only — an Intel install can hit updater errors when the newest release is a nightly); error-tracking/uptime alerting (process handlers log, nothing pages); `docs/SETUP.md` rewrite (predates the cloud-only refactor). ~~Repo codename exposure~~ — renamed `Gilbert09/owl` → `Gilbert09/talyn` (Session 65; GitHub redirects keep old release feeds + git remotes working — never reuse the `owl` name).
 - **Scale-out follow-ups (pre ~50 workspaces)**: the reconcile sweep iterates workspaces serially and outgrows its 5-min interval; no cross-workspace GraphQL dedupe for shared-org installations (Search budget saturation); no task/transcript retention sweep; `requireAuth` does an uncached Supabase round-trip per request.
 
 **Resolved:**
