@@ -35,15 +35,56 @@ import {
 // Rows are upserted by the JWT-verifying middleware on the first request
 // after sign-in.
 
-export const users = pgTable('users', {
-  id: text('id').primaryKey(), // == auth.users.id (uuid)
-  email: text('email').notNull(),
-  githubUsername: text('github_username'),
-  // Gates the developer Debug panel + its WS stream, which expose backend
-  // internals across all accounts. Off by default.
-  isAdmin: boolean('is_admin').notNull().default(false),
+export const users = pgTable(
+  'users',
+  {
+    id: text('id').primaryKey(), // == auth.users.id (uuid)
+    email: text('email').notNull(),
+    githubUsername: text('github_username'),
+    // Gates the developer Debug panel + its WS stream, which expose backend
+    // internals across all accounts. Off by default.
+    isAdmin: boolean('is_admin').notNull().default(false),
+    // ---- Billing (Polar) ----
+    // `plan` is driven exclusively by Polar webhooks; `plan_override` is the
+    // manual comp flag (set via SQL, never touched by webhooks) and wins when
+    // present. Entitlement checks read effective plan = plan_override ?? plan.
+    plan: text('plan').notNull().default('free'), // 'free' | 'unlimited'
+    planOverride: text('plan_override'), // 'free' | 'unlimited' | null
+    polarCustomerId: text('polar_customer_id'),
+    polarSubscriptionId: text('polar_subscription_id'),
+    subscriptionStatus: text('subscription_status'),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+    // Timestamp of the last-applied Polar event for this subscription —
+    // out-of-order webhook deliveries older than this are ignored.
+    subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // Fallback webhook→user mapping when an event lacks our external id.
+    polarCustomerIdx: index('idx_users_polar_customer').on(t.polarCustomerId),
+  })
+);
+
+// ---------- Billing events (webhook audit + idempotency) ----------
+//
+// One row per Polar webhook delivery, keyed by the standard-webhooks
+// `webhook-id` header. The insert-or-conflict on this table is the webhook
+// handler's idempotency gate; `applied` records whether the event mutated a
+// users row (false for ignored types, stale out-of-order events, and events
+// we couldn't map to a user). Backend-pool-only surface: RLS is enabled with
+// no `authenticated` policy (0025 mcp_tokens precedent), so JWT connections
+// can never read it. `user_id` has no FK on purpose — the audit trail must
+// survive an account wipe.
+export const billingEvents = pgTable('billing_events', {
+  eventId: text('event_id').primaryKey(),
+  eventType: text('event_type').notNull(),
+  subscriptionId: text('subscription_id'),
+  userId: text('user_id'),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }),
+  applied: boolean('applied').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 // ---------- Workspaces ----------
