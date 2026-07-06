@@ -385,6 +385,24 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...    # service role, bypasses RLS
 
 POSTHOG_PROJECT_API_KEY=phc_xxx     # optional, for when 18.8 lands
 POSTHOG_HOST=https://us.i.posthog.com
+
+# Polar billing (free 3-active-task limit / $15/mo Unlimited). Optional as a
+# group — when ALL are unset, plan limits are simply not enforced (loud boot
+# warning); a PARTIAL group is a boot error. Use the sandbox
+# (sandbox.polar.sh) org + products for anything that isn't prod. Register
+# the webhook at <backend>/api/v1/webhooks/polar for subscription.* events.
+# POLAR_ACCESS_TOKEN=polar_oat_...
+# POLAR_WEBHOOK_SECRET=<the standard-webhooks secret from the webhook config>
+# POLAR_ENVIRONMENT=sandbox            # or production
+# POLAR_PRODUCT_ID_MONTHLY=<uuid of the $15/mo product>
+# POLAR_PRODUCT_ID_ANNUAL=<uuid of the $150/yr product>
+# POLAR_SUCCESS_URL=https://www.talyn.dev/checkout-success   # optional
+```
+
+To comp an account onto Unlimited without paying (e.g. your own):
+
+```sql
+UPDATE users SET plan_override = 'unlimited' WHERE email = 'you@example.com';
 ```
 
 Desktop app env (set in the shell before `npm run build` or `npm start`):
