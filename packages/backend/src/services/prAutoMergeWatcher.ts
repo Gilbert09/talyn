@@ -4,6 +4,7 @@ import { getDbClient } from '../db/client.js';
 import { guardCrossReplica } from './advisoryLock.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
+import { TaskLimitError } from './billing/entitlements.js';
 import { githubService } from './github.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { prMonitorService } from './prMonitor.js';
@@ -240,22 +241,33 @@ class PRAutoMergeWatcher {
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
-    const created = await createCloudTask({
-      workspaceId: row.workspaceId,
-      type: 'pr_response',
-      title: `Get ${ref} mergeable`,
-      description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state.`,
-      prompt: buildMergeablePrompt({
-        owner: row.owner,
-        repo: row.repo,
-        number: row.number,
-        summary,
-        provider,
-      }),
-      repositoryId: row.repositoryId,
-      assignedEnvironmentId: envId,
-      pullRequestId: row.id,
-    });
+    let created;
+    try {
+      created = await createCloudTask({
+        workspaceId: row.workspaceId,
+        type: 'pr_response',
+        title: `Get ${ref} mergeable`,
+        description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state.`,
+        prompt: buildMergeablePrompt({
+          owner: row.owner,
+          repo: row.repo,
+          number: row.number,
+          summary,
+          provider,
+        }),
+        repositoryId: row.repositoryId,
+        assignedEnvironmentId: envId,
+        pullRequestId: row.id,
+      });
+    } catch (err) {
+      if (err instanceof TaskLimitError) {
+        // Free-plan concurrency limit — skip this tick without burning an
+        // attempt; the watcher retries once a slot frees up.
+        console.log(`[autoKeep] ${ref}: fix run deferred — ${err.message}`);
+        return;
+      }
+      throw err;
+    }
 
     state.lastAutoTaskId = created.id;
     state.accounted = false;

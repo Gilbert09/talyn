@@ -6,6 +6,10 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { createCloudTask } from '../services/taskCreate.js';
+import {
+  ACTIVE_TASK_STATUSES,
+  assertCanActivateTask,
+} from '../services/billing/entitlements.js';
 import { rowToTask, taskColumnsNoTranscript } from '../services/taskSerialize.js';
 import { taskQueueService } from '../services/taskQueue.js';
 import {
@@ -217,6 +221,18 @@ export function taskRoutes(): Router {
       }
     }
 
+    // Reactivating via PATCH is subject to the same free-plan concurrency
+    // gate as create/retry/start — without this it's a limit bypass. Throws
+    // TaskLimitError → 402 via the error middleware. The task itself is
+    // excluded from the count, so re-asserting an already-active status
+    // never self-blocks.
+    if (
+      body.status !== undefined &&
+      (ACTIVE_TASK_STATUSES as readonly string[]).includes(body.status)
+    ) {
+      await assertCanActivateTask(assertUser(req).id, req.params.id);
+    }
+
     const existing = await db
       .select({ id: tasksTable.id })
       .from(tasksTable)
@@ -285,6 +301,9 @@ export function taskRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Task not found' });
     }
 
+    // Free-plan gate: a retry re-occupies a slot. Throws → 402.
+    await assertCanActivateTask(assertUser(req).id, req.params.id);
+
     // Clear the prior cloud run so dispatch starts a fresh one rather than
     // treating the task as already dispatched (idempotency short-circuit).
     await patchTaskMetadata(req.params.id, (meta) => {
@@ -328,6 +347,8 @@ export function taskRoutes(): Router {
     }
     const task = rowToTask(rows[0]);
     if (task.status !== 'in_progress') {
+      // Free-plan gate: queueing re-occupies a slot. Throws → 402.
+      await assertCanActivateTask(assertUser(req).id, task.id);
       await taskQueueService.queueTask(task.id);
     }
     const updated = await db

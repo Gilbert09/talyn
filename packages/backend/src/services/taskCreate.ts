@@ -2,7 +2,12 @@ import { v4 as uuid } from 'uuid';
 import { eq } from 'drizzle-orm';
 import type { TaskPriority, TaskType, TaskSkillInfo, PostHogCodeRuntimeAdapter } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
-import { tasks as tasksTable, pullRequests as pullRequestsTable } from '../db/schema.js';
+import {
+  tasks as tasksTable,
+  pullRequests as pullRequestsTable,
+  workspaces as workspacesTable,
+} from '../db/schema.js';
+import { withTaskLimitGate } from './billing/entitlements.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
 import { bumpSkillUsage } from './skills.js';
 import { rowToTask } from './taskSerialize.js';
@@ -39,6 +44,27 @@ export interface CreateCloudTaskInput {
  * create identical task rows.
  */
 export async function createCloudTask(
+  input: CreateCloudTaskInput
+): Promise<typeof tasksTable.$inferSelect> {
+  const db = getDbClient();
+
+  // Free-plan concurrency gate. Every creation path (routes AND the
+  // merge-queue / auto-keep watchers) funnels through here, so the limit has
+  // no back door; throws TaskLimitError when a free owner is at the cap.
+  const ownerRows = await db
+    .select({ ownerId: workspacesTable.ownerId })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, input.workspaceId))
+    .limit(1);
+  const ownerId = ownerRows[0]?.ownerId;
+  if (!ownerId) {
+    throw new Error(`createCloudTask: workspace ${input.workspaceId} not found`);
+  }
+
+  return withTaskLimitGate(ownerId, {}, () => insertCloudTask(input));
+}
+
+async function insertCloudTask(
   input: CreateCloudTaskInput
 ): Promise<typeof tasksTable.$inferSelect> {
   const db = getDbClient();

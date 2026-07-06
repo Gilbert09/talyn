@@ -326,6 +326,67 @@ describe('mergeQueueProcessor', () => {
     );
   });
 
+  describe('free-plan task limit', () => {
+    const savedPolarToken = process.env.POLAR_ACCESS_TOKEN;
+
+    beforeEach(async () => {
+      // Billing configured → the 3-active-task limit is enforced. Fill the
+      // owner's slots with tasks unrelated to any queued PR.
+      process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
+      await insertTask(db, 'filler-1', 'queued', 'pr-none');
+      await insertTask(db, 'filler-2', 'in_progress', 'pr-none');
+      await insertTask(db, 'filler-3', 'pending', 'pr-none');
+    });
+
+    afterEach(() => {
+      if (savedPolarToken === undefined) delete process.env.POLAR_ACCESS_TOKEN;
+      else process.env.POLAR_ACCESS_TOKEN = savedPolarToken;
+    });
+
+    it('holds a conflicting PR as waiting at the limit — no task, no attempt, no blocked badge', async () => {
+      const prId = await insertPr(db, { summary: conflictSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect(await countTasks(db)).toBe(3); // no fix run created
+      const pr = await getPr(db, prId);
+      const state = pr.mergeQueueState as QueueState;
+      expect(state.status).toBe('waiting');
+      expect(state.attempts ?? 0).toBe(0);
+      expect(state.lastFixTaskId).toBeUndefined();
+      expect(blockedSpy).not.toHaveBeenCalled();
+    });
+
+    it('fires the fix run on a later tick once a slot frees', async () => {
+      const prId = await insertPr(db, { summary: conflictSummary() });
+      await mergeQueueProcessor.runOnce();
+      expect(await countTasks(db)).toBe(3);
+
+      await db
+        .update(tasksTable)
+        .set({ status: 'completed' })
+        .where(eq(tasksTable.id, 'filler-1'));
+      await mergeQueueProcessor.runOnce();
+
+      expect(await countTasks(db)).toBe(4);
+      const pr = await getPr(db, prId);
+      expect((pr.mergeQueueState as QueueState).status).toBe('fixing');
+    });
+
+    it('comped owner is never held', async () => {
+      const { users } = await import('../db/schema.js');
+      await db.update(users).set({ planOverride: 'unlimited' }).where(eq(users.id, OWNER));
+      const prId = await insertPr(db, { summary: conflictSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(await countTasks(db)).toBe(4);
+      const pr = await getPr(db, prId);
+      expect((pr.mergeQueueState as QueueState).status).toBe('fixing');
+    });
+  });
+
   it('funnels a BEHIND PR into the same fix path (the post-merge race)', async () => {
     await insertPr(db, { summary: behindSummary() });
 

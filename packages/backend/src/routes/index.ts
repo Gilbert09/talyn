@@ -15,6 +15,7 @@ import { mcpRoutes } from '../mcp/transport.js';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler, wrapAsyncRoutes } from '../middleware/asyncHandler.js';
+import { TaskLimitError } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 
@@ -106,14 +107,34 @@ export function setupRoutes(app: Express): void {
     res.status(404).json({ success: false, error: 'Not found' });
   });
 
-  // Arity-4 is load-bearing: Express only treats a middleware as an error
-  // handler when it declares exactly four parameters.
-  app.use((err: Error, _req: Request, res: Response, next: NextFunction) => {
+  app.use(apiErrorHandler);
+}
+
+/**
+ * Terminal API error middleware. Arity-4 is load-bearing: Express only
+ * treats a middleware as an error handler when it declares exactly four
+ * parameters. Exported so route tests exercise the same status/code mapping
+ * production uses.
+ */
+export function apiErrorHandler(
+  err: Error,
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (res.headersSent) {
     console.error('API Error:', err);
-    if (res.headersSent) {
-      next(err);
-      return;
-    }
-    res.status(500).json({ success: false, error: err.message });
-  });
+    next(err);
+    return;
+  }
+  // Central mapping for the free-plan concurrency gate — every creation /
+  // reactivation path (POST /tasks, retry, start, PATCH, PR fix) throws
+  // TaskLimitError and lands here, so the 402 + code contract lives in
+  // exactly one place. Expected traffic, not an error — no console spam.
+  if (err instanceof TaskLimitError) {
+    res.status(402).json({ success: false, error: err.message, code: err.code });
+    return;
+  }
+  console.error('API Error:', err);
+  res.status(500).json({ success: false, error: err.message });
 }

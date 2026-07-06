@@ -368,6 +368,9 @@ export type WSEventType =
   | 'environment:status'
   | 'environment:created'
   | 'connection:status'
+  // Per-user billing fact (broadcastToUser) — fired by the Polar webhook
+  // handler after a plan change; payload is the fresh BillingStatus.
+  | 'subscription:updated'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.
@@ -606,6 +609,12 @@ export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  /**
+   * Machine-readable error discriminator for failures the client must branch
+   * on (e.g. TASK_LIMIT_ERROR_CODE → upgrade modal). `error` stays the
+   * human-readable message.
+   */
+  code?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -613,6 +622,46 @@ export interface PaginatedResponse<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+// ============================================================================
+// Billing
+// ============================================================================
+
+export type Plan = 'free' | 'unlimited';
+
+/** Max simultaneously-active tasks (pending/queued/in_progress) on the free plan. */
+export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
+
+/** ApiResponse.code when task creation/activation is rejected by the free limit. */
+export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
+
+/**
+ * The user's billing state as served by `GET /billing/status` and pushed on
+ * the `subscription:updated` WS event.
+ */
+export interface BillingStatus {
+  /** False when the backend has no Polar env configured — limits are off. */
+  billingEnabled: boolean;
+  plan: Plan;
+  /** 'override' = manually comped (plan_override); 'billing_disabled' when unconfigured. */
+  planSource: 'default' | 'subscription' | 'override' | 'billing_disabled';
+  /** Raw provider subscription status, when a subscription exists. */
+  subscriptionStatus?: 'active' | 'past_due' | 'canceled' | 'revoked' | string;
+  cancelAtPeriodEnd: boolean;
+  /** ISO date the current billing period ends (renewal or expiry). */
+  currentPeriodEnd?: string;
+  activeTasks: number;
+  /** null = unlimited. */
+  activeTaskLimit: number | null;
+}
+
+export interface CreateCheckoutRequest {
+  period: 'monthly' | 'annual';
+}
+
+export interface CheckoutSessionResponse {
+  url: string;
 }
 
 // ============================================================================

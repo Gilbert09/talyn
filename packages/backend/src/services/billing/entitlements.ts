@@ -1,4 +1,5 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { FREE_PLAN_ACTIVE_TASK_LIMIT, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
 import {
   getDbClient,
   getPoolDbClient,
@@ -18,7 +19,7 @@ import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
  * once, counted across every workspace the user owns. Paid/comped: no limit.
  */
 
-export const FREE_ACTIVE_TASK_LIMIT = 3;
+export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
 
 /** Statuses that occupy a free-plan slot (mirrors the desktop's ACTIVE_TASK_STATUSES). */
 export const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
@@ -32,7 +33,7 @@ export interface Entitlement {
 
 /** Thrown by the gate when a free owner is at their active-task limit. */
 export class TaskLimitError extends Error {
-  readonly code = 'task_limit_reached';
+  readonly code = TASK_LIMIT_ERROR_CODE;
   constructor(
     readonly limit: number,
     readonly active: number

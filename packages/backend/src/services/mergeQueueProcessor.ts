@@ -9,6 +9,7 @@ import { getDbClient } from '../db/client.js';
 import { guardCrossReplica } from './advisoryLock.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { createCloudTask } from './taskCreate.js';
+import { TaskLimitError } from './billing/entitlements.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService, MergeNotPermittedForAppError } from './github.js';
 import { githubRateGate } from './githubRateGate.js';
@@ -793,22 +794,34 @@ class MergeQueueProcessor {
 
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
-    const created = await createCloudTask({
-      workspaceId: row.workspaceId,
-      type: 'pr_response',
-      title: `Get ${ref} mergeable (merge queue)`,
-      description: `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
-      prompt: buildMergeablePrompt({
-        owner: row.owner,
-        repo: row.repo,
-        number: row.number,
-        summary,
-        provider,
-      }),
-      repositoryId: row.repositoryId,
-      assignedEnvironmentId: envId,
-      pullRequestId: row.id,
-    });
+    let created;
+    try {
+      created = await createCloudTask({
+        workspaceId: row.workspaceId,
+        type: 'pr_response',
+        title: `Get ${ref} mergeable (merge queue)`,
+        description: `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
+        prompt: buildMergeablePrompt({
+          owner: row.owner,
+          repo: row.repo,
+          number: row.number,
+          summary,
+          provider,
+        }),
+        repositoryId: row.repositoryId,
+        assignedEnvironmentId: envId,
+        pullRequestId: row.id,
+      });
+    } catch (err) {
+      if (err instanceof TaskLimitError) {
+        // Free-plan concurrency limit — transient, like "no cloud provider":
+        // hold without burning an attempt; a slot frees up when a task ends.
+        console.log(`[mergeQueue] ${ref}: fix run deferred — ${err.message}`);
+        await this.ensureStatus(row, state, 'waiting', position);
+        return 'hold';
+      }
+      throw err;
+    }
 
     state.lastFixTaskId = created.id;
     state.accounted = false;
