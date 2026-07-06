@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import type {
   AgentEvent,
+  BillingStatus,
   DebugEvent,
   Environment,
   MergeQueueBlockedEvent,
@@ -467,6 +468,16 @@ export function emitEnvironmentCreated(ownerId: string, environment: Environment
   broadcastToUser(ownerId, {
     type: 'environment:created',
     payload: { environment },
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// Billing is a per-user fact — fired by the Polar webhook handler after a
+// plan change so every open desktop updates without polling.
+export function emitSubscriptionUpdated(ownerId: string, status: BillingStatus): void {
+  broadcastToUser(ownerId, {
+    type: 'subscription:updated',
+    payload: status,
     timestamp: new Date().toISOString(),
   });
 }

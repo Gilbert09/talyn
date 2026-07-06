@@ -69,6 +69,10 @@ const SERVICE_INFO: Record<string, string> = {
   github_webhooks:
     'Inbound GitHub App webhooks — verified, filtered, and pushed onto the Redis ingest stream, then drained by the worker into PR refreshes.',
   redis: 'Redis — the cross-replica backbone: WebSocket fan-out (Pub/Sub) and the webhook ingest queue (Stream).',
+  polar:
+    'Polar billing API — hosted checkout + customer-portal sessions for the Unlimited plan.',
+  billing:
+    'Billing domain events — inbound Polar subscription webhooks and the plan changes they apply.',
 };
 
 const TIP_WIDTH = 256; // matches w-64

@@ -18,9 +18,10 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@talyn/shared": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@polar-sh/sdk": "^0.48.1",
     "@supabase/supabase-js": "^2.103.3",
+    "@talyn/shared": "*",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "drizzle-orm": "^0.45.2",

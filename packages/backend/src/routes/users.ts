@@ -5,6 +5,8 @@ import { getDbClient } from '../db/client.js';
 import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 import { githubService } from '../services/github.js';
 import { getSupabaseServiceClient, isSupabaseConfigured } from '../services/supabase.js';
+import { billingEnabled } from '../services/billing/entitlements.js';
+import { revokeSubscriptionBestEffort } from '../services/billing/polar.js';
 
 /**
  * Account-level routes for the calling user. Mounted BEFORE the owner-scope
@@ -29,6 +31,21 @@ export function userRoutes(): Router {
       .select({ id: workspacesTable.id })
       .from(workspacesTable)
       .where(eq(workspacesTable.ownerId, userId));
+
+    // Best-effort: revoke any live Polar subscription BEFORE the row goes —
+    // after the delete there's no user left for billing webhooks to map to,
+    // and the customer would keep getting charged.
+    if (billingEnabled()) {
+      const billingRows = await db
+        .select({ subscriptionId: usersTable.polarSubscriptionId, status: usersTable.subscriptionStatus })
+        .from(usersTable)
+        .where(eq(usersTable.id, userId))
+        .limit(1);
+      const sub = billingRows[0];
+      if (sub?.subscriptionId && sub.status !== 'canceled') {
+        await revokeSubscriptionBestEffort(sub.subscriptionId);
+      }
+    }
 
     await db.delete(usersTable).where(eq(usersTable.id, userId));
 

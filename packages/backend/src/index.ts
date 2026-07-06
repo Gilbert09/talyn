@@ -14,9 +14,11 @@ import { checkCountCoalescer } from './services/checkCounts.js';
 import { webhookWorker } from './services/webhookWorker.js';
 import { prReconcileSweep } from './services/prReconcileSweep.js';
 import { handleGithubWebhook } from './routes/webhooks.js';
+import { handlePolarWebhook } from './services/billing/webhook.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv } from './services/validateEnv.js';
+import { billingEnabled } from './services/billing/entitlements.js';
 import { migrateLegacyPlaintextCredentials } from './services/credentialMigration.js';
 import { environments as environmentsTable } from './db/schema.js';
 import { taskQueueService } from './services/taskQueue.js';
@@ -55,6 +57,13 @@ async function main() {
   // Fail fast on missing/misconfigured env instead of lazy throws on the
   // first request that needs it. Reports every problem at once.
   assertValidEnv();
+
+  // Loud, deliberate: with no Polar env the free-plan task limit is NOT
+  // enforced (a paywall nobody can pay would brick task creation). Fine for
+  // dev/self-hosted; a misconfigured prod shows up in the boot log.
+  if (!billingEnabled()) {
+    console.warn('[billing] POLAR_* env not set — plan limits are disabled');
+  }
 
   // Initialize database + run migrations. Must complete before services
   // read any state.
@@ -152,6 +161,21 @@ async function main() {
     express.raw({ type: () => true, limit: '5mb' }),
     (req, res) => {
       void handleGithubWebhook(req, res);
+    }
+  );
+
+  // Polar (billing) webhook receiver — same raw-body/pre-json/no-auth deal as
+  // the GitHub one; the standard-webhooks signature IS the auth.
+  app.post(
+    '/api/v1/webhooks/polar',
+    express.raw({ type: () => true, limit: '1mb' }),
+    (req, res) => {
+      handlePolarWebhook(req, res).catch((err) => {
+        console.error('[billing] polar webhook failed:', err);
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, error: 'Webhook processing failed' });
+        }
+      });
     }
   );
 

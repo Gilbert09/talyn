@@ -72,6 +72,45 @@ describe('validateEnv', () => {
     expect(errors).toEqual([]);
   });
 
+  it('flags a partially configured Polar billing group with what is missing', () => {
+    const errors = validateEnv(validEnv({ POLAR_ACCESS_TOKEN: 'polar_at' }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('Polar billing is partially configured');
+    expect(errors[0]).toContain('POLAR_WEBHOOK_SECRET');
+    expect(errors[0]).toContain('POLAR_PRODUCT_ID_ANNUAL');
+  });
+
+  it('accepts a fully configured Polar billing group', () => {
+    const errors = validateEnv(
+      validEnv({
+        POLAR_ACCESS_TOKEN: 'polar_at',
+        POLAR_WEBHOOK_SECRET: 'whsec_x',
+        POLAR_ENVIRONMENT: 'sandbox',
+        POLAR_PRODUCT_ID_MONTHLY: 'prod-m',
+        POLAR_PRODUCT_ID_ANNUAL: 'prod-a',
+      })
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts an entirely absent Polar billing group (limits simply off)', () => {
+    expect(validateEnv(validEnv())).toEqual([]);
+  });
+
+  it('rejects an invalid POLAR_ENVIRONMENT value', () => {
+    const errors = validateEnv(
+      validEnv({
+        POLAR_ACCESS_TOKEN: 'polar_at',
+        POLAR_WEBHOOK_SECRET: 'whsec_x',
+        POLAR_ENVIRONMENT: 'staging',
+        POLAR_PRODUCT_ID_MONTHLY: 'prod-m',
+        POLAR_PRODUCT_ID_ANNUAL: 'prod-a',
+      })
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/POLAR_ENVIRONMENT must be 'sandbox' or 'production'/);
+  });
+
   it('assertValidEnv aggregates all problems into one error', () => {
     expect(() =>
       assertValidEnv(validEnv({ DATABASE_URL: undefined, SUPABASE_URL: undefined }))

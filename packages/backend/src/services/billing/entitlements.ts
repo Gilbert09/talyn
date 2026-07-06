@@ -1,5 +1,9 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
-import { FREE_PLAN_ACTIVE_TASK_LIMIT, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
+import {
+  FREE_PLAN_ACTIVE_TASK_LIMIT,
+  TASK_LIMIT_ERROR_CODE,
+  type BillingStatus,
+} from '@talyn/shared';
 import {
   getDbClient,
   getPoolDbClient,
@@ -57,6 +61,18 @@ export function billingEnabled(): boolean {
   return Boolean(process.env.POLAR_ACCESS_TOKEN);
 }
 
+/** Pure entitlement derivation from a users-row billing projection. */
+export function deriveEntitlement(
+  row: { plan: string; planOverride: string | null } | undefined
+): Entitlement {
+  if (!row) return { plan: 'free', source: 'default' };
+  if (row.planOverride === 'unlimited' || row.planOverride === 'free') {
+    return { plan: row.planOverride, source: 'override' };
+  }
+  if (row.plan === 'unlimited') return { plan: 'unlimited', source: 'subscription' };
+  return { plan: 'free', source: 'default' };
+}
+
 /**
  * Resolve the effective plan for an owner: manual override first (the comp
  * flag — set via SQL, never by webhooks), then the webhook-driven plan.
@@ -69,14 +85,50 @@ export async function resolveEntitlement(ownerId: string): Promise<Entitlement> 
     .from(usersTable)
     .where(eq(usersTable.id, ownerId))
     .limit(1);
-  const row = rows[0];
-  if (!row) return { plan: 'free', source: 'default' };
+  return deriveEntitlement(rows[0]);
+}
 
-  if (row.planOverride === 'unlimited' || row.planOverride === 'free') {
-    return { plan: row.planOverride, source: 'override' };
+/**
+ * The full billing snapshot served by `GET /billing/status` and pushed on
+ * the `subscription:updated` WS event.
+ */
+export async function buildBillingStatus(ownerId: string): Promise<BillingStatus> {
+  const activeTasks = await countActiveTasks(ownerId);
+  if (!billingEnabled()) {
+    return {
+      billingEnabled: false,
+      plan: 'unlimited',
+      planSource: 'billing_disabled',
+      cancelAtPeriodEnd: false,
+      activeTasks,
+      activeTaskLimit: null,
+    };
   }
-  if (row.plan === 'unlimited') return { plan: 'unlimited', source: 'subscription' };
-  return { plan: 'free', source: 'default' };
+
+  const rows = await getDbClient()
+    .select({
+      plan: usersTable.plan,
+      planOverride: usersTable.planOverride,
+      subscriptionStatus: usersTable.subscriptionStatus,
+      currentPeriodEnd: usersTable.currentPeriodEnd,
+      cancelAtPeriodEnd: usersTable.cancelAtPeriodEnd,
+    })
+    .from(usersTable)
+    .where(eq(usersTable.id, ownerId))
+    .limit(1);
+  const row = rows[0];
+  const entitlement = deriveEntitlement(row);
+
+  return {
+    billingEnabled: true,
+    plan: entitlement.plan,
+    planSource: entitlement.source,
+    ...(row?.subscriptionStatus ? { subscriptionStatus: row.subscriptionStatus } : {}),
+    cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
+    ...(row?.currentPeriodEnd ? { currentPeriodEnd: row.currentPeriodEnd.toISOString() } : {}),
+    activeTasks,
+    activeTaskLimit: entitlement.plan === 'free' ? FREE_ACTIVE_TASK_LIMIT : null,
+  };
 }
 
 /**

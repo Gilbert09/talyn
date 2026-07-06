@@ -59,6 +59,27 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
     );
   }
 
+  // Polar billing is optional as a whole (absent → task limits are simply
+  // not enforced), but a PARTIAL config is always a mistake: checkout or
+  // webhook verification would throw at request time on the missing half.
+  const polarVars = [
+    'POLAR_ACCESS_TOKEN',
+    'POLAR_WEBHOOK_SECRET',
+    'POLAR_ENVIRONMENT',
+    'POLAR_PRODUCT_ID_MONTHLY',
+    'POLAR_PRODUCT_ID_ANNUAL',
+  ];
+  const setPolarVars = polarVars.filter((name) => Boolean(env[name]));
+  if (setPolarVars.length > 0 && setPolarVars.length < polarVars.length) {
+    const missing = polarVars.filter((name) => !env[name]);
+    errors.push(
+      `Polar billing is partially configured (${setPolarVars.join(', ')} set) — also set ${missing.join(', ')}`
+    );
+  }
+  if (env.POLAR_ENVIRONMENT && !['sandbox', 'production'].includes(env.POLAR_ENVIRONMENT)) {
+    errors.push(`POLAR_ENVIRONMENT must be 'sandbox' or 'production', got '${env.POLAR_ENVIRONMENT}'`);
+  }
+
   return errors;
 }
 

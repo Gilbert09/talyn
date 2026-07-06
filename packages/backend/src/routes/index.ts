@@ -10,6 +10,7 @@ import { skillRoutes } from './skills.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
 import { userRoutes } from './users.js';
+import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { mcpRoutes } from '../mcp/transport.js';
 import { requireMcpToken } from '../mcp/requireMcpToken.js';
@@ -81,6 +82,12 @@ export function setupRoutes(app: Express): void {
   // own users row, which RLS blocks from the authenticated role; handlers
   // hard-scope every query to req.user.id instead. See routes/users.ts.
   app.use(`${api}/users`, mount(userRoutes()));
+
+  // Billing (plan status / checkout / portal). Pre-ownerScope on purpose:
+  // checkout + portal block on Polar's API, and an owner-scoped transaction
+  // would pin a pooled connection for that whole round-trip. Hard-scoped to
+  // req.user.id. See routes/billing.ts.
+  app.use(`${api}/billing`, mount(billingRoutes()));
 
   // Owner-scoped DB enforcement for the data routers below: runs each request
   // inside a transaction that drops to the `authenticated` role so Postgres RLS
