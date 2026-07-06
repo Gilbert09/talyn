@@ -10,6 +10,11 @@ dockerfilePath = "Dockerfile"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 
-# Restart on crash; don't loop forever on config errors.
+# Restart on crash; don't loop forever on config errors. 25 (not 5): the DB
+# watchdog (services/dbWatchdog.ts) now exits deliberately when the Supabase
+# pooler wedges (~every 2min while the wedge persists), and the retry budget is
+# per-deployment-lifetime — 5 could be quietly consumed over a long-lived
+# deploy and permanently park the service, while 25 rides out ~50min of
+# continuous DB outage yet still stops a true boot loop.
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
+restartPolicyMaxRetries = 25

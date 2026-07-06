@@ -29,6 +29,7 @@ import { claudeCodeProvider } from './services/cloudProviders/claude/provider.js
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
 import { mergeQueueProcessor } from './services/mergeQueueProcessor.js';
+import { dbWatchdog } from './services/dbWatchdog.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -90,6 +91,12 @@ async function main() {
   // commits no tracked PR head points at. Inert without REDIS_URL.
   await webhookHeadIndex.init().catch((err) => console.error('webhook head index init failed:', err));
   prReconcileSweep.init();
+
+  // Self-healing for a wedged DB pool (Supavisor backend exhaustion): after
+  // ~2 min of continuously failing probes, exit(1) so Railway's ON_FAILURE
+  // policy restarts us — Railway does NOT healthcheck running deploys, so
+  // without this the Jul 6 incident state persists until a human restarts it.
+  dbWatchdog.init();
 
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
@@ -236,6 +243,7 @@ async function main() {
     if (draining) return; // double SIGTERM/SIGINT — first one is already draining
     draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
+    dbWatchdog.shutdown();
     cloudTaskPoller.shutdown();
     prAutoMergeWatcher.shutdown();
     mergeQueueProcessor.shutdown();

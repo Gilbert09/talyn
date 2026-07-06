@@ -148,7 +148,24 @@ function createPostgresHandle(connectionString: string): Handle {
     // awaits a `Promise.all` over the batch, one stuck query wedges the whole
     // consumer with no error. 30s errors it instead — handleEntry catches it,
     // the delivery stays un-acked, and the loop keeps draining.
-    connection: { statement_timeout: 30_000 },
+    //
+    // idle_in_transaction_session_timeout is the transaction-shaped twin, and
+    // it's what statement_timeout can NOT catch: the ownerScope middleware
+    // (middleware/ownerScope.ts) holds an open transaction for the life of
+    // every authenticated request, so a handler awaiting a slow GitHub call —
+    // or a stalled client — sits idle-in-transaction with no statement
+    // running, pinning one of the Supavisor transaction-pooler's backend
+    // connections the entire time. Enough of those and the pooler's pool
+    // exhausts: every other query (webhook writes, WS auth, the /health
+    // probe) queues behind them and dies with ECHECKOUTTIMEOUT after 60s —
+    // the 2026-07-04 and 2026-07-06 prod outages. 30s matches
+    // statement_timeout: the HTTP p99 is ~150ms, so any request idle in its
+    // transaction for 30s is already failed; killing its session frees the
+    // backend instead of wedging the whole service. NOTE: startup parameters
+    // may not survive every pooler — the same setting should also be pinned
+    // role-level in Supabase (ALTER ROLE ... SET idle_in_transaction_session_timeout)
+    // as defense in depth.
+    connection: { statement_timeout: 30_000, idle_in_transaction_session_timeout: 30_000 },
     // Don't wait forever to acquire a socket either.
     connect_timeout: 15,
   });

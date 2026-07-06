@@ -2,6 +2,12 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 67 — Prod incident: Supavisor pool exhaustion → "Talyn can't reach its server"
+
+- **Incident (2026-07-06 08:43–08:57 UTC, repeat of 2026-07-04 13:45–14:06)**: desktop users hit the "Talyn can't reach its server" screen. Root cause chain: `ownerScope` holds an open transaction for the life of every authenticated request → handlers awaiting GitHub calls sit **idle-in-transaction**, pinning Supavisor (transaction-pooler) backend connections → pool exhausts under webhook-hour load (~15 GitHub webhooks/s) → every query queues into `ECHECKOUTTIMEOUT` after 60s FATALs → WS auth timeouts, poll ticks wedged 5–6 min, `/health` DB probe (3s bound) 503s continuously. `statement_timeout` never fired — no statement was running. Recovery required a **manual Railway restart** (dropping the process's connections freed the pinned backends): Railway's `healthcheckTimeout` only gates deploy cutover; it does NOT healthcheck running deploys.
+- **Fixes**: (1) `idle_in_transaction_session_timeout: 30_000` beside `statement_timeout` in `db/client.ts` — kills the pinned sessions instead of wedging the service; (2) new `services/dbWatchdog.ts` — bounded `select 1` every 15s, after 8 consecutive failures (~2 min) `process.exit(1)` so Railway's ON_FAILURE policy restarts us (registered on the debugBus poller registry; tests in `dbWatchdog.test.ts`); (3) `restartPolicyMaxRetries` 5 → 25 (watchdog exits are deliberate and the retry budget is per-deployment-lifetime).
+- **Ops follow-ups**: `WEBHOOK_TRACE=1` was live in prod and blowing Railway's 500 logs/s cap (logs dropped mid-incident) — flip to 0. Pin the same idle-in-transaction timeout role-level in Supabase (`ALTER ROLE`) as defense-in-depth (startup params may not survive the pooler), and review pooler `pool_size` vs the client `max: 20`. Still open from S66: uptime alerting on `/health`.
+
 ## Session 66 — Launch prep: repo rename, release channels, v0.2.0, docs purge
 
 - **Repo renamed** `Gilbert09/owl` → `Gilbert09/talyn` (GitHub App unaffected; 301 redirects keep old clones + shipped auto-updaters working — never reuse the `owl` name). All references, workflow guards, and the electron-builder publish target updated the same push.
