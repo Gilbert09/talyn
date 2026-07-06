@@ -35,6 +35,7 @@ export type SettingsSection =
   | 'integrations'
   | 'skills'
   | 'account'
+  | 'billing'
   | 'appearance'
   | 'developer'
   | 'mcp'

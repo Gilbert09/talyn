@@ -8,7 +8,8 @@ import {
   HISTORY_STATUS_PARAM,
   HISTORY_TASK_STATUSES,
 } from '../stores/workspace';
-import type { Task } from '@talyn/shared';
+import type { BillingStatus, Task } from '@talyn/shared';
+import { maybeHandleTaskLimit, useBillingStore } from '../stores/billing';
 import type {
   AgentEvent,
   TaskStatusEvent,
@@ -239,7 +240,21 @@ export function useApiConnection() {
   useOnReconnect(() => {
     void reconcileTasksFromServer();
     void reconcileEnvironmentsFromServer();
+    void useBillingStore.getState().refresh();
   });
+
+  // Billing snapshot: fetch once on mount, and re-fetch on window focus —
+  // the backstop for plan changes made in the browser (checkout / portal)
+  // while the WS was down.
+  useEffect(() => {
+    const refresh = () => void useBillingStore.getState().refresh();
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      useBillingStore.getState().stopCheckoutPollBurst();
+    };
+  }, []);
 
   // Handle WebSocket events
   useEffect(() => {
@@ -324,6 +339,14 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<MergeQueueBlockedEvent>('merge_queue:blocked', (payload) => {
         notifyMergeQueueBlocked(payload);
+      })
+    );
+
+    // Plan changes (Polar webhook applied server-side). Per-user event; also
+    // ends the post-checkout poll burst early via setStatus.
+    unsubscribers.push(
+      wsClient.on<BillingStatus>('subscription:updated', (payload) => {
+        useBillingStore.getState().setStatus(payload);
       })
     );
 
@@ -462,7 +485,15 @@ export function useTaskActions() {
 
   const createTask = useCallback(
     async (data: Parameters<typeof api.tasks.create>[0]) => {
-      const task = await api.tasks.create(data);
+      let task;
+      try {
+        task = await api.tasks.create(data);
+      } catch (err) {
+        // Free-plan limit → upgrade modal; still rethrow so the calling
+        // surface shows its inline error too.
+        maybeHandleTaskLimit(err);
+        throw err;
+      }
       trackEvent('task_created', {
         task_type: data.type,
         model: data.model,
@@ -477,9 +508,14 @@ export function useTaskActions() {
 
   const updateTaskStatus = useCallback(
     async (taskId: string, status: string) => {
-      const task = await api.tasks.update(taskId, { status: status as any });
-      updateTask(taskId, task);
-      return task;
+      try {
+        const task = await api.tasks.update(taskId, { status: status as any });
+        updateTask(taskId, task);
+        return task;
+      } catch (err) {
+        maybeHandleTaskLimit(err); // re-queueing via PATCH is gated too
+        throw err;
+      }
     },
     [updateTask]
   );
@@ -496,7 +532,13 @@ export function useTaskActions() {
 
   const retryTask = useCallback(
     async (taskId: string) => {
-      const task = await api.tasks.retry(taskId);
+      let task;
+      try {
+        task = await api.tasks.retry(taskId);
+      } catch (err) {
+        maybeHandleTaskLimit(err);
+        throw err;
+      }
       trackEvent('task_retried', { task_type: task.type });
       updateTask(taskId, task);
       return task;
@@ -507,7 +549,13 @@ export function useTaskActions() {
   // Task execution control
   const startTask = useCallback(
     async (taskId: string) => {
-      const task = await api.tasks.start(taskId);
+      let task;
+      try {
+        task = await api.tasks.start(taskId);
+      } catch (err) {
+        maybeHandleTaskLimit(err);
+        throw err;
+      }
       trackEvent('task_started_manually', { task_type: task.type });
       updateTask(taskId, task);
       return task;

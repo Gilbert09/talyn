@@ -31,6 +31,7 @@ import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
+import { useBillingStore } from '../../../stores/billing';
 
 /**
  * Shared PR table used by all three GitHub pages. The `variant` picks the
@@ -219,6 +220,14 @@ function PRTableRow({
   // "Ask every time" → the Task button opens this provider dropdown instead of
   // dispatching to the default.
   const [taskMenuOpen, setTaskMenuOpen] = useState(false);
+  // Free-plan annotation only — the button stays enabled (the server is the
+  // authority; a click at the limit gets the 402 → upgrade modal flow).
+  const billingStatus = useBillingStore((s) => s.status);
+  const atTaskLimit =
+    billingStatus?.billingEnabled === true &&
+    billingStatus.plan === 'free' &&
+    billingStatus.activeTaskLimit != null &&
+    billingStatus.activeTasks >= billingStatus.activeTaskLimit;
   // Mergeable covers the clean case AND "mergeable, but only non-required
   // checks are failing" — GitHub lets you merge both.
   const canMerge =
@@ -647,6 +656,8 @@ function PRTableRow({
                     ? 'A task is already working this PR — open it from the Working badge'
                     : !canFollowUp
                     ? 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
+                    : atTaskLimit
+                    ? `Free plan limit reached (${billingStatus.activeTasks}/${billingStatus.activeTaskLimit} active tasks) — upgrade for unlimited`
                     : taskMenuEnabled
                     ? 'Get this PR mergeable — choose a cloud provider'
                     : 'Get this PR mergeable with a cloud agent (resolve comments, fix CI, resolve conflicts)'

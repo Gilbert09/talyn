@@ -9,6 +9,9 @@ import type {
   CreateMcpTokenResponse,
   McpToken,
   ApiResponse,
+  BillingStatus,
+  CheckoutSessionResponse,
+  CreateCheckoutRequest,
   WSEvent,
   DebugEvent,
   DebugCategory,
@@ -77,6 +80,23 @@ export class ApiNetworkError extends Error {
   }
 }
 
+/**
+ * An HTTP-level failure the backend answered deliberately: carries the
+ * status and the machine-readable `code` from the ApiResponse envelope so
+ * callers can branch (e.g. `task_limit_reached` → upgrade modal) instead of
+ * string-matching the human message.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -129,7 +149,7 @@ async function request<T>(
   }
 
   if (!data.success) {
-    throw new Error(data.error || 'Request failed');
+    throw new ApiError(data.error || 'Request failed', response.status, data.code);
   }
 
   return data.data as T;
@@ -955,6 +975,14 @@ class WebSocketClient {
   }
 }
 
+// Billing — plan status, hosted checkout, hosted customer portal.
+export const billing = {
+  status: () => request<BillingStatus>('GET', '/billing/status'),
+  checkout: (data: CreateCheckoutRequest) =>
+    request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
+  portal: () => request<CheckoutSessionResponse>('POST', '/billing/portal'),
+};
+
 // Account-level self-service.
 export const users = {
   /**
@@ -984,6 +1012,7 @@ export const api = {
   skills,
   mcpTokens,
   debug,
+  billing,
   users,
   ws: wsClient,
 };

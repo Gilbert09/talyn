@@ -30,6 +30,8 @@ import {
   Copy,
   KeyRound,
   Wand2,
+  CreditCard,
+  Zap,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
@@ -57,6 +59,7 @@ import { openExternal } from '../../lib/openExternal';
 import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@talyn/shared';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, POSTHOG_CODE_MODELS, DEFAULT_POSTHOG_CODE_MODEL_ID } from '@talyn/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
+import { useBillingStore } from '../../stores/billing';
 import {
   useWorkspaceActions,
   getMergeBlockedNotifyEnabled,
@@ -87,6 +90,7 @@ export function SettingsPanel() {
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'account' as const, icon: User, label: 'Account' },
+    { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
     { id: 'mcp' as const, icon: Plug, label: 'MCP server' },
@@ -126,6 +130,7 @@ export function SettingsPanel() {
             {activeSection === 'integrations' && <IntegrationsSettings />}
             {activeSection === 'skills' && <SkillsSettings />}
             {activeSection === 'account' && <AccountSettings />}
+            {activeSection === 'billing' && <BillingSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
             {activeSection === 'mcp' && <MCPServerSettings />}
@@ -2200,6 +2205,198 @@ function AccountSettings() {
           </div>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function formatRenewalDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function BillingSettings() {
+  const status = useBillingStore((s) => s.status);
+  const refresh = useBillingStore((s) => s.refresh);
+  const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);
+  const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Live usage on entry — the snapshot's activeTasks goes stale as tasks
+  // finish in the background.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const openPortal = async () => {
+    setPortalBusy(true);
+    setError(null);
+    try {
+      const { url } = await api.billing.portal();
+      await openExternal(url);
+      // Portal changes (cancel/resume/payment method) also land via webhook.
+      startCheckoutPollBurst();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open the billing portal');
+    } finally {
+      setPortalBusy(false);
+    }
+  };
+
+  if (!status) {
+    return (
+      <div className="space-y-6">
+        <h3 className="text-lg font-semibold mb-4">Billing</h3>
+        <Card className="p-4">
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        </Card>
+      </div>
+    );
+  }
+
+  if (!status.billingEnabled) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-lg font-semibold mb-4">Billing</h3>
+          <Card className="p-4">
+            <p className="text-sm text-muted-foreground">
+              Billing is not configured on this backend — all plans run without limits.
+            </p>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  const comped = status.planSource === 'override';
+  const free = status.plan === 'free';
+  const pastDue = status.subscriptionStatus === 'past_due';
+  const limit = status.activeTaskLimit ?? 0;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-4">Billing</h3>
+        <Card className="p-4 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm text-muted-foreground">Current plan</p>
+              <p className="font-medium flex items-center gap-2">
+                {free ? 'Free' : 'Unlimited'}
+                {!free && <Zap className="w-4 h-4 text-primary" />}
+              </p>
+              {comped && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  Complimentary plan — unlimited tasks, nothing to pay.
+                </p>
+              )}
+              {free && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  Up to {limit} tasks running at once, across all your workspaces.
+                </p>
+              )}
+              {!free && !comped && status.currentPeriodEnd && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {status.cancelAtPeriodEnd
+                    ? `Unlimited until ${formatRenewalDate(status.currentPeriodEnd)}, then Free.`
+                    : `Renews ${formatRenewalDate(status.currentPeriodEnd)}.`}
+                </p>
+              )}
+            </div>
+            {free && (
+              <Button onClick={() => setUpgradeModalOpen(true)} className="gap-2 shrink-0">
+                <Zap className="w-4 h-4" /> Upgrade
+              </Button>
+            )}
+          </div>
+
+          {free && (
+            <div>
+              <div className="flex items-center justify-between text-sm mb-1">
+                <span className="text-muted-foreground">Active tasks</span>
+                <span
+                  className={cn(
+                    'font-medium',
+                    status.activeTasks >= limit && 'text-destructive'
+                  )}
+                >
+                  {status.activeTasks}/{limit}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                <div
+                  className={cn(
+                    'h-full rounded-full transition-all',
+                    status.activeTasks >= limit ? 'bg-destructive' : 'bg-primary'
+                  )}
+                  style={{
+                    width: `${Math.min(100, (status.activeTasks / Math.max(1, limit)) * 100)}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {pastDue && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+              <p className="text-sm">
+                Your last payment failed. Update your payment method to keep unlimited tasks —
+                the plan drops to Free if the retries run out.
+              </p>
+            </div>
+          )}
+
+          {!comped && !free && (
+            <Button
+              variant="outline"
+              onClick={openPortal}
+              disabled={portalBusy}
+              className="gap-2"
+            >
+              {portalBusy ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CreditCard className="w-4 h-4" />
+              )}
+              {status.cancelAtPeriodEnd ? 'Resume or manage subscription' : 'Manage subscription'}
+            </Button>
+          )}
+
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </Card>
+      </div>
+
+      {free && (
+        <div>
+          <h3 className="text-lg font-semibold mb-4">Unlimited — $15/month</h3>
+          <Card className="p-4">
+            <ul className="space-y-1.5 text-sm text-muted-foreground">
+              <li className="flex items-center gap-2">
+                <Check className="w-4 h-4" /> Unlimited concurrent tasks
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="w-4 h-4" /> Merge queue &amp; auto-keep-mergeable never wait for
+                a free slot
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="w-4 h-4" /> Annual option ($150/yr — 2 months free)
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="w-4 h-4" /> Cancel anytime — managed by Polar
+              </li>
+            </ul>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
