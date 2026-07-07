@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" updated="June 2026">
+    <LegalPage title="Terms of Service" updated="July 2026">
       <p>
         These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use
         of {site.name} (&ldquo;Talyn&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;),
@@ -32,7 +32,8 @@ export default function TermsPage() {
         Talyn is pre-release software provided for evaluation. It may change,
         break, lose data, or be unavailable, and features may be added or removed
         without notice. Do not rely on the beta for anything you can&apos;t afford
-        to independently verify.
+        to independently verify. Paid plans are available during the beta; these
+        beta disclaimers still apply to them.
       </p>
 
       <h2>3. Your accounts &amp; credentials</h2>
@@ -48,12 +49,42 @@ export default function TermsPage() {
       <p>
         Talyn orchestrates third-party cloud-agent providers (such as Claude Code
         and PostHog Code). Your use of those providers is billed by them under
-        your own account and subject to their terms. During the beta, Talyn
-        itself is provided free of charge; pricing for general availability will
-        be announced before the beta ends.
+        your own account and subject to their terms. Talyn&apos;s own plans and
+        fees (which do not include your provider&apos;s agent-usage costs) are
+        described in §5.
       </p>
 
-      <h2>5. Acceptable use</h2>
+      <h2>5. Fees, subscriptions &amp; refunds</h2>
+      <p>
+        Talyn offers a free plan (with usage limits shown in the app — currently
+        up to 3 tasks running at once) and a paid &ldquo;Unlimited&rdquo;
+        subscription, billed monthly or annually. Current prices and what each
+        plan includes are shown in the app and on our{" "}
+        <a href="/#pricing">pricing page</a>. We may change plan features,
+        limits, or prices; price changes take effect from your next billing
+        period and we&apos;ll give reasonable notice.
+      </p>
+      <p>
+        Purchases are processed by our merchant of record,{" "}
+        <a href="https://polar.sh">Polar</a> (Polar Software Inc.), which is the
+        seller of record for the transaction — your payment details are
+        collected by Polar, not by us, and each purchase is also subject to
+        Polar&apos;s own terms and privacy policy. Subscriptions{" "}
+        <strong>renew automatically</strong> at the end of each billing period
+        (monthly or yearly, as selected) until cancelled. You can cancel anytime
+        from Settings → Billing in the app or via the billing portal;
+        cancellation takes effect at the end of the current billing period, and
+        you keep paid features until then.
+      </p>
+      <p>
+        Except where required by law, payments are non-refundable and we do not
+        provide credits for partial billing periods. If something has gone wrong
+        with a charge, contact us and we&apos;ll work it out. Nothing in these
+        Terms limits your statutory rights, including any cooling-off or
+        withdrawal rights that apply to you as a consumer.
+      </p>
+
+      <h2>6. Acceptable use</h2>
       <ul>
         <li>Don&apos;t use the Service to violate any law or third-party right.</li>
         <li>Don&apos;t disrupt, reverse-engineer, or abuse the Service or its providers.</li>
@@ -63,14 +94,14 @@ export default function TermsPage() {
         </li>
       </ul>
 
-      <h2>6. Intellectual property</h2>
+      <h2>7. Intellectual property</h2>
       <p>
         We retain all rights in the Service and its branding. You retain all
         rights in your own code and content; nothing here transfers ownership of
         your repositories to us.
       </p>
 
-      <h2>7. Third-party services</h2>
+      <h2>8. Third-party services</h2>
       <p>
         The Service integrates GitHub and your chosen cloud-agent provider, and
         relies on hosting and analytics providers. We are not responsible for
@@ -78,7 +109,7 @@ export default function TermsPage() {
         policies.
       </p>
 
-      <h2>8. Disclaimer of warranties</h2>
+      <h2>9. Disclaimer of warranties</h2>
       <p>
         The Service is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo;,
         without warranties of any kind, express or implied, including
@@ -87,7 +118,7 @@ export default function TermsPage() {
         that agent-generated changes will be correct.
       </p>
 
-      <h2>9. Limitation of liability</h2>
+      <h2>10. Limitation of liability</h2>
       <p>
         To the fullest extent permitted by law, we are not liable for any
         indirect, incidental, special, consequential, or punitive damages, or for
@@ -95,33 +126,35 @@ export default function TermsPage() {
         remain responsible for reviewing what ships.
       </p>
 
-      <h2>10. Indemnification</h2>
+      <h2>11. Indemnification</h2>
       <p>
         You agree to indemnify and hold us harmless from claims arising out of
         your use of the Service, your content, or your violation of these Terms.
       </p>
 
-      <h2>11. Termination</h2>
+      <h2>12. Termination</h2>
       <p>
         You may stop using the Service at any time and revoke its access from
         GitHub. We may suspend or terminate access if you breach these Terms or to
-        protect the Service.
+        protect the Service. If we terminate your access without cause while you
+        have paid subscription time remaining, we&apos;ll refund the unused
+        portion.
       </p>
 
-      <h2>12. Changes</h2>
+      <h2>13. Changes</h2>
       <p>
         We may update these Terms as Talyn evolves; continued use after a change
         means you accept the updated Terms.
       </p>
 
-      <h2>13. Governing law</h2>
+      <h2>14. Governing law</h2>
       <p>
         These Terms are governed by the laws of England and Wales, and any
         dispute arising out of or in connection with them is subject to the
         exclusive jurisdiction of the courts of England and Wales.
       </p>
 
-      <h2>14. Contact</h2>
+      <h2>15. Contact</h2>
       <p>
         Questions? Reach us on <a href={site.supportUrl}>GitHub</a>.
       </p>

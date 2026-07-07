@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" updated="June 2026">
+    <LegalPage title="Privacy Policy" updated="July 2026">
       <p>
         This Privacy Policy explains what information {site.name}
         (&ldquo;Talyn&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) collects when you
@@ -34,6 +34,15 @@ export default function PrivacyPage() {
           for the cloud-agent provider you choose (e.g. Claude Code, PostHog
           Code) are stored to act on your behalf. We treat them as secrets and
           never display them back in full.
+        </li>
+        <li>
+          <strong>Billing &amp; subscription data.</strong> If you subscribe to a
+          paid plan, the purchase is handled by our merchant of record,{" "}
+          <a href="https://polar.sh">Polar</a> — Polar collects your name,
+          email, billing address, and payment details (we never see your card).
+          We store your plan, subscription status, renewal date, and order
+          history, and we pass Polar an account identifier so your purchase
+          links back to your Talyn account.
         </li>
         <li>
           <strong>Waitlist email.</strong> If you ask to be notified, we keep
@@ -81,7 +90,10 @@ export default function PrivacyPage() {
         account — Talyn orchestrates them, it does not store or train on your
         source code. We share data only with the services you connect or that we
         rely on to run the Service: <strong>GitHub</strong> (repositories and
-        PRs), your <strong>cloud-agent provider</strong>, <strong>PostHog</strong>{" "}
+        PRs), your <strong>cloud-agent provider</strong>, <strong>Polar</strong>{" "}
+        (payments &amp; subscriptions, as merchant of record),{" "}
+        <strong>Supabase</strong> (authentication and database),{" "}
+        <strong>Railway</strong> (backend hosting), <strong>PostHog</strong>{" "}
         (analytics), and <strong>Vercel</strong> (website hosting) — or where
         required by law. Your use of those services is also governed by their own
         privacy policies. We do not sell or rent personal data.
@@ -90,8 +102,9 @@ export default function PrivacyPage() {
       <h2>6. Data retention</h2>
       <p>
         We keep personal data only as long as needed for the purposes above or as
-        required by law. You can ask us to delete your account data or waitlist
-        email at any time (see §8).
+        required by law. Billing and transaction records are retained for longer
+        where tax and accounting rules require it. You can ask us to delete your
+        account data or waitlist email at any time (see §8).
       </p>
 
       <h2>7. Security</h2>
