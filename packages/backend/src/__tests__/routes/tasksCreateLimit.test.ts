@@ -25,7 +25,14 @@ import { eq } from 'drizzle-orm';
  * one production serves.
  */
 
-const headers = { ...internalProxyHeaders(TEST_USER_ID), 'content-type': 'application/json' };
+// Billing-aware clients identify themselves with the version header; the
+// limit is only enforced for them (legacy builds can't render the paywall).
+const headers = {
+  ...internalProxyHeaders(TEST_USER_ID),
+  'content-type': 'application/json',
+  'x-talyn-client-version': '0.3.0-test',
+};
+const legacyHeaders = { ...internalProxyHeaders(TEST_USER_ID), 'content-type': 'application/json' };
 const savedPolarToken = process.env.POLAR_ACCESS_TOKEN;
 
 async function makeServer(): Promise<{ url: string; close: () => Promise<void> }> {
@@ -141,6 +148,42 @@ describe('free-plan task limit at the route surface', () => {
       await fillToLimit();
       const res = await fetch(`${url}/tasks`, { method: 'POST', headers, body: createBody() });
       expect(res.status).toBe(201);
+    });
+  });
+
+  describe('legacy clients (no X-Talyn-Client-Version header)', () => {
+    it('POST /tasks is not enforced at the limit', async () => {
+      await fillToLimit();
+      const res = await fetch(`${url}/tasks`, {
+        method: 'POST',
+        headers: legacyHeaders,
+        body: createBody(),
+      });
+      expect(res.status).toBe(201);
+    });
+
+    it.each([
+      { label: 'retry', path: (id: string) => `/tasks/${id}/retry` },
+      { label: 'start', path: (id: string) => `/tasks/${id}/start` },
+    ])('$label of an inactive task is not enforced at the limit', async ({ path }) => {
+      await fillToLimit();
+      const failedId = await insertTask('failed');
+      const res = await fetch(`${url}${path(failedId)}`, {
+        method: 'POST',
+        headers: legacyHeaders,
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('PATCH to an active status is not enforced at the limit', async () => {
+      await fillToLimit();
+      const failedId = await insertTask('failed');
+      const res = await fetch(`${url}/tasks/${failedId}`, {
+        method: 'PATCH',
+        headers: legacyHeaders,
+        body: JSON.stringify({ status: 'queued' }),
+      });
+      expect(res.status).toBe(200);
     });
   });
 

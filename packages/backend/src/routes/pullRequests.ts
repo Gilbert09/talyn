@@ -413,7 +413,12 @@ export function pullRequestRoutes(): Router {
       typeof req.body?.model === 'string' && req.body.model.trim()
         ? req.body.model.trim()
         : undefined;
-    const result = await startPrMergeableRun(row, { model });
+    // Transitional billing rollout: headerless callers (pre-billing desktop
+    // builds, MCP/CLI) can't render the upgrade flow — don't enforce yet.
+    const result = await startPrMergeableRun(row, {
+      model,
+      bypassTaskLimit: !req.headers['x-talyn-client-version'],
+    });
     if (!result.ok) {
       return res.status(400).json({
         success: false,

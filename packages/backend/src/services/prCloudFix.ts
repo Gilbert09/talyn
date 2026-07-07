@@ -140,7 +140,13 @@ export type PrFixResult =
  */
 export async function startPrMergeableRun(
   row: PrFixRow,
-  opts: { title?: string; description?: string; model?: string } = {}
+  opts: {
+    title?: string;
+    description?: string;
+    model?: string;
+    /** See CreateCloudTaskInput.bypassTaskLimit (transitional billing rollout). */
+    bypassTaskLimit?: boolean;
+  } = {}
 ): Promise<PrFixResult> {
   const resolved = await resolveCloudEnv(row.workspaceId);
   if (!resolved) return { ok: false, reason: 'no_cloud_provider' };
@@ -167,6 +173,7 @@ export async function startPrMergeableRun(
     assignedEnvironmentId: envId,
     pullRequestId: row.id,
     model: opts.model,
+    bypassTaskLimit: opts.bypassTaskLimit,
   });
   return { ok: true, task };
 }

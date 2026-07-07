@@ -8,6 +8,7 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { withTaskLimitGate } from './billing/entitlements.js';
+import { debugBus } from './debugBus.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
 import { bumpSkillUsage } from './skills.js';
 import { rowToTask } from './taskSerialize.js';
@@ -33,6 +34,15 @@ export interface CreateCloudTaskInput {
    * for display and bumps the workspace's usage stats.
    */
   skill?: TaskSkillInfo;
+  /**
+   * TRANSITIONAL (billing rollout): skip the free-plan task limit for
+   * requests from desktop builds that predate the paywall UI — they can't
+   * render the upgrade flow, only a bare error, so they aren't enforced
+   * until they update. Set by the routes when the X-Talyn-Client-Version
+   * header is absent; never set by the watchers. Remove once pre-billing
+   * clients have aged out.
+   */
+  bypassTaskLimit?: boolean;
 }
 
 /**
@@ -59,6 +69,17 @@ export async function createCloudTask(
   const ownerId = ownerRows[0]?.ownerId;
   if (!ownerId) {
     throw new Error(`createCloudTask: workspace ${input.workspaceId} not found`);
+  }
+
+  if (input.bypassTaskLimit) {
+    // Legacy pre-billing client — see the field's doc comment.
+    debugBus.recordEvent({
+      service: 'billing',
+      action: 'legacy_bypass',
+      summary: `task limit not enforced for legacy client (owner ${ownerId})`,
+      workspaceId: input.workspaceId,
+    });
+    return insertCloudTask(input);
   }
 
   return withTaskLimitGate(ownerId, {}, () => insertCloudTask(input));

@@ -105,6 +105,10 @@ async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    // Marks this build as billing-aware (it can render the upgrade flow) —
+    // the backend only enforces the free task limit for clients that send
+    // it. Baked at build time; 'dev' in unbuilt dev runs.
+    'X-Talyn-Client-Version': process.env.TALYN_APP_VERSION || 'dev',
   };
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
