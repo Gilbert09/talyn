@@ -443,10 +443,30 @@ describe('routes/pullRequests', () => {
       const body = (await res.json()) as { data: { id: string; type: string } };
       expect(body.data.id).toBe('task-fix-1');
       expect(body.data.type).toBe('pr_response');
-      // The route forwards the PR row + model to the canonical action.
+      // The route forwards the PR row + model to the canonical action. This
+      // caller sends no client-version header, so it's treated as a legacy
+      // (pre-billing) client and the task limit is bypassed.
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({ id }),
-        { model: 'claude-opus-4-8' }
+        { model: 'claude-opus-4-8', bypassTaskLimit: true }
+      );
+    });
+
+    it('does not bypass the task limit for billing-aware clients (header present)', async () => {
+      const id = await insertPR(db);
+      const spy = vi
+        .spyOn(prCloudFixModule, 'startPrMergeableRun')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .mockResolvedValue({ ok: true, task: fakeTaskRow() as any });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/fix`, {
+        method: 'POST',
+        headers: { ...authMine, 'x-talyn-client-version': '0.3.0-test' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(201);
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ id }),
+        expect.objectContaining({ bypassTaskLimit: false })
       );
     });
 
