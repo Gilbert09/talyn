@@ -328,7 +328,11 @@ function PRTableRow({
     }
   }
 
-  const taskMenuEnabled = Boolean(taskAsk && (taskProviders?.length ?? 0) > 0);
+  // Left-click opens the menu only in "Ask every time" mode; right-click
+  // opens it whenever there's any provider to pick — the escape hatch for
+  // running a one-off task on a non-default agent.
+  const taskMenuAvailable = (taskProviders?.length ?? 0) > 0;
+  const taskMenuEnabled = Boolean(taskAsk && taskMenuAvailable);
 
   function runCreatePostHogTask(e: React.MouseEvent) {
     e.stopPropagation();
@@ -339,6 +343,14 @@ function PRTableRow({
       return;
     }
     void startTask();
+  }
+
+  function openTaskMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (taskMenuAvailable && canFollowUp && busy === null) {
+      setTaskMenuOpen((open) => !open);
+    }
   }
   return (
     <tr
@@ -647,6 +659,7 @@ function PRTableRow({
                 type="button"
                 data-attr="pr-row-fix-with-posthog"
                 onClick={runCreatePostHogTask}
+                onContextMenu={openTaskMenu}
                 disabled={!canFollowUp || busy !== null}
                 className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
                 title={
@@ -660,7 +673,9 @@ function PRTableRow({
                     ? `Free plan limit reached (${billingStatus.activeTasks}/${billingStatus.activeTaskLimit} active tasks) — upgrade for unlimited`
                     : taskMenuEnabled
                     ? 'Get this PR mergeable — choose a cloud provider'
-                    : 'Get this PR mergeable with a cloud agent (resolve comments, fix CI, resolve conflicts)'
+                    : `Get this PR mergeable with a cloud agent (resolve comments, fix CI, resolve conflicts)${
+                        taskMenuAvailable ? ' — right-click to pick a different agent' : ''
+                      }`
                 }
               >
                 {busy === 'posthog' ? (
@@ -672,7 +687,7 @@ function PRTableRow({
                 )}
               </button>
 
-              {taskMenuOpen && taskMenuEnabled && (
+              {taskMenuOpen && taskMenuAvailable && (
                 <>
                   {/* Click-away layer — closes the menu without selecting. */}
                   <div
