@@ -7,6 +7,7 @@ import { HowItWorks } from "@/components/sections/HowItWorks";
 import { Features } from "@/components/sections/Features";
 import { Providers } from "@/components/sections/Providers";
 import { WhyTalyn } from "@/components/sections/WhyTalyn";
+import { Pricing } from "@/components/sections/Pricing";
 import { Beta } from "@/components/sections/Beta";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
@@ -23,6 +24,7 @@ export default function Home() {
         <Features />
         <Providers />
         <WhyTalyn />
+        <Pricing />
         <Beta />
         <Faq />
         <FinalCta />

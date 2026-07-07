@@ -20,6 +20,7 @@ export const nav = [
   { label: "How it works", href: "#how" },
   { label: "Features", href: "#features" },
   { label: "Providers", href: "#providers" },
+  { label: "Pricing", href: "#pricing" },
   { label: "FAQ", href: "#faq" },
 ];
 
@@ -216,6 +217,49 @@ export const why = {
   ],
 };
 
+export const pricing = {
+  kicker: "Pricing",
+  title: "Start free. Upgrade when the queue gets serious.",
+  sub: "Talyn is the control tower — your cloud agents do the flying, billed by the provider you connect. One flat price for the tower.",
+  footnote:
+    "Prices exclude agent usage: runs execute in your provider's cloud, on your account and credits. Upgrade, manage, or cancel anytime from Settings → Billing in the app.",
+  annualBadge: "2 months free",
+  tiers: [
+    {
+      name: "Free",
+      priceMonthly: "$0",
+      priceAnnual: "$0",
+      period: "forever",
+      periodAnnualNote: null,
+      blurb: "Full mission control, for a calmer queue.",
+      features: [
+        "The whole PR dashboard — every repo, every workspace",
+        "All agent providers, switch per task",
+        "Skills, merge queue & auto-keep-mergeable",
+        "Up to 3 tasks running at once",
+      ],
+      cta: "Download for Mac",
+      highlighted: false,
+    },
+    {
+      name: "Unlimited",
+      priceMonthly: "$15",
+      priceAnnual: "$12.50",
+      period: "/month",
+      periodAnnualNote: "billed annually ($150/yr)",
+      blurb: "For the weeks when everything ships at once.",
+      features: [
+        "Everything in Free",
+        "Unlimited concurrent tasks",
+        "Automation never waits for a slot — merge queue and auto-keep always dispatch",
+        "Cancel anytime, in-app",
+      ],
+      cta: "Download & upgrade in-app",
+      highlighted: true,
+    },
+  ],
+};
+
 export const beta = {
   badge: "Public beta",
   title: "Talyn is in beta.",
@@ -253,7 +297,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "Talyn is in public beta. You bring your own cloud-agent credits with whichever provider you connect. Pricing for general availability will be announced before we leave beta — beta users get a heads up first.",
+    a: "The free plan is the full app with up to 3 tasks running at once. Unlimited removes the cap for $15/month (or $150/year — 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
   },
   {
     q: "What platforms are supported?",
@@ -278,6 +322,7 @@ export const footer = {
         { label: "How it works", href: "/#how" },
         { label: "Features", href: "/#features" },
         { label: "Providers", href: "/#providers" },
+        { label: "Pricing", href: "/#pricing" },
         { label: "Download", href: "/#download" },
       ],
     },
