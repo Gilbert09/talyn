@@ -2435,28 +2435,7 @@ function BillingSettings() {
         <div>
           <h3 className="text-lg font-semibold mb-4">Upgrade to Unlimited</h3>
           <div className="grid grid-cols-2 gap-3">
-            <Card className="p-4 flex flex-col gap-3">
-              <div>
-                <p className="font-medium">Monthly</p>
-                <p className="text-2xl font-semibold">
-                  $15
-                  <span className="text-sm font-normal text-muted-foreground"> /month</span>
-                </p>
-              </div>
-              <Button
-                onClick={() => startCheckout('monthly')}
-                disabled={checkoutBusy !== null || awaitingCheckout}
-                className="gap-2 mt-auto"
-              >
-                {checkoutBusy === 'monthly' ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Zap className="w-4 h-4" />
-                )}
-                Upgrade monthly
-              </Button>
-            </Card>
-            <Card className="p-4 flex flex-col gap-3 relative">
+            <Card className="p-4 flex flex-col gap-3 relative border-primary/40">
               <span className="absolute right-3 top-3 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                 2 months free
               </span>
@@ -2478,6 +2457,28 @@ function BillingSettings() {
                   <Zap className="w-4 h-4" />
                 )}
                 Upgrade annual
+              </Button>
+            </Card>
+            <Card className="p-4 flex flex-col gap-3">
+              <div>
+                <p className="font-medium">Monthly</p>
+                <p className="text-2xl font-semibold">
+                  $15
+                  <span className="text-sm font-normal text-muted-foreground"> /month</span>
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => startCheckout('monthly')}
+                disabled={checkoutBusy !== null || awaitingCheckout}
+                className="gap-2 mt-auto"
+              >
+                {checkoutBusy === 'monthly' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                Upgrade monthly
               </Button>
             </Card>
           </div>

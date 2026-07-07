@@ -41,7 +41,8 @@ export function billingRoutes(): Router {
         .json({ success: false, error: 'Billing is not configured on this backend' });
     }
     const body = req.body as CreateCheckoutRequest;
-    const period = body?.period === 'annual' ? 'annual' : 'monthly';
+    // Annual is the default plan everywhere; monthly is the opt-out.
+    const period = body?.period === 'monthly' ? 'monthly' : 'annual';
     const url = await createCheckoutUrl(assertUser(req).id, period);
     res.json({ success: true, data: { url } } as ApiResponse<CheckoutSessionResponse>);
   });

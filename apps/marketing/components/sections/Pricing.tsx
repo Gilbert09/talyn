@@ -51,7 +51,7 @@ function PeriodToggle({
 }
 
 export function Pricing() {
-  const [period, setPeriod] = useState<Period>("monthly");
+  const [period, setPeriod] = useState<Period>("annual");
 
   return (
     <section id="pricing" className="border-t border-line py-24">

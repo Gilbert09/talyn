@@ -32,7 +32,7 @@ export function UpgradeModal({
 }) {
   const status = useBillingStore((s) => s.status);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
-  const [period, setPeriod] = useState<Period>('monthly');
+  const [period, setPeriod] = useState<Period>('annual');
   const [opening, setOpening] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,18 +88,18 @@ export function UpgradeModal({
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-2">
               <PlanOption
-                label="Monthly"
-                price="$15/mo"
-                selected={period === 'monthly'}
-                onSelect={() => setPeriod('monthly')}
-                disabled={opening || waiting}
-              />
-              <PlanOption
                 label="Annual"
                 price="$150/yr"
                 hint="2 months free"
                 selected={period === 'annual'}
                 onSelect={() => setPeriod('annual')}
+                disabled={opening || waiting}
+              />
+              <PlanOption
+                label="Monthly"
+                price="$15/mo"
+                selected={period === 'monthly'}
+                onSelect={() => setPeriod('monthly')}
                 disabled={opening || waiting}
               />
             </div>
