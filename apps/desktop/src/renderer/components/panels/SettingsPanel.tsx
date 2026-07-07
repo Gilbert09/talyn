@@ -2224,9 +2224,10 @@ function formatRenewalDate(iso: string): string {
 function BillingSettings() {
   const status = useBillingStore((s) => s.status);
   const refresh = useBillingStore((s) => s.refresh);
-  const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
   const [portalBusy, setPortalBusy] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState<null | 'monthly' | 'annual'>(null);
+  const [awaitingCheckout, setAwaitingCheckout] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Live usage on entry — the snapshot's activeTasks goes stale as tasks
@@ -2234,6 +2235,23 @@ function BillingSettings() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Checkout directly from the plan cards — the settings page IS the pitch,
+  // so no modal detour here (the UpgradeModal stays for the at-limit flow).
+  const startCheckout = async (period: 'monthly' | 'annual') => {
+    setCheckoutBusy(period);
+    setError(null);
+    try {
+      const { url } = await api.billing.checkout({ period });
+      await openExternal(url);
+      startCheckoutPollBurst();
+      setAwaitingCheckout(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start checkout');
+    } finally {
+      setCheckoutBusy(null);
+    }
+  };
 
   const openPortal = async () => {
     setPortalBusy(true);
@@ -2311,11 +2329,6 @@ function BillingSettings() {
                 </p>
               )}
             </div>
-            {free && (
-              <Button onClick={() => setUpgradeModalOpen(true)} className="gap-2 shrink-0">
-                <Zap className="w-4 h-4" /> Upgrade
-              </Button>
-            )}
           </div>
 
           {free && (
@@ -2371,30 +2384,84 @@ function BillingSettings() {
             </Button>
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {/* Checkout errors render under the plan cards below; this slot is
+              for the portal path only. */}
+          {!free && error && <p className="text-sm text-destructive">{error}</p>}
         </Card>
       </div>
 
       {free && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">Unlimited — $15/month</h3>
-          <Card className="p-4">
-            <ul className="space-y-1.5 text-sm text-muted-foreground">
-              <li className="flex items-center gap-2">
-                <Check className="w-4 h-4" /> Unlimited concurrent tasks
-              </li>
-              <li className="flex items-center gap-2">
-                <Check className="w-4 h-4" /> Merge queue &amp; auto-keep-mergeable never wait for
-                a free slot
-              </li>
-              <li className="flex items-center gap-2">
-                <Check className="w-4 h-4" /> Annual option ($150/yr — 2 months free)
-              </li>
-              <li className="flex items-center gap-2">
-                <Check className="w-4 h-4" /> Cancel anytime — managed by Polar
-              </li>
-            </ul>
-          </Card>
+          <h3 className="text-lg font-semibold mb-4">Upgrade to Unlimited</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Card className="p-4 flex flex-col gap-3">
+              <div>
+                <p className="font-medium">Monthly</p>
+                <p className="text-2xl font-semibold">
+                  $15
+                  <span className="text-sm font-normal text-muted-foreground"> /month</span>
+                </p>
+              </div>
+              <Button
+                onClick={() => startCheckout('monthly')}
+                disabled={checkoutBusy !== null || awaitingCheckout}
+                className="gap-2 mt-auto"
+              >
+                {checkoutBusy === 'monthly' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                Upgrade monthly
+              </Button>
+            </Card>
+            <Card className="p-4 flex flex-col gap-3 relative">
+              <span className="absolute right-3 top-3 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                2 months free
+              </span>
+              <div>
+                <p className="font-medium">Annual</p>
+                <p className="text-2xl font-semibold">
+                  $150
+                  <span className="text-sm font-normal text-muted-foreground"> /year</span>
+                </p>
+              </div>
+              <Button
+                onClick={() => startCheckout('annual')}
+                disabled={checkoutBusy !== null || awaitingCheckout}
+                className="gap-2 mt-auto"
+              >
+                {checkoutBusy === 'annual' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4" />
+                )}
+                Upgrade annual
+              </Button>
+            </Card>
+          </div>
+
+          {awaitingCheckout && (
+            <p className="text-sm text-muted-foreground mt-3">
+              <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
+              Finish checkout in your browser — this page updates by itself once payment
+              completes.
+            </p>
+          )}
+          {error && <p className="text-sm text-destructive mt-3">{error}</p>}
+
+          <ul className="space-y-1.5 text-sm text-muted-foreground mt-4">
+            <li className="flex items-center gap-2">
+              <Check className="w-4 h-4" /> Unlimited concurrent tasks
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="w-4 h-4" /> Merge queue &amp; auto-keep-mergeable never wait for a
+              free slot
+            </li>
+            <li className="flex items-center gap-2">
+              <Check className="w-4 h-4" /> Cancel anytime
+            </li>
+          </ul>
         </div>
       )}
     </div>
