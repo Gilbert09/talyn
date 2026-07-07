@@ -30,7 +30,9 @@ function EmailCapture() {
         onChange={(e) => setEmail(e.target.value)}
         placeholder={beta.emailPlaceholder}
         disabled={done}
-        className="h-11 flex-1 rounded-xl border border-line-strong bg-white px-4 text-sm text-ink placeholder:text-ink-400 focus:border-clay/50 focus:outline-none focus:ring-2 focus:ring-clay/25 disabled:opacity-60"
+        // sm:flex-1 (not flex-1): in the mobile COLUMN layout, flex-basis 0
+        // beats h-11 on the vertical axis and squashes the input.
+        className="h-11 rounded-xl border border-line-strong bg-white px-4 text-sm text-ink placeholder:text-ink-400 focus:border-clay/50 focus:outline-none focus:ring-2 focus:ring-clay/25 disabled:opacity-60 sm:flex-1"
       />
       <Button type="submit" variant={done ? "secondary" : "primary"} disabled={done}>
         {done ? (
