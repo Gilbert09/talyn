@@ -33,19 +33,21 @@ export function Nav() {
           <Logo />
         </a>
 
-        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 md:flex">
+        {/* lg (not md): the link row is absolutely centered, so at md widths
+            it collides with the right-side buttons — hamburger until lg. */}
+        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 lg:flex">
           {nav.map((item) => (
             <a
               key={item.href}
               href={`/${item.href}`}
-              className="rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
+              className="whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
             >
               {item.label}
             </a>
           ))}
         </div>
 
-        <div className="hidden items-center gap-2 md:flex">
+        <div className="hidden items-center gap-2 lg:flex">
           <a href={site.githubUrl} target="_blank" rel="noreferrer">
             <Button variant="ghost" size="sm">
               GitHub
@@ -55,7 +57,7 @@ export function Nav() {
         </div>
 
         <button
-          className="rounded-lg p-2 text-ink md:hidden"
+          className="rounded-lg p-2 text-ink lg:hidden"
           onClick={() => setOpen((v) => !v)}
           aria-label="Toggle menu"
         >
@@ -64,7 +66,7 @@ export function Nav() {
       </nav>
 
       {open && (
-        <div className="border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl md:hidden">
+        <div className="border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl lg:hidden">
           <div className="flex flex-col gap-1">
             {nav.map((item) => (
               <a
