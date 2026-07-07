@@ -664,6 +664,21 @@ export interface CheckoutSessionResponse {
   url: string;
 }
 
+/** One past order, served by `GET /billing/orders` (newest first). */
+export interface BillingOrder {
+  id: string;
+  createdAt: string; // ISO
+  /** Total in the smallest currency unit (cents). */
+  amount: number;
+  currency: string;
+  /** Provider order status: 'paid' | 'pending' | 'refunded' | 'partially_refunded' | … */
+  status: string;
+  paid: boolean;
+  productName: string | null;
+  /** Assigned once the order is finalized; shown as the invoice reference. */
+  invoiceNumber: string | null;
+}
+
 // ============================================================================
 // MCP tokens
 // ============================================================================

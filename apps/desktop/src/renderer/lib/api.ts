@@ -9,6 +9,7 @@ import type {
   CreateMcpTokenResponse,
   McpToken,
   ApiResponse,
+  BillingOrder,
   BillingStatus,
   CheckoutSessionResponse,
   CreateCheckoutRequest,
@@ -981,6 +982,9 @@ export const billing = {
   checkout: (data: CreateCheckoutRequest) =>
     request<CheckoutSessionResponse>('POST', '/billing/checkout', data),
   portal: () => request<CheckoutSessionResponse>('POST', '/billing/portal'),
+  orders: () => request<BillingOrder[]>('GET', '/billing/orders'),
+  invoice: (orderId: string) =>
+    request<CheckoutSessionResponse>('POST', `/billing/orders/${orderId}/invoice`),
 };
 
 // Account-level self-service.

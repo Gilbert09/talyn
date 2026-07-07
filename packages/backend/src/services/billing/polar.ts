@@ -1,4 +1,5 @@
 import { Polar } from '@polar-sh/sdk';
+import type { BillingOrder } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { billingEnabled } from './entitlements.js';
 
@@ -107,6 +108,78 @@ export async function createPortalUrl(userId: string): Promise<string> {
     getPolarClient().customerSessions.create({ externalCustomerId: userId })
   );
   return session.customerPortalUrl;
+}
+
+/**
+ * The user's order history (newest first) — the customer is addressed by our
+ * user id (`external_customer_id`), so this can never return another user's
+ * orders. Draft orders (created at cycle start, not yet finalized) are noise
+ * and filtered out.
+ */
+export async function listOrdersForUser(userId: string): Promise<BillingOrder[]> {
+  const page = await timed('GET', 'orders.list', () =>
+    getPolarClient().orders.list({
+      externalCustomerId: userId,
+      limit: 50,
+      sorting: ['-created_at'],
+    })
+  );
+  return page.result.items
+    .filter((order) => order.status !== 'draft')
+    .map((order) => ({
+      id: order.id,
+      createdAt: order.createdAt.toISOString(),
+      amount: order.totalAmount,
+      currency: order.currency,
+      status: typeof order.status === 'string' ? order.status : String(order.status),
+      paid: order.paid,
+      productName: order.product?.name ?? null,
+      invoiceNumber: order.invoiceNumber,
+    }));
+}
+
+/**
+ * Hosted invoice URL for one of the user's orders. Ownership is enforced
+ * here (the order's customer must carry the caller's external id) — the
+ * order id alone must never be enough to read someone else's invoice.
+ * Invoices are generated lazily on first request; generation is async on
+ * Polar's side, so poll briefly before giving up.
+ */
+export async function getInvoiceUrlForUser(userId: string, orderId: string): Promise<string> {
+  const polar = getPolarClient();
+  const order = await timed('GET', 'orders.get', () => polar.orders.get({ id: orderId }));
+  if (order.customer?.externalId !== userId) {
+    throw new OrderNotFoundError(orderId);
+  }
+
+  if (!order.isInvoiceGenerated) {
+    // 409s if generation is already in flight — treat as "keep polling".
+    await timed('POST', 'orders.generateInvoice', () =>
+      polar.orders.generateInvoice({ id: orderId })
+    ).catch(() => undefined);
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const invoice = await timed('GET', 'orders.invoice', () =>
+        polar.orders.invoice({ id: orderId })
+      );
+      return invoice.url;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  console.error(`[billing] invoice for order ${orderId} not ready after polling:`, lastError);
+  throw new Error('The invoice is still being generated — try again in a moment.');
+}
+
+export class OrderNotFoundError extends Error {
+  constructor(orderId: string) {
+    super(`Order ${orderId} not found`);
+    this.name = 'OrderNotFoundError';
+  }
 }
 
 /**

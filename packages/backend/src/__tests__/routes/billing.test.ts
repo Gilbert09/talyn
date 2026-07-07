@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
@@ -14,6 +14,33 @@ import {
   users as usersTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
+
+// Stub the Polar API surface — these tests exercise the route mapping
+// (auth scoping, ownership 404, billing-off short-circuits), not the SDK.
+vi.mock('../../services/billing/polar.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../services/billing/polar.js')>();
+  return {
+    ...actual,
+    listOrdersForUser: vi.fn(async (userId: string) => [
+      {
+        id: 'order-1',
+        createdAt: '2026-07-07T00:00:00.000Z',
+        amount: 1500,
+        currency: 'usd',
+        status: 'paid',
+        paid: true,
+        productName: 'Talyn Unlimited - Monthly',
+        invoiceNumber: 'TAL-0001',
+        _for: userId,
+      },
+    ]),
+    getInvoiceUrlForUser: vi.fn(async (userId: string, orderId: string) => {
+      if (orderId === 'order-not-mine') throw new actual.OrderNotFoundError(orderId);
+      return `https://polar.sh/invoices/${orderId}`;
+    }),
+  };
+});
 
 const headers = { ...internalProxyHeaders(TEST_USER_ID), 'content-type': 'application/json' };
 const POLAR_KEYS = [
@@ -143,6 +170,59 @@ describe('GET /billing/status', () => {
       cancelAtPeriodEnd: true,
       currentPeriodEnd: '2026-08-06T00:00:00.000Z',
     });
+  });
+});
+
+describe('GET /billing/orders', () => {
+  it('returns [] when billing is not configured (no Polar call)', async () => {
+    const res = await fetch(`${url}/billing/orders`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: unknown[] };
+    expect(body.data).toEqual([]);
+  });
+
+  it('returns the caller-scoped order list when configured', async () => {
+    setPolarEnv();
+    const res = await fetch(`${url}/billing/orders`, { headers });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<Record<string, unknown>> };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]).toMatchObject({
+      id: 'order-1',
+      amount: 1500,
+      status: 'paid',
+      _for: TEST_USER_ID, // proves the route passed the AUTHED user's id
+    });
+  });
+});
+
+describe('POST /billing/orders/:id/invoice', () => {
+  it('returns the hosted invoice URL for an owned order', async () => {
+    setPolarEnv();
+    const res = await fetch(`${url}/billing/orders/order-1/invoice`, {
+      method: 'POST',
+      headers,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { url: string } };
+    expect(body.data.url).toBe('https://polar.sh/invoices/order-1');
+  });
+
+  it("404s for another user's order", async () => {
+    setPolarEnv();
+    const res = await fetch(`${url}/billing/orders/order-not-mine/invoice`, {
+      method: 'POST',
+      headers,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('400s when billing is not configured', async () => {
+    const res = await fetch(`${url}/billing/orders/order-1/invoice`, {
+      method: 'POST',
+      headers,
+    });
+    expect(res.status).toBe(400);
   });
 });
 

@@ -56,7 +56,12 @@ import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { isOwnerCovered } from '../../lib/githubInstall';
 import { openExternal } from '../../lib/openExternal';
-import type { WorkspaceLogo as WorkspaceLogoData, Workspace, McpToken } from '@talyn/shared';
+import type {
+  WorkspaceLogo as WorkspaceLogoData,
+  Workspace,
+  McpToken,
+  BillingOrder,
+} from '@talyn/shared';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID, POSTHOG_CODE_MODELS, DEFAULT_POSTHOG_CODE_MODEL_ID } from '@talyn/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
@@ -2229,12 +2234,48 @@ function BillingSettings() {
   const [checkoutBusy, setCheckoutBusy] = useState<null | 'monthly' | 'annual'>(null);
   const [awaitingCheckout, setAwaitingCheckout] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [orders, setOrders] = useState<BillingOrder[] | null>(null);
+  const [invoiceBusy, setInvoiceBusy] = useState<string | null>(null);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+
+  const billingOn = status?.billingEnabled === true;
 
   // Live usage on entry — the snapshot's activeTasks goes stale as tasks
   // finish in the background.
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Order history — also refetched when the plan changes (a fresh checkout
+  // lands its first order moments after the WS push flips the plan).
+  useEffect(() => {
+    if (!billingOn) return;
+    let cancelled = false;
+    api.billing
+      .orders()
+      .then((rows) => {
+        if (!cancelled) setOrders(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setOrders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [billingOn, status?.plan]);
+
+  const openInvoice = async (orderId: string) => {
+    setInvoiceBusy(orderId);
+    setInvoiceError(null);
+    try {
+      const { url } = await api.billing.invoice(orderId);
+      await openExternal(url);
+    } catch (err) {
+      setInvoiceError(err instanceof Error ? err.message : 'Could not fetch the invoice');
+    } finally {
+      setInvoiceBusy(null);
+    }
+  };
 
   // Checkout directly from the plan cards — the settings page IS the pitch,
   // so no modal detour here (the UpgradeModal stays for the at-limit flow).
@@ -2464,6 +2505,64 @@ function BillingSettings() {
           </ul>
         </div>
       )}
+
+      {/* Order history — shown for anyone with past orders (a now-free user
+          can still grab an old invoice). */}
+      {orders != null && orders.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold mb-4">Order history</h3>
+          <Card className="divide-y p-0">
+            {orders.map((order) => (
+              <div key={order.id} className="flex items-center gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">
+                    {order.productName ?? 'Talyn Unlimited'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatRenewalDate(order.createdAt)}
+                    {order.invoiceNumber ? ` · ${order.invoiceNumber}` : ''}
+                  </p>
+                </div>
+                <div className="text-sm font-medium tabular-nums">
+                  {formatOrderAmount(order.amount, order.currency)}
+                </div>
+                {order.status !== 'paid' && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground capitalize">
+                    {order.status.replace('_', ' ')}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openInvoice(order.id)}
+                  disabled={invoiceBusy !== null}
+                  className="gap-1.5 shrink-0"
+                  title="Open the invoice in your browser"
+                >
+                  {invoiceBusy === order.id ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
+                  Invoice
+                </Button>
+              </div>
+            ))}
+          </Card>
+          {invoiceError && <p className="text-sm text-destructive mt-2">{invoiceError}</p>}
+        </div>
+      )}
     </div>
   );
+}
+
+function formatOrderAmount(cents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+    }).format(cents / 100);
+  } catch {
+    return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  }
 }
