@@ -15,7 +15,10 @@ export function HowItWorks() {
             const flip = i % 2 === 1;
             return (
               <div key={step.n} className="grid items-center gap-10 lg:grid-cols-5">
-                <Reveal className={flip ? "lg:order-2 lg:col-span-2" : "lg:col-span-2"}>
+                {/* min-w-0 on the grid items: their default min-width:auto lets
+                    a mock's intrinsic width widen the track past the viewport
+                    on phones, panning the whole page. */}
+                <Reveal className={flip ? "min-w-0 lg:order-2 lg:col-span-2" : "min-w-0 lg:col-span-2"}>
                   <div className="flex items-center gap-3">
                     <span className="font-display text-5xl font-semibold text-clay/20">
                       {step.n}
@@ -30,7 +33,7 @@ export function HowItWorks() {
 
                 <Reveal
                   delay={0.1}
-                  className={flip ? "lg:order-1 lg:col-span-3" : "lg:col-span-3"}
+                  className={flip ? "min-w-0 lg:order-1 lg:col-span-3" : "min-w-0 lg:col-span-3"}
                 >
                   <ScreenshotPlaceholder shot={step.shot as MockId} glow={false} />
                 </Reveal>

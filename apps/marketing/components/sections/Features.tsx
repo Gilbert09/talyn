@@ -18,7 +18,8 @@ export function Features() {
         <div className="mt-16 space-y-24">
           {features.map((f) => (
             <div key={f.id} className="grid items-center gap-10 lg:grid-cols-2">
-              <Reveal className={f.flip ? "lg:order-2" : ""}>
+              {/* min-w-0 on both grid items — see HowItWorks for the why. */}
+              <Reveal className={f.flip ? "min-w-0 lg:order-2" : "min-w-0"}>
                 <p className="font-mono text-xs uppercase tracking-[0.2em] text-clay-600">
                   {f.eyebrow}
                 </p>
@@ -38,7 +39,7 @@ export function Features() {
                 </ul>
               </Reveal>
 
-              <Reveal delay={0.1} className={f.flip ? "lg:order-1" : ""}>
+              <Reveal delay={0.1} className={f.flip ? "min-w-0 lg:order-1" : "min-w-0"}>
                 <ScreenshotPlaceholder shot={f.shot as MockId} filters={false} />
               </Reveal>
             </div>

@@ -76,7 +76,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
-      <body className="font-sans antialiased">
+      {/* overflow-x-clip: backstop so one over-wide element can never make
+          the whole page horizontally pannable on phones. */}
+      <body className="overflow-x-clip font-sans antialiased">
         <Suspense fallback={null}>
           <Analytics />
         </Suspense>

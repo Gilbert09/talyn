@@ -58,7 +58,8 @@ function CheckRollupBar({
 }) {
   const total = Math.max(passed + failed + running + skipped, 1);
   return (
-    <span className="ml-1 flex h-1.5 w-12 overflow-hidden rounded-sm bg-paper-300">
+    // Hidden on phones — the bar is the widest unbreakable bit of a PR row.
+    <span className="ml-1 hidden h-1.5 w-12 overflow-hidden rounded-sm bg-paper-300 sm:flex">
       <span style={{ width: `${((passed + skipped) / total) * 100}%` }} className="bg-status-green" />
       <span
         style={{ width: `${(failed / total) * 100}%` }}
@@ -172,10 +173,10 @@ function FilterBar() {
       <span className="shrink-0 rounded-md border border-status-amber/30 bg-status-amber/10 px-2 py-1 text-status-amber">
         Needs attention · 2
       </span>
-      <span className="shrink-0 rounded-md border border-line px-2 py-1 text-ink-500">
+      <span className="hidden shrink-0 rounded-md border border-line px-2 py-1 text-ink-500 sm:inline-block">
         Needs review · 1
       </span>
-      <span className="shrink-0 rounded-md border border-line px-2 py-1 text-ink-500">
+      <span className="hidden shrink-0 rounded-md border border-line px-2 py-1 text-ink-500 sm:inline-block">
         Ready to merge · 1
       </span>
     </div>
@@ -253,8 +254,8 @@ export function MockTaskRunning(_props: MockProps) {
   return (
     <div className="flex h-[360px] bg-white text-left">
       <Sidebar active="tasks" />
-      {/* task list */}
-      <div className="flex w-44 shrink-0 flex-col gap-2 border-r border-line p-3">
+      {/* task list — hidden on phones like the app sidebar, the detail pane is the story */}
+      <div className="hidden w-44 shrink-0 flex-col gap-2 border-r border-line p-3 sm:flex">
         <p className="flex items-center gap-1.5 px-1 text-[10px] font-medium uppercase tracking-wide text-ink-400">
           Running <span className="text-ink-300">1</span>
         </p>
