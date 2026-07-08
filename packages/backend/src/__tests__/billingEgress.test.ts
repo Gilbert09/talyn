@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb } from './helpers/testDb.js';
-import { countActiveTasksQuery } from '../services/billing/entitlements.js';
+import { countActiveTasksQuery, countQueuedPrsQuery } from '../services/billing/entitlements.js';
 
 /**
  * Egress regression guard (see projectionEgress.test.ts): the free-limit
@@ -33,5 +33,19 @@ describe('billing count egress', () => {
     expect(sql).toContain('count(*)');
     expect(sql).not.toContain('transcript');
     expect(params).toContain('task-1');
+  });
+
+  it('countQueuedPrsQuery is a pure count — no PR columns, no lastSummary', () => {
+    const { sql } = countQueuedPrsQuery('owner-1').toSQL();
+    expect(sql).toContain('count(*)');
+    expect(sql).not.toContain('last_summary');
+    expect(sql).not.toContain('"title"');
+  });
+
+  it('excludePrId variant stays a pure count too', () => {
+    const { sql, params } = countQueuedPrsQuery('owner-1', 'pr-1').toSQL();
+    expect(sql).toContain('count(*)');
+    expect(sql).not.toContain('last_summary');
+    expect(params).toContain('pr-1');
   });
 });

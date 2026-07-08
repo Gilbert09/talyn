@@ -1,5 +1,9 @@
 import { create } from 'zustand';
-import { TASK_LIMIT_ERROR_CODE, type BillingStatus } from '@talyn/shared';
+import {
+  MERGE_QUEUE_LIMIT_ERROR_CODE,
+  TASK_LIMIT_ERROR_CODE,
+  type BillingStatus,
+} from '@talyn/shared';
 import { api, ApiError } from '../lib/api';
 
 /**
@@ -75,13 +79,22 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   },
 }));
 
+/** The 402 codes the free plan can reject with. */
+const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
+  TASK_LIMIT_ERROR_CODE,
+  MERGE_QUEUE_LIMIT_ERROR_CODE,
+]);
+
 /**
- * Shared 402 interception: when `err` is the free-plan limit rejection, open
- * the upgrade modal (and refresh the snapshot so it shows live usage) and
- * return true. Callers keep their generic error handling for everything else.
+ * Shared 402 interception: when `err` is a free-plan limit rejection (task
+ * concurrency or merge-queue cap), open the upgrade modal (and refresh the
+ * snapshot so it shows live usage) and return true. Callers keep their
+ * generic error handling for everything else.
  */
-export function maybeHandleTaskLimit(err: unknown): boolean {
-  if (!(err instanceof ApiError) || err.code !== TASK_LIMIT_ERROR_CODE) return false;
+export function maybeHandleBillingLimit(err: unknown): boolean {
+  if (!(err instanceof ApiError) || !err.code || !BILLING_LIMIT_CODES.has(err.code)) {
+    return false;
+  }
   const store = useBillingStore.getState();
   void store.refresh();
   store.setUpgradeModalOpen(true);

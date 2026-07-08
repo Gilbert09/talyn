@@ -633,8 +633,14 @@ export type Plan = 'free' | 'unlimited';
 /** Max simultaneously-active tasks (pending/queued/in_progress) on the free plan. */
 export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
 
+/** Max PRs sitting in the merge queue at once on the free plan. */
+export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
+
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
+
+/** ApiResponse.code when queueing a PR is rejected by the free merge-queue limit. */
+export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
 
 /**
  * The user's billing state as served by `GET /billing/status` and pushed on
@@ -654,6 +660,10 @@ export interface BillingStatus {
   activeTasks: number;
   /** null = unlimited. */
   activeTaskLimit: number | null;
+  /** PRs currently in the merge queue, across all the user's workspaces. */
+  queuedPrs: number;
+  /** null = unlimited. */
+  mergeQueueLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

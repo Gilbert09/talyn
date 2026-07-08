@@ -11,6 +11,7 @@ import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
 import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
+import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { copyRich } from '../../../lib/prClipboard';
 import { buildCopyListPayload, type StackMeta } from './stacks';
@@ -156,6 +157,8 @@ export function useGitHubActions() {
         });
       } catch (err) {
         patchRow(row.id, { mergeQueued: !enabled });
+        // Free-plan queue cap → upgrade modal instead of a raw error toast.
+        if (maybeHandleBillingLimit(err)) return;
         toast.error(
           `Couldn't ${enabled ? 'queue' : 'dequeue'} ${row.owner}/${row.repo}#${row.number}`,
           err instanceof Error ? err.message : undefined

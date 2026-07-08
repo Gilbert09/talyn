@@ -18,7 +18,8 @@ import {
   setActiveView,
   type ActiveView,
 } from '../services/prFocus.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import {
@@ -511,16 +512,32 @@ export function pullRequestRoutes(): Router {
     // and preserve the queue place on a fast off/on toggle. Disabling: clear
     // all queue bookkeeping.
     const nextState = enabled ? { status: 'waiting' as const, attempts: 0, accounted: true } : null;
-    await db
-      .update(pullRequestsTable)
-      .set({
-        mergeQueued: enabled,
-        mergeQueuedAt: enabled ? (row.mergeQueuedAt ?? new Date()) : null,
-        mergeMethod: method,
-        mergeQueueState: nextState,
-        updatedAt: new Date(),
-      })
-      .where(eq(pullRequestsTable.id, row.id));
+    const armQueue = () =>
+      db
+        .update(pullRequestsTable)
+        .set({
+          mergeQueued: enabled,
+          mergeQueuedAt: enabled ? (row.mergeQueuedAt ?? new Date()) : null,
+          mergeMethod: method,
+          mergeQueueState: nextState,
+          updatedAt: new Date(),
+        })
+        .where(eq(pullRequestsTable.id, row.id));
+
+    if (enabled && req.headers['x-talyn-client-version']) {
+      // Free-plan queue cap — MergeQueueLimitError → 402 via the error
+      // middleware. The PR itself is excluded from the count so re-arming an
+      // already-queued PR never self-blocks. Headerless callers (pre-billing
+      // desktop builds, MCP/CLI) can't render the upgrade flow — don't
+      // enforce yet, same transitional rule as task creation.
+      await withMergeQueueLimitGate(
+        assertUser(req).id,
+        { excludePrId: row.id },
+        armQueue
+      );
+    } else {
+      await armQueue();
+    }
 
     // When disabling, the row is no longer in the queue so the group rebroadcast
     // below won't touch it — emit its cleared badge explicitly here.

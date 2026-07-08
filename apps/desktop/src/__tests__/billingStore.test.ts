@@ -2,9 +2,9 @@
  * @jest-environment jsdom
  */
 import type { BillingStatus } from '@talyn/shared';
-import { TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
+import { MERGE_QUEUE_LIMIT_ERROR_CODE, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
-import { maybeHandleTaskLimit, useBillingStore } from '../renderer/stores/billing';
+import { maybeHandleBillingLimit, useBillingStore } from '../renderer/stores/billing';
 
 jest.mock('../renderer/lib/supabase', () => ({
   isSupabaseConfigured: () => false,
@@ -21,6 +21,8 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
     cancelAtPeriodEnd: false,
     activeTasks: 0,
     activeTaskLimit: 3,
+    queuedPrs: 0,
+    mergeQueueLimit: 3,
     ...overrides,
   };
 }
@@ -48,14 +50,17 @@ describe('billing store', () => {
     jest.useRealTimers();
   });
 
-  describe('maybeHandleTaskLimit', () => {
+  describe('maybeHandleBillingLimit', () => {
     beforeEach(() => {
       mockStatusFetch(status({ activeTasks: 3 }));
     });
 
-    it('opens the upgrade modal for the task-limit ApiError', () => {
-      const err = new ApiError('Free plan is limited…', 402, TASK_LIMIT_ERROR_CODE);
-      expect(maybeHandleTaskLimit(err)).toBe(true);
+    it.each([
+      { label: 'task-limit', code: TASK_LIMIT_ERROR_CODE },
+      { label: 'merge-queue-limit', code: MERGE_QUEUE_LIMIT_ERROR_CODE },
+    ])('opens the upgrade modal for the $label ApiError', ({ code }) => {
+      const err = new ApiError('Free plan is limited…', 402, code);
+      expect(maybeHandleBillingLimit(err)).toBe(true);
       expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
     });
 
@@ -65,7 +70,7 @@ describe('billing store', () => {
       { label: 'a plain Error', err: new Error('boom') },
       { label: 'a non-error', err: 'string' },
     ])('ignores $label', ({ err }) => {
-      expect(maybeHandleTaskLimit(err)).toBe(false);
+      expect(maybeHandleBillingLimit(err)).toBe(false);
       expect(useBillingStore.getState().upgradeModalOpen).toBe(false);
     });
   });

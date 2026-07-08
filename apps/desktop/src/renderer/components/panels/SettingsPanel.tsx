@@ -2228,6 +2228,28 @@ function formatRenewalDate(iso: string): string {
   }
 }
 
+/** One free-plan usage row: label, n/limit count, and a fill bar that goes
+ *  destructive at the cap. Used for active tasks and the merge queue. */
+function UsageMeter({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const atLimit = used >= limit;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm mb-1">
+        <span className="text-muted-foreground">{label}</span>
+        <span className={cn('font-medium', atLimit && 'text-destructive')}>
+          {used}/{limit}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={cn('h-full rounded-full transition-all', atLimit ? 'bg-destructive' : 'bg-primary')}
+          style={{ width: `${Math.min(100, (used / Math.max(1, limit)) * 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BillingSettings() {
   const status = useBillingStore((s) => s.status);
   const refresh = useBillingStore((s) => s.refresh);
@@ -2361,7 +2383,8 @@ function BillingSettings() {
               )}
               {free && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  Up to {limit} tasks running at once, across all your workspaces.
+                  Up to {limit} tasks running and {status.mergeQueueLimit ?? limit} PRs in the
+                  merge queue at once, across all your workspaces.
                 </p>
               )}
               {!free && !comped && status.currentPeriodEnd && (
@@ -2375,30 +2398,14 @@ function BillingSettings() {
           </div>
 
           {free && (
-            <div>
-              <div className="flex items-center justify-between text-sm mb-1">
-                <span className="text-muted-foreground">Active tasks</span>
-                <span
-                  className={cn(
-                    'font-medium',
-                    status.activeTasks >= limit && 'text-destructive'
-                  )}
-                >
-                  {status.activeTasks}/{limit}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className={cn(
-                    'h-full rounded-full transition-all',
-                    status.activeTasks >= limit ? 'bg-destructive' : 'bg-primary'
-                  )}
-                  style={{
-                    width: `${Math.min(100, (status.activeTasks / Math.max(1, limit)) * 100)}%`,
-                  }}
-                />
-              </div>
-            </div>
+            <>
+              <UsageMeter label="Active tasks" used={status.activeTasks} limit={limit} />
+              <UsageMeter
+                label="Merge queue"
+                used={status.queuedPrs}
+                limit={status.mergeQueueLimit ?? limit}
+              />
+            </>
           )}
 
           {pastDue && (

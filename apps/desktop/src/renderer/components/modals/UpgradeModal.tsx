@@ -38,9 +38,31 @@ export function UpgradeModal({
   const [error, setError] = useState<string | null>(null);
 
   const limit = status?.activeTaskLimit ?? FREE_PLAN_ACTIVE_TASK_LIMIT;
-  const atLimit =
+  const atTaskLimit =
     status?.plan === 'free' && status.activeTasks >= (status.activeTaskLimit ?? Infinity);
+  const atQueueLimit =
+    status?.plan === 'free' && status.queuedPrs >= (status.mergeQueueLimit ?? Infinity);
   const upgraded = status != null && status.plan !== 'free';
+
+  const pitch = () => {
+    if (upgraded) return 'Your plan is active — run as many tasks as you like.';
+    if (atQueueLimit && !atTaskLimit) {
+      const qLimit = status?.mergeQueueLimit ?? limit;
+      return (
+        `The free plan holds up to ${qLimit} PRs in the merge queue — you're using all ${qLimit}. ` +
+        'Upgrade for an unlimited queue, or wait for a queued PR to land.'
+      );
+    }
+    if (atTaskLimit) {
+      return (
+        `The free plan runs up to ${limit} tasks at once — you're using all ${limit}. ` +
+        'Upgrade for unlimited concurrent tasks, or wait for a task to finish.'
+      );
+    }
+    return `The free plan runs up to ${limit} tasks at once and queues up to ${
+      status?.mergeQueueLimit ?? limit
+    } PRs. Unlimited removes both caps.`;
+  };
 
   function handleClose(next: boolean) {
     if (!next) {
@@ -73,15 +95,7 @@ export function UpgradeModal({
             <Zap className="h-5 w-5" />
             {upgraded ? 'You’re on Unlimited' : 'Upgrade to Unlimited'}
           </DialogTitle>
-          <DialogDescription>
-            {upgraded
-              ? 'Your plan is active — run as many tasks as you like.'
-              : atLimit
-                ? `The free plan runs up to ${limit} tasks at once — you’re using all ${limit}. ` +
-                  'Upgrade for unlimited concurrent tasks, or wait for a task to finish.'
-                : 'The free plan runs up to ' +
-                  `${limit} tasks at once. Unlimited removes the cap.`}
-          </DialogDescription>
+          <DialogDescription>{pitch()}</DialogDescription>
         </DialogHeader>
 
         {!upgraded && (
@@ -106,6 +120,9 @@ export function UpgradeModal({
             <ul className="space-y-1 text-sm text-muted-foreground">
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Unlimited concurrent tasks
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="h-4 w-4" /> Unlimited PRs in the merge queue
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Merge queue & auto-keep-mergeable never wait for a

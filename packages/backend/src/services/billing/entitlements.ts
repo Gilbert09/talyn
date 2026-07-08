@@ -1,6 +1,8 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
   FREE_PLAN_ACTIVE_TASK_LIMIT,
+  FREE_PLAN_MERGE_QUEUE_LIMIT,
+  MERGE_QUEUE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
@@ -10,7 +12,12 @@ import {
   getScopedDb,
   isRealPostgres,
 } from '../../db/client.js';
-import { tasks as tasksTable, users as usersTable, workspaces as workspacesTable } from '../../db/schema.js';
+import {
+  pullRequests as pullRequestsTable,
+  tasks as tasksTable,
+  users as usersTable,
+  workspaces as workspacesTable,
+} from '../../db/schema.js';
 import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
 
 /**
@@ -24,6 +31,7 @@ import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
  */
 
 export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
+export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
 
 /** Statuses that occupy a free-plan slot (mirrors the desktop's ACTIVE_TASK_STATUSES). */
 export const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
@@ -47,6 +55,21 @@ export class TaskLimitError extends Error {
         `Upgrade for unlimited tasks, or wait for a task to finish.`
     );
     this.name = 'TaskLimitError';
+  }
+}
+
+/** Thrown by the gate when a free owner's merge queue is full. */
+export class MergeQueueLimitError extends Error {
+  readonly code = MERGE_QUEUE_LIMIT_ERROR_CODE;
+  constructor(
+    readonly limit: number,
+    readonly queued: number
+  ) {
+    super(
+      `Free plan is limited to ${limit} PRs in the merge queue (${queued} queued). ` +
+        `Upgrade for an unlimited queue, or wait for a queued PR to land.`
+    );
+    this.name = 'MergeQueueLimitError';
   }
 }
 
@@ -94,6 +117,7 @@ export async function resolveEntitlement(ownerId: string): Promise<Entitlement> 
  */
 export async function buildBillingStatus(ownerId: string): Promise<BillingStatus> {
   const activeTasks = await countActiveTasks(ownerId);
+  const queuedPrs = await countQueuedPrs(ownerId);
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
@@ -102,6 +126,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       cancelAtPeriodEnd: false,
       activeTasks,
       activeTaskLimit: null,
+      queuedPrs,
+      mergeQueueLimit: null,
     };
   }
 
@@ -128,6 +154,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     ...(row?.currentPeriodEnd ? { currentPeriodEnd: row.currentPeriodEnd.toISOString() } : {}),
     activeTasks,
     activeTaskLimit: entitlement.plan === 'free' ? FREE_ACTIVE_TASK_LIMIT : null,
+    queuedPrs,
+    mergeQueueLimit: entitlement.plan === 'free' ? FREE_MERGE_QUEUE_LIMIT : null,
   };
 }
 
@@ -155,6 +183,36 @@ export async function countActiveTasks(
   excludeTaskId?: string
 ): Promise<number> {
   const rows = await countActiveTasksQuery(ownerId, excludeTaskId);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Same contract as countActiveTasksQuery, for the merge queue: a pure count
+ * of the owner's queued PRs, exported unexecuted for the egress test — must
+ * never ship pull_requests columns (lastSummary!) to the backend. The
+ * `state = 'open'` guard is belt-and-braces: merge/close clears mergeQueued,
+ * but a stale row must never eat a free slot.
+ */
+export function countQueuedPrsQuery(ownerId: string, excludePrId?: string) {
+  const conditions = [
+    eq(workspacesTable.ownerId, ownerId),
+    eq(pullRequestsTable.mergeQueued, true),
+    eq(pullRequestsTable.state, 'open'),
+  ];
+  if (excludePrId) conditions.push(ne(pullRequestsTable.id, excludePrId));
+  return getDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(pullRequestsTable)
+    .innerJoin(workspacesTable, eq(pullRequestsTable.workspaceId, workspacesTable.id))
+    .where(and(...conditions));
+}
+
+/** How many PRs the owner has in the merge queue, across all their workspaces. */
+export async function countQueuedPrs(
+  ownerId: string,
+  excludePrId?: string
+): Promise<number> {
+  const rows = await countQueuedPrsQuery(ownerId, excludePrId);
   return rows[0]?.count ?? 0;
 }
 
@@ -192,22 +250,58 @@ export async function withTaskLimitGate<T>(
   options: GateOptions,
   fn: () => Promise<T>
 ): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `taskLimit:${ownerId}`,
+    async () => {
+      const active = await countActiveTasks(ownerId, options.excludeTaskId);
+      if (active >= FREE_ACTIVE_TASK_LIMIT) {
+        throw new TaskLimitError(FREE_ACTIVE_TASK_LIMIT, active);
+      }
+    },
+    fn
+  );
+}
+
+/**
+ * Run `fn` (which puts one PR into the merge queue) unless the owner is a
+ * free user whose queue is already full, in which case throw
+ * MergeQueueLimitError. `excludePrId` keeps re-arming an already-queued PR
+ * (method change, fast off/on toggle) from self-blocking at the limit.
+ */
+export async function withMergeQueueLimitGate<T>(
+  ownerId: string,
+  options: { excludePrId?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `mergeQueueLimit:${ownerId}`,
+    async () => {
+      const queued = await countQueuedPrs(ownerId, options.excludePrId);
+      if (queued >= FREE_MERGE_QUEUE_LIMIT) {
+        throw new MergeQueueLimitError(FREE_MERGE_QUEUE_LIMIT, queued);
+      }
+    },
+    fn
+  );
+}
+
+/** The shared count-then-act choreography behind both free-plan gates. */
+async function withFreePlanGate<T>(
+  ownerId: string,
+  lockName: string,
+  assertWithinLimit: () => Promise<void>,
+  fn: () => Promise<T>
+): Promise<T> {
   const entitlement = await resolveEntitlement(ownerId);
   if (entitlement.plan !== 'free') return fn();
-
-  const assertWithinLimit = async () => {
-    const active = await countActiveTasks(ownerId, options.excludeTaskId);
-    if (active >= FREE_ACTIVE_TASK_LIMIT) {
-      throw new TaskLimitError(FREE_ACTIVE_TASK_LIMIT, active);
-    }
-  };
 
   if (!isRealPostgres()) {
     await assertWithinLimit();
     return fn();
   }
 
-  const lockName = `taskLimit:${ownerId}`;
   const scoped = getScopedDb();
   if (scoped) {
     // Route path: piggyback on the request's ownerScope transaction so the

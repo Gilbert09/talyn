@@ -9,7 +9,7 @@ import {
   HISTORY_TASK_STATUSES,
 } from '../stores/workspace';
 import type { BillingStatus, Task } from '@talyn/shared';
-import { maybeHandleTaskLimit, useBillingStore } from '../stores/billing';
+import { maybeHandleBillingLimit, useBillingStore } from '../stores/billing';
 import type {
   AgentEvent,
   TaskStatusEvent,
@@ -491,7 +491,7 @@ export function useTaskActions() {
       } catch (err) {
         // Free-plan limit → upgrade modal; still rethrow so the calling
         // surface shows its inline error too.
-        maybeHandleTaskLimit(err);
+        maybeHandleBillingLimit(err);
         throw err;
       }
       trackEvent('task_created', {
@@ -513,7 +513,7 @@ export function useTaskActions() {
         updateTask(taskId, task);
         return task;
       } catch (err) {
-        maybeHandleTaskLimit(err); // re-queueing via PATCH is gated too
+        maybeHandleBillingLimit(err); // re-queueing via PATCH is gated too
         throw err;
       }
     },
@@ -536,7 +536,7 @@ export function useTaskActions() {
       try {
         task = await api.tasks.retry(taskId);
       } catch (err) {
-        maybeHandleTaskLimit(err);
+        maybeHandleBillingLimit(err);
         throw err;
       }
       trackEvent('task_retried', { task_type: task.type });
@@ -553,7 +553,7 @@ export function useTaskActions() {
       try {
         task = await api.tasks.start(taskId);
       } catch (err) {
-        maybeHandleTaskLimit(err);
+        maybeHandleBillingLimit(err);
         throw err;
       }
       trackEvent('task_started_manually', { task_type: task.type });
