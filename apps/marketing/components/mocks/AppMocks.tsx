@@ -247,7 +247,7 @@ const transcript = [
   { k: "err", t: "× 2 failing: checkout webhook retry timing" },
   { k: "txt", t: "Patching the retry backoff in the webhook handler…" },
   { k: "tool", t: "edit  services/checkout.ts" },
-  { k: "ok", t: "✓ checks green — pushed fix to fix/webhook-retry" },
+  { k: "ok", t: "✓ checks green · pushed fix to fix/webhook-retry" },
 ];
 
 export function MockTaskRunning(_props: MockProps) {

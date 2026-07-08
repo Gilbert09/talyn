@@ -8,7 +8,6 @@ import { Features } from "@/components/sections/Features";
 import { MidCta } from "@/components/sections/MidCta";
 import { Providers } from "@/components/sections/Providers";
 import { Pricing } from "@/components/sections/Pricing";
-import { Beta } from "@/components/sections/Beta";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
 
@@ -29,9 +28,11 @@ export default function Home() {
             component + `why` copy remain for a future standalone page. */}
         <Providers />
         <Pricing />
-        <Beta />
-        <Faq />
+        {/* FinalCta sits above the FAQ (and the Beta card is gone): the two
+            sections did the same job, and this is the stronger close. It
+            carries the #download anchor + waitlist the Beta card held. */}
         <FinalCta />
+        <Faq />
       </main>
       <Footer />
     </>
