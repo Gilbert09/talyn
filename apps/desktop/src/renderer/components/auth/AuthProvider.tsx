@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
+import { setLogoutReason } from '../../lib/logoutReason';
 
 interface AuthContextValue {
   session: Session | null;
@@ -87,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signOut(): Promise<void> {
     if (!isSupabaseConfigured()) return;
+    setLogoutReason('manual');
     await getSupabase().auth.signOut();
   }
 

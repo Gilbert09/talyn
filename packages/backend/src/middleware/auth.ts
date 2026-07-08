@@ -1,6 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import { eq } from 'drizzle-orm';
 import { randomBytes, timingSafeEqual } from 'crypto';
+import {
+  createRemoteJWKSet,
+  decodeProtectedHeader,
+  jwtVerify,
+  type JWTVerifyGetKey,
+} from 'jose';
 import { getDbClient } from '../db/client.js';
 import {
   users as usersTable,
@@ -38,24 +44,153 @@ export function extractBearerToken(header: string | undefined): string | null {
   return match ? match[1].trim() : null;
 }
 
+// ---------- JWT verification ----------
+//
+// Access tokens are verified LOCALLY against the project's public signing
+// keys (ES256, published at /auth/v1/.well-known/jwks.json) — no per-request
+// round-trip to Supabase. jose caches the key set in memory, so after the
+// first fetch verification has zero network dependency; a Supabase auth
+// outage can no longer 401 valid sessions (which force-logged-out every
+// desktop client at once on 2026-07-07 — see Session 69).
+//
+// Legacy HS256 tokens (shared-secret signing, pre key-migration) can't be
+// checked against the JWKS, so those still round-trip to /auth/v1/user — but
+// with a hard timeout, and a transient failure maps to 503, never 401.
+
+const JWKS_TIMEOUT_MS = 5_000;
+const GET_USER_TIMEOUT_MS = 5_000;
+
+let jwks: JWTVerifyGetKey | null = null;
+
+function getJwks(): JWTVerifyGetKey {
+  if (!jwks) {
+    const url = process.env.SUPABASE_URL;
+    if (!url) throw new AuthError('unavailable', 'SUPABASE_URL is not set');
+    jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`), {
+      timeoutDuration: JWKS_TIMEOUT_MS,
+    });
+  }
+  return jwks;
+}
+
+/** Test-only hook: inject a local key resolver so specs can sign their own
+ *  tokens instead of hitting the real JWKS endpoint. */
+export function setJwtKeySourceForTesting(source: JWTVerifyGetKey | null): void {
+  jwks = source;
+}
+
+/** jose error codes that mean "this token is bad" (→ 401), as opposed to
+ *  "we couldn't check" (→ 503). Anything not on this list — JWKS fetch
+ *  timeout, DNS failure, TLS error — is an infrastructure problem and must
+ *  never read as an invalid session. */
+const TOKEN_REJECTION_CODES = new Set([
+  'ERR_JWT_EXPIRED',
+  'ERR_JWT_CLAIM_VALIDATION_FAILED',
+  'ERR_JWT_INVALID',
+  'ERR_JWS_INVALID',
+  'ERR_JWS_SIGNATURE_VERIFICATION_FAILED',
+  'ERR_JWKS_NO_MATCHING_KEY',
+  'ERR_JOSE_ALG_NOT_ALLOWED',
+  'ERR_JOSE_NOT_SUPPORTED',
+]);
+
+function isTokenRejection(err: unknown): boolean {
+  return TOKEN_REJECTION_CODES.has((err as { code?: string } | null)?.code ?? '');
+}
+
+interface VerifiedIdentity {
+  id: string;
+  email: string;
+  githubUsername?: string;
+}
+
+/** Local path: verify signature + claims against the cached JWKS and read the
+ *  identity straight off the token claims. Returns null for a bad token,
+ *  throws AuthError('unavailable') when the key set can't be fetched. */
+async function verifyJwtLocally(token: string): Promise<VerifiedIdentity | null> {
+  try {
+    const { payload } = await jwtVerify(token, getJwks(), {
+      issuer: `${process.env.SUPABASE_URL}/auth/v1`,
+      audience: 'authenticated',
+    });
+    if (!payload.sub) return null;
+    const meta = (payload.user_metadata ?? {}) as Record<string, unknown>;
+    return {
+      id: payload.sub,
+      email: (payload.email as string | undefined) ?? '',
+      githubUsername:
+        (meta.user_name as string | undefined) ??
+        (meta.preferred_username as string | undefined),
+    };
+  } catch (err) {
+    if (isTokenRejection(err)) return null;
+    if (err instanceof AuthError) throw err;
+    throw new AuthError('unavailable', 'Could not reach the auth key service');
+  }
+}
+
+/** Legacy path (HS256 tokens only): ask Supabase to validate. Transient
+ *  failures — network errors, 5xx, or the whole call hanging — throw
+ *  AuthError('unavailable'); only an explicit rejection returns null. */
+async function verifyViaSupabase(token: string): Promise<VerifiedIdentity | null> {
+  const supabase = getSupabaseServiceClient();
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new AuthError('unavailable', 'Auth service timed out')),
+      GET_USER_TIMEOUT_MS
+    );
+  });
+  try {
+    const { data, error } = await Promise.race([supabase.auth.getUser(token), timeout]);
+    if (error) {
+      // supabase-js tags network/5xx failures as retryable (status 0 or >= 500);
+      // a deliberate rejection of the token carries a 4xx.
+      const status = (error as { status?: number }).status;
+      if (error.name === 'AuthRetryableFetchError' || !status || status >= 500) {
+        throw new AuthError('unavailable', 'Auth service unreachable');
+      }
+      return null;
+    }
+    if (!data.user) return null;
+    return {
+      id: data.user.id,
+      email: data.user.email ?? '',
+      githubUsername:
+        (data.user.user_metadata?.user_name as string | undefined) ??
+        (data.user.user_metadata?.preferred_username as string | undefined),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * Verify a Supabase access token and resolve to an app user. Does one
- * round-trip to Supabase's /auth/v1/user (via the service client). On first
+ * Verify a Supabase access token and resolve to an app user. Verification is
+ * local (JWKS) for ES256 tokens, remote for legacy HS256 ones. On first
  * sight of a user we upsert a row in our mirror `users` table so FK'd
  * ownership columns line up.
  *
- * Returns null on any failure — we never leak Supabase's underlying error
- * to the caller.
+ * Returns null when the token is genuinely invalid/expired. Throws
+ * AuthError('unavailable') when verification infrastructure is down — the
+ * caller MUST surface that as a 503, not a 401, or every desktop client
+ * signs itself out during the blip.
  */
 export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | null> {
-  const supabase = getSupabaseServiceClient();
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return null;
+  let header: { alg?: string };
+  try {
+    header = decodeProtectedHeader(token);
+  } catch {
+    return null;
+  }
 
-  const email = data.user.email ?? '';
-  const githubUsername =
-    (data.user.user_metadata?.user_name as string | undefined) ??
-    (data.user.user_metadata?.preferred_username as string | undefined);
+  const identity =
+    header.alg === 'HS256'
+      ? await verifyViaSupabase(token)
+      : await verifyJwtLocally(token);
+  if (!identity) return null;
+
+  const { email, githubUsername } = identity;
 
   await enforceAllowList(email);
 
@@ -70,7 +205,7 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
   const [row] = await db
     .insert(usersTable)
     .values({
-      id: data.user.id,
+      id: identity.id,
       email,
       githubUsername: githubUsername ?? null,
       isAdmin: bootstrapAdmin,
@@ -90,7 +225,7 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
     .returning({ isAdmin: usersTable.isAdmin });
 
   return {
-    id: data.user.id,
+    id: identity.id,
     email,
     githubUsername,
     isAdmin: row?.isAdmin ?? bootstrapAdmin,
@@ -128,7 +263,10 @@ async function enforceAllowList(email: string): Promise<void> {
 }
 
 export class AuthError extends Error {
-  constructor(public code: 'unauthorized' | 'forbidden', message: string) {
+  constructor(
+    public code: 'unauthorized' | 'forbidden' | 'unavailable',
+    message: string
+  ) {
     super(message);
   }
 }
@@ -245,6 +383,18 @@ export async function requireAuth(
     }
     if (err instanceof AuthError && err.code === 'unauthorized') {
       res.status(401).json({ success: false, error: err.message });
+      return;
+    }
+    if (err instanceof AuthError && err.code === 'unavailable') {
+      // Verification infrastructure is down, NOT a bad token. 401 here would
+      // make every client destroy its (valid) session — the 2026-07-07 mass
+      // logout. Log it loudly: this path was invisible during that incident.
+      console.error(`Auth check unavailable (${req.method} ${req.path}): ${err.message}`);
+      res.status(503).json({
+        success: false,
+        error: 'Authentication is temporarily unavailable — try again shortly',
+        code: 'auth_unavailable',
+      });
       return;
     }
     console.error('Auth middleware failed:', err);

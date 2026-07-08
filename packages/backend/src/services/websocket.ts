@@ -13,7 +13,7 @@ import type {
 import { domainEvents } from './events.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
 import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser } from './wsBus.js';
-import { verifyTokenAndGetUser, type AuthUser } from '../middleware/auth.js';
+import { verifyTokenAndGetUser, AuthError, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
 
@@ -102,9 +102,20 @@ export function setupWebSocket(
           ws.close(4401, 'expected auth');
           return;
         }
-        const user = await verifyTokenAndGetUser(m.token).catch(() => null);
+        let user: AuthUser | null = null;
+        let unavailable = false;
+        try {
+          user = await verifyTokenAndGetUser(m.token);
+        } catch (err) {
+          // 'unavailable' = we couldn't CHECK the token (Supabase/JWKS down),
+          // not that it's bad — close with 1013 (try again later) so the
+          // client's backoff loop retries instead of reading it as an auth
+          // rejection. Everything else stays 4401.
+          unavailable = err instanceof AuthError && err.code === 'unavailable';
+          if (unavailable) console.error('WebSocket auth check unavailable:', err);
+        }
         if (!user) {
-          ws.close(4401, 'invalid token');
+          ws.close(unavailable ? 1013 : 4401, unavailable ? 'auth unavailable' : 'invalid token');
           return;
         }
         authenticated = true;

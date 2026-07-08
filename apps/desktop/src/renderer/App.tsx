@@ -14,6 +14,7 @@ import {
   resetAnalyticsUser,
   trackEvent,
 } from './lib/analytics';
+import { consumeLogoutReason } from './lib/logoutReason';
 import { isMacDesktop } from './lib/utils';
 import { useIsDevBuild } from './hooks/useIsDevBuild';
 import './App.css';
@@ -246,7 +247,7 @@ function Analytics() {
       // Distinguish "no session yet" (undefined) from "session ended"
       // by recording null once auth has resolved to signed-out.
       prevUserIdRef.current = null;
-      if (prevUserId) trackEvent('logged_out');
+      if (prevUserId) trackEvent('logged_out', { reason: consumeLogoutReason() });
       resetAnalyticsUser();
     }
   }, [userId, email, githubLogin]);

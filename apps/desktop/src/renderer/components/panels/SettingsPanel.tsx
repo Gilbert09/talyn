@@ -38,6 +38,7 @@ import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
+import { setLogoutReason } from '../../lib/logoutReason';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -1610,6 +1611,7 @@ function DeveloperSettings() {
       // Privacy mode — nothing persisted to clear anyway.
     }
     if (isSupabaseConfigured()) {
+      setLogoutReason('account_wiped');
       await getSupabase().auth.signOut({ scope: 'local' });
     }
     window.location.reload();

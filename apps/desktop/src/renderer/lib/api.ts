@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from './supabase';
+import { setLogoutReason } from './logoutReason';
 import type {
   Workspace,
   Environment,
@@ -98,10 +99,48 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Deduped session recovery, run when the backend 401s a request we sent a
+ * token with. A 401 is NOT proof the session is dead — the 2026-07-07 mass
+ * logout was the backend 401ing perfectly valid tokens while its Supabase
+ * check was down. So instead of signing out on sight, ask the auth server
+ * for a fresh access token:
+ *   - refresh succeeds → session fine, caller retries the request once
+ *   - auth server explicitly rejects the refresh token (4xx) → the session
+ *     really is unrecoverable → sign out (local scope: a revocation call
+ *     from a dead session would be rejected anyway)
+ *   - refresh fails any other way (offline, 5xx, timeout) → transient;
+ *     keep the session and let the request error surface
+ * Concurrent 401s share one in-flight refresh so a burst of failing polls
+ * can't stampede the (single-use, rotating) refresh token.
+ */
+let sessionRecovery: Promise<boolean> | null = null;
+
+async function recoverSession(): Promise<boolean> {
+  sessionRecovery ??= (async () => {
+    try {
+      const { data, error } = await getSupabase().auth.refreshSession();
+      if (data.session) return true;
+      const status = (error as { status?: number } | null)?.status;
+      if (typeof status === 'number' && status >= 400 && status < 500) {
+        setLogoutReason('api_401_refresh_rejected');
+        await getSupabase().auth.signOut({ scope: 'local' });
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      sessionRecovery = null;
+    }
+  })();
+  return sessionRecovery;
+}
+
 async function request<T>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  isRetry = false
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -127,14 +166,13 @@ async function request<T>(
     throw new ApiNetworkError(method, path, err);
   }
 
-  if (response.status === 401 && token) {
-    // We sent a token and the backend rejected it — the auth user was
-    // deleted or the token is unrecoverable. The locally persisted session
-    // will never work again, so sign out: onAuthStateChange clears the
-    // session and the app returns to the login screen instead of stranding
-    // a logged-in-looking UI where every request fails. Local scope: the
-    // auth server would reject a revocation call from this token anyway.
-    void getSupabase().auth.signOut({ scope: 'local' });
+  if (response.status === 401 && token && !isRetry) {
+    // The backend rejected our token. Try to recover the session (see
+    // recoverSession) and replay the request once with the fresh token;
+    // a second 401 falls through to the normal error path.
+    if (await recoverSession()) {
+      return request<T>(method, path, body, true);
+    }
   }
 
   // The edge proxy in front of the hosted backend answers with plain text
