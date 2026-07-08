@@ -5,8 +5,8 @@ import { PoweredBy } from "@/components/sections/PoweredBy";
 import { Problem } from "@/components/sections/Problem";
 import { HowItWorks } from "@/components/sections/HowItWorks";
 import { Features } from "@/components/sections/Features";
+import { MidCta } from "@/components/sections/MidCta";
 import { Providers } from "@/components/sections/Providers";
-import { WhyTalyn } from "@/components/sections/WhyTalyn";
 import { Pricing } from "@/components/sections/Pricing";
 import { Beta } from "@/components/sections/Beta";
 import { Faq } from "@/components/sections/Faq";
@@ -22,8 +22,12 @@ export default function Home() {
         <Problem />
         <HowItWorks />
         <Features />
+        <MidCta />
+        {/* WhyTalyn was cut from the homepage: its six cards restated what
+            Features + Providers already cover, making the middle of the page
+            feel long and repetitive (Lizzie's feedback, Jul 2026). The
+            component + `why` copy remain for a future standalone page. */}
         <Providers />
-        <WhyTalyn />
         <Pricing />
         <Beta />
         <Faq />

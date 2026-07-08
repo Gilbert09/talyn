@@ -163,6 +163,15 @@ export const features = [
   },
 ];
 
+/** Compact CTA band mid-page — the stretch between Features and Pricing had
+ *  no action to take without scrolling to the bottom. */
+export const midCta = {
+  title: "Ready to stop babysitting CI?",
+  sub: "Download Talyn, connect an agent, and clear the queue tonight.",
+  cta: "Download for Mac",
+  secondary: "See pricing",
+};
+
 export const providers = {
   kicker: "Providers",
   title: "No lock-in. Use the agent you trust.",

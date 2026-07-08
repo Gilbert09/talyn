@@ -7,7 +7,7 @@ import type { MockId } from "@/components/mocks/AppMocks";
 
 export function Features() {
   return (
-    <section id="features" className="py-24">
+    <section id="features" className="py-20">
       <div className="container">
         <SectionHeading
           kicker="Features"
@@ -15,7 +15,7 @@ export function Features() {
           sub="Five things Talyn does so you can stay in flow."
         />
 
-        <div className="mt-16 space-y-24">
+        <div className="mt-14 space-y-20">
           {features.map((f) => (
             <div key={f.id} className="grid items-center gap-10 lg:grid-cols-2">
               {/* min-w-0 on both grid items — see HowItWorks for the why. */}

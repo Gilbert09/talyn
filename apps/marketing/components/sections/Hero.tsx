@@ -11,7 +11,7 @@ import { hero } from "@/lib/content";
 
 export function Hero() {
   return (
-    <section id="top" className="relative overflow-hidden pt-32 pb-20 sm:pt-40">
+    <section id="top" className="relative overflow-hidden pt-28 pb-16 sm:pt-32">
       <GridBackground />
       {/* scan-bar glow echoing the app boot screen */}
       <div
@@ -30,16 +30,18 @@ export function Hero() {
             <Badge dot>{hero.badge}</Badge>
           </div>
 
+          {/* Each sentence on its own line — a free-flowing wrap breaks
+              mid-sentence ("Merge more. Babysit / less.") at laptop widths. */}
           <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-tight text-ink sm:text-7xl">
-            {hero.titleLead}{" "}
-            <span className="text-clay">{hero.titleAccent}</span>
+            <span className="block">{hero.titleLead}</span>
+            <span className="block text-clay">{hero.titleAccent}</span>
           </h1>
 
-          <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-ink-500">
+          <p className="mx-auto mt-5 max-w-2xl text-lg leading-relaxed text-ink-500">
             {hero.sub}
           </p>
 
-          <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <DownloadButton size="lg">{hero.primaryCta}</DownloadButton>
             <a href="#how">
               <Button variant="secondary" size="lg">
@@ -49,14 +51,16 @@ export function Hero() {
             </a>
           </div>
 
-          <p className="mt-4 font-mono text-xs text-ink-400">{hero.microtrust}</p>
+          <p className="mt-3 font-mono text-xs text-ink-400">{hero.microtrust}</p>
         </motion.div>
 
+        {/* mt-10 (was 16): keep the top of the screenshot above the fold on a
+            laptop viewport — the "most useful bit" shouldn't need a scroll. */}
         <motion.div
           initial={{ opacity: 0, y: 40, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.9, delay: 0.15, ease: [0.21, 0.47, 0.32, 0.98] }}
-          className="relative mx-auto mt-16 max-w-5xl"
+          className="relative mx-auto mt-10 max-w-5xl"
         >
           <ScreenshotPlaceholder shot="dashboard" title="Talyn — My PRs" />
         </motion.div>
