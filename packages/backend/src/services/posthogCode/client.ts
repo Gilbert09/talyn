@@ -16,6 +16,34 @@ const STREAM_OPEN_TIMEOUT_MS = 30_000;
 export const DEFAULT_POSTHOG_CODE_MODEL = 'claude-opus-4-8';
 
 /**
+ * A non-2xx response from the PostHog Code API, carrying the HTTP `status`
+ * so callers can branch (notably the cloud poller backing a workspace off on
+ * a 429) without string-matching the message. `retryAfterMs` is the parsed
+ * `Retry-After` for a 429, else null. The message is unchanged from the old
+ * plain-Error format, so any existing text matching still holds.
+ */
+export class PostHogCodeApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'PostHogCodeApiError';
+  }
+}
+
+/** Parse a `Retry-After` header (delta-seconds or HTTP-date) into ms, or null. */
+function parseRetryAfterMs(headers: Headers): number | null {
+  const raw = headers.get('retry-after');
+  if (!raw) return null;
+  const secs = Number(raw);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const date = Date.parse(raw);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
+/**
  * Thin typed wrapper over the PostHog Code (tasks) REST API.
  *
  * Auth is a personal API key sent as `Authorization: Bearer …`. Every
@@ -209,7 +237,9 @@ export class PostHogCodeClient {
       ...(res.ok ? {} : { error: text.slice(0, 500) }),
     });
     if (!res.ok) {
-      throw new Error(
+      throw new PostHogCodeApiError(
+        res.status,
+        res.status === 429 ? parseRetryAfterMs(res.headers) : null,
         `PostHog Code ${method} ${path} failed (${res.status}): ${text.slice(0, 500)}`,
       );
     }

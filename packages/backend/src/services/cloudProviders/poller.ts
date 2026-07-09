@@ -7,6 +7,7 @@ import { getCloudProvider } from './registry.js';
 import { isWatched } from './taskWatch.js';
 import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
+import { ThrottleBackoff, throttleRetryAfterMs } from './throttleBackoff.js';
 import type { CloudTaskRow } from './types.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -22,6 +23,9 @@ const POLL_INTERVAL_MS = 10_000;
 class CloudTaskPoller {
   private interval: NodeJS.Timeout | null = null;
   private guard = new TickGuard('cloudPoller');
+  /** Per-workspace rate-limit cooldowns; pruned each tick to workspaces that
+   *  still have in-flight tasks, so it can't grow unbounded. */
+  private throttle = new ThrottleBackoff();
 
   init(): void {
     if (this.interval) return;
@@ -42,10 +46,32 @@ class CloudTaskPoller {
     }
   }
 
+  /**
+   * Enter (or escalate) a workspace's rate-limit cooldown and log once per
+   * entry — replacing the per-task 429 warn storm.
+   */
+  private enterThrottleCooldown(
+    workspaceId: string,
+    retryAfterMs: number | null,
+    now: number,
+  ): void {
+    const { backoffMs, consecutive, honoredRetryAfter } = this.throttle.record(
+      workspaceId,
+      retryAfterMs,
+      now,
+    );
+    console.warn(
+      `[cloudPoller] workspace ${workspaceId.slice(0, 8)} rate-limited by provider — ` +
+        `backing off ${Math.round(backoffMs / 1000)}s (attempt ${consecutive}` +
+        `${honoredRetryAfter ? ', honoring Retry-After' : ''})`,
+    );
+  }
+
   private async tick(): Promise<void> {
     if (!this.guard.tryBegin()) return;
     const startedAt = Date.now();
     let reconciled = 0;
+    let throttledSkips = 0;
     let tickError: string | undefined;
     let skipRecord = false;
     let lockSkipped = false;
@@ -75,7 +101,19 @@ class CloudTaskPoller {
           .where(eq(tasksTable.status, 'in_progress'));
         reconciled = rows.length;
 
+        // Drop cooldowns for workspaces with no in-flight tasks left, so the
+        // map stays bounded to what's actually being polled.
+        this.throttle.pruneTo(new Set(rows.map((r) => r.workspaceId)));
+
+        const now = Date.now();
         for (const row of rows) {
+          // Skip every task in a rate-limited workspace until its cooldown
+          // expires — one 429 shouldn't re-fire a request per sibling task.
+          if (this.throttle.isCoolingDown(row.workspaceId, now)) {
+            throttledSkips++;
+            continue;
+          }
+
           const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
           const providerType = readCloudTaskProvider({ metadata });
           const provider = getCloudProvider(providerType);
@@ -93,13 +131,20 @@ class CloudTaskPoller {
 
           try {
             await provider.reconcile(taskRow);
+            // Healthy again — lift any lingering cooldown for this workspace.
+            this.throttle.clear(row.workspaceId);
           } catch (err) {
-            // Transient API hiccups are fine — retry next tick. A single
-            // failed poll must never fail the task.
-            console.warn(
-              `[cloudPoller] reconcile failed for task ${row.id.slice(0, 8)}:`,
-              err instanceof Error ? err.message : err,
-            );
+            const retryAfterMs = throttleRetryAfterMs(err);
+            if (retryAfterMs !== undefined) {
+              this.enterThrottleCooldown(row.workspaceId, retryAfterMs, now);
+            } else {
+              // Transient API hiccups are fine — retry next tick. A single
+              // failed poll must never fail the task.
+              console.warn(
+                `[cloudPoller] reconcile failed for task ${row.id.slice(0, 8)}:`,
+                err instanceof Error ? err.message : err,
+              );
+            }
           }
         }
       });
@@ -122,7 +167,9 @@ class CloudTaskPoller {
             ? `cloud_task tick failed: ${tickError}`
             : lockSkipped
               ? 'cloud_task tick skipped — advisory lock held by another instance'
-              : `cloud_task tick — ${reconciled} in-flight`,
+              : `cloud_task tick — ${reconciled} in-flight${
+                  throttledSkips ? `, ${throttledSkips} skipped (rate-limit backoff)` : ''
+                }`,
           error: tickError,
         });
       }
