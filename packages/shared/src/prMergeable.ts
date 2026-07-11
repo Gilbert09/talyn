@@ -158,6 +158,29 @@ export function claudeCodeGitRules(baseBranch: string): string {
   - If a \`github\` MCP tool rejects an operation, its error is authoritative — read it and follow the recovery path it describes rather than retrying the same call or working around it.`;
 }
 
+/**
+ * The small footnote tagline appended to every GitHub comment/reply/review a
+ * cloud run posts on our behalf — a subtle "made with Talyn" credit, rendered
+ * small via GitHub's `<sub>` and linked to the site. Single source of truth so
+ * every prompt family emits the identical line; tweak the wording/link here and
+ * it changes everywhere.
+ */
+export const TALYN_COMMENT_TAGLINE = '<sub>Fixed with [talyn.dev](https://talyn.dev)</sub>';
+
+/**
+ * Instruction block telling a cloud agent to end every comment, reply, or review
+ * it posts to GitHub with {@link TALYN_COMMENT_TAGLINE}. Shared verbatim by the
+ * mergeable and skill prompts so the credit line can't drift, and deliberately
+ * scoped to comments only — never commit messages or the PR description.
+ */
+export function talynTaglineRule(): string {
+  return `COMMENT FOOTER — applies to EVERY comment, reply, or review body you post to GitHub (inline review-thread replies, top-level PR comments, and review summaries alike):
+  - End the comment with this exact line, on its own final line, verbatim (a blank line before it is fine):
+      ${TALYN_COMMENT_TAGLINE}
+  - It renders as a small footnote crediting the tool. Add it once per comment, as the LAST line after your actual message. Never omit it and never alter the text or link.
+  - Scope: comments/replies/reviews ONLY. Do NOT add it to commit messages, the PR title, or the PR description.`;
+}
+
 /** Inputs shared by every provider variant of the "make this PR mergeable" prompt. */
 export interface MergeablePromptInput {
   owner: string;
@@ -206,6 +229,8 @@ PR number: #${number}
 Branch: ${s.headBranch}
 
 ${postHogCodeGitRules(s.baseBranch)}
+
+${talynTaglineRule()}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
 ${buildIssuesSummary(s)}
@@ -276,6 +301,8 @@ PR number: #${number}
 Branch: ${s.headBranch}
 
 ${claudeCodeGitRules(s.baseBranch)}
+
+${talynTaglineRule()}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
 ${buildIssuesSummary(s)}

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { buildPostHogPrompt, buildMergeablePrompt, prNeedsFollowup, prHasFixableIssues, type PRMergeableSummary } from '@talyn/shared';
+import {
+  buildPostHogPrompt,
+  buildMergeablePrompt,
+  prNeedsFollowup,
+  prHasFixableIssues,
+  TALYN_COMMENT_TAGLINE,
+  type PRMergeableSummary,
+  type CloudProviderType,
+} from '@talyn/shared';
 
 /**
  * The cloud "make this PR mergeable" prompt must match the PostHog Code
@@ -143,6 +151,25 @@ describe('buildMergeablePrompt — claude_code variant (GitHub MCP, no signed-gi
     expect(prompt).toContain('git merge --squash');
     expect(prompt.toLowerCase()).toContain('single-parent');
   });
+});
+
+describe('buildMergeablePrompt — Talyn comment tagline', () => {
+  it('exposes the linked, small-font tagline as the shared source of truth', () => {
+    expect(TALYN_COMMENT_TAGLINE).toContain('talyn.dev');
+    expect(TALYN_COMMENT_TAGLINE).toContain('https://talyn.dev');
+    expect(TALYN_COMMENT_TAGLINE).toContain('<sub>'); // renders small on GitHub
+  });
+
+  it.each<CloudProviderType>(['posthog_code', 'claude_code', 'codex_cloud'])(
+    'instructs every provider to append the exact tagline to comments (%s)',
+    (provider) => {
+      const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+      expect(prompt).toContain(TALYN_COMMENT_TAGLINE);
+      expect(prompt).toContain('COMMENT FOOTER');
+      // Scoped to comments — never commit messages / PR description.
+      expect(prompt).toMatch(/Do NOT add it to commit messages/);
+    }
+  );
 });
 
 describe('prHasFixableIssues vs prNeedsFollowup (manual button vs auto-fire)', () => {

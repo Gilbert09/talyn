@@ -5,6 +5,7 @@ import {
   postHogCodeGitRules,
   claudeCodeGitRules,
   buildMergeablePrompt,
+  TALYN_COMMENT_TAGLINE,
   type SkillPromptInput,
   type CloudProviderType,
 } from '@talyn/shared';
@@ -156,6 +157,15 @@ describe('buildSkillPrompt', () => {
   it('omits the repo-path note for platform/local skills', () => {
     expect(buildSkillPrompt(input())).not.toContain('also lives in your checkout');
   });
+
+  it.each<CloudProviderType>(['posthog_code', 'claude_code'])(
+    'appends the shared Talyn comment tagline (%s)',
+    (provider) => {
+      const prompt = buildSkillPrompt(input({ provider }));
+      expect(prompt).toContain(TALYN_COMMENT_TAGLINE);
+      expect(prompt).toContain('COMMENT FOOTER');
+    }
+  );
 
   it('instructs publishing to the PR branch and a single review comment', () => {
     const prompt = buildSkillPrompt(input());

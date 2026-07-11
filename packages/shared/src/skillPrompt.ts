@@ -7,7 +7,7 @@
 // block changes (shared helpers so the two prompt families can't drift).
 
 import type { CloudProviderType } from './index.js';
-import { claudeCodeGitRules, postHogCodeGitRules } from './prMergeable.js';
+import { claudeCodeGitRules, postHogCodeGitRules, talynTaglineRule } from './prMergeable.js';
 import type { SkillSource } from './skills.js';
 
 export interface SkillPromptInput {
@@ -71,6 +71,8 @@ PR title: ${pr.title}
 Branch: ${pr.headBranch} (base: ${pr.baseBranch})
 
 ${gitRules}
+
+${talynTaglineRule()}
 
 ## Skill: ${skill.name}
 ${skill.description ? `\n${skill.description}\n` : ''}
