@@ -5,6 +5,7 @@ import type { BillingStatus } from '@talyn/shared';
 import { MERGE_QUEUE_LIMIT_ERROR_CODE, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
 import { maybeHandleBillingLimit, useBillingStore } from '../renderer/stores/billing';
+import { trackEvent } from '../renderer/lib/analytics';
 
 jest.mock('../renderer/lib/supabase', () => ({
   isSupabaseConfigured: () => false,
@@ -12,6 +13,9 @@ jest.mock('../renderer/lib/supabase', () => ({
     throw new Error('getSupabase should not be called when unconfigured');
   },
 }));
+
+jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
+const trackEventMock = trackEvent as jest.Mock;
 
 function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
   return {
@@ -42,6 +46,7 @@ function reset() {
 describe('billing store', () => {
   beforeEach(() => {
     reset();
+    trackEventMock.mockClear();
     jest.useFakeTimers();
   });
 
@@ -56,12 +61,35 @@ describe('billing store', () => {
     });
 
     it.each([
-      { label: 'task-limit', code: TASK_LIMIT_ERROR_CODE },
-      { label: 'merge-queue-limit', code: MERGE_QUEUE_LIMIT_ERROR_CODE },
+      { label: 'task-limit', code: TASK_LIMIT_ERROR_CODE, reason: 'task_limit' },
+      { label: 'merge-queue-limit', code: MERGE_QUEUE_LIMIT_ERROR_CODE, reason: 'merge_queue_limit' },
     ])('opens the upgrade modal for the $label ApiError', ({ code }) => {
       const err = new ApiError('Free plan is limited…', 402, code);
       expect(maybeHandleBillingLimit(err)).toBe(true);
       expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
+    });
+
+    it('captures paywall_shown with the reason and trigger', () => {
+      useBillingStore.getState().setStatus(status({ activeTasks: 3 }));
+      trackEventMock.mockClear();
+      maybeHandleBillingLimit(new ApiError('nope', 402, TASK_LIMIT_ERROR_CODE), 'task_create');
+      expect(trackEventMock).toHaveBeenCalledWith(
+        'paywall_shown',
+        expect.objectContaining({
+          reason: 'task_limit',
+          trigger: 'task_create',
+          active_tasks: 3,
+          active_task_limit: 3,
+        }),
+      );
+    });
+
+    it('tags the merge-queue reason and defaults an absent trigger to unknown', () => {
+      maybeHandleBillingLimit(new ApiError('nope', 402, MERGE_QUEUE_LIMIT_ERROR_CODE));
+      expect(trackEventMock).toHaveBeenCalledWith(
+        'paywall_shown',
+        expect.objectContaining({ reason: 'merge_queue_limit', trigger: 'unknown' }),
+      );
     });
 
     it.each([
@@ -69,9 +97,31 @@ describe('billing store', () => {
       { label: 'no code', err: new ApiError('Request failed', 500) },
       { label: 'a plain Error', err: new Error('boom') },
       { label: 'a non-error', err: 'string' },
-    ])('ignores $label', ({ err }) => {
+    ])('ignores $label (no modal, no event)', ({ err }) => {
       expect(maybeHandleBillingLimit(err)).toBe(false);
       expect(useBillingStore.getState().upgradeModalOpen).toBe(false);
+      expect(trackEventMock).not.toHaveBeenCalledWith('paywall_shown', expect.anything());
+    });
+  });
+
+  describe('upgrade_completed', () => {
+    it('fires once on a free→paid transition within the session', () => {
+      useBillingStore.getState().setStatus(status({ plan: 'free' }));
+      trackEventMock.mockClear();
+      useBillingStore
+        .getState()
+        .setStatus(status({ plan: 'unlimited', planSource: 'subscription', activeTaskLimit: null }));
+      expect(trackEventMock).toHaveBeenCalledWith('upgrade_completed', {
+        plan_source: 'subscription',
+      });
+    });
+
+    it('does not fire when an already-paid account loads on startup', () => {
+      // prev status is null (fresh store) → loading paid is not a conversion.
+      useBillingStore
+        .getState()
+        .setStatus(status({ plan: 'unlimited', planSource: 'subscription', activeTaskLimit: null }));
+      expect(trackEventMock).not.toHaveBeenCalledWith('upgrade_completed', expect.anything());
     });
   });
 

@@ -12,6 +12,7 @@ import {
 import { Button } from '../ui/button';
 import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
+import { trackEvent } from '../../lib/analytics';
 import { useBillingStore } from '../../stores/billing';
 
 type Period = 'monthly' | 'annual';
@@ -75,6 +76,7 @@ export function UpgradeModal({
   async function handleUpgrade() {
     setOpening(true);
     setError(null);
+    trackEvent('checkout_started', { period });
     try {
       const { url } = await api.billing.checkout({ period });
       await openExternal(url);

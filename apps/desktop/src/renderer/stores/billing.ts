@@ -5,6 +5,7 @@ import {
   type BillingStatus,
 } from '@talyn/shared';
 import { api, ApiError } from '../lib/api';
+import { trackEvent } from '../lib/analytics';
 
 /**
  * Billing state: the user's plan/usage snapshot plus the upgrade-modal flag.
@@ -40,7 +41,15 @@ export const useBillingStore = create<BillingState>((set, get) => ({
   upgradeModalOpen: false,
 
   setStatus: (status) => {
+    const prev = get().status;
     set({ status });
+    // Conversion signal: fire once when a free plan flips to paid *within the
+    // session* (checkout completing via the WS push / poll burst, or a comp).
+    // Guarding on prev existing + being free means loading an already-upgraded
+    // account on startup doesn't count as an upgrade.
+    if (prev?.plan === 'free' && status.plan !== 'free') {
+      trackEvent('upgrade_completed', { plan_source: status.planSource });
+    }
     // The burst exists to catch the plan flip; once we're not free (or
     // billing turns out to be off) there's nothing left to poll for.
     if (status.plan !== 'free' || !status.billingEnabled) {
@@ -87,15 +96,31 @@ const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
 
 /**
  * Shared 402 interception: when `err` is a free-plan limit rejection (task
- * concurrency or merge-queue cap), open the upgrade modal (and refresh the
- * snapshot so it shows live usage) and return true. Callers keep their
- * generic error handling for everything else.
+ * concurrency or merge-queue cap), record the paywall impression, open the
+ * upgrade modal (and refresh the snapshot so it shows live usage), and return
+ * true. Callers keep their generic error handling for everything else.
+ *
+ * `trigger` is the action the user was taking when they hit the wall
+ * (e.g. 'task_create', 'task_retry', 'merge_queue') — the entry point of the
+ * monetization funnel, broken out so we can see which surface drives upgrades.
  */
-export function maybeHandleBillingLimit(err: unknown): boolean {
+export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean {
   if (!(err instanceof ApiError) || !err.code || !BILLING_LIMIT_CODES.has(err.code)) {
     return false;
   }
   const store = useBillingStore.getState();
+  const status = store.status;
+  trackEvent('paywall_shown', {
+    // 'task_limit' | 'merge_queue_limit' — the cap that was hit.
+    reason: err.code === MERGE_QUEUE_LIMIT_ERROR_CODE ? 'merge_queue_limit' : 'task_limit',
+    trigger: trigger ?? 'unknown',
+    // Live usage at the moment of the wall (the pre-refresh snapshot).
+    active_tasks: status?.activeTasks,
+    active_task_limit: status?.activeTaskLimit,
+    queued_prs: status?.queuedPrs,
+    merge_queue_limit: status?.mergeQueueLimit,
+    plan: status?.plan,
+  });
   void store.refresh();
   store.setUpgradeModalOpen(true);
   return true;

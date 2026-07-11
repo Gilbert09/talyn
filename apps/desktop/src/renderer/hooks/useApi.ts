@@ -491,7 +491,7 @@ export function useTaskActions() {
       } catch (err) {
         // Free-plan limit → upgrade modal; still rethrow so the calling
         // surface shows its inline error too.
-        maybeHandleBillingLimit(err);
+        maybeHandleBillingLimit(err, 'task_create');
         throw err;
       }
       trackEvent('task_created', {
@@ -513,7 +513,7 @@ export function useTaskActions() {
         updateTask(taskId, task);
         return task;
       } catch (err) {
-        maybeHandleBillingLimit(err); // re-queueing via PATCH is gated too
+        maybeHandleBillingLimit(err, 'task_requeue'); // re-queueing via PATCH is gated too
         throw err;
       }
     },
@@ -536,7 +536,7 @@ export function useTaskActions() {
       try {
         task = await api.tasks.retry(taskId);
       } catch (err) {
-        maybeHandleBillingLimit(err);
+        maybeHandleBillingLimit(err, 'task_retry');
         throw err;
       }
       trackEvent('task_retried', { task_type: task.type });
@@ -553,7 +553,7 @@ export function useTaskActions() {
       try {
         task = await api.tasks.start(taskId);
       } catch (err) {
-        maybeHandleBillingLimit(err);
+        maybeHandleBillingLimit(err, 'task_start');
         throw err;
       }
       trackEvent('task_started_manually', { task_type: task.type });

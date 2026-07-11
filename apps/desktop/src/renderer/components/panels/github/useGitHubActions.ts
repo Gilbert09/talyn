@@ -158,7 +158,7 @@ export function useGitHubActions() {
       } catch (err) {
         patchRow(row.id, { mergeQueued: !enabled });
         // Free-plan queue cap → upgrade modal instead of a raw error toast.
-        if (maybeHandleBillingLimit(err)) return;
+        if (maybeHandleBillingLimit(err, 'merge_queue')) return;
         toast.error(
           `Couldn't ${enabled ? 'queue' : 'dequeue'} ${row.owner}/${row.repo}#${row.number}`,
           err instanceof Error ? err.message : undefined
