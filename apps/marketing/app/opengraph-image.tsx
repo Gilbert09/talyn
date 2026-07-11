@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Talyn — Merge more. Babysit less.";
+export const alt = "Talyn — Wake up to green PRs.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -54,8 +54,8 @@ export default function OgImage() {
             display: "flex",
           }}
         >
-          Merge more.{" "}
-          <span style={{ color: "#c25e3a", marginLeft: 18 }}>Babysit less.</span>
+          Wake up to{" "}
+          <span style={{ color: "#c25e3a", marginLeft: 18 }}>green PRs.</span>
         </div>
 
         <div
@@ -67,8 +67,8 @@ export default function OgImage() {
             lineHeight: 1.4,
           }}
         >
-          Cloud agents that fix CI, clear conflicts, and keep every pull request
-          mergeable — automatically.
+          Cloud agents that fix CI, clear conflicts, and land your pull
+          requests while you sleep.
         </div>
 
         <div

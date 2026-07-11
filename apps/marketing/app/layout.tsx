@@ -21,7 +21,7 @@ const mono = JetBrains_Mono({
   display: "swap",
 });
 
-const title = `${site.name} — Merge more. Babysit less.`;
+const title = `${site.name} — Wake up to green PRs.`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),

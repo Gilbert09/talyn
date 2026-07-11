@@ -30,8 +30,8 @@ export function Hero() {
             <Badge dot>{hero.badge}</Badge>
           </div>
 
-          {/* Each sentence on its own line — a free-flowing wrap breaks
-              mid-sentence ("Merge more. Babysit / less.") at laptop widths. */}
+          {/* Each part on its own line so a free-flowing wrap can't break it
+              mid-phrase ("Wake up to green / PRs.") at laptop widths. */}
           <h1 className="font-display text-5xl font-semibold leading-[1.04] tracking-tight text-ink sm:text-7xl">
             <span className="block">{hero.titleLead}</span>
             <span className="block text-clay">{hero.titleAccent}</span>

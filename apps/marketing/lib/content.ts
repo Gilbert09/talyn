@@ -8,9 +8,9 @@ export const site = {
   domain: "talyn.dev",
   /** Canonical origin — the apex 308-redirects to www at the Vercel level. */
   url: "https://www.talyn.dev",
-  tagline: "Merge more. Babysit less.",
+  tagline: "Wake up to green PRs.",
   description:
-    "Talyn watches every pull request, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews, so they land without you babysitting them.",
+    "Talyn ranks your whole PR queue by what's blocking you, then sends cloud agents to fix the checks, clear the conflicts, and reply to reviews, so your PRs land without you babysitting them.",
   githubUrl: "https://github.com/Gilbert09/talyn",
   /** Support/contact channel — every Talyn user has a GitHub account. */
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
@@ -26,9 +26,9 @@ export const nav = [
 
 export const hero = {
   badge: "Public beta",
-  titleLead: "Merge more.",
-  titleAccent: "Babysit less.",
-  sub: "Talyn is mission control for your GitHub pull requests. It watches every PR, catches the ones stuck in CI, and sends cloud agents to fix the checks, clear the conflicts, and reply to reviews, so they land without you hovering over them.",
+  titleLead: "Wake up to",
+  titleAccent: "green PRs.",
+  sub: "You live in GitHub PRs, and half of them are red, behind main, or stuck waiting on a review. Talyn ranks the whole queue by what's blocking you, then sends a cloud agent to clear each one. Flag the PRs you trust and they merge themselves the moment they go green, overnight included.",
   primaryCta: "Download for Mac",
   secondaryCta: "See how it works",
   microtrust: "Apple silicon · macOS 13+",
@@ -75,8 +75,8 @@ export const how = {
   steps: [
     {
       n: "01",
-      title: "Connect GitHub + an agent",
-      body: "Sign in with GitHub, pick the repos you live in, and connect a cloud agent (Claude Code or PostHog Code). That's the whole setup.",
+      title: "Connect GitHub",
+      body: "Sign in with GitHub and pick the repos you live in. Your PR queue shows up right away. You only connect a cloud agent (Claude Code or PostHog Code) when you send your first fix, not before.",
       shot: "onboarding",
     },
     {
@@ -167,7 +167,7 @@ export const features = [
  *  no action to take without scrolling to the bottom. */
 export const midCta = {
   title: "Ready to stop babysitting CI?",
-  sub: "Download Talyn, connect an agent, and clear the queue tonight.",
+  sub: "Download Talyn, connect your repos, and clear the queue tonight.",
   cta: "Download for Mac",
   secondary: "See pricing",
 };
