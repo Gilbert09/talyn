@@ -165,7 +165,7 @@ export function claudeCodeGitRules(baseBranch: string): string {
  * every prompt family emits the identical line; tweak the wording/link here and
  * it changes everywhere.
  */
-export const TALYN_COMMENT_TAGLINE = '<sub>Fixed with [talyn.dev](https://talyn.dev)</sub>';
+export const TALYN_COMMENT_TAGLINE = '<sub>🦉 via [talyn.dev](https://talyn.dev)</sub>';
 
 /**
  * Instruction block telling a cloud agent to end every comment, reply, or review
