@@ -137,7 +137,6 @@ export function ReviewsPanel() {
           onSetMergeQueue={actions.setMergeQueue}
           onCreatePostHogTask={actions.createPostHogTask}
           onRunSkill={actions.runSkillTask}
-          posthogEnabled={actions.posthogEnabled}
           taskAsk={actions.taskAsk}
           taskProviders={actions.taskProviders}
           onOpenIntegrations={actions.openIntegrations}

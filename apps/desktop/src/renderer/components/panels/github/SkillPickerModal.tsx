@@ -113,10 +113,10 @@ export function SkillPickerModal({
           `Running "${skill.name}"`,
           `A cloud task is applying the skill to ${row.owner}/${row.repo}#${row.number}.`
         );
-        onClose();
-      } else {
-        toast.error('No cloud provider connected', 'Connect one in Settings → Integrations.');
       }
+      // When `created` is false, no provider was connected — runSkillTask has
+      // opened the "connect an agent" modal, so just close the picker for it.
+      onClose();
     } catch (err) {
       toast.error(
         `Couldn't run "${skill.name}"`,

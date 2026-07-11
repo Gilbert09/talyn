@@ -65,8 +65,6 @@ interface PRTableProps {
     skill: SkillSummary,
     opts: { providerType?: string; localContent?: string }
   ) => Promise<boolean>;
-  /** PostHog Code is configured + a cloud env exists to dispatch to. */
-  posthogEnabled: boolean;
   /** Default is "Ask every time" with >1 provider connected → the Task button
    *  opens a provider dropdown instead of dispatching to the default. */
   taskAsk?: boolean;
@@ -93,7 +91,6 @@ export function PRTable({
   onSetMergeQueue,
   onCreatePostHogTask,
   onRunSkill,
-  posthogEnabled,
   taskAsk,
   taskProviders,
   onOpenIntegrations,
@@ -142,7 +139,6 @@ export function PRTable({
             onSetMergeQueue={onSetMergeQueue}
             onCreatePostHogTask={onCreatePostHogTask}
             onOpenSkillPicker={onRunSkill ? () => setSkillPickerRowId(row.id) : undefined}
-            posthogEnabled={posthogEnabled}
             taskAsk={taskAsk}
             taskProviders={taskProviders}
             onOpenIntegrations={onOpenIntegrations}
@@ -179,7 +175,6 @@ function PRTableRow({
   onSetMergeQueue,
   onCreatePostHogTask,
   onOpenSkillPicker,
-  posthogEnabled,
   taskAsk,
   taskProviders,
   onOpenIntegrations,
@@ -199,7 +194,6 @@ function PRTableRow({
   onCreatePostHogTask: (row: PRRow, providerType?: string) => Promise<boolean>;
   /** Open the table-level skill picker for this row (absent → no skill button). */
   onOpenSkillPicker?: () => void;
-  posthogEnabled: boolean;
   taskAsk?: boolean;
   taskProviders?: { type: string; displayName: string }[];
   onOpenIntegrations?: () => void;
@@ -260,7 +254,7 @@ function PRTableRow({
   // auto-watcher, lets the user choose to spend a run on them — they block
   // Talyn's own App-token merge even though a human could merge past them).
   const canFollowUp =
-    posthogEnabled && row.state === 'open' && prHasFixableIssues(summary) && !taskRunning;
+    row.state === 'open' && prHasFixableIssues(summary) && !taskRunning;
 
   async function copyMarkdownLink(e: React.MouseEvent) {
     e.stopPropagation();
@@ -653,7 +647,7 @@ function PRTableRow({
                 <GitMerge className="h-3.5 w-3.5" />
               </button>
             ))}
-          {variant !== 'review' && posthogEnabled && row.state === 'open' && (
+          {variant !== 'review' && row.state === 'open' && (
             <div className="relative inline-flex">
               <button
                 type="button"
@@ -737,7 +731,7 @@ function PRTableRow({
               Reviews page too — running a review skill on a PR you were asked
               to review is the headline use case — and doesn't require the PR
               to "need" anything. */}
-          {onOpenSkillPicker && posthogEnabled && row.state === 'open' && (
+          {onOpenSkillPicker && row.state === 'open' && (
             <button
               type="button"
               data-attr="pr-row-run-skill"

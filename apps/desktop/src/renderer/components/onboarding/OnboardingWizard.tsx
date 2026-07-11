@@ -8,20 +8,20 @@ import { trackEvent } from '../../lib/analytics';
 import { WorkspaceNameStep } from './steps/WorkspaceNameStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
-import { ConnectCloudAgentStep } from './steps/ConnectCloudAgentStep';
 
 const STEPS = [
   { title: 'Name your workspace', optional: false },
   { title: 'Connect GitHub', optional: false },
   { title: 'Watch repositories', optional: true },
-  { title: 'Connect a cloud agent', optional: true },
 ] as const;
 
 /**
- * First-run onboarding. Walks a new user through the minimum setup a
- * cloud-only PR-management app needs: a named workspace, a GitHub
- * connection, repos to watch, and (optionally) a cloud agent. Shown by
- * App in place of MainLayout until `onboardingComplete` flips true.
+ * First-run onboarding. Walks a new user through the minimum setup needed to
+ * see their PR queue: a named workspace, a GitHub connection, and repos to
+ * watch. A cloud agent is NOT part of setup — task buttons render regardless,
+ * and the first time the user dispatches one the ConnectAgentModal prompts them
+ * to connect a provider (then auto-runs the task). Shown by App in place of
+ * MainLayout until `onboardingComplete` flips true.
  */
 export function OnboardingWizard() {
   const { currentWorkspaceId, repositories, setOnboardingComplete, setJustOnboarded } =
@@ -36,9 +36,6 @@ export function OnboardingWizard() {
     step === 0 ? !!currentWorkspaceId : step === 1 ? githubConnected : true;
 
   const isLast = step === STEPS.length - 1;
-  // On the optional repos step, "Skip" only reads right when nothing's been
-  // added yet; once a repo is watched it's a normal "Next".
-  const nextLabel = STEPS[step].optional && step === 2 && repositories.length === 0 ? 'Skip' : 'Next';
 
   function handlePrimary() {
     if (isLast) {
@@ -104,9 +101,6 @@ export function OnboardingWizard() {
           {step === 2 && currentWorkspaceId && (
             <WatchReposStep workspaceId={currentWorkspaceId} />
           )}
-          {step === 3 && currentWorkspaceId && (
-            <ConnectCloudAgentStep workspaceId={currentWorkspaceId} />
-          )}
         </div>
 
         {/* Footer nav */}
@@ -125,7 +119,7 @@ export function OnboardingWizard() {
               'Finish'
             ) : (
               <>
-                {nextLabel}
+                Next
                 <ArrowRight className="ml-1 h-4 w-4" />
               </>
             )}

@@ -9,6 +9,7 @@ import { SettingsPanel } from '../panels/SettingsPanel';
 import { DebugPanel } from '../panels/DebugPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
+import { ConnectAgentModal } from '../modals/ConnectAgentModal';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
@@ -46,6 +47,7 @@ export function MainLayout() {
         onOpenChange={setCreateWorkspaceOpen}
       />
       <UpgradeModal open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen} />
+      <ConnectAgentModal />
     </div>
   );
 }

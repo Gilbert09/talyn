@@ -32,6 +32,7 @@ export function useGitHubActions() {
     setActivePanel,
     cloudProviders,
     openSettings,
+    openConnectAgent,
   } = useWorkspaceStore();
   const { createTask } = useTaskActions();
   const { patchRow, removeRow } = usePullRequestStore.getState();
@@ -69,7 +70,10 @@ export function useGitHubActions() {
     }
     return null;
   }, [environments, connectedProviders]);
-  const posthogEnabled = posthogEnvId !== null;
+  // Whether a task can dispatch to the default/auto provider right now. Only the
+  // ConnectAgentModal reads this — to auto-run a stashed task the instant a
+  // provider connects (its env row lands) and not a tick before.
+  const providerReady = posthogEnvId !== null;
 
   // Resolve which cloud env a new task dispatches to. An explicit `providerType`
   // (chosen from the Task-button dropdown when the default is "ask") wins.
@@ -176,7 +180,12 @@ export function useGitHubActions() {
     async (row: PRRow, providerType?: string): Promise<boolean> => {
       if (!currentWorkspaceId) return false;
       const envId = resolveTaskEnvId(providerType);
-      if (!envId) return false; // nothing connected / resolvable — caller shows no confirmation
+      if (!envId) {
+        // No provider connected/resolvable. Prompt the user to connect one and
+        // stash this fix so it auto-runs the moment they do.
+        openConnectAgent({ kind: 'fix', row, providerType });
+        return false;
+      }
       // Build the prompt for the provider actually behind the resolved env — the
       // git/publishing mechanics differ (PostHog signed-git vs Claude's GitHub MCP).
       const provider = (environments.find((e) => e.id === envId)?.type ??
@@ -207,7 +216,7 @@ export function useGitHubActions() {
       patchRow(row.id, { taskId: created.id });
       return true;
     },
-    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
+    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow, openConnectAgent]
   );
 
   // Run an agent skill against a PR as a cloud task. Resolves the skill's
@@ -223,7 +232,16 @@ export function useGitHubActions() {
     ): Promise<boolean> => {
       if (!currentWorkspaceId) return false;
       const envId = resolveTaskEnvId(opts.providerType);
-      if (!envId) return false;
+      if (!envId) {
+        openConnectAgent({
+          kind: 'skill',
+          row,
+          skill,
+          localContent: opts.localContent,
+          providerType: opts.providerType,
+        });
+        return false;
+      }
       const provider = (environments.find((e) => e.id === envId)?.type ??
         'posthog_code') as CloudProviderType;
       const ref = `${row.owner}/${row.repo}#${row.number}`;
@@ -290,7 +308,7 @@ export function useGitHubActions() {
       patchRow(row.id, { taskId: created.id });
       return true;
     },
-    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow]
+    [currentWorkspaceId, resolveTaskEnvId, environments, createTask, patchRow, openConnectAgent]
   );
 
   // Connect GitHub for the workspace via the GitHub App install flow.
@@ -330,7 +348,7 @@ export function useGitHubActions() {
   }, []);
 
   return {
-    posthogEnabled,
+    providerReady,
     openTask,
     mergeRow,
     setMergeQueue,

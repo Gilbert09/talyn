@@ -1,12 +1,28 @@
 import { create } from 'zustand';
-import type { Workspace, Environment, Task, TaskStatus } from '@talyn/shared';
+import type { Workspace, Environment, Task, TaskStatus, SkillSummary } from '@talyn/shared';
 import type {
   GitHubStatus,
   GitHubUser,
   GitHubInstallation,
   PostHogCodeStatus,
   CloudProviderInfo,
+  PRRow,
 } from '../lib/api';
+
+/**
+ * A task the user tried to start with no cloud provider connected. Stashed when
+ * the "connect an agent" modal opens so it can auto-run the instant a provider
+ * connects. `providerType` preserves an explicit picker choice, if any.
+ */
+export type PendingCloudTask =
+  | { kind: 'fix'; row: PRRow; providerType?: string }
+  | {
+      kind: 'skill';
+      row: PRRow;
+      skill: SkillSummary;
+      localContent?: string;
+      providerType?: string;
+    };
 
 /**
  * Task status groups. Active tasks are few and always fully loaded; the finished
@@ -188,6 +204,12 @@ interface WorkspaceState {
   // selector, the sidebar status row, and the per-task picker never disagree or
   // flash a stale "disconnected" on remount). null = not yet checked.
   cloudProviders: CloudProviderInfo[] | null;
+  // "Connect an agent" modal. Task buttons render even with no provider
+  // connected (so first-run users can reach them); clicking one with nothing
+  // connected opens this instead of silently no-oping. `pendingCloudTask` is
+  // the intent to auto-run the moment a provider connects.
+  connectAgentOpen: boolean;
+  pendingCloudTask: PendingCloudTask | null;
   // Which Settings sub-section is active. Lifted out of SettingsPanel so other
   // surfaces can deep-link (e.g. clicking the sidebar provider status).
   settingsSection: SettingsSection;
@@ -204,6 +226,13 @@ interface WorkspaceState {
   setGitHubInstallations: (installations: GitHubInstallation[] | null) => void;
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
+  /** Open the "connect an agent" modal, optionally stashing a task to auto-run
+   *  the instant a provider connects. */
+  openConnectAgent: (pending?: PendingCloudTask | null) => void;
+  /** Close the modal and drop any stashed task. */
+  closeConnectAgent: () => void;
+  /** Drop just the stashed task (after it has fired). */
+  clearPendingCloudTask: () => void;
   setSettingsSection: (section: SettingsSection) => void;
   /** Jump to Settings, optionally pre-selecting a sub-section. */
   openSettings: (section?: SettingsSection) => void;
@@ -260,6 +289,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   githubInstallations: null,
   posthogStatus: null,
   cloudProviders: null,
+  connectAgentOpen: false,
+  pendingCloudTask: null,
   settingsSection: 'workspace',
 
   // Actions
@@ -295,6 +326,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
 
   setCloudProviders: (cloudProviders) => set({ cloudProviders }),
+
+  openConnectAgent: (pending = null) =>
+    set({ connectAgentOpen: true, pendingCloudTask: pending }),
+  closeConnectAgent: () => set({ connectAgentOpen: false, pendingCloudTask: null }),
+  clearPendingCloudTask: () => set({ pendingCloudTask: null }),
 
   setSettingsSection: (settingsSection) => set({ settingsSection }),
 

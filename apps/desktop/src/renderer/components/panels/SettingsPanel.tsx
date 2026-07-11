@@ -891,32 +891,7 @@ function IntegrationsSettings() {
           </p>
         </div>
 
-        {/* PostHog Code (cloud tasks) */}
-        <PostHogCodeCard />
-
-        {/* Claude Code (Managed Agents). Generic card driven by the
-            /cloud-providers routes — the template additional providers reuse. */}
-        <CloudProviderCard
-          type="claude_code"
-          displayName="Claude Code"
-          icon={Bot}
-          blurb="Add an Anthropic API key to run tasks on Claude’s cloud sandbox (Managed Agents). GitHub access reuses this workspace’s GitHub connection."
-          connectedBlurb="Cloud tasks run on Claude Managed Agents and open PRs via your GitHub connection."
-          fields={[
-            { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
-          ]}
-          keyHelp={{ url: ANTHROPIC_API_KEYS_URL }}
-          connectedExtras={
-            <WorkspaceModelSelector
-              providerType="claude_code"
-              title="Model"
-              description="Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable but costs more."
-              models={CLAUDE_MODELS}
-              defaultId={DEFAULT_CLAUDE_MODEL_ID}
-              settingKey="claudeModel"
-            />
-          }
-        />
+        <ProviderConnectCards />
 
         <CloudProviderDefaultSelector />
       </div>
@@ -1015,6 +990,44 @@ function WorkspaceModelSelector({
         ))}
       </SettingsSelect>
     </div>
+  );
+}
+
+/**
+ * The two provider connect cards (PostHog Code + Claude Code), shared by the
+ * Settings → Integrations section and the "connect an agent" modal so both
+ * render the identical connect/verify flow from a single definition.
+ */
+export function ProviderConnectCards() {
+  return (
+    <>
+      {/* PostHog Code (cloud tasks) */}
+      <PostHogCodeCard />
+
+      {/* Claude Code (Managed Agents). Generic card driven by the
+          /cloud-providers routes — the template additional providers reuse. */}
+      <CloudProviderCard
+        type="claude_code"
+        displayName="Claude Code"
+        icon={Bot}
+        blurb="Add an Anthropic API key to run tasks on Claude’s cloud sandbox (Managed Agents). GitHub access reuses this workspace’s GitHub connection."
+        connectedBlurb="Cloud tasks run on Claude Managed Agents and open PRs via your GitHub connection."
+        fields={[
+          { key: 'anthropicApiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-...' },
+        ]}
+        keyHelp={{ url: ANTHROPIC_API_KEYS_URL }}
+        connectedExtras={
+          <WorkspaceModelSelector
+            providerType="claude_code"
+            title="Model"
+            description="Which model Claude Code tasks run on. Sonnet handles PR fixes well; Opus is more capable but costs more."
+            models={CLAUDE_MODELS}
+            defaultId={DEFAULT_CLAUDE_MODEL_ID}
+            settingKey="claudeModel"
+          />
+        }
+      />
+    </>
   );
 }
 
