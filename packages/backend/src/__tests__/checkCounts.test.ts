@@ -1,9 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+
+// The required-ness recheck fires the authoritative by-number refresh
+// (prCache.forceFetchAndUpsert). Mock it so we can assert it's invoked without
+// a real GraphQL fetch.
+const { mockForceFetch } = vi.hoisted(() => ({ mockForceFetch: vi.fn() }));
+vi.mock('../services/prCache.js', () => ({ forceFetchAndUpsert: mockForceFetch }));
+
 import {
   ingestCheckRun,
   pruneChecksForSha,
   parseCheckRunPayload,
+  _resetRequirednessRecheck,
   type CheckEventInput,
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -23,6 +31,14 @@ describe('checkCounts', () => {
     const t = await createTestDb();
     db = t.db;
     cleanup = t.cleanup;
+    mockForceFetch.mockReset();
+    mockForceFetch.mockResolvedValue({
+      summary: { blockingReason: 'checks_failed', checks: {} },
+      delta: null,
+      cacheMiss: true,
+      rowId: 'pr-7',
+    });
+    _resetRequirednessRecheck();
     await seedUser(db, { id: TEST_USER_ID });
     await db.insert(workspacesTable).values({ id: 'ws1', ownerId: TEST_USER_ID, name: 'A', settings: {} });
     await db.insert(repositoriesTable).values({
@@ -228,6 +244,53 @@ describe('checkCounts', () => {
       await seedPr(7, 'sha-A', { blockingReason: 'checks_failed', mergeStateStatus: 'BLOCKED' });
       await ingestCheckRun(ev({ name: 'gate', state: 'failure' }), targets, [7], tracked([7]));
       expect((await summaryOf(7)).blockingReason).toBe('checks_failed');
+    });
+  });
+
+  // The incremental path is blind to per-check `isRequired`, so a
+  // `checks_failed_optional` verdict can hide a newly-failing REQUIRED check
+  // (the "N non-required" bug). When the failing set changes under that verdict
+  // we kick an authoritative by-number refresh to re-derive required-ness.
+  describe('required-ness recheck', () => {
+    it('rechecks authoritatively when a check fails under a non-required verdict', async () => {
+      await seedPr(7, 'sha-A', {
+        blockingReason: 'checks_failed_optional',
+        mergeStateStatus: 'UNSTABLE',
+      });
+      await ingestCheckRun(
+        ev({ name: 'Visual regression tests pass', state: 'failure' }),
+        targets,
+        [7],
+        tracked([7]),
+      );
+      // Incrementally it stays "non-required"; the recheck is what corrects it.
+      expect((await summaryOf(7)).blockingReason).toBe('checks_failed_optional');
+      expect(mockForceFetch).toHaveBeenCalledTimes(1);
+      expect(mockForceFetch).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: 'acme', repo: 'widget', number: 7 }),
+      );
+    });
+
+    it('does not recheck when the verdict is not the non-required one', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'checks_failed', mergeStateStatus: 'BLOCKED' });
+      await ingestCheckRun(ev({ name: 'gate', state: 'failure' }), targets, [7], tracked([7]));
+      expect(mockForceFetch).not.toHaveBeenCalled();
+    });
+
+    it('does not recheck a clean (mergeable) PR', async () => {
+      await seedPr(7, 'sha-A', { blockingReason: 'mergeable', mergeStateStatus: 'CLEAN' });
+      await ingestCheckRun(ev({ name: 'lint', state: 'success' }), targets, [7], tracked([7]));
+      expect(mockForceFetch).not.toHaveBeenCalled();
+    });
+
+    it('debounces repeat rechecks for the same PR within the cooldown', async () => {
+      await seedPr(7, 'sha-A', {
+        blockingReason: 'checks_failed_optional',
+        mergeStateStatus: 'UNSTABLE',
+      });
+      await ingestCheckRun(ev({ name: 'a', state: 'failure' }), targets, [7], tracked([7]));
+      await ingestCheckRun(ev({ name: 'b', state: 'failure' }), targets, [7], tracked([7]));
+      expect(mockForceFetch).toHaveBeenCalledTimes(1);
     });
   });
 

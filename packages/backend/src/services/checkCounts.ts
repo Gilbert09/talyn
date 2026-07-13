@@ -27,6 +27,7 @@ import {
   type BlockingReason,
 } from './githubGraphql.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { forceFetchAndUpsert } from './prCache.js';
 import { targetsForRepo } from './webhookIndex.js';
 import { debugBus } from './debugBus.js';
 
@@ -110,6 +111,9 @@ interface AffectedPr {
    *  the verdict against the fresh counts without shipping the jsonb blob. */
   blockingReason: string | null;
   mergeStateStatus: string | null;
+  /** Prior check digest — lets us tell when the failing set actually changed
+   *  (vs a no-op recompute), to gate the required-ness recheck below. */
+  lastCheckDigest: string | null;
 }
 
 /** Columns of an affected PR — scalars only, never the `last_summary` blob
@@ -128,6 +132,8 @@ const AFFECTED_COLUMNS = {
   mergeStateStatus: sql<
     string | null
   >`${pullRequestsTable.lastSummary} ->> 'mergeStateStatus'`,
+  // Real column (not jsonb) — cheap to select, never ships the blob.
+  lastCheckDigest: pullRequestsTable.lastCheckDigest,
 } as const;
 
 /**
@@ -188,6 +194,65 @@ async function upsertCheckStates(states: CheckEventInput[]): Promise<void> {
       },
       setWhere: sql`${prCheckStates.ts} <= excluded.ts`,
     });
+}
+
+// Per-PR cooldown for the required-ness recheck below. The by-branch/webhook
+// path can't resolve `isRequired`, so this fires a targeted authoritative
+// refresh; the cooldown keeps a churning CI suite from firing one GraphQL fetch
+// per flush. 15s: the coalescer flushes at 750ms and a settling suite can churn
+// for tens of seconds, so this bounds rechecks to ~4/min per affected PR while
+// still correcting a required-failure flip within one window. Per-process (like
+// the coalescer) — a duplicate recheck across replicas just writes the same
+// authoritative verdict, so it's harmless.
+const REQUIREDNESS_RECHECK_COOLDOWN_MS = 15_000;
+const requirednessRecheckAt = new Map<string, number>();
+
+/**
+ * Kick a targeted authoritative refresh (by-number, resolves per-check
+ * `isRequired`) for a PR whose incremental verdict claims "only non-required
+ * checks failing" but whose failing set just changed. The incremental path is
+ * blind to required-ness, so a newly-failing REQUIRED check would otherwise keep
+ * reading as `checks_failed_optional` ("N non-required") until the next full
+ * poll — the exact bug this guards against. Fire-and-forget + debounced; the
+ * refresh's own upsert broadcasts the corrected verdict.
+ */
+function scheduleRequirednessRecheck(row: AffectedPr): void {
+  const now = Date.now();
+  if (now - (requirednessRecheckAt.get(row.id) ?? 0) < REQUIREDNESS_RECHECK_COOLDOWN_MS) return;
+  requirednessRecheckAt.set(row.id, now);
+  void forceFetchAndUpsert({
+    workspaceId: row.workspaceId,
+    repositoryId: row.repositoryId,
+    taskId: row.taskId,
+    owner: row.owner,
+    repo: row.repo,
+    number: row.number,
+  })
+    .then((result) =>
+      debugBus.recordEvent({
+        service: 'check_counts',
+        action: 'requiredness_recheck',
+        ok: true,
+        summary: `requiredness recheck ${row.owner}/${row.repo}#${row.number} → ${
+          result?.summary.blockingReason ?? 'no-op'
+        }`,
+      }),
+    )
+    .catch((err) =>
+      debugBus.recordEvent({
+        service: 'check_counts',
+        action: 'requiredness_recheck',
+        ok: false,
+        summary: `requiredness recheck ${row.owner}/${row.repo}#${row.number} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      }),
+    );
+}
+
+/** Test helper — clear the required-ness recheck cooldown between cases. */
+export function _resetRequirednessRecheck(): void {
+  requirednessRecheckAt.clear();
 }
 
 /**
@@ -252,6 +317,15 @@ async function recomputeAndBroadcast(
         ? { checks: counts, blockingReason: reconciled }
         : { checks: counts },
     });
+
+    // A `checks_failed_optional` verdict asserts every failing check is
+    // non-required — but the incremental path can't see `isRequired`, so it
+    // can't notice when a newly-failing check is actually REQUIRED (the pill
+    // stays "N non-required" over a red required check until a full poll). When
+    // the failing set changed under such a verdict, re-derive it authoritatively.
+    if (reconciled === 'checks_failed_optional' && digest !== row.lastCheckDigest) {
+      scheduleRequirednessRecheck(row);
+    }
   }
 }
 
