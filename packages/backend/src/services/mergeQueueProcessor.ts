@@ -514,6 +514,15 @@ class MergeQueueProcessor {
       await this.ensureStatus(row, state, 'fixing', position);
       return 'hold';
     }
+    // 2a. A fix run is already working this head whose only obstacle is a check
+    //     the App won't merge past (not a genuine queue blocker — see the
+    //     App-refusal path below). Don't re-attempt the doomed App merge on top
+    //     of the run; advance so the ready PRs behind it keep draining while the
+    //     run makes it mergeable.
+    if (runActive && !queueBlocked(row, summary) && (summary.checks?.failed ?? 0) > 0) {
+      await this.ensureStatus(row, state, 'fixing', position);
+      return 'advance';
+    }
 
     // 2b. CI still settling — required checks are queued/in-progress on the head
     //     commit, which GitHub reports as mergeStateStatus=BLOCKED. Without this
@@ -744,14 +753,28 @@ class MergeQueueProcessor {
             }
             rerunReason = rerun.reason;
           }
-          state.status = 'blocked';
-          state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
           // A rerun that produced nothing can never produce anything on a
           // re-tick either (permission / ownership are static per head) —
           // spend the budget so the gate doesn't re-attempt it every tick.
           if (checksFailing && rerunReason && rerunReason !== 'no-failing-check-runs') {
             state.rerunAttempts = MAX_ATTEMPTS;
           }
+          // A failing check must NOT be the reason the queue can't proceed. The
+          // PR was queued to LAND and the App won't merge past a red check, and
+          // reruns can't green it — so hand it to the shared fix run to figure
+          // out how to make it mergeable (bounded by `attempts`). Only block for
+          // a human once fix attempts are spent too. (A 'hard' refusal — the App
+          // genuinely can't merge, no failing check to blame — isn't fixable, so
+          // it falls straight through to the block below.)
+          if (checksFailing && state.attempts < MAX_ATTEMPTS) {
+            if ((await this.dispatchFixRun(row, state, summary, position)) === 'fired') {
+              state.attempts += 1;
+              await this.persist(row, state, position);
+            }
+            return 'advance';
+          }
+          state.status = 'blocked';
+          state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
           state.blockReason = !checksFailing
             ? `${err.message} Merge manually on GitHub, or re-queue the PR to retry.`
             : buildFailingChecksBlockReason(rerunReason, state.rerunAttempts ?? 0);
@@ -789,16 +812,34 @@ class MergeQueueProcessor {
       return 'advance';
     }
 
+    await this.dispatchFixRun(row, state, summary, position);
+    // A genuine blocker (conflict / behind / changes / threads) holds the group
+    // while its fix runs — merging a same-base sibling first would just
+    // re-conflict it. (The no-provider / task-limit cases handled inside the
+    // helper also can't advance: same-workspace siblings can't dispatch either.)
+    return 'hold';
+  }
+
+  /**
+   * Fire the shared "get this PR mergeable" cloud run for the head and record it
+   * on the queue state (status → 'fixing'). Returns 'deferred' — badge left as
+   * 'waiting', no accountable state changed — when it couldn't dispatch (no
+   * connected provider, or the free-plan task limit); neither should burn a
+   * retry. Extracted so both the genuine-blocker path (step 6) and the
+   * App-refused-over-a-non-required-check path drive the SAME run.
+   */
+  private async dispatchFixRun(
+    row: PRRow,
+    state: MergeQueueState,
+    summary: PRMergeableSummary,
+    position: number,
+  ): Promise<'fired' | 'deferred'> {
     const resolved = await resolveCloudEnv(row.workspaceId);
     if (!resolved) {
-      // No connected cloud provider — can't dispatch. Keep waiting; the
-      // desktop badge surfaces this. (The PRs behind it can't dispatch either —
-      // same workspace — so there's nothing to advance to.)
       await this.ensureStatus(row, state, 'waiting', position);
-      return 'hold';
+      return 'deferred';
     }
     const { envId, provider } = resolved;
-
     const ref = `${row.owner}/${row.repo}#${row.number}`;
     const prTitle = (row.lastSummary as { title?: string } | null)?.title ?? '';
     let created;
@@ -822,19 +863,18 @@ class MergeQueueProcessor {
     } catch (err) {
       if (err instanceof TaskLimitError) {
         // Free-plan concurrency limit — transient, like "no cloud provider":
-        // hold without burning an attempt; a slot frees up when a task ends.
+        // don't burn an attempt; a slot frees up when a task ends.
         console.log(`[mergeQueue] ${ref}: fix run deferred — ${err.message}`);
         await this.ensureStatus(row, state, 'waiting', position);
-        return 'hold';
+        return 'deferred';
       }
       throw err;
     }
-
     state.lastFixTaskId = created.id;
     state.accounted = false;
     state.status = 'fixing';
     await this.persist(row, state, position);
-    return 'hold';
+    return 'fired';
   }
 
   /**

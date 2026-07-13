@@ -584,48 +584,36 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toBe('merge conflicts with the base branch');
   });
 
-  it('blocks on an App-refused merge over a failing optional check, then self-heals when it goes green', async () => {
-    // The PostHog/posthog#67815 case: the PR is human-mergeable, but the head
-    // has a FAILING optional check — GitHub refuses App tokens (installation
-    // and user-to-server alike) with the integration-403 while a human could
-    // merge straight past it. The queue must stop hammering the doomed merge,
-    // say why, and retry by itself once the check goes green.
+  it('dispatches a fix run to make an App-unmergeable failing-check PR mergeable, then merges when green', async () => {
+    // The PostHog/posthog#67815 case: the PR is human-mergeable, but the head has
+    // a FAILING (non-required) check — GitHub refuses the App a merge past it,
+    // and here it can't be re-run. A failing check must not be the reason the
+    // queue can't proceed, so instead of parking it for a human, the queue hands
+    // it to the shared fix run to make it mergeable.
     mergeSpy.mockRejectedValueOnce(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
-    const failingOptional = {
-      ...cleanSummary(),
-      checks: { total: 5, failed: 1, inProgress: 0 },
-    };
-    const prId = await insertPr(db, { summary: failingOptional });
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+    });
 
     await mergeQueueProcessor.runOnce();
 
-    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
-      blockReason?: string;
-      mergeForbidden?: string;
-    };
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState;
     expect(mergeSpy).toHaveBeenCalledTimes(1);
-    expect(state.status).toBe('blocked');
-    expect(state.mergeForbidden).toBe('failing-checks');
-    expect(state.blockReason).toContain('check is failing');
-    expect(await countTasks(db)).toBe(0); // an optional check is not fix-run material
-    expect(blockedSpy).toHaveBeenCalledTimes(1); // human is told once, with the reason
+    expect(state.status).toBe('fixing'); // a fix run was dispatched, not a human block
+    expect(state.attempts).toBe(1);
+    expect(await countTasks(db)).toBe(1);
+    expect(blockedSpy).not.toHaveBeenCalled();
 
-    // Re-tick while the check is still red: no merge attempt, no re-notify.
-    await mergeQueueProcessor.runOnce();
-    expect(mergeSpy).toHaveBeenCalledTimes(1);
-    expect(blockedSpy).toHaveBeenCalledTimes(1);
-
-    // The check gets re-run and passes (webhook refreshes the summary) — the
-    // gate clears itself and the very next tick merges.
+    // The fix run makes it mergeable (summary refreshes green) — the next tick
+    // merges (a clean PR merges even while its own fix run is still 'running').
     await db
       .update(pullRequestsTable)
       .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
       .where(eq(pullRequestsTable.id, prId));
     await mergeQueueProcessor.runOnce();
 
-    expect(mergeSpy).toHaveBeenCalledTimes(2);
     const pr = await getPr(db, prId);
     expect(pr.state).toBe('merged');
     expect(pr.mergeQueued).toBe(false);
@@ -700,6 +688,8 @@ describe('mergeQueueProcessor', () => {
     rerunSpy.mockResolvedValue({ requested: 0, reason: 'not-rerequestable' });
     const prId = await insertPr(db, {
       summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      // Fix attempts already spent → exercises the terminal human-block path.
+      mergeQueueState: { status: 'waiting', attempts: 3, accounted: true },
     });
 
     await mergeQueueProcessor.runOnce();
@@ -730,6 +720,8 @@ describe('mergeQueueProcessor', () => {
     rerunSpy.mockResolvedValueOnce({ requested: 0, reason: 'needs-actions-permission' });
     const prId = await insertPr(db, {
       summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      // Fix attempts already spent → exercises the terminal human-block path.
+      mergeQueueState: { status: 'waiting', attempts: 3, accounted: true },
     });
 
     await mergeQueueProcessor.runOnce();
@@ -741,13 +733,37 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toContain('Actions: Read & write');
   });
 
-  it('stops re-running after the cap and blocks with the exhausted reason', async () => {
+  it('fires a fix run once reruns are exhausted, before ever parking a failing-check PR for a human', async () => {
+    // Rerun budget already spent (a genuinely-broken, not just flaky, check).
+    // Rather than block for a human, the queue dispatches a fix run to make it
+    // mergeable — and does NOT re-run (budget spent) or block yet.
     mergeSpy.mockRejectedValue(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
     const prId = await insertPr(db, {
       summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
       mergeQueueState: { status: 'waiting', attempts: 0, rerunAttempts: 3 },
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState;
+    expect(rerunSpy).not.toHaveBeenCalled(); // rerun budget spent
+    expect(state.status).toBe('fixing'); // fixed, not blocked
+    expect(state.attempts).toBe(1);
+    expect(await countTasks(db)).toBe(1);
+    expect(blockedSpy).not.toHaveBeenCalled();
+  });
+
+  it('blocks with the exhausted reason once both rerun and fix budgets are spent', async () => {
+    mergeSpy.mockRejectedValue(
+      new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+    );
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      // Both budgets spent: reruns couldn't green it and fix runs couldn't make
+      // it mergeable — only now does it wait for a human.
+      mergeQueueState: { status: 'waiting', attempts: 3, rerunAttempts: 3 },
     });
 
     await mergeQueueProcessor.runOnce();
