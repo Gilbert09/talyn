@@ -527,7 +527,11 @@ class MergeQueueProcessor {
     //     fix path immediately below.
     if (ciInFlight(summary) && !hasSettledBlocker(row, summary)) {
       await this.ensureStatus(row, state, 'waiting', position);
-      return 'hold';
+      // Waiting on CI must NOT gate the PRs queued behind this head — a slow or
+      // flaky check on the head would otherwise freeze a ready PR behind it for
+      // as long as CI churns (the reported stall). Hand the turn to the next
+      // queued PR; this head is re-evaluated next tick, FIFO, nothing lost.
+      return 'advance';
     }
 
     // 3. Account the last fix run now that it's terminal. We only ever
@@ -605,7 +609,9 @@ class MergeQueueProcessor {
               state.lastErrorAt = new Date().toISOString();
               await this.persist(row, state, position);
               await this.refreshAfterFailedMerge(row);
-              return 'hold';
+              // Re-running a check is background work — don't gate the ready PRs
+              // behind this head on it.
+              return 'advance';
             }
             // Nothing could be re-run, and nothing will change on a re-tick
             // (permission / check ownership are static for this head) — spend
@@ -730,10 +736,11 @@ class MergeQueueProcessor {
                 `${rerun.requested} of them (attempt ${state.rerunAttempts}/${MAX_ATTEMPTS})`;
               state.lastErrorAt = new Date().toISOString();
               await this.persist(row, state, position);
-              // Refetch so the re-run shows up as in-flight CI — step 2b then
-              // holds the slot as 'waiting' until the checks settle.
+              // Refetch so the re-run shows up as in-flight CI. Advance rather
+              // than hold: a rerun is background work and must not gate the ready
+              // PRs behind this head (step 2b also advances once CI is in flight).
               await this.refreshAfterFailedMerge(row);
-              return 'hold';
+              return 'advance';
             }
             rerunReason = rerun.reason;
           }

@@ -631,6 +631,30 @@ describe('mergeQueueProcessor', () => {
     expect(pr.mergeQueued).toBe(false);
   });
 
+  it('a ready PR still merges behind a head that only fails a non-required check (no head-of-line stall)', async () => {
+    // Repro of the July 2026 stall: the head is mergeable but its only red check
+    // is non-required, so the App won't merge it and re-runs it. That background
+    // work must NOT gate the CLEAN PR queued behind it — it should merge this tick.
+    mergeSpy.mockImplementation(async (_ws: unknown, _o: unknown, _r: unknown, num: unknown) => {
+      if (num === 1) throw new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'));
+      return { sha: 'merged-sha', merged: true, message: 'ok' };
+    });
+    rerunSpy.mockResolvedValue({ requested: 1 }); // the head's failing check can be re-run
+    const head = await insertPr(db, {
+      summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
+      mergeQueuedAt: new Date(Date.now() - 1000),
+    });
+    const ready = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date() });
+
+    await mergeQueueProcessor.runOnce();
+
+    // The ready PR queued behind the stuck head merged this tick.
+    expect((await getPr(db, ready)).state).toBe('merged');
+    // The head did not merge (its check is still red) but re-ran it, not gating.
+    expect((await getPr(db, head)).state).toBe('open');
+    expect(rerunSpy).toHaveBeenCalled();
+  });
+
   it('re-runs the failing checks on an App-refused merge instead of blocking, then merges when green', async () => {
     // The user-preferred path: GitHub refuses the App over a failing optional
     // check → re-run that check (bounded), wait for it, merge when green.
