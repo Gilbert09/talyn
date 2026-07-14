@@ -65,11 +65,13 @@ interface PRDetailSheetProps {
   pullRequestId: string | null;
   onClose: () => void;
   /**
-   * `overlay` (default) — a fixed slide-in over the right edge (task
-   * screen / QueuePanel). `inline` — an in-flow flex sibling so the
-   * adjacent list keeps its width and stays clickable (GitHub page).
+   * `overlay` (default) — a viewport-fixed slide-in over the right edge (task
+   * screen / QueuePanel). `contained` — absolutely positioned over the right of
+   * its (relative) parent, so it floats on top of the adjacent list instead of
+   * squishing it, while leaving the surrounding header/filters untouched (GitHub
+   * page). `inline` — an in-flow flex sibling that takes its own width.
    */
-  layout?: 'overlay' | 'inline';
+  layout?: 'overlay' | 'inline' | 'contained';
   /**
    * The list's already-loaded row for this PR. When supplied, the panel
    * renders the cached summary instantly on switch and refreshes the
@@ -364,7 +366,9 @@ export function PRDetailSheet({
         'flex w-full max-w-2xl flex-col border-l bg-background',
         layout === 'inline'
           ? 'h-full shrink-0'
-          : 'fixed inset-y-0 right-0 z-40 shadow-2xl'
+          : layout === 'contained'
+            ? 'absolute inset-y-0 right-0 z-30 shadow-2xl'
+            : 'fixed inset-y-0 right-0 z-40 shadow-2xl'
       )}
     >
       <header className="flex shrink-0 flex-col gap-3 border-b p-4">

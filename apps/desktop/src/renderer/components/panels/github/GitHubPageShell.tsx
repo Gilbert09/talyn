@@ -166,10 +166,11 @@ export function GitHubPageShell({
         </div>
       </div>
 
-      {/* Split row: the list keeps its own width (flex-1) and the detail panel
-          sits beside it as an in-flow sibling — not a fixed overlay — so every
-          row stays visible and clicking another PR switches the open panel. */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      {/* The list always keeps its full width; the detail panel floats over its
+          right edge as a `contained` overlay (absolute to this relative row)
+          rather than squishing the columns. The visible left of the list stays
+          clickable, so clicking another PR switches the open panel. */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 overflow-hidden">
           {/* First load (no rows yet): a centered spinner instead of flashing
               the empty state while the initial PR fetch is in flight. */}
@@ -215,7 +216,7 @@ export function GitHubPageShell({
         <PRDetailSheet
           pullRequestId={selectedId}
           onClose={() => setSelectedId(null)}
-          layout="inline"
+          layout="contained"
           seedRow={allRows.find((r) => r.id === selectedId) ?? null}
         />
       </div>
