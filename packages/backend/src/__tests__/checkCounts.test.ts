@@ -12,7 +12,7 @@ import {
   pruneChecksForSha,
   parseCheckRunPayload,
   _resetRequirednessRecheck,
-  _setRequirednessRecheckCooldown,
+  _flushRequirednessRecheckTrailing,
   type CheckEventInput,
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -300,15 +300,16 @@ describe('checkCounts', () => {
       // only 'a'. 'b' (a REQUIRED check) fails inside the cooldown, then no more
       // events arrive. A leading-only cooldown would drop 'b' entirely; the
       // trailing fire must recheck the settled set so the required failure surfaces.
-      _setRequirednessRecheckCooldown(20);
+      // Both ingests land well inside the 15s cooldown, so 'b' parks a trailing
+      // recheck; flush it synchronously rather than racing the real timer.
       await seedPr(7, 'sha-A', {
         blockingReason: 'checks_failed_optional',
         mergeStateStatus: 'UNSTABLE',
       });
       await ingestCheckRun(ev({ name: 'a', state: 'failure' }), targets, [7], tracked([7]));
       await ingestCheckRun(ev({ name: 'b', state: 'failure' }), targets, [7], tracked([7]));
-      expect(mockForceFetch).toHaveBeenCalledTimes(1); // leading
-      await new Promise((r) => setTimeout(r, 40)); // let the cooldown window clear
+      expect(mockForceFetch).toHaveBeenCalledTimes(1); // leading only; trailing parked
+      _flushRequirednessRecheckTrailing();
       expect(mockForceFetch).toHaveBeenCalledTimes(2); // trailing recheck of settled set
     });
   });

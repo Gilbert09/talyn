@@ -204,8 +204,7 @@ async function upsertCheckStates(states: CheckEventInput[]): Promise<void> {
 // still correcting a required-failure flip within one window. Per-process (like
 // the coalescer) — a duplicate recheck across replicas just writes the same
 // authoritative verdict, so it's harmless.
-const DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS = 15_000;
-let requirednessRecheckCooldownMs = DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS;
+const REQUIREDNESS_RECHECK_COOLDOWN_MS = 15_000;
 const requirednessRecheckAt = new Map<string, number>();
 // A recheck the cooldown suppresses parks a single trailing timer here (keyed by
 // PR id), re-armed with the latest row on each suppressed call. Without it a
@@ -216,8 +215,9 @@ const requirednessRecheckAt = new Map<string, number>();
 // and the pill stays "N non-required" over a red required check until the next
 // full poll (which the reserve-budget reconcile sweep may keep deferring on a
 // large account). The trailing fire guarantees one authoritative recheck of the
-// final failing set once the window clears.
-const requirednessRecheckTrailing = new Map<string, NodeJS.Timeout>();
+// final failing set once the window clears. The row is stored beside the timer so
+// a test can flush it synchronously (no wall-clock dependence).
+const requirednessRecheckTrailing = new Map<string, { timer: NodeJS.Timeout; row: AffectedPr }>();
 
 /** Run the authoritative by-number refresh now and stamp the cooldown. */
 function fireRequirednessRecheck(row: AffectedPr): void {
@@ -267,11 +267,11 @@ function fireRequirednessRecheck(row: AffectedPr): void {
 function scheduleRequirednessRecheck(row: AffectedPr): void {
   const now = Date.now();
   const sinceLast = now - (requirednessRecheckAt.get(row.id) ?? -Infinity);
-  if (sinceLast >= requirednessRecheckCooldownMs) {
+  if (sinceLast >= REQUIREDNESS_RECHECK_COOLDOWN_MS) {
     // Leading edge: fire now and drop any parked trailing fire it subsumes.
     const parked = requirednessRecheckTrailing.get(row.id);
     if (parked) {
-      clearTimeout(parked);
+      clearTimeout(parked.timer);
       requirednessRecheckTrailing.delete(row.id);
     }
     fireRequirednessRecheck(row);
@@ -280,26 +280,34 @@ function scheduleRequirednessRecheck(row: AffectedPr): void {
   // Inside the cooldown: (re-)arm a single trailing fire at window-end, carrying
   // the latest row so it rechecks the final failing set.
   const existing = requirednessRecheckTrailing.get(row.id);
-  if (existing) clearTimeout(existing);
+  if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     requirednessRecheckTrailing.delete(row.id);
     fireRequirednessRecheck(row);
-  }, requirednessRecheckCooldownMs - sinceLast);
+  }, REQUIREDNESS_RECHECK_COOLDOWN_MS - sinceLast);
   if (typeof timer.unref === 'function') timer.unref();
-  requirednessRecheckTrailing.set(row.id, timer);
+  requirednessRecheckTrailing.set(row.id, { timer, row });
 }
 
 /** Test helper — clear the required-ness recheck cooldown + trailing timers. */
 export function _resetRequirednessRecheck(): void {
-  for (const timer of requirednessRecheckTrailing.values()) clearTimeout(timer);
+  for (const { timer } of requirednessRecheckTrailing.values()) clearTimeout(timer);
   requirednessRecheckTrailing.clear();
   requirednessRecheckAt.clear();
-  requirednessRecheckCooldownMs = DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS;
 }
 
-/** Test helper — shrink the recheck cooldown so the trailing fire is observable. */
-export function _setRequirednessRecheckCooldown(ms: number): void {
-  requirednessRecheckCooldownMs = ms;
+/**
+ * Test helper — fire any parked trailing rechecks now (cancelling their timers),
+ * so a test can assert the suppressed-recheck-still-fires behaviour without
+ * waiting on (and racing) the real cooldown window.
+ */
+export function _flushRequirednessRecheckTrailing(): void {
+  const parked = [...requirednessRecheckTrailing.values()];
+  requirednessRecheckTrailing.clear();
+  for (const { timer, row } of parked) {
+    clearTimeout(timer);
+    fireRequirednessRecheck(row);
+  }
 }
 
 /**
