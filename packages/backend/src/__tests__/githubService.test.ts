@@ -261,6 +261,21 @@ describe('githubService', () => {
       ).rejects.toThrow(/403.*Resource not accessible by personal access token/);
     });
 
+    it("folds GitHub's x-github-request-id into a failed REST error (for GitHub support)", async () => {
+      const stub = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ message: 'Resource not accessible by personal access token' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json', 'x-github-request-id': 'ABCD:1234:5678' },
+          })
+      );
+      vi.stubGlobal('fetch', stub);
+
+      await expect(
+        githubService.mergePullRequest('ws1', 'acme', 'widgets', 7, { merge_method: 'squash' })
+      ).rejects.toThrow(/GitHub request-id: ABCD:1234:5678/);
+    });
+
     it('retries the merge as the user when the bot is refused by the org ruleset', async () => {
       // First attempt (bot / installation path) is refused with the App-specific
       // 403 — some orgs only allow an allowlist of apps to merge to a protected

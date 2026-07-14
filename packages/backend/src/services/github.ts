@@ -1212,10 +1212,20 @@ class GitHubService extends EventEmitter {
           `${method} ${redactUrl(url)}`,
         );
       }
-      const error =
+      // GitHub stamps every response with a per-request trace id; it's the
+      // handle GitHub support traces a failure by. Fold it into the surfaced
+      // error so a failing call (e.g. a 403 on merge) carries it into the logs
+      // and the desktop error — previously only the 401 path recorded it, so a
+      // 403 lost it entirely. The debugBus http record stays metadata-only (no
+      // headers), so this string is where the id lives. Safe to append: every
+      // error-message matcher (isIntegrationForbiddenMessage, isNotFound, …)
+      // uses substring/regex tests, never exact equality.
+      const requestId = response.headers.get('x-github-request-id') ?? 'n/a';
+      const baseError =
         response.status === 401
           ? 'GitHub token expired or revoked'
           : this.describeApiErrorFromText(response.status, response.statusText, bodyText);
+      const error = `${baseError} (GitHub request-id: ${requestId})`;
       debugBus.recordHttp({
         service: 'github',
         method,
