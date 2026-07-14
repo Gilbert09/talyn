@@ -12,6 +12,7 @@ import {
   pruneChecksForSha,
   parseCheckRunPayload,
   _resetRequirednessRecheck,
+  _setRequirednessRecheckCooldown,
   type CheckEventInput,
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -290,7 +291,25 @@ describe('checkCounts', () => {
       });
       await ingestCheckRun(ev({ name: 'a', state: 'failure' }), targets, [7], tracked([7]));
       await ingestCheckRun(ev({ name: 'b', state: 'failure' }), targets, [7], tracked([7]));
+      // Only the leading recheck fires synchronously; the trailing one is parked.
       expect(mockForceFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('still rechecks the final failing set when a failure lands mid-cooldown and the suite settles', async () => {
+      // The "N non-required" bug: 'a' (non-required) fails → leading recheck sees
+      // only 'a'. 'b' (a REQUIRED check) fails inside the cooldown, then no more
+      // events arrive. A leading-only cooldown would drop 'b' entirely; the
+      // trailing fire must recheck the settled set so the required failure surfaces.
+      _setRequirednessRecheckCooldown(20);
+      await seedPr(7, 'sha-A', {
+        blockingReason: 'checks_failed_optional',
+        mergeStateStatus: 'UNSTABLE',
+      });
+      await ingestCheckRun(ev({ name: 'a', state: 'failure' }), targets, [7], tracked([7]));
+      await ingestCheckRun(ev({ name: 'b', state: 'failure' }), targets, [7], tracked([7]));
+      expect(mockForceFetch).toHaveBeenCalledTimes(1); // leading
+      await new Promise((r) => setTimeout(r, 40)); // let the cooldown window clear
+      expect(mockForceFetch).toHaveBeenCalledTimes(2); // trailing recheck of settled set
     });
   });
 

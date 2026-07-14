@@ -204,22 +204,24 @@ async function upsertCheckStates(states: CheckEventInput[]): Promise<void> {
 // still correcting a required-failure flip within one window. Per-process (like
 // the coalescer) — a duplicate recheck across replicas just writes the same
 // authoritative verdict, so it's harmless.
-const REQUIREDNESS_RECHECK_COOLDOWN_MS = 15_000;
+const DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS = 15_000;
+let requirednessRecheckCooldownMs = DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS;
 const requirednessRecheckAt = new Map<string, number>();
+// A recheck the cooldown suppresses parks a single trailing timer here (keyed by
+// PR id), re-armed with the latest row on each suppressed call. Without it a
+// LEADING-only cooldown drops the recheck that matters most: when the first
+// failure in a burst is non-required (verdict → `checks_failed_optional`) and a
+// REQUIRED check fails a few seconds later — inside the cooldown — then the suite
+// settles with no further events, that required failure never triggers a recheck
+// and the pill stays "N non-required" over a red required check until the next
+// full poll (which the reserve-budget reconcile sweep may keep deferring on a
+// large account). The trailing fire guarantees one authoritative recheck of the
+// final failing set once the window clears.
+const requirednessRecheckTrailing = new Map<string, NodeJS.Timeout>();
 
-/**
- * Kick a targeted authoritative refresh (by-number, resolves per-check
- * `isRequired`) for a PR whose incremental verdict claims "only non-required
- * checks failing" but whose failing set just changed. The incremental path is
- * blind to required-ness, so a newly-failing REQUIRED check would otherwise keep
- * reading as `checks_failed_optional` ("N non-required") until the next full
- * poll — the exact bug this guards against. Fire-and-forget + debounced; the
- * refresh's own upsert broadcasts the corrected verdict.
- */
-function scheduleRequirednessRecheck(row: AffectedPr): void {
-  const now = Date.now();
-  if (now - (requirednessRecheckAt.get(row.id) ?? 0) < REQUIREDNESS_RECHECK_COOLDOWN_MS) return;
-  requirednessRecheckAt.set(row.id, now);
+/** Run the authoritative by-number refresh now and stamp the cooldown. */
+function fireRequirednessRecheck(row: AffectedPr): void {
+  requirednessRecheckAt.set(row.id, Date.now());
   void forceFetchAndUpsert({
     workspaceId: row.workspaceId,
     repositoryId: row.repositoryId,
@@ -250,9 +252,54 @@ function scheduleRequirednessRecheck(row: AffectedPr): void {
     );
 }
 
-/** Test helper — clear the required-ness recheck cooldown between cases. */
+/**
+ * Kick a targeted authoritative refresh (by-number, resolves per-check
+ * `isRequired`) for a PR whose incremental verdict claims "only non-required
+ * checks failing" but whose failing set just changed. The incremental path is
+ * blind to required-ness, so a newly-failing REQUIRED check would otherwise keep
+ * reading as `checks_failed_optional` ("N non-required") until the next full
+ * poll — the exact bug this guards against. Fire-and-forget with a leading +
+ * trailing debounce: fire at once when the window is clear, else park one
+ * trailing fire so a burst collapses to at most two rechecks (leading + a final
+ * one covering the settled failing set). The refresh's own upsert broadcasts the
+ * corrected verdict.
+ */
+function scheduleRequirednessRecheck(row: AffectedPr): void {
+  const now = Date.now();
+  const sinceLast = now - (requirednessRecheckAt.get(row.id) ?? -Infinity);
+  if (sinceLast >= requirednessRecheckCooldownMs) {
+    // Leading edge: fire now and drop any parked trailing fire it subsumes.
+    const parked = requirednessRecheckTrailing.get(row.id);
+    if (parked) {
+      clearTimeout(parked);
+      requirednessRecheckTrailing.delete(row.id);
+    }
+    fireRequirednessRecheck(row);
+    return;
+  }
+  // Inside the cooldown: (re-)arm a single trailing fire at window-end, carrying
+  // the latest row so it rechecks the final failing set.
+  const existing = requirednessRecheckTrailing.get(row.id);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    requirednessRecheckTrailing.delete(row.id);
+    fireRequirednessRecheck(row);
+  }, requirednessRecheckCooldownMs - sinceLast);
+  if (typeof timer.unref === 'function') timer.unref();
+  requirednessRecheckTrailing.set(row.id, timer);
+}
+
+/** Test helper — clear the required-ness recheck cooldown + trailing timers. */
 export function _resetRequirednessRecheck(): void {
+  for (const timer of requirednessRecheckTrailing.values()) clearTimeout(timer);
+  requirednessRecheckTrailing.clear();
   requirednessRecheckAt.clear();
+  requirednessRecheckCooldownMs = DEFAULT_REQUIREDNESS_RECHECK_COOLDOWN_MS;
+}
+
+/** Test helper — shrink the recheck cooldown so the trailing fire is observable. */
+export function _setRequirednessRecheckCooldown(ms: number): void {
+  requirednessRecheckCooldownMs = ms;
 }
 
 /**
