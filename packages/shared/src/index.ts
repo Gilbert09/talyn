@@ -118,6 +118,14 @@ export interface WorkspaceSettings {
   claudeModel?: ClaudeModelId;
   /** Which model PostHog Code runs use. Unset = {@link DEFAULT_POSTHOG_CODE_MODEL_ID}. */
   posthogCodeModel?: PostHogCodeModelId;
+  /**
+   * When on, a newly-tracked open PR the viewer AUTHORED gets "auto-keep
+   * mergeable" armed automatically (the watcher fires cloud fix runs to keep it
+   * mergeable until it merges). Scoped to authored PRs on purpose — arming it
+   * pushes commits, so it must never auto-fire on someone else's
+   * review-requested PR. Individual PRs can still be toggled by hand. Unset = off.
+   */
+  defaultAutoKeepMergeable?: boolean;
 }
 
 export interface ContinuousBuildSettings {

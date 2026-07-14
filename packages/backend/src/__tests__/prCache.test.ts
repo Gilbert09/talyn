@@ -413,6 +413,84 @@ describe('prCache — DB integration', () => {
     ).toBe('Renamed');
   });
 
+  describe('auto-keep mergeable default', () => {
+    async function setDefault(on: boolean): Promise<void> {
+      await db
+        .update(workspacesTable)
+        .set({ settings: { defaultAutoKeepMergeable: on } })
+        .where(eq(workspacesTable.id, 'ws1'));
+    }
+    async function flags(number: number) {
+      const rows = await db
+        .select({
+          autoKeepMergeable: pullRequestsTable.autoKeepMergeable,
+          autoMergeState: pullRequestsTable.autoMergeState,
+        })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.number, number));
+      return rows[0];
+    }
+
+    it('arms a new AUTHORED open PR when the workspace default is on', async () => {
+      await setDefault(true);
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 10 }),
+        authored: true,
+      });
+      const f = await flags(10);
+      expect(f.autoKeepMergeable).toBe(true);
+      expect(f.autoMergeState).toEqual({ attempts: 0, accounted: true });
+    });
+
+    it('does NOT arm a PR the viewer only reviews (not authored), even with the default on', async () => {
+      await setDefault(true);
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 11 }),
+        authored: false,
+        reviewRequested: true,
+      });
+      const f = await flags(11);
+      expect(f.autoKeepMergeable).toBe(false);
+      expect(f.autoMergeState).toBeNull();
+    });
+
+    it('leaves a new authored PR off when the workspace default is off', async () => {
+      await setDefault(false);
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 12 }),
+        authored: true,
+      });
+      const f = await flags(12);
+      expect(f.autoKeepMergeable).toBe(false);
+      expect(f.autoMergeState).toBeNull();
+    });
+
+    it('never arms retroactively on the update path — only on first insert', async () => {
+      await setDefault(false);
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 13 }),
+        authored: true,
+      });
+      // Flip the default on, then re-upsert the SAME PR (update path).
+      await setDefault(true);
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ number: 13, title: 'Updated' }),
+        authored: true,
+      });
+      expect((await flags(13)).autoKeepMergeable).toBe(false);
+    });
+  });
+
   describe('linkTaskToPullRequest', () => {
     async function seedTask(): Promise<string> {
       const id = `task-${Math.random().toString(36).slice(2, 8)}`;

@@ -4,6 +4,7 @@ import { getDbClient, type Database } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
   repositories as repositoriesTable,
+  workspaces as workspacesTable,
 } from '../db/schema.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import {
@@ -547,6 +548,25 @@ function isFresh(lastPolledAt: Date, ttlMs: number): boolean {
   return Date.now() - lastPolledAt.getTime() < ttlMs;
 }
 
+/**
+ * The workspace's "auto-keep mergeable by default" setting. Read only when a
+ * brand-new authored PR is being inserted (a rare event — never the hot update
+ * path), and projected to the small `settings` jsonb so the large `logo` column
+ * never ships.
+ */
+async function workspaceDefaultAutoKeepMergeable(
+  db: Database,
+  workspaceId: string
+): Promise<boolean> {
+  const rows = await db
+    .select({ settings: workspacesTable.settings })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  const settings = (rows[0]?.settings as { defaultAutoKeepMergeable?: boolean } | null) ?? {};
+  return settings.defaultAutoKeepMergeable === true;
+}
+
 async function upsertRow(
   db: Database,
   opts: {
@@ -592,6 +612,19 @@ async function upsertRow(
   }
   const lastSummary = summaryToJsonb(summary);
   const cursors = nextCursors(summary);
+  // A newly-tracked open PR the viewer AUTHORED inherits the workspace's
+  // "auto-keep mergeable by default" setting. Scoped to authored PRs on purpose:
+  // arming it dispatches cloud fix runs that PUSH COMMITS, so it must never
+  // auto-fire on someone else's review-requested PR. Only computed on a genuine
+  // insert of an authored open PR — never on updates or non-authored rows.
+  let autoKeepMergeable = false;
+  let autoMergeState: { attempts: number; accounted: boolean } | null = null;
+  if (!opts.existingId && opts.authored === true && summary.state === 'open') {
+    if (await workspaceDefaultAutoKeepMergeable(db, opts.workspaceId)) {
+      autoKeepMergeable = true;
+      autoMergeState = { attempts: 0, accounted: true };
+    }
+  }
   if (opts.existingId) {
     // Update path — leave taskId alone (set on first insert only).
     await db
@@ -635,6 +668,8 @@ async function upsertRow(
       lastReviewCommentId: cursors.lastReviewCommentId,
       lastCommentId: cursors.lastCommentId,
       lastCheckDigest: cursors.lastCheckDigest,
+      autoKeepMergeable,
+      autoMergeState,
       createdAt: now,
       updatedAt: now,
     });
@@ -652,6 +687,11 @@ async function upsertRow(
     lastSummary,
     ...(opts.reviewRequested === undefined ? {} : { reviewRequested: opts.reviewRequested }),
     ...(opts.authored === undefined ? {} : { authored: opts.authored }),
+    // Surface the auto-armed state on first insert so the toggle reflects it
+    // without waiting for a full fetch (matches the toggle route's emit shape).
+    ...(autoKeepMergeable
+      ? { autoKeepMergeable: true, autoMergeState: { attempts: 0, paused: false } }
+      : {}),
   });
   return id;
 }

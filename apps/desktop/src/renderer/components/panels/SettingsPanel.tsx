@@ -636,6 +636,8 @@ function WorkspaceSettings() {
             )}
           </Card>
 
+          <AutoKeepMergeableDefaultToggle />
+
           <Card className="p-4 border-destructive/30">
             <h4 className="font-medium mb-1">Delete workspace</h4>
             <p className="text-sm text-muted-foreground mb-3">
@@ -1038,6 +1040,63 @@ export function ProviderConnectCards() {
  * back to Auto). Always shown so the default is discoverable even with one (or
  * zero) providers connected. Persists to `workspace.settings.defaultCloudProvider`.
  */
+/**
+ * Workspace default: auto-arm "auto-keep mergeable" on every new PR the viewer
+ * authored. Persists to `workspace.settings.defaultAutoKeepMergeable`; the
+ * backend applies it only to authored PRs on first sighting (never a PR you're
+ * only reviewing). Individual PRs stay hand-toggleable in the PR detail sheet.
+ */
+function AutoKeepMergeableDefaultToggle() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const [saving, setSaving] = useState(false);
+
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const enabled = workspace?.settings?.defaultAutoKeepMergeable === true;
+
+  const onToggle = async (next: boolean) => {
+    if (!currentWorkspaceId) return;
+    setSaving(true);
+    try {
+      const settings = { defaultAutoKeepMergeable: next } as Workspace['settings'];
+      await api.workspaces.update(currentWorkspaceId, { settings });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, ...settings } as Workspace['settings'] }
+            : w,
+        ),
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={saving || !currentWorkspaceId}
+          onChange={(e) => void onToggle(e.target.checked)}
+          className="mt-1"
+        />
+        <div className="flex-1">
+          <div className="font-medium text-sm">Auto-keep new PRs mergeable</div>
+          <p className="text-xs text-muted-foreground mt-1">
+            When a PR you authored first shows up in this workspace, automatically turn on
+            “Auto-keep mergeable” — a cloud agent fixes conflicts, CI, and review comments to keep
+            it mergeable until it merges. Applies only to PRs you opened, never ones you’re just
+            reviewing. You can still toggle any individual PR from its detail panel.
+          </p>
+        </div>
+      </label>
+    </Card>
+  );
+}
+
 function CloudProviderDefaultSelector() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
