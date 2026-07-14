@@ -619,6 +619,36 @@ describe('mergeQueueProcessor', () => {
     expect(pr.mergeQueued).toBe(false);
   });
 
+  it('refreshes a "fixing" head and merges it once the fix run has made it mergeable, even while that run is still active and the GraphQL budget is deferring', async () => {
+    // The stale-cache stall: a fix run updated the branch (GitHub now CLEAN) but
+    // the cached mergeStateStatus still reads BEHIND (queueBlocked), and the
+    // opportunistic refresh is deferred for a big account — so the queue held
+    // 'fixing' on a PR that was actually mergeable.
+    vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(true); // budget in reserve
+    await insertTask(db, 'fix-1', 'in_progress', 'pr-1'); // fix run still running
+    const prId = await insertPr(db, {
+      summary: { ...cleanSummary(), mergeStateStatus: 'BEHIND' }, // stale blocker
+      mergeQueueState: { status: 'fixing', attempts: 1, lastFixTaskId: 'fix-1', accounted: false },
+    });
+    // Old enough that the freshness re-poll applies.
+    await db
+      .update(pullRequestsTable)
+      .set({ lastPolledAt: new Date(Date.now() - 120_000) })
+      .where(eq(pullRequestsTable.id, prId));
+    // The refresh reflects the fix run's result: the branch is now up to date.
+    refreshSpy.mockImplementation(async () => {
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+        .where(eq(pullRequestsTable.id, prId));
+    });
+
+    await mergeQueueProcessor.runOnce();
+
+    expect(refreshSpy).toHaveBeenCalled(); // refreshed despite the budget deferring
+    expect((await getPr(db, prId)).state).toBe('merged'); // and merged, run still active
+  });
+
   it('a ready PR still merges behind a head that only fails a non-required check (no head-of-line stall)', async () => {
     // Repro of the July 2026 stall: the head is mergeable but its only red check
     // is non-required, so the App won't merge it and re-runs it. That background
