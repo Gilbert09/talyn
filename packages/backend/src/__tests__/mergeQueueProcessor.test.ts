@@ -584,12 +584,12 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toBe('merge conflicts with the base branch');
   });
 
-  it('dispatches a fix run to make an App-unmergeable failing-check PR mergeable, then merges when green', async () => {
-    // The PostHog/posthog#67815 case: the PR is human-mergeable, but the head has
-    // a FAILING (non-required) check — GitHub refuses the App a merge past it,
-    // and here it can't be re-run. A failing check must not be the reason the
-    // queue can't proceed, so instead of parking it for a human, the queue hands
-    // it to the shared fix run to make it mergeable.
+  it('blocks an App-unmergeable failing-check PR and advances, without churning a fix run', async () => {
+    // GitHub refuses the App a merge past a failing (non-required) check that
+    // can't be re-run here. A cloud fix run can't grant the App merge permission,
+    // and dispatching one left the PR stuck in 'fixing' gating the whole group —
+    // so the queue BLOCKS this PR (with an actionable reason) and moves on to the
+    // next queued PR. The 4b gate self-heals if the check later goes green.
     mergeSpy.mockRejectedValueOnce(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
@@ -599,24 +599,14 @@ describe('mergeQueueProcessor', () => {
 
     await mergeQueueProcessor.runOnce();
 
-    const state = (await getPr(db, prId)).mergeQueueState as QueueState;
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      mergeForbidden?: string;
+    };
     expect(mergeSpy).toHaveBeenCalledTimes(1);
-    expect(state.status).toBe('fixing'); // a fix run was dispatched, not a human block
-    expect(state.attempts).toBe(1);
-    expect(await countTasks(db)).toBe(1);
-    expect(blockedSpy).not.toHaveBeenCalled();
-
-    // The fix run makes it mergeable (summary refreshes green) — the next tick
-    // merges (a clean PR merges even while its own fix run is still 'running').
-    await db
-      .update(pullRequestsTable)
-      .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
-      .where(eq(pullRequestsTable.id, prId));
-    await mergeQueueProcessor.runOnce();
-
-    const pr = await getPr(db, prId);
-    expect(pr.state).toBe('merged');
-    expect(pr.mergeQueued).toBe(false);
+    expect(state.status).toBe('blocked'); // blocked + advance, NOT a fix-run churn
+    expect(state.mergeForbidden).toBe('failing-checks');
+    expect(await countTasks(db)).toBe(0); // no fix run dispatched
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes a "fixing" head and merges it once the fix run has made it mergeable, even while that run is still active and the GraphQL budget is deferring', async () => {
@@ -763,10 +753,11 @@ describe('mergeQueueProcessor', () => {
     expect(state.blockReason).toContain('Actions: Read & write');
   });
 
-  it('fires a fix run once reruns are exhausted, before ever parking a failing-check PR for a human', async () => {
+  it('blocks a failing-check PR once its rerun budget is spent, without churning a fix run', async () => {
     // Rerun budget already spent (a genuinely-broken, not just flaky, check).
-    // Rather than block for a human, the queue dispatches a fix run to make it
-    // mergeable — and does NOT re-run (budget spent) or block yet.
+    // The App still can't merge past it and a fix run can't grant permission — so
+    // the queue blocks for a human and moves on, rather than dispatching a doomed
+    // fix run that would leave the PR stuck in 'fixing'.
     mergeSpy.mockRejectedValue(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
@@ -777,22 +768,24 @@ describe('mergeQueueProcessor', () => {
 
     await mergeQueueProcessor.runOnce();
 
-    const state = (await getPr(db, prId)).mergeQueueState as QueueState;
+    const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+      blockReason?: string;
+    };
     expect(rerunSpy).not.toHaveBeenCalled(); // rerun budget spent
-    expect(state.status).toBe('fixing'); // fixed, not blocked
-    expect(state.attempts).toBe(1);
-    expect(await countTasks(db)).toBe(1);
-    expect(blockedSpy).not.toHaveBeenCalled();
+    expect(state.status).toBe('blocked'); // blocked, not a fix-run churn
+    expect(await countTasks(db)).toBe(0); // no fix run dispatched
+    expect(state.blockReason).toContain('kept failing');
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks with the exhausted reason once both rerun and fix budgets are spent', async () => {
+  it('blocks with the exhausted reason once the rerun budget is spent', async () => {
     mergeSpy.mockRejectedValue(
       new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
     );
     const prId = await insertPr(db, {
       summary: { ...cleanSummary(), checks: { total: 5, failed: 1, inProgress: 0 } },
-      // Both budgets spent: reruns couldn't green it and fix runs couldn't make
-      // it mergeable — only now does it wait for a human.
+      // Rerun budget spent: the failing check kept failing across reruns, and the
+      // App still won't merge past it — so it waits for a human.
       mergeQueueState: { status: 'waiting', attempts: 3, rerunAttempts: 3 },
     });
 

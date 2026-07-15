@@ -766,20 +766,16 @@ class MergeQueueProcessor {
           if (checksFailing && rerunReason && rerunReason !== 'no-failing-check-runs') {
             state.rerunAttempts = MAX_ATTEMPTS;
           }
-          // A failing check must NOT be the reason the queue can't proceed. The
-          // PR was queued to LAND and the App won't merge past a red check, and
-          // reruns can't green it — so hand it to the shared fix run to figure
-          // out how to make it mergeable (bounded by `attempts`). Only block for
-          // a human once fix attempts are spent too. (A 'hard' refusal — the App
-          // genuinely can't merge, no failing check to blame — isn't fixable, so
-          // it falls straight through to the block below.)
-          if (checksFailing && state.attempts < MAX_ATTEMPTS) {
-            if ((await this.dispatchFixRun(row, state, summary, position)) === 'fired') {
-              state.attempts += 1;
-              await this.persist(row, state, position);
-            }
-            return 'advance';
-          }
+          // The App can't merge THIS PR — GitHub refused it (a red check it won't
+          // merge past, even an "optional" one, or a branch ruleset that excludes
+          // the App on this PR). A cloud fix run can't grant merge permission, and
+          // dispatching one here left the PR churning in 'fixing' and gating the
+          // whole group (the reported stall). So once reruns can't green it, BLOCK
+          // this PR with an actionable reason and ADVANCE to the next queued PR —
+          // the "block and move on" mechanic. The 4b gate self-heals a
+          // 'failing-checks' block the moment the checks go green (a rerun on
+          // GitHub, or a new head), so a transient red check still retries without
+          // us churning a fix run.
           state.status = 'blocked';
           state.mergeForbidden = checksFailing ? 'failing-checks' : 'hard';
           state.blockReason = !checksFailing
