@@ -1016,6 +1016,20 @@ describe('mergeQueueProcessor', () => {
       expect(state.resignAttempts).toBe(1); // not bumped — didn't pile on a second run
       expect(await countTasks(db)).toBe(1); // still just the in-flight one
       expect(mergeSpy).not.toHaveBeenCalled();
+      expect(mockUnsignedCount).not.toHaveBeenCalled(); // no per-tick signature poll while a run is in flight
+    });
+
+    it('defers the signing check (no signature fetch, no merge) when the GraphQL budget is in reserve', async () => {
+      mockRequiresSigning.mockResolvedValue(true);
+      mockUnsignedCount.mockResolvedValue(2);
+      vi.spyOn(graphqlBudget, 'shouldDefer').mockReturnValue(true); // budget in reserve
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mockUnsignedCount).not.toHaveBeenCalled(); // didn't spend a scarce point on signatures
+      expect(mergeSpy).not.toHaveBeenCalled(); // and didn't attempt the doomed merge
+      expect((await getPr(db, prId)).state).toBe('open'); // deferred to a later tick
     });
 
     it('blocks with the signing reason once the re-sign budget is spent', async () => {
