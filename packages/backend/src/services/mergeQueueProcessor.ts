@@ -221,6 +221,19 @@ function queueBlocked(row: PRRow, summary: PRMergeableSummary): boolean {
 }
 
 /**
+ * GitHub can't merge a DRAFT PR — the merge API 405s. The queue must never enter
+ * the merge path for one (a draft reads as not-queue-blocked, so without this it
+ * would attempt a doomed merge every tick and hold the group). Detected from the
+ * summary's `draft` flag OR `mergeStateStatus === 'DRAFT'` (belt and suspenders).
+ */
+function isDraftHead(row: PRRow, summary: PRMergeableSummary): boolean {
+  return summary.draft === true || mergeStateOf(row) === 'DRAFT';
+}
+
+const DRAFT_BLOCK_REASON =
+  'This PR is a draft — mark it ready for review and the merge queue will merge it automatically.';
+
+/**
  * The head commit still has queued / in-progress checks reporting. GitHub
  * surfaces such a PR as `mergeStateStatus = BLOCKED` — the same status it uses
  * for a *failed* required check — so `needsUpdate`/`queueBlocked` can't tell
@@ -505,6 +518,25 @@ class MergeQueueProcessor {
     if (state.status === 'merging' && (await this.verifyMerged(row))) {
       await this.recordMerged(row);
       return 'hold';
+    }
+
+    // 1b. Draft head — GitHub refuses to merge a draft (405). A draft reads as
+    //     not-queue-blocked, so without this the clean path would attempt a
+    //     doomed merge every tick and HOLD the whole group behind it. Surface it
+    //     and ADVANCE so the ready PRs behind it keep draining; it self-heals the
+    //     moment the PR is marked ready for review (this guard stops firing, and
+    //     a now-clean head merges in step 5). No notification — a draft isn't a
+    //     queue failure, just work the author hasn't finished.
+    if (isDraftHead(row, summary)) {
+      if (state.status !== 'blocked' || state.blockReason !== DRAFT_BLOCK_REASON) {
+        state.status = 'blocked';
+        state.blockReason = DRAFT_BLOCK_REASON;
+        // Not an App refusal / retry-exhausted block — clear any stale gate so
+        // un-drafting funnels straight back into the merge path.
+        state.mergeForbidden = undefined;
+        await this.persist(row, state, position);
+      }
+      return 'advance';
     }
 
     // 2. Active-run guard — never fire a NEW run while one is already working

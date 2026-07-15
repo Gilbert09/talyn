@@ -43,6 +43,10 @@ export interface PRMergeableSummary {
   blockingReason: PRBlockingReason;
   checks: { total: number; failed: number; inProgress?: number };
   unresolvedReviewThreads?: number;
+  /** GitHub can't merge a draft PR — the merge queue must never enter the merge
+   *  path for one (it 405s). Persisted in the summary; also reflected as
+   *  `mergeStateStatus === 'DRAFT'`. */
+  draft?: boolean;
 }
 
 /**

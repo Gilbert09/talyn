@@ -117,6 +117,11 @@ function pendingChecksSummary(base = 'main') {
   };
 }
 
+/** A draft PR — GitHub refuses to merge it (reports mergeStateStatus 'DRAFT'). */
+function draftSummary(base = 'main') {
+  return { ...cleanSummary(base), draft: true, mergeStateStatus: 'DRAFT' };
+}
+
 async function seedBase(db: Database): Promise<void> {
   await seedUser(db, { id: OWNER });
   await db.insert(workspacesTable).values({ id: 'ws1', ownerId: OWNER, name: 'ws', settings: {} });
@@ -886,6 +891,64 @@ describe('mergeQueueProcessor', () => {
     expect(mergeSpy).toHaveBeenCalledTimes(1); // never re-attempted
     expect(blockedSpy).toHaveBeenCalledTimes(1); // never re-notified
     expect((await getPr(db, prId)).mergeQueued).toBe(true); // stays queued for the badge
+  });
+
+  describe('draft head', () => {
+    it('does NOT attempt a merge, blocks with a draft reason, and advances so a ready sibling merges', async () => {
+      const draft = await insertPr(db, {
+        summary: draftSummary(),
+        mergeQueuedAt: new Date(Date.now() - 1000),
+      });
+      const ready = await insertPr(db, { summary: cleanSummary(), mergeQueuedAt: new Date() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const draftState = (await getPr(db, draft)).mergeQueueState as QueueState & {
+        blockReason?: string;
+      };
+      expect((await getPr(db, draft)).state).toBe('open'); // never merged
+      expect(draftState.status).toBe('blocked');
+      expect(draftState.blockReason).toMatch(/draft/i);
+      // The ready PR queued behind the draft merged this tick — not gated.
+      expect((await getPr(db, ready)).state).toBe('merged');
+      // Only the ready PR was merge-attempted; the draft never hit the API.
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(await countTasks(db)).toBe(0); // and no fix run dispatched
+    });
+
+    it('detects a draft via mergeStateStatus even without the draft flag', async () => {
+      const prId = await insertPr(db, { summary: { ...cleanSummary(), mergeStateStatus: 'DRAFT' } });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'blocked' });
+    });
+
+    it('does not send a blocked notification for a draft, and does not churn writes on re-ticks', async () => {
+      const prId = await insertPr(db, { summary: draftSummary() });
+
+      await mergeQueueProcessor.runOnce();
+      expect(blockedSpy).not.toHaveBeenCalled(); // a draft isn't a queue failure
+      expect(mergeSpy).not.toHaveBeenCalled();
+
+      await mergeQueueProcessor.runOnce();
+      await mergeQueueProcessor.runOnce();
+      expect(blockedSpy).not.toHaveBeenCalled();
+      expect((await getPr(db, prId)).mergeQueueState).toMatchObject({ status: 'blocked' });
+    });
+
+    it('merges once the PR is marked ready for review (self-heals from the draft block)', async () => {
+      const prId = await insertPr(db, {
+        summary: cleanSummary(), // no longer a draft
+        mergeQueueState: { status: 'blocked', attempts: 0, blockReason: 'This PR is a draft — mark it ready…' },
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, prId)).state).toBe('merged');
+    });
   });
 
   describe('signed-commits gate', () => {
