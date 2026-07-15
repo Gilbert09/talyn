@@ -241,51 +241,118 @@ export interface BatchPRByNumberResult {
   pr: PRSummary | null;
 }
 
+// ---------- by-number fetch de-dup (poll amplification) ----------
+//
+// A PR's GraphQL summary is byte-identical for every workspace on the same
+// GitHub App installation — the PR is the same object on GitHub. When many
+// workspaces track one big shared org (16 track PostHog/posthog here), each
+// workspace's poll re-fetches the SAME PRs against the ONE shared GraphQL point
+// budget — pure amplification (the webhook fan-out already de-dups this; the
+// poll/sweep never did). This short-TTL cache, keyed by the PR's identity
+// (owner/repo#number, not the workspace), lets N workspaces polling the same PR
+// within one window share a single fetch. Opt-in via `dedupeWindowMs`: only the
+// per-workspace poll passes it — the merge queue / detail refresh stay uncached
+// and always fresh. Window is deliberately short (≤ the poll's own freshness
+// tolerance), so no workspace ever sees data staler than it already accepts.
+interface ByNumberCacheEntry {
+  at: number;
+  pr: PRSummary | null;
+}
+const byNumberCache = new Map<string, ByNumberCacheEntry>();
+const BY_NUMBER_CACHE_MAX = 5000; // ~5k tracked PRs — prune expired once past this.
+
+function byNumberCacheKey(owner: string, repo: string, n: number): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${n}`;
+}
+
+/** Test helper — clear the by-number fetch cache between cases. */
+export function _resetByNumberCache(): void {
+  byNumberCache.clear();
+}
+
 /**
  * Fetch PR summaries by number (chunked + bounded-concurrency, same as
  * batchPullRequests). Unlike the branch variant this returns
  * merged/closed PRs too — `pullRequest(number:)` has no `states` filter.
+ *
+ * Pass `dedupeWindowMs` to serve PRs fetched within that window from the shared
+ * {@link byNumberCache} instead of re-fetching — used by the per-workspace poll
+ * so N workspaces tracking the same repo don't each spend a GraphQL point on the
+ * same PR (see the cache note above). Omit it (the default) for fresh fetches.
  */
 export async function batchPullRequestsByNumber(opts: {
   workspaceId: string;
   owner: string;
   repo: string;
   numbers: number[];
+  dedupeWindowMs?: number;
 }): Promise<BatchPRByNumberResult[]> {
-  const { workspaceId, owner, repo, numbers } = opts;
+  const { workspaceId, owner, repo, numbers, dedupeWindowMs } = opts;
   if (numbers.length === 0) return [];
 
-  const chunks: number[][] = [];
-  for (let i = 0; i < numbers.length; i += CHUNK_SIZE) {
-    chunks.push(numbers.slice(i, i + CHUNK_SIZE));
+  // Split into cache hits (within the window) and the numbers we must fetch.
+  const now = Date.now();
+  const hits = new Map<number, PRSummary | null>();
+  const toFetch: number[] = [];
+  if (dedupeWindowMs) {
+    for (const n of numbers) {
+      const entry = byNumberCache.get(byNumberCacheKey(owner, repo, n));
+      if (entry && now - entry.at < dedupeWindowMs) hits.set(n, entry.pr);
+      else toFetch.push(n);
+    }
+  } else {
+    toFetch.push(...numbers);
   }
 
-  const results: BatchPRByNumberResult[] = [];
-  let cursor = 0;
-  async function worker(): Promise<void> {
-    while (cursor < chunks.length) {
-      const idx = cursor++;
-      const chunk = chunks[idx];
-      const query = makeBatchPullRequestsByNumberQuery(chunk);
-      const data = await githubService.executeGraphql<BatchByNumberResponse>(
-        workspaceId,
-        query,
-        { owner, repo }
-      );
-      await topUpCheckContexts(extractByNumberPRs(data, chunk.length), {
-        workspaceId,
-        owner,
-        repo,
-      });
-      results.push(...decodeBatchByNumberResponse(chunk, data, owner, repo));
+  const fetched: BatchPRByNumberResult[] = [];
+  if (toFetch.length > 0) {
+    const chunks: number[][] = [];
+    for (let i = 0; i < toFetch.length; i += CHUNK_SIZE) {
+      chunks.push(toFetch.slice(i, i + CHUNK_SIZE));
+    }
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < chunks.length) {
+        const idx = cursor++;
+        const chunk = chunks[idx];
+        const query = makeBatchPullRequestsByNumberQuery(chunk);
+        const data = await githubService.executeGraphql<BatchByNumberResponse>(
+          workspaceId,
+          query,
+          { owner, repo }
+        );
+        await topUpCheckContexts(extractByNumberPRs(data, chunk.length), {
+          workspaceId,
+          owner,
+          repo,
+        });
+        fetched.push(...decodeBatchByNumberResponse(chunk, data, owner, repo));
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, chunks.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
+    if (dedupeWindowMs) {
+      if (byNumberCache.size > BY_NUMBER_CACHE_MAX) {
+        for (const [k, v] of byNumberCache) {
+          if (now - v.at >= dedupeWindowMs) byNumberCache.delete(k);
+        }
+      }
+      for (const r of fetched) {
+        byNumberCache.set(byNumberCacheKey(owner, repo, r.number), { at: now, pr: r.pr });
+      }
     }
   }
-  const workers = Array.from(
-    { length: Math.min(CONCURRENCY, chunks.length) },
-    () => worker()
-  );
-  await Promise.all(workers);
-  return results;
+
+  if (hits.size === 0) return fetched;
+  // Merge cache hits + freshly fetched, preserving the caller's `numbers` order.
+  const fetchedByNumber = new Map(fetched.map((r) => [r.number, r.pr]));
+  return numbers.map((n) => ({
+    number: n,
+    pr: hits.has(n) ? (hits.get(n) ?? null) : (fetchedByNumber.get(n) ?? null),
+  }));
 }
 
 // ---------- statusCheckRollup pagination ----------

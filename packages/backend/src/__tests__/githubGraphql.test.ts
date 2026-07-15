@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   aliasForBranch,
   batchPullRequests,
+  batchPullRequestsByNumber,
+  _resetByNumberCache,
   computeBlockingReason,
   reconcileBlockingReason,
   computeCheckDigest,
@@ -1288,6 +1290,68 @@ describe('decodeBatchResponse', () => {
     );
     expect(merged[0].pr?.state).toBe('merged');
     expect(merged[0].pr?.mergedAt).toBe('2026-01-01T00:00:00Z');
+  });
+});
+
+describe('batchPullRequestsByNumber — cross-workspace fetch de-dup', () => {
+  beforeEach(() => {
+    _resetByNumberCache();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetByNumberCache();
+  });
+
+  // Every alias comes back as a missing node → decodes to { pr: null }; we assert
+  // the GraphQL call count + which numbers each query fetched, which is what the
+  // de-dup is about (the pr content is irrelevant here).
+  const mockGraphql = () =>
+    vi.spyOn(githubService, 'executeGraphql').mockResolvedValue({ repository: {} } as never);
+
+  it('without dedupeWindowMs, every call fetches (no cache)', async () => {
+    const spy = mockGraphql();
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1] });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1] });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves a PR fetched within the window from cache — one GraphQL call for two workspaces', async () => {
+    const spy = mockGraphql();
+    const shared = { owner: 'acme', repo: 'w', numbers: [1, 2, 3], dedupeWindowMs: 60_000 };
+    const a = await batchPullRequestsByNumber({ workspaceId: 'wsA', ...shared });
+    const b = await batchPullRequestsByNumber({ workspaceId: 'wsB', ...shared });
+    expect(spy).toHaveBeenCalledTimes(1); // wsB fully served from wsA's fetch
+    expect(a.map((r) => r.number)).toEqual([1, 2, 3]);
+    expect(b.map((r) => r.number)).toEqual([1, 2, 3]);
+  });
+
+  it('fetches only the numbers not already cached, preserving order', async () => {
+    const spy = mockGraphql();
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1, 2], dedupeWindowMs: 60_000 });
+    spy.mockClear();
+    const out = await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1, 2, 4], dedupeWindowMs: 60_000 });
+    expect(spy).toHaveBeenCalledTimes(1);
+    const query = spy.mock.calls[0][1] as string;
+    expect(query).toContain('pullRequest(number: 4)'); // only the miss is fetched
+    expect(query).not.toContain('pullRequest(number: 1)');
+    expect(query).not.toContain('pullRequest(number: 2)');
+    expect(out.map((r) => r.number)).toEqual([1, 2, 4]); // hits + fetch merged in order
+  });
+
+  it('re-fetches once the window has elapsed', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const spy = mockGraphql();
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
+    nowSpy.mockReturnValue(1_000_000 + 61_000); // window elapsed
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys by owner/repo/number — a different repo is a cache miss', async () => {
+    const spy = mockGraphql();
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'other', numbers: [1], dedupeWindowMs: 60_000 });
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
 

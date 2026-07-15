@@ -67,6 +67,13 @@ export function createRestSweepCache(): RestSweepCache {
 const UNKNOWN_MERGEABLE_RETRIES = 3;
 const UNKNOWN_MERGEABLE_BACKOFF_MS = 1_500;
 
+// Cross-workspace fetch de-dup window for the bulk poll. When many workspaces
+// track one shared org, a PR fetched for one this window serves the rest (see
+// `batchPullRequestsByNumber`'s dedupe note). 60s = the active-cohort freshness
+// bound, so this never serves data staler than the poll already tolerates, while
+// collapsing the same-PR-across-workspaces amplification within a poll pass.
+const BULK_POLL_DEDUPE_MS = 60_000;
+
 // How long a forced poll (user-facing Refresh) waits for an in-flight tick
 // before giving up. Keeps `POST /repositories/poll` bounded — see
 // `drainInFlightTick`.
@@ -328,6 +335,12 @@ class PRMonitorService extends EventEmitter {
           owner: repo.owner,
           repo: repo.repo,
           numbers: staleNumbers,
+          // De-dup the shared-repo amplification: when many workspaces poll the
+          // same big org (16 track PostHog/posthog), each re-fetches the same PRs
+          // against one GraphQL budget. A PR fetched for one workspace this window
+          // serves the others too. Window ≤ the poll's own freshness tolerance,
+          // so no workspace sees data staler than it already accepts.
+          dedupeWindowMs: BULK_POLL_DEDUPE_MS,
         })
       );
 
