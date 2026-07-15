@@ -12,6 +12,8 @@ import { createCloudTask } from './taskCreate.js';
 import { TaskLimitError } from './billing/entitlements.js';
 import { prMonitorService } from './prMonitor.js';
 import { githubService, MergeNotPermittedForAppError } from './github.js';
+import { fetchUnsignedCommitCount } from './githubGraphql.js';
+import { requiresSignedCommits, markSigningRequired } from './repoSigning.js';
 import { githubRateGate } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from './websocket.js';
@@ -65,9 +67,12 @@ interface MergeQueueState {
    * went green, or a new head reset them). `'hard'` — refused with no failing
    * check to blame; unknown cause, so stay blocked until dequeue/requeue
    * (QUEUE_RESET) rather than re-attempt a doomed merge every tick.
+   * `'unsigned-commits'` — the base branch requires signed commits and this PR
+   * has unsigned ones; re-signing (via the fix task) couldn't resolve it within
+   * budget, so it's blocked until the branch is signed + re-queued.
    * Legacy `true` (one deploy's worth) is normalized at the gate.
    */
-  mergeForbidden?: 'failing-checks' | 'hard' | boolean;
+  mergeForbidden?: 'failing-checks' | 'hard' | 'unsigned-commits' | boolean;
   /**
    * How many times the queue has re-run this head's failing checks after an
    * App-refused merge (its own budget, separate from the fix-run `attempts`;
@@ -75,6 +80,12 @@ interface MergeQueueState {
    * head / checks green) and by dequeue.
    */
   rerunAttempts?: number;
+  /**
+   * How many re-sign fix runs the queue has fired for a base branch that
+   * requires signed commits (its own budget, capped by MAX_ATTEMPTS). Reset by
+   * dequeue/requeue.
+   */
+  resignAttempts?: number;
 }
 
 // Only the columns this processor touches — avoids `select()`-ing every PR
@@ -111,6 +122,7 @@ function readState(row: PRRow): MergeQueueState {
     blockReason: s?.blockReason,
     mergeForbidden: s?.mergeForbidden,
     rerunAttempts: s?.rerunAttempts,
+    resignAttempts: s?.resignAttempts,
   };
 }
 
@@ -599,7 +611,10 @@ class MergeQueueProcessor {
             ? 'failing-checks'
             : 'hard'
           : state.mergeForbidden;
-      if (kind === 'hard') {
+      // 'hard' (unknown, unfixable) and 'unsigned-commits' (re-sign budget
+      // spent) both stay blocked until a human merges/re-queues — don't re-poll
+      // signatures or re-attempt the doomed merge every tick.
+      if (kind === 'hard' || kind === 'unsigned-commits') {
         return 'advance';
       }
       if (checksFailing) {
@@ -672,6 +687,11 @@ class MergeQueueProcessor {
         .where(eq(pullRequestsTable.id, row.id))
         .limit(1);
       if (!current[0] || current[0].state !== 'open' || !current[0].mergeQueued) return 'hold';
+      // 5a. Signing gate — on a base branch that requires signed commits, a PR
+      //     with unsigned commits is refused by GitHub. Re-sign via the fix task
+      //     instead of attempting the doomed merge (scoped to signing repos).
+      const signingVerdict = await this.handleSigningGate(row, state, summary, position, runActive);
+      if (signingVerdict) return signingVerdict;
       state.status = 'merging';
       await this.persist(row, state, position);
       try {
@@ -720,6 +740,26 @@ class MergeQueueProcessor {
         // granted), or there's no failing check to blame; the 4b gate still
         // self-heals `failing-checks` blocks the moment the checks go green.
         if (err instanceof MergeNotPermittedForAppError) {
+          // Safety net for the signing case the proactive 5a gate missed (a
+          // ruleset probe the App couldn't read, or a race). If we can SEE
+          // unsigned commits, the refusal is (at least partly) unsigned commits —
+          // re-sign via the fix task, and record the requirement so every future
+          // PR on this branch is handled proactively (learn-from-403).
+          let unsignedNow = 0;
+          try {
+            unsignedNow = await fetchUnsignedCommitCount({
+              workspaceId: row.workspaceId,
+              owner: row.owner,
+              repo: row.repo,
+              number: row.number,
+            });
+          } catch {
+            // ignore — fall through to the normal refusal handling below
+          }
+          if (unsignedNow > 0) {
+            markSigningRequired(row.workspaceId, row.owner, row.repo, baseBranchOf(row));
+            return this.dispatchResign(row, state, summary, position, runActive);
+          }
           const checksFailing = (summary?.checks?.failed ?? 0) > 0;
           let rerunReason:
             | 'no-failing-check-runs'
@@ -836,6 +876,7 @@ class MergeQueueProcessor {
     state: MergeQueueState,
     summary: PRMergeableSummary,
     position: number,
+    opts: { resign?: boolean } = {},
   ): Promise<'fired' | 'deferred'> {
     const resolved = await resolveCloudEnv(row.workspaceId);
     if (!resolved) {
@@ -851,13 +892,16 @@ class MergeQueueProcessor {
         workspaceId: row.workspaceId,
         type: 'pr_response',
         title: `Get ${ref} mergeable (merge queue)`,
-        description: `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
+        description: opts.resign
+          ? `Merge queue: re-sign ${ref} ("${prTitle}") — the base requires signed commits — and take it to a clean, mergeable state.`
+          : `Merge queue: take ${ref} ("${prTitle}") to a clean, mergeable, up-to-date state.`,
         prompt: buildMergeablePrompt({
           owner: row.owner,
           repo: row.repo,
           number: row.number,
           summary,
           provider,
+          resignCommits: opts.resign ?? false,
         }),
         repositoryId: row.repositoryId,
         assignedEnvironmentId: envId,
@@ -878,6 +922,85 @@ class MergeQueueProcessor {
     state.status = 'fixing';
     await this.persist(row, state, position);
     return 'fired';
+  }
+
+  /**
+   * Signing gate for the clean-merge path. On a base branch that REQUIRES signed
+   * commits, GitHub refuses the App's merge while any commit is unsigned — so
+   * detect it up front and re-sign via the fix task rather than attempting the
+   * doomed merge. Returns a {@link HeadVerdict} when it took over (re-sign fired
+   * or blocked), or `null` when the PR is safe to merge (repo doesn't require
+   * signing, all commits signed, or our own check failed — let the merge/403 net
+   * handle it). Scoped by a cached probe, so most PRs skip the signature fetch.
+   */
+  private async handleSigningGate(
+    row: PRRow,
+    state: MergeQueueState,
+    summary: PRMergeableSummary,
+    position: number,
+    runActive: boolean
+  ): Promise<HeadVerdict | null> {
+    const base = baseBranchOf(row);
+    if (!(await requiresSignedCommits(row.workspaceId, row.owner, row.repo, base))) {
+      return null; // repo/branch doesn't require signed commits — merge as normal
+    }
+    let unsigned: number;
+    try {
+      unsigned = await fetchUnsignedCommitCount({
+        workspaceId: row.workspaceId,
+        owner: row.owner,
+        repo: row.repo,
+        number: row.number,
+      });
+    } catch (err) {
+      // Our own signature check failed — don't block the merge on it; let the
+      // attempt proceed (the 403 safety net catches a real refusal).
+      console.warn(
+        `[mergeQueue] signature check failed for ${row.owner}/${row.repo}#${row.number}:`,
+        err instanceof Error ? err.message : err
+      );
+      return null;
+    }
+    if (unsigned === 0) return null; // every commit signed — merge as normal
+    return this.dispatchResign(row, state, summary, position, runActive);
+  }
+
+  /**
+   * Fire a bounded re-sign fix run (or block once the budget is spent). Advances
+   * the group so ready PRs behind the head keep draining while it re-signs. When
+   * a re-sign run is already in flight (`runActive`) it just holds the badge at
+   * 'fixing' — never piling a second run on top or burning another attempt.
+   */
+  private async dispatchResign(
+    row: PRRow,
+    state: MergeQueueState,
+    summary: PRMergeableSummary,
+    position: number,
+    runActive: boolean
+  ): Promise<HeadVerdict> {
+    if (runActive) {
+      await this.ensureStatus(row, state, 'fixing', position);
+      return 'advance';
+    }
+    if ((state.resignAttempts ?? 0) < MAX_ATTEMPTS) {
+      if ((await this.dispatchFixRun(row, state, summary, position, { resign: true })) === 'fired') {
+        state.resignAttempts = (state.resignAttempts ?? 0) + 1;
+        await this.persist(row, state, position);
+      }
+      return 'advance';
+    }
+    // Re-signing couldn't get every commit signed within budget — wait for a human.
+    state.status = 'blocked';
+    state.mergeForbidden = 'unsigned-commits';
+    state.blockReason =
+      `The base branch requires signed commits and some commits on this PR are unsigned. ` +
+      `Talyn tried to re-sign the branch ${MAX_ATTEMPTS}× and couldn't get every commit signed — ` +
+      `sign the branch's commits (or merge manually on GitHub), then re-queue the PR.`;
+    state.lastError = 'unsigned commits on a signed-commits-required branch';
+    state.lastErrorAt = new Date().toISOString();
+    await this.persist(row, state, position);
+    this.notifyBlocked(row, state);
+    return 'advance';
   }
 
   /**

@@ -187,6 +187,38 @@ export interface MergeablePromptInput {
   repo: string;
   number: number;
   summary: PRMergeableSummary;
+  /**
+   * The PR's base branch enforces "require signed commits" AND the branch
+   * currently has unsigned commits — so the merge will be refused until every
+   * commit is signed. When set, the prompt gains a re-sign section. Set by the
+   * merge queue's signing gate; unset (false) leaves the prompt unchanged.
+   */
+  resignCommits?: boolean;
+}
+
+/**
+ * Re-sign instructions for the PostHog Code sandbox: the signed-git tools sign
+ * what they publish, so re-publishing the whole branch via `git_signed_rewrite`
+ * makes every commit Verified. Only injected when the base branch requires
+ * signatures and the branch has unsigned commits.
+ */
+export function postHogCodeResignRule(baseBranch: string): string {
+  return `COMMIT SIGNING — REQUIRED FOR THIS MERGE (do this before anything else can land):
+  - The base branch (${baseBranch}) enforces "require signed commits": GitHub REFUSES the merge while ANY commit on this PR branch is unsigned, and some commits here currently ARE unsigned. A signed merge/squash result is not enough — every commit on the branch must be Verified.
+  - The signed-git tools sign what they publish, so re-publish the WHOLE branch through them: replay the branch's commits with a rebase (\`git fetch origin ${baseBranch}\` then \`git rebase origin/${baseBranch}\`; if the branch is already up to date, use \`git rebase -i --root\` — or rebase onto the merge-base — so the commits are actually rewritten), resolving any conflicts per the git rules above, then publish with \`git_signed_rewrite\`. That re-signs every commit in the range.
+  - VERIFY before you finish: \`git fetch origin ${baseBranch}\` then \`git log --show-signature origin/${baseBranch}..HEAD\` must show a valid signature on EVERY commit (no "gpg: no signature" / unsigned commit). Do not stop until all of them are signed.`;
+}
+
+/**
+ * Re-sign instructions for the Claude Code sandbox: commits published through
+ * the `github` MCP server are signed by GitHub automatically, so re-creating the
+ * branch's commits through it makes them Verified.
+ */
+export function claudeCodeResignRule(baseBranch: string): string {
+  return `COMMIT SIGNING — REQUIRED FOR THIS MERGE (do this before anything else can land):
+  - The base branch (${baseBranch}) enforces "require signed commits": GitHub REFUSES the merge while ANY commit on this PR branch is unsigned, and some commits here currently ARE unsigned. A signed merge/squash result is not enough — every commit on the branch must be Verified.
+  - Commits you publish through the \`github\` MCP server are signed by GitHub automatically. Re-create the branch's commits through it: rebase locally to linearize/prepare if needed (\`git fetch origin ${baseBranch}\`, \`git rebase origin/${baseBranch}\`), then publish the branch through the \`github\` MCP tools so every commit becomes a Verified GitHub commit.
+  - VERIFY before you finish: every commit in \`origin/${baseBranch}..HEAD\` must show as Verified on GitHub. Do not stop until all of them are signed.`;
 }
 
 /**
@@ -229,11 +261,11 @@ PR number: #${number}
 Branch: ${s.headBranch}
 
 ${postHogCodeGitRules(s.baseBranch)}
-
+${input.resignCommits ? `\n${postHogCodeResignRule(s.baseBranch)}\n` : ''}
 ${talynTaglineRule()}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
-${buildIssuesSummary(s)}
+${buildIssuesSummary(s)}${input.resignCommits ? '\n- Some commits on the branch are UNSIGNED and the base requires signed commits — re-sign the whole branch (see the COMMIT SIGNING section above).' : ''}
 
 Your job is to keep iterating on this PR until ALL of the following are true and stay true:
 
@@ -301,11 +333,11 @@ PR number: #${number}
 Branch: ${s.headBranch}
 
 ${claudeCodeGitRules(s.baseBranch)}
-
+${input.resignCommits ? `\n${claudeCodeResignRule(s.baseBranch)}\n` : ''}
 ${talynTaglineRule()}
 
 Current issues detected (verify by re-fetching — state may have changed since this task was created):
-${buildIssuesSummary(s)}
+${buildIssuesSummary(s)}${input.resignCommits ? '\n- Some commits on the branch are UNSIGNED and the base requires signed commits — re-sign the whole branch (see the COMMIT SIGNING section above).' : ''}
 
 Your job is to keep iterating on this PR until ALL of the following are true and stay true:
 

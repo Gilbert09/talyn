@@ -26,6 +26,25 @@ import {
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
 
+// The signing gate reads two module functions; mock them so we can drive the
+// "does this repo require signed commits?" + "how many commits are unsigned?"
+// answers without a live GitHub. Defaults (set in beforeEach) are "no signing
+// required / 0 unsigned", so every existing test behaves exactly as before.
+const { mockRequiresSigning, mockUnsignedCount, mockMarkSigning } = vi.hoisted(() => ({
+  mockRequiresSigning: vi.fn(),
+  mockUnsignedCount: vi.fn(),
+  mockMarkSigning: vi.fn(),
+}));
+vi.mock('../services/repoSigning.js', () => ({
+  requiresSignedCommits: mockRequiresSigning,
+  markSigningRequired: mockMarkSigning,
+  _resetRepoSigningCache: vi.fn(),
+}));
+vi.mock('../services/githubGraphql.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/githubGraphql.js')>()),
+  fetchUnsignedCommitCount: mockUnsignedCount,
+}));
+
 // Seeding the encrypted PostHog credential needs the token-encryption key.
 process.env.TALYN_TOKEN_KEY ??= randomBytes(32).toString('base64');
 
@@ -234,6 +253,11 @@ describe('mergeQueueProcessor', () => {
     // The one-time "PR blocked" broadcast — tests assert it fires once on the
     // transition and never on a re-tick while already blocked.
     blockedSpy = vi.spyOn(websocketModule, 'emitMergeQueueBlocked').mockImplementation(() => {});
+    // Signing gate defaults: no repo requires signed commits, nothing unsigned —
+    // so the gate is a no-op and every non-signing test is unaffected.
+    mockRequiresSigning.mockReset().mockResolvedValue(false);
+    mockUnsignedCount.mockReset().mockResolvedValue(0);
+    mockMarkSigning.mockReset();
   });
 
   afterEach(async () => {
@@ -862,6 +886,125 @@ describe('mergeQueueProcessor', () => {
     expect(mergeSpy).toHaveBeenCalledTimes(1); // never re-attempted
     expect(blockedSpy).toHaveBeenCalledTimes(1); // never re-notified
     expect((await getPr(db, prId)).mergeQueued).toBe(true); // stays queued for the badge
+  });
+
+  describe('signed-commits gate', () => {
+    it('does NOT fetch signatures on a repo that does not require signed commits', async () => {
+      mockRequiresSigning.mockResolvedValue(false);
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mockUnsignedCount).not.toHaveBeenCalled(); // egress guard — no signature query
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, prId)).state).toBe('merged');
+    });
+
+    it('merges normally when the base requires signing and every commit is signed', async () => {
+      mockRequiresSigning.mockResolvedValue(true);
+      mockUnsignedCount.mockResolvedValue(0);
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      expect(mockUnsignedCount).toHaveBeenCalledTimes(1);
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await getPr(db, prId)).state).toBe('merged');
+    });
+
+    it('re-signs (fix run) instead of attempting a doomed merge when commits are unsigned', async () => {
+      mockRequiresSigning.mockResolvedValue(true);
+      mockUnsignedCount.mockResolvedValue(2);
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+        resignAttempts?: number;
+      };
+      expect(mergeSpy).not.toHaveBeenCalled(); // never attempted the doomed merge
+      expect(state.status).toBe('fixing');
+      expect(state.resignAttempts).toBe(1);
+      expect(await countTasks(db)).toBe(1); // a re-sign fix run was dispatched
+      expect(blockedSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not fire a second re-sign run while one is already in flight', async () => {
+      mockRequiresSigning.mockResolvedValue(true);
+      mockUnsignedCount.mockResolvedValue(2);
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueueState: {
+          status: 'fixing',
+          attempts: 0,
+          resignAttempts: 1,
+          lastFixTaskId: 'resign-1',
+          accounted: false,
+        },
+      });
+      await insertTask(db, 'resign-1', 'in_progress', prId);
+
+      await mergeQueueProcessor.runOnce();
+
+      const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+        resignAttempts?: number;
+      };
+      expect(state.status).toBe('fixing');
+      expect(state.resignAttempts).toBe(1); // not bumped — didn't pile on a second run
+      expect(await countTasks(db)).toBe(1); // still just the in-flight one
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+
+    it('blocks with the signing reason once the re-sign budget is spent', async () => {
+      mockRequiresSigning.mockResolvedValue(true);
+      mockUnsignedCount.mockResolvedValue(1);
+      const prId = await insertPr(db, {
+        summary: cleanSummary(),
+        mergeQueueState: { status: 'fixing', attempts: 0, resignAttempts: 3 },
+      });
+
+      await mergeQueueProcessor.runOnce();
+
+      const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+        mergeForbidden?: string;
+        blockReason?: string;
+      };
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect(state.status).toBe('blocked');
+      expect(state.mergeForbidden).toBe('unsigned-commits');
+      expect(state.blockReason).toContain('signed commits');
+      expect(await countTasks(db)).toBe(0); // no new fix run past the budget
+      expect(blockedSpy).toHaveBeenCalledTimes(1);
+
+      // Re-tick: stays blocked, never re-polls signatures or re-attempts.
+      mockUnsignedCount.mockClear();
+      await mergeQueueProcessor.runOnce();
+      expect(mockUnsignedCount).not.toHaveBeenCalled();
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+
+    it('learns from a 403: re-signs (not hard-blocks) when unsigned commits are visible after a refusal', async () => {
+      // Proactive probe missed it (returns false — e.g. the App can't read the
+      // ruleset), so 5a is a no-op and the merge is attempted → 403. The 403 net
+      // then SEES unsigned commits, records the requirement, and re-signs.
+      mockRequiresSigning.mockResolvedValue(false);
+      mockUnsignedCount.mockResolvedValue(3);
+      mergeSpy.mockRejectedValueOnce(
+        new MergeNotPermittedForAppError('PostHog', 'posthog', new Error('403'))
+      );
+      const prId = await insertPr(db, { summary: cleanSummary() });
+
+      await mergeQueueProcessor.runOnce();
+
+      const state = (await getPr(db, prId)).mergeQueueState as QueueState & {
+        resignAttempts?: number;
+      };
+      expect(mergeSpy).toHaveBeenCalledTimes(1); // attempted, got the 403
+      expect(mockMarkSigning).toHaveBeenCalled(); // recorded so future PRs are proactive
+      expect(state.status).toBe('fixing'); // re-sign, NOT a hard block
+      expect(state.resignAttempts).toBe(1);
+      expect(await countTasks(db)).toBe(1);
+    });
   });
 
   it('does not reset the attempt counter on a transient clean reading (cap-evasion)', async () => {

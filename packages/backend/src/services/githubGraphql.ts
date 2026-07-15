@@ -1482,3 +1482,51 @@ export function decodeReviewDetail(data: RawReviewDetailResponse): PRReviewDetai
 
   return { reviews, threads, comments };
 }
+
+// ---------- commit signatures (merge-queue signing gate) ----------
+
+interface UnsignedCommitsResponse {
+  repository: {
+    pullRequest: {
+      commits: {
+        totalCount: number;
+        nodes: Array<{ commit: { signature: { isValid: boolean } | null } }>;
+      };
+    } | null;
+  } | null;
+}
+
+const UNSIGNED_COMMITS_QUERY = `query PRCommitSignatures($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      commits(first: 100) {
+        totalCount
+        nodes { commit { signature { isValid } } }
+      }
+    }
+  }
+${RATE_LIMIT_FIELD}
+}`;
+
+/**
+ * How many of the PR's commits are unsigned or carry an invalid signature —
+ * the signal the merge-queue signing gate acts on. Only the first 100 commits
+ * are inspected (agent PRs are far smaller; a >100-commit PR whose tail is
+ * unsigned is caught by the queue's 403 safety net). Called ONLY for repos that
+ * require signed commits, so most PRs never trigger this query.
+ */
+export async function fetchUnsignedCommitCount(opts: {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<number> {
+  const data = await githubService.executeGraphql<UnsignedCommitsResponse>(
+    opts.workspaceId,
+    UNSIGNED_COMMITS_QUERY,
+    { owner: opts.owner, repo: opts.repo, number: opts.number }
+  );
+  const nodes = data.repository?.pullRequest?.commits.nodes ?? [];
+  // A missing/invalid signature both count as "not signed" for the ruleset.
+  return nodes.filter((n) => !n.commit.signature?.isValid).length;
+}

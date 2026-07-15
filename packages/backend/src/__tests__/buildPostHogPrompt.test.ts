@@ -172,6 +172,41 @@ describe('buildMergeablePrompt — Talyn comment tagline', () => {
   );
 });
 
+describe('buildMergeablePrompt — re-sign section (signed-commits repos)', () => {
+  it('is absent by default (no behaviour change for the common case)', () => {
+    for (const provider of ['posthog_code', 'claude_code'] as CloudProviderType[]) {
+      const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+      expect(prompt).not.toContain('COMMIT SIGNING');
+      expect(prompt).not.toMatch(/require signed commits/i);
+    }
+  });
+
+  it('PostHog Code: re-sign via git_signed_rewrite + verify, threading the base branch', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme', repo: 'widgets', number: 7, provider: 'posthog_code',
+      summary: { ...summary, baseBranch: 'develop' } as PRMergeableSummary,
+      resignCommits: true,
+    });
+    expect(prompt).toContain('COMMIT SIGNING');
+    expect(prompt).toMatch(/require.*signed commits/i);
+    expect(prompt).toContain('git_signed_rewrite');
+    expect(prompt).toContain('git log --show-signature origin/develop..HEAD');
+    // Surfaced in the issues list too.
+    expect(prompt.toLowerCase()).toContain('unsigned');
+  });
+
+  it('Claude Code: re-sign via the github MCP (no signed-git tools)', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme', repo: 'widgets', number: 7, summary, provider: 'claude_code',
+      resignCommits: true,
+    });
+    expect(prompt).toContain('COMMIT SIGNING');
+    expect(prompt).toContain('`github` MCP server');
+    expect(prompt).not.toContain('git_signed_rewrite');
+    expect(prompt.toLowerCase()).toContain('unsigned');
+  });
+});
+
 describe('prHasFixableIssues vs prNeedsFollowup (manual button vs auto-fire)', () => {
   const base: PRMergeableSummary = {
     url: 'https://github.com/acme/app/pull/1',
