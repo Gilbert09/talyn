@@ -124,47 +124,84 @@ export function graphqlPrimaryLimitResetMs(
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * GitHub bills REST and GraphQL against **separate** primary budgets (each
+ * 5,000/hr on an installation) but shares ONE secondary/abuse throttle across
+ * both. So a block has a scope:
+ *   - `'all'` — the shared secondary limit (a 403/429 with retry-after or a
+ *     "secondary rate limit" body). Gates every request on the account.
+ *   - `'graphql'` / `'rest'` — a single API's *primary* point/request budget
+ *     ran dry. Gates only that API; the other budget is untouched and must keep
+ *     flowing. This is the fix for the recurring merge-queue freeze: GraphQL
+ *     exhaustion (16 workspaces polling one huge repo through one installation)
+ *     used to block the REST merge PUT for the full ~1h reset window, even
+ *     though REST had plenty of budget.
+ */
+export type GateScope = 'all' | 'rest' | 'graphql';
+/** Which budget an outbound request draws on — what {@link GitHubRateGate.isBlocked} checks. */
+export type ApiKind = 'rest' | 'graphql';
+
 class GitHubRateGate {
-  /** accountKey → epoch ms until which that account is gated. */
+  /** `${accountKey}::${scope}` → epoch ms until which that scope is gated. */
   private blocks = new Map<string, number>();
 
+  private keyFor(accountKey: string, scope: GateScope): string {
+    return `${accountKey}::${scope}`;
+  }
+
+  /** Epoch ms a single scope is gated until (0 if clear); prunes stale entries. */
+  private scopeUntil(accountKey: string, scope: GateScope): number {
+    const key = this.keyFor(accountKey, scope);
+    const until = this.blocks.get(key);
+    if (until === undefined) return 0;
+    if (until <= Date.now()) {
+      this.blocks.delete(key);
+      return 0;
+    }
+    return until;
+  }
+
   /**
-   * Engage (or extend) a backoff for an account. Idempotent-ish: a later signal
-   * that points further out wins (`Math.max`), so overlapping 403s don't shorten
-   * an existing block. Logs + records to the Debug panel only when the block is
-   * newly extended, to avoid spamming under a burst.
+   * Engage (or extend) a backoff for an account+scope. Idempotent-ish: a later
+   * signal that points further out wins (`Math.max`), so overlapping 403s don't
+   * shorten an existing block. Logs + records to the Debug panel only when the
+   * block is newly extended, to avoid spamming under a burst. `scope` defaults
+   * to `'all'` (a shared secondary limit); pass `'graphql'`/`'rest'` for a
+   * single-API primary-budget exhaustion.
    */
-  block(accountKey: string, untilMs: number, reason: string): void {
-    const existing = this.blocks.get(accountKey) ?? 0;
+  block(accountKey: string, untilMs: number, reason: string, scope: GateScope = 'all'): void {
+    const key = this.keyFor(accountKey, scope);
+    const existing = this.blocks.get(key) ?? 0;
     if (untilMs <= existing) return;
-    this.blocks.set(accountKey, untilMs);
+    this.blocks.set(key, untilMs);
     const waitMs = Math.max(0, untilMs - Date.now());
     console.warn(
-      `GitHub rate-limit backoff for ${accountKey}: pausing ~${Math.round(waitMs / 1000)}s (${reason})`,
+      `GitHub rate-limit backoff for ${accountKey} [${scope}]: pausing ~${Math.round(waitMs / 1000)}s (${reason})`,
     );
     debugBus.recordEvent({
       service: 'github',
       action: 'rate-limit-backoff',
       ok: false,
-      summary: `Rate-limit backoff ${Math.round(waitMs / 1000)}s — ${reason}`,
-      meta: { accountKey, waitMs, reason },
+      summary: `Rate-limit backoff ${Math.round(waitMs / 1000)}s [${scope}] — ${reason}`,
+      meta: { accountKey, waitMs, reason, scope },
     });
   }
 
-  /** Whether the account is currently gated. */
-  isBlocked(accountKey: string): boolean {
-    return this.blockedUntil(accountKey) > Date.now();
+  /**
+   * Whether a request of `kind` (default `'rest'`) is currently gated — i.e. the
+   * shared `'all'` block OR that API's own primary-budget block is active. A
+   * GraphQL-only exhaustion therefore leaves REST callers (the merge queue) free.
+   */
+  isBlocked(accountKey: string, kind: ApiKind = 'rest'): boolean {
+    return this.blockedUntil(accountKey, kind) > Date.now();
   }
 
-  /** Epoch ms the account is gated until (0 if not gated). */
-  blockedUntil(accountKey: string): number {
-    const until = this.blocks.get(accountKey);
-    if (until === undefined) return 0;
-    if (until <= Date.now()) {
-      this.blocks.delete(accountKey);
-      return 0;
-    }
-    return until;
+  /** Epoch ms a request of `kind` is gated until (0 if not gated). */
+  blockedUntil(accountKey: string, kind: ApiKind = 'rest'): number {
+    return Math.max(
+      this.scopeUntil(accountKey, 'all'),
+      this.scopeUntil(accountKey, kind),
+    );
   }
 
   /**
@@ -173,8 +210,8 @@ class GitHubRateGate {
    * longer we throw {@link GitHubRateLimitError} so the caller skips this tick
    * rather than holding a socket open for minutes.
    */
-  async waitIfBlocked(accountKey: string): Promise<void> {
-    const until = this.blockedUntil(accountKey);
+  async waitIfBlocked(accountKey: string, kind: ApiKind = 'rest'): Promise<void> {
+    const until = this.blockedUntil(accountKey, kind);
     const remaining = until - Date.now();
     if (remaining <= 0) return;
     if (remaining > MAX_GATE_WAIT_MS) {

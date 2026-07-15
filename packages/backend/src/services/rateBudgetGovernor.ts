@@ -104,7 +104,9 @@ class RateBudgetGovernor {
    * buckets, or {@link MAX_FACTOR} if it's currently gated by a hard backoff.
    */
   delayFactor(accountKey: string, now: number = Date.now()): number {
-    if (githubRateGate.isBlocked(accountKey)) return MAX_FACTOR;
+    // Polling is GraphQL-dominated, so a GraphQL block (or the shared secondary
+    // limit, which 'graphql' also covers) means max back-off on cadence.
+    if (githubRateGate.isBlocked(accountKey, 'graphql')) return MAX_FACTOR;
     const resources = this.state.get(accountKey);
     if (!resources) return 1;
     let factor = 1;

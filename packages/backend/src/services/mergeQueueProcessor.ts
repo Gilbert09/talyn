@@ -443,7 +443,11 @@ class MergeQueueProcessor {
   private async processGroup(group: PRRow[], deadline: number): Promise<'ok' | 'deferred'> {
     const accountKey = githubService.accountKeyFor(group[0].workspaceId);
     for (let i = 0; i < group.length; i++) {
-      if (githubRateGate.isBlocked(accountKey)) return 'deferred';
+      // The merge itself is a REST call, so defer the group only on a backoff
+      // that gates REST (the shared secondary limit). A GraphQL point-budget
+      // exhaustion — which the 16-workspace poll fan-out on a shared install
+      // hits constantly — must NOT freeze the queue: REST has its own budget.
+      if (githubRateGate.isBlocked(accountKey, 'rest')) return 'deferred';
       if (Date.now() > deadline) return 'deferred';
       const row = group[i];
       let verdict: HeadVerdict = 'hold';
@@ -777,12 +781,12 @@ class MergeQueueProcessor {
           // unsigned commits, the refusal is (at least partly) unsigned commits —
           // re-sign via the fix task, and record the requirement so every future
           // PR on this branch is handled proactively (learn-from-403).
-          // Skip the signature lookup when the account is in a rate-limit backoff
+          // Skip the signature lookup when GraphQL is in a rate-limit backoff
           // (it would sleep behind waitIfBlocked / burn a scarce point) — fall
           // through to the normal refusal handling; a later tick re-derives it.
           let unsignedNow = 0;
           try {
-            if (!githubRateGate.isBlocked(githubService.accountKeyFor(row.workspaceId))) {
+            if (!githubRateGate.isBlocked(githubService.accountKeyFor(row.workspaceId), 'graphql')) {
               unsignedNow = await fetchUnsignedCommitCount({
                 workspaceId: row.workspaceId,
                 owner: row.owner,
@@ -978,11 +982,12 @@ class MergeQueueProcessor {
     runActive: boolean
   ): Promise<HeadVerdict | null> {
     const accountKey = githubService.accountKeyFor(row.workspaceId);
-    // Hard rate-limit backoff: the signature GraphQL call AND the merge that
-    // follows would each sleep up to MAX_GATE_WAIT_MS behind `waitIfBlocked`,
-    // and stacking those inside one head is what wedged the tick. Defer the head
-    // to a later tick (mirrors processGroup's between-heads rate-gate deferral).
-    if (githubRateGate.isBlocked(accountKey)) return 'advance';
+    // The gate's first move is a GraphQL signature lookup; if GraphQL is in a
+    // backoff (its own point budget, or the shared secondary limit) it would
+    // sleep behind `waitIfBlocked` — defer the head to a later tick instead
+    // (mirrors processGroup's between-heads rate-gate deferral). REST-only
+    // backoffs don't apply here — the merge below rechecks REST itself.
+    if (githubRateGate.isBlocked(accountKey, 'graphql')) return 'advance';
 
     const base = baseBranchOf(row);
     if (!(await requiresSignedCommits(row.workspaceId, row.owner, row.repo, base))) {

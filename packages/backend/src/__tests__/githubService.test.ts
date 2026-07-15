@@ -657,9 +657,10 @@ describe('githubService', () => {
 
     // GitHub returns the PRIMARY point-budget exhaustion as a top-level
     // RATE_LIMITED error on an HTTP 200 body. Without the breaker every caller
-    // just re-hits it (the prod storm). We must engage the shared gate (so
-    // subsequent calls skip until reset) AND surface a GitHubRateLimitError.
-    it('blocks the account and throws GitHubRateLimitError on RATE_LIMITED', async () => {
+    // just re-hits it (the prod storm). We must engage the GraphQL gate (so
+    // subsequent GraphQL calls skip until reset) AND surface a
+    // GitHubRateLimitError — while leaving REST (a separate budget) free.
+    it('blocks GraphQL (not REST) and throws GitHubRateLimitError on RATE_LIMITED', async () => {
       const resetSec = Math.floor(Date.now() / 1000) + 300;
       const fetchStub = vi.fn(async (input: FetchInput) => {
         if (!String(input).includes('/graphql')) throw new Error(`unexpected ${String(input)}`);
@@ -679,9 +680,12 @@ describe('githubService', () => {
       ).rejects.toBeInstanceOf(GitHubRateLimitError);
 
       const accountKey = githubService.accountKeyFor('ws1');
-      expect(githubRateGate.isBlocked(accountKey)).toBe(true);
+      // GraphQL is gated; REST draws on a separate budget and stays free so the
+      // merge queue keeps merging while GraphQL points recover.
+      expect(githubRateGate.isBlocked(accountKey, 'graphql')).toBe(true);
+      expect(githubRateGate.isBlocked(accountKey, 'rest')).toBe(false);
       // Blocked until roughly the reset instant the header advertised.
-      expect(githubRateGate.blockedUntil(accountKey)).toBe(resetSec * 1000);
+      expect(githubRateGate.blockedUntil(accountKey, 'graphql')).toBe(resetSec * 1000);
     });
 
     it('short-circuits a second call while the gate is engaged (no second fetch)', async () => {

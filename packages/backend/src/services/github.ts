@@ -1170,9 +1170,12 @@ class GitHubService extends EventEmitter {
     }
 
     const accountKey = this.accountKeyFor(workspaceId);
-    // Pause behind any active secondary-rate-limit backoff for this account
-    // before adding to the load. Throws if the wait would be too long.
-    await githubRateGate.waitIfBlocked(accountKey);
+    // Pause behind any active backoff that covers REST for this account (the
+    // shared secondary limit, or a REST primary-budget block) before adding to
+    // the load. A GraphQL-only exhaustion does NOT gate REST — that's what keeps
+    // the merge queue merging while the poll loops' GraphQL budget is drained.
+    // Throws if the wait would be too long.
+    await githubRateGate.waitIfBlocked(accountKey, 'rest');
 
     const method = (options.method ?? 'GET').toUpperCase();
     const url = `${GITHUB_API_URL}${endpoint}`;
@@ -2172,8 +2175,9 @@ class GitHubService extends EventEmitter {
     const gqlUrl = `${GITHUB_API_URL}/graphql`;
     const accountKey = this.accountKeyFor(workspaceId);
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // Pause behind any active secondary-rate-limit backoff before sending.
-      await githubRateGate.waitIfBlocked(accountKey);
+      // Pause behind any active backoff that covers GraphQL — the shared
+      // secondary limit, or this account's exhausted GraphQL point budget.
+      await githubRateGate.waitIfBlocked(accountKey, 'graphql');
       const startedAt = Date.now();
       let response: TimedResponse;
       try {
@@ -2302,7 +2306,15 @@ class GitHubService extends EventEmitter {
               const until =
                 graphqlPrimaryLimitResetMs(response.headers) ||
                 Date.now() + PRIMARY_LIMIT_FALLBACK_MS;
-              githubRateGate.block(accountKey, until, 'graphql primary point-budget exhausted');
+              // Scope the block to GraphQL only — REST draws on a separate
+              // budget and must keep flowing (merge queue, webhooks, manual
+              // refresh) while GraphQL points recover.
+              githubRateGate.block(
+                accountKey,
+                until,
+                'graphql primary point-budget exhausted',
+                'graphql',
+              );
               throw new GitHubRateLimitError(message, Math.max(0, until - Date.now()));
             }
             throw new Error(message);
@@ -2339,7 +2351,9 @@ class GitHubService extends EventEmitter {
       // gated tick retries once the window clears.
       const rl = parseRateLimitResponse(response, response.bodyText);
       if (rl.isRateLimited) {
-        githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql');
+        // A secondary/abuse 403/429 is the SHARED throttle — gate all APIs
+        // ('all' scope, the default), not just GraphQL.
+        githubRateGate.block(accountKey, Date.now() + rl.retryAfterMs, 'graphql secondary rate limit');
         recordGql(false, 'secondary rate limit');
         throw new GitHubRateLimitError('GitHub GraphQL rate-limited', rl.retryAfterMs);
       }

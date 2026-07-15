@@ -177,3 +177,52 @@ describe('gate state machine', () => {
     );
   });
 });
+
+describe('scoped gate — REST vs GraphQL budgets are independent', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a GraphQL primary-budget block does NOT gate REST (the merge-queue freeze fix)', () => {
+    githubRateGate.block('acct', NOW + 60 * 60_000, 'graphql exhausted', 'graphql');
+    // GraphQL callers wait; REST (the merge PUT) stays free.
+    expect(githubRateGate.isBlocked('acct', 'graphql')).toBe(true);
+    expect(githubRateGate.isBlocked('acct', 'rest')).toBe(false);
+    // Default kind is 'rest' — so a bare isBlocked() reads REST-free too.
+    expect(githubRateGate.isBlocked('acct')).toBe(false);
+    expect(githubRateGate.blockedUntil('acct', 'rest')).toBe(0);
+    expect(githubRateGate.blockedUntil('acct', 'graphql')).toBe(NOW + 60 * 60_000);
+  });
+
+  it("a REST primary-budget block does NOT gate GraphQL", () => {
+    githubRateGate.block('acct', NOW + 30_000, 'rest exhausted', 'rest');
+    expect(githubRateGate.isBlocked('acct', 'rest')).toBe(true);
+    expect(githubRateGate.isBlocked('acct', 'graphql')).toBe(false);
+  });
+
+  it("the shared secondary limit ('all', the default) gates BOTH APIs", () => {
+    githubRateGate.block('acct', NOW + 45_000, 'secondary');
+    expect(githubRateGate.isBlocked('acct', 'rest')).toBe(true);
+    expect(githubRateGate.isBlocked('acct', 'graphql')).toBe(true);
+  });
+
+  it('blockedUntil returns the furthest-out scope that applies to the kind', () => {
+    githubRateGate.block('acct', NOW + 10_000, 'secondary'); // all
+    githubRateGate.block('acct', NOW + 90_000, 'graphql exhausted', 'graphql');
+    // REST only sees the shared 'all' block; GraphQL sees the later of the two.
+    expect(githubRateGate.blockedUntil('acct', 'rest')).toBe(NOW + 10_000);
+    expect(githubRateGate.blockedUntil('acct', 'graphql')).toBe(NOW + 90_000);
+  });
+
+  it('scopes clear independently as their windows pass', () => {
+    githubRateGate.block('acct', NOW + 5_000, 'secondary'); // all
+    githubRateGate.block('acct', NOW + 20_000, 'graphql', 'graphql');
+    vi.setSystemTime(NOW + 6_000); // 'all' expired, 'graphql' still live
+    expect(githubRateGate.isBlocked('acct', 'rest')).toBe(false);
+    expect(githubRateGate.isBlocked('acct', 'graphql')).toBe(true);
+  });
+});
