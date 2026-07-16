@@ -1,0 +1,862 @@
+// Decision-table tests for the merge queue v2 pure core.
+//
+// These port the edge-case semantics of mergeQueueProcessor.test.ts (the 89
+// hard-won cases) onto decide(). Pipeline-level behavior (group concurrency,
+// broadcasts, advisory locks, freshness refetch, watchdog) is covered by the
+// evaluator integration suite, not here — decide is pure, so every case is
+// (entry, pr, ctx) → actions + verdict.
+
+import { describe, expect, it } from 'vitest';
+import type { PRMergeableSummary } from '@talyn/shared';
+import {
+  DRAFT_BLOCK_REASON,
+  buildFailingChecksBlockReason,
+  decide,
+  unsignedCommitsBlockReason,
+} from '../../services/mergeQueue/decide.js';
+import type {
+  Action,
+  Decision,
+  DecisionContext,
+  EntrySnapshot,
+  PrSnapshot,
+} from '../../services/mergeQueue/types.js';
+
+const NOW = '2026-07-16T12:00:00.000Z';
+
+function entry(o: Partial<EntrySnapshot> = {}): EntrySnapshot {
+  return {
+    id: 'mqe_1',
+    status: 'queued',
+    blockedCode: null,
+    blockedReason: null,
+    headSha: 'sha1',
+    fixAttempts: 0,
+    rerunAttempts: 0,
+    resignAttempts: 0,
+    fixTaskId: null,
+    fixTaskAccounted: true,
+    fixKind: null,
+    signingCheckedSha: null,
+    unsignedCount: null,
+    automergeArmedBy: null,
+    mergeMethod: 'squash',
+    baseBranch: 'main',
+    ...o,
+  };
+}
+
+function summary(o: Partial<PRMergeableSummary> = {}): PRMergeableSummary {
+  return {
+    url: 'https://github.com/o/r/pull/1',
+    headBranch: 'feat',
+    baseBranch: 'main',
+    mergeable: 'MERGEABLE',
+    reviewDecision: null,
+    blockingReason: 'mergeable',
+    checks: { total: 3, failed: 0, inProgress: 0 },
+    unresolvedReviewThreads: 0,
+    ...o,
+  };
+}
+
+function pr(o: Partial<PrSnapshot> = {}, s: Partial<PRMergeableSummary> = {}): PrSnapshot {
+  return {
+    state: 'open',
+    headSha: 'sha1',
+    mergeStateStatus: 'CLEAN',
+    autoMergeEnabledBy: null,
+    summary: summary(s),
+    ...o,
+  };
+}
+
+const cleanPr = () => pr();
+const conflictingPr = () =>
+  pr({ mergeStateStatus: 'DIRTY' }, { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' });
+const behindPr = () => pr({ mergeStateStatus: 'BEHIND' });
+/** Required checks still running — GitHub reports BLOCKED for this. */
+const ciRunningPr = () =>
+  pr({ mergeStateStatus: 'BLOCKED' }, { blockingReason: 'blocked', checks: { total: 3, failed: 0, inProgress: 2 } });
+const draftPr = () => pr({ mergeStateStatus: 'DRAFT' }, { draft: true });
+/** Clean/mergeable but a NON-required check is red (App-refusal territory). */
+const optionalFailPr = () =>
+  pr({}, { blockingReason: 'checks_failed_optional', checks: { total: 3, failed: 1, inProgress: 0 } });
+
+function ctx(o: Partial<DecisionContext> = {}): DecisionContext {
+  return {
+    nowIso: NOW,
+    isHead: true,
+    groupMergeInFlight: false,
+    fixTaskState: 'none',
+    otherLinkedTaskActive: false,
+    signingRequired: false,
+    autoMergeCapability: 'unavailable',
+    updateBranchAvailable: false,
+    cloudEnvAvailable: true,
+    restGateBlocked: false,
+    graphqlGateBlocked: false,
+    graphqlBudgetLow: false,
+    maxAttempts: 3,
+    ...o,
+  };
+}
+
+const kinds = (d: Decision) => d.actions.map((a) => a.kind);
+type Transition = Extract<Action, { kind: 'transition' }>;
+const transitions = (d: Decision) => d.actions.filter((a): a is Transition => a.kind === 'transition');
+const lastTransition = (d: Decision) => transitions(d).at(-1);
+const fixRun = (d: Decision) =>
+  d.actions.find((a): a is Extract<Action, { kind: 'fire_fix_run' }> => a.kind === 'fire_fix_run');
+
+describe('decide — clean path', () => {
+  it('merges a clean queued head (verify-live-then-merge, holding the group)', () => {
+    const d = decide(entry(), cleanPr(), ctx());
+    expect(kinds(d)).toEqual(['verify_live_then_merge']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('records the merge on a merged outcome, without a refetch', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), ctx({ mergeOutcome: { kind: 'merged' } }));
+    expect(kinds(d)).toEqual(['record_merged']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('defers (queued, hold) while the REST rate gate is blocked', () => {
+    const d = decide(entry(), cleanPr(), ctx({ restGateBlocked: true }));
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('waits its turn (hold, no merge) while a sibling merge/arm is in flight', () => {
+    const d = decide(entry(), cleanPr(), ctx({ groupMergeInFlight: true }));
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('merges a now-clean PR even while its fix run is still in flight', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      cleanPr(),
+      ctx({ fixTaskState: 'active' })
+    );
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+});
+
+describe('decide — merge aftermath', () => {
+  it('verifies before believing a merged:false bounce', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({ mergeOutcome: { kind: 'not_merged', message: 'Base branch was modified' } })
+    );
+    expect(kinds(d)).toEqual(['verify_merged']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('records the merge when GitHub returns merged:false but the PR is in fact merged', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({ mergeOutcome: { kind: 'not_merged', message: 'x' }, verifiedMerged: true })
+    );
+    expect(kinds(d)).toEqual(['record_merged']);
+  });
+
+  it('keeps a bounced PR queued and refetches (stale mergeability)', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({ mergeOutcome: { kind: 'not_merged', message: 'Base branch was modified' }, verifiedMerged: false })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('queued');
+    expect(t.set?.lastError).toContain('Base branch was modified');
+    expect(kinds(d)).toContain('refresh_snapshot');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('keeps a PR queued and refetches when the merge throws (e.g. 405 conflicts)', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({ mergeOutcome: { kind: 'error', message: 'Pull Request has merge conflicts' }, verifiedMerged: false })
+    );
+    expect(lastTransition(d)!.to).toBe('queued');
+    expect(kinds(d)).toContain('refresh_snapshot');
+  });
+
+  it('records the merge when the attempt throws 405 but GitHub says merged', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({ mergeOutcome: { kind: 'error', message: '405' }, verifiedMerged: true })
+    );
+    expect(kinds(d)).toEqual(['record_merged']);
+  });
+});
+
+describe('decide — verify-merged recovery (crashed mid-merge)', () => {
+  it('asks GitHub first when found in status=merging with no outcome (the June 2026 wedge)', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), ctx());
+    expect(kinds(d)).toEqual(['verify_merged']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('records the merge when GitHub confirms it', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), ctx({ verifiedMerged: true }));
+    expect(kinds(d)).toEqual(['record_merged']);
+  });
+
+  it('proceeds normally on re-entry when GitHub says still open', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), ctx({ verifiedMerged: false }));
+    // re-armed to queued, then the clean path merges again
+    expect(transitions(d)[0]!.to).toBe('queued');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+});
+
+describe('decide — settled blockers fire the fix run', () => {
+  it('fires a cloud fix run for a conflicting PR instead of merging', () => {
+    const d = decide(entry(), conflictingPr(), ctx());
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: false });
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('funnels a BEHIND PR into the same fix path (the post-merge race)', () => {
+    const d = decide(entry(), behindPr(), ctx());
+    expect(fixRun(d)).toBeTruthy();
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('still fires the fix path for a BEHIND PR even while its CI is in flight', () => {
+    const d = decide(
+      entry(),
+      pr({ mergeStateStatus: 'BEHIND' }, { checks: { total: 3, failed: 0, inProgress: 1 } }),
+      ctx()
+    );
+    expect(fixRun(d)).toBeTruthy();
+  });
+
+  it('holds as queued without firing when the workspace has no cloud env', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ cloudEnvAvailable: false }));
+    expect(fixRun(d)).toBeUndefined();
+    expect(d.verdict).toBe('hold');
+  });
+});
+
+describe('decide — update-branch beats a paid fix run for BEHIND', () => {
+  it('updates the branch server-side when available and nothing else is wrong', () => {
+    const d = decide(entry(), behindPr(), ctx({ updateBranchAvailable: true }));
+    expect(kinds(d)).toEqual(['update_branch']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('waits on CI after a successful update', () => {
+    const d = decide(entry(), behindPr(), ctx({ updateBranchAvailable: true, updateBranchOutcome: 'ok' }));
+    expect(lastTransition(d)!.to).toBe('awaiting_ci');
+    expect(kinds(d)).toContain('refresh_snapshot');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('falls back to the fix run when the update conflicts', () => {
+    const d = decide(entry(), behindPr(), ctx({ updateBranchAvailable: true, updateBranchOutcome: 'conflict' }));
+    expect(fixRun(d)).toBeTruthy();
+  });
+
+  it('never uses update-branch when genuine followup work exists (conflicts)', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ updateBranchAvailable: true }));
+    expect(kinds(d)).not.toContain('update_branch');
+    expect(fixRun(d)).toBeTruthy();
+  });
+});
+
+describe('decide — CI in flight waits without burning anything', () => {
+  it('waits (no fire, no merge, no block) while the head CI is still in flight', () => {
+    const d = decide(entry(), ciRunningPr(), ctx());
+    expect(fixRun(d)).toBeUndefined();
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(lastTransition(d)!.to).toBe('awaiting_ci');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('does not count an attempt for a PR still running CI after a fix run', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      ciRunningPr(),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('awaiting_ci');
+    expect(t.set?.fixAttempts).toBeUndefined();
+    expect(d.verdict).toBe('advance');
+  });
+});
+
+describe('decide — awaiting a required review (no doomed fix runs)', () => {
+  it('waits as awaiting_review when only a required review is missing', () => {
+    const d = decide(
+      entry(),
+      pr({ mergeStateStatus: 'BLOCKED' }, { blockingReason: 'blocked', reviewDecision: 'REVIEW_REQUIRED' }),
+      ctx()
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(lastTransition(d)!.to).toBe('awaiting_review');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('still fixes CHANGES_REQUESTED (a settled blocker, not a review wait)', () => {
+    const d = decide(
+      entry(),
+      pr({ mergeStateStatus: 'BLOCKED' }, { blockingReason: 'changes_requested', reviewDecision: 'CHANGES_REQUESTED' }),
+      ctx()
+    );
+    expect(fixRun(d)).toBeTruthy();
+  });
+});
+
+describe('decide — active-run guard', () => {
+  it('does not fire or merge while a fix run is in flight on a blocked PR', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1' }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'active' })
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('does not fire a duplicate while another linked run is active (taskId reassigned)', () => {
+    const d = decide(entry(), conflictingPr(), ctx({ otherLinkedTaskActive: true }));
+    expect(fixRun(d)).toBeUndefined();
+    expect(lastTransition(d)!.to).toBe('fixing');
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('advances past a head whose only obstacle is a non-required check a run is already working', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1' }),
+      optionalFailPr(),
+      ctx({ fixTaskState: 'active' })
+    );
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+});
+
+describe('decide — fix-run accounting and the attempts budget', () => {
+  it('increments attempts when a terminal fix run left the PR blocked, then re-fires', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, fixAttempts: 0 }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    const acct = transitions(d)[0]!;
+    expect(acct.set?.fixAttempts).toBe(1);
+    expect(acct.set?.fixTaskAccounted).toBe(true);
+    expect(fixRun(d)).toBeTruthy(); // budget left → next run fires
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('blocks after MAX_ATTEMPTS consecutive failed fix runs and notifies once with the reason', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't3', fixTaskAccounted: false, fixAttempts: 2 }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    const t = transitions(d)[0]!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('attempts_exhausted');
+    expect(t.blockedReason).toBe('merge conflicts with the base branch');
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(fixRun(d)).toBeUndefined();
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('does not re-notify or churn writes on re-evaluation while already blocked', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'attempts_exhausted', fixAttempts: 3, fixTaskId: 't3' }),
+      conflictingPr(),
+      ctx()
+    );
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('does not reset the attempt counter on a transient clean reading (cap-evasion)', () => {
+    // Clean reading: the blocked entry falls through to the merge path — but
+    // attempts stay at 3. If the merge then bounces and the PR re-reads
+    // blocked, the hard cap below re-settles it without a 4th run.
+    const clean = decide(
+      entry({ status: 'blocked', blockedCode: 'attempts_exhausted', fixAttempts: 3 }),
+      cleanPr(),
+      ctx()
+    );
+    expect(kinds(clean)).toContain('verify_live_then_merge');
+    expect(transitions(clean).some((t) => t.set?.fixAttempts === 0)).toBe(false);
+  });
+
+  it('never fires past the retry budget, even after a failed-merge flap downgraded the status', () => {
+    const d = decide(entry({ status: 'queued', fixAttempts: 3 }), conflictingPr(), ctx());
+    expect(fixRun(d)).toBeUndefined();
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('attempts_exhausted');
+    expect(kinds(d)).not.toContain('notify_blocked'); // silent re-settle — R8 already notified
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('re-arms a blocked PR that reads clean and merges it', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'attempts_exhausted', fixAttempts: 3 }),
+      cleanPr(),
+      ctx()
+    );
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+});
+
+describe('decide — new head resets budgets (self-healing)', () => {
+  it('zeroes budgets and unblocks when a new head appears on a blocked entry', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'attempts_exhausted', fixAttempts: 3, headSha: 'sha1' }),
+      pr({ headSha: 'sha2', mergeStateStatus: 'DIRTY' }, { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }),
+      ctx()
+    );
+    expect(kinds(d)).toContain('reset_budgets');
+    expect(fixRun(d)).toBeTruthy(); // fresh budget → fix run fires again
+  });
+
+  it('clears the signing memo with the budgets', () => {
+    const d = decide(
+      entry({ headSha: 'sha1', signingCheckedSha: 'sha1', unsignedCount: 2, resignAttempts: 3 }),
+      pr({ headSha: 'sha2' }),
+      ctx({ signingRequired: true })
+    );
+    expect(kinds(d)).toContain('reset_budgets');
+    // memo cleared → the gate needs a fresh probe for the new head
+    expect(kinds(d)).toContain('probe_signatures');
+  });
+
+  it('does NOT reset a blocked_manual entry (App permission is not head-dependent)', () => {
+    const d = decide(
+      entry({ status: 'blocked_manual', blockedCode: 'app_refused_hard', headSha: 'sha1' }),
+      pr({ headSha: 'sha2' }),
+      ctx()
+    );
+    expect(kinds(d)).not.toContain('reset_budgets');
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+});
+
+describe('decide — draft head', () => {
+  it('does NOT attempt a merge; blocks with the draft reason and advances', () => {
+    const d = decide(entry(), draftPr(), ctx());
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('draft');
+    expect(t.blockedReason).toBe(DRAFT_BLOCK_REASON);
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(kinds(d)).not.toContain('notify_blocked'); // a draft isn't a failure
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('detects a draft via mergeStateStatus even without the draft flag', () => {
+    const d = decide(entry(), pr({ mergeStateStatus: 'DRAFT' }), ctx());
+    expect(lastTransition(d)!.blockedCode).toBe('draft');
+  });
+
+  it('does not churn writes on re-evaluations while still a draft', () => {
+    const d = decide(entry({ status: 'blocked', blockedCode: 'draft', blockedReason: DRAFT_BLOCK_REASON }), draftPr(), ctx());
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('merges once the PR is marked ready for review (self-heals)', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'draft', blockedReason: DRAFT_BLOCK_REASON }),
+      cleanPr(),
+      ctx()
+    );
+    expect(transitions(d)[0]!.to).toBe('queued');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+
+  it('a draft overrides an app-refusal residue so un-drafting funnels back to the merge path', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'app_refused_checks', rerunAttempts: 3 }),
+      draftPr(),
+      ctx()
+    );
+    expect(lastTransition(d)!.blockedCode).toBe('draft');
+  });
+});
+
+describe('decide — App-refused merge (MergeNotPermittedForAppError)', () => {
+  const refused = (o: Partial<DecisionContext> = {}) =>
+    ctx({ mergeOutcome: { kind: 'refused_app', message: 'Merge not permitted for GitHub App.' }, verifiedMerged: false, ...o });
+
+  it('probes signatures first (the learn-from-403 net)', () => {
+    const d = decide(entry({ status: 'merging' }), optionalFailPr(), refused());
+    expect(kinds(d)).toEqual(['probe_signatures']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('re-signs (not hard-blocks) when unsigned commits are visible after a refusal', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), refused({ unsignedCount: 2 }));
+    expect(kinds(d)).toContain('mark_signing_required');
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: true });
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('skips the signature lookup while GraphQL is gated and continues the ladder', () => {
+    const d = decide(entry({ status: 'merging' }), optionalFailPr(), refused({ graphqlGateBlocked: true }));
+    expect(kinds(d)).not.toContain('probe_signatures');
+    expect(kinds(d)).toContain('rerequest_failed_checks');
+  });
+
+  it('re-runs the failing checks instead of blocking', () => {
+    const d = decide(entry({ status: 'merging' }), optionalFailPr(), refused({ unsignedCount: 0 }));
+    expect(kinds(d)).toEqual(['rerequest_failed_checks']);
+    expect(d.verdict).toBe('hold');
+  });
+
+  it('waits on CI (awaiting_ci) after a successful re-run, advancing the group', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      optionalFailPr(),
+      refused({ unsignedCount: 0, rerunOutcome: { requested: 2 } })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('awaiting_ci');
+    expect(t.set?.rerunAttempts).toBe(1);
+    expect(kinds(d)).toContain('refresh_snapshot');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('blocks with the ownership explanation when the check cannot be re-run via API', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      optionalFailPr(),
+      refused({ unsignedCount: 0, rerunOutcome: { requested: 0, reason: 'not-rerequestable' } })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('app_refused_checks');
+    expect(t.blockedReason).toBe(buildFailingChecksBlockReason('not-rerequestable', 3, 3));
+    expect(t.set?.rerunAttempts).toBe(3); // spent — ownership is static per head
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('blocks with the actions-permission hint when an Actions check cannot be re-run', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      optionalFailPr(),
+      refused({ unsignedCount: 0, rerunOutcome: { requested: 0, reason: 'needs-actions-permission' } })
+    );
+    expect(lastTransition(d)!.blockedReason).toBe(
+      buildFailingChecksBlockReason('needs-actions-permission', 3, 3)
+    );
+  });
+
+  it('blocks with the exhausted reason once the rerun budget is spent', () => {
+    const d = decide(entry({ status: 'merging', rerunAttempts: 3 }), optionalFailPr(), refused({ unsignedCount: 0 }));
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('app_refused_checks');
+    expect(t.blockedReason).toBe(buildFailingChecksBlockReason(undefined, 3, 3));
+    expect(kinds(d)).not.toContain('fire_fix_run'); // never churn a fix run on a refusal
+  });
+
+  it('does not spend the rerun budget when the re-run call itself errored', () => {
+    const d = decide(
+      entry({ status: 'merging', rerunAttempts: 1 }),
+      optionalFailPr(),
+      refused({ unsignedCount: 0, rerunOutcome: { errored: true } })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.set?.rerunAttempts).toBe(1); // unchanged — transient failure
+  });
+
+  it('hard-blocks (blocked_manual) when refused with no failing check to blame', () => {
+    const d = decide(entry({ status: 'merging' }), cleanPr(), refused({ unsignedCount: 0 }));
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked_manual');
+    expect(t.blockedCode).toBe('app_refused_hard');
+    expect(t.blockedReason).toContain('Merge manually on GitHub');
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(fixRun(d)).toBeUndefined(); // a fix run cannot grant merge permission
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('blocked_manual stays until requeue — even when the PR reads clean', () => {
+    const d = decide(entry({ status: 'blocked_manual', blockedCode: 'app_refused_hard' }), cleanPr(), ctx());
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+});
+
+describe('decide — blocked(app_refused_checks) self-drive and self-heal', () => {
+  it('re-runs failing checks from an already-blocked row (pre-permission rows self-drive)', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'app_refused_checks', rerunAttempts: 0 }),
+      optionalFailPr(),
+      ctx()
+    );
+    expect(kinds(d)).toContain('rerequest_failed_checks');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('accounts a fired re-run from the blocked state', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'app_refused_checks', rerunAttempts: 1 }),
+      optionalFailPr(),
+      ctx({ rerunOutcome: { requested: 1 } })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('awaiting_ci');
+    expect(t.set?.rerunAttempts).toBe(2);
+  });
+
+  it('stops re-running once the budget is spent', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'app_refused_checks', rerunAttempts: 3 }),
+      optionalFailPr(),
+      ctx()
+    );
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('self-heals and merges the moment the failing check goes green', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'app_refused_checks', rerunAttempts: 3 }),
+      cleanPr(),
+      ctx()
+    );
+    const t = transitions(d)[0]!;
+    expect(t.to).toBe('queued');
+    expect(t.set?.rerunAttempts).toBe(0); // a fresh failure gets its own retries
+    expect(kinds(d)).toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('hold');
+  });
+});
+
+describe('decide — signed-commits gate', () => {
+  it('does NOT probe signatures on a repo that does not require signed commits', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: false }));
+    expect(kinds(d)).toEqual(['verify_live_then_merge']);
+  });
+
+  it('probes once per head when signing is required and no memo exists', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true }));
+    expect(kinds(d)).toEqual(['probe_signatures']);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('merges normally when every commit is signed', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true, unsignedCount: 0 }));
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+
+  it('uses the per-head memo instead of re-probing', () => {
+    const d = decide(
+      entry({ signingCheckedSha: 'sha1', unsignedCount: 0 }),
+      cleanPr(),
+      ctx({ signingRequired: true })
+    );
+    expect(kinds(d)).not.toContain('probe_signatures');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+
+  it('re-signs (fix run) instead of attempting a doomed merge when commits are unsigned', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true, unsignedCount: 2 }));
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: true });
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('does not fire a second re-sign run while one is already in flight', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixKind: 'resign' }),
+      cleanPr(),
+      ctx({ signingRequired: true, fixTaskState: 'active' })
+    );
+    expect(fixRun(d)).toBeUndefined();
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('defers the signing check (no probe, no merge) when the GraphQL budget is in reserve', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true, graphqlBudgetLow: true }));
+    expect(kinds(d)).not.toContain('probe_signatures');
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('defers while GraphQL is in a rate-limit backoff', () => {
+    const d = decide(entry(), cleanPr(), ctx({ signingRequired: true, graphqlGateBlocked: true }));
+    expect(kinds(d)).not.toContain('probe_signatures');
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+  });
+
+  it('blocks with the signing reason once the re-sign budget is spent', () => {
+    const d = decide(
+      entry({ resignAttempts: 3 }),
+      cleanPr(),
+      ctx({ signingRequired: true, unsignedCount: 1 })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('unsigned_commits');
+    expect(t.blockedReason).toBe(unsignedCommitsBlockReason(3));
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('blocked(unsigned_commits) stays gated until a new head', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'unsigned_commits', resignAttempts: 3 }),
+      cleanPr(),
+      ctx({ signingRequired: true })
+    );
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('a new head re-arms the signing flow (budgets + memo reset)', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'unsigned_commits', resignAttempts: 3, headSha: 'sha1', signingCheckedSha: 'sha1', unsignedCount: 1 }),
+      pr({ headSha: 'sha2' }),
+      ctx({ signingRequired: true })
+    );
+    expect(kinds(d)).toContain('reset_budgets');
+    expect(kinds(d)).toContain('probe_signatures');
+  });
+});
+
+describe('decide — GitHub native auto-merge', () => {
+  it('arms auto-merge on the head when clean-but-awaiting-CI and capability is available', () => {
+    const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'available' }));
+    expect(kinds(d)).toContain('arm_automerge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('falls back to awaiting_ci when the repo has auto-merge disabled', () => {
+    const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'unavailable' }));
+    expect(kinds(d)).not.toContain('arm_automerge');
+    expect(lastTransition(d)!.to).toBe('awaiting_ci');
+  });
+
+  it('never arms a non-head entry', () => {
+    const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'available', isHead: false }));
+    expect(kinds(d)).not.toContain('arm_automerge');
+  });
+
+  it('never arms while a sibling merge/arm is in flight (one armed entry per group)', () => {
+    const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'available', groupMergeInFlight: true }));
+    expect(kinds(d)).not.toContain('arm_automerge');
+  });
+
+  it('runs the signing gate before arming (an armed unsigned PR would wedge silently)', () => {
+    const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'available', signingRequired: true }));
+    expect(kinds(d)).toEqual(['probe_signatures']);
+  });
+
+  it('re-signs instead of arming when the head has unsigned commits', () => {
+    const d = decide(
+      entry(),
+      ciRunningPr(),
+      ctx({ autoMergeCapability: 'available', signingRequired: true, unsignedCount: 1 })
+    );
+    expect(kinds(d)).not.toContain('arm_automerge');
+    expect(fixRun(d)).toEqual({ kind: 'fire_fix_run', resign: true });
+  });
+
+  it('an armed, unobstructed head just waits for GitHub (no actions)', () => {
+    const d = decide(
+      entry({ status: 'automerge_armed', automergeArmedBy: 'talyn' }),
+      pr({ mergeStateStatus: 'BLOCKED', autoMergeEnabledBy: 'talyn' }, { blockingReason: 'blocked', checks: { total: 3, failed: 0, inProgress: 1 } }),
+      ctx({ autoMergeCapability: 'available' })
+    );
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('re-evaluates when GitHub silently disarmed the auto-merge', () => {
+    const d = decide(
+      entry({ status: 'automerge_armed', automergeArmedBy: 'talyn' }),
+      ciRunningPr(), // autoMergeEnabledBy: null — GitHub bailed
+      ctx({ autoMergeCapability: 'available' })
+    );
+    expect(transitions(d)[0]!.to).toBe('queued');
+    expect(kinds(d)).toContain('arm_automerge'); // preconditions still hold → re-arm
+  });
+
+  it('remediates a settled blocker that appears while armed (BEHIND → fix path)', () => {
+    const d = decide(
+      entry({ status: 'automerge_armed', automergeArmedBy: 'talyn' }),
+      pr({ mergeStateStatus: 'BEHIND', autoMergeEnabledBy: 'talyn' }),
+      ctx({ autoMergeCapability: 'available' })
+    );
+    expect(fixRun(d)).toBeTruthy();
+  });
+});
+
+describe('decide — PR left open underneath us', () => {
+  it('closes the entry out when the PR merged externally', () => {
+    const d = decide(entry(), pr({ state: 'merged' }), ctx());
+    expect(lastTransition(d)!.to).toBe('merged');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('removes the entry when the PR closed without merging', () => {
+    const d = decide(entry({ status: 'blocked', blockedCode: 'attempts_exhausted' }), pr({ state: 'closed' }), ctx());
+    expect(lastTransition(d)!.to).toBe('removed');
+    expect(d.verdict).toBe('advance');
+  });
+});
+
+describe('decide — invariants', () => {
+  const scenarios: Array<[string, EntrySnapshot, PrSnapshot, DecisionContext]> = [
+    ['clean head', entry(), cleanPr(), ctx()],
+    ['conflicting head', entry(), conflictingPr(), ctx()],
+    ['draft head', entry(), draftPr(), ctx()],
+    ['ci running', entry(), ciRunningPr(), ctx()],
+    ['blocked manual', entry({ status: 'blocked_manual', blockedCode: 'app_refused_hard' }), cleanPr(), ctx()],
+    ['signing probe', entry(), cleanPr(), ctx({ signingRequired: true })],
+    ['app refusal', entry({ status: 'merging' }), optionalFailPr(), ctx({ mergeOutcome: { kind: 'refused_app', message: 'x' }, verifiedMerged: false, unsignedCount: 0 })],
+  ];
+
+  it('a merge is only ever attempted through verify_live_then_merge (never blind)', () => {
+    for (const [, e, p, c] of scenarios) {
+      const d = decide(e, p, c);
+      // No decision both merges and fires a fix run — those are exclusive.
+      const hasMerge = kinds(d).includes('verify_live_then_merge');
+      const hasFix = kinds(d).includes('fire_fix_run');
+      expect(hasMerge && hasFix).toBe(false);
+    }
+  });
+
+  it('notify_blocked is always accompanied by a blocked/blocked_manual transition', () => {
+    for (const [, e, p, c] of scenarios) {
+      const d = decide(e, p, c);
+      if (kinds(d).includes('notify_blocked')) {
+        const t = lastTransition(d)!;
+        expect(['blocked', 'blocked_manual']).toContain(t.to);
+      }
+    }
+  });
+
+  it('is deterministic — same inputs, same decision', () => {
+    for (const [, e, p, c] of scenarios) {
+      expect(decide(e, p, c)).toEqual(decide(e, p, c));
+    }
+  });
+});

@@ -1,0 +1,273 @@
+// Merge queue v2 — core types for the pure decision function.
+//
+// The v2 queue splits the old mergeQueueProcessor's four tangled concerns:
+// membership/state (merge_queue_entries table), decision (the pure `decide`
+// in ./decide.ts), execution (the action executor), and scheduling
+// (webhook-triggered evaluation + a slow reconciler). Everything in this file
+// is shared vocabulary between those layers, and none of it does I/O.
+
+import type { PRMergeableSummary } from '@talyn/shared';
+
+/** Stop auto-firing a given remediation after this many attempts per head. */
+export const MAX_ATTEMPTS = 3;
+
+/**
+ * Upper bound on decide→execute rounds within one evaluation of one entry.
+ * The longest legitimate chain is the App-refused merge:
+ * merge → verify-merged → signature probe → check re-run → final block = 5.
+ * Anything past this indicates a decide/executor bug, not real work.
+ */
+export const MAX_DECIDE_ROUNDS = 6;
+
+export type MergeMethod = 'merge' | 'squash' | 'rebase';
+
+/**
+ * v2 entry lifecycle. Unlike the old 4-status jsonb blob, every state is
+ * explicit and every state has a defined exit:
+ *
+ * - `queued`           — in line; not head, or head awaiting its next action.
+ * - `awaiting_ci`      — head; the only obstacle is checks still running.
+ * - `awaiting_review`  — head; the only obstacle is a missing required review.
+ *                        No remediation applies (an agent can't approve a PR);
+ *                        self-heals on the review webhook. The old processor
+ *                        fired doomed fix runs at this state.
+ * - `automerge_armed`  — head; clean-but-awaiting-CI with GitHub native
+ *                        auto-merge enabled. GitHub merges the instant checks
+ *                        pass; we observe it via the closed webhook.
+ * - `fixing`           — a cloud fix run (blockers or re-sign) is in flight.
+ * - `merging`          — a direct REST merge call is in flight. Persisted
+ *                        BEFORE the call so a crash mid-merge is recoverable
+ *                        (verify-merged — the June 2026 incident).
+ * - `blocked`          — can't proceed, but SELF-HEALING: re-evaluated on
+ *                        every relevant event, and a new head resets budgets.
+ * - `blocked_manual`   — truly manual (GitHub refuses the App's merge with no
+ *                        failing check to blame). Only dequeue/requeue clears.
+ * - `merged`/`removed` — terminal; kept as history for the timeline.
+ */
+export type EntryStatus =
+  | 'queued'
+  | 'awaiting_ci'
+  | 'awaiting_review'
+  | 'automerge_armed'
+  | 'fixing'
+  | 'merging'
+  | 'blocked'
+  | 'blocked_manual'
+  | 'merged'
+  | 'removed';
+
+/** Machine-readable cause carried by `blocked` / `blocked_manual`. */
+export type BlockedCode =
+  /** Draft PR — GitHub 405s a draft merge. Self-heals on ready_for_review. */
+  | 'draft'
+  /** Fix-run budget spent on this head. Self-heals on a new head (push). */
+  | 'attempts_exhausted'
+  /** Re-sign budget spent on a signed-commits-required base. Self-heals on a new head. */
+  | 'unsigned_commits'
+  /**
+   * GitHub refused the App's merge over a failing head check (even an
+   * "optional" one a human can merge past). Self-heals the moment the summary
+   * shows no failing checks (a re-run went green, or a new head).
+   */
+  | 'app_refused_checks'
+  /**
+   * GitHub refused the App's merge with no failing check to blame — unknown,
+   * unfixable cause (e.g. a ruleset that excludes the App). `blocked_manual`
+   * only. A fix run cannot grant merge permission (the fix-run-churn incident),
+   * so nothing is dispatched.
+   */
+  | 'app_refused_hard';
+
+export type FixKind = 'blockers' | 'resign';
+
+/** Mirror of a merge_queue_entries row, as the decision function sees it. */
+export interface EntrySnapshot {
+  id: string;
+  status: EntryStatus;
+  blockedCode: BlockedCode | null;
+  blockedReason: string | null;
+  /** Head the budgets below are scoped to. '' when not yet observed. */
+  headSha: string;
+  fixAttempts: number;
+  rerunAttempts: number;
+  resignAttempts: number;
+  fixTaskId: string | null;
+  /** Whether `fixTaskId`'s terminal result has been folded into fixAttempts. */
+  fixTaskAccounted: boolean;
+  fixKind: FixKind | null;
+  /** Signature probe memo — valid only while it matches the current head. */
+  signingCheckedSha: string | null;
+  unsignedCount: number | null;
+  /** Who armed GitHub auto-merge. We never disarm what we didn't arm. */
+  automergeArmedBy: 'talyn' | 'user' | null;
+  mergeMethod: MergeMethod;
+  baseBranch: string;
+}
+
+/**
+ * The PR as last observed, extracted from the pull_requests row. In v2 this
+ * is fresh by construction on webhook-triggered evaluations (the trigger IS
+ * the snapshot write); the reconciler refreshes stale ones before deciding.
+ */
+export interface PrSnapshot {
+  state: 'open' | 'closed' | 'merged';
+  /** Current head commit. '' when the summary predates headSha capture. */
+  headSha: string;
+  /** GitHub's mergeStateStatus (BEHIND/BLOCKED/CLEAN/DRAFT/…), uppercased. */
+  mergeStateStatus: string;
+  /** Who has GitHub auto-merge armed on the PR right now, if anyone. */
+  autoMergeEnabledBy: 'talyn' | 'user' | null;
+  summary: PRMergeableSummary;
+}
+
+export type MergeOutcome =
+  /** GitHub merged it. */
+  | { kind: 'merged' }
+  /** GitHub accepted the request but didn't merge (e.g. lost a race, now behind). */
+  | { kind: 'not_merged'; message: string }
+  /** MergeNotPermittedForAppError — the App's tokens were refused. */
+  | { kind: 'refused_app'; message: string }
+  /** Any other rejection (405 conflicts, network, …). */
+  | { kind: 'error'; message: string };
+
+export type RerunOutcome =
+  | {
+      requested: number;
+      reason?: 'no-failing-check-runs' | 'needs-actions-permission' | 'not-rerequestable';
+    }
+  /** The re-run call itself threw — budget must NOT be spent. */
+  | { errored: true };
+
+/**
+ * Everything the decision function needs beyond the entry + PR snapshot.
+ * Assembled by the evaluator/executor; `decide` itself never does I/O and
+ * never reads clocks. Fields in the "I/O outcomes" group are absent until the
+ * executor has performed the corresponding action within this evaluation,
+ * then re-invoked `decide` with the result folded in.
+ */
+export interface DecisionContext {
+  nowIso: string;
+  /** This entry currently holds its (repo, base) group's turn. */
+  isHead: boolean;
+  /** A sibling entry in the group is `merging` or `automerge_armed`. */
+  groupMergeInFlight: boolean;
+  /** State of the queue's own fix run (`entry.fixTaskId`). */
+  fixTaskState: 'active' | 'terminal' | 'none';
+  /**
+   * Another run is linked to the PR (`pull_requests.taskId` differs from our
+   * fixTaskId and is active) — a manual task or the keep-mergeable watcher.
+   * We never pile a queue run on top of it.
+   */
+  otherLinkedTaskActive: boolean;
+  /** repoSigning probe result; null = unknown/probe failed (proceed; the 403 net catches). */
+  signingRequired: boolean | null;
+  /** Whether GitHub native auto-merge can be armed on this repo (Push E). */
+  autoMergeCapability: 'available' | 'unavailable' | 'unknown';
+  /** Whether githubService.updateBranch exists/is enabled (Push E). */
+  updateBranchAvailable: boolean;
+  /** A cloud provider is connected for this workspace. */
+  cloudEnvAvailable: boolean;
+  /** githubRateGate.isBlocked(account, 'rest') — merge-critical calls would sleep. */
+  restGateBlocked: boolean;
+  /** githubRateGate.isBlocked(account, 'graphql') — probes would sleep. */
+  graphqlGateBlocked: boolean;
+  /** graphqlBudget.shouldDefer(account, 'queue') — points are scarce. */
+  graphqlBudgetLow: boolean;
+  maxAttempts: number;
+
+  // ── I/O outcomes (present only after the executor ran the action) ──
+  /** Result of `verify_merged` — GitHub's canonical merged_at signal. */
+  verifiedMerged?: boolean;
+  /** Result of `probe_signatures` — unsigned commit count on the head. */
+  unsignedCount?: number;
+  /** Result of `verify_live_then_merge`. */
+  mergeOutcome?: MergeOutcome;
+  /** Result of `rerequest_failed_checks`. */
+  rerunOutcome?: RerunOutcome;
+  /** Result of `update_branch`. */
+  updateBranchOutcome?: 'ok' | 'conflict' | 'error';
+}
+
+/** Draft of a merge_queue_events row; the executor stamps `at` + trigger. */
+export interface EventDraft {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * What the executor should do, in order. Actions are granular and idempotent;
+ * `transition` carries the full entry patch so the executor stays mechanical.
+ */
+export type Action =
+  /** Persist entry changes (CAS-guarded) + append the audit event. */
+  | {
+      kind: 'transition';
+      to: EntryStatus;
+      blockedCode?: BlockedCode | null;
+      blockedReason?: string | null;
+      /** Extra column writes folded into the same CAS update. */
+      set?: Partial<
+        Pick<
+          EntrySnapshot,
+          | 'fixAttempts'
+          | 'rerunAttempts'
+          | 'resignAttempts'
+          | 'fixTaskAccounted'
+          | 'signingCheckedSha'
+          | 'unsignedCount'
+        >
+      > & { lastError?: string; lastErrorAt?: string };
+      event: EventDraft;
+    }
+  /**
+   * A new head appeared — zero every per-head budget and clear the signing
+   * memo. THE self-healing mechanic: fresh code gets fresh budgets. Never
+   * applies to `blocked_manual` (App permission isn't head-dependent).
+   */
+  | { kind: 'reset_budgets'; newHeadSha: string; event: EventDraft }
+  /**
+   * Re-read the entry + PR row live (still open? still queued? version
+   * unchanged?), persist `merging` + merge_started_at, then attempt the REST
+   * merge. Aborts without merging if the live re-read fails. The outcome
+   * comes back as ctx.mergeOutcome.
+   */
+  | { kind: 'verify_live_then_merge' }
+  /** Ask GitHub (REST getPullRequest, merged_at) whether the PR is in fact merged. */
+  | { kind: 'verify_merged' }
+  /** Fetch the unsigned-commit count (GraphQL) and memoize it per head. */
+  | { kind: 'probe_signatures' }
+  /** POST re-runs for the head's failing check runs. Outcome → ctx.rerunOutcome. */
+  | { kind: 'rerequest_failed_checks' }
+  /** PUT update-branch — merge the base into the head server-side (Push E). */
+  | { kind: 'update_branch' }
+  /**
+   * Create the "get this PR mergeable" cloud task. Executor contract:
+   * fired → status 'fixing' + fixTaskId + fixTaskAccounted=false (+
+   * resignAttempts+1 when resign); TaskLimitError or no cloud env →
+   * ensure 'queued' and burn NOTHING (a slot frees when a task ends).
+   */
+  | { kind: 'fire_fix_run'; resign: boolean }
+  /** Enable GitHub auto-merge on the head (expectedHeadOid-guarded; Push E). */
+  | { kind: 'arm_automerge' }
+  /** Disable a Talyn-armed auto-merge (never a user-armed one; Push E). */
+  | { kind: 'disarm_automerge' }
+  /** Learn-from-403: persist that this base requires signed commits. */
+  | { kind: 'mark_signing_required' }
+  /** The single success path: entry → merged, PR row terminal, positions rebroadcast. */
+  | { kind: 'record_merged' }
+  /** Force-refetch the PR summary now (post-failed-merge staleness fix). */
+  | { kind: 'refresh_snapshot' }
+  /** Fire the one-shot merge_queue:blocked notification (dedup is the executor's). */
+  | { kind: 'notify_blocked' };
+
+/**
+ * One round's decision. `verdict` is the group-walk semantics carried over
+ * verbatim from v1: `hold` — this entry is being actively worked and keeps
+ * the group's turn; `advance` — it can't make progress right now, so the next
+ * queued entry gets a go instead of sitting behind it.
+ */
+export interface Decision {
+  actions: Action[];
+  verdict: 'hold' | 'advance';
+}
