@@ -228,6 +228,19 @@ export function runInScopedDb<T>(db: Database, fn: () => T): T {
 }
 
 /**
+ * Run `fn` OUTSIDE any active owner scope, so `getDbClient()` in its async
+ * tree resolves to the pool. REQUIRED wherever a request handler schedules
+ * fire-and-forget background work (e.g. the merge-queue triggers):
+ * AsyncLocalStorage propagates the request's scoped TRANSACTION handle into
+ * detached promises, and by the time they run that transaction has committed —
+ * every query on the dead handle then hangs or dies with 25P02 (the
+ * 2026-07-16 stuck-queue incident, part two).
+ */
+export function runWithoutScope<T>(fn: () => T): T {
+  return scopedDbStore.exit(fn);
+}
+
+/**
  * Close the underlying Postgres connection. No-op for test-injected clients
  * (their lifecycle belongs to the test).
  */

@@ -16,6 +16,7 @@
 //                   and re-evaluate anything deferred on the task limit.
 //   route         — enqueue/dequeue call onQueueMembershipChanged directly.
 
+import { runWithoutScope } from '../../db/client.js';
 import {
   domainEvents,
   type DomainPrChecksEvent,
@@ -37,9 +38,20 @@ let initialized = false;
 export function initMergeQueueTriggers(): void {
   if (initialized) return;
   initialized = true;
-  domainEvents.on('pr:snapshot', (evt) => void handlePrSnapshot(evt).catch(swallow('pr:snapshot')));
-  domainEvents.on('pr:checks', (evt) => void handlePrChecks(evt).catch(swallow('pr:checks')));
-  domainEvents.on('task:status', (evt) => void handleTaskStatus(evt).catch(swallow('task:status')));
+  // Every handler is scope-escaped: domain events are often emitted from
+  // inside a request's withOwnerScope transaction (prCache upserts on refresh
+  // routes, the queue toggle), and AsyncLocalStorage would otherwise hand
+  // these detached handlers the request's transaction — dead by the time
+  // they run (hangs / 25P02). The pipeline always works on the pool.
+  domainEvents.on('pr:snapshot', (evt) =>
+    runWithoutScope(() => void handlePrSnapshot(evt).catch(swallow('pr:snapshot')))
+  );
+  domainEvents.on('pr:checks', (evt) =>
+    runWithoutScope(() => void handlePrChecks(evt).catch(swallow('pr:checks')))
+  );
+  domainEvents.on('task:status', (evt) =>
+    runWithoutScope(() => void handleTaskStatus(evt).catch(swallow('task:status')))
+  );
 }
 
 function swallow(source: string) {
@@ -94,9 +106,13 @@ async function handleTaskStatus(evt: DomainTaskStatusEvent): Promise<void> {
   }
 }
 
-/** Direct hook for the enqueue/dequeue route (no event round-trip needed). */
+/** Direct hook for the enqueue/dequeue route (no event round-trip needed).
+ *  Scope-escaped: the route fires this without awaiting it, so it must never
+ *  inherit the request's transaction handle. */
 export async function onQueueMembershipChanged(prId: string, trigger: string): Promise<void> {
-  if (!(await mergeQueueV2Active())) return;
-  const entry = await getActiveEntryForPr(prId);
-  if (entry) scheduleGroupEvaluation(entry.repositoryId, entry.baseBranch, trigger);
+  await runWithoutScope(async () => {
+    if (!(await mergeQueueV2Active())) return;
+    const entry = await getActiveEntryForPr(prId);
+    if (entry) scheduleGroupEvaluation(entry.repositoryId, entry.baseBranch, trigger);
+  });
 }

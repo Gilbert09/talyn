@@ -12,7 +12,7 @@
 // never gates the PRs behind it.
 
 import { inArray } from 'drizzle-orm';
-import { getDbClient } from '../../db/client.js';
+import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { githubService } from '../github.js';
@@ -82,7 +82,12 @@ export function scheduleGroupEvaluation(
   }
   const fresh: GroupState = { running: true, dirty: false, triggers: new Set([trigger]) };
   groups.set(key, fresh);
-  void runGroupLoop(key, repositoryId, baseBranch, fresh);
+  // ESCAPE THE OWNER SCOPE. A schedule call from a request handler would
+  // otherwise propagate the request's scoped TRANSACTION handle (via
+  // AsyncLocalStorage) into this detached evaluation — and by the time it
+  // runs, that transaction has committed, so every query on it hangs until
+  // the 45s timeout or dies with 25P02. The pipeline always runs on the pool.
+  runWithoutScope(() => void runGroupLoop(key, repositoryId, baseBranch, fresh));
 }
 
 async function runGroupLoop(
@@ -113,13 +118,15 @@ async function runGroupLoop(
 }
 
 /** Awaitable single evaluation — tests and direct callers that need the
- *  result settled before proceeding (the scheduled path is fire-and-forget). */
+ *  result settled before proceeding (the scheduled path is fire-and-forget).
+ *  Scope-escaped like the scheduled path: the pipeline never runs on a
+ *  request's transaction handle. */
 export async function evaluateGroupNow(
   repositoryId: string,
   baseBranch: string,
   trigger: string
 ): Promise<void> {
-  await evaluateGroupOnce(repositoryId, baseBranch, trigger);
+  await runWithoutScope(() => evaluateGroupOnce(repositoryId, baseBranch, trigger));
 }
 
 async function evaluateGroupOnce(
@@ -164,7 +171,7 @@ async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Prom
 }
 
 async function walkGroup(repositoryId: string, baseBranch: string, trigger: string): Promise<void> {
-  const db = getDbClient();
+  const db = getPoolDbClient();
   const entries = await loadActiveGroup(repositoryId, baseBranch, db);
   if (entries.length === 0) return;
 

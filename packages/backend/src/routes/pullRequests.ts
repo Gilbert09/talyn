@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { and, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
-import { getDbClient } from '../db/client.js';
+import { getDbClient, runWithoutScope } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
   mergeQueueEntries as mergeQueueEntriesTable,
@@ -648,10 +648,14 @@ export function pullRequestRoutes(): Router {
 
     // Kick a tick so an already-clean PR merges without waiting for the poll.
     // Both engines: the v1 runOnce no-ops when the flag reads 'v2', and the
-    // v2 trigger no-ops while v1 drives.
+    // v2 trigger no-ops while v1 drives. Scope-escaped — fire-and-forget work
+    // must never inherit this request's transaction handle (it's dead by the
+    // time the kick runs; see runWithoutScope).
     if (enabled) {
-      void mergeQueueProcessor.runOnce();
-      void onQueueMembershipChanged(row.id, 'user:enqueue');
+      runWithoutScope(() => {
+        void mergeQueueProcessor.runOnce();
+        void onQueueMembershipChanged(row.id, 'user:enqueue');
+      });
     }
 
     res.json({ success: true, data: null } as ApiResponse<null>);
