@@ -31,6 +31,10 @@ const MIGRATION_0031 = path.resolve(
   __dirname,
   '../../db/migrations/0031_merge_queue_entries.sql'
 );
+const MIGRATION_0032 = path.resolve(
+  __dirname,
+  '../../db/migrations/0032_merge_queue_cutover.sql'
+);
 
 describe('mergeQueue store', () => {
   let db: Database;
@@ -100,16 +104,16 @@ describe('mergeQueue store', () => {
   });
 
   describe('engine flag', () => {
-    it('defaults to v1 (seeded by the migration)', async () => {
-      expect(await getMergeQueueEngine(db)).toBe('v1');
+    it('reads v2 after the cutover migration (0032 flips the 0031 seed)', async () => {
+      expect(await getMergeQueueEngine(db)).toBe('v2');
     });
 
-    it('reads v2 after the flip', async () => {
+    it('reads v1 when rolled back', async () => {
       await db
         .update(settingsTable)
-        .set({ value: 'v2' })
+        .set({ value: 'v1' })
         .where(eq(settingsTable.key, 'merge_queue_engine'));
-      expect(await getMergeQueueEngine(db)).toBe('v2');
+      expect(await getMergeQueueEngine(db)).toBe('v1');
     });
   });
 
@@ -361,6 +365,79 @@ describe('mergeQueue store', () => {
         .from(mergeQueueEntries)
         .where(eq(mergeQueueEntries.pullRequestId, prId));
       expect(rows).toHaveLength(1);
+    });
+  });
+
+  describe('0032 cutover re-sync (re-run against seeded dual-write drift)', () => {
+    async function runCutover(): Promise<void> {
+      const sqlText = fs.readFileSync(MIGRATION_0032, 'utf-8');
+      for (const stmt of sqlText.split('--> statement-breakpoint')) {
+        const trimmed = stmt.trim();
+        if (trimmed) await pglite.exec(trimmed);
+      }
+    }
+
+    it('converges every drift direction, then flips the flag', async () => {
+      // Simulate the pre-cutover state the boot migrator sees.
+      await db
+        .update(settingsTable)
+        .set({ value: 'v1' })
+        .where(eq(settingsTable.key, 'merge_queue_engine'));
+
+      // Drift 1: entry active but v1 merged the PR (mirror cleared).
+      const mergedPr = await insertPr({ queued: false, state: 'merged' });
+      await ensureActiveEntry(enqueueInput(mergedPr), db);
+      // Drift 2: entry active but the user dequeued through a v1-only path.
+      const dequeuedPr = await insertPr({ queued: false });
+      await ensureActiveEntry(enqueueInput(dequeuedPr), db);
+      // Drift 3: entry stale vs the authoritative v1 blob (blocked hard).
+      const stalePr = await insertPr({
+        queued: true,
+        mergeQueueState: {
+          status: 'blocked',
+          mergeForbidden: 'hard',
+          attempts: 3,
+          blockReason: 'refused',
+        },
+      });
+      await ensureActiveEntry(enqueueInput(stalePr), db);
+      // Drift 4: queued PR with no entry at all (missed dual-write).
+      const missingPr = await insertPr({
+        queued: true,
+        mergeQueueState: { status: 'fixing', attempts: 1, accounted: false },
+      });
+
+      await runCutover();
+
+      const byPr = new Map(
+        (await db.select().from(mergeQueueEntries)).map((e) => [e.pullRequestId, e])
+      );
+      expect(byPr.get(mergedPr)?.status).toBe('merged');
+      expect(byPr.get(dequeuedPr)?.status).toBe('removed');
+      expect(byPr.get(stalePr)).toMatchObject({
+        status: 'blocked_manual',
+        blockedCode: 'app_refused_hard',
+        blockedReason: 'refused',
+        fixAttempts: 3,
+      });
+      expect(byPr.get(missingPr)).toMatchObject({ status: 'fixing', fixAttempts: 1 });
+      expect(await getMergeQueueEngine(db)).toBe('v2');
+    });
+
+    it('is idempotent — a second run converges to the same state', async () => {
+      const prId = await insertPr({
+        queued: true,
+        mergeQueueState: { status: 'waiting', attempts: 2, accounted: true },
+      });
+      await ensureActiveEntry(enqueueInput(prId), db);
+      await runCutover();
+      await runCutover();
+      const rows = await db
+        .select()
+        .from(mergeQueueEntries)
+        .where(eq(mergeQueueEntries.pullRequestId, prId));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: 'queued', fixAttempts: 2 });
     });
   });
 });

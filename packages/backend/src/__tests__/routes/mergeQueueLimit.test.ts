@@ -15,6 +15,7 @@ import {
   repositories as repositoriesTable,
   users as usersTable,
   workspaces as workspacesTable,
+  settings as settingsTable,
 } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -94,6 +95,13 @@ describe('free-plan merge-queue limit at the route surface', () => {
   beforeEach(async () => {
     ({ db, cleanup } = await createTestDb());
     process.env.POLAR_ACCESS_TOKEN = 'polar-test-token';
+    // Pin the legacy engine: this suite's subject is the billing gate, and the
+    // v2 triggers firing background evaluations against the torn-down test DB
+    // would only add noise.
+    await db
+      .update(settingsTable)
+      .set({ value: 'v1' })
+      .where(eq(settingsTable.key, 'merge_queue_engine'));
     await seedUser(db);
     await db.insert(workspacesTable).values({
       id: 'ws1',

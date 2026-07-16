@@ -225,6 +225,13 @@
 			"when": 1784160000015,
 			"tag": "0031_merge_queue_entries",
 			"breakpoints": true
+		},
+		{
+			"idx": 32,
+			"version": "7",
+			"when": 1784160000016,
+			"tag": "0032_merge_queue_cutover",
+			"breakpoints": true
 		}
 	]
 }

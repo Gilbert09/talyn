@@ -22,6 +22,7 @@ import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
+  settings as settingsTable,
 } from '../db/schema.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
@@ -238,6 +239,13 @@ describe('mergeQueueProcessor', () => {
     cleanup = testDb.cleanup;
     prCounter = 0;
     await seedBase(db);
+    // The cutover migration (0032) flips the engine to v2 in every fresh test
+    // DB. This suite exercises the LEGACY v1 processor (kept until the cleanup
+    // push), so pin the flag back or every tick would stand down.
+    await db
+      .update(settingsTable)
+      .set({ value: 'v1' })
+      .where(eq(settingsTable.key, 'merge_queue_engine'));
     mergeSpy = vi
       .spyOn(githubService, 'mergePullRequest')
       .mockResolvedValue({ sha: 'merged-sha', merged: true, message: 'ok' });
