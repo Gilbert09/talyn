@@ -31,6 +31,12 @@ import { TaskLimitError } from '../billing/entitlements.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnv } from '../prCloudFix.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from '../websocket.js';
 import { broadcastMergeQueuePositions, QUEUE_RESET_COLUMNS } from '../mergeQueueBroadcast.js';
+import {
+  classifyAutoMergeActor,
+  disableAutoMerge,
+  enableAutoMerge,
+  getAutoMergeCapability,
+} from '../githubAutoMerge.js';
 import { debugBus } from '../debugBus.js';
 import { decide } from './decide.js';
 import { toLegacyPublicState, toLegacyStateBlob, toPublicMergeQueue } from './legacy.js';
@@ -76,19 +82,22 @@ export interface EvaluateEntryResult {
   verdict: 'hold' | 'advance';
   /** Another writer won a CAS race — the group should re-schedule. */
   casLost?: boolean;
+  /** The entry as this evaluation left it — the walk uses it to keep its
+   *  merge-in-flight view current (an arm mid-walk must gate the siblings). */
+  finalEntry?: EntrySnapshot;
 }
 
 export function buildPrSnapshot(pr: PrEvalRow): PrSnapshot {
   const summary = (pr.lastSummary ?? {}) as PRMergeableSummary & {
     headSha?: string;
     mergeStateStatus?: string;
-    autoMergeEnabledBy?: 'talyn' | 'user' | null;
+    autoMergeBy?: string | null;
   };
   return {
     state: pr.state as PrSnapshot['state'],
     headSha: summary.headSha ?? '',
     mergeStateStatus: summary.mergeStateStatus ?? 'UNKNOWN',
-    autoMergeEnabledBy: summary.autoMergeEnabledBy ?? null,
+    autoMergeEnabledBy: classifyAutoMergeActor(summary.autoMergeBy),
     summary: {
       url: summary.url ?? '',
       headBranch: summary.headBranch ?? '',
@@ -119,6 +128,14 @@ async function buildBaseContext(
     requiresSignedCommits(pr.workspaceId, pr.owner, pr.repo, entry.baseBranch).catch(() => null),
     resolveCloudEnv(pr.workspaceId),
   ]);
+  const graphqlGateBlocked = githubRateGate.isBlocked(accountKey, 'graphql');
+  const graphqlBudgetLow = graphqlBudget.shouldDefer(accountKey);
+  // The capability probe is GraphQL (1h-cached per repo) — only worth asking
+  // for the head entry, and never while GraphQL is gated or in the reserve.
+  const autoMergeCapability =
+    input.isHead && !graphqlGateBlocked && !graphqlBudgetLow
+      ? await getAutoMergeCapability(pr.workspaceId, pr.owner, pr.repo, entry.mergeMethod)
+      : 'unknown';
   return {
     nowIso: new Date().toISOString(),
     isHead: input.isHead,
@@ -127,12 +144,12 @@ async function buildBaseContext(
       ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix) ? 'active' : 'terminal',
     otherLinkedTaskActive: otherFix !== null && ACTIVE_STATUSES.has(otherFix),
     signingRequired,
-    autoMergeCapability: 'unavailable', // Push E wires the repo probe here
-    updateBranchAvailable: false, // Push E adds githubService.updateBranch
+    autoMergeCapability,
+    updateBranchAvailable: true,
     cloudEnvAvailable: cloudEnv !== null,
     restGateBlocked: githubRateGate.isBlocked(accountKey, 'rest'),
-    graphqlGateBlocked: githubRateGate.isBlocked(accountKey, 'graphql'),
-    graphqlBudgetLow: graphqlBudget.shouldDefer(accountKey),
+    graphqlGateBlocked,
+    graphqlBudgetLow,
     maxAttempts: MAX_ATTEMPTS,
   };
 }
@@ -165,7 +182,7 @@ export async function evaluateEntry(input: EvaluateEntryInput): Promise<Evaluate
         extras,
       });
       if (applied.casLost) return { verdict: 'advance', casLost: true };
-      if (applied.abort) return { verdict: applied.abort };
+      if (applied.abort) return { verdict: applied.abort, finalEntry: entry };
       if (applied.entry) entry = applied.entry;
       if (applied.versionDelta) version += applied.versionDelta;
       if (applied.redecide) {
@@ -173,12 +190,12 @@ export async function evaluateEntry(input: EvaluateEntryInput): Promise<Evaluate
         break; // decide must see the outcome before any later action runs
       }
     }
-    if (!redecide) return { verdict: decision.verdict };
+    if (!redecide) return { verdict: decision.verdict, finalEntry: entry };
   }
   console.warn(
     `[mergeQueueV2] decide/execute round overflow for entry ${entry.id} — advancing`
   );
-  return { verdict: 'advance' };
+  return { verdict: 'advance', finalEntry: entry };
 }
 
 interface ActionContext {
@@ -219,9 +236,12 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return { redecide: true };
     }
     case 'update_branch': {
-      // Push E adds the REST method; decide never emits this while
-      // ctx.updateBranchAvailable is false, so this is a safety stub.
-      ctx.extras.updateBranchOutcome = 'error';
+      ctx.extras.updateBranchOutcome = await githubService.updatePullRequestBranch(
+        ctx.pr.workspaceId,
+        ctx.pr.owner,
+        ctx.pr.repo,
+        ctx.pr.number
+      );
       return { redecide: true };
     }
     case 'fire_fix_run':
@@ -250,12 +270,158 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return {};
     }
     case 'arm_automerge':
-    case 'disarm_automerge': {
-      // Unreachable until Push E sets autoMergeCapability to 'available'.
-      console.warn(`[mergeQueueV2] ${action.kind} requested before auto-merge shipped — ignoring`);
-      return {};
-    }
+      return armAutoMerge(ctx);
+    case 'disarm_automerge':
+      return disarmAutoMerge(ctx);
   }
+}
+
+/**
+ * Arm GitHub native auto-merge on the group head. On success the entry goes
+ * `automerge_armed` and GitHub owns the merge moment (we observe it via the
+ * closed webhook). Adoption: when the USER already armed it on github.com we
+ * record that and arm nothing — and never disarm it.
+ */
+async function armAutoMerge(ctx: ActionContext): Promise<ActionOutcome> {
+  if (ctx.prSnap.autoMergeEnabledBy === 'user') {
+    return applyArmedTransition(ctx, 'user', 'Adopted the user-armed GitHub auto-merge.');
+  }
+  if (ctx.prSnap.autoMergeEnabledBy === 'talyn') {
+    // GitHub already holds our arm (entry status drifted during remediation) —
+    // re-sync the entry instead of re-arming.
+    return applyArmedTransition(ctx, 'talyn', 'Re-synced: GitHub auto-merge already armed.');
+  }
+  const nodeId = (ctx.pr.lastSummary as { nodeId?: string } | null)?.nodeId;
+  if (!nodeId) {
+    // Rows cached before the nodeId field shipped — refresh fills it; wait as
+    // awaiting_ci meanwhile (the direct-merge path still works).
+    await ensureAwaitingCi(ctx, 'automerge_no_node_id', 'PR node id not cached yet — refreshing.');
+    await prMonitorService
+      .refreshPr(ctx.pr.workspaceId, ctx.pr.owner, ctx.pr.repo, ctx.pr.number)
+      .catch(() => undefined);
+    return {};
+  }
+  const result = await enableAutoMerge({
+    workspaceId: ctx.pr.workspaceId,
+    owner: ctx.pr.owner,
+    repo: ctx.pr.repo,
+    nodeId,
+    mergeMethod: ctx.entry.mergeMethod,
+    expectedHeadOid: ctx.prSnap.headSha,
+  });
+  if (result.armed) {
+    debugBus.recordEvent({
+      service: 'merge_queue',
+      action: 'auto-merge:armed',
+      summary: `${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number} auto-merge armed`,
+      workspaceId: ctx.pr.workspaceId,
+      meta: { entryId: ctx.entry.id, headSha: ctx.prSnap.headSha },
+    });
+    return applyArmedTransition(ctx, 'talyn', 'GitHub auto-merge armed — merges when checks pass.');
+  }
+  switch (result.reason) {
+    case 'clean_status':
+      // The PR is immediately mergeable — nothing to wait for. Direct merge.
+      return verifyLiveThenMerge(ctx);
+    case 'head_mismatch':
+      // A push landed mid-arm — the synchronize webhook re-evaluates with the
+      // new head (and resets budgets); nothing else to do now.
+      return ensureAwaitingCi(ctx, 'automerge_head_moved', 'Head moved while arming — re-evaluating.');
+    case 'not_allowed':
+      // Sticky-recorded by enableAutoMerge; the direct-merge path takes over.
+      return ensureAwaitingCi(ctx, 'automerge_not_allowed', 'Repo refuses auto-merge — will direct-merge when checks pass.');
+    default:
+      return ensureAwaitingCi(ctx, 'automerge_arm_failed', `Arming failed (${result.message}) — will retry.`);
+  }
+}
+
+async function applyArmedTransition(
+  ctx: ActionContext,
+  armedBy: 'talyn' | 'user',
+  message: string
+): Promise<ActionOutcome> {
+  const next: EntrySnapshot = { ...ctx.entry, status: 'automerge_armed', automergeArmedBy: armedBy };
+  const ok = await casTransition(
+    ctx.entry.id,
+    ctx.version,
+    {
+      status: 'automerge_armed',
+      blockedCode: null,
+      blockedReason: null,
+      automergeArmedAt: new Date(),
+      automergeArmedBy: armedBy,
+      pendingDisarm: false,
+      lastEvaluatedAt: new Date(),
+    },
+    {
+      trigger: ctx.trigger,
+      fromStatus: ctx.entry.status,
+      toStatus: 'automerge_armed',
+      code: armedBy === 'user' ? 'automerge_adopted' : 'automerge_armed',
+      message,
+      detail: { headSha: ctx.prSnap.headSha },
+    }
+  );
+  if (!ok) return { casLost: true };
+  await mirrorToPrRow(next, ctx.pr, ctx.position);
+  return { entry: next, versionDelta: 1 };
+}
+
+async function ensureAwaitingCi(
+  ctx: ActionContext,
+  code: string,
+  message: string
+): Promise<ActionOutcome> {
+  if (ctx.entry.status === 'awaiting_ci') return {};
+  return applyTransition(
+    { kind: 'transition', to: 'awaiting_ci', blockedCode: null, blockedReason: null, event: { code, message } },
+    ctx
+  );
+}
+
+/** Disarm a Talyn-armed auto-merge (never a user-armed one — decide guards). */
+async function disarmAutoMerge(ctx: ActionContext): Promise<ActionOutcome> {
+  const nodeId = (ctx.pr.lastSummary as { nodeId?: string } | null)?.nodeId;
+  const ok = nodeId
+    ? await disableAutoMerge({
+        workspaceId: ctx.pr.workspaceId,
+        owner: ctx.pr.owner,
+        repo: ctx.pr.repo,
+        nodeId,
+      })
+    : false;
+  const cas = await casTransition(
+    ctx.entry.id,
+    ctx.version,
+    {
+      automergeArmedAt: null,
+      automergeArmedBy: null,
+      // A failed disarm is retried by the reconciler — never leave a
+      // Talyn-armed auto-merge dangling on GitHub.
+      pendingDisarm: !ok,
+      lastEvaluatedAt: new Date(),
+    },
+    {
+      trigger: ctx.trigger,
+      fromStatus: ctx.entry.status,
+      toStatus: ctx.entry.status,
+      code: ok ? 'automerge_disarmed' : 'automerge_disarm_failed',
+      message: ok ? 'GitHub auto-merge disarmed.' : 'Disarm failed — reconciler will retry.',
+    }
+  );
+  if (!cas) return { casLost: true };
+  debugBus.recordEvent({
+    service: 'merge_queue',
+    action: 'auto-merge:disarmed',
+    ok,
+    summary: `${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number} auto-merge disarm ${ok ? 'ok' : 'FAILED (retrying)'}`,
+    workspaceId: ctx.pr.workspaceId,
+    meta: { entryId: ctx.entry.id },
+  });
+  return {
+    entry: { ...ctx.entry, automergeArmedBy: null },
+    versionDelta: 1,
+  };
 }
 
 async function applyTransition(

@@ -197,6 +197,15 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
 
   const positions = computeEntryPositions(entries);
   const evaluated: string[] = [];
+  // A sibling counts as "merge in flight" while merging, while its entry is
+  // armed, or while GitHub still holds ANY armed auto-merge on it (the
+  // armedBy mirror can outlive the status during remediation) — merging past
+  // it would invalidate the CI GitHub is about to merge on. Seeded from the
+  // loaded rows and kept CURRENT during the walk: an earlier entry arming in
+  // this very walk must gate the ones behind it.
+  const inFlight = (e: { status: string; automergeArmedBy: string | null }) =>
+    e.status === 'merging' || e.status === 'automerge_armed' || e.automergeArmedBy !== null;
+  const inFlightIds = new Set(entries.filter(inFlight).map((e) => e.id));
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
     const pr = prById.get(entry.pullRequestId);
@@ -212,11 +221,7 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
       );
       continue;
     }
-    const groupMergeInFlight = entries.some(
-      (sibling) =>
-        sibling.id !== entry.id &&
-        (sibling.status === 'merging' || sibling.status === 'automerge_armed')
-    );
+    const groupMergeInFlight = [...inFlightIds].some((id) => id !== entry.id);
     let verdict: 'hold' | 'advance' = 'hold';
     try {
       const result = await evaluateEntry({
@@ -233,6 +238,10 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
         return;
       }
       verdict = result.verdict;
+      if (result.finalEntry) {
+        if (inFlight(result.finalEntry)) inFlightIds.add(entry.id);
+        else inFlightIds.delete(entry.id);
+      }
     } catch (err) {
       // One entry failing must never abort the group — log and end the turn.
       console.warn(

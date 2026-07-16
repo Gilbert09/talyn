@@ -61,6 +61,9 @@ export interface PRSummary {
   owner: string;
   repo: string;
   number: number;
+  /** PR GraphQL node id — needed by the auto-merge mutations. Absent on rows
+   *  cached before the field shipped (REST node_id is the fallback). */
+  nodeId?: string;
   title: string;
   body: string;
   url: string;
@@ -77,6 +80,13 @@ export interface PRSummary {
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
+  /** Login that has GitHub native auto-merge armed on the PR (null = not
+   *  armed). The merge queue compares it against the App's bot login to tell
+   *  Talyn-armed from user-armed — we never disarm what we didn't arm. */
+  autoMergeBy?: string | null;
+  /** GitHub's composite "can auto-merge be enabled here" (repo allows it AND
+   *  the PR is in an armable state). */
+  viewerCanEnableAutoMerge?: boolean;
   /**
    * Review state for the UI's approval badge. Equals {@link reviewDecision}
    * when GitHub provides it (the base branch enforces required reviews), and
@@ -936,6 +946,7 @@ function contextNodeFields(numberExpr: string | null): string {
 // parameterised on `numberExpr` and the whole body is inlined instead.
 function prFieldsSelection(numberExpr: string | null): string {
   return `number
+  id
   title
   body
   url
@@ -948,6 +959,8 @@ function prFieldsSelection(numberExpr: string | null): string {
   mergeable
   mergeStateStatus
   reviewDecision
+  viewerCanEnableAutoMerge
+  autoMergeRequest { enabledAt enabledBy { login } mergeMethod }
   author { login }
   reviewRequests(first: 50) {
     nodes {
@@ -1078,6 +1091,8 @@ export function decodeBatchByNumberResponse(
 
 interface RawPullRequest {
   number: number;
+  /** PR GraphQL node id — required by the auto-merge mutations. */
+  id?: string;
   title: string;
   body: string | null;
   url: string;
@@ -1090,6 +1105,12 @@ interface RawPullRequest {
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
+  viewerCanEnableAutoMerge?: boolean;
+  autoMergeRequest?: {
+    enabledAt: string | null;
+    enabledBy: { login: string } | null;
+    mergeMethod: string | null;
+  } | null;
   author: { login: string } | null;
   reviewRequests: {
     nodes: Array<{
@@ -1278,6 +1299,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     owner,
     repo,
     number: raw.number,
+    nodeId: raw.id,
     title: raw.title,
     body: raw.body ?? '',
     url: raw.url,
@@ -1289,6 +1311,8 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     headBranch: raw.headRefName,
     baseBranch: raw.baseRefName,
     headSha: raw.headRefOid,
+    autoMergeBy: raw.autoMergeRequest?.enabledBy?.login ?? null,
+    viewerCanEnableAutoMerge: raw.viewerCanEnableAutoMerge,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     mergeable: raw.mergeable,

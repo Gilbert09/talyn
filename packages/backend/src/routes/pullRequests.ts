@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import { and, desc, eq, isNotNull, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../db/client.js';
-import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import {
+  pullRequests as pullRequestsTable,
+  mergeQueueEntries as mergeQueueEntriesTable,
+} from '../db/schema.js';
 import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
 import { startPrMergeableRun } from '../services/prCloudFix.js';
 import { rowToTask } from '../services/taskSerialize.js';
@@ -23,6 +26,7 @@ import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { closeActiveEntry, ensureActiveEntry } from '../services/mergeQueue/store.js';
+import { disableAutoMerge } from '../services/githubAutoMerge.js';
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import type { MergeMethod } from '../services/mergeQueue/types.js';
 import {
@@ -560,10 +564,32 @@ export function pullRequestRoutes(): Router {
           trigger: 'user:enqueue',
         });
       } else {
-        await closeActiveEntry(row.id, 'removed', {
+        const closed = await closeActiveEntry(row.id, 'removed', {
           trigger: 'user:dequeue',
           message: 'Removed from the merge queue by the user.',
         });
+        // A dequeued PR must NOT keep a Talyn-armed auto-merge on GitHub —
+        // GitHub would merge it after the user explicitly pulled it. Disarm
+        // synchronously; on failure flag pendingDisarm so the reconciler
+        // retries (never leave it dangling). User-armed auto-merges are left
+        // alone — we never disarm what we didn't arm.
+        if (closed?.automergeArmedBy === 'talyn') {
+          const nodeId = (row.lastSummary as { nodeId?: string } | null)?.nodeId;
+          const disarmed = nodeId
+            ? await disableAutoMerge({
+                workspaceId: row.workspaceId,
+                owner: row.owner,
+                repo: row.repo,
+                nodeId,
+              })
+            : false;
+          if (!disarmed) {
+            await db
+              .update(mergeQueueEntriesTable)
+              .set({ pendingDisarm: true, updatedAt: new Date() })
+              .where(eq(mergeQueueEntriesTable.id, closed.id));
+          }
+        }
       }
     } catch (err) {
       console.warn(

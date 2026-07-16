@@ -807,6 +807,33 @@ describe('decide — GitHub native auto-merge', () => {
     );
     expect(fixRun(d)).toBeTruthy();
   });
+
+  it('disarms a Talyn-armed auto-merge on ANY transition into blocked (never merge behind the queue)', () => {
+    const d = decide(
+      entry({
+        status: 'fixing',
+        fixTaskId: 't3',
+        fixTaskAccounted: false,
+        fixAttempts: 2,
+        automergeArmedBy: 'talyn',
+      }),
+      pr({ mergeStateStatus: 'DIRTY', autoMergeEnabledBy: 'talyn' }, { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' }),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    const disarmIdx = kinds(d).indexOf('disarm_automerge');
+    const blockIdx = d.actions.findIndex((a) => a.kind === 'transition' && a.to === 'blocked');
+    expect(disarmIdx).toBeGreaterThanOrEqual(0);
+    expect(blockIdx).toBeGreaterThan(disarmIdx); // disarm strictly before the block
+  });
+
+  it('never disarms a USER-armed auto-merge', () => {
+    const d = decide(
+      entry({ status: 'queued', fixAttempts: 3, automergeArmedBy: 'user' }),
+      conflictingPr(),
+      ctx()
+    );
+    expect(kinds(d)).not.toContain('disarm_automerge');
+  });
 });
 
 describe('decide — PR left open underneath us', () => {

@@ -2030,6 +2030,36 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * Merge the base branch into the PR's head server-side — GitHub's "Update
+   * branch" button. The merge queue uses it for BEHIND heads with no genuine
+   * followup work: one REST call instead of a paid cloud fix run. `conflict`
+   * means the update can't be done automatically (422 merge conflict) and the
+   * fix-run path takes over. NB: the merge commit is authored server-side by
+   * GitHub and is GitHub-signed.
+   */
+  async updatePullRequestBranch(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number
+  ): Promise<'ok' | 'conflict' | 'error'> {
+    try {
+      await this.apiRequest(
+        workspaceId,
+        `/repos/${owner}/${repo}/pulls/${number}/update-branch`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+        'auto'
+      );
+      return 'ok';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/422/.test(msg) || /merge conflict/i.test(msg)) return 'conflict';
+      console.warn(`[github] update-branch ${owner}/${repo}#${number} failed:`, msg);
+      return 'error';
+    }
+  }
+
+  /**
    * Whether a failed bot merge should be retried with the user's own token, plus
    * a human-readable reason for the logs. Retry only when the failure is the
    * App-specific "Resource not accessible by integration" 403 (so the

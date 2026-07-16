@@ -830,6 +830,17 @@ class DecisionBuilder {
       event: EventDraft;
     }
   ): void {
+    // Invariant: a blocked entry must never keep a Talyn-armed auto-merge
+    // live on GitHub — GitHub would merge it out of FIFO order the moment its
+    // checks pass, behind the queue's back. Disarm BEFORE the transition.
+    // (User-armed auto-merges are never ours to disarm.)
+    if (
+      (to === 'blocked' || to === 'blocked_manual') &&
+      this.entry.automergeArmedBy === 'talyn'
+    ) {
+      this.actions.push({ kind: 'disarm_automerge' });
+      this.entry.automergeArmedBy = null;
+    }
     const blockedCode =
       to === 'blocked' || to === 'blocked_manual' ? (opts.blockedCode ?? null) : null;
     const blockedReason =

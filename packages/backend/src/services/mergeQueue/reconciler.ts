@@ -7,10 +7,11 @@
 // freed without a task:status fan-out. Plus hygiene: orphaned entries whose
 // PR left `open` outside the pipeline, and 30-day terminal pruning.
 
-import { and, eq, ne, notInArray } from 'drizzle-orm';
+import { and, eq, ne, notInArray, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { mergeQueueEntries, pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
+import { disableAutoMerge } from '../githubAutoMerge.js';
 import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import {
@@ -72,6 +73,7 @@ class MergeQueueReconciler {
       }
       const lock = await guardCrossReplica('mergeQueueV2:reconcile', async () => {
         const healed = await this.healOrphans();
+        const disarmed = await this.retryPendingDisarms();
         const groups = await loadStaleGroups({
           mergingStaleMs: MERGING_STALE_MS,
           evaluatedStaleMs: EVALUATED_STALE_MS,
@@ -80,12 +82,13 @@ class MergeQueueReconciler {
           scheduleGroupEvaluation(g.repositoryId, g.baseBranch, 'reconcile');
         }
         const pruned = await pruneTerminalEntries(PRUNE_TERMINAL_DAYS);
-        return { healed, groups: groups.length, pruned };
+        return { healed, disarmed, groups: groups.length, pruned };
       });
       summaryText = !lock.acquired
         ? 'merge_queue_reconcile tick skipped — advisory lock held by another instance'
         : `merge_queue_reconcile — ${lock.result!.groups} stale group(s) scheduled` +
           (lock.result!.healed ? `, ${lock.result!.healed} orphan(s) healed` : '') +
+          (lock.result!.disarmed ? `, ${lock.result!.disarmed} pending disarm(s) retried` : '') +
           (lock.result!.pruned ? `, ${lock.result!.pruned} terminal entr(ies) pruned` : '');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -106,6 +109,46 @@ class MergeQueueReconciler {
         });
       }
     }
+  }
+
+  /**
+   * Retry disarms that failed at their trigger (dequeue, block transition).
+   * A Talyn-armed auto-merge left dangling on GitHub merges a PR the queue no
+   * longer owns — this sweep guarantees it eventually clears. Works on
+   * terminal entries too (a dequeue closes the entry before flagging).
+   */
+  private async retryPendingDisarms(): Promise<number> {
+    const db = getDbClient();
+    const pending = await db
+      .select({
+        entryId: mergeQueueEntries.id,
+        workspaceId: mergeQueueEntries.workspaceId,
+        owner: pullRequestsTable.owner,
+        repo: pullRequestsTable.repo,
+        nodeId: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'nodeId'`,
+      })
+      .from(mergeQueueEntries)
+      .innerJoin(pullRequestsTable, eq(pullRequestsTable.id, mergeQueueEntries.pullRequestId))
+      .where(eq(mergeQueueEntries.pendingDisarm, true));
+    let cleared = 0;
+    for (const row of pending) {
+      const ok = row.nodeId
+        ? await disableAutoMerge({
+            workspaceId: row.workspaceId,
+            owner: row.owner,
+            repo: row.repo,
+            nodeId: row.nodeId,
+          })
+        : false;
+      if (ok) {
+        await db
+          .update(mergeQueueEntries)
+          .set({ pendingDisarm: false, automergeArmedAt: null, automergeArmedBy: null, updatedAt: new Date() })
+          .where(eq(mergeQueueEntries.id, row.entryId));
+        cleared++;
+      }
+    }
+    return cleared;
   }
 
   /**

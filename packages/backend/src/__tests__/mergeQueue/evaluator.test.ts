@@ -50,6 +50,17 @@ vi.mock('../../services/githubGraphql.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/githubGraphql.js')>()),
   fetchUnsignedCommitCount: mockUnsignedCount,
 }));
+const { mockCapability, mockEnableAutoMerge, mockDisableAutoMerge } = vi.hoisted(() => ({
+  mockCapability: vi.fn(),
+  mockEnableAutoMerge: vi.fn(),
+  mockDisableAutoMerge: vi.fn(),
+}));
+vi.mock('../../services/githubAutoMerge.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/githubAutoMerge.js')>()),
+  getAutoMergeCapability: mockCapability,
+  enableAutoMerge: mockEnableAutoMerge,
+  disableAutoMerge: mockDisableAutoMerge,
+}));
 
 process.env.TALYN_TOKEN_KEY ??= randomBytes(32).toString('base64');
 registerCloudProvider(postHogCodeProvider);
@@ -239,6 +250,11 @@ describe('mergeQueue v2 pipeline', () => {
     mockRequiresSigning.mockReset().mockResolvedValue(false);
     mockUnsignedCount.mockReset().mockResolvedValue(0);
     mockMarkSigning.mockReset();
+    // Auto-merge defaults: repo doesn't support it, so every non-hybrid test
+    // takes the direct-merge path exactly as before Push E.
+    mockCapability.mockReset().mockResolvedValue('unavailable');
+    mockEnableAutoMerge.mockReset().mockResolvedValue({ armed: true });
+    mockDisableAutoMerge.mockReset().mockResolvedValue(true);
   });
 
   afterEach(async () => {
@@ -462,7 +478,128 @@ describe('mergeQueue v2 pipeline', () => {
     });
   });
 
+  describe('auto-merge hybrid', () => {
+    /** Required checks running + node id cached — the armable state. */
+    const armableSummary = () => ({
+      ...cleanSummary(),
+      nodeId: 'PR_node123',
+      mergeStateStatus: 'BLOCKED',
+      blockingReason: 'blocked',
+      checks: { total: 2, passed: 1, failed: 0, inProgress: 1, skipped: 0 },
+    });
+
+    it('arms the head (expectedHeadOid-pinned) when clean-but-awaiting-CI and capability allows', async () => {
+      mockCapability.mockResolvedValue('available');
+      const { prId } = await insertQueuedPr(db, { summary: armableSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mockEnableAutoMerge).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: 'PR_node123', expectedHeadOid: 'abc', mergeMethod: 'squash' })
+      );
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('automerge_armed');
+      expect(entry?.automergeArmedBy).toBe('talyn');
+      expect(mergeSpy).not.toHaveBeenCalled(); // GitHub owns the merge moment
+    });
+
+    it('falls back to a direct merge when GitHub refuses to arm a clean PR', async () => {
+      mockCapability.mockResolvedValue('available');
+      mockEnableAutoMerge.mockResolvedValue({ armed: false, reason: 'clean_status' });
+      const { prId } = await insertQueuedPr(db, { summary: armableSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect(await entryOf(db, prId)).toBeNull(); // merged
+    });
+
+    it('waits as awaiting_ci when the repo has auto-merge disabled', async () => {
+      mockCapability.mockResolvedValue('unavailable');
+      const { prId } = await insertQueuedPr(db, { summary: armableSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mockEnableAutoMerge).not.toHaveBeenCalled();
+      expect((await entryOf(db, prId))?.status).toBe('awaiting_ci');
+    });
+
+    it('adopts a user-armed auto-merge without calling GitHub and never disarms it', async () => {
+      mockCapability.mockResolvedValue('available');
+      const { prId } = await insertQueuedPr(db, {
+        summary: { ...armableSummary(), autoMergeBy: 'some-human' },
+      });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mockEnableAutoMerge).not.toHaveBeenCalled();
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('automerge_armed');
+      expect(entry?.automergeArmedBy).toBe('user');
+    });
+
+    it('a clean sibling waits while the head is armed (one merge in flight per group)', async () => {
+      mockCapability.mockResolvedValue('available');
+      await insertQueuedPr(db, { summary: armableSummary() });
+      const sibling = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect((await entryOf(db, sibling.prId))?.status).toBe('queued');
+    });
+
+    it('updates a BEHIND branch server-side instead of firing a paid fix run', async () => {
+      const updateSpy = vi
+        .spyOn(githubService, 'updatePullRequestBranch')
+        .mockResolvedValue('ok');
+      const { prId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), mergeStateStatus: 'BEHIND' },
+      });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      expect(await countTasks(db)).toBe(0); // no cloud run
+      expect((await entryOf(db, prId))?.status).toBe('awaiting_ci');
+      expect(refreshSpy).toHaveBeenCalled();
+    });
+
+    it('falls back to the fix run when the server-side update conflicts', async () => {
+      vi.spyOn(githubService, 'updatePullRequestBranch').mockResolvedValue('conflict');
+      const { prId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), mergeStateStatus: 'BEHIND' },
+      });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(await countTasks(db)).toBe(1);
+      expect((await entryOf(db, prId))?.status).toBe('fixing');
+    });
+  });
+
   describe('reconciler', () => {
+    it('retries pending disarms until GitHub confirms', async () => {
+      const { entryId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), nodeId: 'PR_node123' },
+        entry: { lastEvaluatedAt: new Date() },
+      });
+      await db
+        .update(mergeQueueEntries)
+        .set({ pendingDisarm: true })
+        .where(eq(mergeQueueEntries.id, entryId));
+
+      await mergeQueueReconciler.runOnce();
+
+      expect(mockDisableAutoMerge).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: 'PR_node123' })
+      );
+      const row = (
+        await db.select().from(mergeQueueEntries).where(eq(mergeQueueEntries.id, entryId))
+      )[0]!;
+      expect(row.pendingDisarm).toBe(false);
+    });
+
     it('heals entries whose PR left open outside the pipeline', async () => {
       const { prId, entryId } = await insertQueuedPr(db, { state: 'merged' });
 

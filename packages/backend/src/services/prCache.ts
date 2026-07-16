@@ -752,6 +752,10 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     checks: s.checks,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
     reviewRequestVia: s.reviewRequestVia ?? null,
+    // Merge-queue auto-merge hybrid: the PR node id (mutation handle) and who
+    // (if anyone) has GitHub native auto-merge armed.
+    nodeId: s.nodeId ?? null,
+    autoMergeBy: s.autoMergeBy ?? null,
   };
 }
 
@@ -772,6 +776,8 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     headBranch: (meta.headBranch as string) ?? '',
     baseBranch: (meta.baseBranch as string) ?? '',
     headSha: (meta.headSha as string) ?? '',
+    nodeId: (meta.nodeId as string | undefined) ?? undefined,
+    autoMergeBy: (meta.autoMergeBy as string | null | undefined) ?? null,
     createdAt: (meta.createdAt as string) ?? '',
     updatedAt: (meta.updatedAt as string) ?? '',
     mergeable: (meta.mergeable as PRSummary['mergeable']) ?? 'UNKNOWN',
