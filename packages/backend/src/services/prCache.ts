@@ -7,6 +7,7 @@ import {
   workspaces as workspacesTable,
 } from '../db/schema.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { domainEvents } from './events.js';
 import {
   batchPullRequests,
   type CheckBreakdown,
@@ -692,6 +693,18 @@ async function upsertRow(
     ...(autoKeepMergeable
       ? { autoKeepMergeable: true, autoMergeState: { attempts: 0, paused: false } }
       : {}),
+  });
+  // Merge-queue v2 trigger: a fresh snapshot just landed — evaluate any queue
+  // group it affects (this PR's own entry, or a group advance when a same-base
+  // sibling merged). Fire-and-forget on the leaf event bus; no-op unless the
+  // v2 engine is active.
+  domainEvents.emit('pr:snapshot', {
+    workspaceId: opts.workspaceId,
+    repositoryId: opts.repositoryId,
+    prId: id,
+    baseBranch: summary.baseBranch ?? '',
+    state: opts.summary.state,
+    trigger: 'prcache:upsert',
   });
   return id;
 }

@@ -1,0 +1,495 @@
+// Pipeline integration tests for merge queue v2: the evaluator walk, the
+// executor's GitHub/task side effects, trigger wiring off the domain-event
+// bus, and the reconciler — against a real (pglite) DB with the same
+// githubService spy surface the v1 suite used. Decision-table semantics live
+// in decide.test.ts; these cases cover what only the pipeline can prove.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { encryptString } from '../../services/tokenCrypto.js';
+import { githubService, MergeNotPermittedForAppError } from '../../services/github.js';
+import { githubRateGate } from '../../services/githubRateGate.js';
+import { prMonitorService } from '../../services/prMonitor.js';
+import * as websocketModule from '../../services/websocket.js';
+import { domainEvents } from '../../services/events.js';
+import { createTestDb, seedUser } from '../helpers/testDb.js';
+import type { Database } from '../../db/client.js';
+import {
+  workspaces as workspacesTable,
+  environments as environmentsTable,
+  integrations as integrationsTable,
+  repositories as repositoriesTable,
+  pullRequests as pullRequestsTable,
+  tasks as tasksTable,
+  settings as settingsTable,
+  mergeQueueEntries,
+  mergeQueueEvents,
+} from '../../db/schema.js';
+import { registerCloudProvider } from '../../services/cloudProviders/registry.js';
+import { postHogCodeProvider } from '../../services/cloudProviders/posthog/provider.js';
+import { ensureActiveEntry, getActiveEntryForPr } from '../../services/mergeQueue/store.js';
+import {
+  _resetEngineCache,
+  evaluateGroupNow,
+} from '../../services/mergeQueue/evaluator.js';
+import { initMergeQueueTriggers } from '../../services/mergeQueue/triggers.js';
+import { mergeQueueReconciler } from '../../services/mergeQueue/reconciler.js';
+
+const { mockRequiresSigning, mockUnsignedCount, mockMarkSigning } = vi.hoisted(() => ({
+  mockRequiresSigning: vi.fn(),
+  mockUnsignedCount: vi.fn(),
+  mockMarkSigning: vi.fn(),
+}));
+vi.mock('../../services/repoSigning.js', () => ({
+  requiresSignedCommits: mockRequiresSigning,
+  markSigningRequired: mockMarkSigning,
+  _resetRepoSigningCache: vi.fn(),
+}));
+vi.mock('../../services/githubGraphql.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/githubGraphql.js')>()),
+  fetchUnsignedCommitCount: mockUnsignedCount,
+}));
+
+process.env.TALYN_TOKEN_KEY ??= randomBytes(32).toString('base64');
+registerCloudProvider(postHogCodeProvider);
+
+const OWNER = 'user-mqv2';
+
+function cleanSummary(base = 'main', headSha = 'abc') {
+  return {
+    title: 'PR title',
+    author: 'me',
+    draft: false,
+    headBranch: 'feat',
+    baseBranch: base,
+    headSha,
+    url: 'https://github.com/a/b/pull/1',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: null,
+    blockingReason: 'mergeable',
+    checks: { total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 },
+    unresolvedReviewThreads: 0,
+  };
+}
+
+function conflictSummary(base = 'main', headSha = 'abc') {
+  return {
+    ...cleanSummary(base, headSha),
+    mergeable: 'CONFLICTING',
+    mergeStateStatus: 'DIRTY',
+    blockingReason: 'merge_conflicts',
+  };
+}
+
+function draftSummary(base = 'main') {
+  return { ...cleanSummary(base), draft: true, mergeStateStatus: 'DRAFT' };
+}
+
+async function seedBase(db: Database): Promise<void> {
+  await seedUser(db, { id: OWNER });
+  await db.insert(workspacesTable).values({ id: 'ws1', ownerId: OWNER, name: 'ws', settings: {} });
+  await db.insert(environmentsTable).values({
+    id: 'cloud1',
+    ownerId: OWNER,
+    name: 'PostHog Code',
+    type: 'posthog_code',
+    status: 'connected',
+    config: { type: 'posthog_code' },
+  });
+  await db.insert(integrationsTable).values({
+    id: 'int-ph',
+    workspaceId: 'ws1',
+    type: 'posthog',
+    enabled: true,
+    config: { apiKeyEnc: encryptString('test-key'), projectId: '1' },
+  });
+  await db.insert(repositoriesTable).values({
+    id: 'repo1',
+    workspaceId: 'ws1',
+    name: 'a/b',
+    url: 'https://github.com/a/b',
+    defaultBranch: 'main',
+  });
+}
+
+async function setEngine(db: Database, engine: 'v1' | 'v2'): Promise<void> {
+  await db
+    .insert(settingsTable)
+    .values({ key: 'merge_queue_engine', value: engine })
+    .onConflictDoUpdate({ target: settingsTable.key, set: { value: engine } });
+  _resetEngineCache();
+}
+
+let prCounter = 0;
+
+async function insertQueuedPr(
+  db: Database,
+  overrides: {
+    summary?: Record<string, unknown>;
+    state?: string;
+    taskId?: string | null;
+    entry?: Partial<{
+      status: string;
+      blockedCode: string | null;
+      blockedReason: string | null;
+      headSha: string;
+      fixAttempts: number;
+      fixTaskId: string | null;
+      fixTaskAccounted: boolean;
+      mergeStartedAt: Date | null;
+      lastEvaluatedAt: Date | null;
+    }>;
+  } = {}
+): Promise<{ prId: string; entryId: string }> {
+  const prId = `pr-${++prCounter}`;
+  const summary = overrides.summary ?? cleanSummary();
+  await db.insert(pullRequestsTable).values({
+    id: prId,
+    workspaceId: 'ws1',
+    repositoryId: 'repo1',
+    taskId: overrides.taskId ?? null,
+    owner: 'a',
+    repo: 'b',
+    number: prCounter,
+    state: overrides.state ?? 'open',
+    mergeQueued: true,
+    mergeQueuedAt: new Date(),
+    mergeMethod: 'squash',
+    mergeQueueState: { status: 'waiting', attempts: 0, accounted: true },
+    lastPolledAt: new Date(),
+    lastSummary: summary,
+  });
+  const entryId = await ensureActiveEntry(
+    {
+      pullRequestId: prId,
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      baseBranch: (summary as { baseBranch?: string }).baseBranch ?? 'main',
+      mergeMethod: 'squash',
+      headSha: (summary as { headSha?: string }).headSha ?? '',
+      trigger: 'test:seed',
+    },
+    db
+  );
+  if (overrides.entry) {
+    await db
+      .update(mergeQueueEntries)
+      .set(overrides.entry as never)
+      .where(eq(mergeQueueEntries.id, entryId));
+  }
+  return { prId, entryId };
+}
+
+async function insertTask(db: Database, id: string, status: string): Promise<void> {
+  await db.insert(tasksTable).values({
+    id,
+    workspaceId: 'ws1',
+    type: 'pr_response',
+    status,
+    priority: 'medium',
+    title: 't',
+    description: 'd',
+    repositoryId: 'repo1',
+    assignedEnvironmentId: 'cloud1',
+    metadata: {},
+  });
+}
+
+async function entryOf(db: Database, prId: string) {
+  return (await getActiveEntryForPr(prId, db)) ?? null;
+}
+
+async function eventsOf(db: Database, entryId: string) {
+  return db.select().from(mergeQueueEvents).where(eq(mergeQueueEvents.entryId, entryId));
+}
+
+async function countTasks(db: Database): Promise<number> {
+  return (await db.select({ id: tasksTable.id }).from(tasksTable)).length;
+}
+
+describe('mergeQueue v2 pipeline', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+  let mergeSpy: ReturnType<typeof vi.spyOn>;
+  let getPrSpy: ReturnType<typeof vi.spyOn>;
+  let refreshSpy: ReturnType<typeof vi.spyOn>;
+  let blockedSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    prCounter = 0;
+    await seedBase(db);
+    await setEngine(db, 'v2');
+    mergeSpy = vi
+      .spyOn(githubService, 'mergePullRequest')
+      .mockResolvedValue({ sha: 'merged-sha', merged: true, message: 'ok' });
+    getPrSpy = vi
+      .spyOn(githubService, 'getPullRequest')
+      .mockResolvedValue({ state: 'open', merged: false, merged_at: null } as never);
+    vi.spyOn(githubService, 'rerequestFailedCheckRuns').mockResolvedValue({
+      requested: 0,
+      reason: 'no-failing-check-runs',
+    });
+    refreshSpy = vi.spyOn(prMonitorService, 'refreshPr').mockResolvedValue(undefined);
+    blockedSpy = vi.spyOn(websocketModule, 'emitMergeQueueBlocked').mockImplementation(() => {});
+    mockRequiresSigning.mockReset().mockResolvedValue(false);
+    mockUnsignedCount.mockReset().mockResolvedValue(0);
+    mockMarkSigning.mockReset();
+  });
+
+  afterEach(async () => {
+    await cleanup();
+    vi.restoreAllMocks();
+    githubRateGate._reset();
+    _resetEngineCache();
+  });
+
+  it('merges a clean head end-to-end: entry terminal, PR row terminal, timeline written', async () => {
+    const { prId, entryId } = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(await entryOf(db, prId)).toBeNull(); // no longer active
+    const entryRow = (
+      await db.select().from(mergeQueueEntries).where(eq(mergeQueueEntries.id, entryId))
+    )[0]!;
+    expect(entryRow.status).toBe('merged');
+    const pr = (
+      await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, prId))
+    )[0]!;
+    expect(pr.state).toBe('merged');
+    expect(pr.mergeQueued).toBe(false);
+    expect(pr.mergeQueueState).toBeNull();
+    const codes = (await eventsOf(db, entryId)).map((e) => e.code);
+    expect(codes).toContain('merge_attempt');
+    expect(codes).toContain('merged');
+  });
+
+  it('does nothing while the v1 engine drives (dormant)', async () => {
+    await setEngine(db, 'v1');
+    await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+  });
+
+  it('serializes same-base entries — one merge per evaluation, FIFO', async () => {
+    const first = await insertQueuedPr(db);
+    const second = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(await entryOf(db, first.prId)).toBeNull(); // head merged
+    expect((await entryOf(db, second.prId))?.status).toBe('queued'); // waits its turn
+  });
+
+  it('fires the cloud fix run for a conflicting head and holds the group', async () => {
+    const head = await insertQueuedPr(db, { summary: conflictSummary() });
+    const behind = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(await countTasks(db)).toBe(1);
+    const entry = await entryOf(db, head.prId);
+    expect(entry?.status).toBe('fixing');
+    expect(entry?.fixTaskId).toBeTruthy();
+    // Genuine blocker holds the group — the clean sibling must NOT merge.
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect((await entryOf(db, behind.prId))?.status).toBe('queued');
+  });
+
+  it('advances past a draft head so the ready sibling merges in the same evaluation', async () => {
+    const draft = await insertQueuedPr(db, { summary: draftSummary() });
+    const ready = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect((await entryOf(db, draft.prId))?.blockedCode).toBe('draft');
+    expect(mergeSpy).toHaveBeenCalledTimes(1);
+    expect(await entryOf(db, ready.prId)).toBeNull(); // merged
+    expect(blockedSpy).not.toHaveBeenCalled(); // drafts never notify
+  });
+
+  it('accounts a terminal fix run, re-fires while budget remains, blocks + notifies at the cap', async () => {
+    await insertTask(db, 'task-1', 'completed');
+    const { prId } = await insertQueuedPr(db, {
+      summary: conflictSummary(),
+      entry: { status: 'fixing', fixTaskId: 'task-1', fixTaskAccounted: false, fixAttempts: 2 },
+    });
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('blocked');
+    expect(entry?.blockedCode).toBe('attempts_exhausted');
+    expect(entry?.fixAttempts).toBe(3);
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    expect(await countTasks(db)).toBe(1); // no 4th run
+
+    // Re-evaluation while still blocked: no re-notify, no churn.
+    await evaluateGroupNow('repo1', 'main', 'test');
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new head resets budgets and un-blocks (self-healing)', async () => {
+    const { prId } = await insertQueuedPr(db, {
+      summary: conflictSummary('main', 'sha-NEW'),
+      entry: {
+        status: 'blocked',
+        blockedCode: 'attempts_exhausted',
+        blockedReason: 'x',
+        headSha: 'sha-OLD',
+        fixAttempts: 3,
+      },
+    });
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.headSha).toBe('sha-NEW');
+    expect(entry?.fixAttempts).toBe(0);
+    expect(entry?.status).toBe('fixing'); // fresh budget → fix run fired
+    expect(await countTasks(db)).toBe(1);
+  });
+
+  it('recovers a head stuck in status=merging from a crashed evaluation (verify-merged)', async () => {
+    getPrSpy.mockResolvedValue({
+      state: 'closed',
+      merged: true,
+      merged_at: '2026-07-16T10:00:00Z',
+    } as never);
+    const { prId } = await insertQueuedPr(db, {
+      entry: { status: 'merging', mergeStartedAt: new Date(Date.now() - 120_000) },
+    });
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).not.toHaveBeenCalled(); // never re-attempts the doomed merge
+    const pr = (
+      await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, prId))
+    )[0]!;
+    expect(pr.state).toBe('merged');
+  });
+
+  it('keeps a PR queued and refetches when the merge throws (405 conflicts)', async () => {
+    mergeSpy.mockRejectedValue(new Error('405: Pull Request has merge conflicts'));
+    const { prId } = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('queued');
+    expect(entry?.lastError).toContain('merge conflicts');
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('hard-blocks (blocked_manual) on an App refusal with no failing check, notifying once', async () => {
+    mergeSpy.mockRejectedValue(new MergeNotPermittedForAppError('Merge refused for the App.'));
+    const { prId } = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('blocked_manual');
+    expect(entry?.blockedCode).toBe('app_refused_hard');
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    expect(await countTasks(db)).toBe(0); // a fix run can't grant permission
+  });
+
+  it('re-signs instead of merging when the base requires signatures and commits are unsigned', async () => {
+    mockRequiresSigning.mockResolvedValue(true);
+    mockUnsignedCount.mockResolvedValue(2);
+    const { prId } = await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('fixing');
+    expect(entry?.fixKind).toBe('resign');
+    expect(entry?.resignAttempts).toBe(1);
+    // The probe memoized per head — a re-evaluation must not re-fetch.
+    mockUnsignedCount.mockClear();
+    await evaluateGroupNow('repo1', 'main', 'test');
+    expect(mockUnsignedCount).not.toHaveBeenCalled();
+  });
+
+  it('defers the whole group while the REST rate gate is blocked', async () => {
+    githubRateGate.block(githubService.accountKeyFor('ws1'), Date.now() + 60_000, 'test backoff');
+    await insertQueuedPr(db);
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+  });
+
+  describe('triggers', () => {
+    it('a pr:snapshot event evaluates the entry group (webhook-speed merges)', async () => {
+      initMergeQueueTriggers();
+      const { prId } = await insertQueuedPr(db);
+
+      domainEvents.emit('pr:snapshot', {
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        prId,
+        baseBranch: 'main',
+        state: 'open',
+        trigger: 'test:webhook',
+      });
+
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
+    });
+
+    it('a task:status terminal event re-evaluates the entry owning that fix run', async () => {
+      initMergeQueueTriggers();
+      await insertTask(db, 'task-t', 'completed');
+      const { prId } = await insertQueuedPr(db, {
+        // Fix run done, PR now clean → the trigger should merge it.
+        entry: { status: 'fixing', fixTaskId: 'task-t', fixTaskAccounted: false },
+      });
+
+      domainEvents.emit('task:status', { workspaceId: 'ws1', taskId: 'task-t', status: 'completed' });
+
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
+      expect(await entryOf(db, prId)).toBeNull();
+    });
+  });
+
+  describe('reconciler', () => {
+    it('heals entries whose PR left open outside the pipeline', async () => {
+      const { prId, entryId } = await insertQueuedPr(db, { state: 'merged' });
+
+      await mergeQueueReconciler.runOnce();
+
+      expect(await entryOf(db, prId)).toBeNull();
+      const row = (
+        await db.select().from(mergeQueueEntries).where(eq(mergeQueueEntries.id, entryId))
+      )[0]!;
+      expect(row.status).toBe('merged');
+    });
+
+    it('re-evaluates stale groups (the dropped-webhook net)', async () => {
+      await insertQueuedPr(db, { entry: { lastEvaluatedAt: new Date(Date.now() - 10 * 60_000) } });
+
+      await mergeQueueReconciler.runOnce();
+
+      await vi.waitFor(() => expect(mergeSpy).toHaveBeenCalledTimes(1));
+    });
+
+    it('is dormant on the v1 engine', async () => {
+      await setEngine(db, 'v1');
+      await insertQueuedPr(db, { entry: { lastEvaluatedAt: null } });
+
+      await mergeQueueReconciler.runOnce();
+
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+  });
+});

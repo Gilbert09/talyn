@@ -31,6 +31,8 @@ import { claudeCodeProvider } from './services/cloudProviders/claude/provider.js
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
 import { prAutoMergeWatcher } from './services/prAutoMergeWatcher.js';
 import { mergeQueueProcessor } from './services/mergeQueueProcessor.js';
+import { initMergeQueueTriggers } from './services/mergeQueue/triggers.js';
+import { mergeQueueReconciler } from './services/mergeQueue/reconciler.js';
 import { dbWatchdog } from './services/dbWatchdog.js';
 
 const PORT = process.env.PORT || 4747;
@@ -91,6 +93,11 @@ async function main() {
   cloudTaskPoller.init();
   prAutoMergeWatcher.init();
   mergeQueueProcessor.init();
+  // Merge queue v2 (event-driven pipeline) — ships dormant: the triggers and
+  // reconciler no-op until the merge_queue_engine flag reads 'v2' (cutover
+  // migration), at which point the v1 processor above stands down per tick.
+  initMergeQueueTriggers();
+  mergeQueueReconciler.init();
 
   // Webhook pipeline: prime the watch index, start the Redis Stream worker, and
   // arm the low-frequency reconcile sweep. Worker is inert without REDIS_URL.
@@ -271,6 +278,7 @@ async function main() {
     cloudTaskPoller.shutdown();
     prAutoMergeWatcher.shutdown();
     mergeQueueProcessor.shutdown();
+    mergeQueueReconciler.shutdown();
     postHogCodeStreamer.shutdownAll();
     prMonitorService.shutdown();
     taskQueueService.shutdown();

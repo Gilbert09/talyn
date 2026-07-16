@@ -17,6 +17,7 @@ import {
 import { upsertFromBatchResult } from './prCache.js';
 import { ttlFor, isCohortActive } from './prFocus.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { domainEvents } from './events.js';
 import {
   broadcastMergeQueuePositions,
   QUEUE_RESET_COLUMNS,
@@ -1140,6 +1141,19 @@ class PRMonitorService extends EventEmitter {
         state: 'open',
         lastSummary: partial,
       });
+      // Merge-queue v2 trigger: a draft flip is exactly the self-heal signal a
+      // blocked(draft) entry waits for. baseBranch isn't at hand on this
+      // incremental path — the trigger resolves the entry's stored group.
+      if (patch.draft !== undefined) {
+        domainEvents.emit('pr:snapshot', {
+          workspaceId: row.workspaceId,
+          repositoryId: row.repositoryId,
+          prId: row.id,
+          baseBranch: '',
+          state: 'open',
+          trigger: 'webhook:draft-patch',
+        });
+      }
     }
     return rows.length;
   }

@@ -23,6 +23,7 @@ import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
 import { closeActiveEntry, ensureActiveEntry } from '../services/mergeQueue/store.js';
+import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import type { MergeMethod } from '../services/mergeQueue/types.js';
 import {
   computeQueuePositions,
@@ -592,7 +593,12 @@ export function pullRequestRoutes(): Router {
     await broadcastMergeQueuePositions(row.workspaceId);
 
     // Kick a tick so an already-clean PR merges without waiting for the poll.
-    if (enabled) void mergeQueueProcessor.runOnce();
+    // Both engines: the v1 runOnce no-ops when the flag reads 'v2', and the
+    // v2 trigger no-ops while v1 drives.
+    if (enabled) {
+      void mergeQueueProcessor.runOnce();
+      void onQueueMembershipChanged(row.id, 'user:enqueue');
+    }
 
     res.json({ success: true, data: null } as ApiResponse<null>);
   });

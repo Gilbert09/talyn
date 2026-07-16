@@ -436,6 +436,10 @@ export function emitPullRequestUpdated(
       // tooltip.
       reason?: string;
     } | null;
+    // Merge queue v2 payload — the full status vocabulary, per-head budgets,
+    // and auto-merge state (services/mergeQueue/legacy.ts toPublicMergeQueue).
+    // Emitted alongside the legacy mergeQueueState so old builds keep working.
+    mergeQueue?: Record<string, unknown> | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {

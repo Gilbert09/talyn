@@ -27,6 +27,7 @@ import {
   type BlockingReason,
 } from './githubGraphql.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { domainEvents } from './events.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { targetsForRepo } from './webhookIndex.js';
 import { debugBus } from './debugBus.js';
@@ -381,6 +382,20 @@ async function recomputeAndBroadcast(
     if (reconciled === 'checks_failed_optional' && digest !== row.lastCheckDigest) {
       scheduleRequirednessRecheck(row);
     }
+  }
+
+  // Merge-queue v2 trigger: check_run webhooks never reach a full refreshPr —
+  // this recompute IS the "checks settled" signal. Without it, a queued head
+  // whose last check just went green would wait for the reconciler instead of
+  // merging at webhook speed.
+  if (affected.length > 0) {
+    domainEvents.emit('pr:checks', {
+      prs: affected.map((r) => ({
+        prId: r.id,
+        workspaceId: r.workspaceId,
+        repositoryId: r.repositoryId,
+      })),
+    });
   }
 }
 

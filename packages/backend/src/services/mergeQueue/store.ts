@@ -6,7 +6,7 @@
 // newer state), and every transition appends its audit event in the same
 // transaction — the timeline can't lie about what happened.
 
-import { and, asc, eq, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import { getDbClient } from '../../db/client.js';
 import {
@@ -360,6 +360,124 @@ export async function loadActiveEntriesForWorkspace(
       )
     )
     .orderBy(asc(mergeQueueEntries.enqueuedAt));
+}
+
+/** Cheap indexed existence probe — does this (repo, base) group have entries? */
+export async function hasActiveEntries(
+  repositoryId: string,
+  baseBranch: string,
+  db: Db = getDbClient()
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: mergeQueueEntries.id })
+    .from(mergeQueueEntries)
+    .where(
+      and(
+        eq(mergeQueueEntries.repositoryId, repositoryId),
+        eq(mergeQueueEntries.baseBranch, baseBranch),
+        notInArray(mergeQueueEntries.status, TERMINAL_STATUSES)
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Active entries for a batch of PR ids (the pr:checks trigger fan-in). */
+export async function getActiveEntriesForPrs(
+  prIds: string[],
+  db: Db = getDbClient()
+): Promise<EntryRow[]> {
+  if (prIds.length === 0) return [];
+  return db
+    .select(ENTRY_COLUMNS)
+    .from(mergeQueueEntries)
+    .where(
+      and(
+        inArray(mergeQueueEntries.pullRequestId, prIds),
+        notInArray(mergeQueueEntries.status, TERMINAL_STATUSES)
+      )
+    );
+}
+
+/** Active entries whose queue-owned fix run is this task (task:status trigger). */
+export async function getActiveEntriesByFixTask(
+  taskId: string,
+  db: Db = getDbClient()
+): Promise<EntryRow[]> {
+  return db
+    .select(ENTRY_COLUMNS)
+    .from(mergeQueueEntries)
+    .where(
+      and(
+        eq(mergeQueueEntries.fixTaskId, taskId),
+        notInArray(mergeQueueEntries.status, TERMINAL_STATUSES)
+      )
+    );
+}
+
+/** Stamp last_evaluated_at on a walked group (the reconciler's staleness cue). */
+export async function touchEvaluated(entryIds: string[], db: Db = getDbClient()): Promise<void> {
+  if (entryIds.length === 0) return;
+  await db
+    .update(mergeQueueEntries)
+    .set({ lastEvaluatedAt: new Date() })
+    .where(inArray(mergeQueueEntries.id, entryIds));
+}
+
+/**
+ * Reconciler scans: active entries that need attention — a `merging` marker
+ * older than `mergingStaleMs` (crashed mid-merge), or anything not evaluated
+ * within `evaluatedStaleMs` (dropped webhook / gated deferral / crash).
+ * Returns the distinct group keys to re-evaluate.
+ */
+export async function loadStaleGroups(
+  opts: { mergingStaleMs: number; evaluatedStaleMs: number },
+  db: Db = getDbClient()
+): Promise<Array<{ repositoryId: string; baseBranch: string }>> {
+  const now = Date.now();
+  const rows = await db
+    .select({
+      repositoryId: mergeQueueEntries.repositoryId,
+      baseBranch: mergeQueueEntries.baseBranch,
+    })
+    .from(mergeQueueEntries)
+    .where(
+      and(
+        notInArray(mergeQueueEntries.status, TERMINAL_STATUSES),
+        or(
+          and(
+            eq(mergeQueueEntries.status, 'merging'),
+            lt(mergeQueueEntries.mergeStartedAt, new Date(now - opts.mergingStaleMs))
+          ),
+          isNull(mergeQueueEntries.lastEvaluatedAt),
+          lt(mergeQueueEntries.lastEvaluatedAt, new Date(now - opts.evaluatedStaleMs))
+        )
+      )
+    );
+  const seen = new Set<string>();
+  const groups: Array<{ repositoryId: string; baseBranch: string }> = [];
+  for (const row of rows) {
+    const key = `${row.repositoryId}|${row.baseBranch}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.push(row);
+  }
+  return groups;
+}
+
+/** Delete terminal entries older than `days` (their events cascade). */
+export async function pruneTerminalEntries(days: number, db: Db = getDbClient()): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const deleted = await db
+    .delete(mergeQueueEntries)
+    .where(
+      and(
+        inArray(mergeQueueEntries.status, TERMINAL_STATUSES),
+        lt(mergeQueueEntries.updatedAt, cutoff)
+      )
+    )
+    .returning({ id: mergeQueueEntries.id });
+  return deleted.length;
 }
 
 /**
