@@ -62,9 +62,11 @@ CREATE TABLE IF NOT EXISTS "merge_queue_events" (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_mqev_entry" ON "merge_queue_events" ("entry_id","at");
 --> statement-breakpoint
--- Backend-pool-only surface: RLS enabled with NO policies or grants — only
--- the privileged pool role (which bypasses RLS) touches these tables. The
--- desktop sees crafted WS/REST shapes, never rows (billing_events pattern).
+-- RLS enabled here; the authenticated GRANTs + workspace-owner policies land
+-- in 0033. (This migration originally shipped them policy-less on the wrong
+-- assumption these tables were pool-only — but the enqueue route's dual-write
+-- and the list/timeline endpoints query them inside withOwnerScope's
+-- authenticated-role transaction. See 0033 for the incident note.)
 ALTER TABLE "merge_queue_entries" ENABLE ROW LEVEL SECURITY;
 --> statement-breakpoint
 ALTER TABLE "merge_queue_events" ENABLE ROW LEVEL SECURITY;

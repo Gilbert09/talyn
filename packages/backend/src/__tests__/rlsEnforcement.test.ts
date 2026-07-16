@@ -96,6 +96,74 @@ describe('RLS enforcement (authenticated role)', () => {
     expect(check.rows).toHaveLength(0);
   });
 
+  it('the merge-queue tables are queryable AND owner-scoped under the authenticated role', async () => {
+    // Regression pin for the 2026-07-16 incident: 0031 shipped
+    // merge_queue_entries/events RLS-enabled with no policies/grants, so the
+    // enqueue route's first touch raised `permission denied` and aborted the
+    // whole owner-scope request transaction (25P02 cascade — the desktop's
+    // "Failed query: select … from pull_requests" error). 0033 added the
+    // grants + policies; this proves every route-context operation works as
+    // `authenticated` and stays scoped to the claim owner.
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    await seedTwoOwners(testDb.db);
+    await testDb.db.insert(schema.repositories).values([
+      { id: 'repo-a', workspaceId: 'ws-a', name: 'a/a', url: 'https://github.com/a/a', defaultBranch: 'main' },
+      { id: 'repo-b', workspaceId: 'ws-b', name: 'b/b', url: 'https://github.com/b/b', defaultBranch: 'main' },
+    ]);
+    await testDb.db.insert(schema.pullRequests).values([
+      { id: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'a', repo: 'a', number: 1, state: 'open', lastPolledAt: new Date(), lastSummary: {} },
+      { id: 'pr-a2', workspaceId: 'ws-a', repositoryId: 'repo-a', owner: 'a', repo: 'a', number: 2, state: 'open', lastPolledAt: new Date(), lastSummary: {} },
+      { id: 'pr-b', workspaceId: 'ws-b', repositoryId: 'repo-b', owner: 'b', repo: 'b', number: 1, state: 'open', lastPolledAt: new Date(), lastSummary: {} },
+    ]);
+    await testDb.db.insert(schema.mergeQueueEntries).values([
+      { id: 'mqe-a', pullRequestId: 'pr-a', workspaceId: 'ws-a', repositoryId: 'repo-a', baseBranch: 'main' },
+      { id: 'mqe-b', pullRequestId: 'pr-b', workspaceId: 'ws-b', repositoryId: 'repo-b', baseBranch: 'main' },
+    ]);
+    await testDb.db.insert(schema.mergeQueueEvents).values([
+      { entryId: 'mqe-a', toStatus: 'queued', trigger: 'test', message: 'a' },
+      { entryId: 'mqe-b', toStatus: 'queued', trigger: 'test', message: 'b' },
+    ]);
+
+    await testDb.pglite.exec(`SELECT set_config('request.jwt.claim.sub', 'owner-a', false)`);
+    await testDb.pglite.exec(`SET ROLE authenticated`);
+
+    // The dual-write INSERT works for the owner's own workspace (incl. the
+    // events sequence nextval, which needs its own GRANT)…
+    await testDb.pglite.query(
+      `INSERT INTO merge_queue_entries (id, pull_request_id, workspace_id, repository_id, base_branch)
+       VALUES ('mqe-a2', 'pr-a2', 'ws-a', 'repo-a', 'main')`
+    );
+    await testDb.pglite.query(
+      `INSERT INTO merge_queue_events (entry_id, to_status, trigger, message)
+       VALUES ('mqe-a2', 'queued', 'test', 'a2')`
+    );
+    // SELECTs work (the incident was `permission denied` here) and are scoped
+    // to the claim owner — owner-b's rows are invisible.
+    const entries = await testDb.pglite.query<{ id: string }>(
+      `SELECT id FROM merge_queue_entries ORDER BY id`
+    );
+    const events = await testDb.pglite.query<{ message: string }>(
+      `SELECT message FROM merge_queue_events ORDER BY message`
+    );
+    // …and is refused for someone else's workspace (WITH CHECK).
+    let blocked = false;
+    try {
+      const res = await testDb.pglite.query(
+        `INSERT INTO merge_queue_entries (id, pull_request_id, workspace_id, repository_id, base_branch)
+         VALUES ('mqe-x', 'pr-b', 'ws-b', 'repo-b', 'main')`
+      );
+      blocked = (res.affectedRows ?? 0) === 0;
+    } catch {
+      blocked = true;
+    }
+    await testDb.pglite.exec(`RESET ROLE`);
+
+    expect(entries.rows.map((r) => r.id)).toEqual(['mqe-a', 'mqe-a2']);
+    expect(events.rows.map((r) => r.message)).toEqual(['a', 'a2']);
+    expect(blocked).toBe(true);
+  });
+
   it('withOwnerScope is a reentrant passthrough on test pglite (enforcement off)', async () => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;

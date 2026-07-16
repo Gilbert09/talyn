@@ -499,8 +499,11 @@ export const prCheckStates = pgTable(
  * Budgets (`fix_attempts`/`rerun_attempts`/`resign_attempts`) are scoped to
  * `head_sha`: a new push resets all three — the self-healing mechanic.
  *
- * Backend-pool-only surface (the desktop sees crafted WS/REST shapes, never
- * rows): RLS enabled with no policies, like billing_events.
+ * Queried BOTH from the pipeline (pool role, RLS-bypassing) and from request
+ * context (dual-write, list decoration, timeline — inside withOwnerScope's
+ * authenticated-role transaction), so it carries the standard workspace-owner
+ * RLS policy + GRANTs (0033). NOT the billing_events pool-only pattern —
+ * shipping it that way aborted every request that touched it (25P02 cascade).
  */
 export const mergeQueueEntries = pgTable(
   'merge_queue_entries',

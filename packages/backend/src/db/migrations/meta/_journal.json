@@ -232,6 +232,13 @@
 			"when": 1784160000016,
 			"tag": "0032_merge_queue_cutover",
 			"breakpoints": true
+		},
+		{
+			"idx": 33,
+			"version": "7",
+			"when": 1784160000017,
+			"tag": "0033_merge_queue_rls",
+			"breakpoints": true
 		}
 	]
 }
