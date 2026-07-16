@@ -37,6 +37,7 @@ import {
   type PRCheckState,
   type PRReviewDetail,
   type PRReviewThread,
+  type MergeQueueTimelineEvent,
 } from '../../lib/api';
 import { prime } from '../../lib/prSummaryCache';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
@@ -166,6 +167,7 @@ export function PRDetailSheet({
           attempts: number;
           position: number;
         } | null;
+        mergeQueue?: PRRow['mergeQueue'];
       };
       if (p.id !== pullRequestId) return;
       setData((prev) => {
@@ -184,6 +186,7 @@ export function PRDetailSheet({
             mergeQueued: p.mergeQueued ?? prev.row.mergeQueued,
             mergeQueueState:
               p.mergeQueueState !== undefined ? p.mergeQueueState : prev.row.mergeQueueState,
+            mergeQueue: p.mergeQueue !== undefined ? p.mergeQueue : prev.row.mergeQueue,
           },
         };
       });
@@ -720,6 +723,7 @@ function OverviewTab({
       ) : (
         <p className="text-xs text-muted-foreground">No description provided.</p>
       )}
+      <MergeQueueSection row={data.row} />
       <section>
         <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Status
@@ -748,6 +752,150 @@ function OverviewTab({
         </ul>
       </section>
     </div>
+  );
+}
+
+/** Human labels for the merge-queue v2 status vocabulary. */
+const QUEUE_STATUS_LABEL: Record<string, string> = {
+  queued: 'Waiting in line',
+  awaiting_ci: 'Waiting for CI',
+  awaiting_review: 'Waiting for a required review',
+  automerge_armed: 'Auto-merge armed — GitHub merges when checks pass',
+  fixing: 'A cloud fix run is working this PR',
+  merging: 'Merging',
+  blocked: 'Blocked — retries on the next push, or re-queue now',
+  blocked_manual: 'Blocked — needs you (merge manually or re-queue)',
+};
+
+/**
+ * The merge-queue panel of the Overview tab: live state + what it's waiting
+ * on, the per-head retry budgets, auto-merge indicator, a requeue action for
+ * blocked entries, and the entry's audit timeline (what the queue actually
+ * did, with reasons). Hidden entirely for PRs that were never queued.
+ */
+function MergeQueueSection({ row }: { row: PRRow }) {
+  const v2 = row.mergeQueue;
+  const [events, setEvents] = useState<MergeQueueTimelineEvent[] | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [requeueing, setRequeueing] = useState(false);
+  const queued = row.mergeQueued || Boolean(v2);
+
+  useEffect(() => {
+    if (!queued) return;
+    let alive = true;
+    api.pullRequests
+      .mergeQueueTimeline(row.id)
+      .then((r) => alive && setEvents(r.events))
+      .catch(() => alive && setEvents([]));
+    return () => {
+      alive = false;
+    };
+    // Re-fetch when the status changes so the timeline tracks live activity.
+  }, [row.id, queued, v2?.status]);
+
+  if (!queued) return null;
+
+  const blocked = v2?.status === 'blocked' || v2?.status === 'blocked_manual';
+  const statusLabel = v2
+    ? (QUEUE_STATUS_LABEL[v2.status] ?? v2.status)
+    : (row.mergeQueueState?.status ?? 'waiting');
+  const budgets = v2?.budgets;
+  const shown = events ? (showAll ? events : events.slice(0, 8)) : null;
+
+  const handleRequeue = async () => {
+    setRequeueing(true);
+    try {
+      await api.pullRequests.setMergeQueue(row.id, true);
+    } finally {
+      setRequeueing(false);
+    }
+  };
+
+  return (
+    <section>
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Merge queue
+      </h3>
+      <div className="space-y-2 rounded-md border p-3 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <span className={blocked ? 'font-medium text-amber-700 dark:text-amber-400' : ''}>
+            {v2?.position ? `#${v2.position} — ` : ''}
+            {statusLabel}
+            {v2?.autoMerge?.armed && v2.status !== 'automerge_armed' ? ' · auto-merge armed' : ''}
+          </span>
+          {blocked && (
+            <Button
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              onClick={handleRequeue}
+              disabled={requeueing}
+              title="Reset the retry budgets and try again now"
+            >
+              {requeueing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+              Requeue
+            </Button>
+          )}
+        </div>
+        {blocked && v2?.reason && (
+          <p className="text-muted-foreground [overflow-wrap:anywhere]">{v2.reason}</p>
+        )}
+        {budgets && (
+          <p className="text-muted-foreground">
+            Fix runs {budgets.fixRuns[0]}/{budgets.fixRuns[1]} · Check re-runs{' '}
+            {budgets.checkReruns[0]}/{budgets.checkReruns[1]} · Re-signs {budgets.resigns[0]}/
+            {budgets.resigns[1]}
+            {v2?.headShaShort ? (
+              <>
+                {' '}
+                — scoped to <span className="font-mono">{v2.headShaShort}</span> (a new push
+                resets them)
+              </>
+            ) : null}
+          </p>
+        )}
+        {shown === null ? (
+          <p className="flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading timeline…
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="text-muted-foreground">No queue activity recorded yet.</p>
+        ) : (
+          <ul className="space-y-1 border-t pt-2">
+            {shown.map((e, i) => (
+              <li key={`${e.at}-${i}`} className="flex gap-2">
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  {new Date(e.at).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </span>
+                <span className="[overflow-wrap:anywhere]">
+                  {e.message}
+                  {e.fromStatus && e.fromStatus !== e.toStatus ? (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      ({e.fromStatus} → {e.toStatus})
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+            {events && events.length > 8 && !showAll && (
+              <li>
+                <button
+                  className="text-[11px] text-muted-foreground underline hover:text-foreground"
+                  onClick={() => setShowAll(true)}
+                >
+                  Show all {events.length} events
+                </button>
+              </li>
+            )}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

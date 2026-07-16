@@ -4,6 +4,7 @@ import { getDbClient } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
   mergeQueueEntries as mergeQueueEntriesTable,
+  mergeQueueEvents as mergeQueueEventsTable,
 } from '../db/schema.js';
 import { forceFetchAndUpsert, upsertFromBatchResult } from '../services/prCache.js';
 import { startPrMergeableRun } from '../services/prCloudFix.js';
@@ -25,7 +26,14 @@ import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middle
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
-import { closeActiveEntry, ensureActiveEntry } from '../services/mergeQueue/store.js';
+import {
+  closeActiveEntry,
+  computeEntryPositions,
+  ensureActiveEntry,
+  loadActiveEntriesForWorkspace,
+  rowToEntrySnapshot,
+} from '../services/mergeQueue/store.js';
+import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
 import { disableAutoMerge } from '../services/githubAutoMerge.js';
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import type { MergeMethod } from '../services/mergeQueue/types.js';
@@ -182,12 +190,32 @@ export function pullRequestRoutes(): Router {
     // `mergeQueuedAt`. Computed locally over the rows we already have.
     const queuePositionById = computeQueuePositions(rows);
 
+    // Merge queue v2 payloads for the initial paint (the WS echoes keep them
+    // live afterwards): one indexed query over the workspace's active entries.
+    const v2ByPrId = new Map<string, Record<string, unknown>>();
+    try {
+      const entries = await loadActiveEntriesForWorkspace(workspaceId, db);
+      const v2Positions = computeEntryPositions(entries);
+      for (const entry of entries) {
+        v2ByPrId.set(
+          entry.pullRequestId,
+          toPublicMergeQueue(rowToEntrySnapshot(entry), v2Positions.get(entry.id) ?? 0)
+        );
+      }
+    } catch (err) {
+      console.warn(
+        '[pullRequests] merge-queue v2 list decoration failed:',
+        err instanceof Error ? err.message : err
+      );
+    }
+
     res.json({
       success: true,
-      data: rows.map((r) =>
-        rowToPublicShape(r, queuePositionById.get(r.id) ?? 0)
-      ),
-    } as ApiResponse<ReturnType<typeof rowToPublicShape>[]>);
+      data: rows.map((r) => ({
+        ...rowToPublicShape(r, queuePositionById.get(r.id) ?? 0),
+        mergeQueue: v2ByPrId.get(r.id) ?? null,
+      })),
+    } as ApiResponse<Array<ReturnType<typeof rowToPublicShape> & { mergeQueue: unknown }>>);
   });
 
   // Single PR detail. Always returns the persisted row plus a fresh
@@ -627,6 +655,71 @@ export function pullRequestRoutes(): Router {
     }
 
     res.json({ success: true, data: null } as ApiResponse<null>);
+  });
+
+  // Merge-queue timeline: the entry's audit log (transitions, remediations,
+  // arms/disarms, merge attempts, with reasons), newest first. Covers the
+  // ACTIVE entry when one exists, else the most recent terminal one — so a
+  // just-merged PR's timeline is still inspectable. Explicit projections,
+  // capped at 100 events (the `detail` column is small by construction).
+  router.get('/:id/merge-queue/timeline', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select({ workspaceId: pullRequestsTable.workspaceId })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, rows[0].workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const entryRows = await db
+      .select({
+        id: mergeQueueEntriesTable.id,
+        status: mergeQueueEntriesTable.status,
+        enqueuedAt: mergeQueueEntriesTable.enqueuedAt,
+      })
+      .from(mergeQueueEntriesTable)
+      .where(eq(mergeQueueEntriesTable.pullRequestId, req.params.id))
+      .orderBy(desc(mergeQueueEntriesTable.enqueuedAt))
+      .limit(5);
+    const entry =
+      entryRows.find((e) => e.status !== 'merged' && e.status !== 'removed') ?? entryRows[0];
+    if (!entry) {
+      return res.json({ success: true, data: { events: [] } });
+    }
+    const events = await db
+      .select({
+        at: mergeQueueEventsTable.at,
+        fromStatus: mergeQueueEventsTable.fromStatus,
+        toStatus: mergeQueueEventsTable.toStatus,
+        trigger: mergeQueueEventsTable.trigger,
+        code: mergeQueueEventsTable.code,
+        message: mergeQueueEventsTable.message,
+        detail: mergeQueueEventsTable.detail,
+      })
+      .from(mergeQueueEventsTable)
+      .where(eq(mergeQueueEventsTable.entryId, entry.id))
+      .orderBy(desc(mergeQueueEventsTable.at))
+      .limit(100);
+    res.json({
+      success: true,
+      data: {
+        events: events.map((e) => ({
+          at: e.at.toISOString(),
+          fromStatus: e.fromStatus,
+          toStatus: e.toStatus,
+          trigger: e.trigger,
+          code: e.code,
+          message: e.message,
+          detail: e.detail ?? null,
+        })),
+      },
+    });
   });
 
   // Focus signal. Body `{ focused: true }` (default) tightens this

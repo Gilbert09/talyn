@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { PRRow, PRSummaryShape, PRState } from '../lib/api';
+import type { MergeQueuePublic, PRRow, PRSummaryShape, PRState } from '../lib/api';
 
 /**
  * Shared open-PR state, lifted out of the old single GitHub panel so the
@@ -32,6 +32,8 @@ export interface PullRequestUpdatePayload {
     position: number;
     reason?: string;
   } | null;
+  /** v2 payload — rides along with mergeQueueState on v2-era echoes. */
+  mergeQueue?: MergeQueuePublic | null;
 }
 
 interface PullRequestState {
@@ -123,6 +125,7 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
       mergeQueued: p.mergeQueued ?? next[idx].mergeQueued,
       mergeQueueState:
         p.mergeQueueState !== undefined ? p.mergeQueueState : next[idx].mergeQueueState,
+      mergeQueue: p.mergeQueue !== undefined ? p.mergeQueue : next[idx].mergeQueue,
     };
     set({ rows: next });
     return false;

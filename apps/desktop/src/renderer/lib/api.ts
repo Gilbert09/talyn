@@ -566,8 +566,49 @@ export interface PRRow {
     /** Why the PR is blocked (only set when status === 'blocked'). */
     reason?: string;
   } | null;
+  /** Merge queue v2 payload — full status vocabulary, per-head budgets,
+   *  auto-merge state. Null when not queued; absent from pre-v2 echoes. */
+  mergeQueue?: MergeQueuePublic | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** The v2 merge-queue badge payload (backend toPublicMergeQueue). */
+export interface MergeQueuePublic {
+  status:
+    | 'queued'
+    | 'awaiting_ci'
+    | 'awaiting_review'
+    | 'automerge_armed'
+    | 'fixing'
+    | 'merging'
+    | 'blocked'
+    | 'blocked_manual'
+    | 'merged'
+    | 'removed';
+  position: number;
+  blockedCode?: string | null;
+  /** Actionable reason when blocked/blocked_manual. */
+  reason?: string;
+  /** Short sha the retry budgets are scoped to (reset on every push). */
+  headShaShort?: string;
+  budgets?: {
+    fixRuns: [number, number];
+    checkReruns: [number, number];
+    resigns: [number, number];
+  };
+  autoMerge?: { armed: boolean; armedBy?: 'talyn' | 'user' };
+}
+
+/** One row of GET /pull-requests/:id/merge-queue/timeline. */
+export interface MergeQueueTimelineEvent {
+  at: string;
+  fromStatus: string | null;
+  toStatus: string;
+  trigger: string;
+  code: string | null;
+  message: string;
+  detail: Record<string, unknown> | null;
 }
 
 /**
@@ -702,6 +743,13 @@ export const pullRequests = {
     enabled: boolean,
     method?: 'merge' | 'squash' | 'rebase'
   ) => request<null>('POST', `/pull-requests/${id}/merge-queue`, { enabled, method }),
+  // The merge-queue entry's audit timeline (transitions + remediations with
+  // reasons), newest first — powers the detail sheet's "Merge queue" section.
+  mergeQueueTimeline: (id: string) =>
+    request<{ events: MergeQueueTimelineEvent[] }>(
+      'GET',
+      `/pull-requests/${id}/merge-queue/timeline`
+    ),
   // Tell the backend which list is on screen so it can hard-poll that cohort
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
   setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>

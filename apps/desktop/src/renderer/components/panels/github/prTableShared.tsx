@@ -14,6 +14,8 @@ import {
   ListChecks,
   Settings,
   Wand2,
+  Zap,
+  Clock,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
@@ -779,40 +781,132 @@ function PRTableRow({
   );
 }
 
-/** The Merge Queue page's second column: position + coarse status + reason. */
+/**
+ * The Merge Queue page's second column: position + status + reason. Renders
+ * the v2 payload's full vocabulary (auto-merge armed, awaiting CI/review,
+ * per-head budgets) and falls back to the legacy 4-status shape for rows the
+ * v2 echo hasn't reached yet.
+ */
 function QueueCell({ row }: { row: PRRow }) {
-  const qs = row.mergeQueueState?.status ?? 'waiting';
-  const pos = row.mergeQueueState?.position ?? 0;
-  const reason = row.mergeQueueState?.reason;
+  const v2 = row.mergeQueue;
+  const legacy = row.mergeQueueState;
+  const pos = v2?.position ?? legacy?.position ?? 0;
+  const chip = (() => {
+    if (v2) {
+      const budgets = v2.budgets;
+      const fixLabel = budgets ? ` (${budgets.fixRuns[0]}/${budgets.fixRuns[1]})` : '';
+      switch (v2.status) {
+        case 'automerge_armed':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400"
+              title={
+                v2.autoMerge?.armedBy === 'user'
+                  ? 'GitHub auto-merge is armed (by you) — GitHub merges the instant checks pass'
+                  : 'GitHub auto-merge armed — GitHub merges the instant checks pass'
+              }
+            >
+              <Zap className="h-3 w-3" />
+              Auto-merge armed
+            </span>
+          );
+        case 'awaiting_ci':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400"
+              title="Waiting for checks to finish — merges (or arms auto-merge) when they pass"
+            >
+              <Clock className="h-3 w-3" />
+              Waiting for CI
+            </span>
+          );
+        case 'awaiting_review':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-muted-foreground"
+              title="A required review is the only thing missing — merges once approved"
+            >
+              <Eye className="h-3 w-3" />
+              Waiting for review
+            </span>
+          );
+        case 'fixing':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-400"
+              title={`A cloud fix run is working this PR${fixLabel ? ` — attempt${fixLabel} on the current head` : ''}`}
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Fixing{fixLabel}
+            </span>
+          );
+        case 'merging':
+          return (
+            <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Merging
+            </span>
+          );
+        case 'blocked':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+              title={
+                (v2.reason ?? 'Blocked — will retry automatically.') +
+                ' Self-heals on a new push; re-queue to retry immediately.'
+              }
+            >
+              <AlertTriangle className="h-3 w-3" />
+              Blocked
+            </span>
+          );
+        case 'blocked_manual':
+          return (
+            <span
+              className="inline-flex items-center gap-1 text-red-700 dark:text-red-400"
+              title={v2.reason ?? 'GitHub refuses the App merge — merge manually or re-queue.'}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              Needs you
+            </span>
+          );
+        default:
+          return <span className="text-muted-foreground">Waiting</span>;
+      }
+    }
+    // Legacy fallback (pre-v2 echo).
+    const qs = legacy?.status ?? 'waiting';
+    if (qs === 'merging')
+      return (
+        <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Merging
+        </span>
+      );
+    if (qs === 'blocked')
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+          title={legacy?.reason ?? 'Blocked — needs attention'}
+        >
+          <AlertTriangle className="h-3 w-3" />
+          Blocked
+        </span>
+      );
+    if (qs === 'fixing')
+      return (
+        <span className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-400">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Fixing
+        </span>
+      );
+    return <span className="text-muted-foreground">Waiting</span>;
+  })();
   return (
     <td className="px-2 py-2 text-xs">
       <div className="flex items-center gap-1.5">
         <span className="font-medium text-foreground">{pos > 0 ? `#${pos}` : '—'}</span>
-        {qs === 'merging' ? (
-          <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Merging
-          </span>
-        ) : qs === 'blocked' ? (
-          <span
-            className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
-            title={
-              reason
-                ? `Merge queue gave up after 3 attempts — ${reason}. Needs manual intervention.`
-                : 'Merge queue gave up after 3 attempts — needs manual intervention'
-            }
-          >
-            <AlertTriangle className="h-3 w-3" />
-            Blocked
-          </span>
-        ) : qs === 'fixing' ? (
-          <span className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-400">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Fixing
-          </span>
-        ) : (
-          <span className="text-muted-foreground">Waiting</span>
-        )}
+        {chip}
       </div>
     </td>
   );
