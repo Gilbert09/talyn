@@ -13,6 +13,7 @@
 //   - timestamp with time zone for all dates. Postgres default.
 //   - boolean for flags. No more 0/1 int masquerading as boolean.
 
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   text,
@@ -20,6 +21,7 @@ import {
   jsonb,
   boolean,
   integer,
+  bigserial,
   uniqueIndex,
   index,
   primaryKey,
@@ -481,6 +483,127 @@ export const prCheckStates = pgTable(
     ),
     // Drives the count aggregate + sha-scoped pruning.
     repoShaIdx: index('idx_pr_check_states_repo_sha').on(t.repoFullName, t.headSha),
+  })
+);
+
+// ---------- Merge queue v2 (first-class entries + audit log) ----------
+
+/**
+ * One row per merge-queue membership. Replaces the `mergeQueueState` jsonb
+ * blob on pull_requests (kept through the dual-write migration window; see
+ * services/mergeQueue/). At most ONE active (non-terminal) entry per PR —
+ * terminal rows (`merged`/`removed`) are retained ~30 days as history so the
+ * timeline outlives membership, and a re-queue mints a FRESH entry with fresh
+ * budgets (the same semantics the old manual-requeue reset had).
+ *
+ * Budgets (`fix_attempts`/`rerun_attempts`/`resign_attempts`) are scoped to
+ * `head_sha`: a new push resets all three — the self-healing mechanic.
+ *
+ * Backend-pool-only surface (the desktop sees crafted WS/REST shapes, never
+ * rows): RLS enabled with no policies, like billing_events.
+ */
+export const mergeQueueEntries = pgTable(
+  'merge_queue_entries',
+  {
+    id: text('id').primaryKey(),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    /**
+     * Group key, denormalized at enqueue (kept current by the evaluator on a
+     * base-change event) so grouping/positions never read the summary jsonb.
+     */
+    baseBranch: text('base_branch').notNull().default(''),
+    /** Snapshot of the user's merge-method preference at enqueue. */
+    mergeMethod: text('merge_method').notNull().default('squash'),
+    /** EntryStatus — see services/mergeQueue/types.ts. */
+    status: text('status').notNull().default('queued'),
+    /** BlockedCode when status is blocked/blocked_manual. */
+    blockedCode: text('blocked_code'),
+    /** Human sentence for the badge tooltip / notification. */
+    blockedReason: text('blocked_reason'),
+    /** FIFO ordering within the (repo, base) group. */
+    enqueuedAt: timestamp('enqueued_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Head the budgets below are scoped to. '' until first observed. */
+    headSha: text('head_sha').notNull().default(''),
+    fixAttempts: integer('fix_attempts').notNull().default(0),
+    rerunAttempts: integer('rerun_attempts').notNull().default(0),
+    resignAttempts: integer('resign_attempts').notNull().default(0),
+    /** The queue's own most-recent fix run (replaces lastFixTaskId in the blob). */
+    fixTaskId: text('fix_task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    fixTaskAccounted: boolean('fix_task_accounted').notNull().default(true),
+    fixKind: text('fix_kind'), // 'blockers' | 'resign'
+    /** Signature-probe memo — valid only while it matches the current head. */
+    signingCheckedSha: text('signing_checked_sha'),
+    unsignedCount: integer('unsigned_count'),
+    /** GitHub native auto-merge bookkeeping (Push E). */
+    automergeArmedAt: timestamp('automerge_armed_at', { withTimezone: true }),
+    automergeArmedBy: text('automerge_armed_by'), // 'talyn' | 'user'
+    /** A Talyn-armed auto-merge we failed to disarm — the reconciler retries. */
+    pendingDisarm: boolean('pending_disarm').notNull().default(false),
+    /** Crash marker: set entering 'merging', before the REST call. */
+    mergeStartedAt: timestamp('merge_started_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+    lastEvaluatedAt: timestamp('last_evaluated_at', { withTimezone: true }),
+    /** Optimistic-concurrency guard — every transition is a CAS on this. */
+    version: integer('version').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // One ACTIVE entry per PR; terminal entries are retained history.
+    activePrUq: uniqueIndex('uq_mqe_active_pr')
+      .on(t.pullRequestId)
+      .where(sql`${t.status} NOT IN ('merged','removed')`),
+    // The group walk: FIFO within (repo, base).
+    groupIdx: index('idx_mqe_group')
+      .on(t.repositoryId, t.baseBranch, t.enqueuedAt)
+      .where(sql`${t.status} NOT IN ('merged','removed')`),
+    // Reconciler scans + the free-plan entitlement count.
+    activeWsIdx: index('idx_mqe_active_ws')
+      .on(t.workspaceId)
+      .where(sql`${t.status} NOT IN ('merged','removed')`),
+    inflightIdx: index('idx_mqe_inflight')
+      .on(t.status)
+      .where(sql`${t.status} IN ('merging','automerge_armed','fixing')`),
+  })
+);
+
+/**
+ * Per-entry audit log — one row per status transition and per fired action
+ * (fix run, re-run, arm/disarm, merge attempt/refusal, budget reset,
+ * notification). Powers the desktop timeline (`GET
+ * /pull-requests/:id/merge-queue/timeline`) and post-incident forensics.
+ * `detail` is small structured metadata (shas, task ids, attempt counts) —
+ * never payloads. Pruned with its entry (FK cascade + the 30-day sweep).
+ */
+export const mergeQueueEvents = pgTable(
+  'merge_queue_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    entryId: text('entry_id')
+      .notNull()
+      .references(() => mergeQueueEntries.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    fromStatus: text('from_status'),
+    toStatus: text('to_status').notNull(),
+    /** What caused it: 'webhook:check_run', 'task:terminal', 'user:enqueue', 'reconcile', … */
+    trigger: text('trigger').notNull(),
+    /** Machine code ('new_head_reset', 'app_refused_hard', 'rerun_fired', …). */
+    code: text('code'),
+    /** Human sentence for the timeline UI. */
+    message: text('message').notNull().default(''),
+    detail: jsonb('detail'),
+  },
+  (t) => ({
+    entryAtIdx: index('idx_mqev_entry').on(t.entryId, t.at),
   })
 );
 

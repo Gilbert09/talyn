@@ -24,6 +24,7 @@ import {
 import { debugBus } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
 import { ACTIVE_STATUSES, linkedTaskStatus, resolveCloudEnv } from './prCloudFix.js';
+import { getMergeQueueEngine } from './mergeQueue/store.js';
 
 const POLL_INTERVAL_MS = 10_000;
 /**
@@ -330,7 +331,16 @@ class MergeQueueProcessor {
     let tickError: string | undefined;
     let skipRecord = false;
     let lockSkipped = false;
+    let engineSkipped = false;
     try {
+      // Cutover gate: once the engine flag flips to 'v2' (migration 0032),
+      // the event-driven pipeline drives the queue and this processor stands
+      // down — re-read every tick so a prior deploy stops within ~10s of the
+      // flip committing (deploy-overlap safety).
+      if ((await getMergeQueueEngine()) === 'v2') {
+        engineSkipped = true;
+        return;
+      }
       // Cross-replica mutex: a deploy overlap runs two instances, and two
       // concurrent ticks can both try to merge the same head PR.
       const lock = await guardCrossReplica('mergeQueue:tick', async () => {
@@ -406,6 +416,8 @@ class MergeQueueProcessor {
           ok: !tickError,
           summary: tickError
             ? `merge_queue tick failed: ${tickError}`
+            : engineSkipped
+              ? 'merge_queue tick skipped — v2 engine active'
             : lockSkipped
               ? 'merge_queue tick skipped — advisory lock held by another instance'
               : `merge_queue tick — ${headCount} head${headCount === 1 ? '' : 's'}` +

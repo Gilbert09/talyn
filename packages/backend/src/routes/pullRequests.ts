@@ -22,6 +22,8 @@ import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middle
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { mergeQueueProcessor } from '../services/mergeQueueProcessor.js';
+import { closeActiveEntry, ensureActiveEntry } from '../services/mergeQueue/store.js';
+import type { MergeMethod } from '../services/mergeQueue/types.js';
 import {
   computeQueuePositions,
   broadcastMergeQueuePositions,
@@ -537,6 +539,36 @@ export function pullRequestRoutes(): Router {
       );
     } else {
       await armQueue();
+    }
+
+    // Dual-write membership into merge_queue_entries (the v2 queue). While
+    // the v1 engine drives, this only tracks membership — v1's own
+    // transitions don't touch entries, and the cutover migration re-syncs
+    // any drift before the v2 pipeline takes over. Best-effort: a failure
+    // here must never break the toggle.
+    try {
+      const summary = row.lastSummary as { baseBranch?: string; headSha?: string } | null;
+      if (enabled) {
+        await ensureActiveEntry({
+          pullRequestId: row.id,
+          workspaceId: row.workspaceId,
+          repositoryId: row.repositoryId,
+          baseBranch: summary?.baseBranch ?? '',
+          mergeMethod: method as MergeMethod,
+          headSha: summary?.headSha ?? '',
+          trigger: 'user:enqueue',
+        });
+      } else {
+        await closeActiveEntry(row.id, 'removed', {
+          trigger: 'user:dequeue',
+          message: 'Removed from the merge queue by the user.',
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[pullRequests] merge-queue entry dual-write failed for ${row.owner}/${row.repo}#${row.number}:`,
+        err instanceof Error ? err.message : err
+      );
     }
 
     // When disabling, the row is no longer in the queue so the group rebroadcast
