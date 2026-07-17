@@ -73,8 +73,9 @@ function MergeQueueModeToggle() {
     }
   };
 
+  // Rendered in GitHubPageShell's `filters` slot — same row as the search box.
   return (
-    <div className="flex items-center gap-2 border-b bg-background px-4 py-2 text-xs">
+    <div className="flex items-center gap-2">
       <span className="text-muted-foreground">Merge</span>
       <div className="inline-flex overflow-hidden rounded-md border">
         {MODE_OPTIONS.map(({ mode: m, label, icon: Icon, hint }) => (
@@ -96,7 +97,8 @@ function MergeQueueModeToggle() {
           </button>
         ))}
       </div>
-      <span className="text-muted-foreground">
+      {/* Hidden when narrow so the toggle + search share the row cleanly. */}
+      <span className="hidden text-muted-foreground xl:inline">
         {mode === 'ordered'
           ? '— one merge at a time, in queue order'
           : '— any PR merges the moment it’s ready'}
@@ -178,6 +180,7 @@ export function MergeQueuePanel() {
       search={search}
       onSearch={setSearch}
       searchPlaceholder="Search queued PRs or #number… (⌘F)"
+      filters={<MergeQueueModeToggle />}
       rows={queued}
       emptyIcon={<GitMerge className="h-8 w-8" />}
       emptyTitle={hasSearch ? 'No queued PRs match your search.' : 'The merge queue is empty.'}
@@ -189,7 +192,6 @@ export function MergeQueuePanel() {
     >
       {({ selectedId, onSelect }) => (
         <div className="flex flex-col">
-          <MergeQueueModeToggle />
           {groups.map((g) => (
             <div key={g.key}>
               <div className="sticky top-0 z-[1] flex items-center gap-1.5 border-b bg-muted/60 px-4 py-1.5 text-xs font-medium text-muted-foreground">
