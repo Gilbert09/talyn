@@ -478,6 +478,54 @@ describe('mergeQueue v2 pipeline', () => {
     });
   });
 
+  describe('merge-queue mode (workspace setting)', () => {
+    async function setMode(mode: 'ordered' | 'eager'): Promise<void> {
+      await db
+        .update(workspacesTable)
+        .set({ settings: { mergeQueueMode: mode } })
+        .where(eq(workspacesTable.id, 'ws1'));
+    }
+
+    it("eager: every clean entry merges in one evaluation — nothing waits behind a sibling", async () => {
+      await setMode('eager');
+      const a = await insertQueuedPr(db);
+      const b = await insertQueuedPr(db);
+      const c = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mergeSpy).toHaveBeenCalledTimes(3);
+      expect(await entryOf(db, a.prId)).toBeNull();
+      expect(await entryOf(db, b.prId)).toBeNull();
+      expect(await entryOf(db, c.prId)).toBeNull();
+    });
+
+    it('eager: a blocked head does not gate — it gets its fix run AND the clean sibling merges', async () => {
+      await setMode('eager');
+      const head = await insertQueuedPr(db, { summary: conflictSummary() });
+      const ready = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect((await entryOf(db, head.prId))?.status).toBe('fixing');
+      expect(await countTasks(db)).toBe(1); // fix run for the head
+      expect(mergeSpy).toHaveBeenCalledTimes(1); // sibling merged past it
+      expect(await entryOf(db, ready.prId)).toBeNull();
+    });
+
+    it('ordered (default): unchanged — one same-base merge per evaluation', async () => {
+      await setMode('ordered');
+      const first = await insertQueuedPr(db);
+      const second = await insertQueuedPr(db);
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(mergeSpy).toHaveBeenCalledTimes(1);
+      expect((await entryOf(db, second.prId))?.status).toBe('queued');
+      expect(await entryOf(db, first.prId)).toBeNull();
+    });
+  });
+
   describe('auto-merge hybrid', () => {
     /** Required checks running + node id cached — the armable state. */
     const armableSummary = () => ({

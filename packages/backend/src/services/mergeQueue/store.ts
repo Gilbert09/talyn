@@ -13,7 +13,9 @@ import {
   mergeQueueEntries,
   mergeQueueEvents,
   settings as settingsTable,
+  workspaces as workspacesTable,
 } from '../../db/schema.js';
+import type { MergeQueueMode } from '@talyn/shared';
 import type {
   BlockedCode,
   EntrySnapshot,
@@ -103,6 +105,26 @@ export async function getMergeQueueEngine(db: Db = getDbClient()): Promise<Merge
     .where(eq(settingsTable.key, 'merge_queue_engine'))
     .limit(1);
   return rows[0]?.value === 'v2' ? 'v2' : 'v1';
+}
+
+/**
+ * The workspace's queue-drain mode (see WorkspaceSettings.mergeQueueMode):
+ * 'ordered' (default) = FIFO, one merge in flight per (repo, base) group;
+ * 'eager' = every entry is its own head, merge/fix the moment it's possible.
+ * Extracts the one scalar — never ships the settings jsonb (egress rules).
+ */
+export async function getMergeQueueMode(
+  workspaceId: string,
+  db: Db = getDbClient()
+): Promise<MergeQueueMode> {
+  const rows = await db
+    .select({
+      mode: sql<string | null>`${workspacesTable.settings} ->> 'mergeQueueMode'`,
+    })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  return rows[0]?.mode === 'eager' ? 'eager' : 'ordered';
 }
 
 // ── Membership (route dual-write + pipeline) ──

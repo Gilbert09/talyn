@@ -126,7 +126,20 @@ export interface WorkspaceSettings {
    * review-requested PR. Individual PRs can still be toggled by hand. Unset = off.
    */
   defaultAutoKeepMergeable?: boolean;
+  /**
+   * How the merge queue drains a (repo, base) group:
+   * - `'ordered'` (default): FIFO — one merge in flight per group, each PR
+   *   waits its turn. Conservative: same-base merges invalidate the CI of the
+   *   PRs behind them, so serializing avoids wasted runs.
+   * - `'eager'`: every queued PR is its own head — clean PRs merge (or arm
+   *   auto-merge) the moment they're ready, blocked PRs get fix runs
+   *   concurrently, nothing waits behind a sibling. Faster, at the cost of
+   *   sibling CI churn after each merge.
+   */
+  mergeQueueMode?: MergeQueueMode;
 }
+
+export type MergeQueueMode = 'ordered' | 'eager';
 
 export interface ContinuousBuildSettings {
   enabled: boolean;

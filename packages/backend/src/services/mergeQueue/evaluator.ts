@@ -22,6 +22,7 @@ import {
   closeActiveEntry,
   computeEntryPositions,
   getMergeQueueEngine,
+  getMergeQueueMode,
   loadActiveGroup,
   touchEvaluated,
 } from './store.js';
@@ -191,6 +192,13 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
   // call inside the walk would sleep behind waitIfBlocked — defer the whole
   // group to the reconciler instead (v1's between-heads deferral).
   const workspaceId = entries[0]!.workspaceId;
+  // 'ordered' (default): FIFO, first hold consumes the group's turn, one
+  // merge in flight per group. 'eager': every entry is its own head — clean
+  // ones merge/arm immediately, blocked ones remediate concurrently, and the
+  // walk never stops early. The decision engine is untouched; eager is purely
+  // "evaluate each entry as a group of one".
+  const mode = await getMergeQueueMode(workspaceId, db);
+  const eager = mode === 'eager';
   const accountKey = githubService.accountKeyFor(workspaceId);
   if (githubRateGate.isBlocked(accountKey, 'rest')) {
     debugBus.recordEvent({
@@ -228,14 +236,18 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
       );
       continue;
     }
-    const groupMergeInFlight = [...inFlightIds].some((id) => id !== entry.id);
+    // Eager mode: no sibling gates a merge, and every entry may arm/merge as
+    // if it were the head. GitHub still serializes the actual base updates —
+    // a sibling that goes BEHIND after a merge just re-evaluates on its own
+    // snapshot event.
+    const groupMergeInFlight = eager ? false : [...inFlightIds].some((id) => id !== entry.id);
     let verdict: 'hold' | 'advance' = 'hold';
     try {
       const result = await evaluateEntry({
         entry,
         pr,
         position: positions.get(entry.id) ?? i + 1,
-        isHead: evaluated.length === 0 && i === 0,
+        isHead: eager || (evaluated.length === 0 && i === 0),
         groupMergeInFlight,
         trigger,
       });
@@ -257,7 +269,10 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
       );
     }
     evaluated.push(entry.id);
-    if (verdict === 'hold') break;
+    // Ordered mode: the first 'hold' consumes the group's turn (one same-base
+    // merge per evaluation). Eager mode: keep walking — every entry gets its
+    // shot this evaluation.
+    if (!eager && verdict === 'hold') break;
   }
   await touchEvaluated(evaluated, db);
 }

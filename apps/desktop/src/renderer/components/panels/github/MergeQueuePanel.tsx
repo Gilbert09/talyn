@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { GitMerge } from 'lucide-react';
+import { GitMerge, ListOrdered, Zap } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus, CloudProviderType } from '@talyn/shared';
+import type { TaskStatus, CloudProviderType, MergeQueueMode, Workspace } from '@talyn/shared';
 import { taskCloudProvider } from '../../../lib/providerMeta';
-import type { PRRow } from '../../../lib/api';
+import { api, type PRRow } from '../../../lib/api';
+import { cn } from '../../../lib/utils';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable } from './prTableShared';
 import { prMatchesText } from './filters';
@@ -16,6 +17,92 @@ interface QueueGroup {
   repo: string;
   base: string;
   rows: PRRow[];
+}
+
+const MODE_OPTIONS: Array<{
+  mode: MergeQueueMode;
+  label: string;
+  icon: typeof ListOrdered;
+  hint: string;
+}> = [
+  {
+    mode: 'ordered',
+    label: 'In order',
+    icon: ListOrdered,
+    hint: 'FIFO per repo + base branch: one merge at a time, each PR waits its turn. Conservative — merging invalidates the CI of the PRs behind it, so serializing avoids wasted runs.',
+  },
+  {
+    mode: 'eager',
+    label: 'When ready',
+    icon: Zap,
+    hint: 'Every queued PR merges (or arms auto-merge) the moment it’s clean — nothing waits behind a sibling, and blocked PRs get fix runs concurrently. Fastest, at the cost of sibling CI re-runs after each merge.',
+  },
+];
+
+/**
+ * Workspace-level drain mode for the queue: FIFO ('ordered', the default) vs
+ * merge-the-moment-it's-ready ('eager'). Persists to
+ * `workspace.settings.mergeQueueMode`; the backend evaluator reads it per
+ * (repo, base) group walk, so a change applies from the next evaluation.
+ */
+function MergeQueueModeToggle() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const [saving, setSaving] = useState(false);
+
+  const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
+  const mode: MergeQueueMode =
+    workspace?.settings?.mergeQueueMode === 'eager' ? 'eager' : 'ordered';
+
+  const onPick = async (next: MergeQueueMode) => {
+    if (!currentWorkspaceId || next === mode || saving) return;
+    setSaving(true);
+    try {
+      const settings = { mergeQueueMode: next } as Workspace['settings'];
+      await api.workspaces.update(currentWorkspaceId, { settings });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, ...settings } as Workspace['settings'] }
+            : w
+        )
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 border-b bg-background px-4 py-2 text-xs">
+      <span className="text-muted-foreground">Merge</span>
+      <div className="inline-flex overflow-hidden rounded-md border">
+        {MODE_OPTIONS.map(({ mode: m, label, icon: Icon, hint }) => (
+          <button
+            key={m}
+            type="button"
+            title={hint}
+            disabled={saving || !currentWorkspaceId}
+            onClick={() => void onPick(m)}
+            className={cn(
+              'inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors',
+              m === mode
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-background text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Icon className="h-3 w-3" />
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="text-muted-foreground">
+        {mode === 'ordered'
+          ? '— one merge at a time, in queue order'
+          : '— any PR merges the moment it’s ready'}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -102,6 +189,7 @@ export function MergeQueuePanel() {
     >
       {({ selectedId, onSelect }) => (
         <div className="flex flex-col">
+          <MergeQueueModeToggle />
           {groups.map((g) => (
             <div key={g.key}>
               <div className="sticky top-0 z-[1] flex items-center gap-1.5 border-b bg-muted/60 px-4 py-1.5 text-xs font-medium text-muted-foreground">
