@@ -668,6 +668,14 @@ async function rerequestFailedChecks(pr: PrEvalRow): Promise<RerunOutcome> {
   }
 }
 
+// Dispatch a cloud fix run "claim-first": CLAIM the entry (CAS status→fixing,
+// fixTaskId=null) BEFORE creating the task, so N concurrent (cross-replica)
+// evaluations racing at the same entry version collapse to exactly ONE claim —
+// the losers bail before createCloudTask and start nothing. Then create the
+// task and LINK it (second CAS). A crash between claim and link leaves the entry
+// at fixing+null; the reconciler's 120s staleness sweep re-evaluates it and
+// decide (which reads null fixTaskId as no active run) simply re-fires — natural
+// recovery, no wedge. See the 2026-07-17 runaway + Session 72.
 async function fireFixRun(resign: boolean, ctx: ActionContext): Promise<ActionOutcome> {
   const resolved = await resolveCloudEnv(ctx.pr.workspaceId);
   if (!resolved) {
@@ -675,6 +683,43 @@ async function fireFixRun(resign: boolean, ctx: ActionContext): Promise<ActionOu
     // context build and dispatch — hold as queued, burn nothing.
     return ensureQueuedDeferred(ctx, 'no_cloud_env', 'No connected cloud provider — deferring.');
   }
+  const fixKind: 'resign' | 'blockers' = resign ? 'resign' : 'blockers';
+
+  // Phase A — claim. Whoever wins this CAS owns the dispatch; concurrent
+  // evaluations at the same version lose here and create no task. No
+  // resignAttempts bump / no fixTaskId yet, so a TaskLimit deferral below can
+  // roll back having burned nothing.
+  const claimed: EntrySnapshot = {
+    ...ctx.entry,
+    status: 'fixing',
+    blockedCode: null,
+    blockedReason: null,
+    fixTaskId: null,
+    fixKind,
+  };
+  const claimOk = await casTransition(
+    ctx.entry.id,
+    ctx.version,
+    {
+      status: 'fixing',
+      blockedCode: null,
+      blockedReason: null,
+      fixTaskId: null,
+      fixKind,
+      lastEvaluatedAt: new Date(),
+    },
+    {
+      trigger: ctx.trigger,
+      fromStatus: ctx.entry.status,
+      toStatus: 'fixing',
+      code: 'fix_run_claimed',
+      message: resign ? 'Re-sign run claimed — dispatching.' : 'Fix run claimed — dispatching.',
+    }
+  );
+  if (!claimOk) return { casLost: true };
+  const claimedVersion = ctx.version + 1;
+
+  // Phase B — create the cloud task (only the claim winner reaches here).
   const ref = `${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number}`;
   const summary = ctx.prSnap.summary;
   const prTitle = (ctx.pr.lastSummary as { title?: string } | null)?.title ?? '';
@@ -701,42 +746,52 @@ async function fireFixRun(resign: boolean, ctx: ActionContext): Promise<ActionOu
     });
   } catch (err) {
     if (err instanceof TaskLimitError) {
-      // Free-plan concurrency limit — transient; a slot frees when a task
-      // ends (the task:status trigger re-evaluates). Burn NOTHING.
-      return ensureQueuedDeferred(
-        ctx,
-        'deferred_task_limit',
-        'Fix run deferred — free-plan task slots are full.'
+      // Free-plan concurrency limit — transient; a slot frees when a task ends
+      // (the task:status trigger re-evaluates). Roll the claim back to queued
+      // and burn NOTHING (no attempt was counted in Phase A).
+      const reverted: EntrySnapshot = {
+        ...claimed,
+        status: 'queued',
+        fixKind: null,
+      };
+      const revertOk = await casTransition(
+        ctx.entry.id,
+        claimedVersion,
+        { status: 'queued', fixKind: null, lastEvaluatedAt: new Date() },
+        {
+          trigger: ctx.trigger,
+          fromStatus: 'fixing',
+          toStatus: 'queued',
+          code: 'deferred_task_limit',
+          message: 'Fix run deferred — free-plan task slots are full.',
+        }
       );
+      if (!revertOk) return { casLost: true };
+      await mirrorToPrRow(reverted, ctx.pr, ctx.position);
+      return { entry: reverted, versionDelta: 2 };
     }
     throw err;
   }
-  const next: EntrySnapshot = {
-    ...ctx.entry,
-    status: 'fixing',
-    blockedCode: null,
-    blockedReason: null,
+
+  // Phase C — link the created task to the claim.
+  const linked: EntrySnapshot = {
+    ...claimed,
     fixTaskId: created.id,
     fixTaskAccounted: false,
-    fixKind: resign ? 'resign' : 'blockers',
     ...(resign ? { resignAttempts: ctx.entry.resignAttempts + 1 } : {}),
   };
-  const ok = await casTransition(
+  const linkOk = await casTransition(
     ctx.entry.id,
-    ctx.version,
+    claimedVersion,
     {
-      status: 'fixing',
-      blockedCode: null,
-      blockedReason: null,
       fixTaskId: created.id,
       fixTaskAccounted: false,
-      fixKind: resign ? 'resign' : 'blockers',
       ...(resign ? { resignAttempts: ctx.entry.resignAttempts + 1 } : {}),
       lastEvaluatedAt: new Date(),
     },
     {
       trigger: ctx.trigger,
-      fromStatus: ctx.entry.status,
+      fromStatus: 'fixing',
       toStatus: 'fixing',
       code: resign ? 'resign_run_fired' : 'fix_run_fired',
       message: resign
@@ -745,19 +800,16 @@ async function fireFixRun(resign: boolean, ctx: ActionContext): Promise<ActionOu
       detail: { taskId: created.id },
     }
   );
-  if (!ok) {
-    // Lost the claim to a concurrent evaluation of this SAME entry (a
-    // cross-replica overlap or a webhook burst — both read fixTaskId=null and
-    // both dispatched). Our task is a confirmed DUPLICATE: cancel it before the
-    // cloud scheduler picks it up. createCloudTask inserts 'queued' and a
-    // separate scheduler dispatches on its next tick, so cancelling while still
-    // undispatched prevents the vendor run entirely — no wasted compute, no
-    // orphan pushing stray commits (the 2026-07-17 duplicate burst).
+  if (!linkOk) {
+    // A late evaluation re-claimed in the sub-second window between our claim
+    // and this link. Our task is a duplicate: cancel it before the scheduler
+    // dispatches it (created 'queued', dispatched async on the next tick), so
+    // the vendor run never starts. The re-claimer owns the entry now.
     await cancelUndispatchedFixTask(created.id);
     return { casLost: true };
   }
-  await mirrorToPrRow(next, ctx.pr, ctx.position);
-  return { entry: next, versionDelta: 1 };
+  await mirrorToPrRow(linked, ctx.pr, ctx.position);
+  return { entry: linked, versionDelta: 2 };
 }
 
 /** Cancel a just-created fix task that lost the entry claim, but only while it

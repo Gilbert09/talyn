@@ -28,6 +28,8 @@ import {
 } from '../../db/schema.js';
 import { registerCloudProvider } from '../../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../../services/cloudProviders/posthog/provider.js';
+import * as taskCreateModule from '../../services/taskCreate.js';
+import { TaskLimitError } from '../../services/billing/entitlements.js';
 import { ensureActiveEntry, getActiveEntryForPr } from '../../services/mergeQueue/store.js';
 import {
   _resetEngineCache,
@@ -373,6 +375,70 @@ describe('mergeQueue v2 pipeline', () => {
     expect(entry?.fixAttempts).toBe(0);
     expect(entry?.status).toBe('fixing'); // fresh budget → fix run fired
     expect(await countTasks(db)).toBe(1);
+  });
+
+  // Claim-first dispatch (Session 72): the entry is CLAIMED via CAS before the
+  // cloud task is created, so concurrent cross-replica evaluations collapse to
+  // one dispatch instead of a duplicate burst.
+  it('claims the entry (status=fixing) BEFORE creating the task', async () => {
+    const { prId, entryId } = await insertQueuedPr(db, { summary: conflictSummary() });
+    let statusAtCreate: string | undefined;
+    let fixTaskIdAtCreate: string | null | undefined;
+    const orig = taskCreateModule.createCloudTask;
+    const spy = vi
+      .spyOn(taskCreateModule, 'createCloudTask')
+      .mockImplementation(async (input) => {
+        const row = (
+          await db
+            .select({ status: mergeQueueEntries.status, fixTaskId: mergeQueueEntries.fixTaskId })
+            .from(mergeQueueEntries)
+            .where(eq(mergeQueueEntries.id, entryId))
+        )[0]!;
+        statusAtCreate = row.status;
+        fixTaskIdAtCreate = row.fixTaskId;
+        return orig(input);
+      });
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(statusAtCreate).toBe('fixing'); // claimed before the task exists
+    expect(fixTaskIdAtCreate).toBeNull(); // not linked until Phase C
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('fixing');
+    expect(entry?.fixTaskId).toBeTruthy(); // linked after create
+    expect(await countTasks(db)).toBe(1);
+  });
+
+  it('rolls the claim back to queued and burns nothing on a task-limit deferral', async () => {
+    const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new TaskLimitError(3, 3));
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('queued'); // claim reverted
+    expect(entry?.fixKind).toBeNull();
+    expect(entry?.fixAttempts).toBe(0); // no attempt burned
+    expect(entry?.fixTaskId).toBeNull();
+    expect(await countTasks(db)).toBe(0); // nothing dispatched
+  });
+
+  it('re-fires a dispatch left half-claimed (fixing + null fixTaskId) by a crash', async () => {
+    // A crash between claim and link leaves the entry fixing+null. The next
+    // evaluation (reconciler staleness sweep in prod) sees a null fixTaskId as
+    // no active run and re-fires — natural recovery, no wedge.
+    const { prId } = await insertQueuedPr(db, {
+      summary: conflictSummary(),
+      entry: { status: 'fixing', fixTaskId: null },
+    });
+
+    await evaluateGroupNow('repo1', 'main', 'test');
+
+    const entry = await entryOf(db, prId);
+    expect(entry?.status).toBe('fixing');
+    expect(entry?.fixTaskId).toBeTruthy(); // re-claimed + linked
+    expect(await countTasks(db)).toBe(1); // exactly one, not a duplicate
   });
 
   it('recovers a head stuck in status=merging from a crashed evaluation (verify-merged)', async () => {
