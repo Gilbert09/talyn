@@ -748,6 +748,24 @@ describe('decide — GitHub native auto-merge', () => {
     expect(d.verdict).toBe('advance');
   });
 
+  it('arms even while the fix run is still in flight — an overrunning task must not waste the CI window', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      ciRunningPr(),
+      ctx({ autoMergeCapability: 'available', fixTaskState: 'active' })
+    );
+    expect(kinds(d)).toContain('arm_automerge');
+  });
+
+  it('arms mid-run on a signing repo too, once the head probes signed (memoized per head)', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', signingCheckedSha: 'sha1', unsignedCount: 0 }),
+      ciRunningPr(),
+      ctx({ autoMergeCapability: 'available', fixTaskState: 'active', signingRequired: true })
+    );
+    expect(kinds(d)).toContain('arm_automerge');
+  });
+
   it('falls back to awaiting_ci when the repo has auto-merge disabled', () => {
     const d = decide(entry(), ciRunningPr(), ctx({ autoMergeCapability: 'unavailable' }));
     expect(kinds(d)).not.toContain('arm_automerge');

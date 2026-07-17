@@ -274,10 +274,13 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // pull_requests.taskId (a manual task, the keep-mergeable watcher) — which
   // v1 checked separately because taskId gets reassigned by other flows.
   const runActive = ctx.fixTaskState === 'active' || ctx.otherLinkedTaskActive;
-  if (runActive && queueBlocked(pr)) {
-    // An in-flight run only HOLDS BACK a PR that's still blocked. A clean PR
-    // falls through to the merge path regardless — the run may have already
-    // fixed it before its own status flips terminal.
+  if (runActive && queueBlocked(pr) && hasSettledBlocker(pr)) {
+    // An in-flight run only HOLDS BACK a PR with a SETTLED blocker — the
+    // thing the run is actually fixing. A clean PR falls through to the merge
+    // path, and a head whose only obstacle is in-flight CI falls through to
+    // R7 so it can ARM auto-merge mid-run: cloud runs routinely overrun
+    // (idle until turn-complete/auto-finalize) long after their fixes pushed,
+    // and holding 'fixing' through that wasted the whole CI window.
     d.ensure('fixing');
     return d.done('hold');
   }
@@ -437,11 +440,18 @@ function decideCleanButWaitingOnCi(
   // mergeStateStatus=BLOCKED (which queueBlocked counts), and that is exactly
   // the state auto-merge exists to wait out. The caller's guard
   // (ciInFlight && !hasSettledBlocker) is the correct arm condition.
+  //
+  // Also no `!runActive`: an in-flight fix run must not delay the arm — cloud
+  // runs routinely overrun (idle until turn-complete/auto-finalize) long
+  // after their fixes are pushed, and holding 'fixing' meanwhile just wastes
+  // the CI window. This mirrors the v1 rule that a clean PR direct-merges
+  // even mid-run. If the run pushes again, the new head resets budgets and
+  // the arm follows the PR (GitHub keeps it for write-access pushers; a
+  // disarm re-arms via the snapshot event).
   const armable =
     ctx.isHead &&
     !ctx.groupMergeInFlight &&
     ctx.autoMergeCapability === 'available' &&
-    !runActive &&
     d.entry.status !== 'automerge_armed';
   if (armable) {
     // Pre-arm signing gate: an armed PR with unsigned commits on a
@@ -589,12 +599,11 @@ function signingGateFor(
 ): SigningGateResult {
   if (ctx.signingRequired === false) return 'clear';
   if (ctx.signingRequired === null) return 'clear'; // probe failed — the 403 net catches
-  // A re-sign run is already in flight — don't re-poll signatures; hold the
-  // badge at 'fixing' and let the run finish.
-  if (runActive) {
-    d.ensure('fixing');
-    return d.done('advance');
-  }
+  // NOTE: no runActive hold on the PROBE — it's memoized per (entry, head),
+  // so probing during a run costs at most one GraphQL call per push, and
+  // holding here kept signing repos from arming until an overrunning run
+  // finalized. dispatchResign still guards runActive (never pile a second
+  // run on an active one).
   const memoValid = d.entry.signingCheckedSha === pr.headSha && d.entry.unsignedCount !== null;
   const unsigned = memoValid ? d.entry.unsignedCount! : ctx.unsignedCount;
   if (unsigned === undefined) {
