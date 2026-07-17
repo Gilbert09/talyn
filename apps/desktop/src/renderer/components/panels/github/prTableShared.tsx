@@ -116,7 +116,7 @@ export function PRTable({
         <tr>
           <th className="px-4 py-2 text-left font-medium">Title</th>
           {variant === 'queue' && (
-            <th className="px-2 py-2 text-left font-medium">Queue</th>
+            <th className="min-w-[190px] px-2 py-2 text-left font-medium">Queue</th>
           )}
           <th className="px-2 py-2 text-left font-medium">{secondColLabel}</th>
           <th className="px-2 py-2 text-left font-medium">Updated</th>
@@ -916,7 +916,7 @@ function QueueCell({ row }: { row: PRRow }) {
     return <span className="text-muted-foreground">Waiting</span>;
   })();
   return (
-    <td className="px-2 py-2 text-xs">
+    <td className="whitespace-nowrap px-2 py-2 text-xs">
       <div className="flex items-center gap-1.5">
         <span className="font-medium text-foreground">{pos > 0 ? `#${pos}` : '—'}</span>
         {chip}
