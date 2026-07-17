@@ -73,36 +73,29 @@ function MergeQueueModeToggle() {
     }
   };
 
-  // Rendered in GitHubPageShell's `filters` slot — same row as the search box.
+  // Rendered in GitHubPageShell's `filters` slot — same row as the search
+  // box. Just the segmented control: each option's full explanation lives in
+  // its hover tooltip (`title`), no inline labels.
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-muted-foreground">Merge</span>
-      <div className="inline-flex overflow-hidden rounded-md border">
-        {MODE_OPTIONS.map(({ mode: m, label, icon: Icon, hint }) => (
-          <button
-            key={m}
-            type="button"
-            title={hint}
-            disabled={saving || !currentWorkspaceId}
-            onClick={() => void onPick(m)}
-            className={cn(
-              'inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors',
-              m === mode
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-background text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <Icon className="h-3 w-3" />
-            {label}
-          </button>
-        ))}
-      </div>
-      {/* Hidden when narrow so the toggle + search share the row cleanly. */}
-      <span className="hidden text-muted-foreground xl:inline">
-        {mode === 'ordered'
-          ? '— one merge at a time, in queue order'
-          : '— any PR merges the moment it’s ready'}
-      </span>
+    <div className="inline-flex overflow-hidden rounded-md border">
+      {MODE_OPTIONS.map(({ mode: m, label, icon: Icon, hint }) => (
+        <button
+          key={m}
+          type="button"
+          title={hint}
+          disabled={saving || !currentWorkspaceId}
+          onClick={() => void onPick(m)}
+          className={cn(
+            'inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors',
+            m === mode
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-background text-muted-foreground hover:text-foreground'
+          )}
+        >
+          <Icon className="h-3 w-3" />
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
