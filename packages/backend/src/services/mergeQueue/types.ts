@@ -227,6 +227,13 @@ export type Action =
    */
   | { kind: 'reset_budgets'; newHeadSha: string; event: EventDraft }
   /**
+   * A new head appeared that the queue's OWN in-flight fix run pushed — advance
+   * the head pointer WITHOUT resetting budgets. Resetting on our own commits
+   * made the retry cap unreachable (fix → push → new head → reset → fix …
+   * forever); only genuine external pushes deserve fresh budgets. See R2.
+   */
+  | { kind: 'adopt_head'; newHeadSha: string; event: EventDraft }
+  /**
    * Re-read the entry + PR row live (still open? still queued? version
    * unchanged?), persist `merging` + merge_started_at, then attempt the REST
    * merge. Aborts without merging if the live re-read fails. The outcome

@@ -454,6 +454,58 @@ describe('decide — new head resets budgets (self-healing)', () => {
   });
 });
 
+// The 2026-07-17 runaway: a "get mergeable" fix run PUSHES commits, which
+// changes the head SHA. Treating that as an external push reset the fix budget,
+// so the retry cap could never bite — fix → push → new head → reset → fix …
+// forever, dispatching thousands of duplicate runs. The head only earns fresh
+// budgets when the change was NOT authored by an in-flight (unaccounted) run.
+describe('decide — a head pushed by our OWN fix run does NOT reset budgets', () => {
+  const conflictAt = (headSha: string) =>
+    pr({ headSha, mergeStateStatus: 'DIRTY' }, { mergeable: 'CONFLICTING', blockingReason: 'merge_conflicts' });
+
+  it('adopts the head (no reset, no new run) while our unaccounted run is still active', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, fixAttempts: 1, headSha: 'sha1' }),
+      conflictAt('sha2'),
+      ctx({ fixTaskState: 'active' })
+    );
+    expect(kinds(d)).toContain('adopt_head');
+    expect(kinds(d)).not.toContain('reset_budgets');
+    expect(fixRun(d)).toBeFalsy(); // an active run holds — never fire a second on top
+  });
+
+  it('accounts the just-finished run against its own push so the cap still bites', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, fixAttempts: 2, headSha: 'sha1' }),
+      conflictAt('sha2'),
+      ctx({ fixTaskState: 'terminal', maxAttempts: 3 })
+    );
+    expect(kinds(d)).toContain('adopt_head');
+    expect(kinds(d)).not.toContain('reset_budgets');
+    const acct = transitions(d).find((t) => t.set?.fixTaskAccounted);
+    expect(acct?.set?.fixAttempts).toBe(3); // 2 → 3 (NOT reset to 0)
+    expect(fixRun(d)).toBeFalsy(); // budget spent → blocked, not re-fired
+  });
+
+  it('still resets on a genuine external push once the fix run is accounted', () => {
+    const d = decide(
+      entry({
+        status: 'blocked',
+        blockedCode: 'attempts_exhausted',
+        fixTaskId: 't1',
+        fixTaskAccounted: true,
+        fixAttempts: 3,
+        headSha: 'sha1',
+      }),
+      conflictAt('sha2'),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    expect(kinds(d)).toContain('reset_budgets');
+    expect(kinds(d)).not.toContain('adopt_head');
+    expect(fixRun(d)).toBeTruthy(); // fresh budget → retry the now-external head
+  });
+});
+
 describe('decide — draft head', () => {
   it('does NOT attempt a merge; blocks with the draft reason and advances', () => {
     const d = decide(entry(), draftPr(), ctx());

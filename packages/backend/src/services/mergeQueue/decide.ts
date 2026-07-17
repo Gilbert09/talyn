@@ -201,7 +201,20 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     entry.headSha !== pr.headSha &&
     entry.status !== 'blocked_manual'
   ) {
-    d.resetBudgets(pr.headSha);
+    // A head-SHA change normally means fresh EXTERNAL code, which deserves
+    // fresh budgets. But the queue's OWN fix run pushes commits too — and
+    // resetting the fix budget on those made the retry cap unreachable: fix →
+    // push → new head → reset → fix … forever for any PR the agent can't land
+    // (the 2026-07-17 runaway: thousands of duplicate fix runs). While a
+    // fired-but-unaccounted fix run is in flight, attribute the new head to
+    // THAT run: advance the pointer but keep the budget so R8 still counts the
+    // attempt. A genuine external push (no unaccounted run) still resets.
+    const causedByOurFixRun = entry.fixTaskId !== null && !entry.fixTaskAccounted;
+    if (causedByOurFixRun) {
+      d.adoptHead(pr.headSha);
+    } else {
+      d.resetBudgets(pr.headSha);
+    }
   }
 
   // R3 — a persisted `merging` with no outcome in this evaluation means a
@@ -908,6 +921,21 @@ class DecisionBuilder {
       this.entry.blockedCode = null;
       this.entry.blockedReason = null;
     }
+  }
+
+  /** Advance the head pointer WITHOUT resetting budgets — the new head came
+   *  from our own in-flight fix run, not an external push (see R2). */
+  adoptHead(newHeadSha: string): void {
+    this.actions.push({
+      kind: 'adopt_head',
+      newHeadSha,
+      event: {
+        code: 'head_advanced_by_fix',
+        message: "New head from the queue's in-flight fix run — advancing without resetting budgets.",
+        detail: { headSha: newHeadSha },
+      },
+    });
+    this.entry.headSha = newHeadSha;
   }
 
   done(verdict: 'hold' | 'advance'): Decision {

@@ -12,13 +12,14 @@
 // may write state unconditionally except record_merged (GitHub having merged
 // is ground truth that must never be lost to a version race).
 
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { buildMergeablePrompt, type PRMergeableSummary } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   mergeQueueEntries,
   mergeQueueEvents,
   pullRequests as pullRequestsTable,
+  tasks as tasksTable,
 } from '../../db/schema.js';
 import { githubService, MergeNotPermittedForAppError } from '../github.js';
 import { fetchUnsignedCommitCount } from '../githubGraphql.js';
@@ -223,6 +224,8 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return applyTransition(action, ctx);
     case 'reset_budgets':
       return applyBudgetReset(action, ctx);
+    case 'adopt_head':
+      return applyAdoptHead(action, ctx);
     case 'verify_merged': {
       ctx.extras.verifiedMerged = await verifyMerged(ctx.pr);
       return { redecide: true };
@@ -539,6 +542,31 @@ async function applyBudgetReset(
   return { entry: next, versionDelta: 1 };
 }
 
+async function applyAdoptHead(
+  action: Extract<Action, { kind: 'adopt_head' }>,
+  ctx: ActionContext
+): Promise<ActionOutcome> {
+  // Only the head pointer moves — budgets and the fix-run link are preserved so
+  // R8 can still account the in-flight run against the commits it just pushed.
+  const next: EntrySnapshot = { ...ctx.entry, headSha: action.newHeadSha };
+  const ok = await casTransition(
+    ctx.entry.id,
+    ctx.version,
+    { headSha: action.newHeadSha, lastEvaluatedAt: new Date() },
+    {
+      trigger: ctx.trigger,
+      fromStatus: ctx.entry.status,
+      toStatus: ctx.entry.status,
+      code: action.event.code,
+      message: action.event.message,
+      detail: action.event.detail,
+    }
+  );
+  if (!ok) return { casLost: true };
+  await mirrorToPrRow(next, ctx.pr, ctx.position);
+  return { entry: next, versionDelta: 1 };
+}
+
 async function probeSignatures(ctx: ActionContext): Promise<ActionOutcome> {
   let count = 0;
   try {
@@ -717,9 +745,42 @@ async function fireFixRun(resign: boolean, ctx: ActionContext): Promise<ActionOu
       detail: { taskId: created.id },
     }
   );
-  if (!ok) return { casLost: true };
+  if (!ok) {
+    // Lost the claim to a concurrent evaluation of this SAME entry (a
+    // cross-replica overlap or a webhook burst — both read fixTaskId=null and
+    // both dispatched). Our task is a confirmed DUPLICATE: cancel it before the
+    // cloud scheduler picks it up. createCloudTask inserts 'queued' and a
+    // separate scheduler dispatches on its next tick, so cancelling while still
+    // undispatched prevents the vendor run entirely — no wasted compute, no
+    // orphan pushing stray commits (the 2026-07-17 duplicate burst).
+    await cancelUndispatchedFixTask(created.id);
+    return { casLost: true };
+  }
   await mirrorToPrRow(next, ctx.pr, ctx.position);
   return { entry: next, versionDelta: 1 };
+}
+
+/** Cancel a just-created fix task that lost the entry claim, but only while it
+ *  is still undispatched — if the scheduler already promoted it to in_progress
+ *  in the microsecond window, leave it (the poller owns its lifecycle). */
+async function cancelUndispatchedFixTask(taskId: string): Promise<void> {
+  try {
+    const now = new Date();
+    await getDbClient()
+      .update(tasksTable)
+      .set({
+        status: 'cancelled',
+        result: {
+          success: false,
+          error: 'Duplicate merge-queue fix run — superseded by a concurrent dispatch.',
+        },
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(tasksTable.id, taskId), inArray(tasksTable.status, ['queued', 'pending'])));
+  } catch (err) {
+    console.warn(`[mergeQueueV2] failed to cancel duplicate fix task ${taskId}:`, err);
+  }
 }
 
 async function ensureQueuedDeferred(
