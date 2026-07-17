@@ -794,7 +794,6 @@ function QueueCell({ row }: { row: PRRow }) {
   const chip = (() => {
     if (v2) {
       const budgets = v2.budgets;
-      const fixLabel = budgets ? ` (${budgets.fixRuns[0]}/${budgets.fixRuns[1]})` : '';
       switch (v2.status) {
         case 'automerge_armed':
           return (
@@ -830,16 +829,26 @@ function QueueCell({ row }: { row: PRRow }) {
               Waiting for review
             </span>
           );
-        case 'fixing':
+        case 'fixing': {
+          // Budgets count attempts SPENT (a run only burns budget when it
+          // ends without fixing the PR), so show the in-progress attempt as
+          // spent+1 — "Fixing (1/3)" during the first run, not (0/3).
+          // Re-sign runs already count at dispatch; show their budget as-is.
+          const resign = v2.fixKind === 'resign';
+          const [used, max] = resign
+            ? (budgets?.resigns ?? [0, 3])
+            : (budgets?.fixRuns ?? [0, 3]);
+          const attempt = resign ? Math.max(used, 1) : Math.min(used + 1, max);
           return (
             <span
               className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-400"
-              title={`A cloud fix run is working this PR${fixLabel ? ` — attempt${fixLabel} on the current head` : ''}`}
+              title={`A cloud ${resign ? 're-sign' : 'fix'} run is working this PR — attempt ${attempt} of ${max} on the current head`}
             >
               <Loader2 className="h-3 w-3 animate-spin" />
-              Fixing{fixLabel}
+              {resign ? 'Re-signing' : 'Fixing'} ({attempt}/{max})
             </span>
           );
+        }
         case 'merging':
           return (
             <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400">

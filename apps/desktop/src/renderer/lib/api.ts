@@ -590,6 +590,8 @@ export interface MergeQueuePublic {
   blockedCode?: string | null;
   /** Actionable reason when blocked/blocked_manual. */
   reason?: string;
+  /** Flavor of the in-flight fix run when status === 'fixing'. */
+  fixKind?: 'blockers' | 'resign';
   /** Short sha the retry budgets are scoped to (reset on every push). */
   headShaShort?: string;
   budgets?: {

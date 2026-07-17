@@ -64,6 +64,9 @@ export function toPublicMergeQueue(
     position,
     blockedCode: entry.blockedCode,
     reason: entry.blockedReason ?? undefined,
+    /** Which flavor the in-flight fix run is — lets the UI label a 'fixing'
+     *  entry as Re-signing vs Fixing and pick the matching budget. */
+    fixKind: entry.fixKind ?? undefined,
     headShaShort: entry.headSha ? entry.headSha.slice(0, 7) : undefined,
     budgets: {
       fixRuns: [entry.fixAttempts, 3],
