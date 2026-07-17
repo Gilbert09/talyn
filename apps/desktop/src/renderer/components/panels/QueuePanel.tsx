@@ -848,6 +848,9 @@ function PRStatusPillForTask({
       checks={summary.checks}
       state={state}
       onClick={onOpen}
+      // All-in-one pill (no separate review column): the decision keeps an
+      // approved-but-protection-held PR from reading as "Review".
+      reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision}
     />
   );
 }

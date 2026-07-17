@@ -7,6 +7,7 @@ import {
   GitMerge,
   Eye,
   HelpCircle,
+  ShieldAlert,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
@@ -57,6 +58,14 @@ interface PRStatusPillProps {
    * its all-in-one rollup.
    */
   hideReviewState?: boolean;
+  /**
+   * The PR's review decision (effective preferred). Disambiguates the
+   * 'blocked' verdict: GitHub reports mergeStateStatus BLOCKED both for a
+   * missing required review AND for other branch-protection holds (required
+   * signatures, merge restrictions). On an APPROVED PR the "Review" label
+   * would be a lie — it renders as "Protected" instead.
+   */
+  reviewDecision?: string | null;
   className?: string;
 }
 
@@ -78,11 +87,13 @@ export function PRStatusPill({
   onClick,
   compact = false,
   hideReviewState = false,
+  reviewDecision,
   className,
 }: PRStatusPillProps) {
   const terminal = terminalVariant(state);
   const variant =
-    terminal ?? pickVariant(blockingReason, checks, hideReviewState, mergeStateStatus);
+    terminal ??
+    pickVariant(blockingReason, checks, hideReviewState, mergeStateStatus, reviewDecision);
   const Icon = variant.icon;
   // A merged/closed PR's check rollup is no longer meaningful.
   const showRollup = !terminal && !compact && checks.total > 0;
@@ -91,7 +102,7 @@ export function PRStatusPill({
     <button
       type="button"
       onClick={onClick}
-      title={terminal ? terminal.label : titleFor(blockingReason, checks)}
+      title={terminal ? terminal.label : titleFor(blockingReason, checks, reviewDecision)}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
         toneClass(variant.tone),
@@ -185,7 +196,8 @@ function pickVariant(
   blockingReason: PRBlockingReason,
   checks: PRChecks,
   hideReviewState = false,
-  mergeStateStatus?: string
+  mergeStateStatus?: string,
+  reviewDecision?: string | null
 ): PillVariant {
   // When approval lives in its own column, the review-related verdicts
   // ('changes_requested', 'blocked'-on-review) shouldn't drive this pill
@@ -297,6 +309,13 @@ function pickVariant(
           spin: true,
         };
       }
+      // BLOCKED covers every branch-protection hold, not just reviews. On an
+      // already-APPROVED PR the hold is something else (required signatures,
+      // merge restrictions, GitHub's own merge queue) — "Review" would be a
+      // lie there (the 2026-07-17 merge-queue-page report). Say "Protected".
+      if (reviewDecision === 'APPROVED') {
+        return { icon: ShieldAlert, label: 'Protected', tone: 'amber' };
+      }
       return { icon: Eye, label: 'Review', tone: 'amber' };
     case 'unknown':
     default:
@@ -304,12 +323,20 @@ function pickVariant(
   }
 }
 
-function titleFor(blockingReason: PRBlockingReason, checks: PRChecks): string {
+function titleFor(
+  blockingReason: PRBlockingReason,
+  checks: PRChecks,
+  reviewDecision?: string | null
+): string {
   const checkSummary =
     checks.total === 0
       ? 'no checks'
       : `${checks.passed} passed · ${checks.failed} failed · ${checks.inProgress} running · ${checks.skipped} skipped`;
-  return `${humanReason(blockingReason)} · ${checkSummary}`;
+  const reason =
+    blockingReason === 'blocked' && reviewDecision === 'APPROVED'
+      ? 'Approved, but held by branch protection (required signatures / merge restrictions)'
+      : humanReason(blockingReason);
+  return `${reason} · ${checkSummary}`;
 }
 
 function humanReason(b: PRBlockingReason): string {

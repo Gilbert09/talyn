@@ -554,6 +554,10 @@ function PRTableRow({
               checks={summary.checks}
               mergeStateStatus={summary.mergeStateStatus}
               state={row.state}
+              // The queue page has no separate review column, so this pill
+              // carries the review verdict too — the decision disambiguates
+              // 'blocked' (approved-but-protected must not read "Review").
+              reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision}
             />
           </td>
         </>
