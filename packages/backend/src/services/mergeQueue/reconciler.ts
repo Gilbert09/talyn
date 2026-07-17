@@ -71,9 +71,13 @@ class MergeQueueReconciler {
         summaryText = 'merge_queue_reconcile tick skipped — v1 engine active (dormant)';
         return;
       }
+      // The lock transaction covers ONLY the cheap DB work — the pending
+      // disarms make GitHub calls and run AFTER it, so no pool connection is
+      // ever pinned across network I/O (the eager-mode pool-starvation
+      // lesson; disarms are idempotent, so a deploy-overlap double-run is
+      // harmless).
       const lock = await guardCrossReplica('mergeQueueV2:reconcile', async () => {
         const healed = await this.healOrphans();
-        const disarmed = await this.retryPendingDisarms();
         const groups = await loadStaleGroups({
           mergingStaleMs: MERGING_STALE_MS,
           evaluatedStaleMs: EVALUATED_STALE_MS,
@@ -82,13 +86,14 @@ class MergeQueueReconciler {
           scheduleGroupEvaluation(g.repositoryId, g.baseBranch, 'reconcile');
         }
         const pruned = await pruneTerminalEntries(PRUNE_TERMINAL_DAYS);
-        return { healed, disarmed, groups: groups.length, pruned };
+        return { healed, groups: groups.length, pruned };
       });
+      const disarmed = lock.acquired ? await this.retryPendingDisarms() : 0;
       summaryText = !lock.acquired
         ? 'merge_queue_reconcile tick skipped — advisory lock held by another instance'
         : `merge_queue_reconcile — ${lock.result!.groups} stale group(s) scheduled` +
           (lock.result!.healed ? `, ${lock.result!.healed} orphan(s) healed` : '') +
-          (lock.result!.disarmed ? `, ${lock.result!.disarmed} pending disarm(s) retried` : '') +
+          (disarmed ? `, ${disarmed} pending disarm(s) retried` : '') +
           (lock.result!.pruned ? `, ${lock.result!.pruned} terminal entr(ies) pruned` : '');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

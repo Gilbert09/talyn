@@ -2,9 +2,12 @@
 //
 // Evaluation is per-(repo, base) GROUP, triggered by events (fresh snapshot,
 // check flush, task terminal, membership change) and by the reconciler. There
-// is NO global tick and NO global lock: distinct groups evaluate fully in
-// parallel, a hung evaluation stalls only its own group (45s timeout + CAS
-// guards), and cross-replica safety is a per-group advisory lock.
+// is NO global tick and NO lock at all: distinct groups evaluate fully in
+// parallel, a hung evaluation stalls only its own group (45s timeout), and
+// concurrency safety — in-process AND cross-replica — is the CAS version on
+// every entry write (see evaluateGroupOnce for why an advisory lock here was
+// removed: it pinned a pool connection across GitHub calls and starved
+// Supavisor under load).
 //
 // The walk itself carries v1's hard-won semantics verbatim: FIFO from the
 // head, `hold` consumes the group's turn (one same-base merge in flight),
@@ -14,7 +17,6 @@
 import { inArray } from 'drizzle-orm';
 import { getPoolDbClient, runWithoutScope } from '../../db/client.js';
 import { pullRequests as pullRequestsTable } from '../../db/schema.js';
-import { guardCrossReplica } from '../advisoryLock.js';
 import { githubService } from '../github.js';
 import { githubRateGate } from '../githubRateGate.js';
 import { debugBus } from '../debugBus.js';
@@ -136,18 +138,23 @@ async function evaluateGroupOnce(
   trigger: string
 ): Promise<void> {
   if (!(await mergeQueueV2Active())) return;
-  const outcome = await guardCrossReplica(`mqv2:group:${repositoryId}:${baseBranch}`, () =>
-    withTimeout(
-      walkGroup(repositoryId, baseBranch, trigger),
-      GROUP_EVALUATION_TIMEOUT_MS,
-      `${repositoryId}|${baseBranch}`
-    )
+  // NO advisory lock here — deliberately. The per-group lock this originally
+  // held was a POOL TRANSACTION spanning the entire walk, which in eager mode
+  // includes GitHub merge PUTs, signing/capability probes, and cloud-task
+  // dispatches: tens of seconds per evaluation, evaluation after evaluation.
+  // Under a real backlog that pinned enough Supavisor connections to starve
+  // the pool (dbWatchdog probes >3s, webhook/sweep upserts stalling — the
+  // 2026-07-17 stale-merged-rows incident). Cross-replica overlap during a
+  // deploy doesn't need the lock for correctness: every pipeline write is a
+  // CAS on entry.version (a losing evaluation stops at casLost), merges are
+  // guarded by verify-live + verify-merged, and fix-run dispatch dedupes via
+  // the shared task guards. Worst case, the seconds-long overlap wastes a few
+  // duplicate reads.
+  await withTimeout(
+    walkGroup(repositoryId, baseBranch, trigger),
+    GROUP_EVALUATION_TIMEOUT_MS,
+    `${repositoryId}|${baseBranch}`
   );
-  if (!outcome.acquired) {
-    // Another replica is evaluating this group right now — drop the trigger;
-    // its own triggers + the reconciler cover this group.
-    return;
-  }
 }
 
 async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T | void> {
