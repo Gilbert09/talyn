@@ -122,6 +122,43 @@ const DISABLE_MUTATION = `mutation DisableAutoMerge($pullRequestId: ID!) {
   }
 }`;
 
+const READY_FOR_REVIEW_MUTATION = `mutation MarkReady($pullRequestId: ID!) {
+  markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+    pullRequest { isDraft }
+  }
+}`;
+
+/**
+ * Take a draft PR out of draft so the queue can merge it — GitHub 405s a draft
+ * merge. GraphQL-only (there's no REST equivalent). Best-effort + idempotent:
+ * a PR that's already ready ("not a draft") reports success, so a stale-cache
+ * false positive is harmless. `false` only on a real failure (permissions,
+ * network) — the caller keeps the PR queued and decide()'s draft block still
+ * surfaces the manual action.
+ */
+export async function markReadyForReview(opts: {
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  nodeId: string;
+}): Promise<boolean> {
+  try {
+    await githubService.executeGraphql(opts.workspaceId, READY_FOR_REVIEW_MUTATION, {
+      pullRequestId: opts.nodeId,
+    });
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Already ready for review / not a draft → nothing to do; treat as done.
+    if (/not a draft|already.*ready|ready for review/i.test(message)) return true;
+    console.warn(
+      `[githubAutoMerge] mark-ready-for-review failed for ${opts.owner}/${opts.repo}:`,
+      message
+    );
+    return false;
+  }
+}
+
 export type ArmResult =
   | { armed: true }
   /**

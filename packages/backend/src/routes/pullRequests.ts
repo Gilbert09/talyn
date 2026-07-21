@@ -34,7 +34,8 @@ import {
   rowToEntrySnapshot,
 } from '../services/mergeQueue/store.js';
 import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
-import { disableAutoMerge } from '../services/githubAutoMerge.js';
+import { disableAutoMerge, markReadyForReview } from '../services/githubAutoMerge.js';
+import { prMonitorService } from '../services/prMonitor.js';
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import type { MergeMethod } from '../services/mergeQueue/types.js';
 import {
@@ -624,6 +625,40 @@ export function pullRequestRoutes(): Router {
         `[pullRequests] merge-queue entry dual-write failed for ${row.owner}/${row.repo}#${row.number}:`,
         err instanceof Error ? err.message : err
       );
+    }
+
+    // Queuing a draft PR: GitHub 405s a draft merge, so a queued draft would
+    // just sit blocked waiting on the author. Since queuing IS the intent to
+    // merge, mark it ready for review now. Best-effort — on success we refresh
+    // the cached summary so the kick below merges without waiting for the
+    // ready_for_review webhook; on failure decide()'s draft block still surfaces
+    // the manual action.
+    if (enabled) {
+      const summary = row.lastSummary as
+        | { draft?: boolean; nodeId?: string; mergeStateStatus?: string }
+        | null;
+      const isDraftPr = summary?.draft === true || summary?.mergeStateStatus === 'DRAFT';
+      if (isDraftPr && summary?.nodeId) {
+        const ready = await markReadyForReview({
+          workspaceId: row.workspaceId,
+          owner: row.owner,
+          repo: row.repo,
+          nodeId: summary.nodeId,
+        });
+        if (ready) {
+          await prMonitorService
+            .refreshPr(row.workspaceId, row.owner, row.repo, row.number, {
+              resolveMergeable: true,
+              repositoryId: row.repositoryId,
+            })
+            .catch((err) => {
+              console.warn(
+                `[pullRequests] post-ready refresh failed for ${row.owner}/${row.repo}#${row.number}:`,
+                err instanceof Error ? err.message : err
+              );
+            });
+        }
+      }
     }
 
     // When disabling, the row is no longer in the queue so the group rebroadcast
