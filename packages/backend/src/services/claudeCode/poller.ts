@@ -27,6 +27,32 @@ import {
 
 const TRANSCRIPT_MAX_EVENTS = 2000;
 
+/**
+ * Each persist REWRITES the whole transcript jsonb array (full re-TOAST + WAL +
+ * dead tuple), so while a watched run streams we debounce the DB write to at
+ * most once per window — a big saving on the Supabase disk-IO budget. Events
+ * still emit to the UI live every tick regardless; only the durable snapshot
+ * lags. A terminal tick forces an immediate final flush.
+ */
+const PERSIST_INTERVAL_MS = 45_000;
+
+/**
+ * Decide whether to rewrite the transcript blob this tick. Skip when the DB is
+ * already current (`length === persistedCount`), or when the debounce window
+ * hasn't elapsed — unless `force` (a terminal tick) demands a final flush.
+ * Pure so the debounce truth table is unit-testable.
+ */
+export function shouldPersistTranscript(opts: {
+  length: number;
+  persistedCount: number;
+  lastPersistAt: number;
+  now: number;
+  force: boolean;
+}): boolean {
+  if (opts.length === opts.persistedCount) return false;
+  return opts.force || opts.now - opts.lastPersistAt >= PERSIST_INTERVAL_MS;
+}
+
 /** The stop reasons we treat as "still working" rather than terminal. The
  *  vendor resumes a `pause_turn` (a long turn paused server-side) on its own. */
 const NON_TERMINAL_STOP_REASONS = new Set(['pause_turn']);
@@ -71,9 +97,15 @@ export function isManagedRunSuccess(stopType: string | null, hasPr: boolean): bo
  * the full job each tick.
  */
 class ClaudeCodePoller {
-  /** taskId → count of transcript events already persisted+emitted (in-memory
-   *  cursor; avoids re-writing/re-emitting an unchanged transcript each tick). */
+  /** taskId → count of transcript events already emitted over WS (in-memory
+   *  cursor; avoids re-emitting an unchanged transcript each tick). */
   private emitted = new Map<string, number>();
+  /** taskId → count of transcript events already persisted to the DB. Trails
+   *  {@link emitted} because the durable write is debounced (PERSIST_INTERVAL_MS)
+   *  while WS emits stay live — so a poll can advance `emitted` without a write. */
+  private persisted = new Map<string, number>();
+  /** taskId → last DB persist time (ms) for the debounce. */
+  private lastPersistAt = new Map<string, number>();
 
   /** Entry point the generic cloud poller calls via the provider wrapper. */
   async reconcileTask(row: CloudTaskRow): Promise<void> {
@@ -121,7 +153,9 @@ class ClaudeCodePoller {
     let prUrl = cloud.prUrl ?? null;
     if (fetchedEvents) {
       prUrl = findPullRequestUrl(events) ?? prUrl;
-      await this.syncTranscript(row.id, row.workspaceId, events);
+      // Force a final durable flush on the terminal tick; otherwise let the
+      // debounce coalesce mid-run writes.
+      await this.syncTranscript(row.id, row.workspaceId, events, terminal);
     }
 
     await patchTaskMetadata(row.id, (existing) => {
@@ -172,16 +206,33 @@ class ClaudeCodePoller {
     taskId: string,
     workspaceId: string,
     rawEvents: ManagedAgentEvent[],
+    force: boolean,
   ): Promise<void> {
     const inputs = managedAgentEventsToAgentEvents(rawEvents);
-    const prevCount = this.emitted.get(taskId) ?? 0;
-    if (inputs.length <= prevCount) return; // nothing new — skip the write
-
     const transcript: AgentEvent[] = inputs.map((input, i) => ({ ...input, seq: i }) as AgentEvent);
-    for (let i = prevCount; i < transcript.length; i += 1) {
-      emitTaskEvent(workspaceId, taskId, transcript[i]);
+
+    // Live path: emit anything past the WS cursor every tick, cheaply.
+    const emittedCount = this.emitted.get(taskId) ?? 0;
+    if (transcript.length > emittedCount) {
+      for (let i = emittedCount; i < transcript.length; i += 1) {
+        emitTaskEvent(workspaceId, taskId, transcript[i]);
+      }
+      this.emitted.set(taskId, transcript.length);
     }
-    this.emitted.set(taskId, transcript.length);
+
+    // Durable path: skip the full-array rewrite when the DB is already current,
+    // or when the debounce window hasn't elapsed (unless forced at terminal).
+    const now = Date.now();
+    const persist = shouldPersistTranscript({
+      length: transcript.length,
+      persistedCount: this.persisted.get(taskId) ?? 0,
+      lastPersistAt: this.lastPersistAt.get(taskId) ?? 0,
+      now,
+      force,
+    });
+    if (!persist) return;
+    this.lastPersistAt.set(taskId, now);
+    this.persisted.set(taskId, transcript.length);
     await this.persist(taskId, transcript);
   }
 
@@ -204,9 +255,11 @@ class ClaudeCodePoller {
       .where(eq(tasksTable.id, taskId));
   }
 
-  /** Drop the in-memory transcript cursor for a task (stop/delete). */
+  /** Drop the in-memory transcript cursors for a task (stop/delete). */
   stopStreaming(taskId: string): void {
     this.emitted.delete(taskId);
+    this.persisted.delete(taskId);
+    this.lastPersistAt.delete(taskId);
   }
 
   private async linkPr(
@@ -263,6 +316,8 @@ class ClaudeCodePoller {
     result: TaskResult,
   ): Promise<void> {
     this.emitted.delete(taskId);
+    this.persisted.delete(taskId);
+    this.lastPersistAt.delete(taskId);
     clearWatched(taskId);
     const now = new Date();
     await getDbClient()

@@ -2,7 +2,40 @@ import { describe, it, expect } from 'vitest';
 import {
   isManagedSessionTerminal,
   isManagedRunSuccess,
+  shouldPersistTranscript,
 } from '../services/claudeCode/poller.js';
+
+const WINDOW = 45_000;
+
+describe('shouldPersistTranscript (transcript write debounce)', () => {
+  it('never writes when the DB is already current', () => {
+    // Even a terminal tick is a no-op when nothing is unpersisted.
+    expect(
+      shouldPersistTranscript({ length: 5, persistedCount: 5, lastPersistAt: 0, now: 1e9, force: true }),
+    ).toBe(false);
+    expect(
+      shouldPersistTranscript({ length: 5, persistedCount: 5, lastPersistAt: 0, now: 1e9, force: false }),
+    ).toBe(false);
+  });
+
+  it('debounces mid-run writes within the window', () => {
+    expect(
+      shouldPersistTranscript({ length: 6, persistedCount: 5, lastPersistAt: 1000, now: 1000 + WINDOW - 1, force: false }),
+    ).toBe(false);
+  });
+
+  it('writes once the window has elapsed', () => {
+    expect(
+      shouldPersistTranscript({ length: 6, persistedCount: 5, lastPersistAt: 1000, now: 1000 + WINDOW, force: false }),
+    ).toBe(true);
+  });
+
+  it('forces a flush at terminal even inside the window, when there is unpersisted data', () => {
+    expect(
+      shouldPersistTranscript({ length: 6, persistedCount: 5, lastPersistAt: 1000, now: 1001, force: true }),
+    ).toBe(true);
+  });
+});
 
 describe('isManagedSessionTerminal', () => {
   it('is NOT terminal while running', () => {

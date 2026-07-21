@@ -29,12 +29,15 @@ import type { PostHogCodeClient } from './client.js';
  */
 
 /**
- * Transcript writes ship the WHOLE jsonb array (Supabase egress), so the
- * flush is debounced by time rather than event count — a token-level
- * burst coalesces into one write per window. The stream-end tail and
- * `flushNow()` cover anything still buffered.
+ * Each persist REWRITES the WHOLE jsonb array — a full re-TOAST + WAL record +
+ * dead tuple every time, the dominant consumer of the Supabase disk-IO budget
+ * on an active run. So the flush is debounced by time rather than event count:
+ * a token-level burst coalesces into one write per window. Events still stream
+ * to the UI live via `emitTaskEvent` regardless — the DB blob is only the
+ * durable snapshot, so a longer window costs nothing perceptible. The
+ * stream-end tail and `flushNow()` cover anything still buffered at the end.
  */
-const PERSIST_INTERVAL_MS = 10_000;
+const PERSIST_INTERVAL_MS = 45_000;
 const TRANSCRIPT_MAX_EVENTS = 2000;
 const MAX_RECONNECTS = 5;
 const RECONNECT_DELAY_MS = 1500;

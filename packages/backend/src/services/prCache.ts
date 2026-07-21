@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
@@ -628,6 +629,19 @@ async function upsertRow(
   }
   if (opts.existingId) {
     // Update path — leave taskId alone (set on first insert only).
+    // Disk-IO guard: most polls yield byte-identical content. Compare a cheap
+    // stored digest (one small text column) and skip rewriting the ~2 KB
+    // TOASTed `last_summary` + its cursor columns when nothing changed — the
+    // poll then bumps only the TTL timestamp, saving the WAL + TOAST churn.
+    const digest = summaryDigest(lastSummary, cursors);
+    const prevDigest = (
+      await db
+        .select({ digest: pullRequestsTable.lastSummaryDigest })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, opts.existingId))
+        .limit(1)
+    )[0]?.digest;
+    const summaryChanged = prevDigest !== digest;
     await db
       .update(pullRequestsTable)
       .set({
@@ -636,11 +650,16 @@ async function upsertRow(
         state: opts.summary.state,
         mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
         lastPolledAt: now,
-        lastSummary,
-        lastReviewId: cursors.lastReviewId,
-        lastReviewCommentId: cursors.lastReviewCommentId,
-        lastCommentId: cursors.lastCommentId,
-        lastCheckDigest: cursors.lastCheckDigest,
+        ...(summaryChanged
+          ? {
+              lastSummary,
+              lastReviewId: cursors.lastReviewId,
+              lastReviewCommentId: cursors.lastReviewCommentId,
+              lastCommentId: cursors.lastCommentId,
+              lastCheckDigest: cursors.lastCheckDigest,
+              lastSummaryDigest: digest,
+            }
+          : {}),
         // Only the monitor knows the relationship — leave it untouched on
         // refresh paths (detail refresh, merge) that don't pass it.
         ...(opts.reviewRequested === undefined
@@ -669,6 +688,7 @@ async function upsertRow(
       lastReviewCommentId: cursors.lastReviewCommentId,
       lastCommentId: cursors.lastCommentId,
       lastCheckDigest: cursors.lastCheckDigest,
+      lastSummaryDigest: summaryDigest(lastSummary, cursors),
       autoKeepMergeable,
       autoMergeState,
       createdAt: now,
@@ -716,6 +736,30 @@ async function readRowTaskId(db: Database, id: string): Promise<string | null> {
     .where(eq(pullRequestsTable.id, id))
     .limit(1);
   return rows[0]?.taskId ?? null;
+}
+
+/**
+ * Stable digest of the fields whose write is expensive — the TOASTed
+ * `last_summary` blob plus its four derived cursor columns. `upsertRow` stores
+ * it alongside the row and compares against it on the next poll, so a poll that
+ * yields byte-identical content can skip rewriting the blob (and re-TOASTing
+ * ~2 KB) and bump only the TTL timestamp. Order is fixed so the hash is stable.
+ */
+export function summaryDigest(
+  lastSummary: Record<string, unknown>,
+  cursors: CursorState
+): string {
+  return createHash('sha1')
+    .update(
+      JSON.stringify([
+        lastSummary,
+        cursors.lastReviewId,
+        cursors.lastReviewCommentId,
+        cursors.lastCommentId,
+        cursors.lastCheckDigest,
+      ])
+    )
+    .digest('hex');
 }
 
 function nextCursors(summary: PRSummary): CursorState {

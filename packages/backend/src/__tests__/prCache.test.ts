@@ -413,6 +413,83 @@ describe('prCache — DB integration', () => {
     ).toBe('Renamed');
   });
 
+  describe('last_summary write guard (disk-IO)', () => {
+    async function readFullRow(): Promise<
+      typeof pullRequestsTable.$inferSelect
+    > {
+      return (await db.select().from(pullRequestsTable))[0];
+    }
+
+    it('populates last_summary_digest on the insert path', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary(),
+      });
+      const row = await readFullRow();
+      expect(row.lastSummaryDigest).toBeTruthy();
+    });
+
+    it('skips rewriting last_summary when content is unchanged, but still advances last_polled_at', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary(),
+      });
+      const before = await readFullRow();
+      // Poison the stored blob + backdate the TTL. If the guard holds, an
+      // identical re-upsert must NOT rewrite last_summary (sentinel survives)
+      // yet must still bump last_polled_at.
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: { sentinel: true }, lastPolledAt: new Date(0) })
+        .where(eq(pullRequestsTable.id, before.id));
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary(),
+      });
+      const after = await readFullRow();
+      expect((after.lastSummary as { sentinel?: boolean }).sentinel).toBe(true);
+      expect(after.lastPolledAt.getTime()).toBeGreaterThan(0);
+      expect(after.lastSummaryDigest).toBe(before.lastSummaryDigest);
+    });
+
+    it('rewrites last_summary + digest when content changes', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary(),
+      });
+      const before = await readFullRow();
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ title: 'Changed' }),
+      });
+      const after = await readFullRow();
+      expect(after.lastSummaryDigest).not.toBe(before.lastSummaryDigest);
+      expect((after.lastSummary as { title: string }).title).toBe('Changed');
+    });
+
+    it('detects a check-only transition (digest covers the check cursor)', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ checkDigest: 'sha1:a=pending' }),
+      });
+      const before = await readFullRow();
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ checkDigest: 'sha1:a=success' }),
+      });
+      const after = await readFullRow();
+      expect(after.lastSummaryDigest).not.toBe(before.lastSummaryDigest);
+      expect(after.lastCheckDigest).toBe('sha1:a=success');
+    });
+  });
+
   describe('auto-keep mergeable default', () => {
     async function setDefault(on: boolean): Promise<void> {
       await db

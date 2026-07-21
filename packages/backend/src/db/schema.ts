@@ -420,6 +420,14 @@ export const pullRequests = pgTable(
      * whole rollup payload.
      */
     lastCheckDigest: text('last_check_digest'),
+    /**
+     * SHA-1 of the `last_summary` blob + the four event cursors. Lets the
+     * poller skip re-writing the ~2 KB TOASTed `last_summary` (and its cursor
+     * columns) when a poll produced byte-identical content — it then bumps only
+     * the TTL timestamp, avoiding the WAL + TOAST churn that was depleting the
+     * Supabase disk-IO budget. NULL until the first post-migration poll.
+     */
+    lastSummaryDigest: text('last_summary_digest'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

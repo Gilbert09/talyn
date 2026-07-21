@@ -871,6 +871,7 @@ interface PullRequestRow {
   lastReviewCommentId: string | null;
   lastCommentId: string | null;
   lastCheckDigest: string | null;
+  lastSummaryDigest: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
