@@ -196,6 +196,63 @@ describe('decide — merge aftermath', () => {
     );
     expect(kinds(d)).toEqual(['record_merged']);
   });
+
+  it('terminal-blocks (blocked_manual/external_gate) on a "Cannot update this protected ref" refusal', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({
+        mergeOutcome: { kind: 'error', message: 'Cannot update this protected ref' },
+        verifiedMerged: false,
+      })
+    );
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked_manual');
+    expect(t.blockedCode).toBe('external_gate');
+    expect(t.set?.lastError).toContain('protected ref');
+    // Never retries or refetches to loop again — it just blocks + notifies once.
+    expect(kinds(d)).toContain('notify_blocked');
+    expect(kinds(d)).not.toContain('refresh_snapshot');
+    expect(kinds(d)).not.toContain('fire_fix_run');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('treats a native/third-party merge-queue refusal the same way', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({
+        mergeOutcome: { kind: 'error', message: 'Merge queue is required for this branch' },
+        verifiedMerged: false,
+      })
+    );
+    expect(lastTransition(d)!.blockedCode).toBe('external_gate');
+  });
+
+  it('still verifies-merged first — a protected-ref message on an already-merged PR records the merge', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({
+        mergeOutcome: { kind: 'error', message: 'Cannot update this protected ref' },
+        verifiedMerged: true,
+      })
+    );
+    expect(kinds(d)).toEqual(['record_merged']);
+  });
+
+  it('does NOT mistake an ordinary conflict for an external gate (stays queued, refetches)', () => {
+    const d = decide(
+      entry({ status: 'merging' }),
+      cleanPr(),
+      ctx({
+        mergeOutcome: { kind: 'error', message: 'Pull Request has merge conflicts' },
+        verifiedMerged: false,
+      })
+    );
+    expect(lastTransition(d)!.to).toBe('queued');
+    expect(kinds(d)).toContain('refresh_snapshot');
+  });
 });
 
 describe('decide — verify-merged recovery (crashed mid-merge)', () => {

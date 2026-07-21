@@ -27,6 +27,25 @@ import type {
 export const DRAFT_BLOCK_REASON =
   'This PR is a draft — mark it ready for review and the merge queue will merge it automatically.';
 
+export const EXTERNAL_GATE_BLOCK_REASON =
+  'This branch is governed by an external merge queue or protected-ref rule Talyn ' +
+  "can't bypass (GitHub's native merge queue, trunk.io, or a restrictive ruleset). " +
+  'Merge it through that system, or remove it from the queue.';
+
+/**
+ * A merge refusal Talyn can never satisfy by retrying or fixing: the base
+ * branch requires merging through an external gate (GitHub's native merge
+ * queue, a third-party queue like trunk.io, or a restrictive protected-ref
+ * ruleset). GitHub 405s the direct merge with "Cannot update this protected
+ * ref". This is only tested AFTER a clean-looking merge attempt was refused, so
+ * the phrase unambiguously means an unbypassable gate here — a genuinely
+ * fixable blocker (conflict, failing check, unsigned commits) is caught upstream
+ * and never reaches the merge call.
+ */
+export function isExternalMergeGateError(message: string | undefined): boolean {
+  return message !== undefined && /protected ref|merge queue/i.test(message);
+}
+
 /**
  * The blocked-badge reason for an App-refused merge over failing head checks,
  * matched to why the automatic re-run couldn't save it. Ported verbatim from
@@ -716,6 +735,29 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
 
   if (outcome.kind === 'refused_app') {
     return decideAppRefusal(d, pr, ctx, outcome.message);
+  }
+
+  // External merge gate (native merge queue, trunk.io, restrictive ruleset):
+  // GitHub 405s with "Cannot update this protected ref". Retrying or firing a
+  // fix run can NEVER satisfy it, and the generic re-queue below would loop it
+  // forever (burning fix runs). Terminal-block manually — keeps it listed, no
+  // more attempts; dequeue/requeue is the only exit.
+  if (isExternalMergeGateError(outcome.message)) {
+    d.transition('blocked_manual', {
+      blockedCode: 'external_gate',
+      blockedReason: EXTERNAL_GATE_BLOCK_REASON,
+      set: {
+        lastError: outcome.message || 'Cannot update this protected ref',
+        lastErrorAt: ctx.nowIso,
+      },
+      event: {
+        code: 'external_merge_gate',
+        message:
+          'Merge blocked by an external merge queue / protected ref — Talyn cannot merge this PR.',
+      },
+    });
+    d.act({ kind: 'notify_blocked' });
+    return d.done('advance');
   }
 
   // not_merged (bounced: lost a race, now behind) or a real rejection (405

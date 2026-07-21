@@ -76,7 +76,16 @@ export type BlockedCode =
    * only. A fix run cannot grant merge permission (the fix-run-churn incident),
    * so nothing is dispatched.
    */
-  | 'app_refused_hard';
+  | 'app_refused_hard'
+  /**
+   * The base branch is governed by an EXTERNAL merge gate Talyn can't bypass —
+   * GitHub's native merge queue, a third-party queue (trunk.io), or a
+   * protected-ref ruleset. GitHub 405s the direct merge with "Cannot update
+   * this protected ref". `blocked_manual` only: retrying or firing a fix run
+   * can never satisfy it — the PR must be merged through that system. Only
+   * dequeue/requeue clears it.
+   */
+  | 'external_gate';
 
 export type FixKind = 'blockers' | 'resign';
 
