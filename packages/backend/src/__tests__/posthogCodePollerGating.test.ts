@@ -47,6 +47,8 @@ function row(overrides: Partial<CloudTaskRow> = {}): CloudTaskRow {
     metadata: { posthogTaskId: 'pt', posthogRunId: 'pr' },
     transcriptEmpty: true,
     watched: false,
+    status: 'in_progress',
+    completedAt: null,
     ...overrides,
   };
 }

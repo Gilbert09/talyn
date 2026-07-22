@@ -49,6 +49,8 @@ const IDLE_TAIL_WINDOW_MS = 5 * 60 * 1000;
 class PostHogCodePoller {
   /** Per-task throttle for the idle-confirmation log fetch (taskId → ms). */
   private lastIdleCheck = new Map<string, number>();
+  /** Per-task throttle for the resume re-check of an idle-finalized task. */
+  private lastReviveCheck = new Map<string, number>();
 
   // NOTE: this poller no longer drives its own `setInterval` loop. The generic
   // cloud-task scheduler (`cloudProviders/poller.ts`) loads in-flight tasks and
@@ -72,6 +74,8 @@ class PostHogCodePoller {
       repositoryId: row.repositoryId,
       posthogTaskId,
       lastStatus: row.metadata.posthogStatus as string | undefined,
+      localStatus: row.status,
+      completedAt: row.completedAt,
       transcriptEmpty: row.transcriptEmpty,
       watched: row.watched,
     });
@@ -84,16 +88,37 @@ class PostHogCodePoller {
     repositoryId: string | null;
     posthogTaskId: string;
     lastStatus?: string;
+    localStatus: TaskStatus;
+    completedAt: Date | null;
     transcriptEmpty: boolean;
     watched: boolean;
   }): Promise<void> {
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) return; // credentials removed mid-run; leave as-is.
 
+    // Revival candidate: an idle run we optimistically completed (see
+    // maybeFinalizeIdle) that may have resumed. Re-check is throttled so we
+    // don't re-poll every idle-finalized task each 10s tick.
+    const reviving = task.localStatus === 'completed';
+    if (reviving) {
+      const lastCheck = this.lastReviveCheck.get(task.id) ?? 0;
+      if (Date.now() - lastCheck < IDLE_RECHECK_MS) return;
+      this.lastReviveCheck.set(task.id, Date.now());
+    }
+
     const remote = await client.getTask(task.posthogTaskId);
     const run = remote.latest_run ?? null;
     const status = run?.status;
     if (!status) return;
+
+    // Decide whether a completed task's remote run has resumed. If it hasn't,
+    // this returns without touching the task (and stops tracking it once the
+    // remote run is genuinely terminal). If it has, the task is flipped back to
+    // `in_progress` and we fall through to normal reconcile below.
+    if (reviving) {
+      const revived = await this.maybeRevive(task, run, status);
+      if (!revived) return;
+    }
 
     // The real run id lives on `latest_run.id`. Early FastOwl builds
     // mis-stored the task id here (the `run/` endpoint returns the task),
@@ -273,6 +298,62 @@ class PostHogCodePoller {
         : 'PostHog Code run went idle — auto-completed',
       output: stringifyOutput(run.output),
     });
+    // This completion is optimistic: the remote run is still `in_progress`, just
+    // idle. Mark it revivable so the cloud poller keeps re-checking it — if the
+    // run resumes (e.g. CI it was waiting on finished), maybeRevive flips the
+    // task back to `in_progress`.
+    await this.markReviveEligible(task.id);
+  }
+
+  /**
+   * Re-check an idle-finalized (locally `completed`) task's remote run.
+   * Returns true and flips the task back to `in_progress` when the run has
+   * resumed — fresh activity (`updated_at`) past our finalize time. Returns
+   * false (leaving the task completed) when the run is still idle, and clears
+   * the revivable flag once the run reaches a genuinely terminal state so it
+   * stops being a candidate.
+   */
+  private async maybeRevive(
+    task: { id: string; workspaceId: string; completedAt: Date | null },
+    run: PostHogRun | null,
+    status: PostHogRunStatus,
+  ): Promise<boolean> {
+    if (TERMINAL.has(status)) {
+      // Remote genuinely finished — our completion stands. Stop tracking it.
+      await this.clearReviveEligible(task.id);
+      this.lastReviveCheck.delete(task.id);
+      return false;
+    }
+    // Non-terminal remote. Resumed iff there's activity since we finalized —
+    // `updated_at` advancing past `completedAt`. Idle keepalives don't bump
+    // `updated_at`, and finalize only fires after IDLE_FINALIZE_MS of staleness,
+    // so a still-idle run never trips this (no revive/finalize ping-pong).
+    const updatedAtMs = run?.updated_at ? Date.parse(run.updated_at) : NaN;
+    const completedAtMs = task.completedAt ? task.completedAt.getTime() : 0;
+    if (Number.isNaN(updatedAtMs) || updatedAtMs <= completedAtMs) return false;
+
+    this.lastReviveCheck.delete(task.id);
+    const now = new Date();
+    await getDbClient()
+      .update(tasksTable)
+      .set({ status: 'in_progress', result: null, completedAt: null, updatedAt: now })
+      .where(eq(tasksTable.id, task.id));
+    await this.clearReviveEligible(task.id);
+    emitTaskStatus(task.workspaceId, task.id, 'in_progress');
+    console.log(
+      `[posthogCode] task ${task.id.slice(0, 8)}: remote run resumed after idle-finalize — revived to in_progress`,
+    );
+    return true;
+  }
+
+  private async markReviveEligible(taskId: string): Promise<void> {
+    await patchTaskMetadata(taskId, (existing) => ({ ...existing, reviveEligible: true }));
+  }
+
+  private async clearReviveEligible(taskId: string): Promise<void> {
+    await patchTaskMetadata(taskId, (existing) =>
+      existing.reviveEligible ? { ...existing, reviveEligible: false } : existing,
+    );
   }
 
   private async finalize(

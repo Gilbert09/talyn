@@ -1,4 +1,4 @@
-import type { CloudProviderType, Environment, Task } from '@talyn/shared';
+import type { CloudProviderType, Environment, Task, TaskStatus } from '@talyn/shared';
 
 /**
  * A cloud task provider delegates a FastOwl task to a vendor that runs the
@@ -77,4 +77,17 @@ export interface CloudTaskRow {
   /** A desktop client is viewing this task (taskWatch registry) — gates
    *  whether the provider keeps a live transcript stream open. */
   watched: boolean;
+  /**
+   * Local task status. The poller loads `in_progress` tasks plus revival
+   * candidates — `completed` tasks a provider optimistically finalised while
+   * the remote run was still active (`metadata.reviveEligible`). Providers
+   * branch on this to detect a run that has resumed since it was finalised.
+   */
+  status: TaskStatus;
+  /**
+   * When the task was finalised. The reference point for revival: a remote run
+   * whose activity has advanced past this has resumed since we gave up on it.
+   * Null unless the task is completed.
+   */
+  completedAt: Date | null;
 }

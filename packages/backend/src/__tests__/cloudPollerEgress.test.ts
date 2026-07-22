@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gte, or, sql } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { tasks as tasksTable, workspaces as workspacesTable } from '../db/schema.js';
 import type { Database } from '../db/client.js';
@@ -78,5 +78,63 @@ describe('narrowed transcriptEmpty SQL', () => {
       .where(eq(tasksTable.status, 'in_progress'));
 
     expect(rows).toEqual([{ id: 'b', transcriptEmpty: true }]);
+  });
+});
+
+/**
+ * The cloud poller also loads revival candidates: `completed` tasks a provider
+ * optimistically finalised (`metadata.reviveEligible`) within the revive window.
+ * Pins the exact WHERE clause from cloudProviders/poller.ts against real
+ * Postgres semantics — in particular that the jsonb-containment flag and the
+ * completedAt window both gate the completed rows without pulling in others.
+ */
+describe('cloud poller task selection (in-flight + revival candidates)', () => {
+  const REVIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+  async function seedRow(
+    id: string,
+    status: string,
+    opts: { completedAt?: Date | null; reviveEligible?: boolean } = {},
+  ): Promise<void> {
+    await db.insert(tasksTable).values({
+      id,
+      workspaceId: 'ws1',
+      type: 'code_writing',
+      status,
+      priority: 'medium',
+      title: 't',
+      description: 'd',
+      completedAt: opts.completedAt ?? null,
+      metadata: opts.reviveEligible ? { reviveEligible: true } : {},
+    });
+  }
+
+  it('selects in-flight tasks and revivable completed tasks in-window, nothing else', async () => {
+    const now = Date.now();
+    const inWindow = new Date(now - 60 * 60 * 1000); // 1h ago
+    const stale = new Date(now - (REVIVE_WINDOW_MS + 60 * 60 * 1000)); // >24h ago
+
+    await seedRow('inflight', 'in_progress');
+    await seedRow('revivable', 'completed', { completedAt: inWindow, reviveEligible: true });
+    await seedRow('done-no-flag', 'completed', { completedAt: inWindow, reviveEligible: false });
+    await seedRow('revivable-stale', 'completed', { completedAt: stale, reviveEligible: true });
+    await seedRow('failed-flag', 'failed', { completedAt: inWindow, reviveEligible: true });
+
+    const reviveCutoff = new Date(now - REVIVE_WINDOW_MS);
+    const rows = await db
+      .select({ id: tasksTable.id })
+      .from(tasksTable)
+      .where(
+        or(
+          eq(tasksTable.status, 'in_progress'),
+          and(
+            eq(tasksTable.status, 'completed'),
+            gte(tasksTable.completedAt, reviveCutoff),
+            sql`${tasksTable.metadata} @> '{"reviveEligible":true}'::jsonb`,
+          ),
+        ),
+      );
+
+    expect(rows.map((r) => r.id).sort()).toEqual(['inflight', 'revivable']);
   });
 });

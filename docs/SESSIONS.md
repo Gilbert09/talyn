@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 73 — Revive idle-finalized cloud tasks when their remote run resumes (2026-07-22)
+
+A PostHog Code run that goes idle waiting on CI/review sits in `in_progress` on PostHog's side forever, so `maybeFinalizeIdle` (`services/posthogCode/poller.ts`) optimistically completes the local task after `IDLE_FINALIZE_MS` of no `updated_at` movement. But when the wait clears the run resumes — and the local task was already `Done`, never to be re-polled (the generic cloud poller only loads `in_progress`).
+
+Fix: an **idle-finalized task is now a revival candidate**.
+- `maybeFinalizeIdle` stamps a generic `metadata.reviveEligible: true` when it optimistically completes an idle (remote-still-`in_progress`) run.
+- The generic cloud poller (`cloudProviders/poller.ts`) now loads `in_progress` tasks **plus** `completed` tasks carrying `reviveEligible` whose `completedAt` is within a 24h `REVIVE_WINDOW_MS` (ceiling for a legitimate suspension; past that the remote sandbox is abandoned). The jsonb-containment flag keeps this set tiny — genuinely-completed tasks (remote reached a terminal state) never carry it. `CloudTaskRow` gained `status` + `completedAt`.
+- PostHog `reconcile` gained a `maybeRevive` branch (throttled to `IDLE_RECHECK_MS` per task): if the remote run is non-terminal **and** its `updated_at` has advanced past `completedAt` (idle keepalives don't bump `updated_at`, so a still-idle run never trips it → no revive/finalize ping-pong), the task is flipped back to `in_progress` (clearing `result`/`completedAt`/`reviveEligible`) and falls through to normal reconcile. Once the remote run is genuinely terminal, the flag is cleared so it stops being a candidate.
+
+Claude Code needs none of this — its `pause_turn` is already kept non-terminal, so a paused session stays `in_progress`. Tests: `posthogCodePollerRevive.test.ts` (revive/idle/terminal/throttle) + a revival-candidate WHERE-clause case in `cloudPollerEgress.test.ts`.
+
 ## Session 72 — Merge queue v2 runaway: thousands of duplicate fix runs (2026-07-17)
 
 Live incident: the queue dispatched thousands of duplicate "Get `<ref>` mergeable (merge queue)" `pr_response` runs against `posthog/posthog` (e.g. #71167 got runs at 1h → 3× at 44m → 24m). Two compounding bugs in v2:

@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gte, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { tasks as tasksTable } from '../../db/schema.js';
@@ -11,6 +11,16 @@ import { ThrottleBackoff, throttleRetryAfterMs } from './throttleBackoff.js';
 import type { CloudTaskRow } from './types.js';
 
 const POLL_INTERVAL_MS = 10_000;
+
+/**
+ * How long after a task is finalised we keep re-checking whether its remote run
+ * has resumed. A cloud run that goes idle waiting on CI/review can be
+ * optimistically completed by a provider (see PostHog's `maybeFinalizeIdle`) and
+ * then resume when the wait clears; we revive it to `in_progress` when it does.
+ * 24h is the ceiling for a legitimate suspension — past that the remote sandbox
+ * is abandoned and will never resume, so we stop tracking the task as a candidate.
+ */
+const REVIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Drives every in-progress cloud task to a terminal state. Each tick it
@@ -88,6 +98,14 @@ class CloudTaskPoller {
         // `!Array.isArray(t) || t.length === 0`: only an array runs through
         // `jsonb_array_length` (so it never throws on a non-array), and null /
         // non-array values fall to the `ELSE true` (empty) branch.
+        // In-flight tasks, plus revival candidates: tasks a provider
+        // optimistically finalised while the remote run was still active
+        // (`metadata.reviveEligible`) and completed within the revive window. A
+        // provider's reconcile re-checks a candidate and flips it back to
+        // `in_progress` if its remote run has since resumed. The flag keeps this
+        // set tiny — genuinely-completed tasks (remote reached a terminal state)
+        // never carry it, so they're not re-polled.
+        const reviveCutoff = new Date(Date.now() - REVIVE_WINDOW_MS);
         const rows = await db
           .select({
             id: tasksTable.id,
@@ -95,10 +113,21 @@ class CloudTaskPoller {
             title: tasksTable.title,
             repositoryId: tasksTable.repositoryId,
             metadata: tasksTable.metadata,
+            status: tasksTable.status,
+            completedAt: tasksTable.completedAt,
             transcriptEmpty: sql<boolean>`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
           })
           .from(tasksTable)
-          .where(eq(tasksTable.status, 'in_progress'));
+          .where(
+            or(
+              eq(tasksTable.status, 'in_progress'),
+              and(
+                eq(tasksTable.status, 'completed'),
+                gte(tasksTable.completedAt, reviveCutoff),
+                sql`${tasksTable.metadata} @> '{"reviveEligible":true}'::jsonb`,
+              ),
+            ),
+          );
         reconciled = rows.length;
 
         // Drop cooldowns for workspaces with no in-flight tasks left, so the
@@ -127,6 +156,8 @@ class CloudTaskPoller {
             metadata,
             transcriptEmpty: row.transcriptEmpty,
             watched: isWatched(row.id),
+            status: row.status as CloudTaskRow['status'],
+            completedAt: row.completedAt,
           };
 
           try {
