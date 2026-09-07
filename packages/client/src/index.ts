@@ -605,6 +605,25 @@ export interface PRSummaryShape {
   headBranch: string;
   baseBranch: string;
   headSha: string;
+  /**
+   * GitHub's NATIVE stack membership (`gh stack` and friends), as opposed to
+   * the branch-shaped stack both front ends derive with `linkStack`. Absent on
+   * rows cached before it shipped, `null` on a standalone PR.
+   *
+   * Worth the wire bytes because the two are not interchangeable: an external
+   * merge queue batches a stack only when GitHub calls it one, so this is what
+   * decides whether the queue lands the stack in a single CI round or drains it
+   * a rung at a time — and whether merging one member on its own is a sensible
+   * thing to offer.
+   */
+  stack?: {
+    id: string;
+    number: number;
+    size: number;
+    /** 1-based from the BOTTOM: 1 is the rung closest to the landing branch. */
+    position: number;
+    baseRefName: string;
+  } | null;
   /** When the PR was opened on GitHub. Optional for rows cached before
    *  this field was tracked. */
   createdAt?: string;
@@ -733,6 +752,17 @@ export interface MergeQueuePublic {
    * branch link is gone. Present while parked, and after a retarget.
    */
   stackParentNumber?: number | null;
+  /**
+   * Merge stack, batch submission: the PR whose submission to the external
+   * merge queue is carrying this one.
+   *
+   * Set on every rung BELOW the one that was handed over, because the provider
+   * tests and lands the rung it was given plus everything beneath it in one
+   * go. Unlike `stackParentNumber` this is not derivable client-side at all —
+   * which rung got submitted is a server decision, and the covered rung itself
+   * carries no trace of it. Present only while the submission is live.
+   */
+  stackCoveredBy?: number | null;
   /** External merge queue: which door the PR was handed over through, the
    *  resubmit budget for the current head, and where the provider itself says
    *  the PR is (read off its own PR comment — the authoritative channel; the

@@ -853,6 +853,11 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     // (trunk.io) reports a submitted PR's state on. The `labeled`/`unlabeled`
     // webhook patches this in place without a GitHub fetch.
     labels: s.labels ?? [],
+    // GitHub's native stack membership. Small (five scalars) and read on every
+    // merge-queue evaluation of a stacked PR: it decides whether the stack can
+    // be handed to the external queue as one batch, and which rung to hand it
+    // at. `null` on the overwhelming majority of PRs.
+    stack: s.stack ?? null,
   };
 }
 
@@ -873,6 +878,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     headBranch: (meta.headBranch as string) ?? '',
     baseBranch: (meta.baseBranch as string) ?? '',
     headSha: (meta.headSha as string) ?? '',
+    stack: (meta.stack as PRSummary['stack']) ?? null,
     nodeId: (meta.nodeId as string | undefined) ?? undefined,
     autoMergeBy: (meta.autoMergeBy as string | null | undefined) ?? null,
     labels: (meta.labels as string[] | undefined) ?? [],

@@ -41,6 +41,10 @@ import {
 } from '../repoMergeGate.js';
 import { rememberedExternalQueueSubmitRoute } from '../externalQueueSubmitRoute.js';
 import { submitToExternalQueue } from '../externalQueueSubmit.js';
+import {
+  noteStackBatchAccepted,
+  noteStackBatchRefused,
+} from '../repoStackBatching.js';
 import { readExternalQueueState } from '../externalQueueState.js';
 import { noteInfraFailure, noteMerge, queueHealth } from '../repoQueueHealth.js';
 import { classifyExternalQueueFailure } from '../externalQueueFailure.js';
@@ -74,7 +78,7 @@ import {
   type CasPatch,
   type EntryRow,
 } from './store.js';
-import type { StackParent } from './stack.js';
+import type { StackBatchPlan, StackParent } from './stack.js';
 import {
   MAX_ATTEMPTS,
   MAX_DECIDE_ROUNDS,
@@ -115,6 +119,12 @@ export interface EvaluateEntryInput {
   trigger: string;
   /** Resolved once per group walk — see resolveStackParents. */
   stackParent?: StackParent | null;
+  /**
+   * Batch-submission plan for this entry's GitHub native stack, resolved by the
+   * evaluator (a stack spans several groups, so no single group walk could work
+   * it out). Absent = the serial drain.
+   */
+  stackBatch?: StackBatchPlan | null;
 }
 
 export interface EvaluateEntryResult {
@@ -269,14 +279,22 @@ async function buildBaseContext(
     input.isHead && !graphqlGateBlocked && !graphqlBudgetLow
       ? await getAutoMergeCapability(pr.workspaceId, pr.owner, pr.repo, entry.mergeMethod)
       : 'unknown';
-  // Is the base behind an external merge queue? Cached 1h (REST, no GraphQL
-  // points) and sticky once an observed 405 confirms it — so this is a map
-  // lookup on all but the first evaluation per repo+base per process.
+  // Is the branch this PR LANDS on behind an external merge queue? Cached 1h
+  // (REST, no GraphQL points) and sticky once an observed 405 confirms it — so
+  // this is a map lookup on all but the first evaluation per repo+base per
+  // process.
+  //
+  // Lands on, not targets: for a rung of a native stack its own base is the rung
+  // below it — an ordinary topic branch with no rulesets and no merge queue — so
+  // probing that answers "unguarded" for every rung above the bottom one, which
+  // is how a stacked PR gets merged into its parent's branch by the very queue
+  // that would have refused to merge it into master.
+  const gateBranch = input.stackBatch ? input.stackBatch.targetBase : entry.baseBranch;
   const externalGate = await getExternalMergeGate(
     pr.workspaceId,
     pr.owner,
     pr.repo,
-    entry.baseBranch
+    gateBranch
   );
   // What the external queue itself says about this PR. Only asked for when a
   // gate exists AND the entry's fate depends on the answer; usually served from
@@ -379,6 +397,7 @@ async function buildBaseContext(
               : input.stackParent,
         }
       : {}),
+    ...(input.stackBatch ? { stackBatch: input.stackBatch } : {}),
   };
 }
 
@@ -546,8 +565,24 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return disarmAutoMerge(ctx);
     case 'submit_external':
       return submitExternal(ctx);
+    case 'mark_stack_batch_refused': {
+      noteStackBatchRefused(
+        ctx.pr.owner,
+        ctx.pr.repo,
+        ctx.base.stackBatch?.targetBase ?? ctx.entry.baseBranch,
+        action.evidence
+      );
+      return {};
+    }
     case 'mark_external_gate': {
-      markExternalMergeGate(ctx.pr.workspaceId, ctx.pr.owner, ctx.pr.repo, ctx.entry.baseBranch);
+      // The branch the merge was refused ON — the stack's base for a rung of
+      // one, matching what buildBaseContext probed.
+      markExternalMergeGate(
+        ctx.pr.workspaceId,
+        ctx.pr.owner,
+        ctx.pr.repo,
+        ctx.base.stackBatch?.targetBase ?? ctx.entry.baseBranch
+      );
       // decide already asked for a submit in the same round; make sure it sees
       // the confirmed gate rather than the 'suspected' the context was built
       // with (which would send the submit back to the direct merge).
@@ -619,6 +654,12 @@ async function submitExternal(ctx: ActionContext): Promise<ActionOutcome> {
           ...(attempt.command ? { command: attempt.command } : {}),
         },
       });
+      // The provider took a stack submission, so whatever refusal this repo
+      // may have earned before is stale — clear it rather than making the next
+      // stack wait out the TTL.
+      if (ctx.base.stackBatch?.isSubmitRung) {
+        noteStackBatchAccepted(ctx.pr.owner, ctx.pr.repo, ctx.base.stackBatch.targetBase);
+      }
       return settle({
         kind: 'submitted',
         via: attempt.via,

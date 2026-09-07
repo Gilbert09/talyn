@@ -5,11 +5,12 @@ import {
   externalQueueProviderLabel,
   isExternalQueueHolding,
   normalizeLabelNames,
+  prLandingBranch,
   type PRMergeableSummary,
 } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { guardCrossReplica } from './advisoryLock.js';
-import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { mergeQueueEntries, pullRequests as pullRequestsTable } from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { createCloudTask } from './taskCreate.js';
 import { TaskLimitError } from './billing/entitlements.js';
@@ -97,6 +98,34 @@ function publicState(s: AutoMergeState): { attempts: number; paused: boolean } {
 }
 
 /**
+ * The PR number whose external-queue submission is currently carrying this PR
+ * as part of its stack, or null when nothing is.
+ *
+ * One indexed read of the queue entry, no GitHub call. See the
+ * `external_covered_by` column (migration 0051) for why the marker is
+ * persisted rather than re-derived.
+ */
+async function coveringStackSubmission(pullRequestId: string): Promise<number | null> {
+  try {
+    const rows = await getDbClient()
+      .select({
+        status: mergeQueueEntries.status,
+        externalCoveredBy: mergeQueueEntries.externalCoveredBy,
+      })
+      .from(mergeQueueEntries)
+      .where(eq(mergeQueueEntries.pullRequestId, pullRequestId))
+      .limit(1);
+    const entry = rows[0];
+    if (!entry || entry.status === 'merged' || entry.status === 'removed') return null;
+    return entry.externalCoveredBy;
+  } catch {
+    // A read failure answers "nothing is covering it", exactly like the state
+    // read below: a queue we cannot see must never be able to wedge the watcher.
+    return null;
+  }
+}
+
+/**
  * Is an external merge queue (trunk.io) holding this PR right now?
  *
  * The watcher's remedy is a cloud run, and a cloud run's fix arrives as a
@@ -121,7 +150,32 @@ function publicState(s: AutoMergeState): { attempts: number; paused: boolean } {
 async function externalQueueHolds(row: PRRow, summary: PRMergeableSummary): Promise<boolean> {
   const ref = `${row.owner}/${row.repo}#${row.number}`;
   try {
-    const gate = await getExternalMergeGate(row.workspaceId, row.owner, row.repo, summary.baseBranch);
+    // Cheapest and strongest signal first: the merge queue submitted this PR's
+    // whole STACK as one batch, and this rung is one of the ones being carried.
+    // The provider ejects the entire batch when anything pushes to any member,
+    // so a run here would destroy a test cycle covering several PRs at once —
+    // and neither of the two reads below could see it. The covered rung has no
+    // provider comment of its own (the provider talks to the rung that was
+    // enqueued), and its own base is the rung below it, which has no gate.
+    // Gated on native-stack membership so the query never runs for the PRs that
+    // are not in a stack, which is virtually all of them — the same discipline
+    // the gate probe applies to the queue-state read below.
+    const covering = summary.stack ? await coveringStackSubmission(row.id) : null;
+    if (covering !== null) {
+      console.log(
+        `[autoKeep] ${ref}: standing down — the merge queue has this PR in #${covering}'s stack.`
+      );
+      return true;
+    }
+    // A stacked PR lands on its STACK's base, not on the rung below it, so that
+    // is the branch whose gate governs it. Probing `summary.baseBranch` answers
+    // "no queue here" for every rung above the bottom one.
+    const gate = await getExternalMergeGate(
+      row.workspaceId,
+      row.owner,
+      row.repo,
+      prLandingBranch(summary)
+    );
     if (!gate) return false;
     const ext = await readExternalQueueState(
       row.workspaceId,

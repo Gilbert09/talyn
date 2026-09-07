@@ -11,7 +11,7 @@ import type {
   ExternalQueueStatus,
   PRMergeableSummary,
 } from '@talyn/shared';
-import type { StackParent } from './stack.js';
+import type { StackBatchPlan, StackParent } from './stack.js';
 
 /** Stop auto-firing a given remediation after this many attempts per head. */
 export const MAX_ATTEMPTS = 3;
@@ -250,6 +250,12 @@ export interface EntrySnapshot {
   baseBranch: string;
   /** Merge stack: the PR this entry is, or was, stacked on. Never decides. */
   stackParentNumber: number | null;
+  /**
+   * Merge stack, batch submission: the PR number of the rung whose external
+   * submission is carrying this entry. Non-null means HANDS OFF — the provider
+   * is testing this PR as part of a batch and any push ejects the whole thing.
+   */
+  externalCoveredBy: number | null;
   /** Merge stack: retarget actions spent. See MAX_RETARGETS. */
   retargetAttempts: number;
 }
@@ -454,6 +460,19 @@ export interface DecisionContext {
    */
   stackParent?: StackParent | null;
   /**
+   * The batch-submission plan for this entry's GitHub NATIVE stack.
+   *
+   * Present only when every precondition holds: the PR is in a native stack,
+   * the branch that stack lands on is behind an external merge queue, and that
+   * queue has not refused a stack submission on this repo lately. Absent
+   * everywhere else — including for a stack derived from branch shapes alone —
+   * and absence means the serial drain, which is what `stackParent` runs.
+   *
+   * Resolved once per stack per group walk (the members of a stack are in
+   * different groups, so no group walk could work it out entry by entry).
+   */
+  stackBatch?: StackBatchPlan | null;
+  /**
    * Outcome of a `retarget_base` action, folded back for the next round. Only
    * the failures reach decide — a SUCCESSFUL retarget aborts the evaluation
    * outright, because the whole context (signing, external gate, auto-merge
@@ -512,6 +531,7 @@ export type Action =
           | 'signingCheckedSha'
           | 'unsignedCount'
           | 'stackParentNumber'
+          | 'externalCoveredBy'
           | 'retargetAttempts'
         >
       > & { lastError?: string; lastErrorAt?: string };
@@ -587,6 +607,13 @@ export type Action =
   | { kind: 'submit_external' }
   /** Learn-from-405: persist that this base is behind an external merge gate. */
   | { kind: 'mark_external_gate' }
+  /**
+   * Learn-from-refusal: persist that the external queue on this repo will not
+   * take a whole stack as one batch, so every other stack here skips straight
+   * to the serial drain instead of re-earning the same refusal. Decays — see
+   * services/repoStackBatching.ts.
+   */
+  | { kind: 'mark_stack_batch_refused'; evidence: string }
   /** Disable a Talyn-armed auto-merge (never a user-armed one; Push E). */
   | { kind: 'disarm_automerge' }
   /** Learn-from-403: persist that this base requires signed commits. */

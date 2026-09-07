@@ -24,6 +24,34 @@ export type PRBlockingReason =
 
 export type PRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
 
+/**
+ * GitHub's own view of the stack this PR belongs to — the native stacked-PR
+ * feature, not a shape Talyn infers from branch names.
+ *
+ * This distinction is load-bearing: trunk.io's merge queue batches a stack
+ * only when GITHUB says it is one ("GitHub considers this PR to be a part of a
+ * stack" is trunk's own wording), so a chain of PRs that merely happen to
+ * target each other's branches is not eligible. `@talyn/shared`'s `linkStack`
+ * still derives that shape for the UI and for the serial fallback; this is the
+ * authoritative signal, and the only one the batch submission may act on.
+ *
+ * Absent on rows cached before it shipped, and `null` on a standalone PR —
+ * every reader must treat absence as "not a native stack", never as "unknown,
+ * assume yes".
+ */
+export interface PRStackInfo {
+  /** Node ID of the PullRequestStack. Stable across the stack's life. */
+  id: string;
+  /** Number uniquely identifying the stack within its repository. */
+  number: number;
+  /** Total PRs in the stack. */
+  size: number;
+  /** 1-based, where 1 is CLOSEST TO THE BASE (the bottom rung). */
+  position: number;
+  /** The branch every PR in the stack ultimately lands on. */
+  baseRefName: string;
+}
+
 export type PRReviewDecisionState =
   | 'APPROVED'
   | 'CHANGES_REQUESTED'
@@ -78,6 +106,26 @@ export interface PRMergeableSummary {
    * callers must treat `undefined` as "unknown", never as "no failures".
    */
   failingChecksDigest?: string;
+  /**
+   * GitHub's native stack membership — see {@link PRStackInfo}. Undefined on a
+   * summary cached before the field shipped; `null` on a standalone PR.
+   */
+  stack?: PRStackInfo | null;
+}
+
+/**
+ * The branch this PR ultimately lands on: the stack's base when it is part of
+ * a native stack, its own base otherwise.
+ *
+ * Every rule that asks "who governs the merge of this PR" wants THIS, not
+ * `baseBranch`. A stacked PR's own base is the rung below it — an ordinary
+ * topic branch with no rulesets, no merge queue and nothing to ask — so keying
+ * a gate probe on `baseBranch` answers "unguarded" for every rung above the
+ * bottom one, which is how a stack member ends up merged into its parent's
+ * branch by a system that would have refused to merge it into master.
+ */
+export function prLandingBranch(s: PRMergeableSummary): string {
+  return s.stack?.baseRefName || s.baseBranch;
 }
 
 /**

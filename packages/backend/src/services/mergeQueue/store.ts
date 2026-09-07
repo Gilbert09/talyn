@@ -54,6 +54,7 @@ export const ENTRY_COLUMNS = {
   externalSubmitVia: mergeQueueEntries.externalSubmitVia,
   externalSubmittedAt: mergeQueueEntries.externalSubmittedAt,
   externalState: mergeQueueEntries.externalState,
+  externalCoveredBy: mergeQueueEntries.externalCoveredBy,
   fixTaskId: mergeQueueEntries.fixTaskId,
   fixTaskAccounted: mergeQueueEntries.fixTaskAccounted,
   fixKind: mergeQueueEntries.fixKind,
@@ -97,6 +98,7 @@ export function rowToEntrySnapshot(row: EntryRow): EntrySnapshot {
     externalSubmitVia: (row.externalSubmitVia as ExternalSubmitVia | null) ?? null,
     externalSubmittedAt: row.externalSubmittedAt ? row.externalSubmittedAt.toISOString() : null,
     externalState: (row.externalState as ExternalQueueState | null) ?? null,
+    externalCoveredBy: row.externalCoveredBy,
     fixTaskId: row.fixTaskId,
     fixTaskAccounted: row.fixTaskAccounted,
     fixKind: (row.fixKind as FixKind | null) ?? null,
@@ -193,6 +195,10 @@ export async function ensureActiveEntry(
           externalSubmitVia: null,
           externalSubmittedAt: null,
           externalState: null,
+          // A re-arm re-decides from scratch, so a stale "carried by #123"
+          // must not survive it — the covering submission may be long gone,
+          // and the marker is what holds every fix path off this PR.
+          externalCoveredBy: null,
           signingCheckedSha: null,
           unsignedCount: null,
           fixTaskAccounted: true,

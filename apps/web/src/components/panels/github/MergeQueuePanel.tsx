@@ -174,7 +174,7 @@ export function MergeQueuePanel() {
                   <>
                     <span className="opacity-60">·</span>
                     <span
-                      title={`These ${g.size} PRs are stacked on each other, so they merge one at a time from the bottom — each waits for a full CI cycle after the one below it lands`}
+                      title={`These ${g.size} PRs are stacked on each other and land bottom-first. A merge queue that takes stacks (trunk.io) tests and lands all ${g.size} in one CI round; without one they merge one at a time, each waiting a full cycle after the one below it.`}
                     >
                       stack of {g.size}
                     </span>

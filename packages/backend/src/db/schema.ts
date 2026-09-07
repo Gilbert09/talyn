@@ -745,6 +745,19 @@ export const mergeQueueEntries = pgTable(
     /** The provider's own last-observed answer (ExternalQueueState) — read off
      *  its PR comment, or its labels. Drives the desktop badge and R5b/R5c. */
     externalState: text('external_state'),
+    /**
+     * Merge stack, batch submission: the PR NUMBER of the rung whose external
+     * submission is carrying this entry. Set on every rung below the submitted
+     * one, null on the submitted rung itself and on everything unstacked.
+     *
+     * This is what makes a covered rung hands-off. The external queue ejects
+     * the WHOLE batch when anything pushes to any member, so a covered rung
+     * must not be fixed, updated, re-signed or merged while the batch is live
+     * — and nothing else in the entry could say that, because a covered rung's
+     * own base is the rung below it (an ordinary topic branch with no gate, no
+     * queue comment, and nothing to ask). Cleared when the submission ends.
+     */
+    externalCoveredBy: integer('external_covered_by'),
     externalStateAt: timestamp('external_state_at', { withTimezone: true }),
     /** The queue's own most-recent fix run (replaces lastFixTaskId in the blob). */
     fixTaskId: text('fix_task_id').references(() => tasks.id, { onDelete: 'set null' }),

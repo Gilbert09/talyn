@@ -59,7 +59,7 @@ import {
   StackCycleError,
   type StackNode,
 } from '@talyn/shared';
-import type { ApiResponse } from '@talyn/shared';
+import type { ApiResponse, PRStackInfo } from '@talyn/shared';
 
 /**
  * Routes for the PR/CI surface. Mostly read-only — the one write path is
@@ -1320,8 +1320,33 @@ export function pullRequestRoutes(): Router {
       headSha?: string;
       baseBranch?: string;
       autoMergeBy?: string | null;
+      stack?: PRStackInfo | null;
     };
-    const baseBranch = summary.baseBranch ?? '';
+    // The branch this PR actually LANDS on. For a rung of a GitHub native
+    // stack that is the stack's base, not the rung below it — and the rung
+    // below it is an ordinary topic branch with no ruleset and no merge queue,
+    // so probing it answers "nothing governs this merge" and the button below
+    // would merge the PR into its parent's branch.
+    const baseBranch = summary.stack?.baseRefName || summary.baseBranch || '';
+
+    // A stack member on an UNGATED base has no queue to hand the whole stack
+    // to, and merging it directly lands it in the rung below rather than where
+    // the stack goes. Refuse with a code the desktop turns into the stack
+    // action, rather than doing the surprising thing.
+    if (summary.stack && !(await getExternalMergeGate(
+      row.workspaceId,
+      row.owner,
+      row.repo,
+      baseBranch
+    ))) {
+      return res.status(409).json({
+        success: false,
+        code: 'stack_member_requires_stack_merge',
+        error:
+          `#${row.number} is part of a stack of ${summary.stack.size}. Merging it on its own ` +
+          'would land it in the branch below it — use "Merge stack" so the PRs below it land first.',
+      });
+    }
 
     // Hand the PR to the external queue and answer with what happened. Returns
     // false (never throws) when it couldn't answer, so the caller falls through
@@ -1388,9 +1413,22 @@ export function pullRequestRoutes(): Router {
       const confirmed = gate === 'confirmed';
       const outcome = await submitInstead({
         allowAutoMerge: confirmed,
-        reportNoMechanism: confirmed,
+        // A stack member has no fall-through: the direct merge below would land
+        // it in the rung beneath it. Report the missing door rather than doing
+        // the surprising thing, whether the gate is confirmed or only suspected.
+        reportNoMechanism: confirmed || summary.stack != null,
       });
       if (outcome !== 'none') return;
+      if (summary.stack) {
+        return res.status(409).json({
+          success: false,
+          code: 'stack_member_requires_stack_merge',
+          error:
+            `#${row.number} is part of a stack, and the merge queue on ${baseBranch} did not ` +
+            'take it. Merging it on its own would land it in the branch below it — use ' +
+            '"Merge stack" instead.',
+        });
+      }
     }
 
     try {
