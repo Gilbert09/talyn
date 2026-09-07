@@ -1,6 +1,5 @@
 import http from 'http';
 import { randomBytes, createHash } from 'crypto';
-import type { AddressInfo } from 'net';
 
 /**
  * Sign in to a ChatGPT subscription, from the desktop app.
@@ -92,6 +91,82 @@ p{color:#a1a1aa;margin:0;line-height:1.5}</style></head>
  * one-time authorization code for a few seconds, and there is no reason for
  * anything off this machine to be able to reach it.
  */
+/**
+ * Bind the loopback callback on BOTH address families, refusing to start if
+ * anything else already holds the port.
+ *
+ * # Why this is not just `listen(PORT, '127.0.0.1')`
+ *
+ * OpenAI's redirect URI is `http://localhost:1455/auth/callback`, and on macOS
+ * `localhost` resolves to `::1` before `127.0.0.1`. Binding IPv4 only means a
+ * different process holding IPv6 `*:1455` receives the callback instead — and
+ * because the two are different address families, that does NOT raise
+ * EADDRINUSE, so nothing here notices.
+ *
+ * That is not hypothetical. It is what happened the first time this shipped:
+ *
+ *     Talyn     IPv4  TCP 127.0.0.1:1455 (LISTEN)
+ *     OpenCode  IPv6  TCP *:1455         (LISTEN)
+ *
+ * Both bound happily, Chrome resolved `localhost` to `::1`, and OpenCode
+ * answered our callback with "Invalid state — potential CSRF attack" (correct
+ * of it: we issued that state, not OpenCode). Anything using the Codex CLI's
+ * OAuth client collides the same way — `codex login`, Codex CLI, OpenCode.
+ *
+ * The fix is to bind the SPECIFIC loopback addresses, both of them. A specific
+ * bind beats a wildcard one for routing, which is what takes the callback back
+ * from a process holding `*:1455` — measured, not assumed:
+ *
+ *     specific ::1 bind while :: is held  -> bound
+ *       connect localhost  -> us
+ *       connect [::1]      -> us
+ *       connect 127.0.0.1  -> the wildcard holder   (hence binding IPv4 too)
+ *
+ * EADDRINUSE is still fatal, but it now means what it says: another process
+ * holds the exact same specific address, so we would not receive our own
+ * callback. A partial bind is the state to avoid — it looks like it worked and
+ * hands the authorization code to somebody else. That code is not usable
+ * without our PKCE verifier, which never leaves this process, but a
+ * credential-bearing redirect landing in another application is not a thing to
+ * shrug at.
+ */
+async function listenOnLoopback(
+  server: http.Server,
+  family: 'ipv4' | 'ipv6',
+): Promise<'bound' | 'unavailable'> {
+  const host = family === 'ipv6' ? '::1' : '127.0.0.1';
+  return new Promise((resolve, reject) => {
+    const onError = (e: NodeJS.ErrnoException) => {
+      server.removeListener('listening', onListening);
+      if (e.code === 'EADDRINUSE') {
+        reject(
+          new Error(
+            `Port ${PORT} is already in use by another application. ChatGPT sign-in ` +
+              'always redirects there, so only one app can run it at a time. Quit ' +
+              'OpenCode / the Codex CLI (or finish the sign-in it started) and try again.',
+          ),
+        );
+        return;
+      }
+      // A host with no IPv6 stack at all. Not an error — carry on with IPv4.
+      if (e.code === 'EAFNOSUPPORT' || e.code === 'EADDRNOTAVAIL' || e.code === 'EINVAL') {
+        resolve('unavailable');
+        return;
+      }
+      reject(e);
+    };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve('bound');
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    // ipv6Only so the IPv6 socket cannot also claim IPv4 and make the second
+    // bind collide with our own first one.
+    server.listen({ port: PORT, host, ipv6Only: family === 'ipv6' });
+  });
+}
+
 export async function signInToCodex(
   openUrl: (url: string) => void,
 ): Promise<CodexSignInResult> {
@@ -99,13 +174,16 @@ export async function signInToCodex(
   const challenge = base64url(createHash('sha256').update(verifier).digest());
   const state = base64url(randomBytes(32));
 
-  const server = http.createServer();
+  // One handler, two sockets — see listenOnLoopback.
+  const servers = [http.createServer(), http.createServer()];
+  const closeAll = () => servers.forEach((srv) => srv.close());
+
   const code = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('Timed out waiting for the ChatGPT sign-in to finish.'));
     }, TIMEOUT_MS);
 
-    server.on('request', (req, res) => {
+    const handle = (req: http.IncomingMessage, res: http.ServerResponse) => {
       const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
       if (url.pathname !== CALLBACK_PATH) {
         res.writeHead(404).end();
@@ -136,26 +214,29 @@ export async function signInToCodex(
       res.end(page('Codex connected', 'You can close this tab and go back to Talyn.'));
       clearTimeout(timer);
       resolve(returnedCode);
-    });
+    };
+    servers.forEach((srv) => srv.on('request', handle));
 
-    server.on('error', (e: NodeJS.ErrnoException) => {
+    // Errors AFTER binding — a dropped connection, a malformed request. Bind
+    // failures are handled by listenOnLoopback below, which is what turns a
+    // port collision into a message naming the app to quit.
+    servers.forEach((srv) => srv.on('error', (e: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      // The one failure worth naming precisely: `codex login` uses the same
-      // fixed port, so "something else is on 1455" is nearly always another
-      // sign-in already in progress.
-      reject(
-        e.code === 'EADDRINUSE'
-          ? new Error(
-              `Port ${PORT} is already in use. Close any other ChatGPT sign-in that is in ` +
-                'progress (including `codex login`) and try again.',
-            )
-          : e,
-      );
-    });
+      reject(e);
+    }));
 
-    server.listen(PORT, '127.0.0.1', () => {
-      const bound = server.address() as AddressInfo | null;
-      if (!bound) return;
+    // Bind IPv6 first: it is the one `localhost` resolves to on macOS, so it is
+    // the one an interloper will be holding.
+    void (async () => {
+      try {
+        const v6 = await listenOnLoopback(servers[0], 'ipv6');
+        await listenOnLoopback(servers[1], 'ipv4');
+        if (v6 === 'unavailable') servers[0].close();
+      } catch (e) {
+        clearTimeout(timer);
+        reject(e);
+        return;
+      }
       const params = new URLSearchParams({
         response_type: 'code',
         client_id: CLIENT_ID,
@@ -169,10 +250,8 @@ export async function signInToCodex(
         originator: ORIGINATOR,
       });
       openUrl(`${AUTHORIZE_URL}?${params.toString()}`);
-    });
-  }).finally(() => {
-    server.close();
-  });
+    })();
+  }).finally(closeAll);
 
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
