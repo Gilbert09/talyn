@@ -261,8 +261,6 @@ export interface StackChainMember {
   entryStatus: EntryStatus | null;
   /** True when this rung currently holds a live submission to the provider. */
   submitted: boolean;
-  /** The rung's own base — the group key its entry is walked under. */
-  baseBranch: string;
   /** Nothing about this rung individually blocks a merge. */
   ready: boolean;
 }
@@ -338,7 +336,6 @@ interface StackMemberRow {
   blockingReason: string | null;
   mergeable: string | null;
   reviewDecision: string | null;
-  baseBranch: string | null;
 }
 
 /**
@@ -368,7 +365,6 @@ export async function resolveNativeStackChain(
       blockingReason: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'blockingReason'`,
       mergeable: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'mergeable'`,
       reviewDecision: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'reviewDecision'`,
-      baseBranch: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'baseBranch'`,
     })
     .from(pullRequestsTable)
     .where(
@@ -417,7 +413,6 @@ export async function resolveNativeStackChain(
         draft: r.draft === true,
         entryStatus: entry?.status ?? null,
         submitted: entry?.submitted ?? false,
-        baseBranch: r.baseBranch ?? '',
         ready: stackRungReady({
           state: r.state,
           draft: r.draft === true,

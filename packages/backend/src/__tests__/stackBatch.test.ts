@@ -29,7 +29,6 @@ function member(o: Partial<StackChainMember> = {}): StackChainMember {
     draft: false,
     entryStatus: 'queued',
     submitted: false,
-    baseBranch: 'main',
     ready: true,
     ...o,
   };

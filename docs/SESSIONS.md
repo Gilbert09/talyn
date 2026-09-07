@@ -83,12 +83,21 @@ back for a day.
 
 **A stack's rungs live in different (repo, base) groups**, so no group walk can
 see its own stack — the plan is resolved in the evaluator, like `stackParent`,
-and normally costs nothing (`summary.stack` is null on virtually every PR). For
-the same reason a rung's state change now schedules its siblings' groups: their
-own triggers all key on bases nothing touched, so a covered rung would otherwise
-stay hands-off against a submission that had ended until the 60s reconciler came
-past. Guarded on an actual status change, or two rungs would wake each other
-forever.
+and normally costs nothing (`summary.stack` is null on virtually every PR).
+
+**Waking the sibling groups directly was tried and reverted, and the reason is
+worth keeping.** A covered rung's triggers all key on a base nothing touched, so
+when its batch ends it learns that only from the 60s reconciler; scheduling the
+other rungs' groups on a status change looked like the obvious fix, and it hung
+CI on all three OSes for 100 minutes — a run that normally takes ~30. Every
+`scheduleGroupEvaluation` is a DETACHED walk holding a 45s `withTimeout` timer,
+so rungs scheduling each other build an endless chain of scheduled walks: the
+process never goes idle and vitest never exits. Guarding on "only when the
+status actually changed" does not save it — the chain outlives the test that
+started it. **The reconciler is the backstop, deliberately.** A covered rung can
+therefore read "queued with #N" for up to a minute after the batch it names has
+ended, which is a latency cost and not a correctness one: nothing acts on the
+stale marker except to keep hands off a PR the queue has already released.
 
 **Open**: the failure of a batch is handled at the submitted rung, so a fix run
 is dispatched there even when trunk's bisection blames a lower one — the run
