@@ -23,6 +23,7 @@ import { githubRateGate } from './githubRateGate.js';
 import { prMonitorService } from './prMonitor.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
+import { captureWorkspaceEvent } from './analytics.js';
 import { TickGuard } from './tickGuard.js';
 import { activePrTaskId, resolveCloudEnv } from './prCloudFix.js';
 import {
@@ -489,7 +490,31 @@ class PRAutoMergeWatcher {
       if (err instanceof TaskLimitError) {
         // Free-plan concurrency limit — skip this tick without burning an
         // attempt; the watcher retries once a slot frees up.
+        //
+        // This is the free plan's REAL wall for a watcher-driven user, and
+        // until now it left nothing behind but this log line. There is no
+        // request to answer, so there is no 402, no UpgradeModal, and no
+        // client-side `paywall_shown` — and unlike the merge-queue path
+        // (executor.ts), no `merge_queue_events` row either. The result was a
+        // paywall that fires constantly and reads, in every funnel, as a
+        // paywall that never fires at all.
+        //
+        // Captured SERVER-side on purpose: the user hitting this hardest may
+        // be running a client that reports nothing (see Session 116), so
+        // anything client-emitted would miss exactly the population it exists
+        // to measure. This is telemetry only — it shows the user nothing.
         console.log(`[autoKeep] ${ref}: fix run deferred — ${err.message}`);
+        captureWorkspaceEvent(row.workspaceId, 'paywall_deferred', {
+          // The surface that wanted a task, so auto-keep and the merge queue
+          // stay separable — `task_dispatched` records no dispatch source, so
+          // this is currently the only place that distinction is captured.
+          source: 'auto_keep',
+          gate: 'task_limit',
+          limit: err.limit,
+          active: err.active,
+          repo: `${row.owner}/${row.repo}`,
+          pr_number: row.number,
+        });
         return;
       }
       throw err;

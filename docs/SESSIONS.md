@@ -75,16 +75,44 @@ Verified against real builds rather than the unit tests alone, which is how the
 `dev+<sha>`, and `TALYN_ANALYTICS_DISABLED=1` bakes neither. 472 desktop tests,
 typecheck and lint clean.
 
-**Still open, and the bigger half of the original question.** The user's caps
-are hit almost entirely by watchers — 296 of his 298 dispatches never came from
-the UI — and a watcher that hits the task cap is deferred server-side
-(`deferred_task_limit`, `mergeQueue/executor.ts`; `[autoKeep] … fix run
-deferred`, `prAutoMergeWatcher.ts`). There is no request to answer, so there is
-no 402, no `UpgradeModal`, and no event. For a merge-queue-heavy user that is
-the *dominant* path, and no amount of client instrumentation will surface it —
-the deferral needs to notify, or be captured server-side. Related: nothing on
-`task_dispatched` records which path dispatched it, so "is this user's load
-merge queue or auto-keep?" is currently unanswerable from analytics.
+**The bigger half of the question was the silent deferral, and the DB settled
+it.** His workspace: 5 PRs with `auto_keep_mergeable`, **0** in the merge queue,
+and `defaultAutoKeepMergeable = false`. So all three paywalls are unreachable by
+construction — the task 402 needs a UI create (2 in three weeks), the
+merge-queue 402 needs an enqueue (queue empty), and
+`auto_keep_default_requires_unlimited` fires only on the workspace default's
+OFF→ON transition, which he never makes because he arms per PR, which is free.
+
+Meanwhile he is pinned against the cap. Reconstructing in-flight counts from
+dispatch/completion pairs: **143 of 232 task starts happen with exactly 3
+already running**, against 45 at one and 36 at two. That is not a decay curve,
+it is a ceiling — 5 armed PRs contending for 3 slots. Every collision was a
+`console.log` and a `return` in `prAutoMergeWatcher.ts`: no DB row, no event, no
+notification, not even a burnt attempt. The merge-queue path at least wrote a
+`deferred_task_limit` row into `merge_queue_events`; the auto-keep path wrote
+nothing anywhere, so those deferrals were unrecoverable once the logs rolled.
+
+So both sites now capture **`paywall_deferred`** (`source: auto_keep |
+merge_queue`, plus `gate`, `limit`, `active`, `repo`, `pr_number`).
+**Server-side deliberately**: the population most likely to hit this is the one
+running a client that reports nothing, so a client-emitted event would miss
+exactly who it exists to measure. The queue's existing `deferred_task_limit`
+casTransition stays — it is scoped to one entry's history, which is a different
+question from "how often does the free plan actually bind, across every surface
+that can bind".
+
+**This is telemetry, not a paywall.** It changes nothing the user sees; a
+deferred run is still a run that quietly does not happen. Whether a deferral
+should *notify* is a product decision, and it is the one that decides whether
+this user is ever asked to pay. Also still open: nothing on `task_dispatched`
+records which path dispatched it, so splitting a user's load between the queue
+and auto-keep is only possible for the deferrals, not the successes.
+
+**A measurement correction worth keeping.** `duration_queued_ms` on
+`task_dispatched` was flat at ~4s for him every day, and that was read as "not
+throttled". It is not evidence of anything: a deferred run never becomes a task,
+so it emits no dispatch event and contributes no queued duration. The metric is
+blind to precisely the thing it was used to rule out.
 
 ## Session 115 — the merge queue takes a whole stack at once (2026-09-07)
 

@@ -1421,6 +1421,23 @@ async function fireFixRun(
       // Free-plan concurrency limit — transient; a slot frees when a task ends
       // (the task:status trigger re-evaluates). Roll the claim back to queued
       // and burn NOTHING (no attempt was counted in Phase A).
+      //
+      // The `deferred_task_limit` casTransition below records this for the
+      // ENTRY; this records it for the FUNNEL. They are not the same audience
+      // and the entry event cannot serve both — it is scoped to one queue
+      // entry's history, while the question here is "how often does the free
+      // plan actually bite, across every surface that can be bitten". Paired
+      // with the auto-keep watcher's copy, `paywall_deferred` is the whole
+      // silent half of the paywall: a cap that is hit with no request to
+      // refuse, so no 402 and no UpgradeModal ever happen.
+      captureWorkspaceEvent(ctx.pr.workspaceId, 'paywall_deferred', {
+        source: 'merge_queue',
+        gate: 'task_limit',
+        limit: err.limit,
+        active: err.active,
+        repo: `${ctx.pr.owner}/${ctx.pr.repo}`,
+        pr_number: ctx.pr.number,
+      });
       const reverted: EntrySnapshot = {
         ...claimed,
         status: 'queued',

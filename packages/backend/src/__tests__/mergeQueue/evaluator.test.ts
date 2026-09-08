@@ -587,6 +587,21 @@ describe('mergeQueue v2 pipeline', () => {
     expect(entry?.fixAttempts).toBe(0); // no attempt burned
     expect(entry?.fixTaskId).toBeNull();
     expect(await countTasks(db)).toBe(0); // nothing dispatched
+
+    // The `deferred_task_limit` entry event above says it happened to THIS
+    // entry; this says it happened to the FUNNEL. A cap hit on a watcher path
+    // has no request to refuse, so it produces no 402 and no client-side
+    // `paywall_shown` — without this the free plan reads as never binding.
+    expect(mockCaptureWorkspaceEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      'paywall_deferred',
+      expect.objectContaining({
+        source: 'merge_queue',
+        gate: 'task_limit',
+        limit: 3,
+        active: 3,
+      })
+    );
   });
 
   it('re-fires a dispatch left half-claimed (fixing + null fixTaskId) by a crash', async () => {

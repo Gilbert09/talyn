@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { encryptString } from '../services/tokenCrypto.js';
 import { prAutoMergeWatcher } from '../services/prAutoMergeWatcher.js';
+import * as taskCreateModule from '../services/taskCreate.js';
+import { TaskLimitError } from '../services/billing/entitlements.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { graphqlBudget } from '../services/graphqlBudget.js';
 import { githubRateGate } from '../services/githubRateGate.js';
@@ -29,6 +31,14 @@ process.env.TALYN_TOKEN_KEY ??= randomBytes(32).toString('base64');
 // resolveCloudEnvId checks the provider has stored credentials, so register the
 // provider + give the workspace a posthog integration row in seedBase.
 registerCloudProvider(postHogCodeProvider);
+
+const { mockCaptureWorkspaceEvent } = vi.hoisted(() => ({
+  mockCaptureWorkspaceEvent: vi.fn(),
+}));
+vi.mock('../services/analytics.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/analytics.js')>()),
+  captureWorkspaceEvent: mockCaptureWorkspaceEvent,
+}));
 
 /**
  * Exercises the auto-keep-mergeable watcher's decision matrix against a real
@@ -488,6 +498,45 @@ describe('prAutoMergeWatcher', () => {
     expect(state.accounted).toBe(false);
     // The PR row is reverse-linked to the run.
     expect(pr.taskId).toBe(tasks[0].id);
+  });
+
+  it('defers silently on the free-plan task cap, but says so to analytics', async () => {
+    // The free plan's real wall for a watcher-driven user, and the one that
+    // reads as no wall at all: there is no request to refuse, so no 402, no
+    // UpgradeModal, and no client `paywall_shown`. Talyn's #2 user by task
+    // volume ran 5 auto-keep PRs against 3 slots and produced not one paywall
+    // event in three weeks. `paywall_deferred` is the only record that a cap
+    // bound at all — and it is captured server-side because the clients most
+    // likely to hit this report nothing (see Session 116).
+    const prId = await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+    const create = vi
+      .spyOn(taskCreateModule, 'createCloudTask')
+      .mockRejectedValue(new TaskLimitError(3, 3));
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(create).toHaveBeenCalled();
+    expect(await countTasks(db)).toBe(0);
+
+    expect(mockCaptureWorkspaceEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      'paywall_deferred',
+      expect.objectContaining({
+        source: 'auto_keep',
+        gate: 'task_limit',
+        limit: 3,
+        active: 3,
+        pr_number: 1,
+      })
+    );
+
+    // The deferral must stay free: no attempt burned and no run recorded, or
+    // a user at their cap would exhaust the 3-attempt budget without a single
+    // agent ever running, and the watcher would pause a PR it never tried.
+    const pr = await getPr(db, prId);
+    const state = pr.autoMergeState as { attempts?: number; lastAutoTaskId?: string };
+    expect(state.attempts).toBe(0);
+    expect(state.lastAutoTaskId).toBeUndefined();
   });
 
   it('renders the workspace mergeable prompt override when one is set', async () => {
