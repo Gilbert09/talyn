@@ -66,7 +66,7 @@ describe('CloudProviderDefaultSelector', () => {
     seed();
     render(<CloudProviderDefaultSelector />);
     expect(labels()).toEqual([
-      'Auto (prefer Talyn Fleet, else PostHog Code)',
+      'Auto',
       'Talyn Fleet · Claude',
       'Talyn Fleet · Codex',
       'PostHog Code',

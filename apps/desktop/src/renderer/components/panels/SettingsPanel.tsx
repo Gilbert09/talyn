@@ -1573,8 +1573,8 @@ export function CloudProviderDefaultSelector() {
         <div className="flex-1 min-w-0">
           <h4 className="font-medium">Default for new tasks</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Which agent new tasks run on. “Ask every time” shows a picker on the Task button
-            when more than one is connected.
+            Which agent new tasks run on. Auto prefers Talyn Fleet, then PostHog Code.
+            “Ask every time” shows a picker on the Task button when more than one is connected.
           </p>
         </div>
         <SettingsSelect
@@ -1582,7 +1582,7 @@ export function CloudProviderDefaultSelector() {
           disabled={saving}
           onChange={(e) => onChange(e.target.value)}
         >
-          <option value="">Auto (prefer Talyn Fleet, else PostHog Code)</option>
+          <option value="">Auto</option>
           {options.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
