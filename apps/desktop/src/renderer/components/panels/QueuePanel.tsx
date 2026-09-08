@@ -228,7 +228,14 @@ export function QueuePanel() {
       </div>
 
       {/* Task Detail */}
-      <div className="flex-1 flex flex-col">
+      {/* min-w-0 is load-bearing: a flex item defaults to `min-width: auto`,
+          which resolves to its CONTENT's minimum width, and this column holds
+          the run transcript. One un-breakable tool-call line (a `git clone`
+          with a full URL) therefore widened the whole row — pushing the task
+          header, and its check counts, off the right of the window. The
+          truncate/overflow rules further down could not help: they were all
+          descendants of an ancestor that had already sized itself to content. */}
+      <div className="min-w-0 flex-1 flex flex-col">
         {selectedTaskId ? (
           <TaskDetail taskId={selectedTaskId} />
         ) : (
