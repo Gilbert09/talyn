@@ -19,10 +19,17 @@ key is public. A project write key *is* public: it is the string every web page
 ships in its PostHog snippet, it can only write into one project, and it reads
 nothing. `packages/mcp-server/src/analytics.ts` has committed this exact key,
 with that exact reasoning, the whole time. So the default bought nothing and
-cost this: **any build made outside CI emitted no client analytics at all.** The
-user in question is a contributor. He builds from source. Every event we had for
-him was server-side, which is why he had `task_dispatched` but no session, no
-`$pageview`, and no paywall — the client that would have reported it had no key.
+cost this: **any build made outside CI emitted no client analytics at all.**
+
+Be precise about the damage, because the obvious version of it is wrong: he was
+not invisible. His release builds (0.2.48, 0.2.60) and his app.talyn.dev
+sessions reported 810 client events between them. What was invisible was the
+build he runs *alongside* those — the one identifying as `0.1.0`, which is the
+committed placeholder and a version that was never tagged. **That is the client
+his automation drives.** All twelve of his merge-queue enqueues came from it,
+none of them carrying a `merge_queue_toggled`. So the split was the worst
+possible one: we could watch him browse, and not one of the actions that could
+have met a paywall was on a client able to report meeting it.
 
 The key is committed now (`.erb/configs/posthogKey.ts`), and it moved from
 `EnvironmentPlugin` to `DefinePlugin` on the way, which is the part worth

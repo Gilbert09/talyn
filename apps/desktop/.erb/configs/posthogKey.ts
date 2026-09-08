@@ -9,11 +9,12 @@
  * It used to default to `''` here, with the real value injected only by
  * publish.yml (`vars.TALYN_POSTHOG_KEY` — a repo VARIABLE, not a secret, which
  * says the team already treated it as public). The cost of that default was
- * not theoretical: a build made outside CI emitted no client analytics at all,
- * so a contributor running their own build showed up as backend events with no
- * client events behind them — no `paywall_shown`, no `checkout_started`, no
- * session. Talyn's second-heaviest user was invisible in every funnel for
- * three weeks, and a paywall he never saw read as a paywall he ignored.
+ * not theoretical: a build made outside CI emitted no client analytics at all.
+ * Talyn's second-heaviest user runs one alongside his release builds, and it is
+ * the one his automation drives — all twelve of his merge-queue enqueues came
+ * from it, with no `merge_queue_toggled` and no `paywall_shown` behind any of
+ * them, while his browsing on the released app reported normally. Every action
+ * that could have met a paywall happened on the client that could not say so.
  *
  * Two things stop those builds from polluting the numbers now that they do
  * report — both in `renderer/lib/analytics.ts`:
