@@ -1,0 +1,25 @@
+-- Batch a whole stack into the external merge queue, instead of draining it
+-- one rung per CI cycle.
+--
+-- Session 85 built the merge stack on the premise that the external queue
+-- refuses stacks outright ("GitHub considers this PR to be a part of a stack —
+-- our merge queue will be unable to merge this PR", which is still parsed as
+-- `rejected`). That stopped being true: trunk.io supports GitHub's native
+-- stacked PRs, and enqueuing ANY rung tests and lands that rung plus every
+-- rung beneath it atomically, in ONE round of CI. The serial drain therefore
+-- pays N test cycles — ~40 minutes each on posthog/posthog — plus a retarget
+-- and often a paid rebase run per rung, for work the queue would do in one.
+--
+-- `external_covered_by` is the whole state addition: the NUMBER of the rung
+-- whose submission is carrying this entry. It is set on every rung below the
+-- submitted one and is what makes those rungs hands-off — a push to any member
+-- of a submitted stack ejects the entire batch, so the covered rungs must be
+-- as untouchable as the submitted one, and nothing in the entry could say so.
+-- Cleared whenever the submission ends (merged, ejected, refused).
+--
+-- Deliberately a NUMBER and not an FK to the covering entry: the covering rung
+-- is identified to trunk, to the timeline, and to the UI by its PR number, and
+-- an entry id would have to be chased through a join to say "in the queue with
+-- #123". The value is scoped by the row's own repository, so it is unambiguous.
+ALTER TABLE "merge_queue_entries"
+  ADD COLUMN IF NOT EXISTS "external_covered_by" integer;

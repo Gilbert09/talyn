@@ -36,6 +36,12 @@ export function toPublicMergeQueue(
      *  stack membership itself from the open rows' branches; this is the piece
      *  it can't — the parent of a PR already retargeted off that branch. */
     stackParentNumber: entry.stackParentNumber ?? undefined,
+    /** Merge stack, batch submission: the PR whose submission to the external
+     *  queue is carrying this one. The client cannot derive it — the covering
+     *  rung is chosen server-side and the covered rung has no signal of its
+     *  own — and it is the difference between the badge reading "waiting for
+     *  #123 to merge" and "in the queue, with #123". */
+    stackCoveredBy: entry.externalCoveredBy ?? undefined,
     /** External merge queue (trunk.io / GitHub native): how the PR was handed
      *  over, how many submissions this head has spent, and where the provider
      *  itself says the PR is. `state` is the authoritative channel — read off

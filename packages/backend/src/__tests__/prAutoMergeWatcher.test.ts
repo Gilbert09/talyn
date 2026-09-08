@@ -18,6 +18,7 @@ import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
+  mergeQueueEntries,
 } from '../db/schema.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
@@ -661,6 +662,66 @@ describe('prAutoMergeWatcher', () => {
 
       expect(comments).not.toHaveBeenCalled();
       expect(await countTasks(db)).toBe(1);
+    });
+
+    // The batch-submission case, and the one neither read above can see. The
+    // merge queue submitted this PR's whole stack through ANOTHER rung, so this
+    // PR has no queue comment of its own, and its own base is the rung below it
+    // — an ordinary topic branch with no gate to find. A push here ejects the
+    // entire batch, several PRs at once.
+    describe('the queue is holding it as part of a stack', () => {
+      /** A covered rung is by definition a member of a GitHub native stack. */
+      const stackedSummary = () => ({
+        ...blockedSummary(),
+        baseBranch: 'feat-a',
+        stack: { id: 'PRS_1', number: 7, size: 3, position: 2, baseRefName: 'main' },
+      });
+
+      async function queueEntry(prId: string, patch: Record<string, unknown>) {
+        await db.insert(mergeQueueEntries).values({
+          id: `mqe-${prId}`,
+          pullRequestId: prId,
+          workspaceId: 'ws1',
+          repositoryId: 'repo1',
+          baseBranch: 'feat-a',
+          ...patch,
+        });
+      }
+
+      it('stands down for a rung carried by another rung\'s submission', async () => {
+        gateThe('ungated'); // its own base genuinely has no gate — that is the point
+        const comments = vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([]);
+        const prId = await insertPr(db, { summary: stackedSummary() });
+        await queueEntry(prId, { status: 'awaiting_stack', externalCoveredBy: 12 });
+
+        await prAutoMergeWatcher.runOnce();
+
+        expect(await countTasks(db)).toBe(0);
+        // Answered from the entry alone — no GitHub call was needed at all.
+        expect(comments).not.toHaveBeenCalled();
+      });
+
+      it('fires again once the submission carrying it has ended', async () => {
+        gateThe('ungated');
+        const prId = await insertPr(db, { summary: stackedSummary() });
+        await queueEntry(prId, { status: 'queued', externalCoveredBy: null });
+
+        await prAutoMergeWatcher.runOnce();
+
+        expect(await countTasks(db)).toBe(1);
+      });
+
+      // A terminal entry is history. Its marker must not keep a PR frozen after
+      // the queue is done with it.
+      it('ignores the marker on a terminal entry', async () => {
+        gateThe('ungated');
+        const prId = await insertPr(db, { summary: stackedSummary() });
+        await queueEntry(prId, { status: 'removed', externalCoveredBy: 12 });
+
+        await prAutoMergeWatcher.runOnce();
+
+        expect(await countTasks(db)).toBe(1);
+      });
     });
 
     // A queue we cannot see must never wedge the watcher.

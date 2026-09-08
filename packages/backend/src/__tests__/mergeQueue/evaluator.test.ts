@@ -41,6 +41,7 @@ import {
   noteMerge,
   _resetQueueHealth,
 } from '../../services/repoQueueHealth.js';
+import { _resetStackBatching } from '../../services/repoStackBatching.js';
 import { TaskLimitError } from '../../services/billing/entitlements.js';
 import { ensureActiveEntry, getActiveEntryForPr } from '../../services/mergeQueue/store.js';
 import {
@@ -303,6 +304,7 @@ describe('mergeQueue v2 pipeline', () => {
     // `repo1`/`main` — an infra failure recorded by one would otherwise have
     // the queue looking sick for every test after it.
     _resetQueueHealth();
+    _resetStackBatching();
     _resetSubmitRoutes();
     await seedBase(db);
     mergeSpy = vi
@@ -1170,6 +1172,157 @@ describe('mergeQueue v2 pipeline', () => {
       expect(mergeSpy).not.toHaveBeenCalled();
       const codes = (await eventsOf(db, b.entryId)).map((e) => e.code);
       expect(codes).toContain('stack_retargeted');
+    });
+
+    // ── Batch submission ──
+    //
+    // The same three PRs, except GitHub calls them a stack and `main` is behind
+    // trunk. The serial drain above would cost three full test cycles; the
+    // provider does the whole thing in one, so exactly one rung is submitted
+    // and the other two are held hands-off behind it.
+    describe('handed to the external queue as one batch', () => {
+      /** The stack object GitHub puts on each rung. Position 1 = the bottom. */
+      const stackAt = (position: number) => ({
+        id: 'PRS_stack1',
+        number: 7,
+        size: 3,
+        position,
+        baseRefName: 'main',
+      });
+
+      /** A, B, C as a NATIVE stack landing on a trunk-gated `main`. */
+      async function seedNativeStack() {
+        const a = await insertQueuedPr(db, {
+          summary: { ...cleanSummary('main'), headBranch: 'feat-a', nodeId: 'n1', stack: stackAt(1) },
+        });
+        const b = await insertQueuedPr(db, {
+          summary: { ...cleanSummary('feat-a'), headBranch: 'feat-b', nodeId: 'n2', stack: stackAt(2) },
+        });
+        const c = await insertQueuedPr(db, {
+          summary: { ...cleanSummary('feat-b'), headBranch: 'feat-c', nodeId: 'n3', stack: stackAt(3) },
+        });
+        return { a, b, c };
+      }
+
+      /**
+       * Only `main` is gated — which is the crux. Every rung above the bottom
+       * one targets a plain topic branch, so a gate probe on the entry's OWN
+       * base answers "nothing governs this" and the queue would merge the rung
+       * into the rung below it.
+       */
+      function gateLandingBranchOnly() {
+        mockGetGate.mockImplementation(async (_ws, _o, _r, branch: string) =>
+          branch === 'main' ? 'confirmed' : null
+        );
+        mockCapability.mockResolvedValue('available');
+        // trunk's instruction comment — the door the submit ladder prefers.
+        vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+          {
+            body:
+              '<!-- Trunk Merge -->\nMerging to `main` in this repository is managed by Trunk. ' +
+              'To merge this pull request, check the box to the left or comment `/trunk merge` below.',
+          },
+        ]);
+      }
+
+      it('submits the TOP rung and holds the two below it', async () => {
+        gateLandingBranchOnly();
+        const comment = vi
+          .spyOn(githubService, 'createIssueComment')
+          .mockResolvedValue(undefined);
+        const { a, b, c } = await seedNativeStack();
+
+        // Each rung lives in its own group, so each gets its own walk.
+        await evaluateGroupNow('repo1', 'feat-b', 'test'); // C — the top rung
+        await evaluateGroupNow('repo1', 'feat-a', 'test'); // B
+        await evaluateGroupNow('repo1', 'main', 'test'); // A — the bottom rung
+
+        // One submission, on the top rung, which lands all three.
+        expect(comment).toHaveBeenCalledTimes(1);
+        expect(comment).toHaveBeenCalledWith('ws1', 'a', 'b', 3, '/trunk merge');
+        expect((await entryOf(db, c.prId))?.status).toBe('awaiting_external');
+
+        // …and nothing merged. Before batching, A would have merged here.
+        expect(mergeSpy).not.toHaveBeenCalled();
+        for (const rung of [a, b]) {
+          const entry = await entryOf(db, rung.prId);
+          expect(entry?.status).toBe('awaiting_stack');
+          expect(entry?.externalCoveredBy).toBe(3);
+        }
+      });
+
+      // The hazard the covered marker exists for: a push to ANY member ejects
+      // the whole batch, and a covered rung has nothing of its own to say so.
+      it('fires no fix run at a covered rung, even one with a real blocker', async () => {
+        gateLandingBranchOnly();
+        vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
+        const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+        const { a } = await seedNativeStack();
+        await evaluateGroupNow('repo1', 'feat-b', 'test');
+
+        // The bottom rung develops a conflict while the batch is being tested.
+        await db
+          .update(pullRequestsTable)
+          .set({
+            lastSummary: {
+              ...conflictSummary('main'),
+              headBranch: 'feat-a',
+              stack: stackAt(1),
+            },
+          })
+          .where(eq(pullRequestsTable.id, a.prId));
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        expect(fixRun).not.toHaveBeenCalled();
+        expect((await entryOf(db, a.prId))?.externalCoveredBy).toBe(3);
+      });
+
+      // Nothing is submitted while any rung still has work on it — the provider
+      // tests the rungs as one unit, so a conflict four deep fails the batch and
+      // buys a bisection to rediscover which rung was at fault.
+      it('waits for a conflicted rung to be fixed before submitting anything', async () => {
+        gateLandingBranchOnly();
+        const comment = vi
+          .spyOn(githubService, 'createIssueComment')
+          .mockResolvedValue(undefined);
+        const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+        const { a, c } = await seedNativeStack();
+        await db
+          .update(pullRequestsTable)
+          .set({
+            lastSummary: {
+              ...conflictSummary('main'),
+              headBranch: 'feat-a',
+              stack: stackAt(1),
+            },
+          })
+          .where(eq(pullRequestsTable.id, a.prId));
+
+        await evaluateGroupNow('repo1', 'feat-b', 'test'); // the top rung
+        await evaluateGroupNow('repo1', 'main', 'test'); // the conflicted one
+
+        expect(comment).not.toHaveBeenCalled();
+        expect((await entryOf(db, c.prId))?.status).toBe('awaiting_stack');
+        // The rung with the actual problem still gets its run — the serial
+        // drain's park would have prevented that.
+        expect(fixRun).toHaveBeenCalledTimes(1);
+      });
+
+      // A stack that is not GitHub's takes the old path, because the provider
+      // only batches the ones GitHub calls stacks.
+      it('falls back to the serial drain for a branch-shaped stack', async () => {
+        gateLandingBranchOnly();
+        const { a, b } = await seedStack(); // no `stack` on any summary
+
+        await evaluateGroupNow('repo1', 'feat-a', 'test');
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        const child = await entryOf(db, b.prId);
+        expect(child?.status).toBe('awaiting_stack');
+        expect(child?.externalCoveredBy).toBeNull();
+        expect(child?.stackParentNumber).toBe(1);
+        expect(await entryOf(db, a.prId)).not.toBeNull();
+      });
     });
 
     it('clears the memos probed against the old base on retarget', async () => {

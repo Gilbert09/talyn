@@ -2,6 +2,108 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 115 — the merge queue takes a whole stack at once (2026-09-07)
+
+A four-deep stack on posthog/posthog cost four full trunk test cycles — roughly
+40 minutes each — plus a base retarget and often a paid rebase run between every
+pair. It now costs one, because trunk lands the rung it is given **plus every
+rung beneath it, atomically, in a single round of CI**.
+
+**The premise Session 85 was built on had expired.** R4b's own comment said it:
+a parked child must never "be submitted to trunk (which refuses stacks
+outright)", and `externalMergeQueue.ts` still parses that refusal
+(`unable to merge this pr` → `rejected`). trunk supports GitHub's native stacked
+PRs now, so the serial drain was paying N test cycles for work the provider does
+once. `docs/SESSIONS.md` even recorded the cost as a law of nature — "an N-deep
+stack pays N serial CI cycles by construction".
+
+**The eligibility signal is GitHub's, not ours.** `linkStack` derives a stack
+from branch shapes (`child.base == parent.head`) and that is still what the UI
+indents by and what the serial drain runs on — but trunk batches only what
+GITHUB calls a stack ("GitHub considers this PR to be a part of a stack" is
+trunk's own wording). So the batch path reads `stack { id number size
+baseRefName }` + `stackEntry { position }` off the PR query — ordinary nullable
+fields, no preview header, `null` on a standalone PR, so it costs no extra
+round-trip — and a branch-shaped stack takes the old path unchanged. Deriving
+eligibility from branch shapes would submit stacks the provider refuses, at one
+wasted submission per rung. `GITHUB_STACK_FIELDS=0` drops the selection if
+GitHub ever withdraws the fields mid-preview: it rides in the one query every
+poll of every repo runs.
+
+**The gate probe was asking the wrong branch, and that is the crux.** A stacked
+PR's own base is the rung below it — an ordinary topic branch with no rulesets
+and no merge queue — so `getExternalMergeGate(…, entry.baseBranch)` answers
+"nothing governs this merge" for every rung above the bottom one. The gate that
+applies is the one on `stack.baseRefName`, the branch the whole stack lands on
+(`prLandingBranch` in `@talyn/shared`). Same fix in the auto-keep watcher and in
+`POST /pull-requests/:id/merge`, which without it merged a stack member into its
+parent's branch rather than submitting it.
+
+**`external_covered_by` (migration `0051`) is the whole state addition**, and
+it is what makes the feature safe rather than what makes it work. The provider
+ejects the ENTIRE batch when anything pushes to any member, so while a
+submission is live every rung beneath it must be exactly as untouchable as the
+submitted one — and nothing else in a covered entry could say so, because it has
+no provider comment of its own and no gate on its own base. Hence a persisted
+number rather than a derived edge, read by R4b and by the watcher (one indexed
+row, no GitHub call).
+
+**R4b gained a branch that inverts it, above the park.** `decideStackBatch`
+returns a decision only for a covered rung; the submit rung falls through to the
+ordinary rules and submits itself through `decideCleanPath` on the STACK's gate.
+The rungs in between fall through too — deliberately, because the provider tests
+the rungs as one unit, so a conflict four deep is real work that must happen
+BEFORE the submission, and the serial park prevented it. What they must never do
+is merge, arm auto-merge, or submit on their own, which is `stackBatchHoldsMerge`
+at the two clean paths (both doors to `verify_live_then_merge`, `arm_automerge`
+and `submit_external`).
+
+**The submission goes to the TOP rung**, and only when every rung is both queued
+and individually ready. Top, because the provider lands that rung and everything
+under it — submitting lower lands a prefix and leaves the rest for another
+cycle. "Every rung ready" because a batch that fails is bisected to rediscover
+which rung was at fault, with everything batched alongside it waiting (Session
+88's argument). "Every rung QUEUED" is a promise, not a limitation: the
+submission lands rungs whether or not Talyn tracks them, so a stack with an
+unqueued rung would merge a PR the user never asked to merge. `stackRungReady`
+deliberately ignores CI and reviews — trunk waits for branch protection itself,
+so holding the submission until every rung is green would add a whole test cycle
+to the workflow this exists to shorten.
+
+**A refusal is a fallback, not a wall.** `services/repoStackBatching.ts` is the
+fourth instance of the `repoMergeGate` / `repoQueueHealth` / `repoSigning` shape
+— a reading that decays (24h) and re-earns itself, cleared outright the moment a
+submission is accepted. Optimistic by default: guessing wrong costs one refusal
+comment on one PR, which it then remembers; guessing the other way makes every
+stack in every repo take N times longer with nothing to say why. A `rejected`
+state on a batched stack now records the refusal and requeues for the serial
+drain instead of `blocked_manual` — but a `rejected` on an unstacked PR still
+blocks exactly as before, so one unrelated refusal cannot switch a healthy repo
+back for a day.
+
+**A stack's rungs live in different (repo, base) groups**, so no group walk can
+see its own stack — the plan is resolved in the evaluator, like `stackParent`,
+and normally costs nothing (`summary.stack` is null on virtually every PR).
+
+**Waking the sibling groups directly was tried and reverted, and the reason is
+worth keeping.** A covered rung's triggers all key on a base nothing touched, so
+when its batch ends it learns that only from the 60s reconciler; scheduling the
+other rungs' groups on a status change looked like the obvious fix, and it hung
+CI on all three OSes for 100 minutes — a run that normally takes ~30. Every
+`scheduleGroupEvaluation` is a DETACHED walk holding a 45s `withTimeout` timer,
+so rungs scheduling each other build an endless chain of scheduled walks: the
+process never goes idle and vitest never exits. Guarding on "only when the
+status actually changed" does not save it — the chain outlives the test that
+started it. **The reconciler is the backstop, deliberately.** A covered rung can
+therefore read "queued with #N" for up to a minute after the batch it names has
+ended, which is a latency cost and not a correctness one: nothing acts on the
+stale marker except to keep hands off a PR the queue has already released.
+
+**Open**: the failure of a batch is handled at the submitted rung, so a fix run
+is dispatched there even when trunk's bisection blames a lower one — the run
+gets the stack in its prompt and has to place the fix itself. Routing the run at
+the rung trunk names is the obvious follow-up.
+
 ## Session 114 — Talyn Fleet becomes the default, on the user's own subscription (2026-09-05)
 
 Three providers became two, and the survivor changed what it spends. **Talyn

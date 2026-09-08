@@ -29,7 +29,14 @@ import {
   touchEvaluated,
 } from './store.js';
 import { evaluateEntry, PR_EVAL_COLUMNS, type PrEvalRow } from './executor.js';
-import { resolveStackParents } from './stack.js';
+import {
+  planStackBatch,
+  resolveNativeStackChain,
+  resolveStackParents,
+  type StackBatchPlan,
+} from './stack.js';
+import { stackBatchingAllowed } from '../repoStackBatching.js';
+import type { PRMergeableSummary } from '@talyn/shared';
 
 /** Hard bound on one group evaluation — a hung GitHub call must not hold the
  *  group's coalescing slot (or its advisory lock) for minutes. Abandoned work
@@ -159,6 +166,85 @@ async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Prom
   }
 }
 
+/**
+ * Batch-submission plans for every entry in this walk that belongs to a GitHub
+ * NATIVE stack whose landing branch is behind an external merge queue.
+ *
+ * This has to live in the evaluator rather than in `decide` or the executor for
+ * the same reason `stackParent` does, only more so: a stack's members each
+ * target a different base, so they are in different (repo, base) GROUPS, walked
+ * by separate and possibly concurrent evaluations. No entry can see its own
+ * stack from inside its own group walk.
+ *
+ * Cost is bounded and normally zero: `summary.stack` is null on virtually every
+ * PR, so the map is empty and nothing else runs. When a stack IS present it is
+ * one gate lookup (cached, usually a map hit) plus two small queries per
+ * distinct stack in the group — and a group holds at most one rung of any given
+ * stack, since the rungs do not share a base.
+ *
+ * DO NOT wake the other rungs' groups from here. It is the obvious thing to
+ * want — a covered rung's own triggers all key on a base nothing touches, so it
+ * only learns its batch ended from the 60s reconciler — and it does not work:
+ * `scheduleGroupEvaluation` starts a DETACHED walk that holds a 45s
+ * `withTimeout` timer, so rungs scheduling each other build an endless chain of
+ * scheduled walks that never lets the process go idle. It hung CI on all three
+ * OSes for 100 minutes (a run that normally takes ~30) and vitest never exited;
+ * guarding on "only when the status actually changed" does not help, because
+ * the chain outlives the test that started it. The reconciler is the backstop
+ * on purpose — a stale "queued with #N" for up to a minute is a latency cost,
+ * not a correctness one.
+ */
+async function resolveStackBatchPlans(
+  repositoryId: string,
+  workspaceId: string,
+  prRows: PrEvalRow[],
+  db: ReturnType<typeof getPoolDbClient>
+): Promise<Map<string, StackBatchPlan>> {
+  const plans = new Map<string, StackBatchPlan>();
+  const stacked = prRows.filter(
+    (r) => ((r.lastSummary as PRMergeableSummary | null)?.stack ?? null) !== null
+  );
+  if (stacked.length === 0) return plans;
+
+  // One chain per distinct stack, shared by every entry of it in this group.
+  const chains = new Map<string, Awaited<ReturnType<typeof resolveNativeStackChain>>>();
+  for (const row of stacked) {
+    const stack = (row.lastSummary as PRMergeableSummary).stack!;
+    if (chains.has(stack.id)) continue;
+    // Both preconditions before any query: the landing branch must actually be
+    // behind a merge queue (an ungated stack has nothing to submit TO and takes
+    // the ordinary serial drain), and that queue must not have refused a stack
+    // here lately.
+    if (!stackBatchingAllowed(row.owner, row.repo, stack.baseRefName)) continue;
+    const gate = await getExternalMergeGate(
+      workspaceId,
+      row.owner,
+      row.repo,
+      stack.baseRefName
+    ).catch(() => null);
+    if (gate === null) continue;
+    chains.set(
+      stack.id,
+      await resolveNativeStackChain(
+        repositoryId,
+        workspaceId,
+        stack.id,
+        stack.baseRefName,
+        db
+      ).catch(() => null)
+    );
+  }
+
+  for (const row of stacked) {
+    const stack = (row.lastSummary as PRMergeableSummary).stack!;
+    const chain = chains.get(stack.id);
+    if (!chain) continue;
+    const plan = planStackBatch(chain, row.id);
+    if (plan) plans.set(row.id, plan);
+  }
+  return plans;
+}
+
 async function walkGroup(repositoryId: string, baseBranch: string, trigger: string): Promise<void> {
   const db = getPoolDbClient();
   const entries = await loadActiveGroup(repositoryId, baseBranch, db);
@@ -211,6 +297,9 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
   // stack member's parent is what R4b parks it behind and retargets it off.
   const stackParents = await resolveStackParents(repositoryId, workspaceId, [baseBranch], db);
   const stackParent = stackParents.get(baseBranch) ?? null;
+  // …and can this entry's stack go to the external queue in one piece? Answered
+  // per PR, because a group can hold rungs of different stacks.
+  const stackBatchPlans = await resolveStackBatchPlans(repositoryId, workspaceId, prRows, db);
 
   const positions = computeEntryPositions(entries);
   const evaluated: string[] = [];
@@ -257,6 +346,7 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
         groupMergeInFlight,
         trigger,
         stackParent,
+        stackBatch: stackBatchPlans.get(entry.pullRequestId) ?? null,
       });
       if (result.casLost) {
         // Someone newer is writing this group — stop walking; their

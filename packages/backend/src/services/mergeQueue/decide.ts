@@ -685,7 +685,30 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   //   before R5..R11 — a parked child must never arm auto-merge, be submitted
   //                  to trunk (which refuses stacks outright), fire a fix run,
   //                  update its branch, or merge.
-  if (ctx.stackParent !== undefined && ctx.stackParent !== null) {
+  //
+  // R4b-BATCH takes precedence over all of that, and inverts it. The premise
+  // above — that the external queue refuses stacks — stopped being true:
+  // trunk.io lands a GitHub NATIVE stack as one unit, testing the rung it is
+  // given plus every rung beneath it in a single round of CI. Where that
+  // applies, parking the children is the expensive answer: it buys one full
+  // test cycle per rung (~40 minutes each on posthog/posthog) plus a retarget
+  // and often a paid rebase run between each pair, for work the provider does
+  // once. So a batchable stack hands ONE rung to the provider and holds the
+  // rest, rather than draining them.
+  //
+  // `ctx.stackBatch` is present only when the whole precondition holds (native
+  // stack, gated landing branch, provider has not refused a stack here) — its
+  // absence is the serial drain below, unchanged.
+  if (ctx.stackBatch) {
+    const batched = decideStackBatch(d, ctx);
+    if (batched) return batched;
+    // Fell through: this rung is neither covered nor stale, so it proceeds
+    // through the ordinary rules. Whether it may actually MERGE is a separate
+    // question answered by `stackBatchHoldsMerge` on the clean paths — a rung
+    // that is not the submit target still remediates its own blockers (the
+    // provider tests the rungs as one unit, so a conflict four deep is real
+    // work), it just never lands on its own.
+  } else if (ctx.stackParent !== undefined && ctx.stackParent !== null) {
     const parent = ctx.stackParent;
     const stacked = decideStackGate(d, pr, parent, ctx);
     if (stacked) return stacked;
@@ -749,6 +772,34 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
       ext !== null && isExternalQueueEjected(ext.state) && withinPickupGrace(d.entry, ctx);
     if (!staleEjection) d.observeExternalState(ext);
     if (ext && ext.state === 'rejected') {
+      // A refusal on a rung of a stack we submitted as a BATCH is almost
+      // certainly about the batch, not about the PR — trunk's own sentence is
+      // "GitHub considers this PR to be a part of a stack — … our merge queue
+      // will be unable to merge this PR", which is what a repo says when its
+      // stacked-PR support is off. That has a fallback, so it must not become a
+      // human's problem: remember the refusal for the repo (every other stack
+      // skips the batch from here) and put this rung back in line for the
+      // serial drain, which is what the queue did before batching existed.
+      if (ctx.stackBatch) {
+        d.act({ kind: 'mark_stack_batch_refused', evidence: ext.evidence });
+        d.transition('queued', {
+          blockedCode: null,
+          blockedReason: null,
+          set: {
+            externalSubmitVia: null,
+            externalSubmittedAt: null,
+            externalCoveredBy: null,
+          },
+          event: {
+            code: 'stack_batch_refused',
+            message:
+              `${externalQueueProviderLabel(ext.provider)} will not take this stack as one ` +
+              'batch — merging it one PR at a time instead.',
+            detail: { evidence: ext.evidence, source: ext.source },
+          },
+        });
+        return d.done('advance');
+      }
       // The provider itself says it will never merge this PR (trunk on a
       // stacked PR: "our merge queue will be unable to merge this PR"). A fix
       // run can't unstack it and a resubmit would be ignored.
@@ -1274,11 +1325,88 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
 // ── Sub-deciders ──
 
 /**
- * Head is clean except for in-flight CI. Plain wait (awaiting_ci) — or, when
- * native auto-merge is available and the signing gate passes, arm GitHub
- * auto-merge so the merge happens the instant checks go green, with zero
- * queue latency and immune to our budget.
+ * Merge stack, batch submission (R4b-BATCH). Returns a Decision when this rung
+ * is being carried by another rung's submission, or null to let it proceed.
+ *
+ * The covered rungs are the point of the whole feature and the only thing that
+ * makes it safe: the provider ejects the ENTIRE batch when anything pushes to
+ * any member ("🚫 removed from the merge queue because it was pushed to"), so
+ * while a submission is live every rung beneath it must be exactly as
+ * untouchable as the submitted one. Nothing else in a covered entry could say
+ * so — its own base is the rung below it, an ordinary topic branch with no
+ * gate, no provider comment and nothing to ask — which is why the covering
+ * rung's number is persisted on the entry rather than re-derived.
  */
+function decideStackBatch(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
+  const plan = ctx.stackBatch!;
+  if (plan.coveredBy !== null) {
+    if (d.entry.status !== 'awaiting_stack' || d.entry.externalCoveredBy !== plan.coveredBy) {
+      d.transition('awaiting_stack', {
+        blockedCode: null,
+        blockedReason: null,
+        set: { externalCoveredBy: plan.coveredBy },
+        event: {
+          code: 'stack_batch_covered',
+          message:
+            `In the merge queue as part of #${plan.coveredBy}'s stack — the queue tests and ` +
+            `lands all ${plan.size} of them together.`,
+        },
+      });
+    }
+    return d.done('advance');
+  }
+  // Not covered any more: the submission merged, was ejected, or was refused.
+  // Clear the marker and fall through to a fresh decision, or this rung stays
+  // hands-off against a batch that no longer exists.
+  if (d.entry.externalCoveredBy !== null) {
+    d.transition('queued', {
+      blockedCode: null,
+      blockedReason: null,
+      set: { externalCoveredBy: null },
+      event: {
+        code: 'stack_batch_ended',
+        message: 'The stack submission carrying this PR has ended — back in line.',
+      },
+    });
+  }
+  return null;
+}
+
+/**
+ * May this rung take the merge into its own hands?
+ *
+ * No, whenever a batch submission is the plan and this rung is not the one
+ * being submitted — including while the stack is not yet submittable at all
+ * (`submitNumber === null`, i.e. some rung is still draft, conflicted, has
+ * changes requested, or was never enqueued). Both cases end the same way: the
+ * rung waits. What it must NOT do is merge into the rung below it, arm
+ * auto-merge (which is GitHub merging it into the rung below it, later), or
+ * submit itself — a second submission of the same stack is a second batch of
+ * the same commits.
+ */
+function stackBatchHoldsMerge(ctx: DecisionContext): boolean {
+  const plan = ctx.stackBatch;
+  if (!plan) return false;
+  return plan.submitNumber === null || !plan.isSubmitRung;
+}
+
+/** Park a rung whose stack is being batched but which is not the submit rung. */
+function holdForStackBatch(d: DecisionBuilder, ctx: DecisionContext): Decision {
+  const plan = ctx.stackBatch!;
+  const message =
+    plan.submitNumber === null
+      ? `Waiting for the rest of the stack — all ${plan.size} PRs go to the merge queue together.`
+      : `Waiting for #${plan.submitNumber} to be submitted — the merge queue takes the whole stack at once.`;
+  if (d.entry.status !== 'awaiting_stack' || d.entry.blockedReason !== message) {
+    d.transition('awaiting_stack', {
+      blockedCode: null,
+      blockedReason: message,
+      event: { code: 'stack_batch_waiting', message },
+    });
+  }
+  return d.done('advance');
+}
+
 /**
  * The merge-stack gate (R4b). Returns a Decision when this entry belongs to a
  * stack and must not proceed on its own, or null to fall through to the normal
@@ -1418,6 +1546,12 @@ function decideStackGate(
   return d.done('advance');
 }
 
+/**
+ * Head is clean except for in-flight CI. Plain wait (awaiting_ci) — or, when
+ * native auto-merge is available and the signing gate passes, arm GitHub
+ * auto-merge so the merge happens the instant checks go green, with zero
+ * queue latency and immune to our budget.
+ */
 function decideCleanButWaitingOnCi(
   d: DecisionBuilder,
   pr: PrSnapshot,
@@ -1436,6 +1570,12 @@ function decideCleanButWaitingOnCi(
   // even mid-run. If the run pushes again, the new head resets budgets and
   // the arm follows the PR (GitHub keeps it for write-access pushers; a
   // disarm re-arms via the snapshot event).
+  // Same stack-batch hold as the clean path, and it has to be here too: this is
+  // the other door to both `submit_external` and `arm_automerge`, and a rung
+  // that armed auto-merge here would be merged by GitHub into the rung below it
+  // the moment its checks went green — the disarm invariant `awaiting_stack`
+  // already joins for the serial drain.
+  if (stackBatchHoldsMerge(ctx)) return holdForStackBatch(d, ctx);
   // Gated base: arming auto-merge IS the submit primitive for both trunk.io and
   // GitHub's native queue, so route through submit_external — which also owns
   // the fallback when GitHub refuses to arm. No isHead / groupMergeInFlight
@@ -2184,6 +2324,11 @@ function decideCleanPath(
   ctx: DecisionContext,
   runActive: boolean
 ): Decision {
+  // A rung of a batched stack is clean on its OWN base — which is the rung
+  // below it. Merging here would land it in that branch instead of where the
+  // stack goes, which is the hazard R4b has always existed to prevent; the
+  // batch just moves the answer from "park it" to "wait for the submission".
+  if (stackBatchHoldsMerge(ctx)) return holdForStackBatch(d, ctx);
   // One merge in flight per (repo, base): if a sibling is merging or armed,
   // wait our turn — merging past an armed head would invalidate its CI. Not
   // when an external queue owns the base: it serializes (and batches) the

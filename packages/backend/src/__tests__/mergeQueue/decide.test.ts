@@ -24,7 +24,7 @@ import type {
   EntrySnapshot,
   PrSnapshot,
 } from '../../services/mergeQueue/types.js';
-import type { StackParent } from '../../services/mergeQueue/stack.js';
+import type { StackBatchPlan, StackParent } from '../../services/mergeQueue/stack.js';
 import type { ExternalQueueState } from '@talyn/shared';
 
 const NOW = '2026-07-16T12:00:00.000Z';
@@ -53,6 +53,7 @@ function entry(o: Partial<EntrySnapshot> = {}): EntrySnapshot {
     mergeMethod: 'squash',
     baseBranch: 'main',
     stackParentNumber: null,
+    externalCoveredBy: null,
     retargetAttempts: 0,
     ...o,
   };
@@ -3098,6 +3099,194 @@ describe('decide — merge stack', () => {
       );
       expect(kinds(d)).not.toContain('fire_fix_run');
       expect(lastTransition(d)?.to).toBe('awaiting_stack');
+    });
+  });
+});
+
+// ─────────────────────── merge stack: batch submission ───────────────────────
+//
+// The inversion of the rules above. When the stack is a GitHub NATIVE one and
+// the branch it lands on is behind an external merge queue, that queue takes
+// the whole stack in one round of CI — so exactly one rung is submitted and
+// every rung beneath it is held, rather than each rung being drained in turn
+// at a full test cycle apiece.
+describe('decide — merge stack, batch submission', () => {
+  function batch(o: Partial<StackBatchPlan> = {}): StackBatchPlan {
+    return {
+      targetBase: 'main',
+      submitNumber: 43,
+      isSubmitRung: false,
+      coveredBy: null,
+      size: 3,
+      ...o,
+    };
+  }
+  /** A middle rung: based on the rung below, otherwise perfectly mergeable. */
+  const rung = (o: Partial<EntrySnapshot> = {}) => entry({ baseBranch: 'feat-a', ...o });
+  const rungPr = (s: Partial<PRMergeableSummary> = {}) =>
+    pr({}, { headBranch: 'feat-b', baseBranch: 'feat-a', ...s });
+  const gated = (plan: StackBatchPlan, o: Partial<DecisionContext> = {}) =>
+    ctx({ externalGate: 'confirmed', stackBatch: plan, ...o });
+
+  describe('a rung carried by another rung\'s submission', () => {
+    it('parks hands-off and records which PR is carrying it', () => {
+      const d = decide(rung(), rungPr(), gated(batch({ coveredBy: 43 })));
+      const t = lastTransition(d);
+      expect(t?.to).toBe('awaiting_stack');
+      expect(t?.set?.externalCoveredBy).toBe(43);
+      expect(d.verdict).toBe('advance');
+    });
+
+    // The point of the marker: the provider ejects the WHOLE batch when
+    // anything pushes to any member, so a covered rung must not be remediated,
+    // merged, or submitted — even though its own base looks perfectly ordinary.
+    it('does nothing else at all — no fix run, no merge, no submit', () => {
+      const d = decide(
+        rung(),
+        rungPr({ blockingReason: 'merge_conflicts', mergeable: 'CONFLICTING' }),
+        gated(batch({ coveredBy: 43 }))
+      );
+      expect(kinds(d)).not.toContain('fire_fix_run');
+      expect(kinds(d)).not.toContain('verify_live_then_merge');
+      expect(kinds(d)).not.toContain('submit_external');
+      expect(kinds(d)).not.toContain('arm_automerge');
+      expect(kinds(d)).not.toContain('update_branch');
+    });
+
+    it('is idempotent — an already-marked rung writes nothing', () => {
+      const d = decide(
+        rung({ status: 'awaiting_stack', externalCoveredBy: 43 }),
+        rungPr(),
+        gated(batch({ coveredBy: 43 }))
+      );
+      expect(transitions(d)).toHaveLength(0);
+      expect(d.verdict).toBe('advance');
+    });
+
+    // The submission ended (merged, ejected, refused). A stale marker would
+    // hold every fix path off this PR indefinitely, including the watcher's.
+    it('clears the marker and rejoins the queue once nothing covers it', () => {
+      const d = decide(
+        rung({ status: 'awaiting_stack', externalCoveredBy: 43 }),
+        rungPr(),
+        gated(batch({ coveredBy: null, submitNumber: null }))
+      );
+      const t = transitions(d)[0];
+      expect(t?.to).toBe('queued');
+      expect(t?.set?.externalCoveredBy).toBeNull();
+      expect(t?.event.code).toBe('stack_batch_ended');
+    });
+  });
+
+  describe('the rung being submitted', () => {
+    it('hands the stack to the queue instead of parking behind its parent', () => {
+      const d = decide(rung(), rungPr(), gated(batch({ isSubmitRung: true })));
+      expect(kinds(d)).toContain('submit_external');
+    });
+
+    // The serial drain would have parked this rung — that is the whole
+    // inversion, so pin it: a stack parent present alongside a batch plan must
+    // not re-introduce the park.
+    it('ignores the serial stack parent entirely', () => {
+      const d = decide(
+        rung(),
+        rungPr(),
+        gated(batch({ isSubmitRung: true }), {
+          stackParent: {
+            pullRequestId: 'pr-parent',
+            number: 41,
+            headBranch: 'feat-a',
+            baseBranch: 'main',
+            state: 'open',
+            entryStatus: 'queued',
+            targetBase: 'main',
+            depth: 1,
+            cycle: false,
+          },
+        })
+      );
+      expect(kinds(d)).toContain('submit_external');
+      expect(lastTransition(d)?.to).not.toBe('awaiting_stack');
+    });
+  });
+
+  describe('before the stack is submittable', () => {
+    // submitNumber === null means some rung is draft, conflicted, has changes
+    // requested, or was never enqueued. Nothing is submitted until that clears,
+    // and the top rung waits with the rest rather than going alone.
+    it('holds even the top rung', () => {
+      const d = decide(
+        rung(),
+        rungPr(),
+        gated(batch({ isSubmitRung: true, submitNumber: null }))
+      );
+      expect(kinds(d)).not.toContain('submit_external');
+      expect(kinds(d)).not.toContain('verify_live_then_merge');
+      expect(lastTransition(d)?.to).toBe('awaiting_stack');
+      expect(d.verdict).toBe('advance');
+    });
+
+    // …but the rungs still get FIXED. The provider tests the stack as one
+    // unit, so a conflict four deep is real work that has to happen before the
+    // submission, and the serial drain's park would have prevented it.
+    it('still remediates a rung with a real blocker', () => {
+      const d = decide(
+        rung(),
+        rungPr({ blockingReason: 'merge_conflicts', mergeable: 'CONFLICTING' }),
+        gated(batch({ submitNumber: null }))
+      );
+      expect(kinds(d)).toContain('fire_fix_run');
+    });
+
+    it('never merges a clean lower rung into the rung below it', () => {
+      const d = decide(rung(), rungPr(), gated(batch()));
+      expect(kinds(d)).not.toContain('verify_live_then_merge');
+      expect(kinds(d)).not.toContain('arm_automerge');
+      expect(lastTransition(d)?.to).toBe('awaiting_stack');
+    });
+  });
+
+  // trunk answers a stack it cannot batch with "GitHub considers this PR to be
+  // a part of a stack — … our merge queue will be unable to merge this PR".
+  // That is a repo configuration with a working fallback, so it must not become
+  // a human's problem the way an ordinary refusal does.
+  describe('the provider refuses the batch', () => {
+    const refused = (plan: StackBatchPlan | null) =>
+      decide(
+        rung({
+          status: 'awaiting_external',
+          externalSubmitVia: 'comment',
+          externalSubmittedAt: '2026-07-16T11:00:00.000Z',
+        }),
+        rungPr(),
+        ctx({
+          externalGate: 'confirmed',
+          ...(plan ? { stackBatch: plan } : {}),
+          externalQueue: {
+            provider: 'trunk',
+            state: 'rejected',
+            source: 'comment',
+            evidence:
+              'GitHub considers this PR to be a part of a stack, and our merge queue will be ' +
+              'unable to merge this PR.',
+          },
+        })
+      );
+
+    it('remembers the refusal for the repo and falls back to the serial drain', () => {
+      const d = refused(batch({ isSubmitRung: true }));
+      expect(kinds(d)).toContain('mark_stack_batch_refused');
+      const t = lastTransition(d);
+      expect(t?.to).toBe('queued');
+      expect(t?.event.code).toBe('stack_batch_refused');
+      expect(kinds(d)).not.toContain('notify_blocked');
+    });
+
+    it('still blocks a refusal that has nothing to do with a stack', () => {
+      const d = refused(null);
+      expect(kinds(d)).not.toContain('mark_stack_batch_refused');
+      expect(lastTransition(d)?.to).toBe('blocked_manual');
+      expect(kinds(d)).toContain('notify_blocked');
     });
   });
 });

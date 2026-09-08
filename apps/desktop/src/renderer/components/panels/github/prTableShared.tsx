@@ -348,6 +348,11 @@ function PRTableRow({
   // approved, green, conflict-free PR reads `blocked` too. Hiding the button
   // there would hide it on every PR in the repo — instead offer it, and let the
   // backend either merge or submit the PR to that queue.
+  // GitHub's own stack, not the branch-shaped one: a merge queue that takes
+  // stacks lands the rung it is given plus everything beneath it, so on a
+  // stacked PR the merge button is a submission of this PR AND the rungs below.
+  // `position` is 1-based from the bottom, so position 3 has 2 rungs below it.
+  const nativeStackBelow = Math.max((summary.stack?.position ?? 1) - 1, 0);
   const canMerge =
     row.state === 'open' &&
     (summary.blockingReason === 'mergeable' ||
@@ -684,7 +689,7 @@ function PRTableRow({
               {variant !== 'queue' && stack?.depth === 0 && stackAll.length > 1 && (
                 <span
                   className="inline-flex items-center gap-1 rounded bg-indigo-200 px-1 py-0.5 text-[10px] uppercase text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
-                  title={`This PR is the bottom of a stack of ${stackAll.length}. They merge one at a time from here up, each waiting a full CI cycle after the one below it lands.`}
+                  title={`This PR is the bottom of a stack of ${stackAll.length}. They land from here up — in one queue run where the repo's merge queue takes stacks, otherwise one at a time.`}
                 >
                   <Layers className="h-2.5 w-2.5" />
                   Stack of {stackAll.length}
@@ -867,8 +872,8 @@ function PRTableRow({
                   stackWontFit
                     ? `This stack needs ${unqueuedInStack} merge-queue slots; your free plan allows ${billingStatus?.mergeQueueLimit} and ${billingStatus?.queuedPrs} are in use`
                     : (isStackRoot
-                        ? `Merge the whole stack — queues all ${stackTargets.length} PRs and merges them into ${stackBase || 'the base branch'} one at a time, retargeting each as its parent lands`
-                        : `Land this PR and the ${stackTargets.length - 1} below it — merges ${stackTargets.length} PRs into ${stackBase || 'the base branch'} one at a time, retargeting each as its parent lands. PRs stacked above this one are left alone.`) +
+                        ? `Merge the whole stack — queues all ${stackTargets.length} PRs and lands them on ${stackBase || 'the base branch'} in order. A merge queue that takes stacks tests all ${stackTargets.length} in one CI round; otherwise they go one at a time, retargeted as each parent lands.`
+                        : `Land this PR and the ${stackTargets.length - 1} below it — queues ${stackTargets.length} PRs onto ${stackBase || 'the base branch'}, in one queue run where the repo's merge queue takes stacks. PRs stacked above this one are left alone.`) +
                       (draftsInStack > 0
                         ? `. Marks ${draftsInStack} draft ${draftsInStack === 1 ? 'PR' : 'PRs'} ready for review.`
                         : '')
@@ -959,7 +964,11 @@ function PRTableRow({
                   setConfirmMerge(true);
                 }}
                 className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-emerald-500/10 hover:text-emerald-600 focus:opacity-100 group-hover:opacity-100"
-                title="Merge this PR — or, when an external merge queue owns the base branch, submit it to that queue"
+                title={
+                  nativeStackBelow > 0
+                    ? `Submit to the repo's merge queue — it lands this PR and the ${nativeStackBelow} below it in the stack together. (Without a merge queue on ${summary.stack?.baseRefName ?? 'the base branch'}, use "Merge stack" instead.)`
+                    : 'Merge this PR — or, when an external merge queue owns the base branch, submit it to that queue'
+                }
               >
                 <GitMerge className="h-3.5 w-3.5" />
               </button>
@@ -1220,6 +1229,23 @@ function QueueCell({
           );
         }
         case 'awaiting_stack': {
+          // The stack went to the external merge queue in one piece: this PR is
+          // riding another rung's submission and lands with it. Read as
+          // "waiting" it looks parked, when in fact it is being tested right
+          // now — and nothing may touch it, because a push to any member ejects
+          // the whole batch.
+          const carriedBy = v2.stackCoveredBy;
+          if (carriedBy != null) {
+            return (
+              <span
+                className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400"
+                title={`In the merge queue as part of #${carriedBy}'s stack — the queue tests them together and lands them in one go`}
+              >
+                <Layers className="h-3 w-3" />
+                {`Queued with #${carriedBy}`}
+              </span>
+            );
+          }
           // Parked behind the PR this one is stacked on. Ordinarily a quiet
           // wait that needs nothing from anyone — but if the PR below it is
           // stuck, this one is stuck too, and rendering that as a passive

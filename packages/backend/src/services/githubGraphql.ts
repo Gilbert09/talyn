@@ -1,3 +1,4 @@
+import type { PRStackInfo } from '@talyn/shared';
 import { githubService } from './github.js';
 
 /**
@@ -85,6 +86,8 @@ export interface PRSummary {
   headBranch: string;
   baseBranch: string;
   headSha: string;
+  /** GitHub's native stack membership; null on a standalone PR. */
+  stack?: PRStackInfo | null;
   createdAt: string;
   updatedAt: string;
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
@@ -1007,6 +1010,26 @@ function contextNodeFields(numberExpr: string | null): string {
 }
 
 // The PullRequest field selection, inlined per query alias. Was a shared
+/**
+ * GitHub's native stacked-PR selection.
+ *
+ * `stack`/`stackEntry` are ordinary nullable fields on `PullRequest` — no
+ * preview header, `null` for a standalone PR — so this is free to ask for and
+ * costs no extra round-trip. The env switch exists because this selection
+ * rides in the ONE query every poll of every repo runs: if GitHub ever
+ * withdraws the fields while the feature is in public preview, a schema error
+ * would take down PR monitoring wholesale rather than degrade it. Set
+ * `GITHUB_STACK_FIELDS=0` to drop back to the derived (branch-shaped) stacks.
+ *
+ * `position` is 1-based from the BOTTOM: 1 is the rung closest to the base.
+ */
+const STACK_FIELDS =
+  process.env.GITHUB_STACK_FIELDS === '0'
+    ? ''
+    : `
+  stack { id number size baseRefName }
+  stackEntry { position }`;
+
 // `fragment PRFields`, but `isRequired` needs a per-alias PR number, which
 // a single fragment can't carry — so the contexts selection is
 // parameterised on `numberExpr` and the whole body is inlined instead.
@@ -1040,7 +1063,7 @@ function prFieldsSelection(numberExpr: string | null): string {
   }
   headRefName
   baseRefName
-  headRefOid
+  headRefOid${STACK_FIELDS}
   reviews(last: 5) {
     nodes { id author { login } state submittedAt url }
   }
@@ -1200,6 +1223,8 @@ interface RawPullRequest {
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
+  stack?: { id: string; number: number; size: number; baseRefName: string } | null;
+  stackEntry?: { position: number } | null;
   reviews: {
     nodes: Array<{
       id: string;
@@ -1299,6 +1324,30 @@ export function decodeBatchResponse(
     if (!node) return { branch, pr: null };
     return { branch, pr: rawToSummary(node, owner, repo) };
   });
+}
+
+/**
+ * Fold GitHub's two stack selections into one summary field.
+ *
+ * Both halves are required: `stack` carries the identity and the landing
+ * branch, `stackEntry.position` says WHERE in the stack this PR sits, and the
+ * batch submission needs the position to pick the rung to enqueue. A response
+ * carrying one without the other (a partial error, an old cached shape) is
+ * treated as "not a native stack" rather than guessed at — the fallback is the
+ * serial drain, which is merely slower, whereas a wrong position submits the
+ * wrong rung and lands PRs nobody asked to land.
+ */
+function nativeStackOf(raw: RawPullRequest): PRStackInfo | null {
+  const stack = raw.stack;
+  const position = raw.stackEntry?.position;
+  if (!stack || typeof position !== 'number') return null;
+  return {
+    id: stack.id,
+    number: stack.number,
+    size: stack.size,
+    position,
+    baseRefName: stack.baseRefName,
+  };
 }
 
 function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSummary {
@@ -1406,6 +1455,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     headBranch: raw.headRefName,
     baseBranch: raw.baseRefName,
     headSha: raw.headRefOid,
+    stack: nativeStackOf(raw),
     autoMergeBy: raw.autoMergeRequest?.enabledBy?.login ?? null,
     viewerCanEnableAutoMerge: raw.viewerCanEnableAutoMerge,
     createdAt: raw.createdAt,

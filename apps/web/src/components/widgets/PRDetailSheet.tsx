@@ -814,7 +814,7 @@ const QUEUE_STATUS_LABEL: Record<NonNullable<PRRow['mergeQueue']>['status'], str
   awaiting_review: 'Waiting for a required review',
   automerge_armed: 'Auto-merge armed — GitHub merges when checks pass',
   awaiting_external: 'Handed to the repo’s merge queue, which owns the merge now',
-  awaiting_stack: 'Waiting for the PR below it in the stack to merge',
+  awaiting_stack: 'Waiting for the rest of its stack',
   fixing: 'A cloud fix run is working this PR',
   merging: 'Merging',
   blocked: 'Blocked — retries on the next push, or re-queue now',
@@ -856,15 +856,20 @@ function MergeQueueSection({ row }: { row: PRRow }) {
   // nothing. Don't "helpfully" add it here.
   const blocked = v2?.status === 'blocked' || v2?.status === 'blocked_manual';
   const statusLabel = v2
-    ? v2.status === 'awaiting_stack' && v2.stackParentNumber != null
-      ? `Waiting for #${v2.stackParentNumber} to merge — this PR is stacked on it`
-      : // Retargeted off a stack and now waiting on review: bringing the new
-        // base in pushes a merge commit, and a repo that dismisses stale
-        // approvals drops the one this PR already had. Say so, or it reads as
-        // though it was never approved.
-        v2.status === 'awaiting_review' && v2.stackParentNumber != null
-        ? `Waiting for a required review — this PR was retargeted after #${v2.stackParentNumber} merged, which may have dismissed an earlier approval`
-        : QUEUE_STATUS_LABEL[v2.status]
+    ? // Riding another rung's submission: the queue has this PR right now and
+      // is testing the whole stack as one unit. "Waiting for #N to merge" would
+      // read as parked, which is the opposite of what is happening.
+      v2.status === 'awaiting_stack' && v2.stackCoveredBy != null
+      ? `In the merge queue as part of #${v2.stackCoveredBy}'s stack — they are tested together and land in one go`
+      : v2.status === 'awaiting_stack' && v2.stackParentNumber != null
+        ? `Waiting for #${v2.stackParentNumber} to merge — this PR is stacked on it`
+        : // Retargeted off a stack and now waiting on review: bringing the new
+          // base in pushes a merge commit, and a repo that dismisses stale
+          // approvals drops the one this PR already had. Say so, or it reads as
+          // though it was never approved.
+          v2.status === 'awaiting_review' && v2.stackParentNumber != null
+          ? `Waiting for a required review — this PR was retargeted after #${v2.stackParentNumber} merged, which may have dismissed an earlier approval`
+          : QUEUE_STATUS_LABEL[v2.status]
     : 'Waiting';
   const budgets = v2?.budgets;
   const shown = events ? (showAll ? events : events.slice(0, 8)) : null;
