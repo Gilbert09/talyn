@@ -31,8 +31,8 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>Credentials you connect.</strong> Access tokens for GitHub and
-          for the cloud-agent provider you choose (e.g. Claude Code, PostHog
-          Code) are stored to act on your behalf. We treat them as secrets and
+          for the cloud-agent provider you choose (e.g. PostHog Code) are
+          stored to act on your behalf. We treat them as secrets and
           never display them back in full.
         </li>
         <li>

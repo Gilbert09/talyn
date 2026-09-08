@@ -47,8 +47,8 @@ export default function TermsPage() {
 
       <h2>4. Cloud agents &amp; costs</h2>
       <p>
-        Talyn orchestrates third-party cloud-agent providers (such as Claude Code
-        and PostHog Code). Your use of those providers is billed by them under
+        Talyn orchestrates third-party cloud-agent providers (such as PostHog
+        Code). Your use of those providers is billed by them under
         your own account and subject to their terms. Talyn&apos;s own plans and
         fees (which do not include your provider&apos;s agent-usage costs) are
         described in §5.

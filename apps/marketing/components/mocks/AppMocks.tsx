@@ -144,9 +144,9 @@ function Sidebar({ active = "prs" }: { active?: string }) {
       {/* footer: provider dots + user chip */}
       <div className="border-t border-line p-2">
         <div className="mb-2 flex flex-col gap-0.5 px-1 text-[10px] text-ink-400">
-          <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> Claude Code
-          </span>
+          {/* Only providers that are actually registered. These mocks read as
+              screenshots of the app, so a name here is a promise the download
+              has to keep — Claude Code was removed in Session 114. */}
           <span className="flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> PostHog Code
           </span>
@@ -241,7 +241,7 @@ export function MockDashboard({ filters = true }: MockProps) {
 /* ---------- task running (mirrors QueuePanel + TaskTerminal) ---------- */
 
 const transcript = [
-  { k: "sys", t: "Cloud run started · Claude Code · sandbox sundial-3f2a" },
+  { k: "sys", t: "Cloud run started · PostHog Code · sandbox sundial-3f2a" },
   { k: "tool", t: "read  .github/workflows/ci.yml" },
   { k: "tool", t: "run   npm test -- packages/api" },
   { k: "err", t: "× 2 failing: checkout webhook retry timing" },
@@ -291,7 +291,7 @@ export function MockTaskRunning(_props: MockProps) {
                 Working
               </span>
               <span className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[9px] text-ink-500">
-                <Sparkles className="h-2.5 w-2.5" /> Claude Code
+                <Sparkles className="h-2.5 w-2.5" /> PostHog Code
               </span>
               <span className="flex items-center gap-1 rounded border border-line px-1.5 py-0.5 font-mono text-[9px] text-ink-500">
                 <GitBranch className="h-2.5 w-2.5" /> fix/webhook-retry
@@ -300,7 +300,7 @@ export function MockTaskRunning(_props: MockProps) {
           </div>
         </div>
         <div className="flex items-center gap-2 border-b border-line bg-paper-100 px-3 py-1.5 text-[10px] text-ink-500">
-          <Sparkles className="h-3 w-3 text-clay" /> Cloud run on Claude Code
+          <Sparkles className="h-3 w-3 text-clay" /> Cloud run on PostHog Code
           <span className="ml-auto flex items-center gap-1 text-ink-400">
             <ExternalLink className="h-3 w-3" /> View run
           </span>

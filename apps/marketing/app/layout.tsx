@@ -37,7 +37,6 @@ export const metadata: Metadata = {
     "GitHub PR management",
     "CI fixes",
     "cloud coding agents",
-    "Claude Code",
     "PostHog Code",
     "merge queue",
     "auto-merge",
