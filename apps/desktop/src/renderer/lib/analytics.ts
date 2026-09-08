@@ -11,32 +11,45 @@
  *  - A small guarded helper module (rather than the React provider), so calls
  *    are safe no-ops until PostHog is initialised.
  *
- * Analytics is disabled entirely until `TALYN_POSTHOG_KEY` is baked in at
- * build time (see the webpack EnvironmentPlugin configs).
+ * The key is baked in at build time and COMMITTED as the default (see
+ * .erb/configs/posthogKey.ts), so builds made outside CI report too.
+ * `TALYN_ANALYTICS_DISABLED=1 npm run package` builds with analytics off; a
+ * blank TALYN_POSTHOG_KEY deliberately does NOT, since it cannot be told
+ * apart from a leftover line in a .env.
  */
 import posthog from 'posthog-js/dist/module.full.no-external';
 // Inlines the session-replay recorder so it never needs to load from the CDN.
 import 'posthog-js/dist/posthog-recorder';
+import { appVersion, isReleaseBuild } from './appVersion';
 
 const KEY = process.env.TALYN_POSTHOG_KEY || '';
 const HOST = process.env.TALYN_POSTHOG_HOST || 'https://us.i.posthog.com';
-const IS_DEV = process.env.NODE_ENV !== 'production';
+// The dev SERVER, which is a different question from "is this a release" —
+// this one gates exception autocapture, where hot-reload noise is the concern.
+const IS_DEV_SERVER = process.env.NODE_ENV !== 'production';
 // Baked at build time from release/app/package.json (see the webpack
 // renderer configs) so it can be registered synchronously — the old IPC
 // getVersion round-trip silently never landed on any event.
-const APP_VERSION = process.env.TALYN_APP_VERSION || '';
+const APP_VERSION = appVersion();
 
 /**
  * Super properties describing the BUILD rather than the user: app_version
- * segments by release, environment separates dev-server sessions from
- * packaged usage in the same project.
+ * segments by release, environment separates real releases from everything
+ * else in the same project.
+ *
+ * `environment` reads the VERSION, not NODE_ENV. A locally packaged app is
+ * built with NODE_ENV=production, so the old test called it `production` —
+ * true of its bundle, false of what the word is used for. That mattered the
+ * day these builds started carrying the analytics key: a contributor's own
+ * app would otherwise land in the same bucket as shipped releases and quietly
+ * skew every production metric. `dev+<sha>` builds are `development`.
  *
  * Held as a constant because they must be re-applied after every
  * posthog.reset() — see resetAnalyticsUser.
  */
 const BUILD_SUPER_PROPERTIES: Record<string, unknown> = {
-  ...(APP_VERSION ? { app_version: APP_VERSION } : {}),
-  environment: IS_DEV ? 'development' : 'production',
+  app_version: APP_VERSION,
+  environment: isReleaseBuild() ? 'production' : 'development',
   // Counterpart to the web app's `client: 'web'`. Without it a breakdown by
   // client reads "web vs blank" rather than "web vs desktop", and every
   // pre-existing event stays unattributed.
@@ -110,7 +123,7 @@ export function initAnalytics(): void {
     opt_out_capturing_by_default: optedOut,
     // Exception autocapture is noisy against a dev server; enable it in
     // packaged builds only.
-    capture_exceptions: IS_DEV
+    capture_exceptions: IS_DEV_SERVER
       ? false
       : {
           capture_unhandled_errors: true,
@@ -152,14 +165,9 @@ export function initAnalytics(): void {
       if (!getAnalyticsOptOut()) ph.startSessionRecording();
     },
   });
-  // Fallback when no version was baked (e.g. a config drift): best-effort
-  // async resolve from the main process.
-  if (!APP_VERSION) {
-    window.electron?.app
-      ?.getVersion()
-      .then((version) => posthog.register({ app_version: version }))
-      .catch(() => {});
-  }
+  // No IPC fallback: appVersion() always returns a string, and on an unbaked
+  // build app.getVersion() would answer with the committed PLACEHOLDER — the
+  // exact fake release this whole path exists to stop reporting.
 
   trackEvent('app_opened');
 }

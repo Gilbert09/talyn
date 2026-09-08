@@ -14,6 +14,7 @@ import ReactRefreshWebpackPlugin from '@pmmmwh/react-refresh-webpack-plugin';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import { resolveAppVersion } from './appVersion';
+import { resolvePostHogKey } from './posthogKey';
 import checkNodeEnv from '../scripts/check-node-env';
 
 // When an ESLint server is running, we can't set the NODE_ENV so we'll check if it's
@@ -153,12 +154,21 @@ const configuration: webpack.Configuration = {
       TALYN_SUPABASE_URL: '',
       TALYN_SUPABASE_ANON_KEY: '',
       TALYN_API_URL: 'http://localhost:4747',
-      // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
-      TALYN_POSTHOG_KEY: '',
+      // TALYN_POSTHOG_KEY is NOT here — see the DefinePlugin below.
       TALYN_POSTHOG_HOST: 'https://us.i.posthog.com',
       // Baked app version for analytics — see the prod config note. A local
-      // build reports `dev`, never the committed placeholder.
+      // build reports `dev+<sha>`, never the committed placeholder.
       TALYN_APP_VERSION: resolveAppVersion(),
+    }),
+
+    new webpack.DefinePlugin({
+      // The key is COMMITTED (see ./posthogKey) so a build made outside CI
+      // reports too — it used to default to '', which made every
+      // contributor's app analytically invisible. DefinePlugin rather than
+      // EnvironmentPlugin because the value is computed: a blank
+      // `TALYN_POSTHOG_KEY=` in apps/desktop/.env must fall through to the
+      // default, and EnvironmentPlugin defaults only cover UNDEFINED.
+      'process.env.TALYN_POSTHOG_KEY': JSON.stringify(resolvePostHogKey()),
     }),
 
     new webpack.LoaderOptionsPlugin({

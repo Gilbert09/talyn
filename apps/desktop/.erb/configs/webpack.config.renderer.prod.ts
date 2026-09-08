@@ -17,6 +17,7 @@ import TerserPlugin from 'terser-webpack-plugin';
 import baseConfig from './webpack.config.base';
 import webpackPaths from './webpack.paths';
 import { resolveAppVersion } from './appVersion';
+import { resolvePostHogKey } from './posthogKey';
 import checkNodeEnv from '../scripts/check-node-env';
 import deleteSourceMaps from '../scripts/delete-source-maps';
 
@@ -119,15 +120,14 @@ const configuration: webpack.Configuration = {
       TALYN_SUPABASE_URL: '',
       TALYN_SUPABASE_ANON_KEY: '',
       TALYN_API_URL: 'http://localhost:4747',
-      // PostHog analytics. Empty key => analytics disabled (see lib/posthog).
-      TALYN_POSTHOG_KEY: '',
+      // TALYN_POSTHOG_KEY is NOT here — see the DefinePlugin below.
       TALYN_POSTHOG_HOST: 'https://us.i.posthog.com',
       // App version baked at build time so analytics can register it as a
       // super property synchronously (the IPC getVersion round-trip raced
       // event capture and the property never landed). CI stamps
       // release/app/package.json before building, so this matches
-      // app.getVersion(); an unstamped local build reports `dev` rather than
-      // the committed placeholder — see ./appVersion.
+      // app.getVersion(); an unstamped local build reports `dev+<sha>` rather
+      // than the committed placeholder — see ./appVersion.
       TALYN_APP_VERSION: resolveAppVersion(),
     }),
 
@@ -154,6 +154,11 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"renderer"',
+      // Computed, not passed through, so it cannot live in EnvironmentPlugin
+      // above: that only applies its default when the variable is UNDEFINED,
+      // and a blank `TALYN_POSTHOG_KEY=` line in apps/desktop/.env is defined.
+      // See ./posthogKey for the precedence and the opt-out.
+      'process.env.TALYN_POSTHOG_KEY': JSON.stringify(resolvePostHogKey()),
     }),
   ],
 };

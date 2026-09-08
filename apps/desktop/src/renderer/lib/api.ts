@@ -1,6 +1,7 @@
 import { configureApiClient } from '@talyn/client';
 import { getSupabase, isSupabaseConfigured } from './supabase';
 import { setLogoutReason } from './logoutReason';
+import { appVersion } from './appVersion';
 
 /**
  * The desktop's binding of the shared backend client.
@@ -18,10 +19,10 @@ import { setLogoutReason } from './logoutReason';
 configureApiClient({
   // Falls back to local dev so a fresh checkout Just Works.
   baseUrl: process.env.TALYN_API_URL || 'http://localhost:4747',
-  // Baked at build time; 'dev' in unbuilt dev runs. The backend's paywall
-  // exemption is fail-closed, so 'dev' enforces — which is correct, a build
-  // off current main renders the upgrade flow fine.
-  clientVersion: process.env.TALYN_APP_VERSION || 'dev',
+  // Baked at build time; `dev+<sha>` on a local build. Never a bare semver
+  // unless CI stamped it, which is what stops a contributor's app from being
+  // read as an old release — see lib/appVersion.
+  clientVersion: appVersion(),
 
   getAccessToken: async () => {
     if (!isSupabaseConfigured()) return null;

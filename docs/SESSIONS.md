@@ -2,6 +2,83 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 116 — the second-heaviest user was analytically invisible (2026-09-08)
+
+A question with an obvious wrong answer: why has our #2 user not upgraded? He
+had **zero** `paywall_shown`, zero `checkout_started`, and 298 dispatched cloud
+tasks in three weeks. The funnel read as a user ignoring the paywall. He was
+never shown one, and could not have reported it if he had been.
+
+**Two committed defaults, each individually defensible, that together made a
+whole client silent.**
+
+`TALYN_POSTHOG_KEY` defaulted to `''` in both renderer webpack configs, with the
+real value injected only by publish.yml — from `vars.TALYN_POSTHOG_KEY`, a repo
+**variable**, not a secret, which is the team already saying out loud that the
+key is public. A project write key *is* public: it is the string every web page
+ships in its PostHog snippet, it can only write into one project, and it reads
+nothing. `packages/mcp-server/src/analytics.ts` has committed this exact key,
+with that exact reasoning, the whole time. So the default bought nothing and
+cost this: **any build made outside CI emitted no client analytics at all.** The
+user in question is a contributor. He builds from source. Every event we had for
+him was server-side, which is why he had `task_dispatched` but no session, no
+`$pageview`, and no paywall — the client that would have reported it had no key.
+
+The key is committed now (`.erb/configs/posthogKey.ts`), and it moved from
+`EnvironmentPlugin` to `DefinePlugin` on the way, which is the part worth
+remembering. **EnvironmentPlugin applies its default only when the variable is
+`undefined`**, and `apps/desktop/.env` is loaded into `process.env` before the
+plugins are built — so a bare `TALYN_POSTHOG_KEY=` line, the shape anyone
+copying a config leaves behind, is *defined*, beat the committed default, and
+sent the build back to silent with nothing said. That line was already in the
+working tree here; the first build after committing the key still shipped
+without it. So the value is computed (`resolvePostHogKey`): the disable flag
+wins outright, then a non-blank key, then the default. **A blank key is not an
+opt-out** — `TALYN_ANALYTICS_DISABLED=1` is, spelled the way the MCP server
+already spells it, because "off" and "unset" are different intents and must not
+be told apart by guessing.
+
+**The second default was the version, and it had already cost real money.** CI
+stamps `release/app/package.json`; everything else bakes the committed `0.1.0`
+placeholder. Session 104 fixed the acute damage — the paywall used to exempt any
+client below the release that shipped the upgrade UI, and `0.1.0` is below every
+floor, so every local build was silently exempt from both caps — by reporting
+`dev`. That stopped the exemption but left every contributor's build in one
+indistinguishable bucket, which was fine while those builds sent nothing and is
+not fine now that they send everything. An unstamped build reports **`dev+<sha>`**
+(`-dirty` when the tree is), so it names itself without ever parsing as a
+release.
+
+**One predicate decides "is this a release?"** (`renderer/lib/appVersion.ts`),
+because the two consumers were about to disagree. `useWhatsNew` tested
+`raw !== 'dev'` — an equality check that `dev+abc1234` sails straight through,
+which would have had contributor builds asking the release feed which releases
+they contain. The test is structural now (a semver, or not), so the next change
+to the local-build format cannot quietly pass it.
+
+**`environment` reads the version, not `NODE_ENV`.** A locally packaged app is
+built with `NODE_ENV=production` and used to report `environment: 'production'`
+— true of its bundle, false of the word's only use. Harmless while those builds
+were mute; the moment they carry the key it puts a contributor's laptop in the
+same bucket as shipped releases and skews every production metric. Baking the
+key without this change would have traded one wrong number for another.
+
+Verified against real builds rather than the unit tests alone, which is how the
+`.env` precedence bug was caught at all: a default build bakes the key and
+`dev+<sha>`, and `TALYN_ANALYTICS_DISABLED=1` bakes neither. 472 desktop tests,
+typecheck and lint clean.
+
+**Still open, and the bigger half of the original question.** The user's caps
+are hit almost entirely by watchers — 296 of his 298 dispatches never came from
+the UI — and a watcher that hits the task cap is deferred server-side
+(`deferred_task_limit`, `mergeQueue/executor.ts`; `[autoKeep] … fix run
+deferred`, `prAutoMergeWatcher.ts`). There is no request to answer, so there is
+no 402, no `UpgradeModal`, and no event. For a merge-queue-heavy user that is
+the *dominant* path, and no amount of client instrumentation will surface it —
+the deferral needs to notify, or be captured server-side. Related: nothing on
+`task_dispatched` records which path dispatched it, so "is this user's load
+merge queue or auto-keep?" is currently unanswerable from analytics.
+
 ## Session 115 — the merge queue takes a whole stack at once (2026-09-07)
 
 A four-deep stack on posthog/posthog cost four full trunk test cycles — roughly

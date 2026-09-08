@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { shouldShowWhatsNew, nextSeenVersion } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
+import { releaseVersion } from '../lib/appVersion';
 
 /**
  * Decides whether to open the "What's new" modal on launch.
@@ -53,13 +54,16 @@ export function writeLastSeenVersion(version: string | null): void {
  *
  * Baked in by webpack at build time (see .erb/configs/appVersion.ts) so it can
  * be read synchronously — the IPC `app:getVersion()` round-trip resolves after
- * this hook has already decided. Every local build reports the string `'dev'`,
- * which is not a semver, so the auto-open path simply never fires outside a CI
- * build; Settings → About is how you look at the modal on a dev machine.
+ * this hook has already decided. A local build reports `dev` or `dev+<sha>`,
+ * neither of which is a semver, so the auto-open path simply never fires
+ * outside a CI build; Settings → About is how you look at the modal on a dev
+ * machine.
+ *
+ * The "is this a release?" test lives in lib/appVersion so this hook and the
+ * analytics `environment` property cannot disagree about what a local build is.
  */
 export function currentAppVersion(): string | null {
-  const raw = process.env.TALYN_APP_VERSION;
-  return raw && raw !== 'dev' ? raw : null;
+  return releaseVersion();
 }
 
 export function useWhatsNew(): void {

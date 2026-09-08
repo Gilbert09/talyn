@@ -494,7 +494,7 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 
 **Where the write key goes (both use the same project key):**
 
-- **Desktop** — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST`, baked in at webpack build time (CI secret). The renderer also bakes `TALYN_APP_VERSION` from `release/app/package.json` automatically so every event carries `app_version`.
+- **Desktop** — baked in at webpack build time. The project key is **committed** (`apps/desktop/.erb/configs/posthogKey.ts`) — a project write key is public by design, and defaulting it to `''` meant any build made outside CI emitted no client analytics at all. `TALYN_POSTHOG_KEY` still overrides it (that is how you point a build at another project); a **blank** value falls through to the default, and `TALYN_ANALYTICS_DISABLED=1` is the opt-out. The renderer also bakes `TALYN_APP_VERSION`: a CI-stamped release reports its semver, and every other build reports `dev+<sha>` — identifiable, but never mistakable for a release (`.erb/configs/appVersion.ts`, `renderer/lib/appVersion.ts`).
 - **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`).
 
 ### 6b. "Connect with PostHog" — the PostHog Code OAuth app

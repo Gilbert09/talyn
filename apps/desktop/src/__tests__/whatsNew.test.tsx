@@ -162,8 +162,14 @@ describe('useWhatsNew — deciding whether to interrupt', () => {
     expect(stored()).toBe('0.2.62');
   });
 
-  it('does nothing at all on a local build, whose version is not a semver', async () => {
-    process.env.TALYN_APP_VERSION = 'dev';
+  // Both shapes a local build can report. `dev+<sha>` is the one that bites:
+  // the old check was `raw !== 'dev'`, so the moment local builds started
+  // naming their commit they would have been read as releases and asked the
+  // feed which ones they contain.
+  it.each(['dev', 'dev+abc1234', 'dev+abc1234-dirty'])(
+    'does nothing at all on a local build, whose version is not a semver: %s',
+    async (version) => {
+    process.env.TALYN_APP_VERSION = version;
     seed('0.2.60');
     list.mockResolvedValue([entry('0.2.61')]);
 
@@ -177,7 +183,8 @@ describe('useWhatsNew — deciding whether to interrupt', () => {
     expect(latest).not.toHaveBeenCalled();
     expect(modalOpen()).toBe(false);
     expect(stored()).toBe('0.2.60');
-  });
+    },
+  );
 
   it('baselines a user who just finished onboarding, and shows them nothing', async () => {
     // They installed minutes ago; nothing in the feed is new to them. They are
