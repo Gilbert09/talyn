@@ -20,6 +20,7 @@ import {
   Clock,
   Layers,
   Square,
+  PauseCircle,
 } from 'lucide-react';
 import type { PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
@@ -38,6 +39,7 @@ import {
   externalQueueStatusFromLabels,
   prHasFixableIssues,
   coarseQueueStatus,
+  FREE_PLAN_ACTIVE_TASK_LIMIT,
 } from '@talyn/shared';
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
@@ -664,7 +666,12 @@ function PRTableRow({
                 </button>
               )}
               {/* Auto-keep-mergeable watcher indicator. "Watching" while armed,
-                  "Paused" once it's given up after 3 attempts. */}
+                  "Paused" once it's given up after 3 attempts, "Waiting" while
+                  a fix run it wanted could not start because the free plan's
+                  task slots were all busy. Waiting sits between the two: it is
+                  not a failure (nothing was tried, no attempt burned) but the
+                  PR is NOT being kept green, and saying "Watching" there would
+                  be a lie the user has no way to catch. */}
               {row.autoKeepMergeable &&
                 (row.autoMergeState?.paused ? (
                   <span
@@ -674,6 +681,20 @@ function PRTableRow({
                     <AlertTriangle className="h-2.5 w-2.5" />
                     Paused
                   </span>
+                ) : row.autoMergeState?.deferredSince ? (
+                  <button
+                    type="button"
+                    data-attr="pr-row-run-deferred"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+                    }}
+                    className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
+                    title={`Waiting for a free task slot — a fix run for this PR was skipped because all ${FREE_PLAN_ACTIVE_TASK_LIMIT} free-plan slots were busy. Click to see why.`}
+                  >
+                    <PauseCircle className="h-2.5 w-2.5" />
+                    Waiting
+                  </button>
                 ) : (
                   <span
                     className="inline-flex items-center gap-1 rounded bg-emerald-200 px-1 py-0.5 text-[10px] uppercase text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"

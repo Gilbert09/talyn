@@ -15,6 +15,7 @@ import { useBillingStore } from '../../stores/billing';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { usePullRequestSync } from '../../hooks/usePullRequestSync';
 import { useWhatsNew } from '../../hooks/useWhatsNew';
+import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 
 export function MainLayout() {
   const { activePanel, createWorkspaceOpen, setCreateWorkspaceOpen } = useWorkspaceStore();
@@ -27,6 +28,7 @@ export function MainLayout() {
   // Decides whether the release highlights since the user's last-seen version
   // are worth a modal. Mounted here so it can only run once onboarding is done.
   useWhatsNew();
+  useDeferredRuns();
 
   return (
     <div className="flex h-screen flex-col bg-background">

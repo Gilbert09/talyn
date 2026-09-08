@@ -51,6 +51,22 @@ export function UpgradeModal({
 
   const pitch = () => {
     if (upgraded) return 'Your plan is active — run as many tasks as you like.';
+    // A degradation the user was never told about and did not cause. Lead with
+    // what stopped working, not with the cap — they are not standing at a wall
+    // they walked into, they are being told why their PRs went quiet.
+    //
+    // Must precede the usage branches for the same reason `auto_keep_default`
+    // does, but inverted: this user IS at the task limit, so `atTaskLimit`
+    // below would match and answer "you're using all 3" to someone who never
+    // clicked anything. True, and a non-sequitur.
+    if (upgradeReason === 'task_deferred') {
+      return (
+        `Talyn wanted to fix one of your watched PRs, but the free plan runs ${limit} ` +
+        `tasks at once and all ${limit} were busy. That fix run was skipped, not queued — ` +
+        'auto-keep tries again on its next pass, so a PR can sit un-fixed while your ' +
+        'slots stay full. Upgrade to run as many at once as you need.'
+      );
+    }
     // A FEATURE refusal, not a cap: there is no count to quote and nothing to
     // wait out, so this has to be checked before the usage branches below —
     // they would otherwise pitch a limit the user is nowhere near.
@@ -109,7 +125,15 @@ export function UpgradeModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Zap className="h-5 w-5" />
-            {upgraded ? 'You’re on Unlimited' : 'Upgrade to Unlimited'}
+            {upgraded
+              ? 'You’re on Unlimited'
+              : // This modal was not asked for — it opened to report something
+                // that already went wrong. "Upgrade to Unlimited" as the first
+                // words reads as an ad; the user needs to know what happened
+                // before they can judge whether the remedy is worth $15.
+                upgradeReason === 'task_deferred'
+                ? 'A fix run was skipped'
+                : 'Upgrade to Unlimited'}
           </DialogTitle>
           <DialogDescription>{pitch()}</DialogDescription>
         </DialogHeader>

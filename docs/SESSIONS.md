@@ -101,12 +101,47 @@ casTransition stays — it is scoped to one entry's history, which is a differen
 question from "how often does the free plan actually bind, across every surface
 that can bind".
 
-**This is telemetry, not a paywall.** It changes nothing the user sees; a
-deferred run is still a run that quietly does not happen. Whether a deferral
-should *notify* is a product decision, and it is the one that decides whether
-this user is ever asked to pay. Also still open: nothing on `task_dispatched`
-records which path dispatched it, so splitting a user's load between the queue
-and auto-keep is only possible for the deferrals, not the successes.
+**Then the deferral was given a face.** Telemetry alone still left the user
+with a product that quietly got worse, so `autoMergeState.deferredSince` now
+records when a PR first wanted a run it could not have, `publicState` and the
+REST `publicAutoMergeState` both carry it, and the PR row shows a **Waiting**
+chip between *Watching* and *Paused* — not a failure (nothing was tried, no
+attempt burned) but honestly not "Watching" either.
+
+**Persisted, not pushed, because nobody is there.** A deferral fires on a poll
+tick with no request behind it; the user this was built for last opened the app
+seven days before his most recent deferral. A toast would have interrupted an
+empty room. The state survives on the row until someone looks, and
+`useDeferredRuns` reads it out of the PR list the client already holds — no new
+endpoint, no new socket event.
+
+**Two guards, and neither is sufficient alone.** The modal opens at most once
+per app launch (module-scope flag, not component state — a workspace switch
+remounts MainLayout) AND at most once per 24h (localStorage), and only while
+something is deferred *right now*, so a user whose slots freed up is never shown
+a wall they have already walked away from. Per-launch alone nags whoever quits
+and reopens all day; the 24h floor alone would let a long-lived window sit a
+week on an ongoing degradation.
+
+`upgradeReason: 'task_deferred'` is its own reason with its own title — **"A
+fix run was skipped"**, not "Upgrade to Unlimited". The modal was not asked for;
+it opened to report something that already went wrong, and leading with the
+price reads as an ad. It also has to be tested BEFORE the usage branches, for
+the inverse of `auto_keep_default`'s reason: this user *is* at the task limit,
+so `atTaskLimit` would match and answer "you're using all 3" to someone who
+never clicked anything — true, and a non-sequitur.
+
+**A trap worth naming: `readState` is an allow-list.** It rebuilds
+`AutoMergeState` field by field, so `deferredSince` was written to the jsonb and
+silently dropped on every read — the write lands, and every subsequent read
+behaves as though it were never set. Two tests caught it (the timestamp
+restamped each tick, and the clean-PR branch never cleared). New fields go in
+both places.
+
+Still open: nothing on `task_dispatched` records which path dispatched it, so
+splitting a user's load between the queue and auto-keep is only possible for the
+deferrals, not the successes. And the merge-queue deferral has telemetry but no
+chip — its entry already renders as "Queued", which is at least not a lie.
 
 **A measurement correction worth keeping.** `duration_queued_ms` on
 `task_dispatched` was flat at ~4s for him every day, and that was read as "not

@@ -534,9 +534,64 @@ describe('prAutoMergeWatcher', () => {
     // a user at their cap would exhaust the 3-attempt budget without a single
     // agent ever running, and the watcher would pause a PR it never tried.
     const pr = await getPr(db, prId);
-    const state = pr.autoMergeState as { attempts?: number; lastAutoTaskId?: string };
+    const state = pr.autoMergeState as {
+      attempts?: number;
+      lastAutoTaskId?: string;
+      deferredSince?: string;
+    };
     expect(state.attempts).toBe(0);
     expect(state.lastAutoTaskId).toBeUndefined();
+    // Persisted, because the user is almost never watching when this happens —
+    // the whole failure mode is a degradation nobody is present for.
+    expect(state.deferredSince).toBeTruthy();
+  });
+
+  it('keeps the first deferral timestamp across a run of them', async () => {
+    // The age is the point: restamping every tick would make a half-hour
+    // outage read as permanently one minute old.
+    await insertPr(db, { autoMergeState: { attempts: 0, accounted: true } });
+    vi.spyOn(taskCreateModule, 'createCloudTask').mockRejectedValue(new TaskLimitError(3, 3));
+
+    await prAutoMergeWatcher.runOnce();
+    const first = ((await db.select().from(pullRequestsTable))[0].autoMergeState as {
+      deferredSince?: string;
+    }).deferredSince;
+
+    await prAutoMergeWatcher.runOnce();
+    const second = ((await db.select().from(pullRequestsTable))[0].autoMergeState as {
+      deferredSince?: string;
+    }).deferredSince;
+
+    expect(second).toBe(first);
+  });
+
+  it('clears the deferral once a run actually fires', async () => {
+    const prId = await insertPr(db, {
+      autoMergeState: { attempts: 0, accounted: true, deferredSince: '2026-09-08T00:00:00.000Z' },
+    });
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(1);
+    const state = (await getPr(db, prId)).autoMergeState as { deferredSince?: string };
+    // A stale marker would leave a "waiting for a slot" chip on a PR that is
+    // actively being worked.
+    expect(state.deferredSince).toBeUndefined();
+  });
+
+  it('clears the deferral when the PR goes clean and needs no run', async () => {
+    // Slots freed up but the PR fixed itself first. Nothing is waiting, so
+    // nothing should say it is.
+    const prId = await insertPr(db, {
+      summary: cleanSummary(),
+      autoMergeState: { attempts: 0, accounted: true, deferredSince: '2026-09-08T00:00:00.000Z' },
+    });
+
+    await prAutoMergeWatcher.runOnce();
+
+    expect(await countTasks(db)).toBe(0);
+    const state = (await getPr(db, prId)).autoMergeState as { deferredSince?: string };
+    expect(state.deferredSince).toBeUndefined();
   });
 
   it('renders the workspace mergeable prompt override when one is set', async () => {

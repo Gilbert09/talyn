@@ -1621,13 +1621,26 @@ async function reconcileTerminalState(
   return updated;
 }
 
-/** The compact watcher state the desktop renders (toggle + badge). */
+/**
+ * The compact watcher state the desktop renders (toggle + badge).
+ *
+ * Must stay in step with `publicState` in prAutoMergeWatcher — the WS push and
+ * this REST read are the same field arriving by two routes, and a client that
+ * saw `deferredSince` only over the socket would show the chip on a live
+ * update and lose it on every refresh.
+ */
 function publicAutoMergeState(
   raw: unknown
-): { attempts: number; paused: boolean } | null {
-  const s = raw as { attempts?: number; pausedAt?: string } | null;
+): { attempts: number; paused: boolean; deferredSince: string | null } | null {
+  const s = raw as
+    | { attempts?: number; pausedAt?: string; deferredSince?: string }
+    | null;
   if (!s) return null;
-  return { attempts: s.attempts ?? 0, paused: !!s.pausedAt };
+  return {
+    attempts: s.attempts ?? 0,
+    paused: !!s.pausedAt,
+    deferredSince: s.deferredSince ?? null,
+  };
 }
 
 

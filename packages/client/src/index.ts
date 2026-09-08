@@ -690,7 +690,17 @@ export interface PRRow {
   autoKeepMergeable: boolean;
   /** Watcher guard state: consecutive failed auto-runs + whether it's paused
    *  (3 failures with no progress). Null when the watcher is off. */
-  autoMergeState?: { attempts: number; paused: boolean } | null;
+  autoMergeState?: {
+    attempts: number;
+    paused: boolean;
+    /**
+     * ISO timestamp of when auto-keep first wanted a fix run for this PR and
+     * could not get one, because the owner's free-plan task slots were full;
+     * null when nothing is waiting. The deferral has no request behind it, so
+     * this is the ONLY way a user learns their PRs stopped being kept green.
+     */
+    deferredSince?: string | null;
+  } | null;
   /** True when this PR is in the Talyn merge queue (merges one-by-one per
    *  repo+base, auto-fixing conflicts via a cloud run). */
   mergeQueued: boolean;

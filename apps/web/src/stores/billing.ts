@@ -107,7 +107,22 @@ const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
  * count behind it, so the modal has to be told which feature was asked for or
  * it pitches a limit the user is nowhere near.
  */
-export type UpgradeReason = 'task_limit' | 'merge_queue_limit' | 'auto_keep_default';
+export type UpgradeReason =
+  | 'task_limit'
+  | 'merge_queue_limit'
+  | 'auto_keep_default'
+  /**
+   * Nothing was refused — something silently did not happen. Auto-keep wanted
+   * a fix run for a watched PR and every free-plan slot was busy, so the run
+   * was skipped. There is no request behind it, so this reason never arrives
+   * through `maybeHandleBillingLimit` (a 402 interceptor); `useDeferredRuns`
+   * raises it from the PR list instead.
+   *
+   * It needs its own copy because the user did not DO anything. Reusing
+   * `task_limit` would answer "you're using all 3" to someone who never
+   * clicked, which reads as a non-sequitur rather than an explanation.
+   */
+  | 'task_deferred';
 
 function reasonFor(code: string): UpgradeReason {
   if (code === MERGE_QUEUE_LIMIT_ERROR_CODE) return 'merge_queue_limit';

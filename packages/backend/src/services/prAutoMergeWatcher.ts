@@ -52,6 +52,21 @@ interface AutoMergeState {
   accounted?: boolean;
   pausedAt?: string;
   appliedLabels?: string[];
+  /**
+   * When this PR first wanted a fix run and could not have one, because the
+   * owner's free-plan task slots were all busy. Cleared the moment a run
+   * actually fires, or the PR is seen mergeable and stops needing one.
+   *
+   * Persisted rather than kept in memory because **the user is usually not
+   * watching when it happens.** A watcher deferral has no request behind it,
+   * so the only thing a transient signal could interrupt is a session that
+   * mostly is not open — the whole failure mode here is a degradation nobody
+   * is present for. This survives until someone looks.
+   *
+   * It is a TIMESTAMP, not a flag, so the UI can say how long this has been
+   * going on, and so the client can tell one continuous episode from a new one.
+   */
+  deferredSince?: string;
 }
 
 // Only the columns this watcher touches — avoids `select()`-ing every PR
@@ -85,6 +100,12 @@ function readState(row: PRRow): AutoMergeState {
     accounted: s?.accounted ?? true,
     pausedAt: s?.pausedAt,
     appliedLabels: Array.isArray(applied) ? applied.filter((l) => typeof l === 'string') : undefined,
+    // This deserializer is an ALLOW-LIST: it rebuilds the object field by
+    // field, so anything not named here is dropped on read even though it is
+    // sitting in the jsonb. A new field that is written but not listed looks
+    // like it works — the write lands — and then every read behaves as if it
+    // were never set. Add new fields in BOTH places.
+    deferredSince: typeof s?.deferredSince === 'string' ? s.deferredSince : undefined,
   };
 }
 
@@ -94,8 +115,19 @@ export function normalizeWatchLabels(value: unknown): string[] {
 }
 
 /** Compact watcher state for the desktop (toggle + badge). */
-function publicState(s: AutoMergeState): { attempts: number; paused: boolean } {
-  return { attempts: s.attempts, paused: !!s.pausedAt };
+function publicState(s: AutoMergeState): {
+  attempts: number;
+  paused: boolean;
+  deferredSince: string | null;
+} {
+  return {
+    attempts: s.attempts,
+    paused: !!s.pausedAt,
+    // Broadcast even when null: the client uses the transition to null to
+    // clear its chip, and `??`-merging an absent field would leave a stale
+    // "waiting" badge on a PR whose run has since fired.
+    deferredSince: s.deferredSince ?? null,
+  };
 }
 
 /**
@@ -438,9 +470,12 @@ class PRAutoMergeWatcher {
     // 4. Re-arm on clean — nothing to fix; reset the guard so a later problem
     //    gets a fresh batch of attempts.
     if (!needsFollowup) {
-      if (state.attempts !== 0 || state.pausedAt) {
+      if (state.attempts !== 0 || state.pausedAt || state.deferredSince) {
         state.attempts = 0;
         state.pausedAt = undefined;
+        // A clean PR is not waiting on a slot. Leaving this set would show a
+        // "waiting for a free slot" chip on a PR with nothing left to fix.
+        state.deferredSince = undefined;
         await this.persist(row, state);
       }
       return;
@@ -504,6 +539,14 @@ class PRAutoMergeWatcher {
         // anything client-emitted would miss exactly the population it exists
         // to measure. This is telemetry only — it shows the user nothing.
         console.log(`[autoKeep] ${ref}: fix run deferred — ${err.message}`);
+        // Keep the FIRST deferral's timestamp across a run of them: this is
+        // one episode of "your PRs are not being kept green", and restamping
+        // it every tick would reset the age the UI reports and make a
+        // half-hour outage look permanently one minute old.
+        if (!state.deferredSince) {
+          state.deferredSince = new Date().toISOString();
+          await this.persist(row, state);
+        }
         captureWorkspaceEvent(row.workspaceId, 'paywall_deferred', {
           // The surface that wanted a task, so auto-keep and the merge queue
           // stay separable — `task_dispatched` records no dispatch source, so
@@ -522,6 +565,8 @@ class PRAutoMergeWatcher {
 
     state.lastAutoTaskId = created.id;
     state.accounted = false;
+    // The wait is over — a run is actually going.
+    state.deferredSince = undefined;
     await this.persist(row, state);
   }
 
