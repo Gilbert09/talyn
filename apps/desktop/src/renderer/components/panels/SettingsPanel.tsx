@@ -69,7 +69,16 @@ import type {
   McpToken,
   BillingOrder,
 } from '@talyn/shared';
-import { DEFAULT_FLEET_MODEL_ID, FLEET_MODELS, POSTHOG_CODE_MODELS, DEFAULT_POSTHOG_CODE_MODEL_ID, parseAutoKeepMergeableLabels } from '@talyn/shared';
+import {
+  DEFAULT_FLEET_MODEL_ID,
+  FLEET_MODELS,
+  POSTHOG_CODE_MODELS,
+  DEFAULT_POSTHOG_CODE_MODEL_ID,
+  defaultFleetModelForAgent,
+  fleetAgentForModel,
+  parseAutoKeepMergeableLabels,
+  type FleetAgent,
+} from '@talyn/shared';
 import { useWorkspaceStore, type Theme } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import {
@@ -1467,7 +1476,32 @@ export function AutoKeepMergeableLabelsField() {
   );
 }
 
-function CloudProviderDefaultSelector() {
+/**
+ * Which agent new tasks go to by default.
+ *
+ * # Why the options are AGENTS, not providers
+ *
+ * "Talyn Fleet" does not say enough. The fleet runs on the workspace's own
+ * Claude subscription or its own Codex subscription, and which one is decided
+ * by the MODEL — `fleetProviderForModel` reads it, and the fleet builds the
+ * microVM's egress route table from that. So a list of providers left the most
+ * consequential half of the choice somewhere else entirely (the Model picker on
+ * the Talyn Fleet card), where nobody looking at "Default for new tasks" would
+ * think to go.
+ *
+ * The options are therefore one per connected AGENT. Picking one writes both
+ * halves: `defaultCloudProvider` and, for a fleet agent, `fleetModel`.
+ *
+ * # The model is only rewritten when the VENDOR changes
+ *
+ * A workspace that deliberately pinned Opus 5 must not be moved to Sonnet 5
+ * just for re-picking "Claude" here — that is a real cost difference nobody
+ * asked for. So the model is left alone when the current one already belongs to
+ * the chosen agent, and swapped to that agent's default only when the choice
+ * actually crosses vendors.
+ */
+// Exported for its test, like AutoKeepMergeableLabelsField above.
+export function CloudProviderDefaultSelector() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
@@ -1477,20 +1511,51 @@ function CloudProviderDefaultSelector() {
   const [saving, setSaving] = useState(false);
 
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
-  const current = (workspace?.settings?.defaultCloudProvider as string | undefined) ?? '';
+  const settings = workspace?.settings;
+  const provider = (settings?.defaultCloudProvider as string | undefined) ?? '';
+  const fleetModel = settings?.fleetModel;
+
+  // One entry per thing a task can actually be sent to. The fleet contributes
+  // one per connected subscription; every other provider contributes itself.
+  const options = connected.flatMap((p) => {
+    if (p.type !== 'selfhosted') {
+      return [{ value: p.type, label: p.displayName }];
+    }
+    const agents = (p.connectedAgents ?? []) as FleetAgent[];
+    return agents.map((agent) => ({
+      value: `selfhosted:${agent}`,
+      label: `${p.displayName} · ${agent === 'codex' ? 'Codex' : 'Claude'}`,
+    }));
+  });
+
+  // A fleet default reads back as whichever agent its model belongs to, so the
+  // control and the Model picker on the card can never disagree.
+  const current =
+    provider === 'selfhosted' ? `selfhosted:${fleetAgentForModel(fleetModel)}` : provider;
 
   const onChange = async (value: string) => {
     if (!currentWorkspaceId) return;
     setSaving(true);
     try {
-      const defaultCloudProvider = value === '' ? undefined : value;
+      const [type, agent] = value.split(':');
+      const defaultCloudProvider = type === '' ? undefined : type;
+
+      const patch: Partial<NonNullable<Workspace['settings']>> = { defaultCloudProvider } as never;
+      if (agent) {
+        // Only when the choice crosses vendors — see the note above on Opus 5.
+        const keepsVendor = fleetAgentForModel(fleetModel) === agent;
+        if (!keepsVendor) {
+          patch.fleetModel = defaultFleetModelForAgent(agent as FleetAgent);
+        }
+      }
+
       await api.workspaces.update(currentWorkspaceId, {
-        settings: { defaultCloudProvider } as Workspace['settings'],
+        settings: patch as Workspace['settings'],
       });
       setWorkspaces(
         workspaces.map((w) =>
           w.id === currentWorkspaceId
-            ? { ...w, settings: { ...w.settings, defaultCloudProvider } as Workspace['settings'] }
+            ? { ...w, settings: { ...w.settings, ...patch } as Workspace['settings'] }
             : w
         )
       );
@@ -1508,7 +1573,7 @@ function CloudProviderDefaultSelector() {
         <div className="flex-1 min-w-0">
           <h4 className="font-medium">Default for new tasks</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Which cloud provider new tasks use. “Ask every time” shows a picker on the Task button
+            Which agent new tasks run on. “Ask every time” shows a picker on the Task button
             when more than one is connected.
           </p>
         </div>
@@ -1518,9 +1583,9 @@ function CloudProviderDefaultSelector() {
           onChange={(e) => onChange(e.target.value)}
         >
           <option value="">Auto (prefer Talyn Fleet, else PostHog Code)</option>
-          {connected.map((p) => (
-            <option key={p.type} value={p.type}>
-              {p.displayName}
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
             </option>
           ))}
           <option value="ask">Ask every time</option>
