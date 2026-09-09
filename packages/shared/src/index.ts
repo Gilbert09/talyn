@@ -170,7 +170,12 @@ export type FleetProvider = 'anthropic' | 'openai';
  * fleet could run Codex. Sharing one list would have offered every PostHog Code
  * user a model their dispatch cannot accept.
  *
- * The Claude half is the same current-generation id space as PostHog Code.
+ * The Claude half must track https://platform.claude.com/docs/en/about-claude/models/overview
+ * (or `GET /v1/models`, which is the same set, live). It is NOT automatically the
+ * same as PostHog Code's — that list is PostHog's runtime allow-list, and only
+ * PostHog can say what it accepts. Anthropic ships a new flagship faster than
+ * anyone remembers to edit this file: Fable 5.1 landed 2026-09-01 and this list
+ * still said Fable 5 was the newest a week later.
  *
  * THE CODEX HALF IS WHAT A CHATGPT SUBSCRIPTION MAY USE, which is NOT the same
  * question as what the guest's harness knows. It was built from the harness's
@@ -193,8 +198,9 @@ export type FleetProvider = 'anthropic' | 'openai';
  * Most capable first within each vendor.
  */
 export const FLEET_MODELS = [
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', blurb: 'Most capable — demanding reasoning.' },
   { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', blurb: 'Newest Opus, 1M context.' },
-  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', blurb: 'Newest of the Claude 5 line.' },
+  { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', blurb: 'The previous Fable.' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', blurb: 'Cheapest of the Claude set.' },
