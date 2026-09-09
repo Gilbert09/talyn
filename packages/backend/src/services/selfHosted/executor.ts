@@ -8,6 +8,7 @@ import {
   type CloudTaskMetadata,
   type Environment,
   type Task,
+  resolveFleetModel,
 } from '@talyn/shared';
 import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { getDbClient } from '../../db/client.js';
@@ -201,11 +202,17 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     // wrong. An EXPLICIT choice is never rewritten this way: if the model says
     // Claude and there is no Claude token, that is a refusal naming the vendor,
     // not a silent swap onto a model the user did not pick.
-    const model =
+    // resolveFleetModel wraps the whole ladder, not one rung: a retired Codex id
+    // can be pinned on the task, the workspace, or the environment, and all
+    // three produced the same dead run. OpenAI withdraws models from the
+    // ChatGPT sign-in path on its own schedule, so a pin that worked when it
+    // was made stops working without anything here changing.
+    const model = resolveFleetModel(
       modelFromTask(task) ??
-      (await workspaceFleetModel(task.workspaceId)) ??
-      modelFromEnv(env) ??
-      (creds.claudeToken ? DEFAULT_FLEET_MODEL_ID : DEFAULT_FLEET_CODEX_MODEL_ID);
+        (await workspaceFleetModel(task.workspaceId)) ??
+        modelFromEnv(env) ??
+        (creds.claudeToken ? DEFAULT_FLEET_MODEL_ID : DEFAULT_FLEET_CODEX_MODEL_ID),
+    );
 
     // The model decides the provider, and the provider decides what the microVM
     // can reach: the host builds the sandbox's egress route table from it, so a

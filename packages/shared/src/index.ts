@@ -170,10 +170,25 @@ export type FleetProvider = 'anthropic' | 'openai';
  * fleet could run Codex. Sharing one list would have offered every PostHog Code
  * user a model their dispatch cannot accept.
  *
- * The Claude half is the same current-generation id space as PostHog Code. The
- * Codex half is what the guest's harness actually knows (`gpt-5-mini` and
- * `gpt-5-nano` are in its table too but are not offered — they are not worth
- * pointing at a PR).
+ * The Claude half is the same current-generation id space as PostHog Code.
+ *
+ * THE CODEX HALF IS WHAT A CHATGPT SUBSCRIPTION MAY USE, which is NOT the same
+ * question as what the guest's harness knows. It was built from the harness's
+ * model table once, and every id in it — `gpt-5.1-codex`, `gpt-5-codex`,
+ * `gpt-5.1` — was later retired from the ChatGPT sign-in path, so every Codex
+ * run failed with OpenAI's `"The 'gpt-5.1-codex' model is not supported when
+ * using Codex with a ChatGPT account."`. The harness still knew the id; the
+ * subscription was no longer entitled to it.
+ *
+ * The fleet runs on the USER'S OWN ChatGPT subscription, so this list must
+ * track https://learn.chatgpt.com/docs/models — specifically its "available
+ * with a ChatGPT account" set, not the wider API-key one. OpenAI retires from
+ * that path on its own schedule (gpt-5.4 went on 2026-08-31), so treat this
+ * catalogue as perishable: see RETIRED_FLEET_MODELS for what happens to a
+ * workspace still pinned to one that has gone.
+ *
+ * Deliberately NOT offered: `gpt-5.3-codex-spark` (Pro-only, and text-only —
+ * it cannot drive a harness that has to call tools).
  *
  * Most capable first within each vendor.
  */
@@ -183,9 +198,11 @@ export const FLEET_MODELS = [
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', blurb: 'Cheapest of the Claude set.' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', provider: 'openai', blurb: 'Newest Codex — the Codex default.' },
-  { id: 'gpt-5-codex', label: 'GPT-5 Codex', provider: 'openai', blurb: 'The previous Codex release.' },
-  { id: 'gpt-5.1', label: 'GPT-5.1', provider: 'openai', blurb: 'General-purpose, not Codex-tuned.' },
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', blurb: 'Newest and most capable.' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', provider: 'openai', blurb: 'Most capable 5.6 — complex coding.' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai', blurb: 'Balanced — the Codex default.' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', provider: 'openai', blurb: 'Fastest and cheapest of the set.' },
+  { id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai', blurb: 'The previous flagship.' },
 ] as const satisfies readonly { id: string; label: string; provider: FleetProvider; blurb: string }[];
 
 export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
@@ -210,7 +227,45 @@ export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5';
  * asked for. The dispatch ladder picks between the two by which credential the
  * workspace actually holds.
  */
-export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-5.1-codex';
+export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-5.6-terra';
+
+/**
+ * Codex ids that OpenAI has withdrawn from the ChatGPT sign-in path, and what
+ * to run instead.
+ *
+ * NOT the same idea as LEGACY_POSTHOG_CODE_MODEL_IDS, and the difference is
+ * the whole reason this exists. Those ids still WORK — they are merely off the
+ * menu, so a workspace that pinned one deliberately (for cost) keeps it. These
+ * ids are DEAD: every dispatch at one is a 400 from OpenAI and a failed run.
+ * Preserving that choice preserves a broken product, so a retired pin is
+ * migrated forward instead. This is also what OpenAI's own retirement notice
+ * tells you to do ("replace gpt-5.4 with gpt-5.6-terra").
+ *
+ * They map to the DEFAULT rather than to a like-for-like tier: the retired set
+ * spans flagship and mid, the replacements do not line up one to one, and the
+ * everyday model is the safe landing for work that is mostly mechanical.
+ */
+export const RETIRED_FLEET_MODELS = {
+  'gpt-5.1-codex': 'gpt-5.6-terra',
+  'gpt-5-codex': 'gpt-5.6-terra',
+  'gpt-5.1': 'gpt-5.6-terra',
+} as const satisfies Record<string, FleetModelId>;
+
+export type RetiredFleetModelId = keyof typeof RETIRED_FLEET_MODELS;
+
+/**
+ * The model a dispatch should actually ask for, given whatever is stored.
+ *
+ * Call this at the point the model is CHOSEN, not at the point it is read: the
+ * pin can arrive from the task, the workspace, or the environment, and all
+ * three needed the same treatment.
+ */
+export function resolveFleetModel(modelId: string): string;
+export function resolveFleetModel(modelId: string | undefined): string | undefined;
+export function resolveFleetModel(modelId: string | undefined): string | undefined {
+  if (!modelId) return modelId;
+  return (RETIRED_FLEET_MODELS as Record<string, FleetModelId>)[modelId] ?? modelId;
+}
 
 /**
  * Derived from the catalogue rather than hand-maintained beside it. The two
@@ -218,9 +273,16 @@ export const DEFAULT_FLEET_CODEX_MODEL_ID: FleetModelId = 'gpt-5.1-codex';
  * added as OpenAI's — answered 'anthropic' and would have been dispatched with
  * no route to its own API.
  */
-const FLEET_MODEL_PROVIDERS: Record<string, FleetProvider> = Object.fromEntries(
-  FLEET_MODELS.map((m) => [m.id, m.provider]),
-);
+const FLEET_MODEL_PROVIDERS: Record<string, FleetProvider> = {
+  ...Object.fromEntries(FLEET_MODELS.map((m) => [m.id, m.provider])),
+  // The retired ids have to keep answering 'openai'. The fallback below is
+  // 'anthropic', so a workspace still pinned to gpt-5.1-codex would otherwise
+  // have its Codex run routed at Anthropic — refused for a Claude credential
+  // it never connected, on a model it never picked.
+  ...Object.fromEntries(
+    Object.keys(RETIRED_FLEET_MODELS).map((id) => [id, 'openai' as FleetProvider]),
+  ),
+};
 
 /**
  * Which vendor a fleet model belongs to.
@@ -281,11 +343,16 @@ export function isStoredPostHogCodeModelId(
  * staying Claude-only is what stops a `gpt-*` fleet setting leaking into a
  * PostHog Code dispatch.
  */
-export type StoredFleetModelId = FleetModelId | LegacyPostHogCodeModelId;
+export type StoredFleetModelId = FleetModelId | LegacyPostHogCodeModelId | RetiredFleetModelId;
 
 export function isStoredFleetModelId(value: unknown): value is StoredFleetModelId {
   return (
     (typeof value === 'string' && FLEET_MODELS.some((m) => m.id === value)) ||
+    // A retired id still VALIDATES so the stored setting is read rather than
+    // discarded — `resolveFleetModel` then moves it to a model that can run.
+    // Rejecting it here would drop it to the next source in the ladder, which
+    // for a Codex-only workspace is the Claude default.
+    (typeof value === 'string' && value in RETIRED_FLEET_MODELS) ||
     isStoredPostHogCodeModelId(value)
   );
 }

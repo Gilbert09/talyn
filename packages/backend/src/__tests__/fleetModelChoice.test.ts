@@ -9,6 +9,8 @@ import {
   fleetProviderForModel,
   isStoredFleetModelId,
   isStoredPostHogCodeModelId,
+  RETIRED_FLEET_MODELS,
+  resolveFleetModel,
 } from '@talyn/shared';
 
 /**
@@ -26,7 +28,7 @@ describe('fleet model choice', () => {
   });
 
   it('defaults a Codex-only workspace to a Codex model', () => {
-    expect(DEFAULT_FLEET_CODEX_MODEL_ID).toBe('gpt-5.1-codex');
+    expect(DEFAULT_FLEET_CODEX_MODEL_ID).toBe('gpt-5.6-terra');
     expect(fleetProviderForModel(DEFAULT_FLEET_CODEX_MODEL_ID)).toBe('openai');
     expect(defaultFleetModelForAgent('codex')).toBe(DEFAULT_FLEET_CODEX_MODEL_ID);
     expect(defaultFleetModelForAgent('claude')).toBe(DEFAULT_FLEET_MODEL_ID);
@@ -89,6 +91,63 @@ describe('fleet model choice', () => {
   it('rejects anything it does not recognise', () => {
     for (const bad of ['gpt-4', '', null, undefined, 42, 'claude-opus-99', 'gpt-5.2-codex']) {
       expect(isStoredFleetModelId(bad)).toBe(false);
+    }
+  });
+});
+
+/**
+ * OpenAI withdraws models from the CHATGPT SIGN-IN path on its own schedule,
+ * while leaving them on the API-key path. The fleet runs on the user's own
+ * ChatGPT subscription, so the entire Codex catalogue went dead without
+ * anything in this repo changing: every run answered
+ * `"The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT
+ * account."` The harness still knew the id — the subscription was no longer
+ * entitled to it.
+ */
+describe('retired Codex models', () => {
+  it('offers only ids a ChatGPT account can currently run', () => {
+    const openai = FLEET_MODELS.filter((m) => m.provider === 'openai').map((m) => m.id);
+    // Every id that produced the outage must be gone from the MENU.
+    for (const dead of Object.keys(RETIRED_FLEET_MODELS)) {
+      expect(openai).not.toContain(dead);
+    }
+    expect(openai).toContain('gpt-5.6-terra');
+  });
+
+  it('migrates a retired pin forward instead of preserving it', () => {
+    // A dead id is not a preference worth keeping: honouring it means a 400
+    // and a failed run every time. Contrast LEGACY_POSTHOG_CODE_MODEL_IDS,
+    // which still work and so are preserved.
+    for (const [dead, replacement] of Object.entries(RETIRED_FLEET_MODELS)) {
+      expect(resolveFleetModel(dead)).toBe(replacement);
+      expect(FLEET_MODELS.some((m) => m.id === replacement)).toBe(true);
+    }
+  });
+
+  it('leaves a live id and an unknown id alone', () => {
+    // Not a rewrite-everything hook — only the ids we know are dead.
+    expect(resolveFleetModel('claude-sonnet-5')).toBe('claude-sonnet-5');
+    expect(resolveFleetModel('gpt-5.6-sol')).toBe('gpt-5.6-sol');
+    expect(resolveFleetModel('some-future-model')).toBe('some-future-model');
+    expect(resolveFleetModel(undefined)).toBeUndefined();
+  });
+
+  it('still routes a retired Codex id at OpenAI', () => {
+    // fleetProviderForModel falls back to 'anthropic', and the fleet builds the
+    // microVM's egress table from the answer. A retired pin that answered
+    // 'anthropic' would send a Codex run at a workspace's Claude credential —
+    // or refuse it for a credential that workspace never connected.
+    for (const dead of Object.keys(RETIRED_FLEET_MODELS)) {
+      expect(fleetProviderForModel(dead)).toBe('openai');
+      expect(fleetAgentForModel(dead)).toBe('codex');
+    }
+  });
+
+  it('still accepts a retired id as a STORED setting', () => {
+    // It has to validate, or the executor's ladder drops past it to the next
+    // source — which for a Codex-only workspace is the Claude default.
+    for (const dead of Object.keys(RETIRED_FLEET_MODELS)) {
+      expect(isStoredFleetModelId(dead)).toBe(true);
     }
   });
 });

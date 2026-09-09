@@ -83,7 +83,10 @@ describe('CloudProviderDefaultSelector', () => {
     expect(labels()).toContain('Talyn Fleet · Claude');
   });
 
-  it('reads the current agent back off the model', () => {
+  it('reads the current agent back off the model, even a retired one', () => {
+    // gpt-5.1-codex was withdrawn from the ChatGPT sign-in path, but a
+    // workspace can still have it stored. The picker must show Codex, not fall
+    // back to Claude — the dispatch migrates the id, the UI just reads it.
     seed({ defaultCloudProvider: 'selfhosted', fleetModel: 'gpt-5.1-codex' });
     render(<CloudProviderDefaultSelector />);
     expect(select().value).toBe('selfhosted:codex');
@@ -97,7 +100,7 @@ describe('CloudProviderDefaultSelector', () => {
     await waitFor(() => expect(update).toHaveBeenCalled());
     expect(sentSettings(0)).toEqual({
       defaultCloudProvider: 'selfhosted',
-      fleetModel: 'gpt-5.1-codex',
+      fleetModel: 'gpt-5.6-terra',
     });
   });
 
