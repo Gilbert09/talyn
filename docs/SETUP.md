@@ -375,6 +375,22 @@ which box is least loaded or which stopped reporting four minutes ago.
   renews them itself — a subscription access token is short-lived and a fleet
   run outlives it.
 
+**Keeping the model catalogues current.** `FLEET_MODELS` is hand-curated
+(ordering, blurbs, deliberate exclusions), so it rots silently — a legacy model
+keeps working, it just stops being the best one on offer. Two things watch it,
+split by what each vendor actually exposes:
+
+- **Anthropic** publishes `GET /v1/models`, so `.github/workflows/model-catalog.yml`
+  diffs it against ours daily and reports both directions (offered-but-gone,
+  served-but-not-offered). It needs an optional `ANTHROPIC_API_KEY` repo secret
+  and skips cleanly without one. It reports; a human still picks the label.
+- **Codex has no equivalent.** OpenAI's `GET /v1/models` answers for an API KEY,
+  while the fleet runs on the user's own ChatGPT subscription, and the gap
+  between those is exactly what took every Codex run down. So that half is
+  learned at run time: `services/selfHosted/withdrawnModels.ts` reads the
+  vendor's own refusal out of the failure, stops dispatching at that id, and
+  migrates the workspace's stored choice onto the agent's default — no deploy.
+
 **Either agent alone is enough.** A workspace with only Codex connected is fully
 configured, and its runs default to `gpt-5.6-terra` rather than to a Claude
 model it would then be refused for. Which agent runs a given task is decided by

@@ -1,0 +1,37 @@
+# Tells us when Anthropic's catalogue and ours have diverged.
+#
+# NOT part of test.yml, and not a gate on anything. Model drift is not a defect
+# in the commit being pushed — a legacy model keeps working, so nothing is
+# broken on the day a new flagship ships. Failing a PR for it would train
+# people to ignore the failure. This runs on its own clock and is allowed to be
+# red without blocking a deploy.
+name: Model catalogue
+
+on:
+  schedule:
+    # Daily. Anthropic ships a flagship every few weeks, so hourly would be
+    # noise and weekly would have let Fable 5.1 sit for six days.
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    # Same guard as every other scheduled job here: a fork must not run this
+    # against its own (absent) secret and get a daily red cross for it.
+    if: github.repository == 'Gilbert09/talyn'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The script imports the BUILT catalogue rather than parsing the source,
+      # so what it checks is what ships.
+      - run: npm run build --workspace @talyn/shared
+      - name: Compare against the Models API
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Exits 0 and says so when the secret is absent — see the script.
+        run: node scripts/check-model-catalog.mjs

@@ -35,6 +35,7 @@ import { getSelfHostedCredentials, resolveFleetTarget } from './credentials.js';
 // two drift: the shared one grew a `capacity` discriminator and this copy
 // silently did not, so the value the fail-back routes on could not be set.
 import type { DispatchResult } from '../cloudProviders/types.js';
+import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
 
 export type { DispatchResult };
 
@@ -208,7 +209,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     // three produced the same dead run. OpenAI withdraws models from the
     // ChatGPT sign-in path on its own schedule, so a pin that worked when it
     // was made stops working without anything here changing.
-    const model = resolveFleetModel(
+    const resolvedModel = resolveFleetModel(
       modelFromTask(task) ??
         (await workspaceFleetModel(task.workspaceId)) ??
         modelFromEnv(env) ??
@@ -218,6 +219,14 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
         // did not reach the rungs above — the setting existed and did nothing.
         (await workspaceAgentModel(task.workspaceId, creds.claudeToken ? 'claude' : 'codex')),
     );
+
+    // A model the vendor has been OBSERVED to withdraw (withdrawnModels.ts).
+    // The settings migration on the failure path covers the workspace's stored
+    // choice; this covers the two places it can be pinned that the migration
+    // cannot reach — the task's own metadata and the environment's config.
+    const model = isWithdrawnModel(resolvedModel)
+      ? replacementFor(resolvedModel)
+      : resolvedModel;
 
     // The model decides the provider, and the provider decides what the microVM
     // can reach: the host builds the sandbox's egress route table from it, so a

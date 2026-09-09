@@ -14,6 +14,7 @@ import { githubService } from '../github.js';
 import { getSelfHostedClient, getSelfHostedCredentials } from './credentials.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
+import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
 // each had a byte-identical copy of the predicate and the two constants behind
@@ -612,6 +613,13 @@ class SelfHostedPoller {
     // ephemeral sandbox reports `stopped` after success and failure alike.
     const status = taskOutcomeForSandbox(sandbox);
     const failureDetail = initialTaskOf(sandbox)?.error || sandbox.error;
+
+    // The vendor telling us, the only way it ever will, that a model we offer
+    // is no longer usable on a subscription. There is no endpoint for this —
+    // see withdrawnModels.ts. Learning it here stops the next run burning on
+    // the same id, and moves the workspace's stored choice off it.
+    const withdrawnModel = withdrawnModelFrom(failureDetail);
+    if (withdrawnModel) await noteWithdrawnModel(workspaceId, withdrawnModel);
     const result: TaskResult =
       status === 'completed'
         ? {
