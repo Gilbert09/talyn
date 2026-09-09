@@ -101,6 +101,9 @@ describe('CloudProviderDefaultSelector', () => {
     expect(sentSettings(0)).toEqual({
       defaultCloudProvider: 'selfhosted',
       fleetModel: 'gpt-5.6-terra',
+      // The vendor being LEFT is remembered, or flipping to Codex and back
+      // would hand Claude the shipped default and lose the picked model.
+      fleetModels: { claude: 'claude-sonnet-5' },
     });
   });
 

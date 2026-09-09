@@ -1,7 +1,5 @@
 import { eq, sql } from 'drizzle-orm';
 import {
-  DEFAULT_FLEET_CODEX_MODEL_ID,
-  DEFAULT_FLEET_MODEL_ID,
   fleetProviderForModel,
   isStoredFleetModelId,
   readCloudTaskMeta,
@@ -9,6 +7,9 @@ import {
   type Environment,
   type Task,
   resolveFleetModel,
+  fleetModelForAgent,
+  type FleetAgent,
+  type WorkspaceSettings,
 } from '@talyn/shared';
 import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { getDbClient } from '../../db/client.js';
@@ -211,7 +212,11 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       modelFromTask(task) ??
         (await workspaceFleetModel(task.workspaceId)) ??
         modelFromEnv(env) ??
-        (creds.claudeToken ? DEFAULT_FLEET_MODEL_ID : DEFAULT_FLEET_CODEX_MODEL_ID),
+        // The last rung is credential-aware, and now workspace-aware with it.
+        // It used to jump straight to the SHIPPED default, so a workspace that
+        // had chosen a Codex model still got gpt-5.6-terra whenever the choice
+        // did not reach the rungs above — the setting existed and did nothing.
+        (await workspaceAgentModel(task.workspaceId, creds.claudeToken ? 'claude' : 'codex')),
     );
 
     // The model decides the provider, and the provider decides what the microVM
@@ -409,6 +414,24 @@ function sanitizeSlug(name: string): string | null {
  * default: a workspace that pinned a model the picker no longer offers should
  * keep whatever its environment says, not be quietly moved.
  */
+/**
+ * The workspace's choice for ONE agent, or that agent's shipped default.
+ *
+ * Separate from `workspaceFleetModel` below because they answer different
+ * questions: that one is "what does this workspace run by default" (vendor
+ * included, may be absent); this one is "given that we are running `agent`,
+ * what model" — and it always answers, because it is the bottom of the ladder.
+ */
+async function workspaceAgentModel(workspaceId: string, agent: FleetAgent): Promise<string> {
+  const db = getDbClient();
+  const [row] = await db
+    .select({ settings: workspacesTable.settings })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId))
+    .limit(1);
+  return fleetModelForAgent(row?.settings as WorkspaceSettings | null, agent);
+}
+
 async function workspaceFleetModel(workspaceId: string): Promise<string | undefined> {
   const db = getDbClient();
   const [row] = await db

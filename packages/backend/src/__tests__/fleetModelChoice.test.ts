@@ -11,6 +11,8 @@ import {
   isStoredPostHogCodeModelId,
   RETIRED_FLEET_MODELS,
   resolveFleetModel,
+  storedFleetModelForAgent,
+  fleetModelForAgent,
 } from '@talyn/shared';
 
 /**
@@ -149,5 +151,76 @@ describe('retired Codex models', () => {
     for (const dead of Object.keys(RETIRED_FLEET_MODELS)) {
       expect(isStoredFleetModelId(dead)).toBe(true);
     }
+  });
+});
+
+/**
+ * Which model each AGENT runs, per workspace.
+ *
+ * `fleetModel` holds one model for one vendor, and the fleet has two agents —
+ * so a workspace could never express "Opus 5 on Claude AND gpt-6-astra on
+ * Codex". Everything downstream papered over that with the SHIPPED default:
+ * the per-task "run this on Codex" menu sent it unconditionally, and switching
+ * the workspace default across vendors overwrote the other vendor's choice with
+ * it. The picker saved a value that those paths never read.
+ */
+describe('per-agent model selection', () => {
+  it('answers undefined when the workspace has chosen nothing', () => {
+    // Must not answer the default here — the dispatch ladder has rungs below
+    // the workspace (the environment's model), and answering would eat them.
+    expect(storedFleetModelForAgent(undefined, 'codex')).toBeUndefined();
+    expect(storedFleetModelForAgent({}, 'claude')).toBeUndefined();
+  });
+
+  it('reads each agent out of the per-agent map', () => {
+    const settings = {
+      fleetModels: { claude: 'claude-opus-5', codex: 'gpt-6-astra' },
+    } as const;
+    expect(storedFleetModelForAgent(settings, 'claude')).toBe('claude-opus-5');
+    expect(storedFleetModelForAgent(settings, 'codex')).toBe('gpt-6-astra');
+  });
+
+  it('falls back to the legacy single field, but ONLY for its own vendor', () => {
+    // The bug this guards: `fleetModel` is one model for one vendor. Handing a
+    // Claude id back as the Codex answer is not a preference, it is a dispatch
+    // at a credential the workspace may not even hold.
+    const claudePinned = { fleetModel: 'claude-opus-5' } as const;
+    expect(storedFleetModelForAgent(claudePinned, 'claude')).toBe('claude-opus-5');
+    expect(storedFleetModelForAgent(claudePinned, 'codex')).toBeUndefined();
+
+    const codexPinned = { fleetModel: 'gpt-5.6-sol' } as const;
+    expect(storedFleetModelForAgent(codexPinned, 'codex')).toBe('gpt-5.6-sol');
+    expect(storedFleetModelForAgent(codexPinned, 'claude')).toBeUndefined();
+  });
+
+  it('prefers the per-agent map over the legacy field', () => {
+    const settings = {
+      fleetModel: 'claude-sonnet-5',
+      fleetModels: { claude: 'claude-opus-5' },
+    } as const;
+    expect(storedFleetModelForAgent(settings, 'claude')).toBe('claude-opus-5');
+  });
+
+  it('ignores an entry filed under the wrong vendor', () => {
+    // Hand-edited settings, or a model that changed hands. Returning it would
+    // send a Claude id to a Codex run.
+    const settings = { fleetModels: { codex: 'claude-opus-5' } } as const;
+    expect(storedFleetModelForAgent(settings, 'codex')).toBeUndefined();
+    expect(fleetModelForAgent(settings, 'codex')).toBe(DEFAULT_FLEET_CODEX_MODEL_ID);
+  });
+
+  it('applies the shipped default only when nothing was chosen', () => {
+    expect(fleetModelForAgent(undefined, 'claude')).toBe(DEFAULT_FLEET_MODEL_ID);
+    expect(fleetModelForAgent(undefined, 'codex')).toBe(DEFAULT_FLEET_CODEX_MODEL_ID);
+    expect(fleetModelForAgent({ fleetModels: { codex: 'gpt-5.6-luna' } }, 'codex')).toBe(
+      'gpt-5.6-luna'
+    );
+  });
+
+  it('migrates a retired pin on the way out', () => {
+    // A workspace pinned to a withdrawn Codex id must not have it handed back.
+    const settings = { fleetModels: { codex: 'gpt-5.1-codex' } } as const;
+    expect(storedFleetModelForAgent(settings, 'codex')).toBe('gpt-5.1-codex');
+    expect(fleetModelForAgent(settings, 'codex')).toBe(RETIRED_FLEET_MODELS['gpt-5.1-codex']);
   });
 });

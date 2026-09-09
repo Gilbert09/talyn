@@ -305,9 +305,45 @@ export function fleetAgentForModel(modelId: string | undefined): FleetAgent {
   return fleetProviderForModel(modelId) === 'openai' ? 'codex' : 'claude';
 }
 
-/** That agent's default model — what a per-task "run this on Codex" picks. */
+/** That agent's SHIPPED default — the floor when a workspace has chosen nothing. */
 export function defaultFleetModelForAgent(agent: FleetAgent): FleetModelId {
   return agent === 'codex' ? DEFAULT_FLEET_CODEX_MODEL_ID : DEFAULT_FLEET_MODEL_ID;
+}
+
+/**
+ * What this workspace chose for `agent`, or undefined if it never chose.
+ *
+ * Deliberately does NOT apply the shipped default: the backend's dispatch
+ * ladder has more rungs below the workspace (the environment's model), and a
+ * function that always answered would swallow them.
+ *
+ * Two sources, in order — the per-agent map, then the legacy single
+ * `fleetModel`. **Both are vendor-checked.** `fleetModel` holds one model for
+ * one vendor, so returning it for the other agent would answer "your Codex
+ * model is claude-sonnet-5" — which is not a preference, it is a dispatch that
+ * fails for a credential the workspace may not even hold.
+ */
+export function storedFleetModelForAgent(
+  settings: WorkspaceSettings | null | undefined,
+  agent: FleetAgent,
+): StoredFleetModelId | undefined {
+  const belongsToAgent = (value: unknown): value is StoredFleetModelId =>
+    isStoredFleetModelId(value) && fleetAgentForModel(value) === agent;
+
+  const chosen = settings?.fleetModels?.[agent];
+  if (belongsToAgent(chosen)) return chosen;
+  if (belongsToAgent(settings?.fleetModel)) return settings.fleetModel;
+  return undefined;
+}
+
+/** The model to actually run for `agent` — the workspace's choice, or the default. */
+export function fleetModelForAgent(
+  settings: WorkspaceSettings | null | undefined,
+  agent: FleetAgent,
+): string {
+  return resolveFleetModel(
+    storedFleetModelForAgent(settings, agent) ?? defaultFleetModelForAgent(agent),
+  );
 }
 
 /** Type guard for a value being a model the pickers currently OFFER. */
@@ -372,6 +408,22 @@ export interface WorkspaceSettings {
    * setting picks both which agent runs and what it can reach.
    */
   fleetModel?: StoredFleetModelId;
+  /**
+   * The model this workspace picked FOR EACH AGENT, so a choice survives
+   * switching away from its vendor and back.
+   *
+   * `fleetModel` above is still "the default a workspace run uses", and its
+   * vendor is still what picks the default agent — that part is unchanged. What
+   * it cannot do is remember TWO choices at once, and there are two agents. So
+   * picking Codex per task, or flipping the workspace default to Claude and
+   * back, fell through to the shipped default and silently discarded whatever
+   * had been chosen for the other vendor.
+   *
+   * Read it through `storedFleetModelForAgent`, never directly: an entry filed
+   * under the wrong vendor (hand-edited settings, or a model that later changed
+   * hands) must not be handed to an agent that cannot run it.
+   */
+  fleetModels?: Partial<Record<FleetAgent, StoredFleetModelId>>;
   /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and

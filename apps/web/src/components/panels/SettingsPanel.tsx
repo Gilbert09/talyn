@@ -75,6 +75,8 @@ import {
   POSTHOG_CODE_MODELS,
   DEFAULT_POSTHOG_CODE_MODEL_ID,
   defaultFleetModelForAgent,
+  storedFleetModelForAgent,
+  isStoredFleetModelId,
   fleetAgentForModel,
   parseAutoKeepMergeableLabels,
   type FleetAgent,
@@ -946,7 +948,21 @@ function WorkspaceModelSelector({
     if (!currentWorkspaceId) return;
     setSaving(true);
     try {
-      const settings = { [settingKey]: value } as Workspace['settings'];
+      // Writing the fleet model also files it under its VENDOR, so the choice
+      // survives switching the default agent away and back — and so the
+      // per-task "run this on Codex" menu has something to read. `fleetModel`
+      // alone holds one model, and there are two agents.
+      const settings = {
+        [settingKey]: value,
+        ...(settingKey === 'fleetModel' && isStoredFleetModelId(value)
+          ? {
+              fleetModels: {
+                ...(workspace?.settings?.fleetModels ?? {}),
+                [fleetAgentForModel(value)]: value,
+              },
+            }
+          : {}),
+      } as Workspace['settings'];
       await api.workspaces.update(currentWorkspaceId, { settings });
       setWorkspaces(
         workspaces.map((w) =>
@@ -1561,9 +1577,21 @@ export function CloudProviderDefaultSelector() {
       const patch: Partial<NonNullable<Workspace['settings']>> = { defaultCloudProvider } as never;
       if (agent) {
         // Only when the choice crosses vendors — see the note above on Opus 5.
-        const keepsVendor = fleetAgentForModel(fleetModel) === agent;
+        const leaving = fleetAgentForModel(fleetModel);
+        const keepsVendor = leaving === agent;
         if (!keepsVendor) {
-          patch.fleetModel = defaultFleetModelForAgent(agent as FleetAgent);
+          // Remember the model we are LEAVING before overwriting it, and
+          // restore whatever this vendor was last set to. `fleetModel` holds
+          // one model for one vendor, so switching used to overwrite the other
+          // vendor's choice with the shipped default — flip to Claude and back
+          // and your Codex model was silently gone.
+          patch.fleetModels = {
+            ...(settings?.fleetModels ?? {}),
+            ...(isStoredFleetModelId(fleetModel) ? { [leaving]: fleetModel } : {}),
+          };
+          patch.fleetModel =
+            storedFleetModelForAgent(settings, agent as FleetAgent) ??
+            defaultFleetModelForAgent(agent as FleetAgent);
         }
       }
 

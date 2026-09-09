@@ -4,6 +4,7 @@ import {
   buildMergeablePrompt,
   buildSkillPrompt,
   defaultFleetModelForAgent,
+  storedFleetModelForAgent,
   promptTemplateFor,
   type CloudProviderType,
   type FleetAgent,
@@ -78,10 +79,16 @@ export function useGitHubActions() {
         return agents.map((agent) => ({
           type: p.type,
           displayName: `${p.displayName} · ${agent === 'codex' ? 'Codex' : 'Claude'}`,
-          model: defaultFleetModelForAgent(agent),
+          // The WORKSPACE's model for that agent, not the shipped default.
+          // This sent `defaultFleetModelForAgent(agent)` unconditionally, so
+          // "run this on Codex" ignored Settings → Talyn Fleet → Model outright
+          // — the picker saved a value that nothing on this path ever read.
+          model:
+            storedFleetModelForAgent(workspaceSettings, agent) ??
+            defaultFleetModelForAgent(agent),
         }));
       }),
-    [connectedProviders]
+    [connectedProviders, workspaceSettings]
   );
   const taskAsk = defaultCloudProvider === 'ask' && taskProviders.length > 1;
   const openIntegrations = useCallback(() => openSettings('integrations'), [openSettings]);
