@@ -29,26 +29,25 @@ import { emitPullRequestUpdated } from '../services/websocket.js';
 import { noteHeadSha } from '../services/webhookHeadIndex.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
 import {
-  closeActiveEntry,
   computeEntryPositions,
-  ensureActiveEntry,
   getActiveEntryForPr,
   loadActiveEntriesForWorkspace,
   loadActiveGroup,
   rowToEntrySnapshot,
 } from '../services/mergeQueue/store.js';
 import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
-import {
-  classifyAutoMergeActor,
-  disableAutoMerge,
-  markReadyForReview,
-} from '../services/githubAutoMerge.js';
+import { classifyAutoMergeActor } from '../services/githubAutoMerge.js';
 import { getExternalMergeGate, markExternalMergeGate } from '../services/repoMergeGate.js';
 import { submitToExternalQueue } from '../services/externalQueueSubmit.js';
 import { isExternalMergeGateError } from '../services/mergeQueue/decide.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
-import type { MergeMethod } from '../services/mergeQueue/types.js';
+import {
+  applyQueueMembership,
+  emitDequeued,
+  publishDraftForQueue,
+  setQueueMembership,
+} from '../services/mergeQueue/membership.js';
 import {
   broadcastMergeQueuePositions,
   QUEUE_RESET_COLUMNS,
@@ -790,136 +789,6 @@ export function pullRequestRoutes(): Router {
   // per (repo, base branch). On conflict / behind / blocked it fires the same
   // cloud "fix every blocker" run the watcher uses, then merges. The PR drops
   // off the queue once merged.
-  /**
-   * Apply queue membership to ONE PR: the pull_requests bookkeeping plus the
-   * merge_queue_entries dual-write. Extracted so the single-PR toggle and the
-   * stack batch can't drift — the batch is exactly N of these, and a member
-   * that skipped the disarm or the entry write would be a silent hole.
-   *
-   * Deliberately does NOT gate on billing, publish drafts, broadcast, or kick
-   * the pipeline: those are per-CALL, not per-PR, and doing them here would
-   * mean N advisory locks and N broadcasts for one user action.
-   */
-  async function applyQueueMembership(
-    row: PRFlagRow,
-    opts: { enabled: boolean; method: string; trigger: string }
-  ): Promise<void> {
-    const db = getDbClient();
-    const { enabled, method } = opts;
-    // Enabling: arm a fresh guard so the next processor tick acts immediately,
-    // and preserve the queue place on a fast off/on toggle. Disabling: clear
-    // all queue bookkeeping.
-    await db
-      .update(pullRequestsTable)
-      .set({
-        mergeQueued: enabled,
-        mergeQueuedAt: enabled ? (row.mergeQueuedAt ?? new Date()) : null,
-        mergeMethod: method,
-        updatedAt: new Date(),
-      })
-      .where(eq(pullRequestsTable.id, row.id));
-
-    // Dual-write membership into merge_queue_entries (the v2 queue). While
-    // the v1 engine drives, this only tracks membership — v1's own
-    // transitions don't touch entries, and the cutover migration re-syncs
-    // any drift before the v2 pipeline takes over. Best-effort: a failure
-    // here must never break the toggle.
-    try {
-      const summary = row.lastSummary as { baseBranch?: string; headSha?: string } | null;
-      if (enabled) {
-        await ensureActiveEntry({
-          pullRequestId: row.id,
-          workspaceId: row.workspaceId,
-          repositoryId: row.repositoryId,
-          baseBranch: summary?.baseBranch ?? '',
-          mergeMethod: method as MergeMethod,
-          headSha: summary?.headSha ?? '',
-          trigger: opts.trigger,
-        });
-      } else {
-        const closed = await closeActiveEntry(row.id, 'removed', {
-          trigger: opts.trigger,
-          message: 'Removed from the merge queue by the user.',
-        });
-        // A dequeued PR must NOT keep a Talyn-armed auto-merge on GitHub —
-        // GitHub would merge it after the user explicitly pulled it. Disarm
-        // synchronously; on failure flag pendingDisarm so the reconciler
-        // retries (never leave it dangling). User-armed auto-merges are left
-        // alone — we never disarm what we didn't arm.
-        if (closed?.automergeArmedBy === 'talyn') {
-          const nodeId = (row.lastSummary as { nodeId?: string } | null)?.nodeId;
-          const disarmed = nodeId
-            ? await disableAutoMerge({
-                workspaceId: row.workspaceId,
-                owner: row.owner,
-                repo: row.repo,
-                nodeId,
-              })
-            : false;
-          if (!disarmed) {
-            await db
-              .update(mergeQueueEntriesTable)
-              .set({ pendingDisarm: true, updatedAt: new Date() })
-              .where(eq(mergeQueueEntriesTable.id, closed.id));
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(
-        `[pullRequests] merge-queue entry dual-write failed for ${row.owner}/${row.repo}#${row.number}:`,
-        err instanceof Error ? err.message : err
-      );
-    }
-  }
-
-  /**
-   * Queuing a draft PR: GitHub 405s a draft merge, so a queued draft would just
-   * sit blocked waiting on the author. Since queuing IS the intent to merge,
-   * mark it ready for review now. Best-effort — on success we refresh the
-   * cached summary so the kick merges without waiting for the ready_for_review
-   * webhook; on failure decide()'s draft block still surfaces the manual action.
-   */
-  async function publishDraftForQueue(row: PRFlagRow): Promise<void> {
-    const summary = row.lastSummary as
-      | { draft?: boolean; nodeId?: string; mergeStateStatus?: string }
-      | null;
-    const isDraftPr = summary?.draft === true || summary?.mergeStateStatus === 'DRAFT';
-    if (!isDraftPr || !summary?.nodeId) return;
-    const ready = await markReadyForReview({
-      workspaceId: row.workspaceId,
-      owner: row.owner,
-      repo: row.repo,
-      nodeId: summary.nodeId,
-    });
-    if (!ready) return;
-    await prMonitorService
-      .refreshPr(row.workspaceId, row.owner, row.repo, row.number, {
-        resolveMergeable: true,
-        repositoryId: row.repositoryId,
-      })
-      .catch((err) => {
-        console.warn(
-          `[pullRequests] post-ready refresh failed for ${row.owner}/${row.repo}#${row.number}:`,
-          err instanceof Error ? err.message : err
-        );
-      });
-  }
-
-  /** The cleared-badge broadcast a dequeued row needs (it is out of the group). */
-  function emitDequeued(row: PRFlagRow): void {
-    emitPullRequestUpdated(row.workspaceId, {
-      id: row.id,
-      taskId: row.taskId,
-      repositoryId: row.repositoryId,
-      owner: row.owner,
-      repo: row.repo,
-      number: row.number,
-      state: row.state,
-      lastSummary: row.lastSummary as Record<string, unknown>,
-      mergeQueued: false,
-    });
-  }
-
   function resolveMergeMethod(body: unknown, fallback: string): string {
     const m = (body as { method?: string } | undefined)?.method;
     return m === 'merge' || m === 'rebase' || m === 'squash' ? m : fallback;
@@ -946,40 +815,18 @@ export function pullRequestRoutes(): Router {
     const enabled = body?.enabled === true;
     // keep the existing method when omitted
     const method = resolveMergeMethod(req.body, row.mergeMethod);
-    const apply = () =>
-      applyQueueMembership(row, {
-        enabled,
-        method,
-        trigger: enabled ? 'user:enqueue' : 'user:dequeue',
-      });
 
-    if (enabled) {
-      // Free-plan queue cap — MergeQueueLimitError → 402 via the error
-      // middleware. The PR itself is excluded from the count so re-arming an
-      // already-queued PR never self-blocks.
-      await withMergeQueueLimitGate(assertUser(req).id, { excludePrId: row.id }, apply);
-    } else {
-      await apply();
-    }
-
-    if (enabled) await publishDraftForQueue(row);
-    // When disabling, the row is no longer in the queue so the group rebroadcast
-    // below will not touch it — emit its cleared badge explicitly here.
-    else emitDequeued(row);
-
-    // Recompute "#N" for the whole queue so the toggled PR gets its real
-    // position and every sibling shifts to match — not just after a refresh.
-    await broadcastMergeQueuePositions(row.workspaceId);
-
-    // Kick an evaluation so an already-clean PR merges without waiting for the
-    // reconciler. Scope-escaped — fire-and-forget work must never inherit this
-    // request's transaction handle (it is dead by the time the kick runs; see
-    // runWithoutScope).
-    if (enabled) {
-      runWithoutScope(() => {
-        void onQueueMembershipChanged(row.id, 'user:enqueue');
-      });
-    }
+    // The plan gate, the bookkeeping, the badge, the rebroadcast and the
+    // evaluation kick all live in the service — shared with the workflow
+    // engine's `enqueue_merge_queue` action, so the two cannot drift.
+    // MergeQueueLimitError → 402 via the error middleware.
+    await setQueueMembership({
+      row,
+      enabled,
+      method,
+      trigger: enabled ? 'user:enqueue' : 'user:dequeue',
+      ownerId: assertUser(req).id,
+    });
 
     res.json({ success: true, data: null } as ApiResponse<null>);
   });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { workflowsOffered } from '@talyn/shared';
 import {
   ListTodo,
   Settings,
@@ -8,6 +9,7 @@ import {
   GitPullRequest,
   GitMerge,
   Eye,
+  Workflow,
   Check,
   Plus,
   Download,
@@ -34,6 +36,7 @@ export function Sidebar({ className }: SidebarProps) {
     activePanel,
     setActivePanel,
     tasks,
+    features,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -79,6 +82,20 @@ export function Sidebar({ className }: SidebarProps) {
       badge: runningTasksCount > 0 ? runningTasksCount : undefined,
       badgeVariant: 'secondary',
     },
+    // Workflows is allow-listed. `features === null` is STILL LOADING and must
+    // render nothing, exactly like `cloudProviderOffered` — treating it as
+    // "off" and then flipping would flash the item in on every launch.
+    ...(workflowsOffered(features)
+      ? [
+          {
+            id: 'workflows' as const,
+            icon: Workflow,
+            label: 'Workflows',
+            badge: undefined,
+            badgeVariant: 'secondary',
+          },
+        ]
+      : []),
   ];
 
   return (

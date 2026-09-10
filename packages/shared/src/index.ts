@@ -22,6 +22,12 @@ export * from './promptTemplates.js';
 // shared so the desktop and web forks can't disagree about what a filter shows.
 export * from './prFilters.js';
 
+// Workflows — user-defined PR automation: the trigger taxonomy, the pure
+// matcher the engine and both editors share, and the validator the route 400s
+// with. Same argument as prFilters: two copies of the predicate would let one
+// workflow claim different matches on each client.
+export * from './workflows.js';
+
 // Release notes — the "What's new" feed: version ordering, the commit filter
 // the CI generator runs, and the one rule for whether the modal opens.
 export * from './releaseNotes.js';
@@ -773,6 +779,26 @@ export interface AgentEvent {
 }
 
 // ============================================================================
+// Feature flags
+// ============================================================================
+
+/**
+ * Which allow-listed features this account may use — the answer to
+ * `GET /api/v1/features`.
+ *
+ * A capability answer, not a settings object: it is computed per request from
+ * the backend's env allow-list keyed on the workspace OWNER's email, so a
+ * client cannot set it and there is nothing here to persist. Hiding UI from it
+ * is a courtesy; every gated surface is enforced server-side as well, because
+ * a hidden nav item is a decoration that the CLI, the MCP server and plain
+ * `curl` all walk straight past. See `services/workflowsAccess.ts`.
+ */
+export interface Features {
+  /** Workflows — user-defined PR automation. `WORKFLOWS_*` env pair. */
+  workflows: boolean;
+}
+
+// ============================================================================
 // WebSocket Events
 // ============================================================================
 
@@ -791,6 +817,10 @@ export type WSEventType =
   // Per-user billing fact (broadcastToUser) — fired by the Polar webhook
   // handler after a plan change; payload is the fresh BillingStatus.
   | 'subscription:updated'
+  // One workflow evaluated one PR and finished acting. Carries the whole
+  // WorkflowRun row, which is what makes the Workflows page's history and its
+  // derived stats live rather than poll-shaped.
+  | 'workflow:run'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.

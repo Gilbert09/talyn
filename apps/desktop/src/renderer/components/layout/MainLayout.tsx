@@ -1,4 +1,5 @@
 import React from 'react';
+import { workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { QueuePanel } from '../panels/QueuePanel';
@@ -6,6 +7,7 @@ import { MyPRsPanel } from '../panels/github/MyPRsPanel';
 import { ReviewsPanel } from '../panels/github/ReviewsPanel';
 import { MergeQueuePanel } from '../panels/github/MergeQueuePanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
+import { WorkflowsPanel } from '../panels/workflows/WorkflowsPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
 import { ConnectAgentModal } from '../modals/ConnectAgentModal';
@@ -19,6 +21,7 @@ import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 
 export function MainLayout() {
   const { activePanel, createWorkspaceOpen, setCreateWorkspaceOpen } = useWorkspaceStore();
+  const features = useWorkspaceStore((s) => s.features);
   const upgradeModalOpen = useBillingStore((s) => s.upgradeModalOpen);
   const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);
   useSystemStatus();
@@ -43,6 +46,10 @@ export function MainLayout() {
             {activePanel === 'my_prs' && <MyPRsPanel />}
             {activePanel === 'reviews' && <ReviewsPanel />}
             {activePanel === 'merge_queue' && <MergeQueuePanel />}
+            {/* Gated the same way the nav item is. `activePanel` is remembered,
+                so a user who loses the flag must not land back on a page the
+                backend will refuse every request for. */}
+            {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
             {activePanel === 'settings' && <SettingsPanel />}
           </div>
         </main>

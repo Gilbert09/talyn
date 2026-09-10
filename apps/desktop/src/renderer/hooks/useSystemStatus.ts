@@ -18,6 +18,12 @@ import { useOnReconnect } from './useOnReconnect';
  * in-process signal that the workspace just got connected. (The personal-API-key
  * path still writes the new status straight to the store from the card.)
  *
+ * Allow-listed feature flags (`GET /features`) are loaded here too, once per
+ * session — they are account-level, so a workspace switch does not re-fetch
+ * them. `null` means still loading and absent means not offered; anything
+ * reading them must treat those the same way `cloudProviderOffered` does, or the
+ * gated nav item flashes in on every launch.
+ *
  * Cloud-provider connection status is loaded here too (not per-component) so
  * the Settings cards, the default-provider selector, the sidebar status row,
  * and the per-task picker all read one store value — and it's re-checked on
@@ -31,6 +37,7 @@ export function useSystemStatus(): void {
   const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
   const setPostHogStatus = useWorkspaceStore((s) => s.setPostHogStatus);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
+  const setFeatures = useWorkspaceStore((s) => s.setFeatures);
   const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
@@ -110,4 +117,21 @@ export function useSystemStatus(): void {
   }, [refreshCloudProviders]);
 
   useOnReconnect(refreshCloudProviders);
+
+  // Allow-listed features. Account-level rather than per-workspace, so it is
+  // fetched once and NOT re-fetched on a workspace switch. Left at its last
+  // known value on a transient failure: blanking it would pull a nav item out
+  // from under a click.
+  useEffect(() => {
+    let cancelled = false;
+    api.features
+      .get()
+      .then((features) => {
+        if (!cancelled) setFeatures(features);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [setFeatures]);
 }

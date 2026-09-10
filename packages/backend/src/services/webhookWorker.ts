@@ -12,6 +12,12 @@ import {
   pruneChecksForSha,
 } from './checkCounts.js';
 import { noteIssueComment } from './externalQueueState.js';
+import { terminalOutcomeFromPayload, type WebhookDelivery } from './webhookPayload.js';
+import { evaluateWorkflowsForDelivery } from './workflows/engine.js';
+// Re-exported so the receiver, the tests and everything else keep importing the
+// delivery envelope and the terminal-state reader from here. They live in
+// webhookPayload.ts only to keep that module a leaf — see its header.
+export { terminalOutcomeFromPayload, type WebhookDelivery };
 
 /**
  * Drains the GitHub webhook ingest stream and turns each delivery into the
@@ -85,16 +91,6 @@ export function whTrace(msg: string): void {
 }
 
 /** The decoded envelope the receiver enqueues. */
-export interface WebhookDelivery {
-  deliveryId: string;
-  eventType: string;
-  action?: string;
-  repoFullName: string;
-  installationId?: string;
-  enqueuedAtMs: number;
-  payload: Record<string, unknown>;
-}
-
 // ---- Pure classification helpers (unit-tested) ---------------------------
 
 /**
@@ -212,6 +208,22 @@ export async function processWebhookDelivery(
     whTrace(`  push ${delivery.repoFullName}: skipped (sweep handles base-advance conflicts)`);
     return 0;
   }
+
+  // Workflows — user-defined PR automation. Evaluated HERE, above the
+  // refresh gate, for two reasons: `isRefreshEvent` answers "does this imply a
+  // PR data refresh", which is a narrower question than "does a user care"
+  // (`check_suite completed` passes it and is then a no-op below); and the
+  // engine reads the payload, which the refresh path is about to stop caring
+  // about. Awaited rather than fired off, so a workflow's REST calls sit inside
+  // the slow lane's bounded pool like everything else — but it never throws, so
+  // a broken workflow cannot cost this delivery the refresh it was about.
+  await evaluateWorkflowsForDelivery(delivery, targets).catch((err: unknown) => {
+    console.warn(
+      `[webhookWorker] workflow evaluation ${delivery.repoFullName} ` +
+        `${delivery.eventType}/${delivery.action ?? '-'}:`,
+      err instanceof Error ? err.message : err,
+    );
+  });
 
   if (!isRefreshEvent(delivery.eventType)) {
     whTrace(`  └ ${delivery.eventType}: not a refresh event — ignored`);
@@ -334,32 +346,6 @@ async function pruneOnPullRequest(delivery: WebhookDelivery): Promise<void> {
   }
 }
 
-/**
- * Read a merged/closed outcome off a `pull_request` payload. Pure, so the
- * precedence between `merged` and `merged_at` is unit-testable: GitHub sets
- * both on a merge, but only `merged_at` carries the instant, and a bad
- * timestamp must not downgrade the merge to a plain close. Returns null when
- * the payload doesn't describe a close.
- */
-export function terminalOutcomeFromPayload(
-  action: string | undefined,
-  payload: Record<string, unknown>,
-): { merged: boolean; mergedAt: Date | null } | null {
-  if (action !== 'closed') return null;
-  const pr = payload.pull_request as
-    | { merged?: unknown; merged_at?: unknown }
-    | undefined;
-  if (!pr) return null;
-  let mergedAt: Date | null = null;
-  if (typeof pr.merged_at === 'string') {
-    const parsed = new Date(pr.merged_at);
-    if (!Number.isNaN(parsed.getTime())) mergedAt = parsed;
-  }
-  const merged = pr.merged === true || mergedAt !== null;
-  // A merge with no usable timestamp is still a merge — stamp it now rather
-  // than leaving the row in `merged` with a null mergedAt.
-  return { merged, mergedAt: merged ? (mergedAt ?? new Date()) : null };
-}
 
 /**
  * Apply a `pull_request/closed` delivery's terminal state to every watching

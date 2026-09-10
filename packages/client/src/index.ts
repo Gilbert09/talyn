@@ -4,6 +4,10 @@ import {
   getWebSocketUrl,
 } from './config.js';
 import type {
+  Features,
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowWithStats,
   Workspace,
   Environment,
   Task,
@@ -1689,6 +1693,55 @@ export const users = {
   wipeMe: () => request<void>('DELETE', '/users/me'),
 };
 
+// ============================================================================
+// Features (allow-listed capabilities)
+// ============================================================================
+
+export const features = {
+  /**
+   * Which allow-listed features this account may see.
+   *
+   * A capability answer, computed server-side per request — never cached on the
+   * client past a session, and never treated as authorisation. Every gated
+   * surface enforces its own gate; this only decides what to draw.
+   */
+  get: () => request<Features>('GET', '/features'),
+};
+
+// ============================================================================
+// Workflows (user-defined PR automation)
+// ============================================================================
+
+export const workflows = {
+  list: (workspaceId: string) =>
+    request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  create: (workspaceId: string, input: WorkflowInput) =>
+    request<WorkflowWithStats>('POST', '/workflows', { workspaceId, ...input }),
+
+  /**
+   * Whole-workflow replace, not a field merge — the trigger, the conditions and
+   * the actions validate against each other, so send the complete definition.
+   */
+  update: (id: string, input: WorkflowInput) =>
+    request<WorkflowWithStats>('PATCH', `/workflows/${id}`, input),
+
+  remove: (id: string) => request<void>('DELETE', `/workflows/${id}`),
+
+  /**
+   * One workflow's history, newest first. `cursor` is the `createdAt` of the last
+   * row already held — keyset, because the history grows at the head and an
+   * offset page would shift under the reader.
+   */
+  runs: (id: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<WorkflowRun[]>('GET', `/workflows/${id}/runs${suffix}`);
+  },
+};
+
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
@@ -1711,6 +1764,8 @@ export const api = {
   billing,
   releaseNotes,
   users,
+  features,
+  workflows,
   admin,
   ws: wsClient,
 };

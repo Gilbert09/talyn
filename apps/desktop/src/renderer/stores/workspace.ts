@@ -6,6 +6,7 @@ import type {
   TaskStatus,
   SkillSummary,
   ReleaseNoteEntry,
+  Features,
 } from '@talyn/shared';
 import type {
   GitHubStatus,
@@ -169,7 +170,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'settings';
+  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'settings';
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -208,6 +209,17 @@ interface WorkspaceState {
   // selector, the sidebar status row, and the per-task picker never disagree or
   // flash a stale "disconnected" on remount). null = not yet checked.
   cloudProviders: CloudProviderInfo[] | null;
+  /**
+   * Allow-listed features this account may see, from `GET /features`.
+   *
+   * `null` means STILL LOADING and absent means not offered — the same
+   * discipline `cloudProviderOffered` documents. Both render nothing, and
+   * conflating them makes the nav item flash in on every launch.
+   *
+   * Never treated as authorisation: the backend gates every workflow route and
+   * the engine itself. This only decides what to draw.
+   */
+  features: Features | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing
   // connected opens this instead of silently no-oping. `pendingCloudTask` is
@@ -239,6 +251,7 @@ interface WorkspaceState {
   setGitHubInstallations: (installations: GitHubInstallation[] | null) => void;
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
+  setFeatures: (features: Features | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
   openConnectAgent: (pending?: PendingCloudTask | null) => void;
@@ -279,7 +292,7 @@ interface WorkspaceState {
 
   toggleSidebar: () => void;
   setActivePanel: (
-    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'settings'
+    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'settings'
   ) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -307,6 +320,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   githubInstallations: null,
   posthogStatus: null,
   cloudProviders: null,
+  features: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
   whatsNewOpen: false,
@@ -348,6 +362,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
 
   setCloudProviders: (cloudProviders) => set({ cloudProviders }),
+
+  setFeatures: (features) => set({ features }),
 
   openConnectAgent: (pending = null) =>
     set({ connectAgentOpen: true, pendingCloudTask: pending }),

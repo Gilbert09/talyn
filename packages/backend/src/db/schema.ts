@@ -937,3 +937,86 @@ export const fleetHosts = pgTable(
     reportedAtIdx: index('idx_fleet_hosts_reported_at').on(t.reportedAt),
   })
 );
+
+// ---------- Workflows ----------
+//
+// User-defined PR automation: "on these events, matching these conditions, do
+// these actions". Config in `workflows`, an append-only run log in
+// `workflow_runs` — the merge-queue pair's shape, for the same reason (a rule
+// the user edits, plus a history that is queried by time window and appended to
+// from any replica).
+//
+// The trigger taxonomy, the matcher and the validator all live in
+// @talyn/shared's `workflows.ts`; these columns hold what it normalises.
+
+export const workflows = pgTable(
+  'workflows',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    /** `WorkflowTriggerEvent[]`. */
+    events: jsonb('events').notNull(),
+    /** `WorkflowConditions` — `{}` means "every PR in the watched repos". */
+    conditions: jsonb('conditions').notNull().default({}),
+    /** `WorkflowAction[]`, run in order. */
+    actions: jsonb('actions').notNull(),
+    /** The loop breaker — see DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR. */
+    maxRunsPerPrPerHour: integer('max_runs_per_pr_per_hour').notNull().default(5),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceIdx: index('idx_workflows_workspace').on(t.workspaceId),
+  })
+);
+
+export const workflowRuns = pgTable(
+  'workflow_runs',
+  {
+    id: text('id').primaryKey(),
+    workflowId: text('workflow_id')
+      .notNull()
+      .references(() => workflows.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    /** Nullable: a repo can be removed from the workspace after a run. */
+    repositoryId: text('repository_id').references(() => repositories.id, {
+      onDelete: 'set null',
+    }),
+    /** The PR, DENORMALISED — a workflow fires on PRs with no row at all, and
+     *  un-watching a PR deletes the row it had. The history must outlive both. */
+    repoFullName: text('repo_full_name').notNull(),
+    prNumber: integer('pr_number').notNull(),
+    prTitle: text('pr_title').notNull().default(''),
+    prUrl: text('pr_url').notNull().default(''),
+    prAuthor: text('pr_author').notNull().default(''),
+    pullRequestId: text('pull_request_id').references(() => pullRequests.id, {
+      onDelete: 'set null',
+    }),
+    taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /** `WorkflowTriggerEvent`. */
+    event: text('event').notNull(),
+    /** GitHub's `X-GitHub-Delivery`. Unique per workflow — the idempotency key
+     *  that makes a redelivery a no-op instead of a second comment. */
+    deliveryId: text('delivery_id').notNull(),
+    /** `WorkflowRunStatus`: 'succeeded' | 'partial' | 'failed'. */
+    status: text('status').notNull(),
+    /** `WorkflowActionOutcome[]` — one entry per action, in order. */
+    actions: jsonb('actions').notNull().default([]),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    deliveryIdx: uniqueIndex('idx_workflow_runs_delivery').on(t.workflowId, t.deliveryId),
+    workflowAtIdx: index('idx_workflow_runs_workflow_at').on(t.workflowId, t.createdAt),
+    prIdx: index('idx_workflow_runs_pr').on(
+      t.workflowId,
+      t.repoFullName,
+      t.prNumber,
+      t.createdAt
+    ),
+  })
+);

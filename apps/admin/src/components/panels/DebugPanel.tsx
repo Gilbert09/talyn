@@ -80,6 +80,8 @@ const SERVICE_INFO: Record<string, string> = {
     'Polar billing API — hosted checkout + customer-portal sessions for the Unlimited plan.',
   billing:
     'Billing domain events — inbound Polar subscription webhooks and the plan changes they apply.',
+  workflows:
+    'User-defined PR automation — one event per workflow that matched a webhook delivery, plus the two refusals worth seeing: a self-echo (Talyn hearing its own label back) and a per-PR rate cap.',
 };
 
 const TIP_WIDTH = 256; // matches w-64

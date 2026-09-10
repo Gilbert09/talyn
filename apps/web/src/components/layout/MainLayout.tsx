@@ -1,4 +1,5 @@
 import React, { Suspense, lazy } from 'react';
+import { workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 
 /**
@@ -16,6 +17,11 @@ const QueuePanel = lazy(() =>
 );
 const SettingsPanel = lazy(() =>
   import('../panels/SettingsPanel').then((m) => ({ default: m.SettingsPanel }))
+);
+// Lazy for the same reason: it sits behind an allow-list flag, so for almost
+// every visitor it is bytes they will never render.
+const WorkflowsPanel = lazy(() =>
+  import('../panels/workflows/WorkflowsPanel').then((m) => ({ default: m.WorkflowsPanel }))
 );
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { MyPRsPanel } from '../panels/github/MyPRsPanel';
@@ -35,6 +41,7 @@ import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 
 export function MainLayout() {
   const { activePanel, createWorkspaceOpen, setCreateWorkspaceOpen } = useWorkspaceStore();
+  const features = useWorkspaceStore((s) => s.features);
   const upgradeModalOpen = useBillingStore((s) => s.upgradeModalOpen);
   const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);
   useSystemStatus();
@@ -62,6 +69,11 @@ export function MainLayout() {
               {activePanel === 'my_prs' && <MyPRsPanel />}
               {activePanel === 'reviews' && <ReviewsPanel />}
               {activePanel === 'merge_queue' && <MergeQueuePanel />}
+              {/* Gated the same way the nav item is. The panel has a real URL
+                  here, so somebody without the flag can type /workflows — that
+                  must render nothing rather than a page whose every request
+                  403s. */}
+              {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
               {activePanel === 'settings' && <SettingsPanel />}
             </Suspense>
           </div>

@@ -562,16 +562,28 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ## Phase 17: Automation & Triggers
 
-- [ ] **17.1 Automation Rules (Enhanced)**
-  - [ ] PR comment on my PR → create PR Response task
-  - [ ] CI failure → create fix task
-  - [ ] New PR for review → create PR Review task (optional)
-  - [ ] Configure per workspace
+- [x] **17.1 Automation Rules — shipped as Workflows** (Session 117, allow-listed)
+  - [x] A generic rule instead of three hard-coded ones: *on these PR lifecycle
+        events, matching these conditions, do these actions*. The three bullets
+        this used to list are now things a user writes — comment on a PR → run a
+        prompt; checks failed → run a prompt; review requested → run a skill.
+  - [x] Every PR lifecycle event GitHub sends us, on **every PR in a watched
+        repo** (not only tracked ones), read from the webhook payload
+  - [x] Actions: labels (add/remove), reviewers, assignees, comment, run a
+        skill, run a prompt, add to My PRs, add to the merge queue
+  - [x] Author/actor matching by exact login, humans only, or bots only
+  - [x] Configured per workspace, with a run history and derived stats
+  - [ ] The editor takes a raw skill key rather than using the skill picker
+  - [ ] No way to test-fire a workflow against a PR by hand
 
-- [ ] **17.2 Auto-Start Behavior**
-  - [ ] Option to auto-start triggered tasks
-  - [ ] Option to just create inbox item for manual start
-  - [ ] Rate limiting (max concurrent auto-tasks)
+- [x] **17.2 Auto-Start Behavior** (Session 117)
+  - [x] A workflow's task actions dispatch immediately — there is no "create it
+        but do not start it" any more, because the Inbox that would have held it
+        was removed in Session 43
+  - [x] Rate limiting: `max_runs_per_pr_per_hour` per workflow (a loop breaker,
+        counted from `workflow_runs`), plus `activePrTaskId` so a PR never gets
+        a second concurrent run, plus the plan's own in-flight cap
+  - [ ] Per-workflow schedules / quiet hours
 
 - [x] **17.3 Notification Preferences** (Session 17, basic)
   - [x] Desktop OS notifications for `awaiting_review` transitions — fires a native notification via the renderer's `Notification` API (Electron auto-bridges to macOS Notification Center / Windows Action Center / Linux libnotify)

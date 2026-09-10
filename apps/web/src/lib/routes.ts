@@ -18,6 +18,7 @@ export const PANEL_PATHS = {
   my_prs: '/prs',
   reviews: '/reviews',
   merge_queue: '/merge-queue',
+  workflows: '/workflows',
   settings: '/settings',
 } as const satisfies Record<ActivePanel, string>;
 

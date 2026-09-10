@@ -1858,6 +1858,110 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * Remove ONE label from a PR. Labels live on the issue resource, so this
+   * needs the App's `issues: write` — same as {@link addPullRequestLabels}.
+   *
+   * Returns `'removed'` or `'absent'`. A label that is not on the PR earns a
+   * 404 from GitHub, and that is NOT a failure for any caller here: "make sure
+   * this label is off" is satisfied by it already being off. Reporting it as an
+   * error would make a workflow that tidies labels read as broken on every PR
+   * that was already tidy.
+   *
+   * One call per label rather than a bulk endpoint because GitHub has no bulk
+   * remove — `PUT .../labels` REPLACES the whole set, which would silently drop
+   * every label the caller did not name.
+   */
+  async removePullRequestLabel(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    label: string,
+    auth: 'auto' | 'user' = 'auto'
+  ): Promise<'removed' | 'absent'> {
+    try {
+      await this.apiRequest(
+        workspaceId,
+        `/repos/${owner}/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`,
+        { method: 'DELETE' },
+        auth
+      );
+      return 'removed';
+    } catch (err) {
+      if (isGitHubNotFound(err)) return 'absent';
+      throw err;
+    }
+  }
+
+  /**
+   * Ask for reviews on a PR. Users and teams go in one call (GitHub takes both
+   * keys), and it is additive — existing requested reviewers are kept.
+   *
+   * GitHub 422s the whole request when ANY name cannot review: a login that is
+   * not a collaborator, a team that has no repo access, or the PR's own author
+   * (you cannot be asked to review your own PR). That is why the caller gets the
+   * message through rather than a swallowed failure — a workflow naming a
+   * reviewer who left the org should say so, not quietly stop working.
+   */
+  async requestPullRequestReviewers(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    reviewers: { users?: string[]; teams?: string[] },
+    auth: 'auto' | 'user' = 'auto'
+  ): Promise<void> {
+    const body: Record<string, string[]> = {};
+    if (reviewers.users?.length) body.reviewers = reviewers.users;
+    if (reviewers.teams?.length) body.team_reviewers = reviewers.teams;
+    if (Object.keys(body).length === 0) return;
+    await this.apiRequest(
+      workspaceId,
+      `/repos/${owner}/${repo}/pulls/${number}/requested_reviewers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      auth
+    );
+  }
+
+  /**
+   * Assign people to a PR. The assignees endpoint is on the issue resource
+   * (`issues: write`), additive, and — unlike requested reviewers — GitHub
+   * SILENTLY IGNORES a login that cannot be assigned rather than erroring.
+   *
+   * So the response is read back: it carries the PR's resulting assignee list,
+   * which is the only way to tell "assigned" from "GitHub dropped that name on
+   * the floor". A caller that reported success on the request alone would claim
+   * to have assigned somebody who is not assigned.
+   */
+  async addPullRequestAssignees(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number,
+    users: string[],
+    auth: 'auto' | 'user' = 'auto'
+  ): Promise<string[]> {
+    if (users.length === 0) return [];
+    const result = await this.apiRequest<{ assignees?: Array<{ login?: string }> }>(
+      workspaceId,
+      `/repos/${owner}/${repo}/issues/${number}/assignees`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignees: users }),
+      },
+      auth
+    );
+    return (result?.assignees ?? [])
+      .map((a) => a?.login)
+      .filter((l): l is string => typeof l === 'string');
+  }
+
+  /**
    * Re-run every failed check on a PR's head commit, routed by which app
    * CREATED each check — GitHub has no single cross-app re-run API:
    *

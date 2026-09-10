@@ -2,6 +2,155 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 117 — Workflows: the PR automations the user writes (2026-09-10)
+
+Talyn reacted to pull requests in exactly the ways Talyn was coded to react. The
+auto-keep watcher pushed fix runs, the merge queue drained, the poller labelled.
+Everything else anybody wanted done on a PR — label it, pull in a reviewer, run a
+skill when they were asked to review, comment, put it on My PRs — was a manual
+click on a row, every time.
+
+**Workflows** are that made writable: a named, workspace-scoped rule of the shape
+*"on these pull request events, matching these conditions, do these things"*, with
+a run history and derived stats so a rule that has quietly stopped firing is
+visible rather than assumed. Behind `WORKFLOWS_ENABLED` +
+`WORKFLOWS_ALLOWED_EMAILS`, a clone of the fleet's allow-list.
+
+### The engine reads the PAYLOAD, not a PR row
+
+The decision everything else follows from. A workflow fires on **every PR in a
+watched repository**, including PRs Talyn does not track and PRs somebody else
+opened — which is the only reading under which the human/bot author test and the
+`watch_pr` action mean anything: both are about PRs that are *not* already on
+your list. An untracked PR has no row to read, so `services/workflows/facts.ts`
+derives everything from the webhook body and nothing else. Pure, so the whole
+`(eventType, action)` → trigger taxonomy is pinned against verbatim GitHub
+payloads.
+
+Hooked into `processWebhookDelivery` **above the `isRefreshEvent` gate**, because
+that predicate answers "does this imply a PR data refresh", which is a narrower
+question than "does a user care" — `check_suite completed` passes it and is then
+a no-op. Awaited rather than fired off, so a workflow's REST calls sit inside the
+slow lane's bounded pool like everything else; it can never throw, so a broken
+workflow cannot cost the delivery the refresh it was really about.
+
+**Naming the gap beat defaulting it.** Not every payload carries a whole PR: an
+`issue_comment` describes an *issue*, which has a number, a title, an author and
+labels but no base branch, no head branch and no draft flag; a `check_suite`'s
+embedded PRs are `{number, base, head}` and nothing else. So facts carry
+`unknownFields`, a condition on a listed field **fails** rather than passing, and
+the engine enriches from the tracked row first where it can — projected out of
+`last_summary` with SQL accessors, never the blob, with a `.toSQL()` test to keep
+it that way. Defaulting `draft` to `false` would silently widen a rule the user
+wrote as narrow, and they would find out when it commented on the wrong PR.
+
+`pr_checks_completed` is the one trigger narrower than the rest, and the editor
+says so on the option: the receiver drops a check delivery whose `head_sha` is
+not a tracked head, and widening that filter for workflows would multiply the
+busiest event class we receive.
+
+### The insert IS the claim
+
+GitHub redelivers. The webhook worker's own coalescing map is in-memory and
+per-replica — fine for "should I re-fetch this PR", useless for "should I post
+this comment". So `workflow_runs` carries a **unique `(workflow_id,
+delivery_id)`** and the run row is inserted *before* any action executes: a
+conflict means another replica, or an earlier delivery of the same event, already
+owns it. That is the whole distributed-idempotency design. No advisory lock, no
+shared dedupe cache, and it is correct across a deploy overlap because it is the
+database enforcing it.
+
+The PR is **denormalised onto the run row** (`repo_full_name`, `pr_number`,
+`pr_title`, `pr_url`, `pr_author`) rather than only referenced. A workflow acts on
+PRs with no `pull_requests` row at all, and un-watching a PR deletes the row it
+did have — the record of what an automation did to somebody's PR has to outlive
+both, the same reasoning that makes `tasks.pull_request_id` `ON DELETE set null`.
+
+**Settling is two writes, and the split is load-bearing.** The status and the
+per-action outcomes are the record; the task and PR pointers are convenience
+links behind foreign keys, and a row either names can be gone by the time the run
+finishes. One combined UPDATE fails on the FK and leaves the run stuck at
+`running` forever — the history losing the outcome in order to protect a link.
+Found by a test, fixed by landing the outcome unconditionally and attaching the
+links best-effort.
+
+### Two loop guards, not a quota
+
+An `add_labels` action produces a `pull_request/labeled` delivery, which is itself
+a trigger event: a workflow on `pr_labeled` that adds a label is an infinite loop
+bounded only by GitHub's rate limit.
+
+1. **Self-echo suppression** is the real fix — skip a delivery whose actor is
+   Talyn's own App, on the events our own actions produce. Scoped to the App bot
+   only, never the connected user: a person labelling their own PR is a
+   completely legitimate trigger. And `pr_merged` is deliberately **not** in that
+   set even though Talyn's queue merges PRs, because "comment when it merges" is
+   a rule people actually want and a merge cannot re-trigger a merge.
+2. **`max_runs_per_pr_per_hour` (default 5)** is the backstop for the echo the
+   first guard cannot see — trunk relabelling in response to our label. Counted
+   from `workflow_runs`, so it survives a restart and is shared across replicas,
+   and `skipped` rows are excluded from the count or the workflow could never
+   recover from the cap that produced it. The refusal is **announced once per
+   window**, not once per attempt: a storm must not fill the history with
+   identical rows.
+
+### The merge action is the QUEUE
+
+There is deliberately no direct-merge action. Talyn's merge queue already handles
+everything a raw merge gets wrong — a base branch governed by an external merge
+system (posthog/posthog's `master`, where our merge 405s), trunk submission,
+commit signing, stacks, auto-merge arming — and it counts against the plan's
+queue allowance. A workflow calling `mergePullRequest` would work on a personal
+repo and silently fail on the repo the user actually lives in.
+
+That needed the enqueue path to stop being a closure inside
+`routes/pullRequests.ts`. It is `services/mergeQueue/membership.ts` now, split
+per-PR (`applyQueueMembership`) from per-call (`setQueueMembership`: the plan
+gate's advisory lock, the draft publish, the position rebroadcast, the evaluation
+kick) — which is the split the stack endpoint already needed, N of the first and
+one of the second. A second implementation would have drifted from the first,
+which is exactly what that function's own comment warns about.
+
+### Refusals are normal, and carry a code
+
+The plan cap, a closed rate gate, no cloud provider, "a run is already working
+this PR", a skill that no longer exists — none of these is a bug, and none should
+read as one. Every action returns an outcome rather than throwing, so a workflow
+with four actions does not lose the last three because the second named a
+reviewer who left the org (the run lands `partial`); and every refusal carries a
+`WorkflowActionFailureCode` so the history can style a refusal apart from a
+breakage and a test can assert on it.
+
+`TaskLimitError` gets the Session 116 treatment: captured server-side as
+`paywall_deferred` with `source: 'workflow'`, because a workflow run has no
+request behind it — nothing can 402 and no modal can open.
+
+Other pieces worth knowing:
+
+- **`activePrTaskId` guards every task-starting action.** This is the Session 111
+  bug: three concurrent runs at one PR filled the plan's cap and starved a real
+  fix run.
+- **`local:` skills are refused at save time**, with an explanation. They live in
+  `~/.claude/skills` and are read by the desktop's main process over IPC; the
+  backend cannot see one, so accepting it would store a rule that fails every
+  time it matches.
+- **A condition that cannot apply to the chosen trigger is refused, not
+  dropped** — and the editor prunes those conditions when the trigger changes, or
+  the save 400s about a field that is no longer on screen.
+- **`GET /features`** answers `{ workflows: boolean }`. Its own route rather than
+  a field on the workspace payload, so the next flag costs one boolean. Three
+  states, `cloudProviderOffered`-style: `null` is loading, absent is not offered,
+  and both draw nothing — conflating them flashes the nav item in on every
+  launch. `workflowsOffered` is the one predicate, shared, so the page cannot be
+  reachable on one client and hidden on the other.
+- The panel is gated as well as the nav item. `activePanel` is remembered, and on
+  the web it has a real URL somebody can type.
+- Built on **both** front ends (desktop + `apps/web`), per the fork doctrine.
+
+Still open: the editor's skill field is a raw key rather than the skill picker;
+`describeWorkflowTrigger` truncates at two events; and there is no way yet to
+run a workflow against a PR by hand to test it.
+
 ## Session 116 — the second-heaviest user was analytically invisible (2026-09-08)
 
 A question with an obvious wrong answer: why has our #2 user not upgraded? He

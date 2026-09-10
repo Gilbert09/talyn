@@ -31,6 +31,7 @@ export function useSystemStatus(): void {
   const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
   const setPostHogStatus = useWorkspaceStore((s) => s.setPostHogStatus);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
+  const setFeatures = useWorkspaceStore((s) => s.setFeatures);
   const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
@@ -111,4 +112,21 @@ export function useSystemStatus(): void {
   }, [refreshCloudProviders]);
 
   useOnReconnect(refreshCloudProviders);
+
+  // Allow-listed features. Account-level rather than per-workspace, so it is
+  // fetched once and NOT re-fetched on a workspace switch. Left at its last
+  // known value on a transient failure: blanking it would pull a nav item out
+  // from under a click.
+  useEffect(() => {
+    let cancelled = false;
+    api.features
+      .get()
+      .then((features) => {
+        if (!cancelled) setFeatures(features);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [setFeatures]);
 }

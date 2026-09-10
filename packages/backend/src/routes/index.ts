@@ -12,6 +12,8 @@ import { debugRoutes } from './debug.js';
 import { fleetPublicRoutes, fleetRoutes } from './fleet.js';
 import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
+import { featureRoutes } from './features.js';
+import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
 import { releaseNotesPublicRoutes, releaseNotesRoutes } from './releaseNotes.js';
@@ -175,6 +177,12 @@ export function setupRoutes(app: Express): void {
   // req.user.id. See routes/billing.ts.
   app.use(`${api}/billing`, mount(billingRoutes()));
 
+  // Which allow-listed features this account may see. Pre-ownerScope: the
+  // answer is about the caller, not about any workspace's rows, so there is
+  // nothing for RLS to filter. See routes/features.ts — and note that hiding a
+  // feature here is a courtesy; every gated surface enforces its own gate.
+  app.use(`${api}/features`, mount(featureRoutes()));
+
   // The "What's new" feed. Pre-ownerScope because the content is global —
   // what shipped in 0.2.61 is the same fact for every user, `release_notes`
   // has no owner column, and an owner-scoped transaction would pin a pooled
@@ -198,6 +206,9 @@ export function setupRoutes(app: Express): void {
   app.use(`${api}/repositories`, mount(repositoryRoutes()));
   app.use(`${api}/pull-requests`, mount(pullRequestRoutes()));
   app.use(`${api}/skills`, mount(skillRoutes()));
+  // Workflows — user-defined PR automation. Below ownerScope like every other
+  // workspace-scoped router; each handler also gates on the allow-list.
+  app.use(`${api}/workflows`, mount(workflowRoutes()));
   // Personal MCP-token management (mint/list/revoke). The tokens authenticate
   // the `/mcp` endpoint mounted above.
   app.use(`${api}/mcp-tokens`, mount(mcpTokenRoutes()));

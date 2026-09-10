@@ -234,6 +234,37 @@ TALYN_ALLOWED_EMAILS=you@example.com
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
 
+### Workflows allow-list (required to see the Workflows page)
+
+**Workflows** are user-defined PR automation: "on these pull request events,
+matching these conditions, do these things" — label, request reviewers, assign,
+comment, add to My PRs, run a skill or prompt, or send the PR to the merge
+queue. Two flags gate it, and both are needed:
+
+```
+WORKFLOWS_ENABLED=true
+WORKFLOWS_ALLOWED_EMAILS=you@example.com
+```
+
+`WORKFLOWS_ENABLED` decides whether the engine is wired into the webhook worker
+at all. **`WORKFLOWS_ALLOWED_EMAILS` decides who may use it, and unset means
+NOBODY** — not everybody. Same shape as the fleet pair below, and for a sharper
+reason: a workflow comments on, labels and merges pull requests without anybody
+watching, and it fires on **every PR in a watched repository**, including ones
+the user did not open.
+
+A workspace is allowed when its **owner's** email is on the list
+(comma-separated, case-insensitive) — a run has no user attached, it is a
+webhook delivery, so the owner is the one identity it provably has. The gate is
+enforced on every `/api/v1/workflows` route, in the engine before any action
+runs, and again on the task-dispatching actions. `GET /api/v1/features` answers
+`{ workflows: boolean }` so the clients know whether to draw the nav item — but
+that is a courtesy, not the gate.
+
+A refusal names WHICH of the three reasons it is (the deployment has it off,
+nobody is allow-listed, you are not on the list), because reading a forgotten
+env var as "working as intended" costs an evening.
+
 ### Talyn Fleet allow-list (required to use the Firecracker fleet)
 
 The `selfhosted` provider — **"Talyn Fleet" everywhere in the UI**; the wire and

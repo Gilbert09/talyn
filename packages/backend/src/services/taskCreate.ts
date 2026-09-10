@@ -1,6 +1,12 @@
 import { v4 as uuid } from 'uuid';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { TaskPriority, TaskType, TaskSkillInfo, PostHogCodeRuntimeAdapter } from '@talyn/shared';
+import type {
+  TaskPriority,
+  TaskType,
+  TaskSkillInfo,
+  PostHogCodeRuntimeAdapter,
+  WorkflowTriggerEvent,
+} from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import {
   tasks as tasksTable,
@@ -34,6 +40,21 @@ export interface CreateCloudTaskInput {
    * for display and bumps the workspace's usage stats.
    */
   skill?: TaskSkillInfo;
+  /**
+   * The workflow that started this task, when one did.
+   *
+   * Persisted to `metadata.workflow` so the task screen can say what asked for
+   * the run, and so a user reading a task can get back to the rule that fired.
+   * `workflow_runs.task_id` is the other half of the link.
+   */
+  workflow?: TaskWorkflowInfo;
+}
+
+/** Where a workflow-started task came from. See {@link CreateCloudTaskInput.workflow}. */
+export interface TaskWorkflowInfo {
+  workflowId: string;
+  runId: string;
+  event: WorkflowTriggerEvent;
 }
 
 /**
@@ -170,6 +191,11 @@ async function buildTaskMetadata(
   const metadata: Record<string, unknown> = {};
   if (input.runtimeAdapter) metadata.runtimeAdapter = input.runtimeAdapter;
   if (input.model) metadata.model = input.model;
+  // Written here rather than only on the insert path, because this function runs
+  // on the REDISPATCH path too: a reused task row (findReusableTask matches on
+  // (workspace, PR, type)) must carry the link to the run that is happening now,
+  // not the one that happened last week.
+  if (input.workflow) metadata.workflow = input.workflow;
   if (input.skill) {
     metadata.skill = input.skill;
     // Best-effort usage bump for the picker's "frequently used" ordering —

@@ -8,6 +8,7 @@ import type {
   MergeQueueBlockedEvent,
   Task,
   TaskStatus,
+  WorkflowRun,
   WSEvent,
 } from '@talyn/shared';
 import { domainEvents } from './events.js';
@@ -460,6 +461,22 @@ export function emitMergeQueueBlocked(
   broadcastToWorkspace(workspaceId, {
     type: 'merge_queue:blocked',
     payload,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/**
+ * One workflow finished acting on one PR.
+ *
+ * Carries the whole settled run so the Workflows page can prepend it to the
+ * history and re-derive its stat counters without a refetch. Workspace-scoped:
+ * a workflow belongs to a workspace, and a broadcast() here would ship one
+ * tenant's automation history to every open socket.
+ */
+export function emitWorkflowRun(workspaceId: string, run: WorkflowRun): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'workflow:run',
+    payload: run,
     timestamp: new Date().toISOString(),
   });
 }
