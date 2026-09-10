@@ -32,6 +32,7 @@ import {
  */
 const NOT_OFFERED = {
   'claude-haiku-4-5': 'cheapest tier — not worth pointing at a PR',
+  'claude-sonnet-4-5': 'superseded — Sonnet 4.6 and Sonnet 5 are both offered',
   'claude-mythos-5': 'Project Glasswing only',
   'claude-mythos-5-1': 'Project Glasswing only',
   'claude-mythos-preview': 'invitation-only preview',
