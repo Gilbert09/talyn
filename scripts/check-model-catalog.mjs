@@ -19,7 +19,11 @@
  * `gpt-5.1-codex` as healthy on the day every Codex run was failing. That half
  * is handled at run time instead — see services/selfHosted/withdrawnModels.ts.
  */
-import { FLEET_MODELS } from '../packages/shared/dist/cjs/index.js';
+import {
+  FLEET_MODELS,
+  LEGACY_POSTHOG_CODE_MODEL_IDS,
+  RETIRED_FLEET_MODELS,
+} from '../packages/shared/dist/cjs/index.js';
 
 /**
  * Models Anthropic serves that we choose not to offer, and why. An entry here
@@ -32,6 +36,25 @@ const NOT_OFFERED = {
   'claude-mythos-5-1': 'Project Glasswing only',
   'claude-mythos-preview': 'invitation-only preview',
 };
+
+/**
+ * The Models API returns DATED ids for models whose dateless form is an alias
+ * (`claude-haiku-4-5-20251001`), while we — and Anthropic's own docs — write
+ * the alias. Comparing the two raw forms reports every aliased model as
+ * missing, which on the first real run was four of the five "findings".
+ */
+const alias = (id) => id.replace(/-\d{8}$/, '');
+
+/**
+ * Ids we deliberately still ACCEPT without OFFERING: a workspace may have one
+ * pinned, so they must keep validating, but they are off the menu. Reporting
+ * them as missing would push someone to re-add a model we chose to retire from
+ * the picker.
+ */
+const acceptedNotOffered = new Set([
+  ...LEGACY_POSTHOG_CODE_MODEL_IDS,
+  ...Object.keys(RETIRED_FLEET_MODELS),
+]);
 
 const KEY = process.env.ANTHROPIC_API_KEY;
 if (!KEY) {
@@ -50,16 +73,23 @@ if (!res.ok) {
   process.exit(0);
 }
 
-const live = new Map((await res.json()).data.map((m) => [m.id, m.display_name ?? m.id]));
-const offered = FLEET_MODELS.filter((m) => m.provider === 'anthropic').map((m) => m.id);
+// Keyed by ALIAS on both sides, so a dated id and its dateless form compare equal.
+const live = new Map(
+  (await res.json()).data.map((m) => [alias(m.id), m.display_name ?? m.id]),
+);
+const offered = new Set(
+  FLEET_MODELS.filter((m) => m.provider === 'anthropic').map((m) => alias(m.id)),
+);
 
 // The dangerous direction: we offer something the vendor no longer serves.
-const gone = offered.filter((id) => !live.has(id));
-// The chore direction: the vendor serves something we never added.
-const missing = [...live.keys()].filter((id) => !offered.includes(id) && !(id in NOT_OFFERED));
+const gone = [...offered].filter((id) => !live.has(id));
+// The chore direction: the vendor serves something we have made no decision about.
+const missing = [...live.keys()].filter(
+  (id) => !offered.has(id) && !(id in NOT_OFFERED) && !acceptedNotOffered.has(id),
+);
 
 if (gone.length === 0 && missing.length === 0) {
-  console.log(`In step with Anthropic: ${offered.length} models offered, none missing or stale.`);
+  console.log(`In step with Anthropic: ${offered.size} models offered, none missing or stale.`);
   process.exit(0);
 }
 
