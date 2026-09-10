@@ -55,19 +55,25 @@ GitHub has no API for it):
 `packages/backend/.env` and `apps/desktop/.env` must point at the local stack —
 never at Railway/prod values (those live only in Railway service variables).
 
-### 1. Anthropic API key
+### 1. Anthropic API key — NOT needed to run Talyn
 
-Used by `packages/backend/src/services/ai.ts` for auto-generating task titles/descriptions from prompts.
+**Nothing in the backend or either front end reads `ANTHROPIC_API_KEY`.** Talyn
+never calls Anthropic on a first-party key: the fleet runs on the *workspace's
+own* subscription credential (`sk-ant-oat…`, §6c) and PostHog Code runs on
+PostHog's token. That is the whole point of the fleet — see
+[`docs/CLOUD_PROVIDERS.md`](./CLOUD_PROVIDERS.md).
 
-1. Go to https://console.anthropic.com/settings/keys
-2. Create a key
-3. Export it when running the backend:
-   ```bash
-   export ANTHROPIC_API_KEY=sk-ant-...
-   ```
-   Or add it to a `.env` file at the repo root (add to `.gitignore` first — don't commit).
+This section used to say the key powered
+`packages/backend/src/services/ai.ts` for auto-generating task titles. That
+file was deleted in the cloud-only refactor and the instruction outlived it, so
+anyone following this guide was creating a billable key for a feature that no
+longer exists.
 
-Without this, task metadata falls back to first-60-chars heuristic, which is functional but noticeably worse.
+The only things that read it today are optional and developer-facing:
+
+- `scripts/check-model-catalog.mjs` — one read-only `GET /v1/models` to report
+  catalogue drift (see §6d). Skips cleanly when the key is absent.
+- `scripts/spikes/spike-claude.ts` — a hand-run spike, never shipped.
 
 ### 2. `claude` CLI on every environment
 
@@ -666,7 +672,7 @@ Once the accounts above exist, add these to **Repo Settings → Secrets and vari
 
 | Secret                          | Purpose                                   |
 | ------------------------------- | ----------------------------------------- |
-| `ANTHROPIC_API_KEY`             | Future: CI-run tests that hit the API    |
+| `ANTHROPIC_API_KEY`             | OPTIONAL — the daily model-catalogue check only (`GET /v1/models`). Absent = the check skips. Nothing else reads it. |
 | `GITHUB_TOKEN`                  | Already provided by Actions               |
 | `RAILWAY_TOKEN`                 | Deploy the backend on merges to main      |
 | `DATABASE_URL`                  | drizzle-kit migrate step                  |
@@ -682,7 +688,7 @@ Once the accounts above exist, add these to **Repo Settings → Secrets and vari
 Backend reads env vars on startup. To avoid exporting them every terminal, create `packages/backend/.env`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+# NOTE: no ANTHROPIC_API_KEY here — the backend does not read one (see §1).
 
 # Workspace-level GitHub integration (for PR monitoring)
 GITHUB_CLIENT_ID=Iv1.xxx
