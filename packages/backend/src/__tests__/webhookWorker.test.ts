@@ -11,6 +11,7 @@ import {
 } from '../services/webhookWorker.js';
 import { refreshWebhookIndex, _resetWebhookIndex } from '../services/webhookIndex.js';
 import { checkCountCoalescer } from '../services/checkCounts.js';
+import * as workflowEngine from '../services/workflows/engine.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import { githubService } from '../services/github.js';
 import {
@@ -212,6 +213,72 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     checkCountCoalescer._reset();
     await cleanup();
     vi.restoreAllMocks();
+  });
+
+  /**
+   * The workflow engine is CALLED, and called for events the refresh path drops.
+   *
+   * Every other workflow test drives `evaluateWorkflowsForDelivery` directly, so
+   * removing this one call site would leave the whole feature dead with a green
+   * suite. It also pins the placement: the hook sits ABOVE the `isRefreshEvent`
+   * gate and above the `check_suite` no-op, because "does this imply a PR data
+   * refresh" is a narrower question than "does a user care".
+   */
+  describe('workflow engine hook', () => {
+    it('offers every delivery with a resolved target to the engine', async () => {
+      const spy = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ action: 'opened', payload: { pull_request: { number: 7 } } }), 1_000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [passedDelivery, targets] = spy.mock.calls[0]!;
+      expect(passedDelivery.eventType).toBe('pull_request');
+      // Both watching workspaces, so a workflow in either can act.
+      expect((targets as Array<{ workspaceId: string }>).map((t) => t.workspaceId).sort()).toEqual([
+        'wsA',
+        'wsB',
+      ]);
+    });
+
+    it('offers a check_suite, which the refresh path treats as a no-op', async () => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      const spy = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(
+        delivery({
+          eventType: 'check_suite',
+          action: 'completed',
+          payload: { check_suite: { conclusion: 'failure', pull_requests: [{ number: 7 }] } },
+        }),
+        1_000,
+      );
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not offer a delivery no workspace watches', async () => {
+      const spy = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(
+        delivery({ repoFullName: 'nobody/watches', action: 'opened', payload: { pull_request: { number: 7 } } }),
+        1_000,
+      );
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('does not offer a push — the sweep owns base-advance conflicts', async () => {
+      const spy = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ eventType: 'push', payload: {} }), 1_000);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('still refreshes the PR when the engine throws', async () => {
+      // A broken workflow must never cost the delivery the refresh it was about.
+      vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockRejectedValue(
+        new Error('workflow exploded'),
+      );
+      const n = await processWebhookDelivery(
+        delivery({ action: 'opened', payload: { pull_request: { number: 7 } } }),
+        1_000,
+      );
+      expect(n).toBeGreaterThan(0);
+      expect(refreshSpy).toHaveBeenCalled();
+    });
   });
 
   it("captures an external merge queue's state from its own comment edit", async () => {

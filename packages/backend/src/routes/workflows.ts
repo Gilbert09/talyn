@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import type { ApiResponse } from '@talyn/shared';
 import { validateWorkflow } from '@talyn/shared';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
@@ -45,12 +45,14 @@ const MAX_RUN_PAGE = 200;
 export function workflowRoutes(): Router {
   const router = Router();
 
-  /** Resolve + authorise + gate. Returns null when it has already answered. */
-  async function gate(
-    req: Parameters<Parameters<Router['get']>[1]>[0],
-    res: Parameters<Parameters<Router['get']>[1]>[1],
-    workspaceId: string
-  ): Promise<boolean> {
+  /**
+   * Authorise the workspace and check the allow-list.
+   *
+   * Returns false when it has already answered the request, so every handler
+   * reads `if (!(await gate(...))) return;` and cannot forget one of the two
+   * checks.
+   */
+  async function gate(req: Request, res: Response, workspaceId: string): Promise<boolean> {
     if (!workspaceId) {
       res.status(400).json({ success: false, error: 'workspaceId is required' });
       return false;
