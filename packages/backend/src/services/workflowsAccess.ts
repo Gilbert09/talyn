@@ -73,6 +73,15 @@ export function workflowsAllowlistIsEmpty(): boolean {
 }
 
 /**
+ * How many accounts are allow-listed. For the boot log — a COUNT and never the
+ * addresses, because boot logs are shipped to a log service and an allow-list is
+ * a list of real people's email addresses.
+ */
+export function workflowsAllowlistSize(): number {
+  return allowedEmails().size;
+}
+
+/**
  * True when the workspace's owner may use workflows.
  *
  * Keyed on the OWNER rather than on whoever triggered the evaluation. A

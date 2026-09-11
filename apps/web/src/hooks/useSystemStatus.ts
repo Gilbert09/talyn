@@ -23,6 +23,13 @@ import { useOnReconnect } from './useOnReconnect';
  * and the per-task picker all read one store value — and it's re-checked on
  * window focus, on the env WS events, and after a reconnect, so connecting a
  * provider then leaving + returning to the tab never shows a stale state.
+ *
+ * Allow-listed feature flags (`GET /features`) are loaded here too — account
+ * level, so a workspace switch does not re-fetch them, but re-checked on focus
+ * and after a reconnect, because a flag flips in the backend's environment and
+ * the app has no in-process signal that it did. `null` means still loading and
+ * absent means not offered; anything reading them must treat those the same way
+ * `cloudProviderOffered` does, or the gated nav item flashes in on every load.
  */
 export function useSystemStatus(): void {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -113,20 +120,31 @@ export function useSystemStatus(): void {
 
   useOnReconnect(refreshCloudProviders);
 
-  // Allow-listed features. Account-level rather than per-workspace, so it is
-  // fetched once and NOT re-fetched on a workspace switch. Left at its last
-  // known value on a transient failure: blanking it would pull a nav item out
-  // from under a click.
-  useEffect(() => {
-    let cancelled = false;
+  // Allow-listed features. Account-level rather than per-workspace, so a
+  // workspace switch does not re-fetch them. Left at their last known value on a
+  // transient failure: blanking them would pull a nav item out from under a
+  // click.
+  const refreshFeatures = useCallback(() => {
     api.features
       .get()
-      .then((features) => {
-        if (!cancelled) setFeatures(features);
-      })
+      .then(setFeatures)
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, [setFeatures]);
+
+  useEffect(() => {
+    refreshFeatures();
+  }, [refreshFeatures]);
+
+  // Re-checked on focus, for the same reason PostHog's status is: a flag flips
+  // in the backend's environment, so the app has no in-process signal that it
+  // changed. MainLayout is not keyed on anything, so without this the only way
+  // to pick up a newly granted feature is to restart — which is precisely the
+  // moment somebody is waiting to see it appear.
+  useEffect(() => {
+    const onFocus = () => refreshFeatures();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshFeatures]);
+
+  useOnReconnect(refreshFeatures);
 }
