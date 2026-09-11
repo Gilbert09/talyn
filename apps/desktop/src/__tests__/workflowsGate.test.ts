@@ -118,13 +118,19 @@ describe('the form cannot compose a workflow the API refuses', () => {
     expect(already.map((s) => s.key)).toContain('titleContains');
   });
 
+  /**
+   * Conditions whose input is a boolean, and so have no "present but unset"
+   * state. Adding one constrains immediately — unavoidably, and the starting
+   * value is the common intent rather than a neutral one.
+   */
+  const BOOLEAN_INPUTS = ['draft', 'baseIsDefault'];
+
   it('gives every condition a starting value that constrains nothing', () => {
     // A freshly added condition must not silently narrow the workflow before the
     // user has typed anything — the validator drops each of these.
-    //
-    // `draft` is the one exception and cannot be otherwise: it is a boolean, so
-    // "present but unset" does not exist. Adding it constrains immediately.
-    for (const spec of WORKFLOW_CONDITION_SPECS.filter((s) => s.input !== 'draft')) {
+    for (const spec of WORKFLOW_CONDITION_SPECS.filter(
+      (s) => !BOOLEAN_INPUTS.includes(s.input)
+    )) {
       const value = emptyWorkflowConditionValue(spec);
       const savable = validateWorkflow({
         name: 'x',
@@ -138,16 +144,18 @@ describe('the form cannot compose a workflow the API refuses', () => {
     }
   });
 
-  it('starts the draft condition at "not a draft", which is the common intent', () => {
-    const spec = WORKFLOW_CONDITION_SPECS.find((s) => s.input === 'draft')!;
+  it.each(BOOLEAN_INPUTS)('starts the %s condition at the common intent', (input) => {
+    // "Not a draft" and "not the default branch" — the second being the whole
+    // reason somebody adds a base-branch condition: they are after stacked PRs.
+    const spec = WORKFLOW_CONDITION_SPECS.find((s) => s.input === input)!;
     expect(emptyWorkflowConditionValue(spec)).toBe(false);
     const savable = validateWorkflow({
       name: 'x',
       events: ['pr_opened'],
-      conditions: { draft: false },
+      conditions: { [spec.key]: false },
       actions: [{ type: 'watch_pr' }],
     });
-    expect(savable.conditions.draft).toBe(false);
+    expect(savable.conditions[spec.key]).toBe(false);
   });
 
   it('prunes a condition when its trigger is unchecked', () => {

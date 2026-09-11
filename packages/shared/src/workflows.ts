@@ -180,6 +180,19 @@ export interface WorkflowConditions {
   repos?: string[];
   /** Base branches the PR must target. Matches ANY. */
   baseBranches?: string[];
+  /**
+   * Whether the PR targets the repository's DEFAULT branch.
+   *
+   * `false` is the interesting one: a PR whose base is not `main` is, in
+   * practice, a PR stacked on another PR — which is the population worth
+   * treating differently, because the usual rules (queue it, ask for a review,
+   * label it ready) mostly apply to the bottom of a stack rather than the middle.
+   *
+   * Separate from {@link baseBranches} rather than a magic value inside it,
+   * because the two answer different questions and compose: "not the default
+   * branch, and not one of these long-lived release branches either".
+   */
+  baseIsDefault?: boolean;
   /** Case-insensitive substring of the PR title. */
   titleContains?: string;
   /** `true` = drafts only, `false` = non-drafts only, absent = either. */
@@ -495,6 +508,13 @@ export interface WorkflowEventFacts {
   /** Who did the thing. Falls back to the author when the payload has no sender. */
   actor: WorkflowActor;
   baseBranch: string;
+  /**
+   * The repository's default branch, for {@link WorkflowConditions.baseIsDefault}.
+   * GitHub puts `repository.default_branch` on every repo-scoped delivery, so
+   * this is nearly always known — but it is in `unknownFields` when it is not,
+   * and a condition on it then fails rather than guessing "main".
+   */
+  defaultBranch: string;
   headBranch: string;
   draft: boolean;
   labels: string[];
@@ -526,6 +546,7 @@ export type WorkflowFactField =
   | 'title'
   | 'author'
   | 'baseBranch'
+  | 'defaultBranch'
   | 'headBranch'
   | 'draft'
   | 'labels'
@@ -630,6 +651,16 @@ export function workflowMatches(
   if (bases.length > 0) {
     if (unknown('baseBranch')) return false;
     if (!bases.includes(facts.baseBranch.trim().toLowerCase())) return false;
+  }
+
+  if (c.baseIsDefault !== undefined) {
+    if (unknown('baseBranch') || unknown('defaultBranch')) return false;
+    const base = facts.baseBranch.trim().toLowerCase();
+    const def = facts.defaultBranch.trim().toLowerCase();
+    // Neither can be blank: comparing '' to '' would answer "yes, it targets the
+    // default branch" for a delivery that said nothing about either.
+    if (!base || !def) return false;
+    if ((base === def) !== c.baseIsDefault) return false;
   }
 
   const title = (c.titleContains ?? '').trim().toLowerCase();
@@ -820,6 +851,7 @@ function validateConditions(
   const known = [
     'repos',
     'baseBranches',
+    'baseIsDefault',
     'titleContains',
     'draft',
     'labelsAny',
@@ -860,6 +892,10 @@ function validateConditions(
   if (c.draft !== undefined) {
     if (typeof c.draft !== 'boolean') fail('conditions.draft must be a boolean');
     out.draft = c.draft;
+  }
+  if (c.baseIsDefault !== undefined) {
+    if (typeof c.baseIsDefault !== 'boolean') fail('conditions.baseIsDefault must be a boolean');
+    out.baseIsDefault = c.baseIsDefault;
   }
 
   out.author = validateActorMatch(c.author, 'conditions.author');
@@ -1119,6 +1155,7 @@ export type WorkflowConditionInput =
   | 'text'
   | 'actor'
   | 'draft'
+  | 'baseIsDefault'
   | 'reviewStates'
   | 'checkConclusions';
 
@@ -1150,6 +1187,13 @@ export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
     label: 'Base branch',
     hint: 'The branch the PR is targeting.',
     input: 'branches',
+    appliesTo: null,
+  },
+  {
+    key: 'baseIsDefault',
+    label: 'Targets the default branch',
+    hint: 'Choose "No" for PRs stacked on another PR — their base is the branch below them, not main.',
+    input: 'baseIsDefault',
     appliesTo: null,
   },
   {
@@ -1270,6 +1314,11 @@ export function emptyWorkflowConditionValue(
       // validator drops it until the user narrows it.
       return { kind: 'any' } as WorkflowActorMatch;
     case 'draft':
+      return false;
+    case 'baseIsDefault':
+      // `false` = "not the default branch", i.e. stacked — the reason anybody
+      // reaches for this condition. Like `draft`, a boolean has no empty value,
+      // so adding it constrains immediately.
       return false;
     case 'reviewStates':
       return [] as WorkflowReviewState[];

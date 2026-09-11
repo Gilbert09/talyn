@@ -28,6 +28,7 @@ function facts(over: Partial<WorkflowEventFacts> = {}): WorkflowEventFacts {
     author: { login: 'alice', isBot: false },
     actor: { login: 'alice', isBot: false },
     baseBranch: 'main',
+    defaultBranch: 'main',
     headBranch: 'alice/widget',
     draft: false,
     labels: ['enhancement', 'frontend'],
@@ -148,6 +149,51 @@ describe('workflowMatches — conditions', () => {
     const botActor = facts({ actor: { login: 'dependabot[bot]', isBot: true } });
     expect(workflowMatches(wf({ actor: { kind: 'bot' } }), botActor)).toBe(true);
     expect(workflowMatches(wf({ author: { kind: 'bot' } }), botActor)).toBe(false);
+  });
+});
+
+describe('workflowMatches — baseIsDefault (the stacked-PR condition)', () => {
+  const stacked = facts({ baseBranch: 'alice/part-1', defaultBranch: 'main' });
+
+  it('false matches a PR stacked on another branch', () => {
+    expect(workflowMatches(wf({ baseIsDefault: false }), stacked)).toBe(true);
+    expect(workflowMatches(wf({ baseIsDefault: false }), facts())).toBe(false);
+  });
+
+  it('true matches a PR targeting the default branch', () => {
+    expect(workflowMatches(wf({ baseIsDefault: true }), facts())).toBe(true);
+    expect(workflowMatches(wf({ baseIsDefault: true }), stacked)).toBe(false);
+  });
+
+  it('works for a repo whose default is not "main"', () => {
+    // The whole reason this reads the repository's own default rather than
+    // comparing against a hardcoded name.
+    const posthog = facts({ baseBranch: 'master', defaultBranch: 'master' });
+    expect(workflowMatches(wf({ baseIsDefault: true }), posthog)).toBe(true);
+    expect(workflowMatches(wf({ baseIsDefault: false }), posthog)).toBe(false);
+  });
+
+  it('fails rather than guessing when either branch is unknown', () => {
+    const noBase = facts({ baseBranch: '', unknownFields: ['baseBranch'] });
+    const noDefault = facts({ defaultBranch: '', unknownFields: ['defaultBranch'] });
+    for (const value of [true, false]) {
+      expect(workflowMatches(wf({ baseIsDefault: value }), noBase)).toBe(false);
+      expect(workflowMatches(wf({ baseIsDefault: value }), noDefault)).toBe(false);
+    }
+    // Blank without being declared unknown must fail too — comparing '' to ''
+    // would otherwise answer "yes, it targets the default branch".
+    expect(
+      workflowMatches(wf({ baseIsDefault: true }), facts({ baseBranch: '', defaultBranch: '' }))
+    ).toBe(false);
+  });
+
+  it('composes with an explicit base-branch list', () => {
+    // "not the default branch, and not one of these release branches either".
+    const rule = wf({ baseIsDefault: false, baseBranches: ['alice/part-1'] });
+    expect(workflowMatches(rule, stacked)).toBe(true);
+    expect(workflowMatches(rule, facts({ baseBranch: 'release/2', defaultBranch: 'main' }))).toBe(
+      false
+    );
   });
 });
 

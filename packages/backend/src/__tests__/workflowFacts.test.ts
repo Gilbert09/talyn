@@ -17,7 +17,9 @@ function delivery(over: Partial<WebhookDelivery>): WebhookDelivery {
     eventType: 'pull_request',
     repoFullName: 'acme/widget',
     enqueuedAtMs: 0,
-    payload: {},
+    // GitHub puts a full `repository` on every repo-scoped delivery; the default
+    // branch is read off it for the baseIsDefault condition.
+    payload: { repository: { default_branch: 'main' } },
     ...over,
   };
 }
@@ -199,6 +201,39 @@ describe('workflowFactsFromDelivery — pull_request actions', () => {
     expect(
       workflowFactsFromDelivery(delivery({ action: 'opened', payload: { pull_request: { title: 'x' } } }))
     ).toEqual([]);
+  });
+});
+
+describe('workflowFactsFromDelivery — the default branch', () => {
+  it('reads it off the repository, for every event shape', () => {
+    const pull = workflowFactsFromDelivery(
+      delivery({
+        action: 'opened',
+        payload: { repository: { default_branch: 'master' }, pull_request: pr() },
+      })
+    );
+    expect(pull[0]?.defaultBranch).toBe('master');
+
+    const commented = workflowFactsFromDelivery(
+      delivery({
+        eventType: 'issue_comment',
+        action: 'created',
+        payload: {
+          repository: { default_branch: 'master' },
+          issue: { number: 42, user: { login: 'alice' }, labels: [], pull_request: {} },
+          comment: { body: 'hi', user: { login: 'bob' } },
+        },
+      })
+    );
+    // An issue payload says nothing about branches, but the repository node does.
+    expect(commented[0]?.defaultBranch).toBe('master');
+  });
+
+  it('is blank when the payload carries no repository', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({ action: 'opened', payload: { pull_request: pr() } })
+    );
+    expect(facts?.defaultBranch).toBe('');
   });
 });
 

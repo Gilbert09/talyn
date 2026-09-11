@@ -7,7 +7,10 @@ import type {
 } from '@talyn/shared';
 import { workflowMatches } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
-import { pullRequests as pullRequestsTable } from '../../db/schema.js';
+import {
+  pullRequests as pullRequestsTable,
+  repositories as repositoriesTable,
+} from '../../db/schema.js';
 import { workspaces as workspacesTable } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { githubService } from '../github.js';
@@ -87,7 +90,9 @@ function needsEnrichment(workflows: WorkflowDefinition[], facts: WorkflowEventFa
       const c = w.conditions;
       switch (f) {
         case 'baseBranch':
-          return (c.baseBranches?.length ?? 0) > 0;
+          return (c.baseBranches?.length ?? 0) > 0 || c.baseIsDefault !== undefined;
+        case 'defaultBranch':
+          return c.baseIsDefault !== undefined;
         case 'title':
           return !!c.titleContains;
         case 'draft':
@@ -105,7 +110,9 @@ function needsEnrichment(workflows: WorkflowDefinition[], facts: WorkflowEventFa
       }
     });
   };
-  return (['baseBranch', 'title', 'draft', 'labels', 'author'] as WorkflowFactField[]).some(wants);
+  return (
+    ['baseBranch', 'defaultBranch', 'title', 'draft', 'labels', 'author'] as WorkflowFactField[]
+  ).some(wants);
 }
 
 /**
@@ -133,10 +140,14 @@ export function enrichmentQuery(target: WatchTarget, number: number) {
       baseBranch: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'baseBranch'`,
       headBranch: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'headBranch'`,
       url: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'url'`,
+      // Not from the summary: the repository row is where the default branch
+      // lives, and it is the cheaper read of the two.
+      defaultBranch: repositoriesTable.defaultBranch,
       draft: sql<boolean | null>`(${pullRequestsTable.lastSummary} ->> 'draft')::boolean`,
       labels: sql<string[] | null>`${pullRequestsTable.lastSummary} -> 'labels'`,
     })
     .from(pullRequestsTable)
+    .innerJoin(repositoriesTable, eq(repositoriesTable.id, pullRequestsTable.repositoryId))
     .where(
       and(
         eq(pullRequestsTable.workspaceId, target.workspaceId),
@@ -183,6 +194,11 @@ async function enrich(
   take('baseBranch', () => {
     if (!row.baseBranch) return false;
     next.baseBranch = row.baseBranch;
+    return true;
+  });
+  take('defaultBranch', () => {
+    if (!row.defaultBranch) return false;
+    next.defaultBranch = row.defaultBranch;
     return true;
   });
   take('headBranch', () => {

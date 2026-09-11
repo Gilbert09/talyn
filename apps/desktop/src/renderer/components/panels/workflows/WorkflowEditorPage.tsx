@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
   WorkflowAction,
   WorkflowActionType,
@@ -157,6 +157,16 @@ function ConditionInput({
         >
           <option value="false">Not a draft</option>
           <option value="true">Drafts only</option>
+        </Select>
+      );
+    case 'baseIsDefault':
+      return (
+        <Select
+          value={conditions.baseIsDefault === undefined ? '' : String(conditions.baseIsDefault)}
+          onChange={(e) => set(e.target.value === '' ? undefined : e.target.value === 'true')}
+        >
+          <option value="false">No — stacked on another branch</option>
+          <option value="true">Yes — targets the default branch</option>
         </Select>
       );
     case 'reviewStates':
@@ -318,6 +328,16 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  /**
+   * Whether the user has tried to save yet.
+   *
+   * Nothing is wrong with a half-built workflow — that is what building one looks
+   * like. Telling somebody "a workflow needs at least one action" while they are
+   * still typing the NAME is scolding them for not having finished, so validation
+   * stays quiet until they ask for it by pressing Save, and only then goes live
+   * (updating as they fix it, which is useful once they are looking for it).
+   */
+  const [attempted, setAttempted] = useState(false);
 
   const conditions = input.conditions ?? {};
   const problem = useMemo(() => workflowInputProblem(input), [input]);
@@ -361,6 +381,13 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
     });
 
   const save = async () => {
+    // The button stays ENABLED while the workflow is incomplete, so that pressing
+    // it is how you find out what is missing. A disabled button that explains
+    // nothing is the other half of the same problem.
+    if (problem) {
+      setAttempted(true);
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -380,33 +407,48 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
           Workflows
         </Button>
         <div className="min-w-0 flex-1">
-          <Input
-            className="h-9 border-0 bg-transparent px-0 text-lg font-semibold shadow-none focus:ring-0"
-            value={input.name}
-            maxLength={MAX_WORKFLOW_NAME_LENGTH}
-            placeholder="Name this workflow"
-            onChange={(e) => setInput((p) => ({ ...p, name: e.target.value }))}
-          />
+          <h1 className="truncate text-lg font-semibold">
+            {input.name.trim() || (editing ? 'Workflow' : 'New workflow')}
+          </h1>
         </div>
-        <Button
-          variant={input.enabled === false ? 'outline' : 'secondary'}
-          size="sm"
-          onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
-        >
-          {input.enabled === false ? 'Off' : 'On'}
-        </Button>
-        <Button onClick={save} disabled={saving || problem !== null} data-attr="workflow-save">
+        {/* Only when editing. A workflow you are creating is on — nobody composes
+            a rule in order to leave it switched off, and the list row has the
+            toggle for the moment that changes. */}
+        {editing && (
+          <Button
+            variant={input.enabled === false ? 'outline' : 'secondary'}
+            size="sm"
+            onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
+          >
+            {input.enabled === false ? 'Off' : 'On'}
+          </Button>
+        )}
+        <Button onClick={save} disabled={saving} data-attr="workflow-save">
           {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
         </Button>
       </header>
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-3xl space-y-4 p-6">
-          {(saveError ?? (problem && input.name.trim() ? problem : null)) && (
+          {(saveError ?? (attempted ? problem : null)) && (
             <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
               {saveError ?? problem}
             </p>
           )}
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="workflow-name">
+              Name
+            </label>
+            <Input
+              id="workflow-name"
+              className="h-10 text-base"
+              value={input.name}
+              maxLength={MAX_WORKFLOW_NAME_LENGTH}
+              placeholder="Label new PRs from bots"
+              onChange={(e) => setInput((p) => ({ ...p, name: e.target.value }))}
+            />
+          </div>
 
           {/* ---- WHEN ---- */}
           <Section
@@ -432,32 +474,46 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
                 Pick at least one trigger — a workflow with none can never run.
               </p>
             ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {input.events.map((e) => (
-                  <span
-                    key={e}
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs',
-                      WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e) &&
-                        'border-dashed text-muted-foreground'
-                    )}
-                    title={
-                      WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e)
-                        ? 'Only fires on PRs Talyn already tracks. Check events for untracked PRs are dropped before they reach the workflow engine.'
-                        : undefined
-                    }
-                  >
-                    {WORKFLOW_EVENT_LABELS[e]}
-                    <button
-                      className="opacity-60 hover:opacity-100"
-                      onClick={() => removeEvent(e)}
-                      aria-label={`Remove ${WORKFLOW_EVENT_LABELS[e]}`}
+              <>
+                {/* Compact, but with some weight: a full-width row per trigger
+                    gave one short label the footprint of a paragraph, and the
+                    original filter-chip was too slight for a load-bearing part of
+                    the rule. Squared corners, a solid fill and body-sized text
+                    sit between the two. */}
+                <div className="flex flex-wrap gap-2">
+                  {input.events.map((e) => (
+                    <span
+                      key={e}
+                      className={cn(
+                        'inline-flex items-center gap-2 rounded-md border bg-muted/60 py-1.5 pl-3 pr-1.5 text-sm font-medium',
+                        WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e) && 'border-dashed'
+                      )}
                     >
-                      &times;
-                    </button>
-                  </span>
-                ))}
-              </div>
+                      {WORKFLOW_EVENT_LABELS[e]}
+                      <button
+                        className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                        onClick={() => removeEvent(e)}
+                        aria-label={`Remove ${WORKFLOW_EVENT_LABELS[e]}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                {/* The caveat as text rather than a tooltip on each chip: it is
+                    the difference between a rule that fires and one that silently
+                    never does, which is not tooltip-grade information. */}
+                {input.events.some((e) => WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e)) && (
+                  <p className="text-xs text-muted-foreground">
+                    {input.events
+                      .filter((e) => WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e))
+                      .map((e) => WORKFLOW_EVENT_LABELS[e])
+                      .join(' and ')}{' '}
+                    only fires on PRs Talyn already tracks — check events for untracked PRs are
+                    dropped before they reach the workflow engine.
+                  </p>
+                )}
+              </>
             )}
           </Section>
 
@@ -596,6 +652,21 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
                 </p>
               </div>
             )}
+          </div>
+
+          {/* The same action as the header's, where you finish reading. The header
+              copy is for a long form you have scrolled up in; this one is for the
+              end of the sentence you just wrote. */}
+          <div className="flex items-center justify-end gap-3 border-t pt-4">
+            {attempted && problem && (
+              <p className="flex-1 text-xs text-red-500">{problem}</p>
+            )}
+            <Button variant="ghost" onClick={onCancel} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={save} disabled={saving} data-attr="workflow-save-inline">
+              {saving ? 'Saving...' : editing ? 'Save changes' : 'Create workflow'}
+            </Button>
           </div>
         </div>
       </div>

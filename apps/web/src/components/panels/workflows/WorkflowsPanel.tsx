@@ -10,6 +10,7 @@ import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { toast } from '../../../stores/toast';
 import { cn } from '../../../lib/utils';
+import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
 import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
@@ -207,6 +208,7 @@ export function WorkflowsPanel() {
             workspace watches, including ones you did not open.
           </p>
         </div>
+        <FeedbackButton surface="workflows" />
         <Button onClick={openNew} data-attr="workflow-new">
           <Plus className="mr-1 h-4 w-4" />
           New workflow

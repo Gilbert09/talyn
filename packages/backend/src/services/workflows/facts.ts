@@ -54,6 +54,20 @@ function str(v: unknown): string {
 }
 
 /**
+ * The repository's default branch.
+ *
+ * GitHub puts a full `repository` object on every repo-scoped delivery, so this
+ * is available for all of them — including `issue_comment` and `check_suite`,
+ * whose own nodes say nothing about branches. Blank when absent, and the caller
+ * lists `defaultBranch` as unknown so a condition on it fails rather than
+ * guessing "main" for a repo that uses "master".
+ */
+function defaultBranchOf(payload: Record<string, unknown>): string {
+  const repo = payload.repository as { default_branch?: unknown } | undefined;
+  return str(repo?.default_branch);
+}
+
+/**
  * The `pull_request` action → trigger mapping, minus `closed` (which splits on
  * whether it merged) and the review-request actions GitHub spells with
  * underscores. Anything absent is deliberately inert.
@@ -142,6 +156,7 @@ function fromPullRequest(delivery: WebhookDelivery): WorkflowEventFacts[] {
     // the self-echo guard and the `actor` condition are about.
     actor: actorOf(payload.sender) ?? author,
     baseBranch: str(base?.ref),
+    defaultBranch: defaultBranchOf(payload),
     headBranch: str(head?.ref),
     draft: pr.draft === true,
     labels: labelNames(pr.labels),
@@ -208,6 +223,7 @@ function fromReview(delivery: WebhookDelivery): WorkflowEventFacts[] {
     // "changes requested by a human" means the person who requested them.
     actor: reviewer ?? actorOf(payload.sender) ?? author,
     baseBranch: str(base?.ref),
+    defaultBranch: defaultBranchOf(payload),
     headBranch: str(head?.ref),
     draft: pr.draft === true,
     labels: labelNames(pr.labels),
@@ -243,6 +259,7 @@ function fromReviewComment(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author,
       actor: actorOf(comment.user) ?? actorOf(payload.sender) ?? author,
       baseBranch: str(base?.ref),
+      defaultBranch: defaultBranchOf(payload),
       headBranch: str(head?.ref),
       draft: pr.draft === true,
       labels: labelNames(pr.labels),
@@ -281,6 +298,7 @@ function fromIssueComment(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author,
       actor: actorOf(comment.user) ?? actorOf(payload.sender) ?? author,
       baseBranch: '',
+      defaultBranch: defaultBranchOf(payload),
       headBranch: '',
       draft: false,
       labels: labelNames(issue.labels),
@@ -339,6 +357,7 @@ function fromCheckSuite(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author: NOBODY,
       actor: NOBODY,
       baseBranch: str(base?.ref),
+      defaultBranch: defaultBranchOf(payload),
       headBranch: str(head?.ref),
       draft: false,
       labels: [],

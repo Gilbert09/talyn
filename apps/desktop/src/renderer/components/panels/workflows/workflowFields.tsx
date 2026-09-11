@@ -165,7 +165,11 @@ export function TokenField({
   return (
     <div className="space-y-1.5">
       {label && <label className="text-xs font-medium text-muted-foreground">{label}</label>}
-      <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-background px-2 py-1.5">
+      {/* The ring belongs on the BOX, not the inner input: the chips and the
+          text entry are one control, and lighting up only the text half drew a
+          second rectangle inside the first. `focus-within` is what makes the
+          whole field respond to the input's focus. */}
+      <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-background px-2 py-1.5 focus-within:ring-2 focus-within:ring-ring">
         {values.map((v) => (
           <span
             key={v}
@@ -183,7 +187,10 @@ export function TokenField({
         ))}
         <div className="relative min-w-32 flex-1">
           <input
-            className="w-full bg-transparent py-0.5 text-sm outline-none placeholder:text-muted-foreground"
+            // Chrome draws its own blue ring on `:focus-visible`, which the app's
+            // global `*:focus { outline: none }` does not cover — so both are
+            // named here explicitly rather than relying on the shorthand.
+            className="w-full bg-transparent py-0.5 text-sm placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0"
             value={text}
             placeholder={values.length === 0 ? placeholder : 'Add another...'}
             onChange={(e) => setText(e.target.value)}
@@ -200,18 +207,28 @@ export function TokenField({
               }
             }}
           />
-          {focused && matches.length > 0 && (
+          {focused && (matches.length > 0 || suggestions.length === 0) && (
             <div className="absolute left-0 z-30 mt-1 max-h-56 w-64 overflow-auto rounded-md border bg-background p-1 shadow-lg">
-              {matches.map((s) => (
-                <button
-                  key={s}
-                  className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-accent"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => add(s)}
-                >
-                  {renderSuggestion ? renderSuggestion(s) : s}
-                </button>
-              ))}
+              {matches.length === 0 ? (
+                // Say so, rather than showing nothing. An empty list is the
+                // expected state when a permission is missing or GitHub is
+                // rate-limited, and silence there reads as a broken field — which
+                // is exactly how it read the first time.
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                  No suggestions loaded. Type a value and press Enter.
+                </p>
+              ) : (
+                matches.map((s) => (
+                  <button
+                    key={s}
+                    className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-accent"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => add(s)}
+                  >
+                    {renderSuggestion ? renderSuggestion(s) : s}
+                  </button>
+                ))
+              )}
             </div>
           )}
         </div>
