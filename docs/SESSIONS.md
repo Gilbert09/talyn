@@ -2,6 +2,37 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 118 — a pending failure is not an ejection (2026-09-11)
+
+PostHog's "push to a queued PR reset 3 or more others" alert fired six times in
+two days on `talyn-app[bot]` pushes: PostHog/posthog#97519,
+#98248, #98469 and #98590 on 09-10, then #98918 (13 PRs reset) and #99003 (9)
+on 09-11. Session 87's hands-off rule was doing what it says. It was being fed
+the wrong state.
+
+**Trunk has two failure sentences, and only one of them lets go of the PR.**
+"⚠️ The required check `X` has failed. Pull request failed tests and is waiting
+for other pull requests to finish testing" is trunk's *pending failure*: the PR
+stays in the queue while the PRs ahead finish, because one of them may be the
+culprit, and then trunk either retests it or removes it with "❌ … removed from
+the merge queue because it failed tests". The parser read both as `failed`.
+`failed` is an ejected state, so R5b handed the entry to
+`decideExternalEjection`, which fired a `queue_failure` run. The run pushed
+(usually a merge of master as its first step), and trunk answered by ejecting
+the PR and restarting every PR testing on top of it. In each case the failure
+came from another PR in the batch; #99003's run said as much, after its push.
+On #97519 trunk had already put the PR back into testing when the push landed.
+
+**`pending_failure` is its own state now**: holding, push-would-eject, never
+ejected. Both channels map to it (the `trunk-pending-failure` label was read as
+`failed` too). Everything that asks "may Talyn touch this PR?" goes through
+those two predicates, so R5b, R5d, the submit ladder's `already_submitted` and
+the auto-keep watcher all stand down with no rule changes. The fix run now goes
+out on the removal, which also carries the failure table and run link the infra
+classifier reads. The cost is up to one trunk cycle of latency before a genuine
+failure gets its run, against a full reset of the queue behind it. Both front
+ends show it as an amber "Queue: pending failure".
+
 ## Session 117 — Workflows: the PR automations the user writes (2026-09-10)
 
 Talyn reacted to pull requests in exactly the ways Talyn was coded to react. The

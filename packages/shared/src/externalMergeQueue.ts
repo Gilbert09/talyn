@@ -45,6 +45,13 @@ export type ExternalQueueProvider = 'trunk';
  *                 which may be a human pulling it out deliberately. Terminal:
  *                 overriding that is not a repair.
  *
+ * `pending_failure` is NOT one of them, however much it reads like `failed`.
+ * Trunk saw a required check fail in the batch but still has the PR: it waits
+ * for the PRs ahead to finish, because one of them may be the real culprit,
+ * and then either retests this PR or removes it ("removed from the merge queue
+ * because it failed tests", which is `failed`). Every PR behind it is testing
+ * on top of it meanwhile, so a push here resets all of them.
+ *
  * `not_submitted` and `rejected` are only ever read off the provider's comment:
  * the first says its submit box is untouched (it does NOT have the PR), the
  * second that it refuses to merge this PR at all — neither is something a fix
@@ -56,6 +63,7 @@ export type ExternalQueueState =
   | 'queued'
   | 'testing'
   | 'passed'
+  | 'pending_failure'
   | 'failed'
   | 'ejected'
   | 'cancelled'
@@ -107,7 +115,7 @@ export interface ExternalQueueStatus {
 const TRUNK_STATE_LABELS: Array<{ prefix: string; state: ExternalQueueState }> = [
   { prefix: 'trunk-merged', state: 'merged' },
   { prefix: 'trunk-failed', state: 'failed' },
-  { prefix: 'trunk-pending-failure', state: 'failed' },
+  { prefix: 'trunk-pending-failure', state: 'pending_failure' },
   { prefix: 'trunk-cancelled', state: 'cancelled' },
   { prefix: 'trunk-canceled', state: 'cancelled' },
   { prefix: 'trunk-tests-passed', state: 'passed' },
@@ -201,6 +209,16 @@ const TRUNK_STATUS_PATTERNS: Array<{ re: RegExp; state: ExternalQueueState }> = 
   { re: /could not start testing/i, state: 'failed' },
   // "⚠️ The required check `X` (Failure) has failed. Pull request failed tests
   //  and is waiting for other pull requests to finish testing."
+  //
+  // Trunk still has the PR here, so this must be read before the bare "has
+  // failed" rule below. Read as `failed`, it sent a queue_failure fix run at
+  // the PR within minutes; the run merged master in, and that push ejected the
+  // PR and reset every PR testing behind it (PostHog/posthog#98918 reset 13,
+  // #99003 reset 9, 2026-09-11). The failure usually was not even the PR's own:
+  // it came from another PR in the batch, which is what trunk was waiting to
+  // find out.
+  { re: /waiting for other pull requests to finish testing/i, state: 'pending_failure' },
+  // Any other failure sentence, where trunk has not said it is still waiting.
   { re: /has failed|failed tests/i, state: 'failed' },
   // "👍 Pull request will be merged soon because tests have passed on #x"
   { re: /will be merged soon/i, state: 'passed' },
@@ -506,7 +524,13 @@ export function isExternalQueueEjected(state: ExternalQueueState): boolean {
  * {@link externalQueuePushWouldEject}.
  */
 export function isExternalQueueHolding(state: ExternalQueueState): boolean {
-  return state === 'not_ready' || state === 'queued' || state === 'testing' || state === 'passed';
+  return (
+    state === 'not_ready' ||
+    state === 'queued' ||
+    state === 'testing' ||
+    state === 'passed' ||
+    state === 'pending_failure'
+  );
 }
 
 /**
@@ -519,6 +543,12 @@ export function isExternalQueueHolding(state: ExternalQueueState): boolean {
  * `passed`, a fix run destroys a cycle — ~40 minutes of CI at PostHog — to
  * repair something the provider was already handling.
  *
+ * `pending_failure` belongs here too. The PR failed in its batch, but trunk has
+ * not let go of it yet, and the PRs behind it are testing on top of it. A push
+ * ejects it and resets every one of them, while waiting costs at most one
+ * cycle: trunk either retests the PR or removes it as `failed`, and THAT is
+ * when a fix run is both safe and useful.
+ *
  * `not_ready` is the opposite case, and collapsing the two deadlocked the
  * queue: trunk holds the submission but has NOT added the PR, and says why —
  * "it will be added to the merge queue once all branch protection rules pass".
@@ -527,7 +557,9 @@ export function isExternalQueueHolding(state: ExternalQueueState): boolean {
  * side waits for the other forever (PostHog/posthog#84450).
  */
 export function externalQueuePushWouldEject(state: ExternalQueueState): boolean {
-  return state === 'queued' || state === 'testing' || state === 'passed';
+  return (
+    state === 'queued' || state === 'testing' || state === 'passed' || state === 'pending_failure'
+  );
 }
 
 /**
@@ -566,6 +598,8 @@ export function externalQueueStateLabel(state: ExternalQueueState): string {
       return 'Testing';
     case 'passed':
       return 'Tests passed';
+    case 'pending_failure':
+      return 'Pending failure';
     case 'failed':
       return 'Failed in queue';
     case 'ejected':

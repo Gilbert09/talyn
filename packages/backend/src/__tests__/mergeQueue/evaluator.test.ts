@@ -746,7 +746,9 @@ describe('mergeQueue v2 pipeline', () => {
 
     // PostHog/posthog#85338 + #85284: trunk's own run died in "Apply postgres
     // and clickhouse migrations and setup dev" (a Docker port collision). The
-    // PRs were green on their branches; a fix run had nothing to fix.
+    // PRs were green on their branches; a fix run had nothing to fix. Read off
+    // the removal, not the "⚠️ … waiting for other pull requests" line before
+    // it: trunk still holds the PR there (see the next test).
     it('resubmits when the queue run died on CI infrastructure', async () => {
       gated();
       mockCapability.mockResolvedValue('unavailable');
@@ -755,10 +757,11 @@ describe('mergeQueue v2 pipeline', () => {
       vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
         {
           body:
-            `\u{26A0}\u{FE0F} The required check [\`Playwright tests pass\`](${JOB}) (Failure) ` +
-            'has failed. Pull request failed tests and is waiting for other pull requests to ' +
-            'finish testing. See more details ' +
-            '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/85338).',
+            '\u{274C} This pull request was removed from the merge queue because it failed ' +
+            'tests. PR [#85340](https://www.github.com/PostHog/posthog/pull/85340) was used for ' +
+            'testing. See more details ' +
+            '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/85338).\n' +
+            `|Failed Required Status|Conclusion|\n|-|-|\n|Playwright tests pass|[Failure](${JOB})|`,
         },
       ]);
       vi.spyOn(githubService, 'getWorkflowJob').mockResolvedValue({
@@ -798,6 +801,53 @@ describe('mergeQueue v2 pipeline', () => {
       const entry = await entryOf(db, prId);
       expect(entry?.status).toBe('awaiting_external');
       expect(entry?.submitAttempts).toBe(2);
+    });
+
+    // PostHog/posthog#99003, 2026-09-11. Trunk reported a failed check while
+    // it still held the PR, waiting on the PRs ahead. This line was read as an
+    // ejection: a queue_failure run went out, merged master in three minutes
+    // later, and that push ejected the PR and reset the 9 PRs behind it. The
+    // failure was a visual diff from another PR in the batch.
+    it('leaves a PR alone while trunk holds it with a pending failure', async () => {
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      const JOB = 'https://github.com/PostHog/posthog/actions/runs/34605745446/job/103288055093';
+      vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+        {
+          body:
+            `\u{26A0}\u{FE0F} The required check [\`Visual regression tests pass\`](${JOB}) ` +
+            '(Failure) has failed. Pull request failed tests and is waiting for other pull ' +
+            'requests to finish testing. PR [#99264](https://www.github.com/PostHog/posthog/pull/99264) ' +
+            'was used for testing. See more details ' +
+            '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/99003).',
+        },
+      ]);
+      const comment = vi.spyOn(githubService, 'createIssueComment').mockResolvedValue(undefined);
+      const updateSpy = vi.spyOn(githubService, 'updatePullRequestBranch').mockResolvedValue('ok');
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: { ...cleanSummary(), nodeId: 'PR_node', mergeStateStatus: 'BEHIND' },
+      });
+      await db
+        .update(mergeQueueEntries)
+        .set({
+          status: 'awaiting_external',
+          externalSubmitVia: 'comment',
+          externalSubmittedAt: new Date(Date.now() - 15 * 60_000),
+          submitAttempts: 1,
+        })
+        .where(eq(mergeQueueEntries.id, entryId));
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).not.toHaveBeenCalled();
+      expect(updateSpy).not.toHaveBeenCalled();
+      expect(comment).not.toHaveBeenCalled();
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('awaiting_external');
+      expect(entry?.externalState).toBe('pending_failure');
     });
 
     // The cross-PR half: the tally is fed by the very transitions the pipeline

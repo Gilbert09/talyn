@@ -160,4 +160,19 @@ describe('PRStatusPill', () => {
       expect(screen.getByText('Queue: testing')).toBeInTheDocument();
     });
   });
+
+  // Trunk still has the PR while it waits on the PRs ahead, so this is not the
+  // red "back in the author's court" state yet.
+  it('shows a pending failure in the queue as amber, not as a failed PR', () => {
+    render(
+      <PRStatusPill
+        blockingReason="mergeable"
+        checks={checks({ total: 201, passed: 201 })}
+        state="open"
+        externalQueueState="pending_failure"
+      />
+    );
+    expect(screen.getByText('Queue: pending failure')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('amber-500');
+  });
 });
