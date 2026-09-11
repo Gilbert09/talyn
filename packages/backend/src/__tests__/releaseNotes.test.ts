@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   compareVersions,
   filterReleaseCommits,
+  GATED_SCOPES,
+  INTERNAL_SCOPES,
   kindForCommitType,
   highlightsForSurface,
   nextSeenVersion,
@@ -133,12 +135,51 @@ describe('shared/releaseNotes — commit filtering', () => {
   it('drops scopes a Talyn user cannot see from inside the app', () => {
     const kept = filterReleaseCommits([
       'feat(admin): add a cross-tenant task list',
-      'fix(fleet): stop dialling a stale host',
       'fix(ci): pin the runner image',
       'feat(marketing): new pricing page',
       'feat(desktop): apply a staged update once the machine goes idle',
     ]);
     expect(kept.map((c) => c.scope)).toEqual(['desktop']);
+  });
+
+  it('drops a surface that is still behind an allow-list', () => {
+    // Announcing one of these is worse than announcing nothing: the modal
+    // points at a page the user cannot open, and the span is then marked seen —
+    // so the real launch is never announced. This is what put Workflows into
+    // 0.2.75's notes while it was allow-listed to one account.
+    const kept = filterReleaseCommits([
+      'feat(workflows): user-defined PR automation, behind an allow-list',
+      'fix(fleet): stop dialling a stale host',
+      'feat(desktop): apply a staged update once the machine goes idle',
+    ]);
+    expect(kept.map((c) => c.scope)).toEqual(['desktop']);
+  });
+
+  it('keeps the two lists apart, because they need opposite maintenance', () => {
+    // An internal scope stays on its list forever. A gated one is temporary, and
+    // must be removed in the same commit that removes its allow-list gate —
+    // that release is the one where the feature becomes usable. Conflating them
+    // is how a feature ships to everybody and is never mentioned.
+    for (const scope of GATED_SCOPES) {
+      expect(INTERNAL_SCOPES).not.toContain(scope);
+    }
+    expect(GATED_SCOPES).toContain('workflows');
+    expect(GATED_SCOPES).toContain('fleet');
+  });
+
+  it('un-gating is what announces a feature', () => {
+    // The proof that the mechanism reverses: take `workflows` off GATED_SCOPES
+    // and the very next `feat(workflows)` commit reaches the model.
+    const subjects = ['feat(workflows): run a workflow against a PR by hand'];
+    expect(filterReleaseCommits(subjects)).toHaveLength(0);
+    const ungated = ['fleet'];
+    const kept = subjects
+      .map(parseConventionalCommit)
+      .filter(
+        (c): c is NonNullable<typeof c> =>
+          !!c && !INTERNAL_SCOPES.includes(c.scope ?? '') && !ungated.includes(c.scope ?? '')
+      );
+    expect(kept).toHaveLength(1);
   });
 
   it('maps a commit scope to the clients it can possibly affect', () => {

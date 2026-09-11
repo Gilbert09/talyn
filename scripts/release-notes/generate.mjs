@@ -13,11 +13,12 @@
  * survives into user-facing highlights → POST them.
  *
  * Two filters, deliberately. The mechanical one drops merge commits,
- * non-user commit types, and internal scopes without any judgement; the model
- * answers the judgement question ("would a user notice this?") on what's left.
- * Either one alone gets it wrong: the filter can't tell a plumbing `fix(github)`
- * from a visible one, and the model shouldn't be spending attention on
- * `chore(deps)`.
+ * non-user commit types, internal scopes, and scopes still behind an allow-list
+ * (`GATED_SCOPES`) without any judgement; the model answers the judgement
+ * question ("would a user notice this?") on what's left. Either one alone gets
+ * it wrong: the filter can't tell a plumbing `fix(github)` from a visible one,
+ * it can't tell that a `fix(desktop)` is about a gated page, and the model
+ * shouldn't be spending attention on `chore(deps)`.
  *
  * Nothing here may fail a release. The job is `continue-on-error`, this script
  * exits 0 on every soft failure, and an empty highlight list is a normal
@@ -145,6 +146,8 @@ You are given the commits from one release. Turn them into the short list a Taly
 What earns a highlight: something the user can see or do differently. New capabilities, changed behaviour they would notice, fixes to problems they would have hit, and speedups they would feel.
 
 What does not: internal refactors, test changes, dependency bumps, build and CI work, logging and instrumentation, anything on the operator console or the marketing site, and fixes to bugs that only ever existed on an unreleased branch.
+
+And what must NOT, even when it is the most interesting thing in the release: anything the commit tells you is not available to users yet — behind an allow-list, behind a feature flag, gated to specific accounts, or described as not yet enabled. Announcing one of those is worse than announcing nothing, because the user is told about something they cannot open AND the release is then marked as read, so the real launch is never announced. When a release contains only gated work, the correct answer is an empty list.
 
 Merge commits that tell one story into one highlight. Three commits iterating on the same feature are one highlight describing the finished feature, not three.
 

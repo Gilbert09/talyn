@@ -10,7 +10,8 @@
 //      nothing at all when the span has no user-facing content.
 //   2. What reaches a highlight has to be filtered twice: once mechanically
 //      (`filterReleaseCommits`, which drops merge commits, non-user commit
-//      types, and internal scopes), and once editorially by the model in CI.
+//      types, internal scopes, and scopes still behind an allow-list), and once
+//      editorially by the model in CI.
 //
 // Everything in this file is pure and lives in @talyn/shared on purpose. The
 // CI generator, the backend, the desktop renderer and apps/web all depend on
@@ -142,15 +143,18 @@ export function parseConventionalCommit(subject: string): ParsedCommit | null {
 export const USER_FACING_TYPES: readonly string[] = ['feat', 'fix', 'perf'];
 
 /**
- * Scopes whose changes a Talyn user cannot see from inside the app:
- * `admin`/`fleet` are the operator console (admin.talyn.dev), `marketing` is
- * the public website, and the rest are build/observability plumbing.
+ * Scopes whose changes a Talyn user cannot see from inside the app: `admin` is
+ * the operator console (admin.talyn.dev), `marketing` is the public website,
+ * and the rest are build/observability plumbing.
+ *
+ * These are permanently invisible — nothing will ever make a `chore(deps)` bump
+ * worth announcing. For a real product surface that is merely not available
+ * YET, see {@link GATED_SCOPES}.
  *
  * Exported so the list can be tuned without editing the filter.
  */
 export const INTERNAL_SCOPES: readonly string[] = [
   'admin',
-  'fleet',
   'ci',
   'debug',
   'deps',
@@ -159,6 +163,37 @@ export const INTERNAL_SCOPES: readonly string[] = [
   'marketing',
   'docs',
 ];
+
+/**
+ * Scopes for product surfaces that exist but are behind an ALLOW-LIST, so no
+ * user can reach them yet.
+ *
+ * Announcing one of these is worse than announcing nothing: the modal tells
+ * somebody about a page they cannot open, and the entry is then burnt — the
+ * span has been marked seen, so the real launch is never announced.
+ *
+ * Kept apart from {@link INTERNAL_SCOPES} because the two need opposite
+ * maintenance. An internal scope stays on its list forever; a gated one is
+ * temporary, and the obligation is:
+ *
+ *   **Remove the scope here in the same commit that removes its allow-list
+ *   gate.** That release then announces the feature, which is exactly when a
+ *   user can first use it.
+ *
+ * Leaving a scope here after un-gating is the failure mode to watch for: the
+ * feature ships to everybody and is never mentioned. The gates as they stand:
+ *
+ *   - `fleet` — Talyn Fleet, `FLEET_ENABLED` + `FLEET_ALLOWED_EMAILS`
+ *   - `workflows` — PR automation, `WORKFLOWS_ENABLED` + `WORKFLOWS_ALLOWED_EMAILS`
+ *
+ * This is a mechanical backstop, not the whole answer. A gated feature's
+ * commits do not all carry its scope — `fix(desktop): hide the Workflows nav
+ * item while loading` is scoped `desktop` and slips straight through — so the
+ * generator's prompt also tells the model not to announce anything a commit
+ * says is behind a flag or an allow-list. Judgement covers what a scope list
+ * cannot.
+ */
+export const GATED_SCOPES: readonly string[] = ['fleet', 'workflows'];
 
 /**
  * The mechanical pre-filter: what the model in CI is even allowed to consider.
@@ -173,6 +208,7 @@ export function filterReleaseCommits(subjects: readonly string[]): ParsedCommit[
     if (!parsed) continue;
     if (!USER_FACING_TYPES.includes(parsed.type)) continue;
     if (parsed.scope && INTERNAL_SCOPES.includes(parsed.scope)) continue;
+    if (parsed.scope && GATED_SCOPES.includes(parsed.scope)) continue;
     kept.push(parsed);
   }
   return kept;
