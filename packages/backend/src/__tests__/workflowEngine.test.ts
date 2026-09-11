@@ -13,7 +13,6 @@ import {
 } from '../db/schema.js';
 import { createWorkflow, _resetWorkflowStore, listWorkflows } from '../services/workflows/store.js';
 import { evaluateWorkflowsForDelivery, isSelfEcho } from '../services/workflows/engine.js';
-import { resetWorkflowsAccessCache } from '../services/workflowsAccess.js';
 import type { WebhookDelivery } from '../services/webhookPayload.js';
 import type { WatchTarget } from '../services/webhookIndex.js';
 import { githubService } from '../services/github.js';
@@ -102,9 +101,7 @@ describe('workflow engine', () => {
       defaultBranch: 'main',
     });
 
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
+    delete process.env.WORKFLOWS_ENABLED;
     _resetWorkflowStore();
 
     addLabels = vi.spyOn(githubService, 'addPullRequestLabels').mockResolvedValue(undefined);
@@ -114,8 +111,6 @@ describe('workflow engine', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     delete process.env.WORKFLOWS_ENABLED;
-    delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    resetWorkflowsAccessCache();
     _resetWorkflowStore();
     await cleanup();
   });
@@ -196,27 +191,27 @@ describe('workflow engine', () => {
     expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
   });
 
-  describe('the allow-list gate', () => {
-    it('refuses a workspace whose owner is not on the list', async () => {
+  describe('the kill switch', () => {
+    it('runs for every workspace by default — no allow-list any more', async () => {
       await addWorkflow();
+      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(1);
+      expect(addLabels).toHaveBeenCalled();
+    });
+
+    it('ignores a stale allow-list left on a deployment', async () => {
+      // The env var is gone from the code. A value someone forgot to delete must
+      // not resurrect a gate that no longer exists.
       process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
-      resetWorkflowsAccessCache();
-      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
-      expect(addLabels).not.toHaveBeenCalled();
-    });
-
-    it('refuses everybody when the list is empty — unset means nobody', async () => {
       await addWorkflow();
+      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(1);
       delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-      resetWorkflowsAccessCache();
-      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
     });
 
-    it('refuses when the subsystem is off, whatever the list says', async () => {
+    it('stops everything when the switch is pulled', async () => {
       await addWorkflow();
       process.env.WORKFLOWS_ENABLED = 'false';
-      resetWorkflowsAccessCache();
       expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
+      expect(addLabels).not.toHaveBeenCalled();
     });
   });
 
@@ -651,7 +646,8 @@ describe('workflow engine', () => {
   });
 
   it('runs each workspace watching the repo independently', async () => {
-    // A second workspace, NOT on the allow-list: the first still runs.
+    // Two workspaces watching one repo, each with its own workflow: BOTH run
+    // now. This used to assert the second was filtered out by the allow-list.
     await seedUser(db, { id: 'user-2', email: 'other@example.test' });
     await db.insert(workspacesTable).values({
       id: 'ws-2',
@@ -681,9 +677,10 @@ describe('workflow engine', () => {
       { workspaceId: 'ws-2', repositoryId: 'repo-2', owner: 'acme', repo: 'widget' },
     ]);
 
-    expect(ran).toBe(1);
-    expect(addLabels).toHaveBeenCalledTimes(1);
+    expect(ran).toBe(2);
+    expect(addLabels).toHaveBeenCalledTimes(2);
     expect(addLabels).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, ['talyn-seen']);
+    expect(addLabels).toHaveBeenCalledWith('ws-2', 'acme', 'widget', 42, ['theirs']);
   });
 
   it('does not let one workspace’s failure stop another’s workflow', async () => {

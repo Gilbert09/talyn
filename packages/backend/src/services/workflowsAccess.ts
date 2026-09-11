@@ -1,116 +1,56 @@
-import { eq } from 'drizzle-orm';
-import { getDbClient } from '../db/client.js';
-import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
-
 /**
- * Who may use Workflows — user-defined PR automation.
+ * The one switch that can stop Workflows.
  *
- * The same shape as `cloudProviders/fleetAccess.ts`, and for the same reasons.
- * Read that file's header for the full argument; the short version:
+ * Workflows — user-defined PR automation — is a released feature available to
+ * every workspace. This used to be an allow-list keyed on the workspace owner's
+ * email (the `fleetAccess.ts` shape); that gate is gone.
  *
- * # Fail closed, and not in the UI
+ * # Absent means ON, and that is the opposite of how it started
  *
- * `WORKFLOWS_ALLOWED_EMAILS` unset means NOBODY, not everybody. Getting that
- * backwards would hand every workspace a feature that comments on, labels and
- * merges other people's pull requests — the blast radius here is larger than
- * the fleet's, because a workflow acts without anyone watching.
+ * While the feature was gated, `WORKFLOWS_ENABLED` unset meant "off for
+ * everybody" — fail closed, because an unconfigured deployment must not hand out
+ * a feature nobody decided to give it. Released, that reading is wrong in both
+ * directions: every new deployment would ship with the feature dark, and every
+ * developer's local backend would hide a page that exists, until somebody
+ * remembered a line of env.
  *
- * And the gate is enforced where the work happens: at the routes, at
- * evaluation, and again on the task-dispatching actions. Hiding the nav item
- * from one client is not a gate; it is a decoration that the CLI, the MCP
- * server and plain `curl` all walk straight past. That is the billing
- * `clientGate` bug this codebase has already paid for once.
+ * So the polarity is inverted. This is now a KILL SWITCH: set
+ * `WORKFLOWS_ENABLED=false` to stop the engine and hide the page, and leave it
+ * unset the rest of the time. It exists because workflows comment on, label and
+ * merge other people's pull requests, and a feature with that blast radius
+ * should have one env var that stops it without a code change.
  *
- * # Two vars, not one
+ * # It is still enforced where the work happens
  *
- * `WORKFLOWS_ENABLED` turns the subsystem on for the BACKEND (whether the
- * engine is wired into the webhook worker at all); the allow-list decides which
- * workspaces it answers for. Turning the first on must not simultaneously turn
- * the feature on for everybody, which is exactly the split `FLEET_ENABLED` /
- * `FLEET_ALLOWED_EMAILS` makes.
+ * At the routes, in the engine before any action runs, and on the
+ * task-dispatching actions. Hiding the nav item from one client was never a
+ * gate — the CLI, the MCP server and plain `curl` all walk straight past one.
  */
 
-/** Parsed once per process. The env is not going to change under us. */
-let cachedRaw: string | undefined;
-let cachedSet: Set<string> | null = null;
-
-function allowedEmails(): Set<string> {
-  const raw = process.env.WORKFLOWS_ALLOWED_EMAILS ?? '';
-  if (cachedSet && cachedRaw === raw) return cachedSet;
-  cachedRaw = raw;
-  cachedSet = new Set(
-    raw
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean)
-  );
-  return cachedSet;
-}
-
-/** Exposed for tests, which need to change the env between cases. */
-export function resetWorkflowsAccessCache(): void {
-  cachedSet = null;
-  cachedRaw = undefined;
+/**
+ * Whether Workflows is available.
+ *
+ * Anything other than an explicit `false`/`0` is on, so a typo turns the feature
+ * ON rather than silently off — the safer failure for a kill switch, because
+ * "it stopped working and nobody knows why" is harder to notice than the thing
+ * you were trying to stop.
+ */
+export function workflowsEnabled(): boolean {
+  const raw = (process.env.WORKFLOWS_ENABLED ?? '').trim().toLowerCase();
+  return raw !== 'false' && raw !== '0';
 }
 
 /**
- * Whether the engine is wired in at all. Separate from the allow-list so a
- * deployment can carry the code without running it.
+ * Kept under its old name so the engine and the actions read the same way they
+ * did when this was per-workspace. There is nothing workspace-specific left to
+ * decide — every workspace gets the same answer — but the call sites are the
+ * places the gate must be enforced, and renaming them would only obscure that.
  */
-export function workflowsSubsystemEnabled(): boolean {
-  return process.env.WORKFLOWS_ENABLED === 'true';
+export function workspaceMayUseWorkflows(): boolean {
+  return workflowsEnabled();
 }
 
-/** True when this email may use workflows. Case-insensitive. */
-export function isWorkflowsAllowedEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return allowedEmails().has(email.trim().toLowerCase());
-}
-
-/** Whether anyone at all is allowed — used only to explain a refusal. */
-export function workflowsAllowlistIsEmpty(): boolean {
-  return allowedEmails().size === 0;
-}
-
-/**
- * How many accounts are allow-listed. For the boot log — a COUNT and never the
- * addresses, because boot logs are shipped to a log service and an allow-list is
- * a list of real people's email addresses.
- */
-export function workflowsAllowlistSize(): number {
-  return allowedEmails().size;
-}
-
-/**
- * True when the workspace's owner may use workflows.
- *
- * Keyed on the OWNER rather than on whoever triggered the evaluation. A
- * workflow run has no user attached by construction — it is a webhook
- * delivery — and a gate that silently passes when it cannot identify a caller
- * is not a gate. The owner is the one identity every run provably has.
- */
-export async function workspaceMayUseWorkflows(workspaceId: string): Promise<boolean> {
-  if (!workflowsSubsystemEnabled()) return false;
-  if (workflowsAllowlistIsEmpty()) return false; // fail closed, cheaply
-  const rows = await getDbClient()
-    .select({ email: usersTable.email })
-    .from(workspacesTable)
-    .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  return isWorkflowsAllowedEmail(rows[0]?.email);
-}
-
-/**
- * The message a refusal carries. Says which of the three reasons it is, because
- * reading a deployment that forgot its config as "working as intended" is an
- * hour of someone's evening.
- */
+/** The message a refusal carries. One reason left: somebody pulled the switch. */
 export function workflowsRefusalReason(): string {
-  if (!workflowsSubsystemEnabled()) {
-    return 'workflows are not enabled on this deployment (WORKFLOWS_ENABLED is not "true")';
-  }
-  return workflowsAllowlistIsEmpty()
-    ? 'workflows have no allowlist configured (WORKFLOWS_ALLOWED_EMAILS is empty), so they are available to nobody'
-    : 'this workspace is not on the workflows allowlist';
+  return 'workflows are switched off on this deployment (WORKFLOWS_ENABLED=false)';
 }

@@ -25,15 +25,13 @@ import { workflowSuggestions } from '../services/workflows/suggestions.js';
  * policies (migration 0052) are the second line of defence behind
  * `requireWorkspaceAccess`.
  *
- * Every handler gates on the allow-list. That is not belt-and-braces with the
+ * Every handler gates on the kill switch. That is not belt-and-braces with the
  * hidden nav item — the nav item is not a gate at all, it is a decoration that
  * the CLI, the MCP server and plain `curl` walk straight past. See
  * `services/workflowsAccess.ts`.
  *
- * A refusal is 403 with the reason, not 404. The three reasons (the deployment
- * has it off, nobody is allow-listed, you are not on the list) are genuinely
- * different, and reading a forgotten env var as "working as intended" costs an
- * evening.
+ * A refusal is 403 with the reason, not 404: somebody switching the feature off
+ * should be able to tell that from a route that does not exist.
  */
 
 /** How many history rows one page returns when the caller does not say. */
@@ -95,7 +93,7 @@ export function workflowRoutes(): Router {
       handleAccessError(err, res);
       return false;
     }
-    if (!(await workspaceMayUseWorkflows(workspaceId))) {
+    if (!workspaceMayUseWorkflows()) {
       res.status(403).json({
         success: false,
         error: `Workflows are not available: ${workflowsRefusalReason()}.`,

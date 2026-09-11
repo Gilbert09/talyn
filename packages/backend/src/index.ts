@@ -27,10 +27,7 @@ import { githubService } from './services/github.js';
 import { prMonitorService } from './services/prMonitor.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
-import {
-  workflowsAllowlistSize,
-  workflowsSubsystemEnabled,
-} from './services/workflowsAccess.js';
+import { workflowsEnabled } from './services/workflowsAccess.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from './services/cloudProviders/selfhosted/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
@@ -99,23 +96,20 @@ async function main() {
     console.log('[fleet] self-hosted provider registered (FLEET_ENABLED=true)');
   }
 
-  // Say out loud whether the workflow engine is armed, and for how many
-  // accounts.
+  // Say out loud whether the workflow engine is armed.
   //
-  // This line exists because its absence cost a round trip. Workflows are gated
-  // by two env vars and answered per request through `GET /features`, which
-  // needs a signed-in session — so from outside the app there was NO way to tell
-  // "the flag is not set" from "the flag is set and something else is wrong".
-  // The fleet has logged its own registration since it shipped; this is the same
-  // courtesy. Counts only, never the addresses: boot logs are shipped to a log
-  // service and an allow-list is a list of real people's emails.
-  if (workflowsSubsystemEnabled()) {
-    console.log(
-      `[workflows] engine armed (WORKFLOWS_ENABLED=true), ` +
-        `${workflowsAllowlistSize()} account(s) allow-listed`
-    );
+  // This line exists because its absence cost a round trip: workflows are
+  // answered per request through `GET /features`, which needs a signed-in
+  // session, so from outside the app there was no way to tell "switched off"
+  // from "on, and something else is wrong". The fleet has logged its own
+  // registration since it shipped; this is the same courtesy.
+  //
+  // The interesting case is now the OFF one — the feature is on by default, so
+  // a `NOT armed` line means somebody deliberately pulled the switch.
+  if (workflowsEnabled()) {
+    console.log('[workflows] engine armed');
   } else {
-    console.log('[workflows] engine NOT armed — WORKFLOWS_ENABLED is not "true"');
+    console.log('[workflows] engine NOT armed — WORKFLOWS_ENABLED=false');
   }
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the

@@ -156,6 +156,9 @@ export const USER_FACING_TYPES: readonly string[] = ['feat', 'fix', 'perf'];
 export const INTERNAL_SCOPES: readonly string[] = [
   'admin',
   'ci',
+  // Our own release-notes pipeline. A user cannot see it, and it was reaching
+  // the model every time it changed — which the model then correctly discarded.
+  'release-notes',
   'debug',
   'deps',
   'build',
@@ -184,7 +187,10 @@ export const INTERNAL_SCOPES: readonly string[] = [
  * feature ships to everybody and is never mentioned. The gates as they stand:
  *
  *   - `fleet` — Talyn Fleet, `FLEET_ENABLED` + `FLEET_ALLOWED_EMAILS`
- *   - `workflows` — PR automation, `WORKFLOWS_ENABLED` + `WORKFLOWS_ALLOWED_EMAILS`
+ *
+ * `workflows` was here and has been removed, which is the mechanism working: PR
+ * automation was released to everybody, so the release that did it is the one
+ * that announces it.
  *
  * This is a mechanical backstop, not the whole answer. A gated feature's
  * commits do not all carry its scope — `fix(desktop): hide the Workflows nav
@@ -193,7 +199,7 @@ export const INTERNAL_SCOPES: readonly string[] = [
  * says is behind a flag or an allow-list. Judgement covers what a scope list
  * cannot.
  */
-export const GATED_SCOPES: readonly string[] = ['fleet', 'workflows'];
+export const GATED_SCOPES: readonly string[] = ['fleet'];
 
 /**
  * The mechanical pre-filter: what the model in CI is even allowed to consider.

@@ -19,7 +19,7 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { emitWorkflowRun } from '../websocket.js';
 import type { WatchTarget } from '../webhookIndex.js';
 import type { WebhookDelivery } from '../webhookPayload.js';
-import { workspaceMayUseWorkflows, workflowsSubsystemEnabled } from '../workflowsAccess.js';
+import { workflowsEnabled } from '../workflowsAccess.js';
 import { runWorkflowActions } from './actions.js';
 import { workflowFactsFromDelivery } from './facts.js';
 import { checkRateCap, claimRun, recordSkippedRun, settleRun, statusFromOutcomes } from './runs.js';
@@ -261,7 +261,7 @@ export async function evaluateWorkflowsForDelivery(
   delivery: WebhookDelivery,
   targets: WatchTarget[]
 ): Promise<number> {
-  if (!workflowsSubsystemEnabled()) return 0;
+  if (!workflowsEnabled()) return 0;
 
   const factsList = workflowFactsFromDelivery(delivery);
   if (factsList.length === 0) return 0;
@@ -286,12 +286,12 @@ async function evaluateForWorkspace(
   target: WatchTarget,
   factsList: WorkflowEventFacts[]
 ): Promise<number> {
-  // The allow-list gate, enforced where the work happens. Ordered so the
-  // cheap-and-common answer ("this workspace has no workflows") is reached
-  // without the join whenever possible.
+  // The kill switch is checked once by the caller, before any of this. What
+  // used to sit here was a per-workspace allow-list lookup — a join against
+  // `users` for every delivery, for every watching workspace — and releasing the
+  // feature removed it rather than making it always answer true.
   const workflows = await enabledWorkflowsFor(target.workspaceId);
   if (workflows.length === 0) return 0;
-  if (!(await workspaceMayUseWorkflows(target.workspaceId))) return 0;
 
   const ownerId = await ownerOf(target.workspaceId);
   if (!ownerId) return 0;

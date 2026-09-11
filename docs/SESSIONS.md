@@ -2,6 +2,99 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 118 — Workflows released, and instrumented first (2026-09-11)
+
+Two things, in this order on purpose: the analytics that make adoption visible,
+then the removal of the gate.
+
+### Instrument, then release
+
+`workflow_ran` could say how often workflows FIRE but not how many people build
+one — a user whose three workflows never match looked identical to a user who
+built none. Releasing to everybody on that basis would have been shipping blind.
+
+So the routes now emit `workflow_created`, `workflow_updated`,
+`workflow_deleted` (with `age_hours` — a rule deleted within the hour is a
+failed attempt, one deleted after a month did its job and stopped being needed)
+and `workflow_enabled_toggled` as its OWN event, because switching a workflow
+off is the strongest signal something about it is wrong and is invisible inside
+a generic "updated" that also fires for a rename.
+
+They report the SHAPE of the rule — which triggers, which condition keys, which
+action types — and never its content: not the name, not the label values, not
+the logins, not the prompt. Those are the user's words about their own
+repositories. (`workflow_ran` does carry repo and PR number, because a run
+without the thing it ran on cannot be debugged. A definition can.)
+
+Server-side rather than from the client, for the Session 116 reason: a client
+that reports nothing must not be able to hide adoption. The one exception is
+`workflow_editor_opened`, which has to be client-side because abandonment only
+exists there — somebody who opens the editor and never saves makes no request at
+all, and "opened 40, created 3" is the shape of a form that is too hard.
+
+**`workflow_action_failed` is one FLAT event per failed action.** "How often does
+GitHub's rate limit cost us an action" is a one-line insight over this and an
+array-unpacking exercise over `workflow_ran`. It carries `refused`, which
+separates the two populations that look identical in a status column: a decision
+Talyn made on purpose (the plan cap, a closed rate gate, a run already working
+the PR) and something that actually broke. The classification lives in the
+engine, not in a dashboard filter, so the two cannot drift.
+
+A [Workflows dashboard](https://us.posthog.com/project/459813/dashboard/2087294)
+reads all of it: adoption, runs by outcome, failure reasons, refusals vs
+breakages, the editor→created funnel, and which actions people reach for.
+
+### The gate comes off, the switch stays
+
+`WORKFLOWS_ALLOWED_EMAILS` is deleted. `WORKFLOWS_ENABLED` survives as a kill
+switch, because workflows comment on, label and merge other people's pull
+requests, and a feature with that blast radius should have one env var that stops
+it without a code change.
+
+**The polarity inverted, and that is the load-bearing part.** While the feature
+was gated, unset meant NOBODY — fail closed, because an unconfigured deployment
+must not hand out a feature nobody decided to give it. Released, that reading is
+wrong in both directions: every new deployment would ship the page dark, and
+every developer's local backend would hide a feature that exists, until somebody
+remembered a line of env. So absent now means ON, and only an explicit
+`false`/`0` stops it. A typo turns the feature ON rather than off — the safer
+failure for a kill switch, since "it stopped working and nobody knows why" is
+much harder to notice than the thing you were trying to stop.
+
+Removing the gate also deleted work: `workspaceMayUseWorkflows` was a join
+against `users` for every delivery, for every watching workspace. It is a
+synchronous env read now, and its test asserts it needs no database — an awaited
+version would hide the join coming back.
+
+**`workflows` came off `GATED_SCOPES` in the same commit.** That is the
+obligation the list documents, and it is what makes THIS release the one that
+announces the feature in What's new. `release-notes` joined `INTERNAL_SCOPES`
+alongside it, having reached the model on every release it changed in — which
+the model then correctly discarded, at the cost of a turn.
+
+The filter had already proved itself on 0.2.76: four commits, one candidate after
+filtering, zero highlights published. Every `workflows`-scoped commit dropped
+mechanically; the survivor was our own CI plumbing and the editorial pass caught
+it.
+
+### The rate limit was real, and the run is lost
+
+A Stamphog run failed on PostHog/posthog#99327 with "GitHub is rate-limiting this
+account right now". It was accurate: the whole installation was inside a backoff,
+with the PR monitor failing across ~18 PostHog repos at ~295s and mergeableSettle
+at 85s. Talyn's own polling load earned it — Session 97's phenomenon.
+
+**The defect is what happened next: nothing.** That label was never added and
+never will be. The delivery is consumed, the run row is settled `failed`, and the
+unique `(workflow_id, delivery_id)` index means even a GitHub redelivery is a
+no-op. Every other subsystem retries on its next tick; a workflow run is
+one-shot.
+
+Not fixed here. It needs a retry sweep for runs that failed on a transient
+refusal, and waiting inside the action is not the answer — 300s would pin a slot
+in the webhook worker's six-wide slow lane. The new `workflow_action_failed`
+tile is how the cost of it becomes visible.
+
 ## Session 117 — Workflows: the PR automations the user writes (2026-09-10)
 
 Talyn reacted to pull requests in exactly the ways Talyn was coded to react. The

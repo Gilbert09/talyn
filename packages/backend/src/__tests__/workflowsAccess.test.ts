@@ -1,155 +1,83 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import type { Database } from '../db/client.js';
-import { workspaces as workspacesTable } from '../db/schema.js';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
-  isWorkflowsAllowedEmail,
-  resetWorkflowsAccessCache,
-  workflowsAllowlistIsEmpty,
+  workflowsEnabled,
   workflowsRefusalReason,
-  workflowsSubsystemEnabled,
   workspaceMayUseWorkflows,
 } from '../services/workflowsAccess.js';
 
 /**
- * The workflows allow-list, mirroring `fleetAccess.test.ts`.
+ * The Workflows kill switch.
  *
- * The case that matters most is the EMPTY one. Unset means nobody, which is the
- * opposite of the obvious default and deliberate: getting it backwards hands
- * every workspace a feature that comments on, labels and merges other people's
- * pull requests.
+ * This file used to test an allow-list keyed on the workspace owner's email,
+ * where unset meant NOBODY. Workflows is released now, so the polarity is
+ * inverted and the property worth pinning is the opposite one: **absent means
+ * ON**, and only an explicit `false` stops it.
+ *
+ * Getting that backwards is not symmetric. A gate that fails closed hides a
+ * feature people paid no attention to; a kill switch that fails closed takes a
+ * shipped feature away from everybody on the next deployment that forgets a line
+ * of env — silently, because nothing errors.
  */
 
-describe('isWorkflowsAllowedEmail', () => {
-  beforeEach(() => resetWorkflowsAccessCache());
-  afterEach(() => {
-    delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    delete process.env.WORKFLOWS_ENABLED;
-    resetWorkflowsAccessCache();
-  });
-
-  it('an unset list allows nobody', () => {
-    expect(workflowsAllowlistIsEmpty()).toBe(true);
-    expect(isWorkflowsAllowedEmail('tom@example.com')).toBe(false);
-  });
-
-  it.each(['', '   ', ',', ' , , '])('a blank-ish list (%j) allows nobody', (raw) => {
-    process.env.WORKFLOWS_ALLOWED_EMAILS = raw;
-    resetWorkflowsAccessCache();
-    expect(workflowsAllowlistIsEmpty()).toBe(true);
-    expect(isWorkflowsAllowedEmail('tom@example.com')).toBe(false);
-  });
-
-  it('matches case-insensitively and tolerates whitespace', () => {
-    process.env.WORKFLOWS_ALLOWED_EMAILS = ' Tom@Example.com , other@x.com ';
-    resetWorkflowsAccessCache();
-    expect(isWorkflowsAllowedEmail('tom@example.com')).toBe(true);
-    expect(isWorkflowsAllowedEmail('TOM@EXAMPLE.COM')).toBe(true);
-    expect(isWorkflowsAllowedEmail('other@x.com')).toBe(true);
-    expect(isWorkflowsAllowedEmail('nobody@x.com')).toBe(false);
-  });
-
-  it('refuses a null or empty email', () => {
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.com';
-    resetWorkflowsAccessCache();
-    expect(isWorkflowsAllowedEmail(null)).toBe(false);
-    expect(isWorkflowsAllowedEmail(undefined)).toBe(false);
-    expect(isWorkflowsAllowedEmail('')).toBe(false);
-  });
-
-  it('re-reads the env when it changes between cases', () => {
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'a@x.com';
-    expect(isWorkflowsAllowedEmail('a@x.com')).toBe(true);
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'b@x.com';
-    expect(isWorkflowsAllowedEmail('a@x.com')).toBe(false);
-    expect(isWorkflowsAllowedEmail('b@x.com')).toBe(true);
-  });
-});
-
-describe('workflowsSubsystemEnabled', () => {
+describe('workflowsEnabled', () => {
   afterEach(() => delete process.env.WORKFLOWS_ENABLED);
 
   it.each([
-    [undefined, false],
-    ['', false],
-    ['false', false],
-    ['1', false],
-    ['TRUE', false],
+    [undefined, true],
+    ['', true],
     ['true', true],
+    ['TRUE', true],
+    ['1', true],
+    ['yes', true],
+    // Only these two switch it off.
+    ['false', false],
+    ['FALSE', false],
+    ['0', false],
+    ['  false  ', false],
   ])('WORKFLOWS_ENABLED=%j → %s', (value, expected) => {
     if (value === undefined) delete process.env.WORKFLOWS_ENABLED;
-    else process.env.WORKFLOWS_ENABLED = value;
-    expect(workflowsSubsystemEnabled()).toBe(expected);
+    else process.env.WORKFLOWS_ENABLED = value as string;
+    expect(workflowsEnabled()).toBe(expected);
   });
-});
 
-describe('workflowsRefusalReason', () => {
-  afterEach(() => {
-    delete process.env.WORKFLOWS_ENABLED;
+  it('a typo turns the feature ON rather than silently off', () => {
+    // The safer failure for a kill switch: "it stopped working and nobody knows
+    // why" is much harder to notice than the thing you were trying to stop.
+    process.env.WORKFLOWS_ENABLED = 'flase';
+    expect(workflowsEnabled()).toBe(true);
+  });
+
+  it('no longer reads an allow-list', () => {
+    // The env var is gone from the code; a stale value left on a deployment must
+    // not resurrect a gate that no longer exists.
+    process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
+    expect(workflowsEnabled()).toBe(true);
+    expect(workspaceMayUseWorkflows()).toBe(true);
     delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    resetWorkflowsAccessCache();
-  });
-
-  it('distinguishes the three reasons — reading one as another costs an evening', () => {
-    expect(workflowsRefusalReason()).toMatch(/not enabled on this deployment/);
-
-    process.env.WORKFLOWS_ENABLED = 'true';
-    resetWorkflowsAccessCache();
-    expect(workflowsRefusalReason()).toMatch(/no allowlist configured/);
-
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'someone@x.com';
-    resetWorkflowsAccessCache();
-    expect(workflowsRefusalReason()).toMatch(/not on the workflows allowlist/);
   });
 });
 
 describe('workspaceMayUseWorkflows', () => {
-  let db: Database;
-  let cleanup: () => Promise<void>;
+  afterEach(() => delete process.env.WORKFLOWS_ENABLED);
 
-  beforeEach(async () => {
-    ({ db, cleanup } = await createTestDb());
-    await seedUser(db, { id: TEST_USER_ID, email: 'tom@example.test' });
-    await db.insert(workspacesTable).values({
-      id: 'ws-1',
-      ownerId: TEST_USER_ID,
-      name: 'Test',
-      settings: {},
-    });
-    resetWorkflowsAccessCache();
+  it('gives every workspace the same answer', () => {
+    expect(workspaceMayUseWorkflows()).toBe(true);
+    process.env.WORKFLOWS_ENABLED = 'false';
+    expect(workspaceMayUseWorkflows()).toBe(false);
   });
 
-  afterEach(async () => {
-    delete process.env.WORKFLOWS_ENABLED;
-    delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    resetWorkflowsAccessCache();
-    await cleanup();
+  it('needs no database', () => {
+    // It used to join `users` for every delivery, for every watching workspace.
+    // That this is now synchronous IS the performance change — a test that
+    // awaited it would hide the regression if the join came back.
+    const answer: boolean = workspaceMayUseWorkflows();
+    expect(typeof answer).toBe('boolean');
   });
+});
 
-  it('allows a workspace whose OWNER is on the list', async () => {
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
-    expect(await workspaceMayUseWorkflows('ws-1')).toBe(true);
-  });
-
-  it('refuses when the owner is not on the list', async () => {
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
-    resetWorkflowsAccessCache();
-    expect(await workspaceMayUseWorkflows('ws-1')).toBe(false);
-  });
-
-  it('refuses when the subsystem is off, whatever the list says', async () => {
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
-    expect(await workspaceMayUseWorkflows('ws-1')).toBe(false);
-  });
-
-  it('refuses a workspace that does not exist', async () => {
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
-    expect(await workspaceMayUseWorkflows('ws-nope')).toBe(false);
+describe('workflowsRefusalReason', () => {
+  it('says the switch was pulled, since that is the only reason left', () => {
+    expect(workflowsRefusalReason()).toMatch(/switched off/);
+    expect(workflowsRefusalReason()).toMatch(/WORKFLOWS_ENABLED=false/);
   });
 });

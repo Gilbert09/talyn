@@ -234,36 +234,41 @@ TALYN_ALLOWED_EMAILS=you@example.com
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
 
-### Workflows allow-list (required to see the Workflows page)
+### Workflows kill switch (optional)
 
 **Workflows** are user-defined PR automation: "on these pull request events,
 matching these conditions, do these things" — label, request reviewers, assign,
 comment, add to My PRs, run a skill or prompt, or send the PR to the merge
-queue. Two flags gate it, and both are needed:
+queue. They are **available to every workspace**; there is nothing to configure
+to turn them on.
+
+There is one env var, and it only ever turns them OFF:
 
 ```
-WORKFLOWS_ENABLED=true
-WORKFLOWS_ALLOWED_EMAILS=you@example.com
+WORKFLOWS_ENABLED=false
 ```
 
-`WORKFLOWS_ENABLED` decides whether the engine is wired into the webhook worker
-at all. **`WORKFLOWS_ALLOWED_EMAILS` decides who may use it, and unset means
-NOBODY** — not everybody. Same shape as the fleet pair below, and for a sharper
-reason: a workflow comments on, labels and merges pull requests without anybody
-watching, and it fires on **every PR in a watched repository**, including ones
-the user did not open.
+**Absent means ON.** That is the opposite of how this started, and the inversion
+is deliberate. While the feature was allow-listed, unset meant "nobody" so an
+unconfigured deployment could not hand out a feature nobody had decided to give
+it. Released, that reading fails in both directions: every new deployment would
+ship the page dark, and every developer's local backend would hide a feature
+that exists, until somebody remembered a line of env.
 
-A workspace is allowed when its **owner's** email is on the list
-(comma-separated, case-insensitive) — a run has no user attached, it is a
-webhook delivery, so the owner is the one identity it provably has. The gate is
-enforced on every `/api/v1/workflows` route, in the engine before any action
-runs, and again on the task-dispatching actions. `GET /api/v1/features` answers
-`{ workflows: boolean }` so the clients know whether to draw the nav item — but
-that is a courtesy, not the gate.
+So this is a kill switch, not an enablement flag. It exists because workflows
+comment on, label and merge other people's pull requests, and a feature with
+that blast radius should have one variable that stops it without a code change.
+Anything other than an explicit `false` or `0` is on — a typo turns the feature
+ON rather than silently off, which is the safer failure here: "it stopped
+working and nobody knows why" is much harder to notice than the thing you were
+trying to stop.
 
-A refusal names WHICH of the three reasons it is (the deployment has it off,
-nobody is allow-listed, you are not on the list), because reading a forgotten
-env var as "working as intended" costs an evening.
+Pulling it stops the engine, 403s every `/api/v1/workflows` route, and makes
+`GET /api/v1/features` answer `{ workflows: false }` so both clients hide the
+nav item rather than leaving it pointing at routes that refuse.
+
+`WORKFLOWS_ALLOWED_EMAILS` is **gone**. Nothing reads it; delete it from any
+deployment that still has it.
 
 ### Talyn Fleet allow-list (required to use the Firecracker fleet)
 

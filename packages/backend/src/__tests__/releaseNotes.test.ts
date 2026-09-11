@@ -148,7 +148,6 @@ describe('shared/releaseNotes — commit filtering', () => {
     // so the real launch is never announced. This is what put Workflows into
     // 0.2.75's notes while it was allow-listed to one account.
     const kept = filterReleaseCommits([
-      'feat(workflows): user-defined PR automation, behind an allow-list',
       'fix(fleet): stop dialling a stale host',
       'feat(desktop): apply a staged update once the machine goes idle',
     ]);
@@ -163,23 +162,26 @@ describe('shared/releaseNotes — commit filtering', () => {
     for (const scope of GATED_SCOPES) {
       expect(INTERNAL_SCOPES).not.toContain(scope);
     }
-    expect(GATED_SCOPES).toContain('workflows');
     expect(GATED_SCOPES).toContain('fleet');
   });
 
-  it('un-gating is what announces a feature', () => {
-    // The proof that the mechanism reverses: take `workflows` off GATED_SCOPES
-    // and the very next `feat(workflows)` commit reaches the model.
-    const subjects = ['feat(workflows): run a workflow against a PR by hand'];
-    expect(filterReleaseCommits(subjects)).toHaveLength(0);
-    const ungated = ['fleet'];
-    const kept = subjects
-      .map(parseConventionalCommit)
-      .filter(
-        (c): c is NonNullable<typeof c> =>
-          !!c && !INTERNAL_SCOPES.includes(c.scope ?? '') && !ungated.includes(c.scope ?? '')
-      );
-    expect(kept).toHaveLength(1);
+  it('announces a feature once it is un-gated', () => {
+    // `workflows` WAS on GATED_SCOPES and was removed in the commit that
+    // released PR automation to everybody — which is the mechanism working, not
+    // a hole in it. A `feat(workflows)` commit now reaches the model.
+    expect(GATED_SCOPES).not.toContain('workflows');
+    const kept = filterReleaseCommits([
+      'feat(workflows): run a workflow against a PR by hand',
+    ]);
+    expect(kept.map((c) => c.scope)).toEqual(['workflows']);
+  });
+
+  it('drops our own release-notes plumbing', () => {
+    // It reached the model on every release it changed in, which then correctly
+    // discarded it — a turn spent on something a list entry drops for free.
+    expect(filterReleaseCommits(['fix(release-notes): stop announcing gated features'])).toEqual(
+      []
+    );
   });
 
   it('maps a commit scope to the clients it can possibly affect', () => {
