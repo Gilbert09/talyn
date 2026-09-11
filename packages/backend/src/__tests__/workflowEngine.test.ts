@@ -17,11 +17,13 @@ import { resetWorkflowsAccessCache } from '../services/workflowsAccess.js';
 import type { WebhookDelivery } from '../services/webhookPayload.js';
 import type { WatchTarget } from '../services/webhookIndex.js';
 import { githubService } from '../services/github.js';
+import { githubRateGate } from '../services/githubRateGate.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
 import * as taskCreate from '../services/taskCreate.js';
 import { TaskLimitError } from '../services/billing/entitlements.js';
+import * as analytics from '../services/analytics.js';
 
 /**
  * The engine end to end, against a real Postgres.
@@ -422,6 +424,73 @@ describe('workflow engine', () => {
       expect(run?.status).toBe('failed');
       expect(run?.taskId).toBeNull();
       expect((run?.actions as Array<{ code?: string }>)[0]?.code).toBe('task_limit_reached');
+    });
+  });
+
+  describe('analytics', () => {
+    // These events are how anybody finds out whether workflows are used and
+    // whether they work. They are emitted server-side because a client that
+    // reports nothing must not be able to hide adoption (Session 116), and a
+    // test is what stops them being refactored away silently.
+    it('reports every run, with its failure codes', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      addLabels.mockRejectedValueOnce(new Error('GitHub API error 403'));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const ran = capture.mock.calls.find(([, event]) => event === 'workflow_ran');
+      expect(ran?.[2]).toMatchObject({
+        status: 'failed',
+        failed_count: 1,
+        failure_codes: ['github_error'],
+        repo: 'acme/widget',
+        pr_number: 42,
+      });
+    });
+
+    it('emits one flat event per failed action', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      addLabels.mockRejectedValueOnce(new Error('GitHub API error 403'));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const failures = capture.mock.calls.filter(
+        ([, event]) => event === 'workflow_action_failed'
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.[2]).toMatchObject({
+        action_type: 'add_labels',
+        code: 'github_error',
+        // A GitHub 403 is a breakage, not a decision Talyn made.
+        refused: false,
+      });
+    });
+
+    it('marks a REFUSAL apart from a breakage', async () => {
+      // The rate gate, the plan cap and "a run is already working this PR" are
+      // the system working. A dashboard that counts them as failures makes a
+      // healthy workspace look broken.
+      vi.spyOn(githubRateGate, 'isBlocked').mockReturnValue(true);
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const failure = capture.mock.calls.find(
+        ([, event]) => event === 'workflow_action_failed'
+      );
+      expect(failure?.[2]).toMatchObject({ code: 'rate_gated', refused: true });
+    });
+
+    it('says nothing when nothing failed', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      await addWorkflow();
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+      expect(
+        capture.mock.calls.filter(([, event]) => event === 'workflow_action_failed')
+      ).toHaveLength(0);
     });
   });
 

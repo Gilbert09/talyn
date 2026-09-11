@@ -9,6 +9,7 @@ import {
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { toast } from '../../../stores/toast';
+import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from './FeedbackButton';
 import { useWorkflows } from './useWorkflows';
@@ -154,7 +155,21 @@ export function WorkflowsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  const openNew = () => setView({ mode: 'edit', workflow: null });
+  /**
+   * The one workflow event the server cannot see.
+   *
+   * Everything else is captured in the routes, deliberately — a client that
+   * reports nothing must not be able to hide adoption. But abandonment only
+   * exists on the client: somebody who opens the editor and never saves makes no
+   * request at all, and "opened 40, created 3" is the shape of a form that is
+   * too hard, which no server-side event can tell you.
+   */
+  const openEditor = (workflow: WorkflowWithStats | null) => {
+    trackEvent('workflow_editor_opened', { mode: workflow ? 'edit' : 'create' });
+    setView({ mode: 'edit', workflow });
+  };
+
+  const openNew = () => openEditor(null);
 
   const save = async (input: WorkflowInput) => {
     if (view.mode === 'edit' && view.workflow) {
@@ -246,7 +261,7 @@ export function WorkflowsPanel() {
                 onToggleExpanded={() =>
                   setExpandedId((id) => (id === workflow.id ? null : workflow.id))
                 }
-                onEdit={() => setView({ mode: 'edit', workflow })}
+                onEdit={() => openEditor(workflow)}
                 onDelete={() => void doDelete(workflow)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(workflow, enabled).catch((err: unknown) =>

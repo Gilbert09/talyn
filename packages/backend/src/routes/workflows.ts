@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import type { ApiResponse } from '@talyn/shared';
 import { validateWorkflow } from '@talyn/shared';
+import type { NormalizedWorkflow } from '@talyn/shared';
+import { captureWorkspaceEvent } from '../services/analytics.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   createWorkflow,
@@ -42,6 +44,35 @@ const DEFAULT_RUN_PAGE = 50;
  * ask for one enormous response.
  */
 const MAX_RUN_PAGE = 200;
+
+/**
+ * What a workflow definition event reports.
+ *
+ * The SHAPE of the rule, never its content: which triggers, which condition
+ * KEYS, which action types. Not the name, not the label values, not the logins,
+ * not the prompt. Those are the user's words about their own repositories, and a
+ * product-analytics event is the wrong place for them — we want to know whether
+ * people build workflows and which parts they reach for, and none of that needs
+ * the contents.
+ *
+ * (`workflow_ran` does carry repo and PR number, because a run without the thing
+ * it ran on cannot be debugged. A definition can.)
+ */
+function workflowShape(
+  id: string,
+  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'>
+): Record<string, unknown> {
+  return {
+    workflow_id: id,
+    enabled: workflow.enabled,
+    trigger_count: workflow.events.length,
+    events: workflow.events,
+    condition_keys: Object.keys(workflow.conditions).sort(),
+    condition_count: Object.keys(workflow.conditions).length,
+    action_types: workflow.actions.map((a) => a.type),
+    action_count: workflow.actions.length,
+  };
+}
 
 export function workflowRoutes(): Router {
   const router = Router();
@@ -116,6 +147,12 @@ export function workflowRoutes(): Router {
       });
     }
     const data = await createWorkflow(workspaceId, normalized);
+    // Server-side, not from the client: `workflow_ran` can tell us how often
+    // workflows FIRE but not how many people build one, and a user whose three
+    // workflows never match is indistinguishable from a user who built none.
+    // Emitted here so a client that reports nothing cannot hide adoption — the
+    // Session 116 lesson.
+    captureWorkspaceEvent(workspaceId, 'workflow_created', workflowShape(data.id, normalized));
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -141,6 +178,21 @@ export function workflowRoutes(): Router {
     }
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Workflow not found' });
+
+    captureWorkspaceEvent(
+      existing.workspaceId,
+      'workflow_updated',
+      workflowShape(existing.id, normalized)
+    );
+    // Its own event, because switching a workflow OFF is the strongest signal
+    // that something about it is wrong — and it is invisible inside a generic
+    // "updated" that fires for every rename too.
+    if (normalized.enabled !== existing.enabled) {
+      captureWorkspaceEvent(existing.workspaceId, 'workflow_enabled_toggled', {
+        ...workflowShape(existing.id, normalized),
+        previously_enabled: existing.enabled,
+      });
+    }
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -151,6 +203,12 @@ export function workflowRoutes(): Router {
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     await deleteWorkflow(existing.id, existing.workspaceId);
+    captureWorkspaceEvent(existing.workspaceId, 'workflow_deleted', {
+      ...workflowShape(existing.id, existing),
+      // How long it lasted. A rule deleted within the hour is a failed attempt;
+      // one deleted after a month did its job and stopped being needed.
+      age_hours: Math.round((Date.now() - new Date(existing.createdAt).getTime()) / 3_600_000),
+    });
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
 

@@ -51,6 +51,24 @@ import { enabledWorkflowsFor } from './store.js';
  * re-trigger a merge — the PR is closed. Only the genuinely self-feeding
  * actions are suppressed.
  */
+/**
+ * Failure codes that are a DECISION rather than a breakage.
+ *
+ * Talyn declining to act — the plan cap reached, GitHub rate-limiting the
+ * account, a run already working this PR, a PR that closed before the workflow
+ * got to it — is the system working. Lumping those in with a 500 from GitHub
+ * makes a healthy workspace look broken and buries the failures worth reading.
+ */
+const REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'rate_capped',
+  'task_limit_reached',
+  'rate_gated',
+  'no_cloud_provider',
+  'task_already_running',
+  'merge_queue_limit_reached',
+  'not_open',
+]);
+
 const SELF_ECHO_EVENTS: ReadonlySet<WorkflowTriggerEvent> = new Set([
   'pr_labeled',
   'pr_unlabeled',
@@ -401,6 +419,8 @@ async function runOne(
     },
   });
 
+  const failed = results.outcomes.filter((o) => !o.ok);
+
   captureWorkspaceEvent(target.workspaceId, 'workflow_ran', {
     workflow_id: workflow.id,
     event: facts.event,
@@ -409,7 +429,33 @@ async function runOne(
     started_task: results.taskId !== null,
     repo: facts.repoFullName,
     pr_number: facts.number,
+    // The codes on the run itself, so "which workflows are failing and why" is
+    // answerable without unpacking the per-action array.
+    failed_count: failed.length,
+    failure_codes: [...new Set(failed.map((o) => o.code ?? 'error'))],
   });
+
+  // One FLAT event per failed action, on top of the run's summary.
+  //
+  // A dashboard question like "how often does GitHub's rate limit cost us an
+  // action" is a one-line insight over this and an array-unpacking exercise over
+  // `workflow_ran`. It also separates the two populations that matter and look
+  // identical in a status column: a REFUSAL Talyn made on purpose (the plan cap,
+  // a closed rate gate, a run already working the PR) and something that
+  // actually broke.
+  for (const outcome of failed) {
+    captureWorkspaceEvent(target.workspaceId, 'workflow_action_failed', {
+      workflow_id: workflow.id,
+      event: facts.event,
+      action_type: outcome.type,
+      code: outcome.code ?? 'error',
+      // Refusals are normal and expected; anything else wants looking at. Named
+      // here rather than derived in the dashboard so the two never drift.
+      refused: REFUSAL_CODES.has(outcome.code ?? 'error'),
+      repo: facts.repoFullName,
+      pr_number: facts.number,
+    });
+  }
 
   return true;
 }
