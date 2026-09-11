@@ -14,6 +14,8 @@ import {
   externalQueueStatusFromComment,
   externalQueueStatusFromComments,
   externalQueueStatusFromLabels,
+  externalQueueStateLabel,
+  type ExternalQueueState,
   isExternalQueueEjected,
   isExternalQueueHolding,
   externalQueuePushWouldEject,
@@ -146,6 +148,13 @@ describe('externalQueueStatusFromLabels', () => {
     // Anything a push would eject must also be a state the provider holds —
     // otherwise the two predicates disagree about who owns the PR.
     if (wouldEject) expect(isExternalQueueHolding(state)).toBe(true);
+  });
+
+  // The backend deploys ahead of installed desktop apps, so a client meets
+  // states newer than itself. Returning nothing crashed every caller that
+  // lowercases the label.
+  it('labels a state newer than the build instead of returning nothing', () => {
+    expect(externalQueueStateLabel('from_the_future' as ExternalQueueState)).toBe('In queue');
   });
 });
 

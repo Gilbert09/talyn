@@ -625,6 +625,11 @@ export function externalQueueStateLabel(state: ExternalQueueState): string {
       return 'Cancelled in queue';
     case 'merged':
       return 'Merged';
+    default:
+      // A state newer than this build. The backend deploys ahead of installed
+      // desktop apps, and returning nothing here crashed every caller that
+      // lowercases the label (see `toPublicMergeQueue` in the backend).
+      return 'In queue';
   }
 }
 

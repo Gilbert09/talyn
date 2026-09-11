@@ -46,6 +46,15 @@ classifier reads. The cost is up to one trunk cycle of latency before a genuine
 failure gets its run, against a full reset of the queue behind it. Both front
 ends show it as an amber "Queue: pending failure".
 
+**The new state stays inside the backend for now.** Desktop builds from before
+this change crash on a state they don't know: `externalQueueStateLabel` had no
+default, so it returned nothing, and the pill and the queue table lowercase it.
+The backend deploys on push while installed apps update on idle, so
+`toPublicMergeQueue` publishes `pending_failure` as `testing` (what trunk showed
+just before it), and the label now falls back to "In queue" for any state newer
+than the build. Lift the mapping once pre-118 builds have aged out; until then
+the new pill only shows off the `trunk-pending-failure` label.
+
 ## Session 117 — Workflows: the PR automations the user writes (2026-09-10)
 
 Talyn reacted to pull requests in exactly the ways Talyn was coded to react. The
