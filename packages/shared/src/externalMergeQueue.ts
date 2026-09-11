@@ -177,8 +177,9 @@ const TRUNK_TEST_ANALYTICS_MARKER = '<!-- Trunk Test Analytics -->';
 
 /**
  * Trunk's status sentences, most-decisive first. Verbatim shapes observed on
- * posthog/posthog (2026-07-29); each is matched loosely enough to survive
- * trunk's own interpolations (PR numbers, check names, usernames).
+ * posthog/posthog (2026-07-29, and the bisection/stack ones 2026-09-11); each
+ * is matched loosely enough to survive trunk's own interpolations (PR numbers,
+ * check names, usernames).
  */
 const TRUNK_STATUS_PATTERNS: Array<{ re: RegExp; state: ExternalQueueState }> = [
   // "😎 Merged successfully - [details](…)"
@@ -207,25 +208,41 @@ const TRUNK_STATUS_PATTERNS: Array<{ re: RegExp; state: ExternalQueueState }> = 
   // "❌ This pull request could not start testing because there was a merge
   //  conflict." — ejected, and exactly what Talyn's fix runs are for.
   { re: /could not start testing/i, state: 'failed' },
+  // Everything from here to the bare failure rule is a state in which trunk
+  // STILL HAS the PR, and several of them mention a failure, of this PR or of
+  // one ahead of it. They must all be read before that rule. Read as `failed`,
+  // each one sent a queue_failure fix run at a PR trunk was holding, and the
+  // run's push (usually a merge of master) ejected the PR and reset every PR
+  // testing behind it (PostHog/posthog#98918 reset 13, #99003 reset 9,
+  // 2026-09-11).
+  //
   // "⚠️ The required check `X` (Failure) has failed. Pull request failed tests
   //  and is waiting for other pull requests to finish testing."
-  //
-  // Trunk still has the PR here, so this must be read before the bare "has
-  // failed" rule below. Read as `failed`, it sent a queue_failure fix run at
-  // the PR within minutes; the run merged master in, and that push ejected the
-  // PR and reset every PR testing behind it (PostHog/posthog#98918 reset 13,
-  // #99003 reset 9, 2026-09-11). The failure usually was not even the PR's own:
-  // it came from another PR in the batch, which is what trunk was waiting to
-  // find out.
+  // "⚠️ Pull request failed tests in a previous identical test run and is
+  //  waiting for other pull requests to finish testing."
+  // Trunk waits for the PRs ahead, since one of them may be the culprit, then
+  // retests this PR or removes it ("removed … because it failed tests" above).
+  // Also said of a whole stack ("Stack failed tests and is waiting …").
   { re: /waiting for other pull requests to finish testing/i, state: 'pending_failure' },
-  // Any other failure sentence, where trunk has not said it is still waiting.
-  { re: /has failed|failed tests/i, state: 'failed' },
   // "👍 Pull request will be merged soon because tests have passed on #x"
   { re: /will be merged soon/i, state: 'passed' },
-  // "🧪 Running tests on this pull request (testing on PR #x)"
-  { re: /running tests on this pull request/i, state: 'testing' },
-  // "⏳ Waiting to start tests on this pull request[ because …]"
-  { re: /waiting to start tests/i, state: 'queued' },
+  // The bisection round trip. After a batch fails, trunk splits it and retests
+  // the halves; a PR that passes goes back in line.
+  // "👍 Pull request will re-enter the queue soon as it passed testing during a
+  //  batch bisection (tested on PR #x)"
+  // "⏳ Re-entering the merge queue because it has passed tests on a bisection
+  //  of its original batch"
+  { re: /will re-enter the queue|re-entering the merge queue/i, state: 'queued' },
+  // "🧪 Running tests on this pull request (testing on PR #x)", or "on this
+  //  stack" for a stack trunk took as one batch.
+  { re: /running tests on this (pull request|stack)/i, state: 'testing' },
+  // "⏳ Waiting to start tests on this pull request[ because …]", including
+  //  "… because a pull request (#x) ahead of it failed tests", which is about
+  //  the PR AHEAD. "⏳ Waiting for tests to start on a bisection of its batch
+  //  because tests failed on it." Stacks say "Stack waiting to start tests".
+  { re: /waiting to start tests|waiting for tests to start/i, state: 'queued' },
+  // Any other failure sentence, where trunk has not said it still has the PR.
+  { re: /has failed|failed tests/i, state: 'failed' },
   // "✨ Submitted to Merge by @x. It will be added to the merge queue once all
   //  branch protection rules pass, there are no merge conflicts with the target
   //  branch, and impacted targets … have been uploaded."

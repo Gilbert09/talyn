@@ -200,7 +200,7 @@ function externalQueueVariant(
       };
     case 'pending_failure':
       return {
-        variant: { ...base, icon: AlertTriangle, tone: 'amber' },
+        variant: { ...base, icon: Clock, tone: 'amber' },
         title: `A check failed in ${provider}'s merge queue (${ext.evidence}) — it still has this PR, and retests it or sends it back once the PRs ahead of it finish.`,
       };
     case 'failed':

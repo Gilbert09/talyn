@@ -23,6 +23,19 @@ the PR and restarting every PR testing on top of it. In each case the failure
 came from another PR in the batch; #99003's run said as much, after its push.
 On #97519 trunk had already put the PR back into testing when the push landed.
 
+**The bare failure rule was catching more than that.** `/has failed|failed
+tests/` sat above the holding sentences, and trunk mentions failures in several
+of them: "⏳ Waiting to start tests on this pull request because a pull request
+(#x) ahead of it failed tests" is about the PR *ahead*, and it read as this PR
+failing (eight times across six sampled PRs). The bisection round trip ("⏳
+Waiting for tests to start on a bisection of its batch…", "👍 … will re-enter
+the queue soon…", "⏳ Re-entering the merge queue…") and "🧪 Running tests on
+this stack" matched nothing. That is worse than it sounds: the webhook ignores
+an unrecognised body, but the REST backstop caches it as "no state", which
+either blocks a `/trunk merge` entry as "never picked up" or hands an R5d-parked
+one back to rules that `update_branch` a BEHIND PR. Every "trunk still has it"
+sentence now matches before the failure fallback.
+
 **`pending_failure` is its own state now**: holding, push-would-eject, never
 ejected. Both channels map to it (the `trunk-pending-failure` label was read as
 `failed` too). Everything that asks "may Talyn touch this PR?" goes through

@@ -211,6 +211,30 @@ describe('externalQueueStatusFromComment — trunk states, as trunk writes them'
     // Any OTHER removal reason stays terminal — it may be a human.
     ['removed for an unrecognised reason', 'cancelled',
       `\u{1F6AB} This pull request was removed from the merge queue by @someone. See more details [here]${LINK}.`],
+    // Verbatim off PostHog/posthog#94380, #96429, #84887, #96536 and the six
+    // PRs Talyn pushed to (2026-09-08..11). Trunk still has the PR in every one
+    // of these, and the ones that mention a failure, of this PR or of one
+    // AHEAD of it, used to fall through to the bare failure rule.
+    ['waiting behind a PR that failed', 'queued',
+      `\u{23F3} Waiting to start tests on this pull request because a pull request ([#98275](https://www.github.com/PostHog/posthog/pull/98275)) ahead of it failed tests - [details]${LINK}.`],
+    ['waiting behind a batch that failed', 'queued',
+      `\u{23F3} Waiting to start tests on this pull request because a batch ([#95225](https://www.github.com/PostHog/posthog/pull/95225), [#95226](https://www.github.com/PostHog/posthog/pull/95226)) ahead of it failed tests - [details]${LINK}.`],
+    ['waiting on a bisection of its batch', 'queued',
+      `\u{23F3} Waiting for tests to start on a bisection of its batch because tests failed on it - [details]${LINK}.`],
+    ['passed a bisection', 'queued',
+      `\u{1F44D} Pull request will re-enter the queue soon as it passed testing during a batch bisection (tested on PR [#85151](https://www.github.com/PostHog/posthog/pull/85151)) - [details]${LINK}.`],
+    ['re-entering after a bisection', 'queued',
+      `\u{23F3} Re-entering the merge queue because it has passed tests on a bisection of its original batch - [details]${LINK}.`],
+    ['a failed re-run trunk is still holding', 'pending_failure',
+      `\u{26A0}\u{FE0F} Pull request failed tests in a previous identical test run and is waiting for other pull requests to finish testing. [This SHA](https://github.com/PostHog/posthog/commit/abc) was used for testing. See more details [here]${LINK}.`],
+    ['a stack under test', 'testing',
+      `\u{1F9EA} Running tests on this stack (testing on PR [#97226](https://www.github.com/PostHog/posthog/pull/97226)) - [details]${LINK}.`],
+    ['a stack waiting behind a failed batch', 'queued',
+      `\u{23F3} Stack waiting to start tests on this stack because a batch ([#96353](https://www.github.com/PostHog/posthog/pull/96353), [#96643](https://www.github.com/PostHog/posthog/pull/96643)) ahead of it failed tests - [details]${LINK}.`],
+    ['a stack with a pending failure', 'pending_failure',
+      `\u{26A0}\u{FE0F} The required check [\`Playwright tests pass\`](https://github.com/PostHog/posthog/actions/runs/1) (Failure) has failed. Stack failed tests and is waiting for other pull requests to finish testing. PR [#97226](https://www.github.com/PostHog/posthog/pull/97226) was used for testing. See more details [here]${LINK}.`],
+    ['a stack removed for failing tests', 'failed',
+      `\u{274C} This stack was removed from the merge queue because it failed tests. PR [#97245](https://www.github.com/PostHog/posthog/pull/97245) was used for testing. See more details [here]${LINK}.`],
   ])('reads %s as %s', (_name, state, body) => {
     expect(externalQueueStatusFromComment(trunk(body))).toMatchObject({
       provider: 'trunk',
