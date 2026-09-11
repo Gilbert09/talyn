@@ -231,6 +231,14 @@ function isGitHubUnprocessable(err: unknown): boolean {
   return err instanceof Error && /GitHub API error 422\b/.test(err.message);
 }
 
+/**
+ * A 403 — authenticated, but this installation was not granted the permission.
+ * Distinct from a rate limit, which `GitHubRateLimitError` already carries.
+ */
+function isGitHubForbidden(err: unknown): boolean {
+  return err instanceof Error && /GitHub API error 403\b/.test(err.message);
+}
+
 interface GitHubUser {
   id: number;
   login: string;
@@ -1855,6 +1863,66 @@ class GitHubService extends EventEmitter {
       },
       auth
     );
+  }
+
+  /**
+   * Everyone who can be asked to review or be assigned on a repo.
+   *
+   * `affiliation=all` covers direct collaborators, org members with access, and
+   * outside collaborators — which is the same set GitHub's own reviewer picker
+   * offers, and the only set where a `request_reviewers` action will not 422.
+   *
+   * Returns `[]` rather than throwing on a 403. The App needs `metadata: read`
+   * for this and an installation that has not granted it should leave the picker
+   * as a plain text field, not break the page the picker is on.
+   */
+  async listRepoCollaborators(
+    workspaceId: string,
+    owner: string,
+    repo: string
+  ): Promise<Array<{ login: string; isBot: boolean }>> {
+    try {
+      const rows = await this.paginate<{ login?: string; type?: string }>(
+        workspaceId,
+        (page) =>
+          `/repos/${owner}/${repo}/collaborators?affiliation=all&per_page=100&page=${page}`,
+        // A repo with more than 1,000 collaborators exists (posthog/posthog is
+        // in the hundreds); past that the picker's suggestions stop being
+        // suggestions, and the field still accepts anything typed.
+        10
+      );
+      return rows
+        .map((r) => r.login)
+        .filter((l): l is string => typeof l === 'string')
+        // GitHub's collaborators endpoint does not report `type`, so bot-ness is
+        // read off the login shape — which is what `[bot]` suffixes are for.
+        .map((login) => ({ login, isBot: login.toLowerCase().endsWith('[bot]') }));
+    } catch (err) {
+      if (isGitHubForbidden(err) || isGitHubNotFound(err)) return [];
+      throw err;
+    }
+  }
+
+  /**
+   * The teams in an org, for a team review request.
+   *
+   * Needs `members: read`, which Talyn's App does not request — so this is
+   * expected to 403 for most installations and returns `[]` when it does. The
+   * reviewer picker degrades to accepting a typed slug, which still works: the
+   * request only has to name a team GitHub knows, not one we listed.
+   */
+  async listOrgTeamSlugs(workspaceId: string, org: string): Promise<string[]> {
+    try {
+      const rows = await this.paginate<{ slug?: string }>(
+        workspaceId,
+        (page) => `/orgs/${org}/teams?per_page=100&page=${page}`,
+        5
+      );
+      return rows.map((r) => r.slug).filter((s): s is string => typeof s === 'string');
+    } catch (err) {
+      if (isGitHubForbidden(err) || isGitHubNotFound(err)) return [];
+      throw err;
+    }
   }
 
   /**

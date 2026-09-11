@@ -141,14 +141,38 @@ describe('workflowFactsFromDelivery — pull_request actions', () => {
     expect(facts?.target).toEqual({ login: 'tom', isBot: false });
   });
 
-  it('leaves the target absent on a TEAM review request', () => {
-    // A team is not a person, and answering `targetIsViewer` for one would need a
-    // membership lookup per delivery. Absent means the condition fails, which is
-    // the honest answer rather than a guess.
+  it('names the TEAM as the target on a team review request', () => {
+    // A team request carries no user at all, so the team itself is the target and
+    // its slug goes in `teamSlugs` — that is what lets a rule say "a review was
+    // requested from the frontend team".
     const [facts] = workflowFactsFromDelivery(
       delivery({
         action: 'review_requested',
         payload: { pull_request: pr(), requested_team: { slug: 'frontend' } },
+      })
+    );
+    expect(facts?.target).toEqual({ login: 'frontend', isBot: false, teamSlugs: ['frontend'] });
+  });
+
+  it('prefers the requested USER over a team when both are present', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({
+        action: 'review_requested',
+        payload: {
+          pull_request: pr(),
+          requested_reviewer: { login: 'tom', type: 'User' },
+          requested_team: { slug: 'frontend' },
+        },
+      })
+    );
+    expect(facts?.target).toEqual({ login: 'tom', isBot: false });
+  });
+
+  it('leaves the target absent when a team request carries no slug', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({
+        action: 'review_requested',
+        payload: { pull_request: pr(), requested_team: { name: 'Frontend' } },
       })
     );
     expect(facts?.target).toBeUndefined();

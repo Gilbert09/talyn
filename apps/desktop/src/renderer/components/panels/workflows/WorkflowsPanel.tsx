@@ -11,7 +11,7 @@ import { Button } from '../../ui/button';
 import { toast } from '../../../stores/toast';
 import { cn } from '../../../lib/utils';
 import { useWorkflows } from './useWorkflows';
-import { WorkflowEditorModal } from './WorkflowEditorModal';
+import { WorkflowEditorPage } from './WorkflowEditorPage';
 import { WorkflowRunsList } from './WorkflowRunsList';
 
 /**
@@ -135,26 +135,47 @@ function WorkflowRow({
 }
 
 export function WorkflowsPanel() {
-  const { workflows, error, create, update, remove, setEnabled, liveRuns } = useWorkflows();
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editing, setEditing] = useState<WorkflowWithStats | null>(null);
+  const { workflows, error, create, update, remove, setEnabled, liveRuns, suggestions } =
+    useWorkflows();
+  /**
+   * The editor is a PAGE, not a modal — but not a route either.
+   *
+   * `activePanel` is the app's whole routing vocabulary and `PANEL_PATHS` is a flat
+   * `Record<ActivePanel, string>` of static paths, so a parameterised
+   * `/workflows/:id` would mean changing that contract on the web fork while the
+   * desktop (which has no URLs at all) kept view state anyway — two different
+   * mechanisms for one screen. This keeps both forks identical. The cost is honest:
+   * no deep link to a specific workflow's editor.
+   */
+  const [view, setView] = useState<{ mode: 'list' } | { mode: 'edit'; workflow: WorkflowWithStats | null }>(
+    { mode: 'list' }
+  );
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  const openNew = () => {
-    setEditing(null);
-    setEditorOpen(true);
-  };
+  const openNew = () => setView({ mode: 'edit', workflow: null });
 
   const save = async (input: WorkflowInput) => {
-    if (editing) {
-      await update(editing.id, input);
+    if (view.mode === 'edit' && view.workflow) {
+      await update(view.workflow.id, input);
       toast.success('Workflow saved');
     } else {
       await create(input);
       toast.success('Workflow created');
     }
+    setView({ mode: 'list' });
   };
+
+  if (view.mode === 'edit') {
+    return (
+      <WorkflowEditorPage
+        editing={view.workflow}
+        suggestions={suggestions}
+        onCancel={() => setView({ mode: 'list' })}
+        onSave={save}
+      />
+    );
+  }
 
   const doDelete = async (workflow: WorkflowWithStats) => {
     // Two clicks rather than a modal: deleting a workflow also deletes its
@@ -223,10 +244,7 @@ export function WorkflowsPanel() {
                 onToggleExpanded={() =>
                   setExpandedId((id) => (id === workflow.id ? null : workflow.id))
                 }
-                onEdit={() => {
-                  setEditing(workflow);
-                  setEditorOpen(true);
-                }}
+                onEdit={() => setView({ mode: 'edit', workflow })}
                 onDelete={() => void doDelete(workflow)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(workflow, enabled).catch((err: unknown) =>
@@ -242,12 +260,6 @@ export function WorkflowsPanel() {
         )}
       </div>
 
-      <WorkflowEditorModal
-        open={editorOpen}
-        editing={editing}
-        onClose={() => setEditorOpen(false)}
-        onSave={save}
-      />
     </div>
   );
 }

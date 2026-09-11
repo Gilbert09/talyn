@@ -137,11 +137,25 @@ const CHECK_EVENTS: readonly WorkflowTriggerEvent[] = ['pr_checks_completed'];
  */
 export type WorkflowActorMatch =
   | { kind: 'any' }
+  /** The workspace's own connected GitHub user — "me". */
+  | { kind: 'viewer' }
   | { kind: 'human' }
   | { kind: 'bot' }
-  | { kind: 'logins'; logins: string[] };
+  | { kind: 'logins'; logins: string[]; teams?: string[] };
 
-export const WORKFLOW_ACTOR_KINDS = ['any', 'human', 'bot', 'logins'] as const;
+export const WORKFLOW_ACTOR_KINDS = ['any', 'viewer', 'human', 'bot', 'logins'] as const;
+
+/** How each actor kind reads in a picker. */
+export const WORKFLOW_ACTOR_KIND_LABELS: Record<
+  (typeof WORKFLOW_ACTOR_KINDS)[number],
+  string
+> = {
+  any: 'Anyone',
+  viewer: 'Me',
+  human: 'Any person',
+  bot: 'Any bot',
+  logins: 'Specific accounts',
+};
 
 export type WorkflowReviewState = 'approved' | 'changes_requested' | 'commented';
 export type WorkflowCheckConclusion = 'success' | 'failure';
@@ -185,11 +199,16 @@ export interface WorkflowConditions {
   /** `pr_labeled` / `pr_unlabeled` only: the label that changed. */
   labelName?: string;
   /**
-   * `pr_review_requested` / `pr_assigned` (and their removals) only: the
-   * person named by the event must be the workspace's connected GitHub user.
-   * This is what "run a skill when I am asked to review" is made of.
+   * `pr_review_requested` / `pr_assigned` (and their removals) only: WHO the
+   * event names — the reviewer who was asked, or the person assigned.
+   *
+   * A full actor match rather than the boolean "is it me?" this started as,
+   * because "is it me" is only the most common question, not the only one: a
+   * team's workflow wants "a review was requested from anyone on the frontend
+   * team", and a triage workflow wants "Dependabot was assigned". `kind:
+   * 'viewer'` is how "me" is expressed now.
    */
-  targetIsViewer?: boolean;
+  target?: WorkflowActorMatch;
   /** `pr_checks_completed` only. */
   checkConclusions?: WorkflowCheckConclusion[];
   /** Case-insensitive substring of the comment / review body. */
@@ -313,6 +332,38 @@ export interface NormalizedWorkflow {
 }
 
 // ============================================================================
+// Editor suggestions
+// ============================================================================
+
+/**
+ * The autocomplete options the editor offers, from `GET /workflows/suggestions`.
+ *
+ * Merged across every repository the workspace watches, because the editor's
+ * fields are workflow-wide: a workflow can name three repositories and a label,
+ * and the label has to be offered if any of them has it.
+ *
+ * Every list may be EMPTY and that is not an error. A picker with no suggestions
+ * is still a working text field — GitHub only has to know the label, not us —
+ * which is what lets the whole thing degrade rather than break when a permission
+ * is missing or the account is inside a rate-limit backoff.
+ */
+export interface WorkflowSuggestions {
+  /** `owner/repo` full names of the workspace's watched repositories. */
+  repos: string[];
+  labels: string[];
+  branches: string[];
+  /** Collaborators who can be asked to review or be assigned. */
+  people: Array<{ login: string; isBot: boolean }>;
+  /** Org team slugs. Usually empty — listing teams needs `members: read`. */
+  teams: string[];
+  /**
+   * True when something could not be fetched, so the editor can say "type it in"
+   * rather than implying the label does not exist.
+   */
+  partial: boolean;
+}
+
+// ============================================================================
 // Run history + stats
 // ============================================================================
 
@@ -414,10 +465,17 @@ export interface WorkflowWithStats extends WorkflowDefinition {
 // The matcher
 // ============================================================================
 
-/** A person as a webhook payload describes them. */
+/** A person — or a team — as a webhook payload describes them. */
 export interface WorkflowActor {
   login: string;
   isBot: boolean;
+  /**
+   * Team slugs this actor stands for. Only ever set for a TEAM review request,
+   * where GitHub names a team and no user at all — the slug goes here and
+   * `login` carries the slug too, so a rule can say "a review was requested
+   * from the frontend team".
+   */
+  teamSlugs?: string[];
 }
 
 /**
@@ -501,22 +559,43 @@ export function loginLooksLikeBot(login: string, type?: string | null): boolean 
   return l.endsWith('[bot]');
 }
 
-/** Whether one person satisfies one actor condition. */
+/**
+ * Whether one person satisfies one actor condition.
+ *
+ * `viewerLogin` is the workspace's connected GitHub user. It is REQUIRED for a
+ * `viewer` match and absent means unknown, which FAILS — "when I am asked to
+ * review" must not widen into "when anyone is asked" because we could not work
+ * out who "I" is.
+ *
+ * Teams are matched by the slugs the event carries on the actor, when it carries
+ * any. A team review request names a team and no user, so a `logins` match that
+ * lists only people cannot be satisfied by one — which is the honest answer.
+ */
 export function actorMatches(
   match: WorkflowActorMatch | undefined,
-  actor: WorkflowActor | undefined
+  actor: WorkflowActor | undefined,
+  viewerLogin?: string | null
 ): boolean {
   if (!match || match.kind === 'any') return true;
-  // A condition that names a class or a login cannot be satisfied by nobody.
-  // An event with no identifiable person fails it rather than passing.
+  // A condition that names a class, a login or a team cannot be satisfied by
+  // nobody. An event with no identifiable person fails it rather than passing.
   if (!actor) return false;
+  const login = actor.login.trim().toLowerCase();
   switch (match.kind) {
+    case 'viewer': {
+      const viewer = (viewerLogin ?? '').trim().toLowerCase();
+      return viewer.length > 0 && viewer === login;
+    }
     case 'human':
       return !actor.isBot;
     case 'bot':
       return actor.isBot;
-    case 'logins':
-      return normalizeList(match.logins).includes(actor.login.trim().toLowerCase());
+    case 'logins': {
+      if (normalizeList(match.logins).includes(login)) return true;
+      const teams = normalizeList(match.teams);
+      if (teams.length === 0) return false;
+      return normalizeList(actor.teamSlugs).some((slug) => teams.includes(slug));
+    }
   }
 }
 
@@ -531,10 +610,10 @@ export function workflowMatches(
   workflow: Pick<WorkflowDefinition, 'events' | 'conditions'>,
   facts: WorkflowEventFacts,
   /**
-   * The workspace's connected GitHub login, for `targetIsViewer`. Absent means
-   * unknown, which FAILS the condition — "when I am asked to review" must not
-   * turn into "when anyone is asked to review" because we could not resolve
-   * who "I" is.
+   * The workspace's connected GitHub login, for any `viewer` actor match.
+   * Absent means unknown, which FAILS the condition — "when I am asked to
+   * review" must not turn into "when anyone is asked to review" because we
+   * could not resolve who "I" is.
    */
   viewerLogin?: string | null
 ): boolean {
@@ -576,8 +655,9 @@ export function workflowMatches(
   }
 
   if (c.author && c.author.kind !== 'any' && unknown('author')) return false;
-  if (!actorMatches(c.author, facts.author)) return false;
-  if (!actorMatches(c.actor, facts.actor)) return false;
+  if (!actorMatches(c.author, facts.author, viewerLogin)) return false;
+  if (!actorMatches(c.actor, facts.actor, viewerLogin)) return false;
+  if (!actorMatches(c.target, facts.target, viewerLogin)) return false;
 
   if (c.reviewStates && c.reviewStates.length > 0) {
     if (!facts.reviewState || !c.reviewStates.includes(facts.reviewState)) return false;
@@ -586,12 +666,6 @@ export function workflowMatches(
   const labelName = (c.labelName ?? '').trim().toLowerCase();
   if (labelName) {
     if ((facts.labelName ?? '').trim().toLowerCase() !== labelName) return false;
-  }
-
-  if (c.targetIsViewer === true) {
-    const viewer = (viewerLogin ?? '').trim().toLowerCase();
-    const target = (facts.target?.login ?? '').trim().toLowerCase();
-    if (!viewer || !target || viewer !== target) return false;
   }
 
   if (c.checkConclusions && c.checkConclusions.length > 0) {
@@ -663,14 +737,17 @@ function validateActorMatch(raw: unknown, at: string): WorkflowActorMatch | unde
     fail(`${at}.kind must be one of ${WORKFLOW_ACTOR_KINDS.join(', ')}`);
   }
   if (kind === 'logins') {
-    const logins = stringList((raw as { logins?: unknown }).logins, `${at}.logins`);
-    if (logins.length === 0) fail(`${at} names no logins, so it can never match`);
-    return { kind: 'logins', logins };
+    const logins = optionalStringList((raw as { logins?: unknown }).logins, `${at}.logins`) ?? [];
+    const teams = optionalStringList((raw as { teams?: unknown }).teams, `${at}.teams`);
+    if (logins.length === 0 && !teams) {
+      fail(`${at} names no accounts or teams, so it can never match`);
+    }
+    return { kind: 'logins', logins, ...(teams ? { teams } : {}) };
   }
   // 'any' is the absence of a constraint — drop it so the stored jsonb holds
   // only what actually constrains, and the matcher's fast path is honest.
   if (kind === 'any') return undefined;
-  return { kind: kind as 'human' | 'bot' };
+  return { kind: kind as 'viewer' | 'human' | 'bot' };
 }
 
 /**
@@ -752,6 +829,9 @@ function validateConditions(
     'actor',
     'reviewStates',
     'labelName',
+    'target',
+    // Accepted, never written: workflows saved before the target became a full
+    // actor match carry the boolean. Normalised below.
     'targetIsViewer',
     'checkConclusions',
     'bodyContains',
@@ -806,12 +886,18 @@ function validateConditions(
     }
   }
 
-  if (c.targetIsViewer !== undefined) {
-    if (typeof c.targetIsViewer !== 'boolean') fail('conditions.targetIsViewer must be a boolean');
-    if (c.targetIsViewer) {
-      appliesTo(TARGET_EVENTS, 'targetIsViewer');
-      out.targetIsViewer = true;
-    }
+  // `target` is the current shape; `targetIsViewer: true` is what workflows saved
+  // before it existed carry, and it means exactly `{ kind: 'viewer' }`. Read the
+  // legacy field only when the current one is absent, so a client that sends
+  // both cannot have the old one win.
+  const target =
+    validateActorMatch(c.target, 'conditions.target') ??
+    (c.targetIsViewer === true ? ({ kind: 'viewer' } as WorkflowActorMatch) : undefined);
+  if (target) {
+    appliesTo(TARGET_EVENTS, 'target');
+    out.target = target;
+  } else if (c.targetIsViewer !== undefined && typeof c.targetIsViewer !== 'boolean') {
+    fail('conditions.targetIsViewer must be a boolean');
   }
 
   if (c.checkConclusions !== undefined) {
@@ -956,19 +1042,21 @@ export function workflowsOffered(features: { workflows?: boolean } | null | unde
 }
 
 /**
- * A blank workflow the editor opens on.
- *
- * `pr_opened` + one label is the shape of the first rule almost everybody
- * writes, so the form starts somewhere rather than empty — but the label list is
- * empty, so Save is refused until the user says what to add.
+ * A blank workflow the editor opens on. Save stays refused until it has a name
+ * and at least one action — see {@link workflowInputProblem}.
  */
 export function emptyWorkflowInput(): WorkflowInput {
   return {
     name: '',
     enabled: true,
+    // One trigger preselected, because a workflow with no trigger is not a draft
+    // of anything — and this is the one almost everybody starts from.
     events: ['pr_opened'],
+    // No conditions and no actions: both are built up a step at a time, and an
+    // editor that opens with a half-filled action row reads as a form to correct
+    // rather than a thing to compose.
     conditions: {},
-    actions: [{ type: 'add_labels', labels: [] }],
+    actions: [],
     maxRunsPerPrPerHour: DEFAULT_WORKFLOW_RUNS_PER_PR_PER_HOUR,
   };
 }
@@ -1010,30 +1098,209 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
 }
 
 /**
- * Which conditions the editor should offer for a given set of trigger events.
+ * Every condition a workflow can carry, as data.
+ *
+ * The editor builds its "Add condition" menu from this list rather than
+ * hard-coding a form, which is what makes adding a condition a one-entry change
+ * instead of an edit in three files that drift. It also means the menu can only
+ * ever offer what {@link validateWorkflow} will accept — `appliesTo` here and
+ * the `appliesTo()` check in the validator read the same event sets.
+ *
+ * `input` names the widget, and the widget knows where its own suggestions come
+ * from: `repos` from the workspace's watched repositories, `labels` and
+ * `branches` from GitHub for the repositories in scope, `actor` from the
+ * repositories' collaborators and the org's teams.
+ */
+export type WorkflowConditionInput =
+  | 'repos'
+  | 'branches'
+  | 'labels'
+  | 'label'
+  | 'text'
+  | 'actor'
+  | 'draft'
+  | 'reviewStates'
+  | 'checkConclusions';
+
+export interface WorkflowConditionSpec {
+  key: keyof WorkflowConditions;
+  /** Menu entry and field label. */
+  label: string;
+  /** One line under the field. */
+  hint: string;
+  input: WorkflowConditionInput;
+  /**
+   * Events this condition can apply to, or `null` for "every event" — the
+   * generic PR filters, which stay available whatever the trigger is.
+   */
+  appliesTo: readonly WorkflowTriggerEvent[] | null;
+}
+
+export const WORKFLOW_CONDITION_SPECS: readonly WorkflowConditionSpec[] = [
+  // ---- Generic PR filters: always offered, whatever the trigger ----------
+  {
+    key: 'repos',
+    label: 'Repository',
+    hint: 'Only these repositories. Leave a workflow without this to cover every repository the workspace watches.',
+    input: 'repos',
+    appliesTo: null,
+  },
+  {
+    key: 'baseBranches',
+    label: 'Base branch',
+    hint: 'The branch the PR is targeting.',
+    input: 'branches',
+    appliesTo: null,
+  },
+  {
+    key: 'author',
+    label: 'Opened by',
+    hint: 'Who opened the PR.',
+    input: 'actor',
+    appliesTo: null,
+  },
+  {
+    key: 'titleContains',
+    label: 'Title contains',
+    hint: 'Case-insensitive. Handy for a convention like "fix:" or "[WIP]".',
+    input: 'text',
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAny',
+    label: 'Has any of these labels',
+    input: 'labels',
+    hint: 'Matches when the PR carries at least one.',
+    appliesTo: null,
+  },
+  {
+    key: 'labelsAll',
+    label: 'Has all of these labels',
+    input: 'labels',
+    hint: 'Matches only when the PR carries every one.',
+    appliesTo: null,
+  },
+  {
+    key: 'labelsNone',
+    label: 'Has none of these labels',
+    input: 'labels',
+    hint: 'Carrying any one of them stops the workflow.',
+    appliesTo: null,
+  },
+  {
+    key: 'draft',
+    label: 'Draft',
+    hint: 'Restrict to drafts, or to PRs that are not drafts.',
+    input: 'draft',
+    appliesTo: null,
+  },
+  {
+    key: 'actor',
+    label: 'Done by',
+    hint: 'Whoever performed the event: the commenter, the reviewer, the person who added the label.',
+    input: 'actor',
+    appliesTo: null,
+  },
+
+  // ---- Event-specific: offered only when the trigger carries the fact ----
+  {
+    key: 'target',
+    label: 'The person named',
+    hint: 'Who the event is about — the reviewer who was asked, or the person assigned.',
+    input: 'actor',
+    appliesTo: TARGET_EVENTS,
+  },
+  {
+    key: 'reviewStates',
+    label: 'Review verdict',
+    hint: 'Which verdicts count.',
+    input: 'reviewStates',
+    appliesTo: REVIEW_STATE_EVENTS,
+  },
+  {
+    key: 'labelName',
+    label: 'The label that changed',
+    hint: 'Only when this exact label was the one added or removed.',
+    input: 'label',
+    appliesTo: LABEL_NAME_EVENTS,
+  },
+  {
+    key: 'checkConclusions',
+    label: 'Checks passed or failed',
+    hint: 'Which outcome to act on.',
+    input: 'checkConclusions',
+    appliesTo: CHECK_EVENTS,
+  },
+  {
+    key: 'bodyContains',
+    label: 'Comment contains',
+    hint: 'Case-insensitive substring of the comment or review body.',
+    input: 'text',
+    appliesTo: BODY_EVENTS,
+  },
+];
+
+/**
+ * The value a freshly added condition starts at.
+ *
+ * Deliberately an EMPTY value rather than a plausible one: a condition the user
+ * has just added constrains nothing until they fill it in, and `validateWorkflow`
+ * drops an empty list — so a half-filled form saves as "no such condition"
+ * instead of silently narrowing the workflow to something nobody typed.
+ *
+ * `draft` is the one exception, and unavoidably so: it is a boolean with no empty
+ * value, so "present but unset" does not exist. Adding it therefore DOES
+ * constrain immediately, and it starts at `false` ("not a draft") because that is
+ * what somebody adding a draft condition almost always means — a workflow that
+ * acts on drafts is the unusual one.
+ */
+export function emptyWorkflowConditionValue(
+  spec: WorkflowConditionSpec
+): WorkflowConditions[keyof WorkflowConditions] {
+  switch (spec.input) {
+    case 'repos':
+    case 'branches':
+    case 'labels':
+      return [];
+    case 'label':
+    case 'text':
+      return '';
+    case 'actor':
+      // `any` is the absence of a constraint, so the picker opens on it and the
+      // validator drops it until the user narrows it.
+      return { kind: 'any' } as WorkflowActorMatch;
+    case 'draft':
+      return false;
+    case 'reviewStates':
+      return [] as WorkflowReviewState[];
+    case 'checkConclusions':
+      return [] as WorkflowCheckConclusion[];
+  }
+}
+
+/** The spec for one condition key. */
+export function workflowConditionSpec(
+  key: keyof WorkflowConditions
+): WorkflowConditionSpec | undefined {
+  return WORKFLOW_CONDITION_SPECS.find((spec) => spec.key === key);
+}
+
+/**
+ * The conditions worth offering for a set of trigger events — the "Add
+ * condition" menu, minus whatever the workflow already carries.
  *
  * Mirrors what {@link validateWorkflow} will ACCEPT, so the form cannot compose
- * a workflow the API then refuses. The general conditions (repo, base branch,
- * title, labels, author, actor) apply to every event and are always offered.
+ * a workflow the API then refuses.
  */
 export function availableWorkflowConditions(
-  events: WorkflowTriggerEvent[]
-): {
-  reviewStates: boolean;
-  labelName: boolean;
-  targetIsViewer: boolean;
-  checkConclusions: boolean;
-  bodyContains: boolean;
-} {
-  const any = (allowed: readonly WorkflowTriggerEvent[]): boolean =>
-    events.some((e) => allowed.includes(e));
-  return {
-    reviewStates: any(REVIEW_STATE_EVENTS),
-    labelName: any(LABEL_NAME_EVENTS),
-    targetIsViewer: any(TARGET_EVENTS),
-    checkConclusions: any(CHECK_EVENTS),
-    bodyContains: any(BODY_EVENTS),
-  };
+  events: WorkflowTriggerEvent[],
+  already: WorkflowConditions = {}
+): WorkflowConditionSpec[] {
+  return WORKFLOW_CONDITION_SPECS.filter((spec) => {
+    if (already[spec.key] !== undefined) return false;
+    if (spec.appliesTo === null) return true;
+    return events.some((e) => spec.appliesTo!.includes(e));
+  });
 }
 
 /**
@@ -1047,13 +1314,11 @@ export function pruneWorkflowConditions(
   conditions: WorkflowConditions,
   events: WorkflowTriggerEvent[]
 ): WorkflowConditions {
-  const allowed = availableWorkflowConditions(events);
   const next = { ...conditions };
-  if (!allowed.reviewStates) delete next.reviewStates;
-  if (!allowed.labelName) delete next.labelName;
-  if (!allowed.targetIsViewer) delete next.targetIsViewer;
-  if (!allowed.checkConclusions) delete next.checkConclusions;
-  if (!allowed.bodyContains) delete next.bodyContains;
+  for (const spec of WORKFLOW_CONDITION_SPECS) {
+    if (spec.appliesTo === null) continue;
+    if (!events.some((e) => spec.appliesTo!.includes(e))) delete next[spec.key];
+  }
   return next;
 }
 

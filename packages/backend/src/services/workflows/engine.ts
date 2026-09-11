@@ -264,7 +264,13 @@ async function evaluateForWorkspace(
 
   // Only resolved when a workflow actually asks "…and it's me". Cached inside
   // githubService, so a repeat costs nothing.
-  const needsViewer = workflows.some((w) => w.conditions.targetIsViewer === true);
+  // Any `viewer` actor match needs to know who "I" am — on the author, the
+  // actor, or the person the event named.
+  const needsViewer = workflows.some((w) =>
+    [w.conditions.author, w.conditions.actor, w.conditions.target].some(
+      (m) => m?.kind === 'viewer'
+    )
+  );
   const viewerLogin = needsViewer
     ? await githubService.getViewerLogin(target.workspaceId).catch(() => null)
     : null;

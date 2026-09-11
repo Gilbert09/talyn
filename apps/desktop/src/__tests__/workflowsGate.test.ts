@@ -1,6 +1,9 @@
 import { describe, it, expect } from '@jest/globals';
 import {
   availableWorkflowConditions,
+  emptyWorkflowConditionValue,
+  validateWorkflow,
+  WORKFLOW_CONDITION_SPECS,
   emptyWorkflowAction,
   emptyWorkflowInput,
   pruneWorkflowConditions,
@@ -86,19 +89,65 @@ describe('the editor’s starting point', () => {
 });
 
 describe('the form cannot compose a workflow the API refuses', () => {
+  const keysFor = (events: Parameters<typeof availableWorkflowConditions>[0]) =>
+    availableWorkflowConditions(events).map((s) => s.key);
+
+  it('always offers the generic PR filters, whatever the trigger is', () => {
+    // "but also generic PR filters should still apply" — repo, branch, author,
+    // title, labels, draft and actor are offered for every event.
+    for (const key of ['repos', 'baseBranches', 'author', 'titleContains', 'draft', 'actor']) {
+      expect(keysFor(['pr_opened'])).toContain(key);
+      expect(keysFor(['pr_checks_completed'])).toContain(key);
+    }
+  });
+
   it('offers a trigger-specific condition only for its trigger', () => {
-    expect(availableWorkflowConditions(['pr_opened'])).toEqual({
-      reviewStates: false,
-      labelName: false,
-      targetIsViewer: false,
-      checkConclusions: false,
-      bodyContains: false,
+    expect(keysFor(['pr_opened'])).not.toContain('reviewStates');
+    expect(keysFor(['pr_review_submitted'])).toContain('reviewStates');
+    expect(keysFor(['pr_labeled'])).toContain('labelName');
+    expect(keysFor(['pr_review_requested'])).toContain('target');
+    expect(keysFor(['pr_checks_completed'])).toContain('checkConclusions');
+    expect(keysFor(['pr_comment'])).toContain('bodyContains');
+  });
+
+  it('does not re-offer a condition the workflow already carries', () => {
+    // The "Add condition" menu is the specs minus what is on the page, so it can
+    // never produce a duplicate row.
+    const already = availableWorkflowConditions(['pr_opened'], { repos: ['acme/widget'] });
+    expect(already.map((s) => s.key)).not.toContain('repos');
+    expect(already.map((s) => s.key)).toContain('titleContains');
+  });
+
+  it('gives every condition a starting value that constrains nothing', () => {
+    // A freshly added condition must not silently narrow the workflow before the
+    // user has typed anything — the validator drops each of these.
+    //
+    // `draft` is the one exception and cannot be otherwise: it is a boolean, so
+    // "present but unset" does not exist. Adding it constrains immediately.
+    for (const spec of WORKFLOW_CONDITION_SPECS.filter((s) => s.input !== 'draft')) {
+      const value = emptyWorkflowConditionValue(spec);
+      const savable = validateWorkflow({
+        name: 'x',
+        events: spec.appliesTo ? [...spec.appliesTo] : ['pr_opened'],
+        conditions: { [spec.key]: value },
+        actions: [{ type: 'watch_pr' }],
+      });
+      // The key is in the loop's failure output via the spec list, and jest's
+      // `expect` takes no message argument (that is vitest).
+      expect(savable.conditions[spec.key]).toBeUndefined();
+    }
+  });
+
+  it('starts the draft condition at "not a draft", which is the common intent', () => {
+    const spec = WORKFLOW_CONDITION_SPECS.find((s) => s.input === 'draft')!;
+    expect(emptyWorkflowConditionValue(spec)).toBe(false);
+    const savable = validateWorkflow({
+      name: 'x',
+      events: ['pr_opened'],
+      conditions: { draft: false },
+      actions: [{ type: 'watch_pr' }],
     });
-    expect(availableWorkflowConditions(['pr_review_submitted']).reviewStates).toBe(true);
-    expect(availableWorkflowConditions(['pr_labeled']).labelName).toBe(true);
-    expect(availableWorkflowConditions(['pr_review_requested']).targetIsViewer).toBe(true);
-    expect(availableWorkflowConditions(['pr_checks_completed']).checkConclusions).toBe(true);
-    expect(availableWorkflowConditions(['pr_comment']).bodyContains).toBe(true);
+    expect(savable.conditions.draft).toBe(false);
   });
 
   it('prunes a condition when its trigger is unchecked', () => {

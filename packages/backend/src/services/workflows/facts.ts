@@ -158,13 +158,21 @@ function fromPullRequest(delivery: WebhookDelivery): WorkflowEventFacts[] {
     event === 'pr_assigned' ||
     event === 'pr_unassigned'
   ) {
-    // A team review request carries `requested_team` and no user. `target` stays
-    // absent, which fails `targetIsViewer` — correct: a team is not you, even
-    // when you are in it. (Answering otherwise needs a team-membership lookup
-    // per delivery, which is a GitHub call on the hot path for a rule nobody
-    // has asked for yet.)
+    // A team review request carries `requested_team` and no user at all. The
+    // team becomes the target, with its slug in `teamSlugs`, so a rule can say
+    // "a review was requested from the frontend team".
+    //
+    // What it deliberately does NOT do is resolve the team's MEMBERS: a
+    // `viewer` or per-login target still fails on a team request, because
+    // answering otherwise needs a membership lookup per delivery — a GitHub call
+    // on the webhook hot path, against the account's shared budget, for every
+    // team request in every watched repo.
+    const team = payload.requested_team as { slug?: unknown; name?: unknown } | undefined;
+    const teamSlug = typeof team?.slug === 'string' ? team.slug : '';
     const target =
-      actorOf(payload.requested_reviewer) ?? actorOf(payload.assignee) ?? undefined;
+      actorOf(payload.requested_reviewer) ??
+      actorOf(payload.assignee) ??
+      (teamSlug ? { login: teamSlug, isBot: false, teamSlugs: [teamSlug] } : undefined);
     if (target) facts.target = target;
   }
 

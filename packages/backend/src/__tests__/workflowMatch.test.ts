@@ -79,6 +79,14 @@ describe('actorMatches', () => {
     expect(actorMatches({ kind: 'logins', logins: ['bob'] }, human)).toBe(false);
   });
 
+  it('viewer matches only the connected user, and only when it is known', () => {
+    expect(actorMatches({ kind: 'viewer' }, human, 'alice')).toBe(true);
+    expect(actorMatches({ kind: 'viewer' }, human, 'ALICE')).toBe(true);
+    expect(actorMatches({ kind: 'viewer' }, human, 'bob')).toBe(false);
+    expect(actorMatches({ kind: 'viewer' }, human, null)).toBe(false);
+    expect(actorMatches({ kind: 'viewer' }, human)).toBe(false);
+  });
+
   it('a named class or login cannot be satisfied by nobody', () => {
     for (const kind of ['human', 'bot'] as const) {
       expect(actorMatches({ kind }, undefined)).toBe(false);
@@ -163,20 +171,66 @@ describe('workflowMatches — event-specific conditions', () => {
     expect(workflowMatches(w('needs'), labeled)).toBe(false);
   });
 
-  it('targetIsViewer needs BOTH a target and a known viewer', () => {
+  it('a viewer target needs BOTH a target and a known viewer', () => {
     const requested = facts({
       event: 'pr_review_requested',
       target: { login: 'tom', isBot: false },
     });
-    const w = wf({ targetIsViewer: true }, ['pr_review_requested']);
+    const w = wf({ target: { kind: 'viewer' } }, ['pr_review_requested']);
     expect(workflowMatches(w, requested, 'tom')).toBe(true);
     expect(workflowMatches(w, requested, 'Tom')).toBe(true);
     expect(workflowMatches(w, requested, 'alice')).toBe(false);
     // An unresolved viewer FAILS — "when I am asked" must not widen into "when
     // anyone is asked" because we could not work out who "I" is.
     expect(workflowMatches(w, requested, null)).toBe(false);
-    // A team request has no target.
+    // An event that named nobody cannot satisfy it.
     expect(workflowMatches(w, facts({ event: 'pr_review_requested' }), 'tom')).toBe(false);
+  });
+
+  it('targets a specific person, which is not only "me"', () => {
+    const requested = facts({
+      event: 'pr_review_requested',
+      target: { login: 'carol', isBot: false },
+    });
+    const w = (logins: string[]) =>
+      wf({ target: { kind: 'logins', logins } }, ['pr_review_requested']);
+    expect(workflowMatches(w(['carol', 'dave']), requested)).toBe(true);
+    expect(workflowMatches(w(['dave']), requested)).toBe(false);
+  });
+
+  it('targets a TEAM by slug', () => {
+    const teamRequest = facts({
+      event: 'pr_review_requested',
+      target: { login: 'frontend', isBot: false, teamSlugs: ['frontend'] },
+    });
+    const w = (teams: string[]) =>
+      wf({ target: { kind: 'logins', logins: [], teams } }, ['pr_review_requested']);
+    expect(workflowMatches(w(['frontend']), teamRequest)).toBe(true);
+    expect(workflowMatches(w(['platform']), teamRequest)).toBe(false);
+    // A per-login target is NOT satisfied by a team request — resolving a team's
+    // members would be a GitHub call per delivery.
+    expect(
+      workflowMatches(
+        wf({ target: { kind: 'logins', logins: ['tom'] } }, ['pr_review_requested']),
+        teamRequest,
+        'tom'
+      )
+    ).toBe(false);
+    expect(
+      workflowMatches(
+        wf({ target: { kind: 'viewer' } }, ['pr_review_requested']),
+        teamRequest,
+        'tom'
+      )
+    ).toBe(false);
+  });
+
+  it('a viewer match works on the author too — "my own PRs"', () => {
+    const mine = facts({ author: { login: 'tom', isBot: false } });
+    const w = wf({ author: { kind: 'viewer' } });
+    expect(workflowMatches(w, mine, 'tom')).toBe(true);
+    expect(workflowMatches(w, facts(), 'tom')).toBe(false);
+    expect(workflowMatches(w, mine, null)).toBe(false);
   });
 
   it('checkConclusions', () => {

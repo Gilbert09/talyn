@@ -14,6 +14,7 @@ import {
   workspaceMayUseWorkflows,
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
+import { workflowSuggestions } from '../services/workflows/suggestions.js';
 
 /**
  * Workflows — user-defined PR automation.
@@ -78,6 +79,25 @@ export function workflowRoutes(): Router {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
     const data = await listWorkflows(workspaceId);
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * The editor's autocomplete options: labels, branches, people and teams across
+   * the workspace's watched repositories.
+   *
+   * Mounted ABOVE `/:id` — Express matches in declaration order, and
+   * `/suggestions` would otherwise be read as a workflow id and 404.
+   *
+   * Never fails: `workflowSuggestions` settles each fetch independently and
+   * returns empty lists with `partial: true` for whatever it could not get. A
+   * picker with no suggestions is still a working text field; a 500 is an editor
+   * that will not open.
+   */
+  router.get('/suggestions', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string;
+    if (!(await gate(req, res, workspaceId))) return;
+    const data = await workflowSuggestions(workspaceId);
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 

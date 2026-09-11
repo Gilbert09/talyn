@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { WorkflowInput, WorkflowRun, WorkflowWithStats } from '@talyn/shared';
+import type {
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowSuggestions,
+  WorkflowWithStats,
+} from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
@@ -24,6 +29,12 @@ export interface UseWorkflows {
   setEnabled: (workflow: WorkflowWithStats, enabled: boolean) => Promise<void>;
   /** The newest runs seen this session, keyed by workflow — fed by the WS event. */
   liveRuns: Record<string, WorkflowRun[]>;
+  /**
+   * Autocomplete options for the editor. `null` until loaded — the editor treats
+   * that as "no suggestions yet" and still accepts typed values, so it never
+   * blocks on this.
+   */
+  suggestions: WorkflowSuggestions | null;
 }
 
 export function useWorkflows(): UseWorkflows {
@@ -31,6 +42,7 @@ export function useWorkflows(): UseWorkflows {
   const [workflows, setWorkflows] = useState<WorkflowWithStats[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveRuns, setLiveRuns] = useState<Record<string, WorkflowRun[]>>({});
+  const [suggestions, setSuggestions] = useState<WorkflowSuggestions | null>(null);
 
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
@@ -60,6 +72,28 @@ export function useWorkflows(): UseWorkflows {
     setLiveRuns({});
     load();
   }, [load]);
+
+  // Fetched once per workspace, not per editor open: it is reference data (labels,
+  // branches, collaborators) that the backend caches for ten minutes anyway, and
+  // every GitHub read behind it spends the account's single shared budget. A
+  // failure is swallowed — the editor's fields accept typed values regardless.
+  useEffect(() => {
+    if (!workspaceId) {
+      setSuggestions(null);
+      return;
+    }
+    let cancelled = false;
+    setSuggestions(null);
+    api.workflows
+      .suggestions(workspaceId)
+      .then((s) => {
+        if (!cancelled) setSuggestions(s);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
   // A finished run changes both the history and the derived stats, and the stats
   // are aggregated server-side — so the event prepends the run locally (instant)
@@ -130,8 +164,18 @@ export function useWorkflows(): UseWorkflows {
   );
 
   return useMemo(
-    () => ({ workflows, error, reload: load, create, update, remove, setEnabled, liveRuns }),
-    [workflows, error, load, create, update, remove, setEnabled, liveRuns]
+    () => ({
+      workflows,
+      error,
+      reload: load,
+      create,
+      update,
+      remove,
+      setEnabled,
+      liveRuns,
+      suggestions,
+    }),
+    [workflows, error, load, create, update, remove, setEnabled, liveRuns, suggestions]
   );
 }
 

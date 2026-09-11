@@ -7,6 +7,7 @@ import type {
   Features,
   WorkflowInput,
   WorkflowRun,
+  WorkflowSuggestions,
   WorkflowWithStats,
   Workspace,
   Environment,
@@ -1715,6 +1716,20 @@ export const features = {
 export const workflows = {
   list: (workspaceId: string) =>
     request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * Autocomplete options for the editor — labels, branches, people, teams.
+   *
+   * One call rather than one per field per repo: every GitHub read behind it
+   * spends the account's single shared budget, and the editor filters in memory
+   * anyway. Lists may come back empty with `partial: true`, which is a working
+   * text field and not an error.
+   */
+  suggestions: (workspaceId: string) =>
+    request<WorkflowSuggestions>(
+      'GET',
+      `/workflows/suggestions?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
 
   create: (workspaceId: string, input: WorkflowInput) =>
     request<WorkflowWithStats>('POST', '/workflows', { workspaceId, ...input }),

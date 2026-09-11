@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { workflowsOffered } from '@talyn/shared';
+import { availableWorkflowConditions, workflowsOffered } from '@talyn/shared';
 import { PANEL_PATHS, panelForPath } from '../lib/routes';
 
 /**
@@ -20,6 +20,18 @@ describe('workflowsOffered', () => {
   it('is false when the backend says no, true when it says yes', () => {
     expect(workflowsOffered({ workflows: false })).toBe(false);
     expect(workflowsOffered({ workflows: true })).toBe(true);
+  });
+});
+
+describe('conditions follow the trigger', () => {
+  it('offers the event-specific condition alongside the generic filters', () => {
+    // "the conditions should match the action we're on, but generic PR filters
+    // should still apply" — both halves, in one assertion.
+    const keys = availableWorkflowConditions(['pr_review_requested']).map((s) => s.key);
+    expect(keys).toContain('target');
+    expect(keys).toContain('repos');
+    expect(keys).toContain('author');
+    expect(availableWorkflowConditions(['pr_opened']).map((s) => s.key)).not.toContain('target');
   });
 });
 
