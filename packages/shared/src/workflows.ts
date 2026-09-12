@@ -392,8 +392,20 @@ export interface WorkflowSuggestions {
  * `skipped` is a run that deliberately did nothing — it hit the per-PR rate cap,
  * or a guard stood it down. It is recorded so a user can SEE the refusal, and it
  * is excluded from the run counts because it is not a time the workflow fired.
+ *
+ * `pending_retry` is a run whose action GitHub rate-limited: the work is owed,
+ * not abandoned. It is parked with the instant the gate clears and a sweep
+ * re-runs only the actions that have not succeeded. Waiting inline is what this
+ * replaced — these run in the webhook worker's six-wide slow lane, and the gate
+ * is per ACCOUNT, so a burst of PRs would block most of the lane on one wait.
  */
-export type WorkflowRunStatus = 'running' | 'succeeded' | 'partial' | 'failed' | 'skipped';
+export type WorkflowRunStatus =
+  | 'running'
+  | 'pending_retry'
+  | 'succeeded'
+  | 'partial'
+  | 'failed'
+  | 'skipped';
 
 /**
  * Why one action inside a run did not happen. A machine code rather than only
@@ -448,6 +460,10 @@ export interface WorkflowRun {
   status: WorkflowRunStatus;
   actions: WorkflowActionOutcome[];
   error: string | null;
+  /** When a `pending_retry` run becomes due. Null for every other status. */
+  retryAfter: string | null;
+  /** How many times the actions have been attempted. Starts at 1. */
+  attempts: number;
   createdAt: string;
 }
 
@@ -1421,6 +1437,9 @@ export function describeWorkflowAction(action: WorkflowAction): string {
  */
 export const WORKFLOW_RUN_STATUS_LABELS: Record<WorkflowRunStatus, string> = {
   running: 'Running',
+  // Not "Failed": the work is owed, and saying so is the difference between
+  // "Talyn dropped this" and "Talyn is waiting for GitHub".
+  pending_retry: 'Waiting to retry',
   succeeded: 'Done',
   partial: 'Partly done',
   failed: 'Failed',

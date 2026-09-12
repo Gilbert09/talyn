@@ -28,9 +28,19 @@ function statusVariant(status: WorkflowRunStatus): 'success' | 'warning' | 'erro
     case 'failed':
       return 'error';
     default:
-      // `running` and `skipped` are both "nothing to celebrate, nothing broken".
+      // `running`, `pending_retry` and `skipped` are all "nothing to celebrate,
+      // nothing broken". A parked run in particular must not wear the failure
+      // colour: the work is owed, and Talyn is waiting for GitHub.
       return 'secondary';
   }
+}
+
+/** How long until a parked run is due. */
+function until(iso: string): string {
+  const secs = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  if (Number.isNaN(secs) || secs <= 0) return 'any moment';
+  if (secs < 60) return `in ${secs}s`;
+  return `in ${Math.round(secs / 60)}m`;
 }
 
 function relative(iso: string): string {
@@ -122,6 +132,16 @@ export function WorkflowRunsList({
               <OutcomeLine key={i} outcome={outcome} />
             ))}
           </div>
+
+          {/* Say what is going to happen, not just what did. A run that reads
+              "Failed — rate limited" and never changes is the bug this replaced. */}
+          {run.status === 'pending_retry' && (
+            <p className="text-xs text-muted-foreground">
+              GitHub is rate-limiting this account. Talyn will try again
+              {run.retryAfter ? ` ${until(run.retryAfter)}` : ' shortly'}
+              {run.attempts > 1 ? ` (attempt ${run.attempts + 1})` : ''}.
+            </p>
+          )}
 
           {run.taskId && (
             <Button

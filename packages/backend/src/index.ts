@@ -28,6 +28,7 @@ import { prMonitorService } from './services/prMonitor.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { workflowsEnabled } from './services/workflowsAccess.js';
+import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from './services/cloudProviders/selfhosted/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
@@ -108,6 +109,10 @@ async function main() {
   // a `NOT armed` line means somebody deliberately pulled the switch.
   if (workflowsEnabled()) {
     console.log('[workflows] engine armed');
+    // Re-runs actions GitHub rate-limited. Only started when the engine is, so a
+    // deployment with workflows switched off has no timer looking for work that
+    // can never be created.
+    initWorkflowRetrySweep();
   } else {
     console.log('[workflows] engine NOT armed — WORKFLOWS_ENABLED=false');
   }

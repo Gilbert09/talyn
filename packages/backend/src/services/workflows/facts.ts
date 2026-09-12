@@ -367,3 +367,48 @@ function fromCheckSuite(delivery: WebhookDelivery): WorkflowEventFacts[] {
   }
   return out;
 }
+
+
+/**
+ * Rebuild the facts a parked run was acting on, so a retry is faithful.
+ *
+ * Prefers the `facts` column, written when the run was claimed — a `comment`
+ * action interpolates the PR's branches, and the webhook payload is long gone by
+ * the time a rate-limit gate clears.
+ *
+ * Falls back to the denormalised columns for rows written before that column
+ * existed. Those carry the repo, number, title, URL and author and nothing else,
+ * so everything they cannot supply is declared UNKNOWN rather than defaulted:
+ * `renderWorkflowComment` leaves an unresolvable placeholder verbatim, which
+ * tells the user their template did not fill in — where a blank would quietly
+ * post a sentence with a hole in it.
+ */
+export function workflowFactsFromRun(run: {
+  repoFullName: string;
+  prNumber: number;
+  prTitle: string;
+  prUrl: string;
+  prAuthor: string;
+  event: string;
+  facts?: unknown;
+}): WorkflowEventFacts {
+  const stored = run.facts as WorkflowEventFacts | null | undefined;
+  if (stored && typeof stored === 'object' && typeof stored.number === 'number') return stored;
+
+  const author = { login: run.prAuthor, isBot: loginLooksLikeBot(run.prAuthor) };
+  return {
+    event: run.event as WorkflowTriggerEvent,
+    repoFullName: run.repoFullName,
+    number: run.prNumber,
+    title: run.prTitle,
+    url: run.prUrl,
+    author,
+    actor: author,
+    baseBranch: '',
+    defaultBranch: '',
+    headBranch: '',
+    draft: false,
+    labels: [],
+    unknownFields: ['baseBranch', 'defaultBranch', 'headBranch', 'draft', 'labels'],
+  };
+}

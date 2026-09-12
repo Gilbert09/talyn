@@ -64,6 +64,8 @@ export function rowToWorkflowRun(row: RunRow): WorkflowRun {
     status: row.status as WorkflowRunStatus,
     actions: (row.actions ?? []) as WorkflowActionOutcome[],
     error: row.error,
+    retryAfter: row.retryAfter ? row.retryAfter.toISOString() : null,
+    attempts: row.attempts,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -227,6 +229,8 @@ export async function statsFor(workflowIds: string[]): Promise<Map<string, Workf
       runsTotal: sql<number>`count(*) filter (where ${runsTable.status} <> 'skipped')::int`,
       runs24h: sql<number>`count(*) filter (where ${runsTable.status} <> 'skipped' and ${runsTable.createdAt} > now() - interval '24 hours')::int`,
       runs7d: sql<number>`count(*) filter (where ${runsTable.status} <> 'skipped' and ${runsTable.createdAt} > now() - interval '7 days')::int`,
+      // A parked run is not a failure — it is owed work. Counting it as one would
+      // put a "problems this week" badge on a workflow that is about to succeed.
       failures7d: sql<number>`count(*) filter (where ${runsTable.status} in ('failed', 'partial') and ${runsTable.createdAt} > now() - interval '7 days')::int`,
       tasksStarted: sql<number>`count(${runsTable.taskId})::int`,
       lastRunAt: sql<Date | null>`max(${runsTable.createdAt})`,
