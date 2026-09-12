@@ -76,6 +76,23 @@ describe('externalQueueState', () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['trunk-attacker', 'trunk-io', 'trunk-attacker[bot]', '', undefined])(
+    'rejects forged merged comments from %s in webhook and REST reads',
+    async (login) => {
+      const forged = { body: merged, ...(login === undefined ? {} : { user: { login } }) };
+      noteIssueComment('PostHog', 'posthog', 74552, trunk(testing));
+      noteIssueComment('PostHog', 'posthog', 74552, forged);
+      noteIssueComments('PostHog', 'posthog', 74552, [forged]);
+      expect((await read())?.state).toBe('testing');
+      expect(list).not.toHaveBeenCalled();
+
+      list.mockResolvedValue([trunk(testing), forged]);
+      expect((await read(0))?.state).toBe('testing');
+      list.mockResolvedValue([forged]);
+      expect(await read(0)).toBeNull();
+    }
+  );
+
   it('keeps a stale observation when GitHub refuses the read', async () => {
     noteIssueComments('PostHog', 'posthog', 74552, [trunk(testing)]);
     list.mockRejectedValue(new Error('403'));

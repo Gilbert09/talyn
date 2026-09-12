@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import type { Request, Response } from 'express';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
+import { requireMcpToken } from '../mcp/requireMcpToken.js';
 import { mcpTokens as mcpTokensTable } from '../db/schema.js';
 import {
   createToken,
@@ -23,6 +25,7 @@ describe('services/mcpToken', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await cleanup();
   });
 
@@ -104,6 +107,37 @@ describe('services/mcpToken', () => {
     });
 
     expect(await validateToken(legacyToken)).toEqual({ ownerId: TEST_USER_ID });
+  });
+
+  it.each([
+    ['other@example.test', false],
+    [` OTHER@example.test, ${TEST_USER_ID.toUpperCase()}@EXAMPLE.TEST `, true],
+    ['', true],
+  ])('applies the current account allowlist %j to existing tokens', async (allowlist, allowed) => {
+    const { token, token_meta } = await createToken(TEST_USER_ID);
+    vi.stubEnv('TALYN_ALLOWED_EMAILS', allowlist);
+    expect(await validateToken(token)).toEqual(allowed ? { ownerId: TEST_USER_ID } : null);
+    const [row] = await db.select().from(mcpTokensTable).where(eq(mcpTokensTable.id, token_meta.id));
+    expect(Boolean(row.lastUsedAt)).toBe(allowed);
+  });
+
+  it('rejects a previously valid MCP caller when its owner leaves the allowlist', async () => {
+    const { token } = await createToken(TEST_USER_ID);
+    vi.stubEnv('TALYN_ALLOWED_EMAILS', `${TEST_USER_ID}@example.test`);
+    const req = { headers: { authorization: `Bearer ${token}` } } as Request;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+      setHeader: vi.fn(),
+    };
+    const next = vi.fn();
+    await requireMcpToken(req, res as unknown as Response, next);
+    expect(next).toHaveBeenCalledOnce();
+    next.mockClear();
+    vi.stubEnv('TALYN_ALLOWED_EMAILS', 'other@example.test');
+    await requireMcpToken({ headers: req.headers } as Request, res as unknown as Response, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
   });
 
   it('lists only the caller\'s active tokens and never returns the hash', async () => {

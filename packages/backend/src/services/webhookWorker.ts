@@ -3,7 +3,7 @@ import { createRedisConnection, isRedisEnabled } from './redis.js';
 import { REPLICA_ID } from './wsBus.js';
 import { targetsForRepo, refreshWebhookIndex, type WatchTarget } from './webhookIndex.js';
 import { prMonitorService } from './prMonitor.js';
-import { githubService } from './github.js';
+import { GitHubAuthorizationUnavailableError } from './github.js';
 import { GitHubRateLimitError } from './githubRateGate.js';
 import { debugBus } from './debugBus.js';
 import {
@@ -36,27 +36,27 @@ export { terminalOutcomeFromPayload, type WebhookDelivery };
  */
 
 export const WEBHOOK_STREAM = 'gh:webhooks';
+export const WEBHOOK_AUTH_DEAD_LETTERS = 'gh:webhooks:authorization-failed';
+// Pending deliveries survive worker restarts. Fixed delay avoids occupying a worker during backoff.
+const AUTH_RETRY_IDLE_MS = 5 * 60_000;
+const AUTH_MAX_ATTEMPTS = 16;
 const GROUP = 'fastowl';
 const COALESCE_WINDOW_MS = 750;
 // How many stream deliveries to read per loop iteration.
 const WORKER_BATCH = 32;
 
-// Max concurrent SLOW deliveries (pull_request/review/comment → a ~1-2s
-// `refreshPr` GraphQL call). These run in a background lane so they never gate
-// the fast `check_run`/`check_suite` firehose (which only buffers into the
-// coalescer, ~1ms). Before this split, one slow refresh in a Promise.all batch
-// dragged the whole batch to ~1.5s and capped drain below the ingest rate, so a
-// CI burst built a multi-minute backlog the worker could never claw back. The
-// cap also bounds simultaneous GitHub GraphQL + DB-pool load.
+// Bound concurrent access checks and PR refreshes to protect the user's API budget.
 const SLOW_LANE_MAX = 6;
 
-/** Events whose processing makes a ~1-2s `refreshPr` GraphQL call (the slow lane). */
+/** Repository events need a user access check, including incremental check updates. */
 export function isSlowEvent(eventType: string): boolean {
   return [
     'pull_request',
     'pull_request_review',
     'pull_request_review_comment',
     'issue_comment',
+    'check_run',
+    'check_suite',
   ].includes(eventType);
 }
 
@@ -174,24 +174,16 @@ function shouldRefresh(key: string, nowMs: number): boolean {
 export async function processWebhookDelivery(
   delivery: WebhookDelivery,
   nowMs: number = Date.now(),
+  replayed = false,
 ): Promise<number> {
   whTrace(
     `recv ${delivery.eventType}/${delivery.action ?? '-'} ` +
       `${delivery.repoFullName || '(no repo)'} delivery=${delivery.deliveryId}`,
   );
 
-  // installation lifecycle: keep the repo watch index + the account→installation
-  // index current (the latter so data-plane reads resolve a newly-(un)installed
-  // account immediately, across replicas).
+  // Installation lifecycle updates discovery, never workspace authorization.
   if (delivery.eventType === 'installation' || delivery.eventType === 'installation_repositories') {
     await refreshWebhookIndex().catch(() => undefined);
-    await githubService.refreshInstallationIndex().catch(() => undefined);
-    return 0;
-  }
-
-  const targets = await targetsForRepo(delivery.repoFullName);
-  if (targets.length === 0) {
-    whTrace(`  └ ${delivery.repoFullName}: no watching workspace — dropped`);
     return 0;
   }
 
@@ -206,6 +198,14 @@ export async function processWebhookDelivery(
   // still fires `pull_request synchronize`. So skip push entirely.
   if (delivery.eventType === 'push') {
     whTrace(`  push ${delivery.repoFullName}: skipped (sweep handles base-advance conflicts)`);
+    return 0;
+  }
+
+  // This checks current user access before workflows or any payload-derived write.
+  // The check-count coalescer repeats the check when its delayed batch flushes.
+  const targets = await targetsForRepo(delivery.repoFullName);
+  if (targets.length === 0) {
+    whTrace(`  └ ${delivery.repoFullName}: no authorized watching workspace — dropped`);
     return 0;
   }
 
@@ -247,7 +247,7 @@ export async function processWebhookDelivery(
   // provider's current answer. Capture it here — for free, from the payload we
   // already have — so the merge-queue evaluation this delivery is about to
   // trigger reads a fresh state instead of paying a REST call for it.
-  if (delivery.eventType === 'issue_comment' && delivery.action !== 'deleted') {
+  if (!replayed && delivery.eventType === 'issue_comment' && delivery.action !== 'deleted') {
     noteExternalQueueComment(delivery, numbers[0]!);
   }
 
@@ -271,7 +271,7 @@ export async function processWebhookDelivery(
   // (very common — GitHub runs many checks on a *merge commit*) isn't in the PR
   // head's statusCheckRollup anyway; a genuinely stale head is corrected by the
   // PR's own pull_request/synchronize event and the reconcile sweep.
-  if (delivery.eventType === 'check_run') {
+  if (!replayed && delivery.eventType === 'check_run') {
     const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
     if (!ev) return 0;
     checkCountCoalescer.enqueue(ev);
@@ -282,7 +282,8 @@ export async function processWebhookDelivery(
   // A PR closing/merging or force-pushing makes its per-check state irrelevant —
   // prune it (the count fast-path stays bounded to open, tracked PRs). Done
   // alongside the normal refresh below, which still materialises the PR row.
-  if (delivery.eventType === 'pull_request') {
+  // Replays still run workflows, but fetch current PR state instead of applying an old payload.
+  if (!replayed && delivery.eventType === 'pull_request') {
     await pruneOnPullRequest(delivery).catch(() => undefined);
     // A `closed` delivery already TELLS us the PR's terminal state. Write it
     // now, from the payload, before the GraphQL refresh below that may not get
@@ -302,10 +303,8 @@ export async function processWebhookDelivery(
 
   // Everything else (pull_request actions, reviews, comments): a full refresh
   // that materialises/updates the row (mergeable, reviews, authoritative counts).
-  // ONE shared GitHub fetch per PR number across all watching workspaces — the
-  // old per-(workspace, PR) fan-out made N identical GraphQL calls against the
-  // installation's single shared point budget and drained it (the prod
-  // rate-limit storm). See prMonitor.refreshPrAcrossWorkspaces.
+  // Fetch separately with each workspace's user credentials. Sharing an installation
+  // does not prove that users have the same repository permissions.
   let dispatched = 0;
   for (const number of numbers) {
     dispatched += await refreshNumberAcrossTargets(
@@ -457,12 +456,8 @@ async function tryIncrementalPrMetadata(
 }
 
 /**
- * Refresh one PR number across every watching workspace with a SINGLE shared
- * GitHub fetch. Per-workspace coalescing still applies (a workspace refreshed
- * <COALESCE_WINDOW_MS ago is skipped); the fetch runs once for the workspaces
- * that survive it. Returns how many (workspace) refreshes were dispatched
- * post-coalescing. A fetch failure is logged ONCE here — not once per workspace,
- * as the old per-target fan-out did.
+ * Refresh one PR number for authorized recipients, with a separate fetch per workspace.
+ * Coalescing skips recently refreshed workspaces. Return the number of dispatched refreshes.
  *
  * The index-resolved repositoryId flows through so the refresh skips its
  * getWatchedRepos DB round-trip; refreshPrAcrossWorkspaces never blocks on
@@ -547,10 +542,11 @@ function parseDelivery(fields: string[]): WebhookDelivery | null {
   }
 }
 
-class WebhookWorker {
+export class WebhookWorker {
   private conn: Redis | null = null;
   private running = false;
   private slowGate = new Semaphore(SLOW_LANE_MAX);
+  private claimCursor = '0-0';
 
   async init(): Promise<void> {
     if (!isRedisEnabled()) {
@@ -580,7 +576,13 @@ class WebhookWorker {
   private async loop(): Promise<void> {
     while (this.running && this.conn) {
       try {
-        const res = (await this.conn.xreadgroup(
+        const claimed = await this.conn.xautoclaim(
+          WEBHOOK_STREAM, GROUP, REPLICA_ID, AUTH_RETRY_IDLE_MS, this.claimCursor, 'COUNT', WORKER_BATCH,
+        ) as [string, Array<[string, string[]]>];
+        this.claimCursor = claimed[0];
+        const res = claimed[1].length > 0
+          ? [[WEBHOOK_STREAM, claimed[1]]] as Array<[string, Array<[string, string[]]>]>
+          : (await this.conn.xreadgroup(
           'GROUP',
           GROUP,
           REPLICA_ID,
@@ -604,18 +606,15 @@ class WebhookWorker {
           .flatMap(([, entries]) => entries)
           .map(([id, fields]) => ({ id, delivery: parseDelivery(fields) }));
 
-        // FAST lane: check_run/check_suite (buffer into the coalescer, ~1ms) and
-        // anything unparseable/no-op. Drained inline at memory speed so the
-        // firehose never waits on a refresh. SLOW lane: refresh events run in a
-        // bounded background pool (slowGate) and are NOT awaited here, so one
-        // slow refreshPr can't gate the batch. Backpressure: we only block
-        // reading more when the slow lane is saturated.
+        // Repository events use the bounded lane because authorization requires a GitHub request.
+        // Installation maintenance and ignored events stay in the fast lane.
         const fast = batch.filter((b) => !b.delivery || !isSlowEvent(b.delivery.eventType));
         const slow = batch.filter((b) => b.delivery && isSlowEvent(b.delivery.eventType));
-        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast')));
+        const replayed = claimed[1].length > 0;
+        await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast', replayed)));
         for (const b of slow) {
           await this.slowGate.acquire();
-          void this.handleEntry(b.id, b.delivery, 'slow').finally(() => this.slowGate.release());
+          void this.handleEntry(b.id, b.delivery, 'slow', replayed).finally(() => this.slowGate.release());
         }
       } catch (err) {
         if (this.running) {
@@ -630,11 +629,15 @@ class WebhookWorker {
     id: string,
     delivery: WebhookDelivery | null,
     lane: 'fast' | 'slow',
+    replayed = false,
   ): Promise<void> {
     const startedAt = Date.now();
+    let acknowledge = true;
+    let ok = false;
     try {
       if (!delivery) throw new Error('unparseable delivery payload');
-      const fanout = await processWebhookDelivery(delivery);
+      const fanout = await processWebhookDelivery(delivery, Date.now(), replayed);
+      ok = true;
       // Definitive consumer-lag readout: how long this delivery sat between the
       // receiver enqueuing it and the worker starting it. Reading this directly
       // beats inferring lag from UUID gaps in a noisy log buffer.
@@ -657,6 +660,23 @@ class WebhookWorker {
         durationMs: Date.now() - startedAt,
       });
     } catch (err) {
+      if (err instanceof GitHubAuthorizationUnavailableError) {
+        acknowledge = false;
+        try {
+          const pending = await this.conn?.xpending(WEBHOOK_STREAM, GROUP, id, id, 1) as
+            Array<[string, string, number, number]> | undefined;
+          if (delivery && pending?.[0] && pending[0][3] >= AUTH_MAX_ATTEMPTS) {
+            // Persist the payload before acknowledging. Exhaustion requires explicit replay, not data loss.
+            await this.conn!.xadd(WEBHOOK_AUTH_DEAD_LETTERS, '*',
+              'data', JSON.stringify(delivery), 'reason', 'authorization_unavailable',
+              'attempts', String(pending[0][3]));
+            acknowledge = true;
+          }
+        } catch {
+          // Redis failed: leave the original pending so another worker can recover it.
+          console.error('[webhookWorker] could not retain authorization retry metadata');
+        }
+      }
       debugBus.recordWebhook({
         action: 'processed',
         eventType: delivery?.eventType ?? 'unknown',
@@ -667,12 +687,10 @@ class WebhookWorker {
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      // Ack regardless: a delivery that throws is logged; the reconcile sweep is
-      // the safety net for missed work. Leaving it un-acked would wedge the PEL.
-      await this.conn?.xack(WEBHOOK_STREAM, GROUP, id).catch(() => undefined);
+      if (acknowledge) await this.conn?.xack(WEBHOOK_STREAM, GROUP, id).catch(() => undefined);
       debugBus.pollerTick('webhook_worker', {
         durationMs: Date.now() - startedAt,
-        ok: true,
+        ok,
         summary: `webhook_worker processed ${delivery?.eventType ?? '?'} `,
       });
     }

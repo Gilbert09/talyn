@@ -18,6 +18,7 @@ import { configureApiClient, wsClient } from '@talyn/client';
  */
 
 const HEARTBEAT = 25_000;
+const getAccessToken = vi.fn<() => Promise<string | null>>();
 
 class FakeWebSocket {
   // All four constants matter. connect() guards with
@@ -69,19 +70,94 @@ async function connect() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  getAccessToken.mockReset().mockResolvedValue('token');
   vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
   configureApiClient({
     baseUrl: 'http://localhost:4747',
     clientVersion: 'web/test',
-    getAccessToken: async () => 'token',
+    getAccessToken,
     recoverSession: async () => false,
   });
 });
 
 afterEach(() => {
   wsClient.disconnect();
+  vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('session recovery and explicit disconnect', () => {
+  it.each(['missing', 'rejected'])('retries a %s token lookup after the server closes the socket', async (failure) => {
+    const ws = await connect();
+    if (failure === 'missing') getAccessToken.mockResolvedValueOnce(null);
+    else getAccessToken.mockRejectedValueOnce(new Error('session temporarily unavailable'));
+    getAccessToken.mockResolvedValue('refreshed-token');
+    ws.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const reconnected = FakeWebSocket.instances[1];
+    reconnected.onopen?.();
+    expect(reconnected.sent).toContain(JSON.stringify({ type: 'auth', token: 'refreshed-token' }));
+  });
+
+  it('bounds token retries with the existing 30-second backoff cap', async () => {
+    const ws = await connect();
+    getAccessToken.mockResolvedValue(null);
+    ws.close();
+    let calls = 1;
+    for (const delay of [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(getAccessToken).toHaveBeenCalledTimes(calls);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getAccessToken).toHaveBeenCalledTimes(++calls);
+    }
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it.each(['open', 'waiting for token'])('does not reconnect after explicit logout while %s', async (state) => {
+    const ws = await connect();
+    if (state === 'waiting for token') {
+      getAccessToken.mockResolvedValue(null);
+      ws.close();
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    wsClient.disconnect();
+    const calls = getAccessToken.mock.calls.length;
+    ws.onclose?.();
+    for (const type of ['focus', 'online', 'pageshow']) window.dispatchEvent(new Event(type));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(getAccessToken).toHaveBeenCalledTimes(calls);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])('ignores an old token lookup after logout (new login: %s)', async (loginAgain) => {
+    const ws = await connect();
+    let resolve!: (token: string) => void;
+    getAccessToken.mockReturnValueOnce(new Promise<string>((done) => { resolve = done; }));
+    ws.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    wsClient.disconnect();
+    if (loginAgain) {
+      getAccessToken.mockResolvedValue('new-session');
+      await wsClient.connect();
+      FakeWebSocket.instances[1].onopen?.();
+    }
+    resolve('old-session');
+    await vi.advanceTimersByTimeAsync(0);
+    ws.onclose?.();
+    expect(FakeWebSocket.instances).toHaveLength(loginAgain ? 2 : 1);
+    expect(vi.getTimerCount()).toBe(loginAgain ? 1 : 0);
+    if (loginAgain) {
+      expect(FakeWebSocket.instances[1].sent).toContain(JSON.stringify({ type: 'auth', token: 'new-session' }));
+    }
+  });
 });
 
 describe('heartbeat', () => {

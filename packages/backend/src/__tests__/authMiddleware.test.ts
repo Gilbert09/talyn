@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
+import { eq } from 'drizzle-orm';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import {
@@ -7,6 +8,7 @@ import {
   generateKeyPair,
   exportJWK,
   createLocalJWKSet,
+  decodeJwt,
   errors as joseErrors,
   type KeyLike,
 } from 'jose';
@@ -28,12 +30,13 @@ import {
 } from '../middleware/auth.js';
 import { setSupabaseServiceClientForTesting } from '../services/supabase.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import type { Database } from '../db/client.js';
+import { getDbClient, type Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   environments as environmentsTable,
   tasks as tasksTable,
   repositories as repositoriesTable,
+  users as usersTable,
 } from '../db/schema.js';
 
 const OTHER_USER_ID = 'user-other';
@@ -154,6 +157,7 @@ describe('requireAuth (JWT + internal-proxy)', () => {
   afterEach(async () => {
     await closeServer();
     await cleanup();
+    vi.unstubAllEnvs();
   });
 
   it('401s when no headers are provided', async () => {
@@ -175,6 +179,16 @@ describe('requireAuth (JWT + internal-proxy)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.userId).toBe(TEST_USER_ID);
+  });
+
+  it.each([
+    ['other@example.test', 403],
+    [` ${TEST_USER_ID.toUpperCase()}@EXAMPLE.TEST `, 200],
+    ['', 200],
+  ])('enforces the allowlist %j for internal impersonation', async (allowlist, status) => {
+    vi.stubEnv('TALYN_ALLOWED_EMAILS', allowlist);
+    const res = await fetch(`${serverUrl}/probe`, { headers: internalProxyHeaders(TEST_USER_ID) });
+    expect(res.status).toBe(status);
   });
 
   it('401s with "malformed" header error when one internal header is missing', async () => {
@@ -249,16 +263,16 @@ describe('requireAuth (Supabase JWT verification)', () => {
       .sign(key);
   }
 
-  function signHs256() {
+  function signHs256(exp: number | null = Math.floor(Date.now() / 1000) + 300) {
     const nowSec = Math.floor(Date.now() / 1000);
-    return new SignJWT({ email: 'legacy@test' })
+    const jwt = new SignJWT({ email: 'legacy@test' })
       .setProtectedHeader({ alg: 'HS256' })
       .setIssuer(`${TEST_SUPABASE_URL}/auth/v1`)
       .setAudience('authenticated')
       .setSubject(JWT_USER_ID)
-      .setIssuedAt(nowSec)
-      .setExpirationTime(nowSec + 300)
-      .sign(new TextEncoder().encode('legacy-shared-secret'));
+      .setIssuedAt(nowSec);
+    if (exp !== null) jwt.setExpirationTime(exp);
+    return jwt.sign(new TextEncoder().encode('legacy-shared-secret'));
   }
 
   function stubSupabaseGetUser(
@@ -302,6 +316,40 @@ describe('requireAuth (Supabase JWT verification)', () => {
     const res = await probe(await signEs256(privateKey));
     expect(res.status).toBe(200);
     expect((await res.json()).userId).toBe(JWT_USER_ID);
+  });
+
+  it('retains the verified ES256 expiry', async () => {
+    const token = await signEs256(privateKey);
+    expect((await verifyTokenAndGetUser(token))?.expiresAt).toBe(decodeJwt(token).exp! * 1000);
+  });
+
+  it('bootstraps only new users and preserves a revoked admin on later HTTP authentication', async () => {
+    vi.stubEnv('TALYN_ADMIN_EMAILS', ' JWT@TEST ');
+    try {
+      const token = await signEs256(privateKey);
+      expect((await verifyTokenAndGetUser(token))?.isAdmin).toBe(true);
+      expect((await probe(token)).status).toBe(200);
+      expect((await verifyTokenAndGetUser(token))?.isAdmin).toBe(true);
+
+      await getDbClient().update(usersTable).set({ isAdmin: false }).where(eq(usersTable.id, JWT_USER_ID));
+      expect((await probe(token)).status).toBe(200);
+      expect((await verifyTokenAndGetUser(token))?.isAdmin).toBe(false);
+      const [row] = await getDbClient().select({ isAdmin: usersTable.isAdmin })
+        .from(usersTable).where(eq(usersTable.id, JWT_USER_ID));
+      expect(row.isAdmin).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rejects a signed token without an expiry', async () => {
+    const token = await new SignJWT({ email: 'jwt@test' })
+      .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
+      .setIssuer(`${TEST_SUPABASE_URL}/auth/v1`)
+      .setAudience('authenticated')
+      .setSubject(JWT_USER_ID)
+      .sign(privateKey);
+    expect((await probe(token)).status).toBe(401);
   });
 
   it('401s an expired token', async () => {
@@ -348,9 +396,11 @@ describe('requireAuth (Supabase JWT verification)', () => {
       },
       error: null,
     }));
-    const res = await probe(await signHs256());
+    const token = await signHs256();
+    const res = await probe(token);
     expect(res.status).toBe(200);
     expect((await res.json()).userId).toBe(JWT_USER_ID);
+    expect((await verifyTokenAndGetUser(token))?.expiresAt).toBe(decodeJwt(token).exp! * 1000);
   });
 
   it('401s an HS256 token that Supabase explicitly rejects (4xx)', async () => {
@@ -360,6 +410,14 @@ describe('requireAuth (Supabase JWT verification)', () => {
     }));
     const res = await probe(await signHs256());
     expect(res.status).toBe(401);
+  });
+
+  it.each([null, 0])('requires a live HS256 expiry after remote verification: %s', async (exp) => {
+    stubSupabaseGetUser(async () => ({
+      data: { user: { id: JWT_USER_ID, email: 'legacy@test' } },
+      error: null,
+    }));
+    expect((await probe(await signHs256(exp))).status).toBe(401);
   });
 
   it.each([

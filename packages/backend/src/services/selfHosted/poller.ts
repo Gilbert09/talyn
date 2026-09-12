@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@talyn/shared';
 import { readCloudTaskMeta, readCloudTaskProvider } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
@@ -201,6 +201,10 @@ class SelfHostedPoller {
       }
       throw err;
     }
+    if (sandbox.workspaceId !== row.workspaceId) {
+      this.stopStreaming(row.id);
+      throw new Error('Fleet sandbox not found in this workspace');
+    }
     const terminal = isFleetSandboxTerminal(sandbox.status);
 
     // An ADOPTED sandbox survived a fleetd restart, but its credentials did
@@ -305,7 +309,7 @@ class SelfHostedPoller {
     const key = adoptedAt ?? '';
     if (adoptedAt && this.recredentialed.get(row.id) === key) return;
     try {
-      const githubToken = githubService.getAccessToken(row.workspaceId);
+      const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
       const creds = await getSelfHostedCredentials(row.workspaceId);
       if (!githubToken || !creds) {
         // Silent returns here were invisible for two sessions: the run went on
@@ -443,8 +447,9 @@ class SelfHostedPoller {
     const repoRows = await getDbClient()
       .select({ defaultBranch: repositoriesTable.defaultBranch })
       .from(repositoriesTable)
-      .where(eq(repositoriesTable.id, repositoryId))
+      .where(and(eq(repositoriesTable.id, repositoryId), eq(repositoriesTable.workspaceId, workspaceId)))
       .limit(1);
+    if (!repoRows[0]) return;
     try {
       const rowId = await linkTaskToPullRequest({
         workspaceId,

@@ -3,7 +3,8 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import type { CreateMcpTokenResponse, McpToken } from '@talyn/shared';
 import { getDbClient, getPoolDbClient } from '../db/client.js';
-import { mcpTokens as mcpTokensTable } from '../db/schema.js';
+import { mcpTokens as mcpTokensTable, users as usersTable } from '../db/schema.js';
+import { AuthError, enforceAllowList } from '../middleware/auth.js';
 
 const TOKEN_BYTES = 32;
 const TOKEN_PREFIX = 'talyn_mcp_';
@@ -140,14 +141,22 @@ export async function validateToken(rawToken: string): Promise<{ ownerId: string
       ownerId: mcpTokensTable.ownerId,
       expiresAt: mcpTokensTable.expiresAt,
       revokedAt: mcpTokensTable.revokedAt,
+      email: usersTable.email,
     })
     .from(mcpTokensTable)
+    .innerJoin(usersTable, eq(usersTable.id, mcpTokensTable.ownerId))
     .where(eq(mcpTokensTable.tokenHash, hashToken(trimmed)))
     .limit(1);
 
   if (!row) return null;
   if (row.revokedAt) return null;
   if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) return null;
+  try {
+    enforceAllowList(row.email);
+  } catch (err) {
+    if (err instanceof AuthError && err.code === 'forbidden') return null;
+    throw err;
+  }
 
   // Recency stamp for the settings list. Tolerate a write failure — a flaky
   // stamp must never reject an otherwise-valid token.

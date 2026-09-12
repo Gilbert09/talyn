@@ -58,7 +58,7 @@ vi.mock('../services/selfHosted/credentials.js', async () => {
 });
 
 vi.mock('../services/github.js', () => ({
-  githubService: { getAccessToken: vi.fn(() => 'gho_test') },
+  githubService: { getVerifiedAccessToken: vi.fn(async () => 'gho_test') },
 }));
 
 vi.mock('../services/repoDefaultBranch.js', () => ({

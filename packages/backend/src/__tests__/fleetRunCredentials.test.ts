@@ -27,7 +27,10 @@ const CLAUDE_TOKEN = 'sk-ant-oat-workspace';
 const OPENAI_KEY = 'sk-openai-workspace';
 
 vi.mock('../services/github.js', () => ({
-  githubService: { getAccessToken: vi.fn(() => GH_TOKEN) },
+  githubService: {
+    getAccessToken: vi.fn(() => 'unchecked-token'),
+    getVerifiedAccessToken: vi.fn(async () => GH_TOKEN),
+  },
 }));
 vi.mock('../services/selfHosted/credentials.js', () => ({
   getSelfHostedCredentials: vi.fn(async () => ({ claudeToken: CLAUDE_TOKEN })),
@@ -83,7 +86,7 @@ beforeEach(async () => {
     fleetTask({ id: 'nohost', status: 'in_progress', host: null }),
     fleetTask({ id: 'otherprov', status: 'in_progress', provider: 'posthog_code' }),
   ]);
-  vi.mocked(githubService.getAccessToken).mockReturnValue(GH_TOKEN);
+  vi.mocked(githubService.getVerifiedAccessToken).mockResolvedValue(GH_TOKEN);
 });
 
 afterEach(async () => {
@@ -102,6 +105,8 @@ describe('resolveRunCredentials', () => {
         repo: 'PostHog/posthog',
       },
     });
+    expect(githubService.getVerifiedAccessToken).toHaveBeenCalledWith('ws-1');
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
   });
 
   // A queued task has been dispatched and may already be booting. Refusing it
@@ -161,11 +166,36 @@ describe('resolveRunCredentials', () => {
   // credentials-ready gate on nothing, converting its 90-second wait into an
   // immediate failure — worse than either waiting or refusing honestly.
   it('refuses rather than answering with an empty github token', async () => {
-    vi.mocked(githubService.getAccessToken).mockReturnValue(null);
+    vi.mocked(githubService.getVerifiedAccessToken).mockResolvedValue(null);
     await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).resolves.toEqual({
       ok: false,
       reason: 'credentials_unavailable',
     });
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not return credentials when token verification fails', async () => {
+    vi.mocked(githubService.getVerifiedAccessToken).mockRejectedValueOnce(new Error('verification failed'));
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).rejects.toThrow('verification failed');
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('uses the verified token for the run workspace, not another tenant', async () => {
+    await seedUser(db, { id: 'other-user' });
+    await db.insert(workspacesTable).values({ id: 'ws-2', ownerId: 'other-user', name: 'other' });
+    await db.insert(tasksTable).values({
+      ...fleetTask({ id: 'other', status: 'in_progress' }), workspaceId: 'ws-2',
+    });
+    vi.mocked(githubService.getVerifiedAccessToken).mockImplementation(async (workspaceId) =>
+      workspaceId === 'ws-2' ? 'other-verified-token' : null,
+    );
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).resolves.toEqual({
+      ok: false, reason: 'credentials_unavailable',
+    });
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-other')).resolves.toMatchObject({
+      ok: true, credentials: { githubToken: 'other-verified-token' },
+    });
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
   });
 
   // The read must not drag `transcript` along. It is megabytes of conversation

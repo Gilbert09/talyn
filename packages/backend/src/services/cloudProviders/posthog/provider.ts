@@ -10,8 +10,7 @@ import { dispatchTaskToPostHogCode } from '../../posthogCode/executor.js';
 import { postHogCodePoller } from '../../posthogCode/poller.js';
 import { postHogCodeStreamer } from '../../posthogCode/streamer.js';
 import type { CloudTaskProvider, CloudTaskRow, DispatchResult } from '../types.js';
-
-const DEFAULT_HOST = 'https://us.posthog.com';
+import { normalizeHost } from '../../posthogCode/hostPolicy.js';
 
 interface PostHogCredInput {
   apiKey?: string;
@@ -35,8 +34,9 @@ export const postHogCodeProvider: CloudTaskProvider = {
     if (!apiKey || !projectId) {
       return { ok: false, error: 'apiKey and projectId are required' };
     }
-    const resolvedHost = host?.replace(/\/+$/, '') || DEFAULT_HOST;
+    let resolvedHost: string;
     try {
+      resolvedHost = normalizeHost(host);
       await new PostHogCodeClient(apiKey, projectId, resolvedHost).ping();
     } catch (err) {
       return {

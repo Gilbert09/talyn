@@ -1124,10 +1124,13 @@ class WebSocketClient {
   // streaming only the selected account's events. undefined = all.
   private debugFilter: string | undefined;
   private authenticated = false;
+  private shouldReconnect = false;
+  private connectGeneration = 0;
   /** One console.error per outage; later attempts only warn (see onerror). */
   private errorLoggedSinceOpen = false;
 
   async connect(): Promise<void> {
+    this.shouldReconnect = true;
     this.bindLifecycle();
     // Bail if a socket is already open or mid-handshake — re-entry from a
     // focus/online wake would otherwise orphan the in-flight socket.
@@ -1137,11 +1140,19 @@ class WebSocketClient {
     )
       return;
 
-    const token = await getAuthToken();
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const generation = ++this.connectGeneration;
+    const token = await getAuthToken().catch(() => null);
+    // Logout or a newer attempt can supersede this asynchronous token lookup.
+    if (!this.shouldReconnect || generation !== this.connectGeneration) return;
     if (!token) {
       // Defer until we have a session — callers usually gate this behind
       // the AuthProvider so it's a transient case on cold start.
       console.log('WebSocket connect deferred: no auth token yet');
+      this.scheduleReconnect();
       return;
     }
     console.log('Connecting to WebSocket...');
@@ -1149,17 +1160,20 @@ class WebSocketClient {
     // doesn't end up in access/edge logs. The backend closes the
     // socket if auth doesn't arrive within its handshake window.
     this.authenticated = false;
-    this.ws = new WebSocket(getWebSocketUrl());
+    const ws = new WebSocket(getWebSocketUrl());
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (this.ws !== ws || !this.shouldReconnect) return;
       console.log('WebSocket opened; authenticating…');
       this.reconnectAttempts = 0;
       this.errorLoggedSinceOpen = false;
-      this.ws?.send(JSON.stringify({ type: 'auth', token }));
+      ws.send(JSON.stringify({ type: 'auth', token }));
       this.startHeartbeat();
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.ws !== ws || !this.shouldReconnect) return;
       try {
         const data = JSON.parse(event.data) as WSEvent;
         const payload = data.payload as
@@ -1191,7 +1205,9 @@ class WebSocketClient {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
       console.log('WebSocket disconnected');
       this.authenticated = false;
       this.stopHeartbeat();
@@ -1199,7 +1215,8 @@ class WebSocketClient {
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
+    ws.onerror = () => {
+      if (this.ws !== ws) return;
       // The browser Event carries no diagnostics ("[object Event]") —
       // describe the socket state instead. console.error becomes a PostHog
       // $exception via autocapture, so it's reserved for a REAL outage: the
@@ -1220,13 +1237,19 @@ class WebSocketClient {
   }
 
   disconnect(): void {
-    if (this.reconnectTimer) {
+    this.shouldReconnect = false;
+    this.connectGeneration++;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
-    this.ws?.close();
+    this.authenticated = false;
+    const ws = this.ws;
     this.ws = null;
+    ws?.close();
+    this.emit('connection:status', { connected: false });
   }
 
   subscribe(workspaceId: string): void {
@@ -1290,7 +1313,7 @@ class WebSocketClient {
   private scheduleReconnect(): void {
     // Already a reconnect queued — don't stack timers (focus/online events
     // and an onclose can all fire near-simultaneously).
-    if (this.reconnectTimer) return;
+    if (!this.shouldReconnect || this.reconnectTimer !== null) return;
 
     const delay = Math.min(
       1000 * Math.pow(2, this.reconnectAttempts),
@@ -1380,6 +1403,7 @@ class WebSocketClient {
     if (this.lifecycleBound || typeof window === 'undefined') return;
     this.lifecycleBound = true;
     const wake = () => {
+      if (!this.shouldReconnect) return;
       if (this.ws?.readyState === WebSocket.OPEN) {
         // Looks open — but after a freeze or sleep "open" is exactly what a
         // half-open socket looks like, and its onclose may never fire. Ping

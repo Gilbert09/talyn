@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   fleetProviderForModel,
   isStoredFleetModelId,
@@ -165,7 +165,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
   // Fetched fresh each dispatch so a re-connected or rotated token is current.
   // It goes backend -> fleetd only; the fleet's credential proxy injects it
   // host-side and it never enters the microVM (fleet spec §8).
-  const githubToken = githubService.getAccessToken(task.workspaceId);
+  const githubToken = await githubService.getVerifiedAccessToken(task.workspaceId);
   if (!githubToken) {
     return {
       ok: false,
@@ -389,7 +389,7 @@ async function resolveRepository(
       defaultBranch: repositoriesTable.defaultBranch,
     })
     .from(repositoriesTable)
-    .where(eq(repositoriesTable.id, repositoryId))
+    .where(and(eq(repositoriesTable.id, repositoryId), eq(repositoriesTable.workspaceId, workspaceId)))
     .limit(1);
   const row = rows[0];
   if (!row) return null;

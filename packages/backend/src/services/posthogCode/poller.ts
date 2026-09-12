@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { TaskResult, TaskStatus } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
@@ -237,8 +237,12 @@ class PostHogCodePoller {
     const repoRows = await db
       .select({ defaultBranch: repositoriesTable.defaultBranch })
       .from(repositoriesTable)
-      .where(eq(repositoriesTable.id, task.repositoryId))
+      .where(and(
+        eq(repositoriesTable.id, task.repositoryId),
+        eq(repositoriesTable.workspaceId, task.workspaceId),
+      ))
       .limit(1);
+    if (!repoRows[0]) return;
     const baseBranch = repoRows[0]?.defaultBranch || 'main';
 
     try {

@@ -605,6 +605,7 @@ describe('prCache — DB integration', () => {
       await db.insert(tasksTable).values({
         id,
         workspaceId: 'ws1',
+        repositoryId: 'repo1',
         type: 'code_writing',
         status: 'in_progress',
         priority: 'medium',

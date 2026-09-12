@@ -28,6 +28,25 @@ describe('prMonitorService — repo CRUD', () => {
   });
 
   describe('addWatchedRepo', () => {
+    beforeEach(() => {
+      vi.spyOn(githubService, 'getRepository').mockResolvedValue({
+        full_name: 'acme/widgets', default_branch: 'main',
+      } as never);
+    });
+
+    it.each(['not found', 'revoked', 'disconnected', 'network failure'])('refuses registration on %s', async (message) => {
+      vi.mocked(githubService.getRepository).mockRejectedValue(new Error(message));
+      await expect(prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets')).rejects.toThrow(message);
+      expect(await db.select({ id: repositoriesTable.id }).from(repositoriesTable)).toEqual([]);
+    });
+
+    it('refuses a URL that names a different repository before checking access', async () => {
+      await expect(prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets', 'https://github.com/victim/private'))
+        .rejects.toThrow(/must match/);
+      expect(githubService.getRepository).not.toHaveBeenCalled();
+      expect(await db.select({ id: repositoriesTable.id }).from(repositoriesTable)).toEqual([]);
+    });
+
     it('inserts a repo with a default github url when one is not supplied', async () => {
       const watched = await prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets');
       expect(watched.owner).toBe('acme');

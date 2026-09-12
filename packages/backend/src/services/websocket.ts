@@ -1,4 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import type { IncomingMessage } from 'http';
+import { isIP } from 'net';
 import { eq } from 'drizzle-orm';
 import type {
   AgentEvent,
@@ -14,9 +16,9 @@ import type {
 import { domainEvents } from './events.js';
 import { debugBus, matchesOwnerFilter, type DebugOwnerFilter } from './debugBus.js';
 import { setLocalDelivery, publishBroadcast, publishToWorkspace, publishToUser } from './wsBus.js';
-import { verifyTokenAndGetUser, AuthError, type AuthUser } from '../middleware/auth.js';
+import { verifyTokenAndGetUser, enforceAllowList, AuthError, type AuthUser } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
-import { workspaces as workspacesTable } from '../db/schema.js';
+import { workspaces as workspacesTable, users as usersTable } from '../db/schema.js';
 
 // Store connected clients
 const clients = new Set<WebSocket>();
@@ -24,8 +26,59 @@ const clients = new Set<WebSocket>();
 // Store subscriptions (client -> workspaceIds) and identities.
 const subscriptions = new Map<WebSocket, Set<string>>();
 const connectionUsers = new Map<WebSocket, AuthUser>();
+const connectionDeadlines = new Map<WebSocket, number>();
 // Per-client owner filter for the admin Debug stream. Absent = all owners.
 const debugFilters = new Map<WebSocket, DebugOwnerFilter>();
+
+export const WS_MAX_PAYLOAD = 16 * 1024;
+const AUTHORIZATION_REFRESH_MS = 15_000;
+const MAX_MESSAGES_PER_MINUTE = 120;
+const MAX_SUBSCRIPTIONS = 64;
+const MAX_CONNECTIONS_PER_OWNER = 20;
+// A reconnect sends every subscription, then the debug filter and heartbeat.
+const MAX_PENDING_MESSAGES = MAX_SUBSCRIPTIONS + 2;
+
+/** The deployment has exactly one trusted proxy hop, matching HTTP's fixed trust setting. */
+export function createWebSocketUpgradeGuard(): (req: IncomingMessage) => boolean {
+  const buckets = new Map<string, { startedAt: number; attempts: number; active: number }>();
+  let active = 0;
+  let sweptAt = Date.now();
+  return (req) => {
+    const now = Date.now();
+    if (now - sweptAt >= 60_000) {
+      for (const [key, bucket] of buckets) {
+        if (bucket.active === 0 && now - bucket.startedAt >= 60_000) buckets.delete(key);
+      }
+      sweptAt = now;
+    }
+    const forwarded = req.headers['x-forwarded-for'];
+    const lastHop = typeof forwarded === 'string' ? forwarded.split(',').at(-1)?.trim() : undefined;
+    const ip = lastHop && isIP(lastHop) ? lastHop : req.socket.remoteAddress ?? 'unknown';
+    let bucket = buckets.get(ip);
+    if (!bucket) {
+      if (buckets.size >= 10_000) return false;
+      bucket = { startedAt: now, attempts: 0, active: 0 };
+      buckets.set(ip, bucket);
+    }
+    if (now - bucket.startedAt >= 60_000) {
+      bucket.startedAt = now;
+      bucket.attempts = 0;
+    }
+    if (bucket.attempts >= 120 || bucket.active >= 50 || active >= 1000) return false;
+    bucket.attempts++;
+    bucket.active++;
+    active++;
+    req.socket.once('close', () => {
+      bucket.active--;
+      active--;
+    });
+    return true;
+  };
+}
+
+function canDeliver(ws: WebSocket): boolean {
+  return ws.readyState === WebSocket.OPEN && (connectionDeadlines.get(ws) ?? 0) > Date.now();
+}
 
 /**
  * Fan a debug event out only to ADMIN clients, and only to those whose current
@@ -36,7 +89,7 @@ const debugFilters = new Map<WebSocket, DebugOwnerFilter>();
 function fanOutDebugEvent(event: DebugEvent): void {
   let message: string | null = null;
   for (const client of clients) {
-    if (client.readyState !== WebSocket.OPEN) continue;
+    if (!canDeliver(client)) continue;
     if (!connectionUsers.get(client)?.isAdmin) continue;
     if (!matchesOwnerFilter(event.ownerId, debugFilters.get(client))) continue;
     if (message === null) {
@@ -58,7 +111,8 @@ export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 export function setupWebSocket(
   wss: WebSocketServer,
-  handshakeTimeoutMs: number = DEFAULT_HANDSHAKE_TIMEOUT_MS
+  handshakeTimeoutMs: number = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  authorizationRefreshMs: number = AUTHORIZATION_REFRESH_MS
 ): void {
   // Wire the debug bus to the live client fan-out + connection count. Kept
   // here (not in debugBus) so debugBus stays dependency-free.
@@ -74,35 +128,114 @@ export function setupWebSocket(
     user: deliverToUserLocal,
   });
 
-  wss.on('connection', async (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket) => {
     // Accept the upgrade anonymously. The client must send an
     // `{type:'auth', token}` message within the handshake window
     // or the socket is closed. Keeping the token out of the URL
     // stops it leaking into access logs, Railway edge logs, and
     // monitoring tool URL captures.
     let authenticated = false;
+    let authPending = false;
+    let closed = false;
+    let refreshTimer: NodeJS.Timeout | undefined;
+    let accessTimer: NodeJS.Timeout | undefined;
+    let messageWindow = Date.now();
+    let messageCount = 0;
+    let pendingMessages = 0;
+    let messageChain = Promise.resolve();
+    const handshakeDeadline = Date.now() + handshakeTimeoutMs;
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(handshakeTimer);
+      clearTimeout(refreshTimer);
+      clearTimeout(accessTimer);
+      const wasConnected = clients.delete(ws);
+      subscriptions.delete(ws);
+      connectionUsers.delete(ws);
+      connectionDeadlines.delete(ws);
+      debugFilters.delete(ws);
+      if (wasConnected) {
+        debugBus.recordWs({
+          action: 'disconnect',
+          summary: `client disconnected (${clients.size} left)`,
+        });
+      }
+    };
+    const close = (code: number, reason: string) => {
+      cleanup();
+      const timer = setTimeout(() => ws.terminate(), 1000).unref();
+      ws.once('close', () => clearTimeout(timer));
+      ws.close(code, reason);
+    };
+    const authorizeUntil = (user: AuthUser, checkedAt: number) => {
+      // Stop delivery at the lease deadline even if a database check stalls.
+      const deadline = Math.min(user.expiresAt!, checkedAt + authorizationRefreshMs * 2);
+      connectionUsers.set(ws, user);
+      connectionDeadlines.set(ws, deadline);
+      clearTimeout(accessTimer);
+      accessTimer = setTimeout(() => close(4401, 'authorization expired'), Math.max(0, deadline - Date.now()));
+    };
+    const refreshAuthorization = async () => {
+      const user = connectionUsers.get(ws);
+      if (closed || !user) return;
+      const checkedAt = Date.now();
+      try {
+        const [row] = await getDbClient()
+          .select({ email: usersTable.email, isAdmin: usersTable.isAdmin })
+          .from(usersTable)
+          .where(eq(usersTable.id, user.id))
+          .limit(1);
+        if (closed) return;
+        if (!canDeliver(ws) || !row) {
+          close(4401, 'authorization expired');
+          return;
+        }
+        enforceAllowList(row.email);
+        authorizeUntil({ ...user, ...row }, checkedAt);
+        if (!row.isAdmin) debugFilters.delete(ws);
+        refreshTimer = setTimeout(() => { void refreshAuthorization(); }, authorizationRefreshMs);
+      } catch (err) {
+        if (!closed) close(err instanceof AuthError ? 4401 : 1013, 'authorization unavailable');
+      }
+    };
     const handshakeTimer = setTimeout(() => {
       if (!authenticated) {
-        console.warn('WebSocket auth timeout; closing');
-        ws.close(4401, 'auth timeout');
+        close(4401, 'auth timeout');
       }
     }, handshakeTimeoutMs);
 
     ws.on('message', async (data: Buffer) => {
-      let message: unknown;
+      if (closed || ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - messageWindow >= 60_000) {
+        messageWindow = Date.now();
+        messageCount = 0;
+      }
+      if (++messageCount > MAX_MESSAGES_PER_MINUTE || data.length > WS_MAX_PAYLOAD) {
+        close(1008, 'message limit');
+        return;
+      }
+      let message: Record<string, unknown>;
       try {
         message = JSON.parse(data.toString());
-      } catch (err) {
-        console.error('Invalid WebSocket message:', err);
+      } catch {
+        close(1008, 'invalid message');
+        return;
+      }
+      if (!message || Array.isArray(message) || typeof message.type !== 'string' || message.type.length > 32) {
+        close(1008, 'invalid message');
         return;
       }
 
       if (!authenticated) {
         const m = message as { type?: unknown; token?: unknown };
-        if (m.type !== 'auth' || typeof m.token !== 'string') {
-          ws.close(4401, 'expected auth');
+        if (authPending || m.type !== 'auth' || typeof m.token !== 'string') {
+          close(4401, 'expected one auth frame');
           return;
         }
+        authPending = true;
+        const checkedAt = Date.now();
         let user: AuthUser | null = null;
         let unavailable = false;
         try {
@@ -115,15 +248,28 @@ export function setupWebSocket(
           unavailable = err instanceof AuthError && err.code === 'unavailable';
           if (unavailable) console.error('WebSocket auth check unavailable:', err);
         }
-        if (!user) {
-          ws.close(unavailable ? 1013 : 4401, unavailable ? 'auth unavailable' : 'invalid token');
+        if (closed || ws.readyState !== WebSocket.OPEN) return;
+        if (
+          !user || !Number.isFinite(user.expiresAt) || user.expiresAt! <= Date.now() ||
+          Date.now() >= handshakeDeadline || checkedAt + authorizationRefreshMs * 2 <= Date.now()
+        ) {
+          close(unavailable ? 1013 : 4401, unavailable ? 'auth unavailable' : 'invalid token');
+          return;
+        }
+        let ownerConnections = 0;
+        for (const connectedUser of connectionUsers.values()) {
+          if (connectedUser.id === user.id) ownerConnections++;
+        }
+        if (ownerConnections >= MAX_CONNECTIONS_PER_OWNER) {
+          close(1013, 'owner connection limit');
           return;
         }
         authenticated = true;
         clearTimeout(handshakeTimer);
         clients.add(ws);
         subscriptions.set(ws, new Set());
-        connectionUsers.set(ws, user);
+        authorizeUntil(user, checkedAt);
+        refreshTimer = setTimeout(() => { void refreshAuthorization(); }, authorizationRefreshMs);
         debugBus.recordWs({
           action: 'connect',
           summary: `client connected (${clients.size} total)`,
@@ -138,36 +284,43 @@ export function setupWebSocket(
         return;
       }
 
-      void handleMessage(ws, message);
+      if (!canDeliver(ws)) {
+        close(4401, 'authorization expired');
+        return;
+      }
+      if (pendingMessages >= MAX_PENDING_MESSAGES) {
+        close(1008, 'too many pending messages');
+        return;
+      }
+      pendingMessages++;
+      messageChain = messageChain.then(async () => {
+        if (!closed && canDeliver(ws)) await handleMessage(ws, message, close);
+      }).catch(() => {
+        if (!closed) close(1013, 'message handling failed');
+      }).finally(() => { pendingMessages--; });
     });
 
-    ws.on('close', () => {
-      clearTimeout(handshakeTimer);
-      if (authenticated) {
-        console.log('WebSocket client disconnected');
-        debugBus.recordWs({
-          action: 'disconnect',
-          summary: `client disconnected (${Math.max(0, clients.size - 1)} left)`,
-        });
-      }
-      clients.delete(ws);
-      subscriptions.delete(ws);
-      connectionUsers.delete(ws);
-      debugFilters.delete(ws);
-    });
+    ws.on('close', cleanup);
 
     ws.on('error', (err) => {
       console.error('WebSocket error:', err);
-      clearTimeout(handshakeTimer);
-      clients.delete(ws);
-      subscriptions.delete(ws);
-      connectionUsers.delete(ws);
-      debugFilters.delete(ws);
+      cleanup();
+      ws.terminate();
     });
   });
 }
 
-async function handleMessage(ws: WebSocket, message: any): Promise<void> {
+async function handleMessage(
+  ws: WebSocket,
+  message: Record<string, unknown>,
+  close: (code: number, reason: string) => void
+): Promise<void> {
+  if (message.type === 'subscribe' || message.type === 'unsubscribe') {
+    if (typeof message.workspaceId !== 'string' || !message.workspaceId || message.workspaceId.length > 128) {
+      close(1008, 'invalid workspace');
+      return;
+    }
+  }
   // Inbound message trace. Skip `ping` — it fires every 25s per client and
   // would drown out the signal.
   if (message?.type && message.type !== 'ping') {
@@ -180,19 +333,25 @@ async function handleMessage(ws: WebSocket, message: any): Promise<void> {
   switch (message.type) {
     case 'subscribe': {
       // Only allow subscribing to a workspace the connected user owns.
-      if (!message.workspaceId) break;
+      const workspaceId = message.workspaceId as string;
+      const current = subscriptions.get(ws);
+      if (!current || current.has(workspaceId)) break;
+      if (current.size >= MAX_SUBSCRIPTIONS) {
+        close(1008, 'subscription limit');
+        break;
+      }
       const user = connectionUsers.get(ws);
       if (!user) break;
-      const allowed = await userOwnsWorkspace(user.id, message.workspaceId);
-      if (allowed) {
-        subscriptions.get(ws)?.add(message.workspaceId);
+      const allowed = await userOwnsWorkspace(user.id, workspaceId);
+      if (allowed && canDeliver(ws)) {
+        subscriptions.get(ws)?.add(workspaceId);
       }
       break;
     }
 
     case 'unsubscribe':
       if (message.workspaceId) {
-        subscriptions.get(ws)?.delete(message.workspaceId);
+        subscriptions.get(ws)?.delete(message.workspaceId as string);
       }
       break;
 
@@ -202,7 +361,11 @@ async function handleMessage(ws: WebSocket, message: any): Promise<void> {
       // ignored (they never receive debug events regardless).
       if (!connectionUsers.get(ws)?.isAdmin) break;
       const owner = message.owner;
-      debugFilters.set(ws, typeof owner === 'string' ? (owner as DebugOwnerFilter) : undefined);
+      if (typeof owner === 'string' && owner.length > 128) {
+        close(1008, 'invalid owner');
+        break;
+      }
+      debugFilters.set(ws, typeof owner === 'string' ? owner : undefined);
       break;
     }
 
@@ -215,7 +378,7 @@ async function handleMessage(ws: WebSocket, message: any): Promise<void> {
       break;
 
     default:
-      console.log('Unknown WebSocket message type:', message.type);
+      close(1008, 'unknown message type');
   }
 }
 
@@ -230,7 +393,7 @@ async function userOwnsWorkspace(userId: string, workspaceId: string): Promise<b
 }
 
 function sendToClient(ws: WebSocket, event: WSEvent): void {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (canDeliver(ws)) {
     ws.send(JSON.stringify(event));
   }
 }
@@ -241,7 +404,7 @@ function deliverBroadcastLocal(event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
+    if (canDeliver(client)) {
       client.send(message);
       sent++;
     }
@@ -261,7 +424,7 @@ function deliverToWorkspaceLocal(workspaceId: string, event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const [client, workspaces] of subscriptions) {
-    if (workspaces.has(workspaceId) && client.readyState === WebSocket.OPEN) {
+    if (workspaces.has(workspaceId) && canDeliver(client)) {
       client.send(message);
       sent++;
     }
@@ -279,7 +442,7 @@ function deliverToUserLocal(userId: string, event: WSEvent): void {
   const message = JSON.stringify(event);
   let sent = 0;
   for (const [client, user] of connectionUsers) {
-    if (user.id === userId && client.readyState === WebSocket.OPEN) {
+    if (user.id === userId && canDeliver(client)) {
       client.send(message);
       sent++;
     }
@@ -314,7 +477,7 @@ export function broadcastToUser(userId: string, event: WSEvent): void {
 }
 
 // Helper functions for common events
-export function emitTaskStatus(workspaceId: string, taskId: string, status: string, result?: any): void {
+export function emitTaskStatus(workspaceId: string, taskId: string, status: string, result?: unknown): void {
   broadcastToWorkspace(workspaceId, {
     type: 'task:status',
     payload: { taskId, status, result },

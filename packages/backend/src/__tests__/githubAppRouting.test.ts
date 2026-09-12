@@ -1,212 +1,141 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { randomBytes, generateKeyPairSync } from 'node:crypto';
-import { githubService } from '../services/github.js';
-import { _resetInstallationTokenCache } from '../services/githubApp.js';
-import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
+import { randomBytes } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { githubService, GitHubAuthorizationUnavailableError } from '../services/github.js';
+import { githubRateGate } from '../services/githubRateGate.js';
+import * as githubApp from '../services/githubApp.js';
+import { createTestDb, seedUser } from './helpers/testDb.js';
+import { workspaces, githubInstallations, integrations } from '../db/schema.js';
+import { encryptString } from '../services/tokenCrypto.js';
 import type { Database } from '../db/client.js';
-import { workspaces as workspacesTable, githubInstallations as githubInstallationsTable } from '../db/schema.js';
 
-/**
- * Hybrid-auth routing: an App-connected workspace (one with an installationId)
- * must send a freshly-minted INSTALLATION token on data-plane reads, and the
- * USER token only on viewer-identity endpoints (`/user`). A legacy workspace
- * with no installationId keeps sending the stored token everywhere.
- */
-
-const { privateKey } = generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-});
-
-interface Captured {
-  url: string;
-  authorization: string | null;
-}
-
-function capturingFetch(
-  captured: Captured[],
-  routes: Record<string, unknown>,
-) {
-  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    const headers = new Headers((init?.headers as HeadersInit) ?? {});
-    captured.push({ url, authorization: headers.get('authorization') });
-    for (const [pattern, payload] of Object.entries(routes)) {
-      if (url.includes(pattern)) {
-        return new Response(JSON.stringify(payload), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-    }
-    throw new Error(`no fetch mock for ${url}`);
-  });
-}
-
-describe('github hybrid-auth routing', () => {
-  let db: Database;
+describe('workspace GitHub authorization', () => {
   let cleanup: () => Promise<void>;
-  const originalEnv = { ...process.env };
+  let db: Database;
 
   beforeEach(async () => {
-    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
-    process.env.GITHUB_APP_ID = '777';
-    process.env.GITHUB_APP_PRIVATE_KEY = Buffer.from(privateKey).toString('base64');
-
+    githubRateGate._reset();
+    vi.stubEnv('TALYN_TOKEN_KEY', randomBytes(32).toString('base64'));
     const testDb = await createTestDb();
     db = testDb.db;
     cleanup = testDb.cleanup;
-    await seedUser(db, { id: TEST_USER_ID });
-    await db.insert(workspacesTable).values({ id: 'ws1', ownerId: TEST_USER_ID, name: 'mine', settings: {} });
-
-    _resetInstallationTokenCache();
-    // Rebuild the (singleton) installation index from the fresh, empty test DB
-    // so entries seeded by a prior test don't leak in.
-    await githubService.refreshInstallationIndex();
-    for (const ws of githubService.getConnectedWorkspaces()) {
-      await githubService.removeToken(ws).catch(() => {});
-    }
+    for (const ws of githubService.getConnectedWorkspaces()) await githubService.removeToken(ws);
+    await seedUser(testDb.db, { id: 'owner-a', email: 'a@example.test' });
+    await seedUser(testDb.db, { id: 'owner-b', email: 'b@example.test' });
+    await testDb.db.insert(workspaces).values([
+      { id: 'ws-a', ownerId: 'owner-a', name: 'A' },
+      { id: 'ws-b', ownerId: 'owner-b', name: 'B' },
+    ]);
+    await testDb.db.insert(githubInstallations).values({
+      installationId: 'victim-install', accountLogin: 'victim', accountType: 'Organization',
+      repoFullNames: ['victim/private'],
+    });
+    vi.spyOn(githubApp, 'isGitHubAppConfigured').mockReturnValue(true);
+    vi.spyOn(githubApp, 'getInstallationToken').mockResolvedValue('installation-must-not-be-used');
+    await githubService.storeToken('ws-a', 'user-a', 'bearer', 'repo', { installationId: 'victim-install' });
+    await githubService.storeToken('ws-b', 'user-b', 'bearer', 'repo', { installationId: 'victim-install' });
+    await githubService.init();
   });
 
   afterEach(async () => {
-    for (const ws of githubService.getConnectedWorkspaces()) {
-      await githubService.removeToken(ws).catch(() => {});
-    }
+    for (const ws of githubService.getConnectedWorkspaces()) await githubService.removeToken(ws);
     await cleanup();
-    process.env = { ...originalEnv };
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
-  it('uses the installation token for data-plane reads and the user token for /user', async () => {
-    await db.insert(githubInstallationsTable).values({
-      installationId: '555', accountLogin: 'acme', accountType: 'Organization',
-      repoFullNames: [], createdAt: new Date(), updatedAt: new Date(),
+  const operations = [
+    ['repository', (ws: string) => githubService.getRepository(ws, 'victim', 'private')],
+    ['merge', (ws: string) => githubService.mergePullRequest(ws, 'victim', 'private', 7)],
+    ['search', (ws: string) => githubService.searchPullRequestNumbers(ws, 'repo:victim/private is:pr')],
+    ['GraphQL read', (ws: string) => githubService.executeGraphql(ws, 'query { viewer { login } }', { owner: 'victim' })],
+    ['GraphQL mutation', (ws: string) => githubService.executeGraphql(ws, 'mutation { example }', { owner: 'victim' })],
+  ] as const;
+
+  it.each(operations)('uses each user token for %s, never the global installation', async (_name, operation) => {
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const authorization = new Headers(init?.headers).get('authorization');
+      const allowed = authorization === 'bearer user-b';
+      return new Response(JSON.stringify(allowed
+        ? { full_name: 'victim/private', merged: true, items: [], data: { allowed: true } }
+        : { message: 'Not Found' }), { status: allowed ? 200 : 404 });
     });
-    await githubService.refreshInstallationIndex();
-    await githubService.storeToken('ws1', 'ghu_usertoken', 'bearer', 'repo', {
-      installationId: '555',
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(operation('ws-a')).rejects.toThrow();
+    await expect(operation('ws-b')).resolves.toBeDefined();
+    expect(fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get('authorization')))
+      .toEqual(['bearer user-a', 'bearer user-b']);
+    expect(githubApp.getInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it.each(operations)('refuses disconnected workspace %s without an outbound call', async (_name, operation) => {
+    await githubService.removeToken('ws-a');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(operation('ws-a')).rejects.toThrow(/not connected/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(githubApp.getInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 404])('refuses webhook access on HTTP %i', async (status) => {
+    vi.spyOn(githubService, 'checkTokenHealth').mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
+    expect(await githubService.canAccessRepository('ws-a', 'victim', 'private')).toBe(false);
+    expect(githubApp.getInstallationToken).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 500, 503])('keeps authorization unverifiable on HTTP %i', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
+    await expect(githubService.canAccessRepository('ws-a', 'victim', 'private'))
+      .rejects.toBeInstanceOf(GitHubAuthorizationUnavailableError);
+  });
+
+  it.each(['deleted', 'disabled'])('refuses a cached credential after its integration is %s elsewhere', async (change) => {
+    const where = eq(integrations.workspaceId, 'ws-a');
+    if (change === 'deleted') await db.delete(integrations).where(where);
+    else await db.update(integrations).set(change === 'disabled'
+      ? { enabled: false }
+      : { config: { accessTokenEnc: encryptString('replacement-user') } }).where(where);
+    expect(githubService.getAccessToken('ws-a')).toBe('user-a');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await githubService.canAccessRepository('ws-a', 'victim', 'private')).toBe(false);
+    await expect(githubService.executeGraphql('ws-a', 'query { viewer { login } }')).rejects.toThrow(/not connected/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses network errors and mismatched repository responses', async () => {
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ full_name: 'other/repo' })));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(githubService.canAccessRepository('ws-a', 'victim', 'private'))
+      .rejects.toBeInstanceOf(GitHubAuthorizationUnavailableError);
+    expect(await githubService.canAccessRepository('ws-a', 'victim', 'private')).toBe(false);
+  });
+
+  it('does not restore a credential when disconnect occurs during refresh', async () => {
+    await githubService.storeToken('ws-a', 'user-a', 'bearer', 'repo', {
+      refreshToken: 'refresh-a', accessTokenExpiresAt: Date.now() - 1,
     });
-
-    const captured: Captured[] = [];
-    vi.stubGlobal(
-      'fetch',
-      capturingFetch(captured, {
-        '/app/installations/555/access_tokens': {
-          token: 'ghs_installtoken',
-          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-        },
-        '/repos/acme/widget/pulls/7': { number: 7, title: 'PR' },
-        '/user': { id: 1, login: 'octocat' },
-      }),
-    );
-
-    await githubService.getPullRequest('ws1', 'acme', 'widget', 7);
-    await githubService.getUser('ws1');
-
-    const prCall = captured.find((c) => c.url.includes('/repos/acme/widget/pulls/7'));
-    const userCall = captured.find((c) => c.url.endsWith('/user'));
-    expect(prCall?.authorization).toBe('token ghs_installtoken');
-    expect(userCall?.authorization).toBe('bearer ghu_usertoken');
-  });
-
-  /**
-   * A SEARCH must use the installation covering the repo it searches.
-   *
-   * The repo lives in the `q` qualifier, not the path, and URLSearchParams
-   * percent-encodes it: `q=repo%3APostHog%2Fcharts…`. ownerFromEndpoint matched
-   * a literal `repo:`, so it allowed `%2F` for the slash but never got past
-   * `%3A` for the colon — the owner came back undefined and every search fell
-   * back to the workspace's PRIMARY installation.
-   *
-   * That token belongs to another account, so GitHub answers 403 "Resource not
-   * accessible by integration", and prMonitor reports it as "the GitHub App has
-   * no access to <repo>". The App had access all along; the request carried the
-   * wrong installation's token.
-   */
-  it('searches with the installation that covers the searched repo, not the primary one', async () => {
-    // Two installations, and the workspace's primary is the WRONG one for the
-    // repo being searched.
-    await db.insert(githubInstallationsTable).values([
-      {
-        installationId: '555', accountLogin: 'acme', accountType: 'Organization',
-        repoFullNames: [], createdAt: new Date(), updatedAt: new Date(),
-      },
-      {
-        installationId: '888', accountLogin: 'PostHog', accountType: 'Organization',
-        repoFullNames: [], createdAt: new Date(), updatedAt: new Date(),
-      },
-    ]);
-    await githubService.refreshInstallationIndex();
-    await githubService.storeToken('ws1', 'ghu_usertoken', 'bearer', 'repo', {
-      installationId: '555',
+    vi.spyOn(githubApp, 'refreshUserToken').mockImplementation(async () => {
+      await githubService.removeToken('ws-a');
+      return { access_token: 'new-a', token_type: 'bearer', scope: 'repo', expiresInSec: 3600 };
     });
-
-    const captured: Captured[] = [];
-    vi.stubGlobal(
-      'fetch',
-      capturingFetch(captured, {
-        '/app/installations/555/access_tokens': {
-          token: 'ghs_acme', expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-        },
-        '/app/installations/888/access_tokens': {
-          token: 'ghs_posthog', expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-        },
-        '/search/issues': { total_count: 0, items: [] },
-      }),
-    );
-
-    await githubService.searchPullRequestNumbers('ws1', 'repo:PostHog/charts is:pr is:open');
-
-    const search = captured.find((c) => c.url.includes('/search/issues'));
-    expect(search).toBeTruthy();
-    expect(search?.authorization).toBe('token ghs_posthog');
-    // The bug: acme's token on a PostHog search.
-    expect(search?.authorization).not.toBe('token ghs_acme');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await githubService.canAccessRepository('ws-a', 'victim', 'private')).toBe(false);
+    expect(githubService.getAccessToken('ws-a')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('falls back to the stored token everywhere for a workspace without an installation', async () => {
-    await githubService.storeToken('ws1', 'gho_legacy', 'bearer', 'repo');
-
-    const captured: Captured[] = [];
-    vi.stubGlobal(
-      'fetch',
-      capturingFetch(captured, { '/repos/acme/widget/pulls/7': { number: 7 } }),
-    );
-
-    await githubService.getPullRequest('ws1', 'acme', 'widget', 7);
-    const prCall = captured.find((c) => c.url.includes('/pulls/7'));
-    // No installation minting happened — the only call is the data-plane read,
-    // authed with the stored OAuth token.
-    expect(captured.some((c) => c.url.includes('/access_tokens'))).toBe(false);
-    expect(prCall?.authorization).toBe('bearer gho_legacy');
-  });
-
-  it('resolves the installation by repo OWNER when a workspace spans accounts', async () => {
-    // Two installations: acme → inst-A (the workspace's primary), beta → inst-B.
-    await db.insert(githubInstallationsTable).values([
-      { installationId: 'inst-A', accountLogin: 'acme', accountType: 'Organization', repoFullNames: [], createdAt: new Date(), updatedAt: new Date() },
-      { installationId: 'inst-B', accountLogin: 'beta', accountType: 'Organization', repoFullNames: [], createdAt: new Date(), updatedAt: new Date() },
-    ]);
-    await githubService.refreshInstallationIndex();
-    await githubService.storeToken('ws1', 'ghu_usertoken', 'bearer', 'repo', { installationId: 'inst-A' });
-
-    const captured: Captured[] = [];
-    vi.stubGlobal(
-      'fetch',
-      capturingFetch(captured, {
-        '/app/installations/inst-A/access_tokens': { token: 'ghs_A', expires_at: new Date(Date.now() + 3_600_000).toISOString() },
-        '/app/installations/inst-B/access_tokens': { token: 'ghs_B', expires_at: new Date(Date.now() + 3_600_000).toISOString() },
-        '/repos/acme/widget/pulls/1': { number: 1 },
-        '/repos/beta/gadget/pulls/2': { number: 2 },
-      }),
-    );
-
-    await githubService.getPullRequest('ws1', 'acme', 'widget', 1);
-    await githubService.getPullRequest('ws1', 'beta', 'gadget', 2);
-
-    // acme repo → inst-A token; beta repo → inst-B token (resolved by owner).
-    expect(captured.find((c) => c.url.includes('/repos/acme/widget'))?.authorization).toBe('token ghs_A');
-    expect(captured.find((c) => c.url.includes('/repos/beta/gadget'))?.authorization).toBe('token ghs_B');
+  it('never shares fetched data or installation budgets between workspaces', () => {
+    expect(githubService.graphqlAccountKeyForOwner('ws-a', 'victim'))
+      .not.toBe(githubService.graphqlAccountKeyForOwner('ws-b', 'victim'));
+    expect(githubService.accountKeyFor('ws-a')).not.toBe('inst:victim-install');
+    expect(githubService.accountKeyFor('ws-a')).toMatch(/^token:[a-f0-9]{64}$/);
+    expect(githubService.accountKeyFor('ws-a')).not.toContain('user-a');
+    expect(githubService.accountKeyFor('ws-a')).not.toBe(githubService.accountKeyFor('ws-b'));
+    expect(githubService.accountKeyFor('ws-a')).toBe(githubService.accountKeyFor('ws-a'));
   });
 });

@@ -5,7 +5,7 @@ import {
   tasks as tasksTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
-import { createCloudTask } from '../services/taskCreate.js';
+import { createCloudTask, TaskReferenceError } from '../services/taskCreate.js';
 import {
   ACTIVE_TASK_STATUSES,
   assertCanActivateTask,
@@ -176,21 +176,28 @@ export function taskRoutes(): Router {
       });
     }
 
-    const row = await createCloudTask({
-      workspaceId: body.workspaceId,
-      type: body.type,
-      title: body.title,
-      description: body.description,
-      prompt: body.prompt,
-      priority: body.priority,
-      repositoryId: body.repositoryId,
-      assignedEnvironmentId: body.assignedEnvironmentId,
-      pullRequestId: body.pullRequestId,
-      runtimeAdapter: body.runtimeAdapter,
-      model: body.model,
-      skill: body.skill,
-    });
-    res.status(201).json({ success: true, data: rowToTask(row) } as ApiResponse<Task>);
+    try {
+      const row = await createCloudTask({
+        workspaceId: body.workspaceId,
+        type: body.type,
+        title: body.title,
+        description: body.description,
+        prompt: body.prompt,
+        priority: body.priority,
+        repositoryId: body.repositoryId,
+        assignedEnvironmentId: body.assignedEnvironmentId,
+        pullRequestId: body.pullRequestId,
+        runtimeAdapter: body.runtimeAdapter,
+        model: body.model,
+        skill: body.skill,
+      });
+      res.status(201).json({ success: true, data: rowToTask(row) } as ApiResponse<Task>);
+    } catch (err) {
+      if (err instanceof TaskReferenceError) {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      throw err;
+    }
   });
 
   // Update task
@@ -211,6 +218,19 @@ export function taskRoutes(): Router {
       result?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
     };
+
+    // Only dispatch settings are public. Remote handles and PR links belong to the server.
+    if (body.metadata !== undefined) {
+      const meta = body.metadata;
+      if (
+        !meta || typeof meta !== 'object' || Array.isArray(meta) ||
+        Object.keys(meta).some((key) => key !== 'model' && key !== 'runtimeAdapter') ||
+        (meta.model !== undefined && (typeof meta.model !== 'string' || !meta.model.trim())) ||
+        (meta.runtimeAdapter !== undefined && meta.runtimeAdapter !== 'claude' && meta.runtimeAdapter !== 'codex')
+      ) {
+        return res.status(400).json({ success: false, error: 'metadata accepts only model and runtimeAdapter dispatch settings' });
+      }
+    }
 
     // Re-pinning a task to an environment must prove the caller owns that
     // env — POST /tasks already enforces this; PATCH previously didn't.
@@ -252,7 +272,6 @@ export function taskRoutes(): Router {
     if (body.assignedEnvironmentId !== undefined)
       updates.assignedEnvironmentId = body.assignedEnvironmentId;
     if (body.result !== undefined) updates.result = body.result;
-    if (body.metadata !== undefined) updates.metadata = body.metadata;
 
     const now = new Date();
     if (
@@ -269,6 +288,10 @@ export function taskRoutes(): Router {
         .update(tasksTable)
         .set(updates)
         .where(eq(tasksTable.id, req.params.id));
+    }
+
+    if (body.metadata !== undefined) {
+      await patchTaskMetadata(req.params.id, (meta) => ({ ...meta, ...body.metadata }));
     }
 
     const rows = await db
@@ -636,4 +659,3 @@ function deriveTaskMetadata(prompt: string): GenerateTaskMetadataResponse {
     suggestedPriority: 'medium',
   };
 }
-

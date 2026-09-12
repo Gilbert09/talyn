@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { eq, sql } from 'drizzle-orm';
 import { setupRoutes } from './routes/index.js';
-import { setupWebSocket } from './services/websocket.js';
+import { createWebSocketUpgradeGuard, setupWebSocket, WS_MAX_PAYLOAD } from './services/websocket.js';
 import { initWsBus, shutdownWsBus } from './services/wsBus.js';
 import { closeRedis } from './services/redis.js';
 import { initWebhookIndex } from './services/webhookIndex.js';
@@ -272,8 +272,9 @@ async function main() {
   // Single user-facing WS server on `/ws`. Uses `noServer: true` + a
   // manual upgrade router so a stray non-`/ws` upgrade is cleanly closed
   // instead of crashing the ws library's auto-attached listener.
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
   setupWebSocket(wss);
+  const allowWebSocketUpgrade = createWebSocketUpgradeGuard();
 
   // Cross-replica WebSocket fan-out over Redis Pub/Sub. Inert (single-process
   // delivery only) when REDIS_URL is unset. Started after setupWebSocket so the
@@ -294,6 +295,12 @@ async function main() {
       return;
     }
     if (pathname === '/ws') {
+      if (!allowWebSocketUpgrade(req)) {
+        const timer = setTimeout(() => socket.destroy(), 1000).unref();
+        socket.once('close', () => clearTimeout(timer));
+        socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
     } else {
       socket.destroy();

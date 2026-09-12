@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { repositoryRoutes } from '../../routes/repositories.js';
+import { githubService } from '../../services/github.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
@@ -61,6 +62,7 @@ describe('routes/repositories', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await closeServer();
     await cleanup();
   });
@@ -122,6 +124,11 @@ describe('routes/repositories', () => {
   });
 
   describe('POST /repositories', () => {
+    beforeEach(() => {
+      vi.spyOn(githubService, 'getRepository').mockResolvedValue({
+        full_name: 'acme/widgets', default_branch: 'main',
+      } as never);
+    });
     it('adds a repo and defaults the url when not provided', async () => {
       const res = await fetch(`${serverUrl}/repositories`, {
         method: 'POST',

@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Backend security review (2026-09-12)
+
+Reviewed backend authorization, tenant isolation, credential handling, webhooks, sockets, MCP, and runtime dependencies.
+The fixes enforce workspace user credentials for GitHub and authorize webhook recipients before processing private payloads.
+They also protect cached skills, task associations, remote execution metadata, and fleet transcript access.
+PostHog requests now use approved origins without redirects. Sockets enforce token deadlines, current authorization, and bounded work.
+Queue comments require the known bot identity. External merge claims require independent GitHub confirmation.
+
+Validation passed: 1,856 backend tests across 72 selected files, plus 11 client heartbeat tests.
+Root typechecks and changed-file lint passed. The backend production dependency audit reported zero known vulnerabilities.
+This was a source review with local tests, not production penetration testing.
+See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for deployment requirements and remaining work.
+
 ## Session 119 — a pending failure is not an ejection (2026-09-11)
 
 PostHog's "push to a queued PR reset 3 or more others" alert fired six times in

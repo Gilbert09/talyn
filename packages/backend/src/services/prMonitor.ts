@@ -1,7 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { fetchDefaultBranch } from './repoDefaultBranch.js';
 import { getPoolDbClient, type Database } from '../db/client.js';
 import {
   repositories as repositoriesTable,
@@ -51,13 +50,6 @@ interface TrackedOpenRow {
 }
 
 /**
- * Tick-scoped cache for `sweepClosedViaRest`, shared across every workspace in
- * one reconcile-sweep tick: N workspaces watching the same repo reuse ONE
- * open-list fetch and ONE per-PR lookup (promises, so concurrent callers
- * coalesce too). Create a fresh one per tick — a stale open list must not
- * outlive the tick that fetched it.
- */
-/**
  * Options shared by every single-PR refresh entry point.
  *
  * `settleUnknown` exists so the deferred settle can re-apply its own result
@@ -69,6 +61,7 @@ export interface RefreshPrOptions {
   settleUnknown?: boolean;
 }
 
+/** Reuse responses only within one workspace and one sweep tick. */
 export interface RestSweepCache {
   openLists: Map<string, Promise<Set<number> | null>>;
   prLookups: Map<string, Promise<{ state: 'open' | 'closed'; mergedAt: string | null } | null>>;
@@ -86,13 +79,6 @@ export function createRestSweepCache(): RestSweepCache {
 // resolved MERGEABLE/CONFLICTING instead. The timings live in
 // `mergeableSettle.ts` so the inline resolve and the deferred settle answer
 // the same question with the same numbers.
-
-// Cross-workspace fetch de-dup window for the bulk poll. When many workspaces
-// track one shared org, a PR fetched for one this window serves the rest (see
-// `batchPullRequestsByNumber`'s dedupe note). 60s = the active-cohort freshness
-// bound, so this never serves data staler than the poll already tolerates, while
-// collapsing the same-PR-across-workspaces amplification within a poll pass.
-const BULK_POLL_DEDUPE_MS = 60_000;
 
 // How long a forced poll (user-facing Refresh) waits for an in-flight tick
 // before giving up. Keeps `POST /repositories/poll` bounded — see
@@ -197,13 +183,16 @@ class PRMonitorService extends EventEmitter {
     const id = uuid();
     const fullName = `${owner}/${repo}`;
     const repoUrl = url || `https://github.com/${fullName}`;
-    // Asked, not assumed. This used to be a hardcoded 'main' and nothing ever
-    // corrected it, so every master-defaulted repo carried a branch that does
-    // not exist — which is why PostHog/posthog's golden bake failed instantly
-    // on every dispatch (`fatal: Remote branch main not found`). 'main' is
-    // still the fallback when GitHub cannot be reached, because a watched repo
-    // with a wrong branch is better than no watched repo.
-    const defaultBranch = (await fetchDefaultBranch(workspaceId, owner, repo)) ?? 'main';
+    const identity = parseRepoUrl(repoUrl);
+    if (!identity || identity.fullName.toLowerCase() !== fullName.toLowerCase()) {
+      throw new Error('Repository URL must match owner/repo');
+    }
+    // Do not use the default-branch cache as an authorization check.
+    const accessible = await githubService.getRepository(workspaceId, owner, repo);
+    if (accessible.full_name?.toLowerCase() !== fullName.toLowerCase()) {
+      throw new Error('Repository is not accessible to this GitHub user');
+    }
+    const defaultBranch = accessible.default_branch || 'main';
 
     await this.db.insert(repositoriesTable).values({
       id,
@@ -455,12 +444,6 @@ class PRMonitorService extends EventEmitter {
             owner: repo.owner,
             repo: repo.repo,
             numbers: staleNumbers,
-            // De-dup the shared-repo amplification: when many workspaces poll the
-            // same big org (16 track PostHog/posthog), each re-fetches the same PRs
-            // against one GraphQL budget. A PR fetched for one workspace this window
-            // serves the others too. Window ≤ the poll's own freshness tolerance,
-            // so no workspace sees data staler than it already accepts.
-            dedupeWindowMs: BULK_POLL_DEDUPE_MS,
           })
         );
 
@@ -816,9 +799,8 @@ class PRMonitorService extends EventEmitter {
    * `merged_at`). A failed list or lookup skips the repo/row; we never close
    * on missing data. Spends core REST budget only, zero GraphQL points.
    *
-   * `cache` is shared across one sweep tick so the N workspaces watching the
-   * same repo make ONE list call and ONE lookup per closed PR (the same
-   * dedup principle as refreshPrAcrossWorkspaces). Returns rows closed.
+   * Cache keys include the workspace. One user's response must never authorize another user.
+   * Returns the number of rows closed.
    */
   async sweepClosedViaRest(workspaceId: string, cache: RestSweepCache): Promise<number> {
     const repos = await this.getWatchedRepos(workspaceId);
@@ -826,7 +808,7 @@ class PRMonitorService extends EventEmitter {
     for (const repo of repos) {
       const rows = await this.getTrackedOpenRows(workspaceId, repo.id);
       if (rows.length === 0) continue;
-      const repoKey = repo.fullName.toLowerCase();
+      const repoKey = `${workspaceId}:${repo.fullName.toLowerCase()}`;
       let listPromise = cache.openLists.get(repoKey);
       if (!listPromise) {
         listPromise = githubService
@@ -1168,28 +1150,18 @@ class PRMonitorService extends EventEmitter {
   }
 
   /**
-   * Refresh one PR across EVERY workspace watching it while making a SINGLE
-   * GitHub fetch. `resolveAuth` resolves the data-plane token by the repo
-   * OWNER, so every workspace on the same installation gets a byte-identical
-   * GraphQL result — fetching per-workspace (the old webhook fan-out) was pure
-   * amplification: N identical calls against ONE shared GraphQL point budget,
-   * which exhausted installation 140694558 in prod and produced the sustained
-   * rate-limit storm. We group targets by the account their call actually
-   * authenticates as, fetch once per group, then run only the cheap
-   * per-workspace post-processing (viewer relationship flags + upsert).
+   * Fetch each workspace's PR with its own user credentials.
+   * Installation-wide sharing is unsafe because user tokens have different permissions.
    *
    * Webhook-only, so `resolveMergeable` is always false (a follow-up event or
-   * the reconcile sweep settles UNKNOWN). A fetch error propagates to the caller
-   * so a rate-limit is logged ONCE for the group, not once per workspace.
+   * the reconcile sweep settles UNKNOWN). Failures are isolated to each workspace.
    */
   async refreshPrAcrossWorkspaces(
     targets: Array<{ workspaceId: string; owner: string; repo: string; repositoryId: string }>,
     number: number
   ): Promise<void> {
     if (targets.length === 0) return;
-    // Group by the account the fetch will authenticate as. Normally every target
-    // shares one installation → a single group → a single fetch; only owner-less
-    // user-token fallbacks (no installation covers the owner) split per workspace.
+    // Only duplicate targets within one workspace may share a response.
     const groups = new Map<string, typeof targets>();
     for (const t of targets) {
       const key = githubService.graphqlAccountKeyForOwner(t.workspaceId, t.owner);
@@ -1200,14 +1172,19 @@ class PRMonitorService extends EventEmitter {
     for (const group of groups.values()) {
       const lead = group[0];
       const watched = this.watchedFromTarget(lead);
-      const results = await this.fetchPrSummaries(lead.workspaceId, watched, [number], {
-        resolveMergeable: false,
-      });
-      for (const target of group) {
-        await this.applyPrResults(
-          { workspaceId: target.workspaceId, repositoryId: target.repositoryId, fullName: watched.fullName },
-          results
-        );
+      try {
+        const results = await this.fetchPrSummaries(lead.workspaceId, watched, [number], {
+          resolveMergeable: false,
+        });
+        for (const target of group) {
+          await this.applyPrResults(
+            { workspaceId: target.workspaceId, repositoryId: target.repositoryId, fullName: watched.fullName },
+            results
+          );
+        }
+      } catch (err) {
+        console.warn(`[prMonitor] refresh failed for workspace ${lead.workspaceId}:`,
+          err instanceof Error ? err.message : String(err));
       }
     }
   }

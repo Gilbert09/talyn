@@ -16,6 +16,7 @@ vi.mock('../services/debugBus.js', () => ({
 }));
 
 const { finalizeRun, gatingRunForPr } = await import('../services/visualReview.js');
+const { debugBus } = await import('../services/debugBus.js');
 
 const HOST = 'https://us.posthog.com';
 const HEAD = 'sha-head';
@@ -142,7 +143,8 @@ describe('finalizeRun', () => {
     mockFetch(409, { code: 'not_fully_resolved', detail: '2 snapshots quarantined' });
     const out = await finalizeRun('ws1', 'run-1');
     expect(out.kind).toBe('error');
-    expect(out.kind === 'error' && out.message).toContain('2 snapshots quarantined');
+    expect(out.kind === 'error' && out.message).toContain('not_fully_resolved');
+    expect(JSON.stringify(out)).not.toContain('2 snapshots quarantined');
   });
 
   it('retries a network failure rather than declaring the run unfixable', async () => {
@@ -172,6 +174,7 @@ describe('finalizeRun', () => {
     await finalizeRun('ws1', 'run-1');
     const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${HOST}/api/projects/2/visual_review/runs/run-1/finalize/`);
+    expect(init.redirect).toBe('error');
     expect(JSON.parse(init.body as string)).toMatchObject({
       approve_all: true,
       commit_to_github: true,
@@ -189,5 +192,15 @@ describe('finalizeRun', () => {
     vi.stubGlobal('fetch', spy);
     await finalizeRun('ws1', 'run-1', '999');
     expect((spy.mock.calls[0] as unknown as [string])[0]).toContain('/api/projects/999/');
+  });
+
+  it.each([
+    'upstream-secret-value',
+    { code: 'upstream-secret-value', detail: 'upstream-secret-value' },
+  ])('does not expose an upstream error body: %j', async (body) => {
+    mockFetch(500, body);
+    const result = await finalizeRun('ws1', 'run-1');
+    expect(result).toEqual({ kind: 'retry', message: 'PostHog Visual Review returned HTTP 500' });
+    expect(JSON.stringify(vi.mocked(debugBus.recordHttp).mock.calls)).not.toContain('upstream-secret-value');
   });
 });

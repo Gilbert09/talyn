@@ -147,7 +147,7 @@ describe('sweepClosedViaRest', () => {
     expect((await rowFor('ws1', 11))?.state).toBe('open');
   });
 
-  it('shares ONE open-list fetch and ONE per-PR lookup across workspaces via the tick cache', async () => {
+  it('does not share cached responses with a workspace whose user cannot access the repository', async () => {
     await db.insert(workspacesTable).values({ id: 'ws2', ownerId: TEST_USER_ID, name: 'n', settings: {} });
     await db.insert(repositoriesTable).values({
       id: 'repo2', workspaceId: 'ws2', name: 'acme/widgets',
@@ -159,7 +159,10 @@ describe('sweepClosedViaRest', () => {
     ]);
     const listSpy = vi
       .spyOn(githubService, 'listOpenPullRequestNumbers')
-      .mockResolvedValue([]);
+      .mockImplementation(async (ws) => {
+        if (ws === 'ws2') throw new Error('Not Found');
+        return [];
+      });
     const lookupSpy = vi.spyOn(githubService, 'getPullRequest').mockResolvedValue({
       number: 7, state: 'closed', merged_at: '2026-07-02T08:51:33Z',
     } as never);
@@ -168,11 +171,12 @@ describe('sweepClosedViaRest', () => {
     const closed1 = await prMonitorService.sweepClosedViaRest('ws1', cache);
     const closed2 = await prMonitorService.sweepClosedViaRest('ws2', cache);
 
-    expect(closed1 + closed2).toBe(2); // each workspace's own row closes...
-    expect(listSpy).toHaveBeenCalledTimes(1); // ...off ONE shared list fetch
-    expect(lookupSpy).toHaveBeenCalledTimes(1); // ...and ONE shared PR lookup
+    expect(closed1).toBe(1);
+    expect(closed2).toBe(0);
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
     expect((await rowFor('ws1', 7))?.state).toBe('merged');
-    expect((await rowFor('ws2', 7))?.state).toBe('merged');
+    expect((await rowFor('ws2', 7))?.state).toBe('open');
   });
 
   it('skips repos with no tracked-open rows without any GitHub call', async () => {

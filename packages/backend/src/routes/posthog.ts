@@ -8,6 +8,7 @@ import {
   removePostHogCodeCredentials,
 } from '../services/posthogCode/credentials.js';
 import { PostHogCodeClient } from '../services/posthogCode/client.js';
+import { normalizeHost } from '../services/posthogCode/hostPolicy.js';
 import {
   completeAuthorization,
   consumeState,
@@ -198,10 +199,16 @@ export function posthogRoutes(): Router {
       return handleAccessError(err, res);
     }
 
+    let resolvedHost: string;
+    try {
+      resolvedHost = normalizeHost(host);
+    } catch (err) {
+      return res.status(400).json({ success: false, error: (err as Error).message });
+    }
     const { authorizeUrl } = await startAuthorization({
       workspaceId,
       userId: assertUser(req).id,
-      host,
+      host: resolvedHost,
       client: originClient(req),
       // Only ever a pre-selection on PostHog's own consent screen, and only
       // honoured there if the user actually has access to it.
@@ -230,8 +237,9 @@ export function posthogRoutes(): Router {
     }
 
     // Validate before persisting so a bad key never gets stored.
-    const resolvedHost = host?.replace(/\/+$/, '') || 'https://us.posthog.com';
+    let resolvedHost: string;
     try {
+      resolvedHost = normalizeHost(host);
       await new PostHogCodeClient(apiKey, projectId, resolvedHost).ping();
     } catch (err) {
       return res.status(400).json({

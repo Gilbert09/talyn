@@ -13,6 +13,7 @@ import {
   environments as environmentsTable,
   pullRequests as pullRequestsTable,
   workspaces as workspacesTable,
+  repositories as repositoriesTable,
 } from '../db/schema.js';
 import { withTaskLimitGate } from './billing/entitlements.js';
 import { attachTaskToPullRequestRow } from './prCache.js';
@@ -57,6 +58,8 @@ export interface TaskWorkflowInfo {
   event: WorkflowTriggerEvent;
 }
 
+export class TaskReferenceError extends Error {}
+
 /**
  * Insert a cloud task as `queued` (the queue's tick picks it up), stash the
  * cloud overrides + PR pointer on metadata, and reverse-link the PR row so the
@@ -82,6 +85,26 @@ export async function createCloudTask(
   const ownerId = ownerRows[0]?.ownerId;
   if (!ownerId) {
     throw new Error(`createCloudTask: workspace ${input.workspaceId} not found`);
+  }
+
+  const [repository] = await db
+    .select({ id: repositoriesTable.id })
+    .from(repositoriesTable)
+    .where(and(eq(repositoriesTable.id, input.repositoryId), eq(repositoriesTable.workspaceId, input.workspaceId)))
+    .limit(1);
+  if (!repository) throw new TaskReferenceError('Repository not found in this workspace');
+
+  if (input.pullRequestId) {
+    const [pullRequest] = await db
+      .select({ id: pullRequestsTable.id })
+      .from(pullRequestsTable)
+      .where(and(
+        eq(pullRequestsTable.id, input.pullRequestId),
+        eq(pullRequestsTable.workspaceId, input.workspaceId),
+        eq(pullRequestsTable.repositoryId, input.repositoryId),
+      ))
+      .limit(1);
+    if (!pullRequest) throw new TaskReferenceError('Pull request not found in this workspace and repository');
   }
 
   return withTaskLimitGate(ownerId, {}, async () => {
@@ -120,6 +143,7 @@ async function findReusableTask(
     .where(
       and(
         eq(tasksTable.workspaceId, input.workspaceId),
+        eq(tasksTable.repositoryId, input.repositoryId),
         eq(tasksTable.pullRequestId, input.pullRequestId),
         eq(tasksTable.type, input.type),
         inArray(tasksTable.status, [...REUSABLE_STATUSES])
@@ -211,7 +235,11 @@ async function buildTaskMetadata(
     const prRows = await db
       .select()
       .from(pullRequestsTable)
-      .where(eq(pullRequestsTable.id, input.pullRequestId))
+      .where(and(
+        eq(pullRequestsTable.id, input.pullRequestId),
+        eq(pullRequestsTable.workspaceId, input.workspaceId),
+        eq(pullRequestsTable.repositoryId, input.repositoryId),
+      ))
       .limit(1);
     const prRow = prRows[0];
     if (prRow && prRow.workspaceId === input.workspaceId) {

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { randomBytes, timingSafeEqual } from 'crypto';
 import {
   createRemoteJWKSet,
+  decodeJwt,
   decodeProtectedHeader,
   jwtVerify,
   type JWTVerifyGetKey,
@@ -22,6 +23,8 @@ export interface AuthUser {
   email: string;
   githubUsername?: string;
   isAdmin: boolean;
+  /** Verified token expiry in milliseconds. Internal callers have no JWT. */
+  expiresAt?: number;
 }
 
 declare global {
@@ -102,6 +105,7 @@ interface VerifiedIdentity {
   id: string;
   email: string;
   githubUsername?: string;
+  expiresAt: number;
 }
 
 /** Local path: verify signature + claims against the cached JWKS and read the
@@ -112,11 +116,13 @@ async function verifyJwtLocally(token: string): Promise<VerifiedIdentity | null>
     const { payload } = await jwtVerify(token, getJwks(), {
       issuer: `${process.env.SUPABASE_URL}/auth/v1`,
       audience: 'authenticated',
+      requiredClaims: ['sub', 'exp'],
     });
     if (!payload.sub) return null;
     const meta = (payload.user_metadata ?? {}) as Record<string, unknown>;
     return {
       id: payload.sub,
+      expiresAt: payload.exp! * 1000,
       email: (payload.email as string | undefined) ?? '',
       githubUsername:
         (meta.user_name as string | undefined) ??
@@ -153,8 +159,12 @@ async function verifyViaSupabase(token: string): Promise<VerifiedIdentity | null
       return null;
     }
     if (!data.user) return null;
+    // Supabase verified the token. Retain its expiry for long-lived connections.
+    const { exp } = decodeJwt(token);
+    if (typeof exp !== 'number' || !Number.isFinite(exp) || exp * 1000 <= Date.now()) return null;
     return {
       id: data.user.id,
+      expiresAt: exp * 1000,
       email: data.user.email ?? '',
       githubUsername:
         (data.user.user_metadata?.user_name as string | undefined) ??
@@ -192,12 +202,9 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
 
   const { email, githubUsername } = identity;
 
-  await enforceAllowList(email);
+  enforceAllowList(email);
 
-  // Bootstrap admins from an env allow-list so the is_admin column can be
-  // granted without manual SQL on a hosted DB. The column stays the source of
-  // truth for gating; this just promotes (never demotes — a manual grant or a
-  // later env removal won't be clobbered).
+  // Bootstrap only new users. Existing database grants and revocations take precedence.
   const bootstrapAdmin = isBootstrapAdminEmail(email);
 
   const db = getDbClient();
@@ -218,8 +225,6 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
         email,
         githubUsername: githubUsername ?? null,
         updatedAt: now,
-        // Only ever promote via the env bootstrap; preserve an existing grant.
-        ...(bootstrapAdmin ? { isAdmin: true } : {}),
       },
     })
     .returning({ isAdmin: usersTable.isAdmin });
@@ -228,11 +233,12 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
     id: identity.id,
     email,
     githubUsername,
-    isAdmin: row?.isAdmin ?? bootstrapAdmin,
+    isAdmin: row?.isAdmin ?? false,
+    expiresAt: identity.expiresAt,
   };
 }
 
-/** Emails in TALYN_ADMIN_EMAILS (comma-separated) are bootstrapped to admin. */
+/** TALYN_ADMIN_EMAILS grants admin access only when the user row is first inserted. */
 function isBootstrapAdminEmail(email: string): boolean {
   const raw = process.env.TALYN_ADMIN_EMAILS;
   if (!raw || !email) return false;
@@ -250,7 +256,7 @@ function isBootstrapAdminEmail(email: string): boolean {
  *
  * Throws AuthError so the middleware turns it into a 403.
  */
-async function enforceAllowList(email: string): Promise<void> {
+export function enforceAllowList(email: string): void {
   const raw = process.env.TALYN_ALLOWED_EMAILS;
   if (!raw) return;
   const allowed = raw
@@ -332,6 +338,7 @@ async function checkInternalAuth(req: Request): Promise<AuthUser | null> {
   if (!rows[0]) {
     throw new AuthError('unauthorized', 'Internal user not found');
   }
+  enforceAllowList(rows[0].email);
   return {
     id: rows[0].id,
     email: rows[0].email,

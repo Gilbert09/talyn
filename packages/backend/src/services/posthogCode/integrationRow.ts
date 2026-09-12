@@ -15,7 +15,7 @@ import type { EncryptedEnvelope } from '../tokenCrypto.js';
  */
 
 export const POSTHOG_INTEGRATION_TYPE = 'posthog';
-export const DEFAULT_POSTHOG_HOST = 'https://us.posthog.com';
+export { DEFAULT_POSTHOG_HOST, normalizeHost } from './hostPolicy.js';
 
 /** How a workspace authenticates to PostHog. */
 export type PostHogAuthMethod = 'personal_api_key' | 'oauth';
@@ -72,10 +72,6 @@ export interface PostHogIntegrationRow {
  */
 export function readAuthMethod(config: PostHogIntegrationConfig): PostHogAuthMethod {
   return config.authMethod === 'oauth' ? 'oauth' : 'personal_api_key';
-}
-
-export function normalizeHost(host?: string | null): string {
-  return host?.trim().replace(/\/+$/, '') || DEFAULT_POSTHOG_HOST;
 }
 
 export async function readPostHogIntegration(

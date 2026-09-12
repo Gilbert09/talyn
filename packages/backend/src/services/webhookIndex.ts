@@ -1,5 +1,7 @@
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { getPoolDbClient } from '../db/client.js';
-import { repositories as repositoriesTable } from '../db/schema.js';
+import { repositories as repositoriesTable, pullRequests as pullRequestsTable } from '../db/schema.js';
+import { githubService, GitHubAuthorizationUnavailableError } from './github.js';
 
 /**
  * In-memory map: a repo's `owner/repo` full-name → every watching workspace.
@@ -90,10 +92,34 @@ export async function refreshWebhookIndex(): Promise<void> {
   await build();
 }
 
-/** Every workspace watching `owner/repo`. Ensures freshness first. */
+/** Check each recipient now, including historical records and delayed check flushes. */
 export async function targetsForRepo(fullName: string): Promise<WatchTarget[]> {
-  await ensureFresh();
-  return index.get(fullName.toLowerCase()) ?? [];
+  try {
+    await ensureFresh();
+    const candidates = index.get(fullName.toLowerCase()) ?? [];
+    if (candidates.length === 0) return [];
+    // Historical task creation allowed cross-workspace PR links. Repo-ID-based writes must not reach them.
+    const malformed = await getPoolDbClient()
+      .selectDistinct({ id: repositoriesTable.id })
+      .from(repositoriesTable)
+      .innerJoin(pullRequestsTable, eq(pullRequestsTable.repositoryId, repositoriesTable.id))
+      .where(and(
+        inArray(repositoriesTable.id, candidates.map((t) => t.repositoryId)),
+        ne(pullRequestsTable.workspaceId, repositoriesTable.workspaceId),
+      ));
+    const blocked = new Set(malformed.map((r) => r.id));
+    const authorized: WatchTarget[] = [];
+    for (const target of candidates) {
+      if (blocked.has(target.repositoryId)) continue;
+      if (await githubService.canAccessRepository(target.workspaceId, target.owner, target.repo)) {
+        authorized.push(target);
+      }
+    }
+    return authorized;
+  } catch {
+    // A failed lookup is not a denial. Do not lose workflow triggers during an outage.
+    throw new GitHubAuthorizationUnavailableError();
+  }
 }
 
 /** Prime the index at boot. */

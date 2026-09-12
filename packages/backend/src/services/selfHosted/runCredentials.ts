@@ -111,7 +111,7 @@ export async function resolveRunCredentials(
     return { ok: false, reason: 'run_not_live' };
   }
 
-  const githubToken = githubService.getAccessToken(row.workspaceId);
+  const githubToken = await githubService.getVerifiedAccessToken(row.workspaceId);
   const creds = await getSelfHostedCredentials(row.workspaceId);
   // No GitHub token means the workspace disconnected GitHub mid-run. Refusing
   // is right: an answer with an empty token would close the proxy's
