@@ -5,6 +5,9 @@ import {
 } from './config.js';
 import type {
   Features,
+  LoopInput,
+  LoopRun,
+  LoopWithStats,
   WorkflowCounts,
   WorkflowInput,
   WorkflowRun,
@@ -1837,6 +1840,58 @@ export const workflows = {
   },
 };
 
+// ============================================================================
+// Loops (recurring prompts on a cron schedule)
+// ============================================================================
+
+export const loops = {
+  list: (workspaceId: string) =>
+    request<LoopWithStats[]>('GET', `/loops?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /** Just the counter, for the sidebar's nav badge. See `workflows.count`. */
+  count: (workspaceId: string) =>
+    request<{ enabled: number }>(
+      'GET',
+      `/loops/count?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  create: (workspaceId: string, input: LoopInput) =>
+    request<LoopWithStats>('POST', '/loops', { workspaceId, ...input }),
+
+  /**
+   * Whole-loop replace, not a field merge.
+   *
+   * The provider and the model validate against each other — the PostHog Code
+   * and Talyn Fleet catalogues overlap on the Claude ids — so sending one field
+   * alone could land a pair the server would have refused as a whole.
+   */
+  update: (id: string, input: LoopInput) =>
+    request<LoopWithStats>('PATCH', `/loops/${id}`, input),
+
+  remove: (id: string) => request<void>('DELETE', `/loops/${id}`),
+
+  /**
+   * One loop's history, newest first. `cursor` is the `createdAt` of the last
+   * row already held — keyset, because the history grows at the head.
+   */
+  runs: (id: string, opts: { limit?: number; cursor?: string | null } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    if (opts.cursor) qs.set('cursor', opts.cursor);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<LoopRun[]>('GET', `/loops/${id}/runs${suffix}`);
+  },
+
+  /**
+   * Run this loop now, without waiting for its next occurrence.
+   *
+   * Returns the settled run rather than a task: a refusal — no task slot, a
+   * disconnected agent — is part of the run's story, and the history is where
+   * the user will look for it.
+   */
+  runNow: (id: string) => request<LoopRun>('POST', `/loops/${id}/run`),
+};
+
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
@@ -1861,6 +1916,7 @@ export const api = {
   users,
   features,
   workflows,
+  loops,
   admin,
   ws: wsClient,
 };

@@ -245,6 +245,7 @@ at the call site.
 | Flag (PostHog key) | Gates | Break glass | Fallback |
 |---|---|---|---|
 | `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** |
+| `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** |
 | `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** |
 
 **The fallbacks are deliberately opposite, and they are per flag.** The fallback
@@ -252,8 +253,18 @@ is the answer when PostHog is not configured, is unreachable, or has never heard
 of the key — so it is chosen by asking "if the flag service is down, what is the
 safe answer?" Workflows is released, so a PostHog outage must not hide a page
 that exists. The fleet is one box running on somebody's own subscription, so an
-outage must not open it to everybody. A single shared default would silently
-flip whichever of the two it did not describe.
+outage must not open it to everybody. Loops reads like workflows but answers
+like the fleet, and the difference is worth stating: a workflow acts when a
+webhook arrives, so there is a person at the other end of every firing, while a
+loop acts because time passed — "PostHog is unreachable, so arm every
+scheduler" spends the workspace's money and its agent subscription at 3am with
+nobody watching. A single shared default would silently flip whichever of these
+it did not describe.
+
+**Running Loops locally** needs no PostHog project at all: set
+`LOOPS_ENABLED=true` and the override wins over the flag service. Without it the
+scheduler still arms — the boot log says so — but every firing is refused per
+workspace, which is the same thing as off.
 
 #### Backend configuration
 

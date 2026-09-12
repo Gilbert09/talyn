@@ -39,6 +39,16 @@ export * from './releaseNotes.js';
 // string typed twice.
 export * from './featureFlags.js';
 
+// Loops — recurring prompts on a cron schedule: the schedule arithmetic both
+// editors preview from and the scheduler fires on, plus the validator the route
+// 400s with. Same argument as workflows: a "next run" the client computes
+// differently from the server is a bug nobody can see.
+export * from './loops.js';
+
+// The agent picker — which agents a workspace can start a task on. One pure
+// derivation, shared by the per-PR task menu and the Loop editor on both forks.
+export * from './cloudAgents.js';
+
 // The operator console's contract (admin.talyn.dev ⇄ /api/v1/admin).
 export * from './admin.js';
 export * from './transcript.js';
@@ -808,6 +818,10 @@ export type WSEventType =
   // WorkflowRun row, which is what makes the Workflows page's history and its
   // derived stats live rather than poll-shaped.
   | 'workflow:run'
+  // One loop firing reached a terminal state. Carries the whole LoopRun row, so
+  // the Loops page's history and its derived stats are live rather than
+  // poll-shaped — the same reason 'workflow:run' exists.
+  | 'loop:run'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.

@@ -443,15 +443,19 @@ describe('featuresForUser', () => {
     // `fleet` is keyed on the workspace OWNER, who is not always the caller, so
     // an account-scoped answer would be wrong for every member of somebody
     // else's workspace.
-    expect(Object.keys(features)).toEqual(['workflows']);
+    expect(Object.keys(features).sort()).toEqual(['loops', 'workflows']);
   });
 
   it('reflects the kill switch, so the UI stops drawing what the routes refuse', async () => {
     process.env.WORKFLOWS_ENABLED = 'false';
-    expect(await featuresForUser(SUBJECT)).toEqual({ workflows: false });
+    expect(await featuresForUser(SUBJECT)).toEqual({ workflows: false, loops: false });
   });
 
-  it('defaults workflows on for a deployment with no PostHog at all', async () => {
-    expect(await featuresForUser(SUBJECT)).toEqual({ workflows: true });
+  it('carries each flag’s own fallback, which are deliberately opposite', async () => {
+    // No PostHog at all. Workflows is a released feature and stays ON, so an
+    // unconfigured deployment still serves a page that exists. Loops stays OFF,
+    // because it creates paid cloud tasks on a timer with nobody watching —
+    // collapsing these two to one default would silently flip one of them.
+    expect(await featuresForUser(SUBJECT)).toEqual({ workflows: true, loops: false });
   });
 });

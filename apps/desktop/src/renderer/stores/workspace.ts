@@ -170,7 +170,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'settings';
+  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings';
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -230,6 +230,8 @@ interface WorkspaceState {
    * toggling a rule off updates the badge without a round trip.
    */
   enabledWorkflowCount: number | null;
+  /** Enabled loops, for the nav badge. `null` is not yet counted. */
+  enabledLoopCount: number | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing
   // connected opens this instead of silently no-oping. `pendingCloudTask` is
@@ -263,6 +265,7 @@ interface WorkspaceState {
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
   setFeatures: (features: Features | null) => void;
   setEnabledWorkflowCount: (count: number | null) => void;
+  setEnabledLoopCount: (count: number | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
   openConnectAgent: (pending?: PendingCloudTask | null) => void;
@@ -303,7 +306,7 @@ interface WorkspaceState {
 
   toggleSidebar: () => void;
   setActivePanel: (
-    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'settings'
+    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings'
   ) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -333,6 +336,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   cloudProviders: null,
   features: null,
   enabledWorkflowCount: null,
+  enabledLoopCount: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
   whatsNewOpen: false,
@@ -377,6 +381,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setFeatures: (features) => set({ features }),
   setEnabledWorkflowCount: (enabledWorkflowCount) => set({ enabledWorkflowCount }),
+  setEnabledLoopCount: (enabledLoopCount) => set({ enabledLoopCount }),
 
   openConnectAgent: (pending = null) =>
     set({ connectAgentOpen: true, pendingCloudTask: pending }),

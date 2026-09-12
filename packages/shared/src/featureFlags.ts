@@ -102,6 +102,27 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Loops — recurring prompts on a cron schedule.
+   *
+   * Fallback OFF, and this is the flag where that matters most. Every other
+   * gate in this file decides whether a person can reach a surface; a loop
+   * decides whether a MACHINE creates paid cloud tasks at 3am with nobody
+   * watching. "PostHog is unreachable, so start the schedulers" is a failure
+   * that spends the workspace's money and its agent subscription before anyone
+   * is awake to see it, so the safe answer when we cannot ask is no.
+   *
+   * Note the deliberate contrast with `workflows` directly above: both features
+   * act on their own, but a workflow only acts when a webhook arrives — a human
+   * somewhere pushed a commit or left a review. A loop acts because time passed.
+   */
+  loops: {
+    posthogKey: 'loops',
+    envOverride: 'LOOPS_ENABLED',
+    fallback: false,
+    description: 'Loops — recurring prompts on a cron schedule',
+  },
+
+  /**
    * Talyn Fleet — the self-hosted Firecracker microVMs.
    *
    * Fallback OFF, and that is the whole point of the gate. The fleet is one
@@ -138,7 +159,7 @@ export const FEATURE_FLAG_KEYS = Object.keys(FEATURE_FLAGS) as FeatureFlagKey[];
  * member of somebody else's workspace. The cloud-provider routes answer that
  * one per workspace instead.
  */
-export const ACCOUNT_FEATURE_FLAGS = ['workflows'] as const satisfies readonly FeatureFlagKey[];
+export const ACCOUNT_FEATURE_FLAGS = ['workflows', 'loops'] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
 

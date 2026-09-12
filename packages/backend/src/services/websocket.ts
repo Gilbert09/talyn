@@ -5,6 +5,7 @@ import type {
   BillingStatus,
   DebugEvent,
   Environment,
+  LoopRun,
   MergeQueueBlockedEvent,
   Task,
   TaskStatus,
@@ -476,6 +477,23 @@ export function emitMergeQueueBlocked(
 export function emitWorkflowRun(workspaceId: string, run: WorkflowRun): void {
   broadcastToWorkspace(workspaceId, {
     type: 'workflow:run',
+    payload: run,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/**
+ * One loop firing reached a new state.
+ *
+ * Carries the whole run so the Loops page can prepend it to the history and
+ * re-derive its counters without a refetch — the `emitWorkflowRun` argument.
+ * Fired on every transition, not only the terminal one, because the states a
+ * loop run passes through are exactly what somebody watching wants to see:
+ * queued, running, and whether it got a task slot at all.
+ */
+export function emitLoopRun(workspaceId: string, run: LoopRun): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'loop:run',
     payload: run,
     timestamp: new Date().toISOString(),
   });

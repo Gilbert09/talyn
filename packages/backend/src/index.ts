@@ -28,7 +28,9 @@ import { prMonitorService } from './services/prMonitor.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
+import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
+import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import {
   featureFlagsEvaluateLocally,
   isFeatureFlagServiceConfigured,
@@ -135,6 +137,20 @@ async function main() {
     // can never be created. The per-account flag is checked when a run is
     // re-evaluated, not here — a sweep with nothing to do costs nothing.
     initWorkflowRetrySweep();
+  }
+
+  // Loops reads the opposite way round from workflows: the flag fails CLOSED,
+  // so the interesting line is the ON one. A scheduler that is armed will
+  // create paid cloud tasks with nobody watching, and an operator reading this
+  // log should be able to see that it is running without inferring it.
+  if (loopsKillSwitchPulled()) {
+    console.log('[loops] scheduler NOT armed — LOOPS_ENABLED=false');
+  } else {
+    console.log('[loops] scheduler armed — due loops fire every 30s');
+    // Armed whenever the break glass is not pulled, NOT only when some
+    // workspace is in the audience: the flag is per workspace and answered per
+    // firing, and a sweep that finds nothing due costs one indexed lookup.
+    initLoopScheduler();
   }
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
@@ -348,6 +364,10 @@ async function main() {
     // graceful restart (the sweep would re-derive it, but this avoids the gap).
     await checkCountCoalescer.flushAllNow().catch(() => undefined);
     prReconcileSweep.shutdown();
+    // Stops the timer AND removes the task:status listener. Leaving the
+    // listener attached through a drain would have it settling runs against a
+    // database connection that is about to close.
+    loopScheduler.stop();
     // posthog-node batches the `$feature_flag_called` events that make a flag's
     // rollout visible in PostHog. Without this flush they are lost on every
     // deploy — and a deploy is when a rollout is most interesting to look at.

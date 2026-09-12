@@ -3,11 +3,9 @@ import { api, type PRRow } from '../../../lib/api';
 import {
   buildMergeablePrompt,
   buildSkillPrompt,
-  defaultFleetModelForAgent,
-  storedFleetModelForAgent,
+  cloudAgentChoices,
   promptTemplateFor,
   type CloudProviderType,
-  type FleetAgent,
   type SkillSummary,
 } from '@talyn/shared';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -60,34 +58,13 @@ export function useGitHubActions() {
   // actual choice (>1 connected).
   const workspaceSettings = workspaces.find((w) => w.id === currentWorkspaceId)?.settings;
   const defaultCloudProvider = workspaceSettings?.defaultCloudProvider;
-  // The menu lists AGENTS, not providers. Talyn Fleet runs on the workspace's
-  // own Claude subscription or its own Codex subscription, and "Talyn Fleet"
-  // alone cannot say which — so a fleet with both connected contributes two
-  // entries, and one with neither contributes none. An agent the workspace has
-  // not connected is never offered: picking it would produce a task the backend
-  // refuses at dispatch, which is a worse answer than not offering it.
-  //
-  // A fleet entry carries a MODEL, because the model is what carries the
-  // vendor: `fleetProviderForModel` reads it and the fleet builds the microVM's
-  // egress route table from that. Sending an agent name as well would be a
-  // second source of truth that can disagree with the first.
+  // The menu lists AGENTS, not providers — and the derivation is shared with
+  // the Loop editor, which asks the same question. It used to be two copies of
+  // this `useMemo` (this file and the web fork's), which is how a menu ends up
+  // answering differently on each client. See `@talyn/shared`'s cloudAgents.ts
+  // for the two rules it encodes.
   const taskProviders = useMemo(
-    () =>
-      connectedProviders.flatMap((p) => {
-        if (p.type !== 'selfhosted') return [{ type: p.type, displayName: p.displayName }];
-        const agents = (p.connectedAgents ?? []) as FleetAgent[];
-        return agents.map((agent) => ({
-          type: p.type,
-          displayName: `${p.displayName} · ${agent === 'codex' ? 'Codex' : 'Claude'}`,
-          // The WORKSPACE's model for that agent, not the shipped default.
-          // This sent `defaultFleetModelForAgent(agent)` unconditionally, so
-          // "run this on Codex" ignored Settings → Talyn Fleet → Model outright
-          // — the picker saved a value that nothing on this path ever read.
-          model:
-            storedFleetModelForAgent(workspaceSettings, agent) ??
-            defaultFleetModelForAgent(agent),
-        }));
-      }),
+    () => cloudAgentChoices(connectedProviders, workspaceSettings),
     [connectedProviders, workspaceSettings]
   );
   const taskAsk = defaultCloudProvider === 'ask' && taskProviders.length > 1;

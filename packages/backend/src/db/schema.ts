@@ -1038,3 +1038,125 @@ export const workflowRuns = pgTable(
     ),
   })
 );
+
+// ---------- Loops ----------
+//
+// Recurring prompts: "run this prompt, on this repository, with this agent,
+// every weekday at 09:00". Config in `loops`, an append-only history in
+// `loop_runs` — the workflows pair's shape, because it is the same problem (a
+// rule the user edits, plus a history appended to from any replica).
+//
+// THE SCHEDULE IS A COLUMN, NOT A TIMER. `next_run_at` holds the next
+// occurrence, so the schedule survives a deploy, a crash and a move to another
+// replica — the same argument `workflow_runs.retry_after` makes. A timer in a
+// process is lost the moment Railway rolls the deployment, which it does on
+// every push.
+//
+// The cron arithmetic, the presets and the validator live in @talyn/shared's
+// `loops.ts`; these columns hold what it normalises.
+
+export const loops = pgTable(
+  'loops',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    /** The whole instruction the agent receives. */
+    prompt: text('prompt').notNull(),
+    /** Five-field cron. The one stored form of the schedule — presets are UI. */
+    cron: text('cron').notNull(),
+    /** IANA zone name. The first per-row timezone anywhere in Talyn. */
+    timezone: text('timezone').notNull(),
+    /** `LoopProvider` — the pinned provider. Never failed over; see dispatch.ts. */
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    /** `LoopConcurrency` — what a firing does when the last run is still going. */
+    concurrency: text('concurrency').notNull().default('skip'),
+    /**
+     * Nullable + set null, NOT cascade: removing a repository must not delete
+     * the loop and its whole history. The scheduler re-resolves by
+     * `repo_full_name` first, and only then records a skip and switches off.
+     */
+    repositoryId: text('repository_id').references(() => repositories.id, {
+      onDelete: 'set null',
+    }),
+    /** Denormalised, and it outlives the FK: repo rows are re-minted on re-add. */
+    repoFullName: text('repo_full_name').notNull(),
+    /**
+     * The next occurrence. The scheduler's whole read.
+     *
+     * Null only while disabled — an enabled loop always knows when it next
+     * fires, and a schedule with no future occurrence is switched off with
+     * `disabled_reason = 'never_fires'` rather than left with a null here.
+     */
+    nextRunAt: timestamp('next_run_at', { withTimezone: true }),
+    /** `LoopDisabledReason` when the ENGINE switched it off; null when the user did. */
+    disabledReason: text('disabled_reason'),
+    /** Reset to 0 on any success. At LOOP_FAILURE_LIMIT the loop switches off. */
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // idx_loops_due — the sweep's read — is PARTIAL (`WHERE enabled`) and so
+    // lives only in 0054_loops.sql, the way 0053's partial retry index does.
+    workspaceIdx: index('idx_loops_workspace').on(t.workspaceId),
+  })
+);
+
+export const loopRuns = pgTable(
+  'loop_runs',
+  {
+    id: text('id').primaryKey(),
+    loopId: text('loop_id')
+      .notNull()
+      .references(() => loops.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    /**
+     * The occurrence this run stands for — and the idempotency key.
+     *
+     * A cron firing's "delivery id". Unlike GitHub's, it is DERIVED from shared
+     * state (the loop's stored `next_run_at`), so two replicas that both think
+     * a firing is owed necessarily compute the same value and the second insert
+     * conflicts.
+     */
+    scheduledFor: timestamp('scheduled_for', { withTimezone: true }).notNull(),
+    /** `LoopRunTrigger`: 'schedule' | 'manual'. */
+    trigger: text('trigger').notNull().default('schedule'),
+    repositoryId: text('repository_id').references(() => repositories.id, {
+      onDelete: 'set null',
+    }),
+    repoFullName: text('repo_full_name').notNull(),
+    /** Copied at fire time, so editing the loop cannot rewrite its history. */
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    taskId: text('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    /**
+     * When this run's task was created — the fact `task_id` cannot carry.
+     *
+     * The FK is ON DELETE SET NULL, so deleting a task silently empties
+     * `task_id` and a run that HAD a task becomes indistinguishable from one
+     * that never got that far. The two need different answers: a deleted task
+     * is the user's own doing and settles immediately, while a claim that was
+     * never dispatched is a crash to be reaped after a grace period.
+     */
+    dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+    /** `LoopRunStatus`. */
+    status: text('status').notNull(),
+    /** `LoopRunFailureCode` — the machine-readable why, so the UI can explain. */
+    failureCode: text('failure_code'),
+    error: text('error'),
+    /** When a `waiting_slot` run next re-attempts. Null for every other status. */
+    retryAfter: timestamp('retry_after', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    slotIdx: uniqueIndex('idx_loop_runs_slot').on(t.loopId, t.scheduledFor),
+    historyIdx: index('idx_loop_runs_history').on(t.loopId, t.createdAt),
+    // idx_loop_runs_active and idx_loop_runs_task are partial; see 0054_loops.sql.
+  })
+);

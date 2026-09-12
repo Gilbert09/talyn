@@ -11,4 +11,5 @@ export type ActivePanel =
   | 'reviews'
   | 'merge_queue'
   | 'workflows'
+  | 'loops'
   | 'settings';

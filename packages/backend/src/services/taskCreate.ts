@@ -48,6 +48,22 @@ export interface CreateCloudTaskInput {
    * `workflow_runs.task_id` is the other half of the link.
    */
   workflow?: TaskWorkflowInfo;
+  /**
+   * The loop firing that started this task, when one did.
+   *
+   * Persisted to `metadata.loop` so a task screen can say which schedule asked
+   * for the run, and so somebody reading a surprising 3am task can get back to
+   * the rule that fired it. `loop_runs.task_id` is the other half of the link.
+   */
+  loop?: TaskLoopInfo;
+}
+
+/** Where a loop-started task came from. See {@link CreateCloudTaskInput.loop}. */
+export interface TaskLoopInfo {
+  loopId: string;
+  runId: string;
+  /** The occurrence, not the wall clock — a late firing still names its slot. */
+  scheduledFor: string;
 }
 
 /** Where a workflow-started task came from. See {@link CreateCloudTaskInput.workflow}. */
@@ -196,6 +212,7 @@ async function buildTaskMetadata(
   // (workspace, PR, type)) must carry the link to the run that is happening now,
   // not the one that happened last week.
   if (input.workflow) metadata.workflow = input.workflow;
+  if (input.loop) metadata.loop = input.loop;
   if (input.skill) {
     metadata.skill = input.skill;
     // Best-effort usage bump for the picker's "frequently used" ordering —

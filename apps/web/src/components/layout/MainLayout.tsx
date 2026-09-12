@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { workflowsOffered } from '@talyn/shared';
+import { loopsOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 
 /**
@@ -22,6 +22,11 @@ const SettingsPanel = lazy(() =>
 // every visitor it is bytes they will never render.
 const WorkflowsPanel = lazy(() =>
   import('../panels/workflows/WorkflowsPanel').then((m) => ({ default: m.WorkflowsPanel }))
+);
+// Lazy for the same reason, and more so: the loops flag fails closed, so almost
+// every visitor never renders a byte of this.
+const LoopsPanel = lazy(() =>
+  import('../panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel }))
 );
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { MyPRsPanel } from '../panels/github/MyPRsPanel';
@@ -74,6 +79,7 @@ export function MainLayout() {
                   must render nothing rather than a page whose every request
                   403s. */}
               {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
+              {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
               {activePanel === 'settings' && <SettingsPanel />}
             </Suspense>
           </div>

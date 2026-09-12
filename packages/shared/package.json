@@ -19,5 +19,8 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js"
     }
+  },
+  "dependencies": {
+    "croner": "^10.0.1"
   }
 }

@@ -34,9 +34,16 @@ export async function resolvePostHogEnvId(workspaceId: string): Promise<string |
   return envIdForType(workspaceId, 'posthog_code');
 }
 
-/** The auto-provisioned env marker of a given provider type for a workspace
- *  (env markers are per-owner; credentials are per-workspace). */
-async function envIdForType(
+/**
+ * The auto-provisioned env marker of a given provider type for a workspace
+ * (env markers are per-owner; credentials are per-workspace).
+ *
+ * Exported for callers that must dispatch at a PINNED provider rather than walk
+ * the fall-back chain — a loop is chosen by the user for a reason, so rerouting
+ * it to a different vendor is a decision only they can make. See
+ * `services/loops/dispatch.ts`.
+ */
+export async function envIdForType(
   workspaceId: string,
   type: CloudProviderType
 ): Promise<string | null> {

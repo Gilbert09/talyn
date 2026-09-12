@@ -217,8 +217,11 @@ describe('workflow routes', () => {
   describe('GET /features', () => {
     it('answers true for an allow-listed caller', async () => {
       const res = await fetch(`${url}/api/v1/features`, { headers });
+      // `loops` rides along because it is account-scoped too, and it is false
+      // here: its flag fails CLOSED, the opposite of this one.
       expect(((await res.json()) as { data: { workflows: boolean } }).data).toEqual({
         workflows: true,
+        loops: false,
       });
     });
 
@@ -231,6 +234,7 @@ describe('workflow routes', () => {
       expect(res.status).toBe(200);
       expect(((await res.json()) as { data: { workflows: boolean } }).data).toEqual({
         workflows: false,
+        loops: false,
       });
     });
   });

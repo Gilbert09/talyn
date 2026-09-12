@@ -18,6 +18,17 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
+### Shipped
+
+- [x] **Loops — recurring prompts on a cron schedule** (Session 122, 2026-09-12). A named rule: a prompt, a repository, an agent + model, a cron expression and an IANA timezone. Every firing creates an ordinary `code_writing` cloud task. Behind the `loops` PostHog flag, **fallback OFF** (`LOOPS_ENABLED=true` is how to run it locally). Backend: `services/loops/{store,runs,dispatch,scheduler}.ts` + `routes/loops.ts` + migration `0054`. UI: the Loops tab on the desktop and the web fork. Open follow-ups below.
+
+Follow-ups now that Loops has shipped:
+
+- [ ] **A loop over several repositories.** `createCloudTask` requires one `repositoryId`, so a loop pins one repo. "Sweep every repo in this workspace" is a real ask that would mean N tasks per firing — and therefore N times the plan-limit pressure, which is a product decision before it is a technical one.
+- [ ] **Templates for the prompt field.** The editor is a blank textarea; the shipped prompt templates (`packages/shared/src/promptTemplates.ts`) are the obvious source of starters, and "sweep yesterday's failing checks" should not have to be typed from scratch.
+- [ ] **Surface the loop on the task it created.** `metadata.loop` is written and nothing reads it yet — the task screen should say which schedule asked for the run and link back to it.
+- [ ] **A timezone picker rather than a shortlist.** The editor offers eleven common zones plus the browser's; anybody outside that set has to have their zone already stored.
+
 ## Backlog
 
 - [ ] **Analytics panel — token / cost usage** — surface an Analytics tab aggregating per-workspace spend, per-task spend + token breakdown, per-model mix, and a trend chart from whatever usage data each cloud provider's transcript/run exposes. Inspiration: how PostHog / Linear surface "insights" around usage.

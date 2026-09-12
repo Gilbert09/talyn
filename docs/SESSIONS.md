@@ -2,6 +2,94 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 122 — Loops: recurring prompts, and the clock as a trigger (2026-09-12)
+
+Talyn could act on a webhook (workflows) or on a click, but not on the calendar.
+Tom asked for **Loops**: a named rule that runs a custom prompt on a repository,
+with a chosen agent and model, on a cron schedule — the Workflows tab's shape,
+with a list of loops and a history of their runs.
+
+Every firing creates an ordinary `code_writing` cloud task, so the poller, the
+transcript, the PR the agent opens and the billing gate all work unchanged. What
+the feature actually had to invent is the scheduling, and that is where the
+decisions are.
+
+**The schedule is a column, not a timer.** `loops.next_run_at` holds the next
+occurrence; a 30s sweep reads the due rows through a partial index and advances
+it. This is the `retrySweep` maxim applied to a harder case: a Railway deploy
+happens on every push to main and briefly runs old and new instances together, so
+a `setTimeout` per loop would lose every pending firing on each release *and*
+double-fire during the overlap.
+
+**The claim is a unique index, not a lock** — `UNIQUE (loop_id, scheduled_for)`,
+inserted before anything happens. It is the workflows `(workflow_id,
+delivery_id)` trick, and stronger here: a webhook delivery id is an opaque token
+each replica must have *received*, while a scheduled instant is derived from the
+loop's own stored `next_run_at`, so two actors that both believe a firing is owed
+cannot compute different keys for it.
+
+**claim → dispatch → advance, in that order.** Advancing first reads as tidier
+and is wrong: a crash in between leaves `next_run_at` in the *future*, so nothing
+ever re-selects that loop and the claimed run sits `queued` forever — a firing
+silently lost. Dispatch-first leaves it in the past, so the ordinary due-scan
+re-enters and the unique claim makes that idempotent. The window that remains is
+the few milliseconds between `createCloudTask` returning and `task_id` landing,
+and it costs one duplicate task rather than a lost or corrupt firing.
+
+**Catch-up fires once.** A six-hour outage does not replay six near-identical
+tasks (on a free plan: one run and five immediate refusals), and a thirty-second
+deploy at 08:59:50 does not eat the 09:00 daily run. Re-enabling a loop resumes
+from now rather than backfilling. Overlap became a per-loop setting — Tom's call
+— defaulting to skip, which is also the answer to "what stops `* * * * *`": a
+tight cron with a long task produces one real run and a recorded wall of skips,
+so no arbitrary minimum-interval cap was needed.
+
+**A pinned provider is never failed over.** `resolveCloudEnvChain` walks
+providers in order, which is right for "fix this PR somehow" and wrong for a loop:
+somebody who chose Talyn Fleet chose their own subscription and credential
+custody, and quietly moving that onto metered PostHog credits at 3am is a bill
+they did not agree to. A revoked fleet loop fails visibly instead. Same
+principle for the plan limit: a task-limit hit is a **visible `waiting_slot` run**
+retried until the next occurrence supersedes it, rather than the silent
+server-side deferral that is why the paywall reads as never firing elsewhere.
+Supersession, not an attempt cap — a cron payload is "it is time", which does not
+go stale until the next time arrives, so a daily loop waits most of a day and a
+five-minute loop gives up in five.
+
+**The flag fails CLOSED**, which is the opposite of `workflows` sitting next to
+it. The register's own rule picks it: a workflow acts when a webhook arrives, so
+there is a person at the other end of every firing, while a loop acts because
+time passed. "PostHog is unreachable, so arm every scheduler" spends the
+workspace's money with nobody awake to see it. Built straight on Session 120's
+PostHog flag register — the first flag added since it landed, and it cost one
+entry.
+
+**Things that turned out to be wrong, and the tests that found them:**
+
+- `validateCron` had a 366-day horizon meant to catch "never fires". It refused
+  `0 9 29 2 *` — 09:00 every 29 February, the longest legitimate cron period
+  there is. croner returning `null` already IS the never-fires answer, so the cap
+  was both redundant and harmful. Deleted.
+- A run parked on the task limit never left `waiting_slot` after a successful
+  retry: the dispatch path attached the task id without moving the status, so the
+  run would have been retried forever with a task already running behind it.
+  `markDispatched` now does both.
+- The "task deleted mid-flight" branch was unreachable. `loop_runs.task_id` is
+  `ON DELETE SET NULL`, so a deleted task empties the column immediately and a run
+  that *had* a task became indistinguishable from one that never got that far —
+  which the orphan reaper would have settled five minutes later under the wrong
+  name. Fixed with a `dispatched_at` column: the fact the FK erases.
+
+`croner` is `@talyn/shared`'s first runtime dependency, and it earns that on one
+job — an 02:30 loop has no 02:30 on the day the clocks go forward and two 01:30s
+on the day they go back. `loopSchedule.test.ts` pins both edges in
+`America/New_York` so a croner upgrade fails there rather than in somebody's
+repository at two in the morning.
+
+The agent picker was extracted to `packages/shared/src/cloudAgents.ts` on the
+way: it was a `useMemo` in `useGitHubActions.ts`, copied into the web fork, and
+the Loop editor needed the same answer — three copies of "which agents can this
+workspace use" is three chances to disagree.
 ## Session 121 — three workflows on the free plan (2026-09-12)
 
 Workflows shipped to everybody in Session 118 with no plan gate at all. Now the

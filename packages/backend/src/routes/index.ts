@@ -13,6 +13,7 @@ import { fleetPublicRoutes, fleetRoutes } from './fleet.js';
 import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
+import { loopRoutes } from './loops.js';
 import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
@@ -210,6 +211,10 @@ export function setupRoutes(app: Express): void {
   // Workflows — user-defined PR automation. Below ownerScope like every other
   // workspace-scoped router; each handler also gates on the allow-list.
   app.use(`${api}/workflows`, mount(workflowRoutes()));
+  // Loops — recurring prompts on a cron schedule. Same shape as workflows:
+  // below ownerScope, and every handler gates on the flag independently of
+  // whether the client drew the tab.
+  app.use(`${api}/loops`, mount(loopRoutes()));
   // Personal MCP-token management (mint/list/revoke). The tokens authenticate
   // the `/mcp` endpoint mounted above.
   app.use(`${api}/mcp-tokens`, mount(mcpTokenRoutes()));
