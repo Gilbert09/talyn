@@ -136,7 +136,7 @@ describe('validateWorkflow — a condition must apply to the workflow’s events
   it.each<[string, Record<string, unknown>, string[], RegExp]>([
     ['reviewStates', { reviewStates: ['approved'] }, ['pr_opened'], /only applies to Review submitted/],
     ['labelName', { labelName: 'wip' }, ['pr_opened'], /only applies to Label added/],
-    ['targetIsViewer', { targetIsViewer: true }, ['pr_opened'], /only applies to/],
+    ['target', { target: { kind: 'viewer' } }, ['pr_opened'], /only applies to/],
     [
       'checkConclusions',
       { checkConclusions: ['failure'] },
@@ -151,7 +151,7 @@ describe('validateWorkflow — a condition must apply to the workflow’s events
   it.each<[string, Record<string, unknown>, string[]]>([
     ['reviewStates', { reviewStates: ['approved'] }, ['pr_review_submitted']],
     ['labelName', { labelName: 'wip' }, ['pr_labeled']],
-    ['targetIsViewer', { targetIsViewer: true }, ['pr_review_requested']],
+    ['target', { target: { kind: 'viewer' } }, ['pr_review_requested']],
     ['checkConclusions', { checkConclusions: ['failure'] }, ['pr_checks_completed']],
     ['bodyContains', { bodyContains: 'rebase' }, ['pr_comment']],
   ])('accepts %s on the right event', (_name, conditions, events) => {
@@ -170,18 +170,56 @@ describe('validateWorkflow — a condition must apply to the workflow’s events
   });
 
   it('a falsy value places no constraint, so it is not refused', () => {
-    // `targetIsViewer: false` and a blank `labelName` mean "no constraint", and
-    // an editor that ships defaults must not 400 for sending them.
+    // An `any` target and a blank `labelName` mean "no constraint", and an editor
+    // that ships defaults must not 400 for sending them.
     const out = validateWorkflow(
-      input({ conditions: { targetIsViewer: false, labelName: '  ', bodyContains: '' } })
+      input({ conditions: { target: { kind: 'any' }, labelName: '  ', bodyContains: '' } })
     );
     expect(out.conditions).toEqual({});
   });
 
-  it('refuses an actor match that names no logins', () => {
+  it('refuses an actor match that names nobody at all', () => {
     expect(() =>
       validateWorkflow(input({ conditions: { author: { kind: 'logins', logins: [] } } }))
-    ).toThrow(/names no logins/);
+    ).toThrow(/names no accounts or teams/);
+  });
+
+  it('accepts an actor match that names only teams', () => {
+    // A team-only match is the whole point of "a review was requested from the
+    // frontend team" — it must not need a login alongside it.
+    const out = validateWorkflow(
+      input({
+        conditions: { target: { kind: 'logins', logins: [], teams: ['frontend'] } },
+        events: ['pr_review_requested'] as never,
+      })
+    );
+    expect(out.conditions.target).toEqual({ kind: 'logins', logins: [], teams: ['frontend'] });
+  });
+
+  it('migrates a legacy targetIsViewer into a viewer match', () => {
+    // Workflows saved before the target became a full actor match carry the
+    // boolean. It means exactly `{ kind: 'viewer' }`.
+    const out = validateWorkflow(
+      input({
+        conditions: { targetIsViewer: true } as never,
+        events: ['pr_review_requested'] as never,
+      })
+    );
+    expect(out.conditions.target).toEqual({ kind: 'viewer' });
+    expect((out.conditions as Record<string, unknown>).targetIsViewer).toBeUndefined();
+  });
+
+  it('lets an explicit target win over the legacy boolean', () => {
+    const out = validateWorkflow(
+      input({
+        conditions: {
+          target: { kind: 'logins', logins: ['carol'] },
+          targetIsViewer: true,
+        } as never,
+        events: ['pr_review_requested'] as never,
+      })
+    );
+    expect(out.conditions.target).toEqual({ kind: 'logins', logins: ['carol'] });
   });
 
   it('refuses a bad review state and a bad check conclusion', () => {

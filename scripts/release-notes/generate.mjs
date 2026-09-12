@@ -190,8 +190,14 @@ When nothing in the release is worth telling a user about, reply {"highlights": 
  *                     agent's scaffolding and this repo's CLAUDE.md, tens of
  *                     thousands of tokens of instructions for a job that is
  *                     "read these commit subjects and write three sentences".
- *   --max-turns 1     One answer. There is nothing here to iterate on, and a
- *                     tool call would just burn the turn.
+ *   --max-turns 3     Nominally one answer — there is nothing here to iterate
+ *                     on. It was `1`, and this comment used to say "a tool call
+ *                     would just burn the turn", which is precisely what
+ *                     happened on 0.2.78: the model reached for a tool, had no
+ *                     turn left to answer in, and the release that announced
+ *                     Workflows shipped with no notes at all. The extra turns
+ *                     cost nothing on the happy path and only exist so a single
+ *                     reflexive tool call is survivable.
  *   --output-format   Gives the envelope below instead of bare text, so a
  *                     failure can be told apart from a short answer.
  *
@@ -209,7 +215,7 @@ async function callClaude(userMessage) {
       '--model',
       'claude-opus-5',
       '--max-turns',
-      '1',
+      '3',
       '--output-format',
       'json',
     ],
@@ -284,10 +290,19 @@ async function generateHighlights(commits) {
   });
   const ask = `Release ${RELEASE_VERSION} contains these commits:\n\n${lines.join('\n')}`;
 
-  // One retry, and only for a malformed REPLY — the schema used to buy this for
-  // free. A transport failure is not retried here: the job is already
-  // continue-on-error, and a second attempt at a down API just costs a minute.
-  let text = await callClaude(ask);
+  // Retried for a malformed REPLY, and for the model spending its turns without
+  // answering — both are the model behaving badly rather than the world being
+  // down, and both are fixed by asking again. A TRANSPORT failure is still not
+  // retried: the job is already continue-on-error, and a second attempt at an
+  // unreachable API just costs a minute.
+  let text;
+  try {
+    text = await callClaude(ask);
+  } catch (err) {
+    if (!/error_max_turns/.test(err.message)) throw err;
+    console.warn('release-notes: the model used its turns without answering — asking once more');
+    text = await callClaude(`${ask}\n\nAnswer directly with the JSON. Do not use any tools.`);
+  }
   try {
     return normalize(extractJson(text).highlights ?? []);
   } catch (err) {

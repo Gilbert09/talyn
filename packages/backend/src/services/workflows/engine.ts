@@ -7,7 +7,10 @@ import type {
 } from '@talyn/shared';
 import { workflowMatches } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
-import { pullRequests as pullRequestsTable } from '../../db/schema.js';
+import {
+  pullRequests as pullRequestsTable,
+  repositories as repositoriesTable,
+} from '../../db/schema.js';
 import { workspaces as workspacesTable } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { githubService } from '../github.js';
@@ -16,7 +19,7 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { emitWorkflowRun } from '../websocket.js';
 import type { WatchTarget } from '../webhookIndex.js';
 import type { WebhookDelivery } from '../webhookPayload.js';
-import { workspaceMayUseWorkflows, workflowsSubsystemEnabled } from '../workflowsAccess.js';
+import { workflowsEnabled } from '../workflowsAccess.js';
 import { runWorkflowActions } from './actions.js';
 import { workflowFactsFromDelivery } from './facts.js';
 import { checkRateCap, claimRun, recordSkippedRun, settleRun, statusFromOutcomes } from './runs.js';
@@ -48,6 +51,24 @@ import { enabledWorkflowsFor } from './store.js';
  * re-trigger a merge — the PR is closed. Only the genuinely self-feeding
  * actions are suppressed.
  */
+/**
+ * Failure codes that are a DECISION rather than a breakage.
+ *
+ * Talyn declining to act — the plan cap reached, GitHub rate-limiting the
+ * account, a run already working this PR, a PR that closed before the workflow
+ * got to it — is the system working. Lumping those in with a 500 from GitHub
+ * makes a healthy workspace look broken and buries the failures worth reading.
+ */
+const REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'rate_capped',
+  'task_limit_reached',
+  'rate_gated',
+  'no_cloud_provider',
+  'task_already_running',
+  'merge_queue_limit_reached',
+  'not_open',
+]);
+
 const SELF_ECHO_EVENTS: ReadonlySet<WorkflowTriggerEvent> = new Set([
   'pr_labeled',
   'pr_unlabeled',
@@ -87,7 +108,9 @@ function needsEnrichment(workflows: WorkflowDefinition[], facts: WorkflowEventFa
       const c = w.conditions;
       switch (f) {
         case 'baseBranch':
-          return (c.baseBranches?.length ?? 0) > 0;
+          return (c.baseBranches?.length ?? 0) > 0 || c.baseIsDefault !== undefined;
+        case 'defaultBranch':
+          return c.baseIsDefault !== undefined;
         case 'title':
           return !!c.titleContains;
         case 'draft':
@@ -105,7 +128,9 @@ function needsEnrichment(workflows: WorkflowDefinition[], facts: WorkflowEventFa
       }
     });
   };
-  return (['baseBranch', 'title', 'draft', 'labels', 'author'] as WorkflowFactField[]).some(wants);
+  return (
+    ['baseBranch', 'defaultBranch', 'title', 'draft', 'labels', 'author'] as WorkflowFactField[]
+  ).some(wants);
 }
 
 /**
@@ -133,10 +158,14 @@ export function enrichmentQuery(target: WatchTarget, number: number) {
       baseBranch: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'baseBranch'`,
       headBranch: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'headBranch'`,
       url: sql<string | null>`${pullRequestsTable.lastSummary} ->> 'url'`,
+      // Not from the summary: the repository row is where the default branch
+      // lives, and it is the cheaper read of the two.
+      defaultBranch: repositoriesTable.defaultBranch,
       draft: sql<boolean | null>`(${pullRequestsTable.lastSummary} ->> 'draft')::boolean`,
       labels: sql<string[] | null>`${pullRequestsTable.lastSummary} -> 'labels'`,
     })
     .from(pullRequestsTable)
+    .innerJoin(repositoriesTable, eq(repositoriesTable.id, pullRequestsTable.repositoryId))
     .where(
       and(
         eq(pullRequestsTable.workspaceId, target.workspaceId),
@@ -185,6 +214,11 @@ async function enrich(
     next.baseBranch = row.baseBranch;
     return true;
   });
+  take('defaultBranch', () => {
+    if (!row.defaultBranch) return false;
+    next.defaultBranch = row.defaultBranch;
+    return true;
+  });
   take('headBranch', () => {
     if (!row.headBranch) return false;
     next.headBranch = row.headBranch;
@@ -227,7 +261,7 @@ export async function evaluateWorkflowsForDelivery(
   delivery: WebhookDelivery,
   targets: WatchTarget[]
 ): Promise<number> {
-  if (!workflowsSubsystemEnabled()) return 0;
+  if (!workflowsEnabled()) return 0;
 
   const factsList = workflowFactsFromDelivery(delivery);
   if (factsList.length === 0) return 0;
@@ -252,19 +286,25 @@ async function evaluateForWorkspace(
   target: WatchTarget,
   factsList: WorkflowEventFacts[]
 ): Promise<number> {
-  // The allow-list gate, enforced where the work happens. Ordered so the
-  // cheap-and-common answer ("this workspace has no workflows") is reached
-  // without the join whenever possible.
+  // The kill switch is checked once by the caller, before any of this. What
+  // used to sit here was a per-workspace allow-list lookup — a join against
+  // `users` for every delivery, for every watching workspace — and releasing the
+  // feature removed it rather than making it always answer true.
   const workflows = await enabledWorkflowsFor(target.workspaceId);
   if (workflows.length === 0) return 0;
-  if (!(await workspaceMayUseWorkflows(target.workspaceId))) return 0;
 
   const ownerId = await ownerOf(target.workspaceId);
   if (!ownerId) return 0;
 
   // Only resolved when a workflow actually asks "…and it's me". Cached inside
   // githubService, so a repeat costs nothing.
-  const needsViewer = workflows.some((w) => w.conditions.targetIsViewer === true);
+  // Any `viewer` actor match needs to know who "I" am — on the author, the
+  // actor, or the person the event named.
+  const needsViewer = workflows.some((w) =>
+    [w.conditions.author, w.conditions.actor, w.conditions.target].some(
+      (m) => m?.kind === 'viewer'
+    )
+  );
   const viewerLogin = needsViewer
     ? await githubService.getViewerLogin(target.workspaceId).catch(() => null)
     : null;
@@ -379,6 +419,8 @@ async function runOne(
     },
   });
 
+  const failed = results.outcomes.filter((o) => !o.ok);
+
   captureWorkspaceEvent(target.workspaceId, 'workflow_ran', {
     workflow_id: workflow.id,
     event: facts.event,
@@ -387,7 +429,33 @@ async function runOne(
     started_task: results.taskId !== null,
     repo: facts.repoFullName,
     pr_number: facts.number,
+    // The codes on the run itself, so "which workflows are failing and why" is
+    // answerable without unpacking the per-action array.
+    failed_count: failed.length,
+    failure_codes: [...new Set(failed.map((o) => o.code ?? 'error'))],
   });
+
+  // One FLAT event per failed action, on top of the run's summary.
+  //
+  // A dashboard question like "how often does GitHub's rate limit cost us an
+  // action" is a one-line insight over this and an array-unpacking exercise over
+  // `workflow_ran`. It also separates the two populations that matter and look
+  // identical in a status column: a REFUSAL Talyn made on purpose (the plan cap,
+  // a closed rate gate, a run already working the PR) and something that
+  // actually broke.
+  for (const outcome of failed) {
+    captureWorkspaceEvent(target.workspaceId, 'workflow_action_failed', {
+      workflow_id: workflow.id,
+      event: facts.event,
+      action_type: outcome.type,
+      code: outcome.code ?? 'error',
+      // Refusals are normal and expected; anything else wants looking at. Named
+      // here rather than derived in the dashboard so the two never drift.
+      refused: REFUSAL_CODES.has(outcome.code ?? 'error'),
+      repo: facts.repoFullName,
+      pr_number: facts.number,
+    });
+  }
 
   return true;
 }

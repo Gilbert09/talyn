@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { WorkflowInput, WorkflowRun, WorkflowWithStats } from '@talyn/shared';
+import type {
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowSuggestions,
+  WorkflowWithStats,
+} from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
@@ -24,6 +29,27 @@ export interface UseWorkflows {
   setEnabled: (workflow: WorkflowWithStats, enabled: boolean) => Promise<void>;
   /** The newest runs seen this session, keyed by workflow — fed by the WS event. */
   liveRuns: Record<string, WorkflowRun[]>;
+  /**
+   * Autocomplete options for the editor. `null` until loaded — the editor treats
+   * that as "no suggestions yet" and still accepts typed values, so it never
+   * blocks on this.
+   *
+   * Starts as the cheap half: the workspace's repositories and their default
+   * branches, straight from our own rows. The GitHub-backed half arrives only
+   * when {@link loadGithubSuggestions} is called.
+   */
+  suggestions: WorkflowSuggestions | null;
+  /**
+   * Fetch labels, people and teams for `repos` — the repositories a workflow
+   * names.
+   *
+   * Called when the user opens a field that needs them, not when the editor
+   * opens. Reading every watched repository's labels up front was 320+ requests
+   * on an 80-repo workspace, spent before anybody clicked anything.
+   *
+   * Idempotent per scope: asking twice for the same repositories is free.
+   */
+  loadGithubSuggestions: (repos: string[]) => void;
 }
 
 export function useWorkflows(): UseWorkflows {
@@ -31,6 +57,11 @@ export function useWorkflows(): UseWorkflows {
   const [workflows, setWorkflows] = useState<WorkflowWithStats[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveRuns, setLiveRuns] = useState<Record<string, WorkflowRun[]>>({});
+  const [suggestions, setSuggestions] = useState<WorkflowSuggestions | null>(null);
+  // Which scopes have already been asked for, so re-focusing a field costs
+  // nothing. Keyed by the sorted repo list — a different scope is a different
+  // question.
+  const askedRef = useRef<Set<string>>(new Set());
 
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
@@ -60,6 +91,64 @@ export function useWorkflows(): UseWorkflows {
     setLiveRuns({});
     load();
   }, [load]);
+
+  // The cheap half, once per workspace: repositories and their default branches,
+  // read from our own rows. No GitHub request, so this cannot fail in a way the
+  // user would notice and costs nothing to do on mount.
+  useEffect(() => {
+    if (!workspaceId) {
+      setSuggestions(null);
+      return;
+    }
+    let cancelled = false;
+    setSuggestions(null);
+    askedRef.current = new Set();
+    api.workflows
+      .suggestions(workspaceId)
+      .then((s) => {
+        if (!cancelled) setSuggestions(s);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  const loadGithubSuggestions = useCallback(
+    (repos: string[]) => {
+      if (!workspaceId) return;
+      const key = [...repos].map((r) => r.toLowerCase()).sort().join(',');
+      if (askedRef.current.has(key)) return;
+      askedRef.current.add(key);
+      api.workflows
+        .suggestions(workspaceId, { repos, github: true })
+        .then((next) =>
+          // Merged, not replaced: a narrower scope asked for later must not drop
+          // the labels a wider one already found, and the repo/branch lists are
+          // the same either way.
+          setSuggestions((prev) =>
+            prev
+              ? {
+                  ...next,
+                  labels: [...new Set([...prev.labels, ...next.labels])].sort(),
+                  people: [
+                    ...new Map(
+                      [...prev.people, ...next.people].map((p) => [p.login, p])
+                    ).values(),
+                  ],
+                  teams: [...new Set([...prev.teams, ...next.teams])].sort(),
+                }
+              : next
+          )
+        )
+        .catch(() => {
+          // Let it be asked again: a transient failure should not leave the
+          // field permanently empty for the rest of the session.
+          askedRef.current.delete(key);
+        });
+    },
+    [workspaceId]
+  );
 
   // A finished run changes both the history and the derived stats, and the stats
   // are aggregated server-side — so the event prepends the run locally (instant)
@@ -130,8 +219,30 @@ export function useWorkflows(): UseWorkflows {
   );
 
   return useMemo(
-    () => ({ workflows, error, reload: load, create, update, remove, setEnabled, liveRuns }),
-    [workflows, error, load, create, update, remove, setEnabled, liveRuns]
+    () => ({
+      workflows,
+      error,
+      reload: load,
+      create,
+      update,
+      remove,
+      setEnabled,
+      liveRuns,
+      suggestions,
+      loadGithubSuggestions,
+    }),
+    [
+      workflows,
+      error,
+      load,
+      create,
+      update,
+      remove,
+      setEnabled,
+      liveRuns,
+      suggestions,
+      loadGithubSuggestions,
+    ]
   );
 }
 

@@ -17,7 +17,9 @@ function delivery(over: Partial<WebhookDelivery>): WebhookDelivery {
     eventType: 'pull_request',
     repoFullName: 'acme/widget',
     enqueuedAtMs: 0,
-    payload: {},
+    // GitHub puts a full `repository` on every repo-scoped delivery; the default
+    // branch is read off it for the baseIsDefault condition.
+    payload: { repository: { default_branch: 'main' } },
     ...over,
   };
 }
@@ -141,14 +143,38 @@ describe('workflowFactsFromDelivery — pull_request actions', () => {
     expect(facts?.target).toEqual({ login: 'tom', isBot: false });
   });
 
-  it('leaves the target absent on a TEAM review request', () => {
-    // A team is not a person, and answering `targetIsViewer` for one would need a
-    // membership lookup per delivery. Absent means the condition fails, which is
-    // the honest answer rather than a guess.
+  it('names the TEAM as the target on a team review request', () => {
+    // A team request carries no user at all, so the team itself is the target and
+    // its slug goes in `teamSlugs` — that is what lets a rule say "a review was
+    // requested from the frontend team".
     const [facts] = workflowFactsFromDelivery(
       delivery({
         action: 'review_requested',
         payload: { pull_request: pr(), requested_team: { slug: 'frontend' } },
+      })
+    );
+    expect(facts?.target).toEqual({ login: 'frontend', isBot: false, teamSlugs: ['frontend'] });
+  });
+
+  it('prefers the requested USER over a team when both are present', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({
+        action: 'review_requested',
+        payload: {
+          pull_request: pr(),
+          requested_reviewer: { login: 'tom', type: 'User' },
+          requested_team: { slug: 'frontend' },
+        },
+      })
+    );
+    expect(facts?.target).toEqual({ login: 'tom', isBot: false });
+  });
+
+  it('leaves the target absent when a team request carries no slug', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({
+        action: 'review_requested',
+        payload: { pull_request: pr(), requested_team: { name: 'Frontend' } },
       })
     );
     expect(facts?.target).toBeUndefined();
@@ -175,6 +201,39 @@ describe('workflowFactsFromDelivery — pull_request actions', () => {
     expect(
       workflowFactsFromDelivery(delivery({ action: 'opened', payload: { pull_request: { title: 'x' } } }))
     ).toEqual([]);
+  });
+});
+
+describe('workflowFactsFromDelivery — the default branch', () => {
+  it('reads it off the repository, for every event shape', () => {
+    const pull = workflowFactsFromDelivery(
+      delivery({
+        action: 'opened',
+        payload: { repository: { default_branch: 'master' }, pull_request: pr() },
+      })
+    );
+    expect(pull[0]?.defaultBranch).toBe('master');
+
+    const commented = workflowFactsFromDelivery(
+      delivery({
+        eventType: 'issue_comment',
+        action: 'created',
+        payload: {
+          repository: { default_branch: 'master' },
+          issue: { number: 42, user: { login: 'alice' }, labels: [], pull_request: {} },
+          comment: { body: 'hi', user: { login: 'bob' } },
+        },
+      })
+    );
+    // An issue payload says nothing about branches, but the repository node does.
+    expect(commented[0]?.defaultBranch).toBe('master');
+  });
+
+  it('is blank when the payload carries no repository', () => {
+    const [facts] = workflowFactsFromDelivery(
+      delivery({ action: 'opened', payload: { pull_request: pr() } })
+    );
+    expect(facts?.defaultBranch).toBe('');
   });
 });
 

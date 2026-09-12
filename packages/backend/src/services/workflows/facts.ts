@@ -54,6 +54,20 @@ function str(v: unknown): string {
 }
 
 /**
+ * The repository's default branch.
+ *
+ * GitHub puts a full `repository` object on every repo-scoped delivery, so this
+ * is available for all of them — including `issue_comment` and `check_suite`,
+ * whose own nodes say nothing about branches. Blank when absent, and the caller
+ * lists `defaultBranch` as unknown so a condition on it fails rather than
+ * guessing "main" for a repo that uses "master".
+ */
+function defaultBranchOf(payload: Record<string, unknown>): string {
+  const repo = payload.repository as { default_branch?: unknown } | undefined;
+  return str(repo?.default_branch);
+}
+
+/**
  * The `pull_request` action → trigger mapping, minus `closed` (which splits on
  * whether it merged) and the review-request actions GitHub spells with
  * underscores. Anything absent is deliberately inert.
@@ -142,6 +156,7 @@ function fromPullRequest(delivery: WebhookDelivery): WorkflowEventFacts[] {
     // the self-echo guard and the `actor` condition are about.
     actor: actorOf(payload.sender) ?? author,
     baseBranch: str(base?.ref),
+    defaultBranch: defaultBranchOf(payload),
     headBranch: str(head?.ref),
     draft: pr.draft === true,
     labels: labelNames(pr.labels),
@@ -158,13 +173,21 @@ function fromPullRequest(delivery: WebhookDelivery): WorkflowEventFacts[] {
     event === 'pr_assigned' ||
     event === 'pr_unassigned'
   ) {
-    // A team review request carries `requested_team` and no user. `target` stays
-    // absent, which fails `targetIsViewer` — correct: a team is not you, even
-    // when you are in it. (Answering otherwise needs a team-membership lookup
-    // per delivery, which is a GitHub call on the hot path for a rule nobody
-    // has asked for yet.)
+    // A team review request carries `requested_team` and no user at all. The
+    // team becomes the target, with its slug in `teamSlugs`, so a rule can say
+    // "a review was requested from the frontend team".
+    //
+    // What it deliberately does NOT do is resolve the team's MEMBERS: a
+    // `viewer` or per-login target still fails on a team request, because
+    // answering otherwise needs a membership lookup per delivery — a GitHub call
+    // on the webhook hot path, against the account's shared budget, for every
+    // team request in every watched repo.
+    const team = payload.requested_team as { slug?: unknown; name?: unknown } | undefined;
+    const teamSlug = typeof team?.slug === 'string' ? team.slug : '';
     const target =
-      actorOf(payload.requested_reviewer) ?? actorOf(payload.assignee) ?? undefined;
+      actorOf(payload.requested_reviewer) ??
+      actorOf(payload.assignee) ??
+      (teamSlug ? { login: teamSlug, isBot: false, teamSlugs: [teamSlug] } : undefined);
     if (target) facts.target = target;
   }
 
@@ -200,6 +223,7 @@ function fromReview(delivery: WebhookDelivery): WorkflowEventFacts[] {
     // "changes requested by a human" means the person who requested them.
     actor: reviewer ?? actorOf(payload.sender) ?? author,
     baseBranch: str(base?.ref),
+    defaultBranch: defaultBranchOf(payload),
     headBranch: str(head?.ref),
     draft: pr.draft === true,
     labels: labelNames(pr.labels),
@@ -235,6 +259,7 @@ function fromReviewComment(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author,
       actor: actorOf(comment.user) ?? actorOf(payload.sender) ?? author,
       baseBranch: str(base?.ref),
+      defaultBranch: defaultBranchOf(payload),
       headBranch: str(head?.ref),
       draft: pr.draft === true,
       labels: labelNames(pr.labels),
@@ -273,6 +298,7 @@ function fromIssueComment(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author,
       actor: actorOf(comment.user) ?? actorOf(payload.sender) ?? author,
       baseBranch: '',
+      defaultBranch: defaultBranchOf(payload),
       headBranch: '',
       draft: false,
       labels: labelNames(issue.labels),
@@ -331,6 +357,7 @@ function fromCheckSuite(delivery: WebhookDelivery): WorkflowEventFacts[] {
       author: NOBODY,
       actor: NOBODY,
       baseBranch: str(base?.ref),
+      defaultBranch: defaultBranchOf(payload),
       headBranch: str(head?.ref),
       draft: false,
       labels: [],

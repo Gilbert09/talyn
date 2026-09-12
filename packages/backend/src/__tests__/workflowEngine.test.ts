@@ -13,15 +13,16 @@ import {
 } from '../db/schema.js';
 import { createWorkflow, _resetWorkflowStore, listWorkflows } from '../services/workflows/store.js';
 import { evaluateWorkflowsForDelivery, isSelfEcho } from '../services/workflows/engine.js';
-import { resetWorkflowsAccessCache } from '../services/workflowsAccess.js';
 import type { WebhookDelivery } from '../services/webhookPayload.js';
 import type { WatchTarget } from '../services/webhookIndex.js';
 import { githubService } from '../services/github.js';
+import { githubRateGate, GitHubRateLimitError } from '../services/githubRateGate.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
 import * as taskCreate from '../services/taskCreate.js';
 import { TaskLimitError } from '../services/billing/entitlements.js';
+import * as analytics from '../services/analytics.js';
 
 /**
  * The engine end to end, against a real Postgres.
@@ -100,9 +101,7 @@ describe('workflow engine', () => {
       defaultBranch: 'main',
     });
 
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
+    delete process.env.WORKFLOWS_ENABLED;
     _resetWorkflowStore();
 
     addLabels = vi.spyOn(githubService, 'addPullRequestLabels').mockResolvedValue(undefined);
@@ -112,8 +111,6 @@ describe('workflow engine', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     delete process.env.WORKFLOWS_ENABLED;
-    delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    resetWorkflowsAccessCache();
     _resetWorkflowStore();
     await cleanup();
   });
@@ -194,27 +191,27 @@ describe('workflow engine', () => {
     expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
   });
 
-  describe('the allow-list gate', () => {
-    it('refuses a workspace whose owner is not on the list', async () => {
+  describe('the kill switch', () => {
+    it('runs for every workspace by default — no allow-list any more', async () => {
       await addWorkflow();
+      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(1);
+      expect(addLabels).toHaveBeenCalled();
+    });
+
+    it('ignores a stale allow-list left on a deployment', async () => {
+      // The env var is gone from the code. A value someone forgot to delete must
+      // not resurrect a gate that no longer exists.
       process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
-      resetWorkflowsAccessCache();
-      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
-      expect(addLabels).not.toHaveBeenCalled();
-    });
-
-    it('refuses everybody when the list is empty — unset means nobody', async () => {
       await addWorkflow();
+      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(1);
       delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-      resetWorkflowsAccessCache();
-      expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
     });
 
-    it('refuses when the subsystem is off, whatever the list says', async () => {
+    it('stops everything when the switch is pulled', async () => {
       await addWorkflow();
       process.env.WORKFLOWS_ENABLED = 'false';
-      resetWorkflowsAccessCache();
       expect(await evaluateWorkflowsForDelivery(delivery(), [target])).toBe(0);
+      expect(addLabels).not.toHaveBeenCalled();
     });
   });
 
@@ -425,6 +422,103 @@ describe('workflow engine', () => {
     });
   });
 
+  describe('analytics', () => {
+    // These events are how anybody finds out whether workflows are used and
+    // whether they work. They are emitted server-side because a client that
+    // reports nothing must not be able to hide adoption (Session 116), and a
+    // test is what stops them being refactored away silently.
+    it('reports every run, with its failure codes', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      addLabels.mockRejectedValueOnce(new Error('GitHub API error 403'));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const ran = capture.mock.calls.find(([, event]) => event === 'workflow_ran');
+      expect(ran?.[2]).toMatchObject({
+        status: 'failed',
+        failed_count: 1,
+        failure_codes: ['github_error'],
+        repo: 'acme/widget',
+        pr_number: 42,
+      });
+    });
+
+    it('emits one flat event per failed action', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      addLabels.mockRejectedValueOnce(new Error('GitHub API error 403'));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const failures = capture.mock.calls.filter(
+        ([, event]) => event === 'workflow_action_failed'
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.[2]).toMatchObject({
+        action_type: 'add_labels',
+        code: 'github_error',
+        // A GitHub 403 is a breakage, not a decision Talyn made.
+        refused: false,
+      });
+    });
+
+    it('waits out a SHORT gate instead of dropping the action', async () => {
+      // `apiRequest` already sleeps any block under MAX_GATE_WAIT_MS. An earlier
+      // `gateClosed()` pre-check jumped in front of that and refused the moment
+      // the account was gated at all — dropping actions a two-second wait would
+      // have completed. The gate is not consulted up front any more.
+      vi.spyOn(githubRateGate, 'isBlocked').mockReturnValue(true);
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      // The label call was still attempted; the gate is the HTTP layer's problem.
+      expect(addLabels).toHaveBeenCalled();
+      const [run] = await db.select().from(runsTable);
+      expect(run?.status).toBe('succeeded');
+    });
+
+    it('reports how long GitHub asked for when the gate is too long to wait', async () => {
+      addLabels.mockRejectedValueOnce(new GitHubRateLimitError('rate limited', 295_000));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const [run] = await db.select().from(runsTable);
+      const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
+      expect(outcome?.code).toBe('rate_gated');
+      // The number is the point: "another 295s" is actionable where "right now"
+      // is not.
+      expect(outcome?.error).toMatch(/295s/);
+    });
+
+    it('marks a REFUSAL apart from a breakage', async () => {
+      // The rate gate, the plan cap and "a run is already working this PR" are
+      // the system working. A dashboard that counts them as failures makes a
+      // healthy workspace look broken.
+      addLabels.mockRejectedValueOnce(new GitHubRateLimitError('rate limited', 295_000));
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const failure = capture.mock.calls.find(
+        ([, event]) => event === 'workflow_action_failed'
+      );
+      expect(failure?.[2]).toMatchObject({ code: 'rate_gated', refused: true });
+    });
+
+    it('says nothing when nothing failed', async () => {
+      const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+      await addWorkflow();
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+      expect(
+        capture.mock.calls.filter(([, event]) => event === 'workflow_action_failed')
+      ).toHaveLength(0);
+    });
+  });
+
   describe('several actions', () => {
     it('lands "partial" and keeps going when one action fails', async () => {
       addLabels.mockRejectedValueOnce(new Error('GitHub API error 403'));
@@ -582,7 +676,8 @@ describe('workflow engine', () => {
   });
 
   it('runs each workspace watching the repo independently', async () => {
-    // A second workspace, NOT on the allow-list: the first still runs.
+    // Two workspaces watching one repo, each with its own workflow: BOTH run
+    // now. This used to assert the second was filtered out by the allow-list.
     await seedUser(db, { id: 'user-2', email: 'other@example.test' });
     await db.insert(workspacesTable).values({
       id: 'ws-2',
@@ -612,9 +707,10 @@ describe('workflow engine', () => {
       { workspaceId: 'ws-2', repositoryId: 'repo-2', owner: 'acme', repo: 'widget' },
     ]);
 
-    expect(ran).toBe(1);
-    expect(addLabels).toHaveBeenCalledTimes(1);
+    expect(ran).toBe(2);
+    expect(addLabels).toHaveBeenCalledTimes(2);
     expect(addLabels).toHaveBeenCalledWith(WORKSPACE, 'acme', 'widget', 42, ['talyn-seen']);
+    expect(addLabels).toHaveBeenCalledWith('ws-2', 'acme', 'widget', 42, ['theirs']);
   });
 
   it('does not let one workspace’s failure stop another’s workflow', async () => {

@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import type { ApiResponse } from '@talyn/shared';
 import { validateWorkflow } from '@talyn/shared';
+import type { NormalizedWorkflow } from '@talyn/shared';
+import { captureWorkspaceEvent } from '../services/analytics.js';
 import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   createWorkflow,
@@ -14,6 +16,7 @@ import {
   workspaceMayUseWorkflows,
   workflowsRefusalReason,
 } from '../services/workflowsAccess.js';
+import { workflowSuggestions } from '../services/workflows/suggestions.js';
 
 /**
  * Workflows — user-defined PR automation.
@@ -22,15 +25,13 @@ import {
  * policies (migration 0052) are the second line of defence behind
  * `requireWorkspaceAccess`.
  *
- * Every handler gates on the allow-list. That is not belt-and-braces with the
+ * Every handler gates on the kill switch. That is not belt-and-braces with the
  * hidden nav item — the nav item is not a gate at all, it is a decoration that
  * the CLI, the MCP server and plain `curl` walk straight past. See
  * `services/workflowsAccess.ts`.
  *
- * A refusal is 403 with the reason, not 404. The three reasons (the deployment
- * has it off, nobody is allow-listed, you are not on the list) are genuinely
- * different, and reading a forgotten env var as "working as intended" costs an
- * evening.
+ * A refusal is 403 with the reason, not 404: somebody switching the feature off
+ * should be able to tell that from a route that does not exist.
  */
 
 /** How many history rows one page returns when the caller does not say. */
@@ -41,6 +42,35 @@ const DEFAULT_RUN_PAGE = 50;
  * ask for one enormous response.
  */
 const MAX_RUN_PAGE = 200;
+
+/**
+ * What a workflow definition event reports.
+ *
+ * The SHAPE of the rule, never its content: which triggers, which condition
+ * KEYS, which action types. Not the name, not the label values, not the logins,
+ * not the prompt. Those are the user's words about their own repositories, and a
+ * product-analytics event is the wrong place for them — we want to know whether
+ * people build workflows and which parts they reach for, and none of that needs
+ * the contents.
+ *
+ * (`workflow_ran` does carry repo and PR number, because a run without the thing
+ * it ran on cannot be debugged. A definition can.)
+ */
+function workflowShape(
+  id: string,
+  workflow: Pick<NormalizedWorkflow, 'events' | 'conditions' | 'actions' | 'enabled'>
+): Record<string, unknown> {
+  return {
+    workflow_id: id,
+    enabled: workflow.enabled,
+    trigger_count: workflow.events.length,
+    events: workflow.events,
+    condition_keys: Object.keys(workflow.conditions).sort(),
+    condition_count: Object.keys(workflow.conditions).length,
+    action_types: workflow.actions.map((a) => a.type),
+    action_count: workflow.actions.length,
+  };
+}
 
 export function workflowRoutes(): Router {
   const router = Router();
@@ -63,7 +93,7 @@ export function workflowRoutes(): Router {
       handleAccessError(err, res);
       return false;
     }
-    if (!(await workspaceMayUseWorkflows(workspaceId))) {
+    if (!workspaceMayUseWorkflows()) {
       res.status(403).json({
         success: false,
         error: `Workflows are not available: ${workflowsRefusalReason()}.`,
@@ -78,6 +108,42 @@ export function workflowRoutes(): Router {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
     const data = await listWorkflows(workspaceId);
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * The editor's autocomplete options.
+   *
+   * Two modes, and the default is the cheap one. With no query beyond the
+   * workspace this is a pure database read — the watched repositories and their
+   * default branches — which is what the editor wants when it opens, and costs
+   * nothing. `github=1` additionally reads labels for the repositories in
+   * `repos`, plus the collaborators and teams of their owners.
+   *
+   * The split exists because the first version spent 320+ GitHub requests the
+   * moment the editor opened, on a workspace watching 80 repositories. Now
+   * nothing is spent until somebody opens a field that needs it, and then only
+   * for the repositories the workflow names.
+   *
+   * Mounted ABOVE `/:id` — Express matches in declaration order, and
+   * `/suggestions` would otherwise be read as a workflow id and 404.
+   *
+   * Never fails: `workflowSuggestions` settles each fetch independently and
+   * returns empty lists with `partial: true` for whatever it could not get. A
+   * picker with no suggestions is still a working text field; a 500 is an editor
+   * that will not open.
+   */
+  router.get('/suggestions', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string;
+    if (!(await gate(req, res, workspaceId))) return;
+    const repos = String(req.query.repos ?? '')
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean);
+    const data = await workflowSuggestions(workspaceId, {
+      repos,
+      includeGithub: req.query.github === '1',
+    });
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -96,6 +162,12 @@ export function workflowRoutes(): Router {
       });
     }
     const data = await createWorkflow(workspaceId, normalized);
+    // Server-side, not from the client: `workflow_ran` can tell us how often
+    // workflows FIRE but not how many people build one, and a user whose three
+    // workflows never match is indistinguishable from a user who built none.
+    // Emitted here so a client that reports nothing cannot hide adoption — the
+    // Session 116 lesson.
+    captureWorkspaceEvent(workspaceId, 'workflow_created', workflowShape(data.id, normalized));
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -121,6 +193,21 @@ export function workflowRoutes(): Router {
     }
     const data = await updateWorkflow(existing.id, existing.workspaceId, normalized);
     if (!data) return res.status(404).json({ success: false, error: 'Workflow not found' });
+
+    captureWorkspaceEvent(
+      existing.workspaceId,
+      'workflow_updated',
+      workflowShape(existing.id, normalized)
+    );
+    // Its own event, because switching a workflow OFF is the strongest signal
+    // that something about it is wrong — and it is invisible inside a generic
+    // "updated" that fires for every rename too.
+    if (normalized.enabled !== existing.enabled) {
+      captureWorkspaceEvent(existing.workspaceId, 'workflow_enabled_toggled', {
+        ...workflowShape(existing.id, normalized),
+        previously_enabled: existing.enabled,
+      });
+    }
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -131,6 +218,12 @@ export function workflowRoutes(): Router {
     }
     if (!(await gate(req, res, existing.workspaceId))) return;
     await deleteWorkflow(existing.id, existing.workspaceId);
+    captureWorkspaceEvent(existing.workspaceId, 'workflow_deleted', {
+      ...workflowShape(existing.id, existing),
+      // How long it lasted. A rule deleted within the hour is a failed attempt;
+      // one deleted after a month did its job and stopped being needed.
+      age_hours: Math.round((Date.now() - new Date(existing.createdAt).getTime()) / 3_600_000),
+    });
     res.json({ success: true, data: null } as ApiResponse<null>);
   });
 

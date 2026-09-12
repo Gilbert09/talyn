@@ -11,16 +11,15 @@ import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import { workspaces as workspacesTable } from '../../db/schema.js';
-import { resetWorkflowsAccessCache } from '../../services/workflowsAccess.js';
 import { _resetWorkflowStore } from '../../services/workflows/store.js';
 
 /**
  * The workflows API.
  *
  * What is pinned beyond CRUD:
- *   - the allow-list gate answers EVERY verb, because a hidden nav item is not a
+ *   - the kill switch answers EVERY verb, because a hidden nav item is not a
  *     gate — the CLI, the MCP server and plain `curl` walk straight past one;
- *   - the refusal is a 403 that names WHICH of the three reasons it is;
+ *   - the refusal is a 403 that says the switch was pulled, not a 404;
  *   - PATCH is a whole-workflow replace, so a partial body cannot land a
  *     trigger/condition combination the validator would refuse as a whole;
  *   - a validator message reaches the caller verbatim, because those messages
@@ -75,16 +74,12 @@ describe('workflow routes', () => {
       { id: 'ws-theirs', ownerId: OTHER_USER_ID, name: 'theirs', settings: {} },
     ]);
     ({ url, close } = await makeServer());
-    process.env.WORKFLOWS_ENABLED = 'true';
-    process.env.WORKFLOWS_ALLOWED_EMAILS = 'tom@example.test';
-    resetWorkflowsAccessCache();
+    delete process.env.WORKFLOWS_ENABLED;
     _resetWorkflowStore();
   });
 
   afterEach(async () => {
     delete process.env.WORKFLOWS_ENABLED;
-    delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-    resetWorkflowsAccessCache();
     _resetWorkflowStore();
     await close();
     await cleanup();
@@ -162,11 +157,10 @@ describe('workflow routes', () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/cannot run a local skill/);
   });
 
-  describe('the allow-list gate', () => {
-    it('403s every verb when the caller is not allow-listed', async () => {
+  describe('the kill switch', () => {
+    it('403s every verb when the feature is switched off', async () => {
       const made = await create();
-      process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
-      resetWorkflowsAccessCache();
+      process.env.WORKFLOWS_ENABLED = 'false';
 
       const calls: Array<[string, RequestInit]> = [
         [`/api/v1/workflows?workspaceId=ws-mine`, { headers }],
@@ -180,24 +174,23 @@ describe('workflow routes', () => {
         expect(res.status, path).toBe(403);
         const json = (await res.json()) as { code: string; error: string };
         expect(json.code).toBe('workflows_unavailable');
-        expect(json.error).toMatch(/not on the workflows allowlist/);
+        expect(json.error).toMatch(/switched off/);
       }
     });
 
-    it('names the reason: an empty allowlist is not the same as "not you"', async () => {
-      delete process.env.WORKFLOWS_ALLOWED_EMAILS;
-      resetWorkflowsAccessCache();
+    it('serves everybody by default — absent means ON now', async () => {
+      // The inverted polarity, at the API boundary. While the feature was gated,
+      // an unset env var meant nobody; released, it means everybody.
+      delete process.env.WORKFLOWS_ENABLED;
       const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as { error: string }).error).toMatch(/no allowlist configured/);
+      expect(res.status).toBe(200);
     });
 
-    it('names the reason when the deployment has the subsystem off', async () => {
-      process.env.WORKFLOWS_ENABLED = 'false';
-      resetWorkflowsAccessCache();
+    it('ignores a stale allow-list left on a deployment', async () => {
+      process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
       const res = await fetch(`${url}/api/v1/workflows?workspaceId=ws-mine`, { headers });
-      expect(res.status).toBe(403);
-      expect(((await res.json()) as { error: string }).error).toMatch(/not enabled on this deployment/);
+      expect(res.status).toBe(200);
+      delete process.env.WORKFLOWS_ALLOWED_EMAILS;
     });
   });
 
@@ -229,9 +222,11 @@ describe('workflow routes', () => {
       });
     });
 
-    it('answers false — not 403 — for everyone else, so the client can just not draw it', async () => {
-      process.env.WORKFLOWS_ALLOWED_EMAILS = 'somebody-else@example.test';
-      resetWorkflowsAccessCache();
+    it('answers false — not 403 — when the switch is pulled, so the client just does not draw it', async () => {
+      // Kept as a capability answer rather than hardcoded true precisely so the
+      // switch reaches the UI: a deployment with the engine off must not leave a
+      // nav item pointing at routes that 403.
+      process.env.WORKFLOWS_ENABLED = 'false';
       const res = await fetch(`${url}/api/v1/features`, { headers });
       expect(res.status).toBe(200);
       expect(((await res.json()) as { data: { workflows: boolean } }).data).toEqual({
