@@ -15,6 +15,27 @@ import { prMonitorService } from '../prMonitor.js';
  * merge queue and every webhook refresh draw on. One answer, cached, keeps the
  * cost of opening the editor bounded whatever the user clicks.
  *
+ * # What each thing costs, and why it is fetched at the scope it is
+ *
+ * The first version of this fetched all four PER REPO, which on the workspace
+ * that watches 80 PostHog repos meant 320 requests minimum — 80 of them
+ * byte-identical calls to `/orgs/PostHog/teams`, and up to 800 more from
+ * paginating collaborators on every one. On an account already inside a GitHub
+ * backoff, opening the editor was a meaningful part of the problem it then
+ * reported. So each thing is now fetched at its true scope:
+ *
+ *  - **labels** are genuinely per-repo, and are the suggestion list that matters
+ *    most. One request per repo (paginated only where a repo has >100 labels).
+ *  - **teams** belong to the ORG, not the repo. Fetched once per distinct owner.
+ *  - **people** are nominally per-repo, but an org's repos share almost all their
+ *    collaborators, and this is a suggestion list rather than an authorisation
+ *    check. Sampled from ONE repo per owner. Somebody with access to a single
+ *    repo is missing from the list and can still be typed in.
+ *  - **branches** are not fetched from GitHub at all. The base-branch condition
+ *    is overwhelmingly "the default branch", which we already store on the
+ *    `repositories` row — and listing every branch of 80 repos to offer
+ *    `release/2` as well is wildly out of proportion to that. Typed values work.
+ *
  * # Everything degrades
  *
  * Each part is independent and a failure yields an EMPTY list for that part
@@ -31,61 +52,46 @@ import { prMonitorService } from '../prMonitor.js';
  * Long, because this is reference data that changes on a human timescale — a new
  * label or a new collaborator is a weekly event, not a per-minute one — and
  * because the alternative is spending REST budget every time somebody opens the
- * editor. `refresh` is the escape hatch for the case where somebody has just
- * created the label they are trying to select.
+ * editor.
  */
 const TTL_MS = 10 * 60_000;
 
-interface CacheEntry {
+interface CacheEntry<T> {
   at: number;
-  value: RepoSuggestions;
+  value: T;
 }
 
-interface RepoSuggestions {
-  labels: string[];
-  branches: string[];
-  people: Array<{ login: string; isBot: boolean }>;
-  teams: string[];
-}
-
-const cache = new Map<string, CacheEntry>();
+/** Per-repo: labels only. */
+const labelCache = new Map<string, CacheEntry<string[]>>();
+/** Per-owner: the things that belong to an account rather than a repository. */
+const ownerCache = new Map<
+  string,
+  CacheEntry<{ people: Array<{ login: string; isBot: boolean }>; teams: string[] }>
+>();
 
 /** Test hook. */
 export function _resetWorkflowSuggestions(): void {
-  cache.clear();
+  labelCache.clear();
+  ownerCache.clear();
 }
 
-function emptyRepo(): RepoSuggestions {
-  return { labels: [], branches: [], people: [], teams: [] };
-}
-
-/**
- * One repository's reference data.
- *
- * Every fetch is settled independently — `Promise.allSettled` rather than
- * `Promise.all` — so a repo whose teams 403 still contributes its labels.
- */
-async function fetchRepo(
-  workspaceId: string,
-  owner: string,
-  repo: string
-): Promise<RepoSuggestions> {
-  const [labels, branches, people, teams] = await Promise.allSettled([
-    githubService.listRepoLabelNames(workspaceId, owner, repo),
-    githubService.listBranches(workspaceId, owner, repo, { per_page: 100 }),
-    githubService.listRepoCollaborators(workspaceId, owner, repo),
-    githubService.listOrgTeamSlugs(workspaceId, owner),
-  ]);
-
-  return {
-    labels: labels.status === 'fulfilled' ? labels.value : [],
-    branches:
-      branches.status === 'fulfilled'
-        ? branches.value.map((b) => b.name).filter(Boolean)
-        : [],
-    people: people.status === 'fulfilled' ? people.value : [],
-    teams: teams.status === 'fulfilled' ? teams.value : [],
-  };
+/** Read through a cache, recording a miss's failure as `partial` rather than throwing. */
+async function cached<T>(
+  store: Map<string, CacheEntry<T>>,
+  key: string,
+  now: number,
+  empty: T,
+  fetch: () => Promise<T>,
+  onFailure: () => void
+): Promise<T> {
+  const hit = store.get(key);
+  if (hit && now - hit.at < TTL_MS) return hit.value;
+  const value = await fetch().catch(() => {
+    onFailure();
+    return empty;
+  });
+  store.set(key, { at: now, value });
+  return value;
 }
 
 /**
@@ -106,7 +112,8 @@ export async function workflowSuggestions(workspaceId: string): Promise<Workflow
   const out: WorkflowSuggestions = {
     repos: repos.map((r) => r.fullName),
     labels: [],
-    branches: [],
+    // Straight off the `repositories` rows — no GitHub call, and no failure mode.
+    branches: [...new Set(repos.map((r) => r.defaultBranch).filter(Boolean))].sort(),
     people: [],
     teams: [],
     partial: false,
@@ -122,34 +129,55 @@ export async function workflowSuggestions(workspaceId: string): Promise<Workflow
     return out;
   }
 
-  const labels = new Set<string>();
-  const branches = new Set<string>();
-  const teams = new Set<string>();
-  const people = new Map<string, boolean>();
   const now = Date.now();
+  const fail = () => {
+    out.partial = true;
+  };
 
-  for (const repo of repos) {
-    const key = `${workspaceId}:${repo.id}`;
-    const hit = cache.get(key);
-    let value: RepoSuggestions;
-    if (hit && now - hit.at < TTL_MS) {
-      value = hit.value;
-    } else {
-      value = await fetchRepo(workspaceId, repo.owner, repo.repo).catch(() => {
-        out.partial = true;
-        return emptyRepo();
-      });
-      cache.set(key, { at: now, value });
-    }
-    for (const l of value.labels) labels.add(l);
-    for (const b of value.branches) branches.add(b);
-    for (const t of value.teams) teams.add(t);
+  // ---- Per owner: teams, and one repo's collaborators ---------------------
+  const owners = new Map<string, { owner: string; repo: string }>();
+  for (const r of repos) if (!owners.has(r.owner)) owners.set(r.owner, { owner: r.owner, repo: r.repo });
+
+  const people = new Map<string, boolean>();
+  const teams = new Set<string>();
+  for (const { owner, repo } of owners.values()) {
+    const value = await cached(
+      ownerCache,
+      `${workspaceId}:${owner}`,
+      now,
+      { people: [], teams: [] },
+      async () => {
+        const [collaborators, orgTeams] = await Promise.allSettled([
+          githubService.listRepoCollaborators(workspaceId, owner, repo),
+          githubService.listOrgTeamSlugs(workspaceId, owner),
+        ]);
+        return {
+          people: collaborators.status === 'fulfilled' ? collaborators.value : [],
+          teams: orgTeams.status === 'fulfilled' ? orgTeams.value : [],
+        };
+      },
+      fail
+    );
     for (const p of value.people) people.set(p.login, p.isBot);
+    for (const t of value.teams) teams.add(t);
+  }
+
+  // ---- Per repo: labels ---------------------------------------------------
+  const labels = new Set<string>();
+  for (const repo of repos) {
+    const value = await cached(
+      labelCache,
+      `${workspaceId}:${repo.id}`,
+      now,
+      [] as string[],
+      () => githubService.listRepoLabelNames(workspaceId, repo.owner, repo.repo),
+      fail
+    );
+    for (const l of value) labels.add(l);
   }
 
   const byName = (a: string, b: string) => a.localeCompare(b);
   out.labels = [...labels].sort(byName);
-  out.branches = [...branches].sort(byName);
   out.teams = [...teams].sort(byName);
   // People first, bots after: a reviewer picker is nearly always after a person,
   // and Dependabot sorting above a colleague is a small daily annoyance.

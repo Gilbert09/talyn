@@ -14,7 +14,7 @@ import {
 import { getDbClient } from '../../db/client.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
-import { githubRateGate } from '../githubRateGate.js';
+import { GitHubRateLimitError } from '../githubRateGate.js';
 import { prMonitorService } from '../prMonitor.js';
 import { getOrFetchPRSummary } from '../prCache.js';
 import { activePrTaskId, resolveCloudEnv } from '../prCloudFix.js';
@@ -193,20 +193,38 @@ async function runOne(
 // ---- GitHub-calling actions ----------------------------------------------
 
 /**
- * A closed rate gate is a REFUSAL, not an error.
+ * Turn a GitHub failure into an outcome, waiting out a short rate-limit gate.
  *
- * `apiRequest` waits behind the gate and throws if the wait would be too long,
- * which is the right behaviour for a user pressing a button. For a workflow it
- * is worth naming: the account is inside a GitHub backoff, the action did not
- * happen, and nothing is broken. Checked before the call so the outcome says so
- * instead of surfacing GitHub's message.
+ * There used to be a `gateClosed()` pre-check here that refused the moment the
+ * account was gated at all. That was strictly worse than doing nothing:
+ * `apiRequest` already calls `githubRateGate.waitIfBlocked`, which SLEEPS OUT any
+ * block shorter than `MAX_GATE_WAIT_MS` (60s) and only throws beyond it. The
+ * pre-check jumped in front of that and dropped actions that a two-second wait
+ * would have completed.
+ *
+ * So the gate is no longer consulted up front. A short throttle now costs the
+ * action a pause and it still happens; a long one throws
+ * `GitHubRateLimitError`, which becomes a `rate_gated` outcome carrying how long
+ * GitHub asked for.
+ *
+ * 60s is the codebase's existing bound and the right one here: these run in the
+ * webhook worker's six-wide slow lane, so waiting out a 300s backoff would pin a
+ * slot for five minutes and starve the PR refreshes queued behind it.
  */
-function gateClosed(ctx: ActionContext): boolean {
-  return githubRateGate.isBlocked(githubService.accountKeyFor(ctx.workspaceId), 'rest');
+function githubOutcome(type: WorkflowActionType, err: unknown): WorkflowActionOutcome {
+  if (err instanceof GitHubRateLimitError) {
+    return no(
+      type,
+      'rate_gated',
+      `GitHub is rate-limiting this account for another ${Math.round(
+        err.retryAfterMs / 1000
+      )}s, so the action was skipped`
+    );
+  }
+  return no(type, 'github_error', err instanceof Error ? err.message : String(err));
 }
 
 async function addLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
-  if (gateClosed(ctx)) return rateGated('add_labels');
   try {
     await githubService.addPullRequestLabels(
       ctx.workspaceId,
@@ -222,7 +240,6 @@ async function addLabels(labels: string[], ctx: ActionContext): Promise<Workflow
 }
 
 async function removeLabels(labels: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
-  if (gateClosed(ctx)) return rateGated('remove_labels');
   const removed: string[] = [];
   const absent: string[] = [];
   for (const label of labels) {
@@ -252,7 +269,6 @@ async function requestReviewers(
   action: { users?: string[]; teams?: string[] },
   ctx: ActionContext
 ): Promise<WorkflowActionOutcome> {
-  if (gateClosed(ctx)) return rateGated('request_reviewers');
   // GitHub 422s the WHOLE request when it is asked to make the PR's author a
   // reviewer, which would take the other reviewers down with it. Drop the
   // author here — asking is meaningless, and a rule that names a team of
@@ -278,7 +294,6 @@ async function requestReviewers(
 }
 
 async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActionOutcome> {
-  if (gateClosed(ctx)) return rateGated('assign');
   try {
     const assigned = await githubService.addPullRequestAssignees(
       ctx.workspaceId,
@@ -308,7 +323,6 @@ async function assign(users: string[], ctx: ActionContext): Promise<WorkflowActi
 }
 
 async function comment(body: string, ctx: ActionContext): Promise<WorkflowActionOutcome> {
-  if (gateClosed(ctx)) return rateGated('comment');
   const rendered = renderWorkflowComment(body, ctx.facts);
   try {
     await githubService.createIssueComment(
@@ -324,17 +338,8 @@ async function comment(body: string, ctx: ActionContext): Promise<WorkflowAction
   }
 }
 
-function rateGated(type: WorkflowActionType): WorkflowActionOutcome {
-  return no(
-    type,
-    'rate_gated',
-    'GitHub is rate-limiting this account right now, so the action was skipped'
-  );
-}
-
-function githubFailure(type: WorkflowActionType, err: unknown): WorkflowActionOutcome {
-  return no(type, 'github_error', err instanceof Error ? err.message : String(err));
-}
+/** Kept as the name every call site already uses. */
+const githubFailure = githubOutcome;
 
 // ---- watch_pr -------------------------------------------------------------
 

@@ -16,7 +16,7 @@ import { evaluateWorkflowsForDelivery, isSelfEcho } from '../services/workflows/
 import type { WebhookDelivery } from '../services/webhookPayload.js';
 import type { WatchTarget } from '../services/webhookIndex.js';
 import { githubService } from '../services/github.js';
-import { githubRateGate } from '../services/githubRateGate.js';
+import { githubRateGate, GitHubRateLimitError } from '../services/githubRateGate.js';
 import { prMonitorService } from '../services/prMonitor.js';
 import * as prCache from '../services/prCache.js';
 import * as prCloudFix from '../services/prCloudFix.js';
@@ -463,11 +463,41 @@ describe('workflow engine', () => {
       });
     });
 
+    it('waits out a SHORT gate instead of dropping the action', async () => {
+      // `apiRequest` already sleeps any block under MAX_GATE_WAIT_MS. An earlier
+      // `gateClosed()` pre-check jumped in front of that and refused the moment
+      // the account was gated at all — dropping actions a two-second wait would
+      // have completed. The gate is not consulted up front any more.
+      vi.spyOn(githubRateGate, 'isBlocked').mockReturnValue(true);
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      // The label call was still attempted; the gate is the HTTP layer's problem.
+      expect(addLabels).toHaveBeenCalled();
+      const [run] = await db.select().from(runsTable);
+      expect(run?.status).toBe('succeeded');
+    });
+
+    it('reports how long GitHub asked for when the gate is too long to wait', async () => {
+      addLabels.mockRejectedValueOnce(new GitHubRateLimitError('rate limited', 295_000));
+      await addWorkflow();
+
+      await evaluateWorkflowsForDelivery(delivery(), [target]);
+
+      const [run] = await db.select().from(runsTable);
+      const outcome = (run?.actions as Array<{ code?: string; error?: string }>)[0];
+      expect(outcome?.code).toBe('rate_gated');
+      // The number is the point: "another 295s" is actionable where "right now"
+      // is not.
+      expect(outcome?.error).toMatch(/295s/);
+    });
+
     it('marks a REFUSAL apart from a breakage', async () => {
       // The rate gate, the plan cap and "a run is already working this PR" are
       // the system working. A dashboard that counts them as failures makes a
       // healthy workspace look broken.
-      vi.spyOn(githubRateGate, 'isBlocked').mockReturnValue(true);
+      addLabels.mockRejectedValueOnce(new GitHubRateLimitError('rate limited', 295_000));
       const capture = vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
       await addWorkflow();
 
