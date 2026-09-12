@@ -33,6 +33,8 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
     mergeQueueLimit: 3,
     workflows: 0,
     workflowLimit: 3,
+    loops: 0,
+    loopLimit: 3,
     ...overrides,
   };
 }

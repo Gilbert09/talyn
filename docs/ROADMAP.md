@@ -20,7 +20,7 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ### Shipped
 
-- [x] **Loops — recurring prompts on a cron schedule** (Session 122, 2026-09-12). A named rule: a prompt, a repository, an agent + model, a cron expression and an IANA timezone. Every firing creates an ordinary `code_writing` cloud task. Behind the `loops` PostHog flag, **fallback OFF** (`LOOPS_ENABLED=true` is how to run it locally). Backend: `services/loops/{store,runs,dispatch,scheduler}.ts` + `routes/loops.ts` + migration `0054`. UI: the Loops tab on the desktop and the web fork. Open follow-ups below.
+- [x] **Loops — recurring prompts on a cron schedule** (Session 122, 2026-09-12). A named rule: a prompt, a repository, an agent + model, a cron expression and an IANA timezone. Every firing creates an ordinary `code_writing` cloud task. Behind the `loops` PostHog flag, **fallback OFF** (`LOOPS_ENABLED=true` is how to run it locally). Backend: `services/loops/{store,runs,dispatch,scheduler}.ts` + `routes/loops.ts` + migration `0054`. UI: the Loops tab on the desktop and the web fork. Free plan keeps 3 per owner (Session 123). Open follow-ups below.
 
 Follow-ups now that Loops has shipped:
 

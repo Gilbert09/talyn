@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { Loader2, Zap, Check } from 'lucide-react';
-import { FREE_PLAN_ACTIVE_TASK_LIMIT, FREE_PLAN_WORKFLOW_LIMIT } from '@talyn/shared';
+import {
+  FREE_PLAN_ACTIVE_TASK_LIMIT,
+  FREE_PLAN_LOOP_LIMIT,
+  FREE_PLAN_WORKFLOW_LIMIT,
+} from '@talyn/shared';
 import {
   Dialog,
   DialogContent,
@@ -85,6 +89,16 @@ export function UpgradeModal({
       return (
         `The free plan keeps up to ${wLimit} workflows across all your workspaces — ` +
         `you have ${status?.workflows ?? wLimit}. Upgrade for as many as you want, or ` +
+        'delete one you no longer need.'
+      );
+    }
+    // Same kind of cap as workflows — how many you KEEP, not what is running —
+    // so it belongs above the live-usage branches for the same reason.
+    if (upgradeReason === 'loop_limit') {
+      const lLimit = status?.loopLimit ?? FREE_PLAN_LOOP_LIMIT;
+      return (
+        `The free plan keeps up to ${lLimit} loops across all your workspaces — ` +
+        `you have ${status?.loops ?? lLimit}. Upgrade for as many as you want, or ` +
         'delete one you no longer need.'
       );
     }
@@ -181,6 +195,9 @@ export function UpgradeModal({
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Unlimited workflows
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="h-4 w-4" /> Unlimited loops
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Cancel anytime from Settings

@@ -9,6 +9,7 @@ import {
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { toast } from '../../../stores/toast';
+import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
@@ -183,15 +184,54 @@ export function LoopsPanel() {
     setView({ mode: 'edit', loop });
   };
 
-  const openNew = () => openEditor(null);
+  /**
+   * Start a new loop — unless the free plan has no slot left, in which case
+   * pitch the upgrade instead of opening the editor.
+   *
+   * The server gate is the real one; this only moves the refusal to before the
+   * form. Writing a prompt, picking a schedule and an agent and THEN being told
+   * you may not keep it is the worst order to learn it in. The snapshot is
+   * owner-wide, so it counts loops in workspaces this page cannot see.
+   *
+   * `status` may be null (still loading) or the limit null (unlimited / billing
+   * off); both mean "no reason to refuse" and fall through to the editor.
+   */
+  const openNew = () => {
+    const status = useBillingStore.getState().status;
+    if (status && status.loopLimit != null && status.loops >= status.loopLimit) {
+      trackEvent('paywall_shown', {
+        // The same event the 402 path fires, so the funnel keeps one
+        // denominator; `trigger` is what says this one came before the request.
+        reason: 'loop_limit',
+        trigger: 'loop_new',
+        loops: status.loops,
+        loop_limit: status.loopLimit,
+        plan: status.plan,
+      });
+      useBillingStore.getState().setUpgradeModalOpen(true, 'loop_limit');
+      return;
+    }
+    openEditor(null);
+  };
 
   const save = async (input: LoopInput) => {
     if (view.mode === 'edit' && view.loop) {
       await update(view.loop.id, input);
       toast.success('Loop saved');
     } else {
-      await create(input);
+      try {
+        await create(input);
+      } catch (err) {
+        // A free plan that filled its last slot elsewhere (another window,
+        // another workspace) only finds out here. The modal explains it, so
+        // swallow the throw and leave the editor open with the user's work in it.
+        if (maybeHandleBillingLimit(err, 'loop_create')) return;
+        throw err;
+      }
       toast.success('Loop created');
+      // Keep the owner-wide count current, so the NEXT click is pre-empted
+      // rather than round-tripping to the same refusal.
+      void useBillingStore.getState().refresh();
     }
     setView({ mode: 'list' });
   };
@@ -220,6 +260,9 @@ export function LoopsPanel() {
     try {
       await remove(loop.id);
       toast.success('Loop deleted');
+      // A deleted loop gives its free-plan slot back — re-read the count so
+      // "New loop" stops pre-empting on a limit the user is no longer at.
+      void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
     }

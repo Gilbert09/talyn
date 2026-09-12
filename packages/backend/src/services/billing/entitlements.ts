@@ -3,9 +3,11 @@ import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   FREE_PLAN_MERGE_QUEUE_LIMIT,
+  FREE_PLAN_LOOP_LIMIT,
   FREE_PLAN_WORKFLOW_LIMIT,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
+  LOOP_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
@@ -19,6 +21,7 @@ import {
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
   users as usersTable,
+  loops as loopsTable,
   workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
@@ -37,6 +40,7 @@ import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
 export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
 export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
 export const FREE_WORKFLOW_LIMIT = FREE_PLAN_WORKFLOW_LIMIT;
+export const FREE_LOOP_LIMIT = FREE_PLAN_LOOP_LIMIT;
 
 /** Statuses that occupy a free-plan slot (mirrors the desktop's ACTIVE_TASK_STATUSES). */
 export const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
@@ -96,6 +100,21 @@ export class WorkflowLimitError extends Error {
         `Upgrade for unlimited workflows, or delete one you no longer need.`
     );
     this.name = 'WorkflowLimitError';
+  }
+}
+
+/** Thrown by the gate when a free owner already has their allowance of loops. */
+export class LoopLimitError extends Error {
+  readonly code = LOOP_LIMIT_ERROR_CODE;
+  constructor(
+    readonly limit: number,
+    readonly count: number
+  ) {
+    super(
+      `Free plan is limited to ${limit} loops (${count} in use). ` +
+        `Upgrade for unlimited loops, or delete one you no longer need.`
+    );
+    this.name = 'LoopLimitError';
   }
 }
 
@@ -165,6 +184,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
   const activeTasks = await countActiveTasks(ownerId);
   const queuedPrs = await countQueuedPrs(ownerId);
   const workflows = await countOwnerWorkflows(ownerId);
+  const loops = await countOwnerLoops(ownerId);
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
@@ -177,6 +197,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       mergeQueueLimit: null,
       workflows,
       workflowLimit: null,
+      loops,
+      loopLimit: null,
     };
   }
 
@@ -207,6 +229,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     mergeQueueLimit: entitlement.plan === 'free' ? FREE_MERGE_QUEUE_LIMIT : null,
     workflows,
     workflowLimit: entitlement.plan === 'free' ? FREE_WORKFLOW_LIMIT : null,
+    loops,
+    loopLimit: entitlement.plan === 'free' ? FREE_LOOP_LIMIT : null,
   };
 }
 
@@ -287,6 +311,26 @@ export function countOwnerWorkflowsQuery(ownerId: string) {
 /** How many workflows the owner has, across all their workspaces. */
 export async function countOwnerWorkflows(ownerId: string): Promise<number> {
   const rows = await countOwnerWorkflowsQuery(ownerId);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Same contract as the counts above, for loops: how many loop definitions the
+ * owner keeps across every workspace they own. Exported unexecuted for the
+ * egress test — the `loops` row carries a prompt that can be thousands of
+ * characters, and none of it may ship to count.
+ */
+export function countOwnerLoopsQuery(ownerId: string) {
+  return getDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(loopsTable)
+    .innerJoin(workspacesTable, eq(loopsTable.workspaceId, workspacesTable.id))
+    .where(eq(workspacesTable.ownerId, ownerId));
+}
+
+/** How many loops the owner has, across all their workspaces. */
+export async function countOwnerLoops(ownerId: string): Promise<number> {
+  const rows = await countOwnerLoopsQuery(ownerId);
   return rows[0]?.count ?? 0;
 }
 
@@ -391,6 +435,34 @@ export async function withWorkflowLimitGate<T>(ownerId: string, fn: () => Promis
       const count = await countOwnerWorkflows(ownerId);
       if (count >= FREE_WORKFLOW_LIMIT) {
         throw new WorkflowLimitError(FREE_WORKFLOW_LIMIT, count);
+      }
+    },
+    fn
+  );
+}
+
+/**
+ * Run `fn` (which creates one loop) unless the owner is a free user who already
+ * keeps their allowance, in which case throw LoopLimitError.
+ *
+ * Creation only, exactly as the workflow gate is: a PATCH replaces a schedule
+ * rather than adding one, and gating it would strand a free user at the limit
+ * with a loop they are not allowed to fix — including switching off the one
+ * that is misbehaving.
+ *
+ * Note what this does NOT gate: a firing. Those go through the active-task
+ * limit like every other cloud task, so the two caps compose rather than
+ * overlap — this one bounds how many schedules exist, that one bounds how much
+ * they can have running at once.
+ */
+export async function withLoopLimitGate<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `loopLimit:${ownerId}`,
+    async () => {
+      const count = await countOwnerLoops(ownerId);
+      if (count >= FREE_LOOP_LIMIT) {
+        throw new LoopLimitError(FREE_LOOP_LIMIT, count);
       }
     },
     fn

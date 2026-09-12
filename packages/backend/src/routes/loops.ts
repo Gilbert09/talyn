@@ -8,7 +8,8 @@ import {
   type NormalizedLoop,
 } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { withLoopLimitGate } from '../services/billing/entitlements.js';
 import { getDbClient } from '../db/client.js';
 import { repositories as reposTable } from '../db/schema.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
@@ -180,7 +181,13 @@ export function loopRoutes(): Router {
     const problem = await checkTarget(workspaceId, normalized);
     if (problem) return res.status(400).json({ success: false, error: problem });
 
-    const data = await createLoop(workspaceId, normalized);
+    // Free-plan cap on how many loops an owner KEEPS, counted across every
+    // workspace they own. LoopLimitError → 402 via the error middleware.
+    // Creation only: a PATCH replaces a schedule rather than adding one, and a
+    // firing is bounded separately by the active-task limit.
+    const data = await withLoopLimitGate(assertUser(req).id, () =>
+      createLoop(workspaceId, normalized)
+    );
     captureWorkspaceEvent(workspaceId, 'loop_created', loopShape(data.id, normalized));
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });

@@ -2,6 +2,41 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 123 — three loops on the free plan (2026-09-12)
+
+Loops shipped an hour after the workflow cap landed (Session 121), so it shipped
+with no cap of its own. Tom asked for the same 3: counted per OWNER across every
+workspace they own, Unlimited keeps as many as you like.
+
+It is the workflow gate with the nouns changed — `LoopLimitError`,
+`countOwnerLoops`, `withLoopLimitGate` over the same `withFreePlanGate`
+choreography, so the advisory lock still serialises two concurrent creations at
+2/3. The parts that are NOT shared are deliberate: its own error type, its own
+`loop_limit_reached` code, its own advisory-lock key. `routes/loopLimit.test.ts`
+pins each of those separately rather than trusting them to match, because a
+copy-paste that left the count pointing at `workflows` would have passed every
+other assertion in the file.
+
+**The cap is on schedules, not on runs**, and that is worth stating because it
+looks like a gap. A free user with three loops on a one-minute cron does not get
+unlimited agent time: every firing is an ordinary cloud task and goes through
+the active-task limit, so what they get is three tasks in flight and a history
+full of "waiting for a task slot". The two caps compose — this one bounds how
+many schedules exist, that one bounds how much they can have running at once.
+
+**Creation only**, like the workflow gate, and the reason is sharper here: a
+gated PATCH would leave a free user at the cap unable to switch OFF the loop
+that is misbehaving. "Run now" is ungated for the same reason — it starts work
+rather than keeping a schedule, and its own refusal, if any, is the task limit
+recorded on the run.
+
+Both front ends refuse before the form rather than after it: the billing
+snapshot carries `loops` + `loopLimit`, and "New loop" opens the UpgradeModal at
+the cap instead of the editor. The 402 path stays for a stale snapshot — another
+window, another workspace — and when it fires the editor keeps the user's work
+while the modal explains. Create and delete both refresh the snapshot, so the
+next click is pre-empted rather than round-tripping to the same refusal.
+
 ## Session 122 — Loops: recurring prompts, and the clock as a trigger (2026-09-12)
 
 Talyn could act on a webhook (workflows) or on a click, but not on the calendar.
