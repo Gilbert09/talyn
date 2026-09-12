@@ -27,14 +27,52 @@ Every push to main deploys — treat a push as a production release. All deploy/
 
 **Update channels**: the desktop picker (Settings → About; persisted in userData via `src/main/updateChannel.ts`, default `stable`) maps to electron-updater's `allowPrerelease`. Since Session 96 nothing publishes a pre-release, so both channels receive the same stable build. The picker is kept so a pre-release track can come back without a client change; removing it (and the "every build as it lands" copy) is an open follow-up.
 
-## Testing — run only the relevant tests while iterating
+## Testing — run the relevant tests; CI runs the rest
 
-**Do NOT run the whole test suite on every change.** It's slow (many backend suites spin up a real pglite Postgres per file) and wastes the loop. Run only the tests that cover what you actually touched, picked by what the change can plausibly break — not by habit:
+**Do NOT run a whole package suite locally.** `npm test` in `packages/backend` is
+~7 minutes — many suites spin up a real pglite Postgres per file — and running it
+after every edit is most of the loop spent waiting. Run what covers the change:
 
-- **Backend** (`packages/backend`, Vitest): `npx vitest run <path/to/file.test.ts>` for the specific file(s); add more paths or a glob (e.g. `npx vitest run src/__tests__/prMonitor*`) when a change spans a few related suites; use `-t "<name>"` to target a single `describe`/`it`.
-- **Desktop** (`apps/desktop`, Jest): `npx jest <pattern>` for the matching test(s).
+- **Backend** (`packages/backend`, Vitest): `npx vitest run <path/to/file.test.ts>`
+  for the specific file(s); add paths or a glob (`npx vitest run src/__tests__/prMonitor*`)
+  when a change spans related suites; `-t "<name>"` for a single `describe`/`it`.
+- **Desktop** (`apps/desktop`, Jest): `npx jest <pattern>`.
+- **Web** (`apps/web`, Vitest): `npx vitest run <pattern>`.
 
-Run the **full** package suite (`npm test`) only when wrapping up a change, or when the edit is genuinely cross-cutting — shared types (`packages/shared`), a widely-imported helper, or DB schema/migrations. Always pair the run with `tsc --noEmit` + `eslint` on the changed files. See [`docs/TESTING.md`](./docs/TESTING.md) for the broader strategy.
+Pick by what the change can plausibly break, not by habit — and this holds for a
+cross-cutting edit too. Touching `packages/shared`, a widely-imported helper or a
+migration is a reason to run *more of the relevant suites*, not to run everything:
+a schema change means the suites that read those tables, not `prMonitor`'s.
+
+**The full suite is CI's job.** `test.yml` runs `typecheck` → `lint` → `npm test`
+across macOS, Windows and Ubuntu on every push and PR — broader than a local run
+and three platforms wider. Push and let it do that.
+
+It is a BACKSTOP, not a fast feedback loop: that matrix takes **~30 minutes**, so
+it tells you about a break long after you have moved on, and (see below) after the
+backend has already deployed. Local typecheck + lint is what actually protects the
+change; CI is what catches what they cannot.
+
+**What to always run locally**, because it is seconds and catches most breakage
+before it leaves the machine:
+
+```
+tsc --noEmit        # in the package(s) you touched
+eslint <changed files>
+```
+
+**The consequence to respect**: nothing blocks a deploy on `test.yml` — a push to
+main deploys the backend whether or not the suite has finished, let alone passed.
+Combined with the ~30-minute matrix, that means a red test is discovered roughly
+half an hour after the code it breaks is already serving traffic. So delegating
+the suite to CI is not the same as not caring about it: **watch the run you
+triggered**, and if it goes red, fixing it is immediate work rather than something
+to pick up later. And when a change is risky in a way typecheck and lint cannot
+see — a migration, an auth path, anything in the webhook worker — run the suites
+around it locally BEFORE pushing. Half an hour of a broken backend is worse than
+two minutes of waiting.
+
+See [`docs/TESTING.md`](./docs/TESTING.md) for the broader strategy.
 
 ## Where Things Live
 

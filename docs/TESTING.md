@@ -6,9 +6,9 @@ Talyn is changing quickly across three packages (Electron desktop, Node backend,
 
 1. **Every change that ships gets type-checked in CI.** Already in place (`npm run typecheck`). Non-negotiable.
 2. **Favour integration-style tests over unit tests.** Talyn is mostly orchestration (routes → services → DB, environments → PTY, WebSocket events). Pure unit tests rarely catch the failures that actually bite us; integration tests do.
-3. **No mocking the DB.** Use a real in-memory SQLite (`better-sqlite3` with `:memory:`). The DB is fast, deterministic, and one of the most bug-prone surfaces — mocking it defeats the purpose.
+3. **No mocking the DB.** Use a real in-memory Postgres — `createTestDb()` in `src/__tests__/helpers/testDb.ts`, which boots pglite and applies the migrations the journal lists. (This principle used to say `better-sqlite3` with `:memory:`; that is long gone, and it matters which one: the suite relies on real Postgres semantics — jsonb, `timestamp with time zone`, partial indexes, RLS policies calling `auth.uid()` — none of which SQLite has.) The DB is one of the most bug-prone surfaces here; mocking it defeats the purpose.
 4. **Mock only I/O we can't control locally.** `claude` CLI, SSH, GitHub API, WebSocket clients. Wrap these in thin service interfaces so tests can inject stubs.
-5. **CI runs fast enough to be part of the inner loop.** Target: < 2 minutes total on ubuntu for typecheck + lint + unit + integration. E2E tests can be slower but are gated to main.
+5. **CI is a backstop, not the inner loop.** This principle used to read "CI runs fast enough to be part of the inner loop. Target: < 2 minutes" — it is not, and has not been for a long time: the 3-OS matrix in `test.yml` takes **~30 minutes**, and nothing blocks a deploy on it. The inner loop is `tsc --noEmit` plus the tests that cover what you touched; CI is what catches the platform differences and the suites you did not think to run. Treat a red run as immediate work, because by the time it goes red the backend has already shipped.
 
 ## Stack
 
