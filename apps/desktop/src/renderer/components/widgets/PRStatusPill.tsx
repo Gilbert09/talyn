@@ -198,6 +198,11 @@ function externalQueueVariant(
         variant: { ...base, label: 'Queue: refused', icon: XCircle, tone: 'red' },
         title: `${provider}'s merge queue says it cannot merge this PR (${ext.evidence}).`,
       };
+    case 'pending_failure':
+      return {
+        variant: { ...base, icon: Clock, tone: 'amber' },
+        title: `A check failed in ${provider}'s merge queue (${ext.evidence}) — it still has this PR, and retests it or sends it back once the PRs ahead of it finish.`,
+      };
     case 'failed':
       return {
         variant: { ...base, icon: XCircle, tone: 'red' },

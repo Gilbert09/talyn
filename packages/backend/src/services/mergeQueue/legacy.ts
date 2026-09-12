@@ -8,7 +8,24 @@
 // of a nightly auto-updating app have gone out since. `merge_queue_entries` is
 // now the only source of queue state.
 
+import type { ExternalQueueState } from '@talyn/shared';
 import type { EntrySnapshot } from './types.js';
+
+/**
+ * The provider state as clients get it. `pending_failure` goes out as
+ * `testing`, the state trunk showed just before it.
+ *
+ * Desktop builds older than Session 118 crash on a state they don't know:
+ * their `externalQueueStateLabel` has no default case, so it returns nothing
+ * and the PR pill and the queue table call `.toLowerCase()` on it. The backend
+ * deploys on every push while installed apps update on idle, so those builds
+ * would get this state first. Drop the mapping once they have aged out, the
+ * way the v1 shim this file used to carry was retired. Builds from Session
+ * 118 on fall back to a generic label for any state newer than themselves.
+ */
+function publicExternalState(state: ExternalQueueState): ExternalQueueState {
+  return state === 'pending_failure' ? 'testing' : state;
+}
 
 /** The v2 payload richer clients render (new badges, budgets, head scope). */
 export function toPublicMergeQueue(
@@ -53,7 +70,7 @@ export function toPublicMergeQueue(
             ...(entry.externalSubmitVia
               ? { via: entry.externalSubmitVia, submits: [entry.submitAttempts, 3] }
               : {}),
-            ...(entry.externalState ? { state: entry.externalState } : {}),
+            ...(entry.externalState ? { state: publicExternalState(entry.externalState) } : {}),
           }
         : undefined,
   };

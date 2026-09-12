@@ -14,6 +14,8 @@ import {
   externalQueueStatusFromComment,
   externalQueueStatusFromComments,
   externalQueueStatusFromLabels,
+  externalQueueStateLabel,
+  type ExternalQueueState,
   isExternalQueueEjected,
   isExternalQueueHolding,
   externalQueuePushWouldEject,
@@ -45,7 +47,7 @@ describe('externalQueueStatusFromLabels', () => {
     ['trunk-testing (bisection)', 'testing'],
     ['trunk-tests-passed', 'passed'],
     ['trunk-failed', 'failed'],
-    ['trunk-pending-failure', 'failed'],
+    ['trunk-pending-failure', 'pending_failure'],
     ['trunk-cancelled', 'cancelled'],
     ['trunk-merged', 'merged'],
   ])('maps %s → %s', (label, state) => {
@@ -96,6 +98,7 @@ describe('externalQueueStatusFromLabels', () => {
     ['queued', false],
     ['testing', false],
     ['passed', false],
+    ['pending_failure', false],
     ['not_ready', false],
     ['merged', false],
     ['not_submitted', false],
@@ -108,6 +111,7 @@ describe('externalQueueStatusFromLabels', () => {
     ['queued', true],
     ['testing', true],
     ['passed', true],
+    ['pending_failure', true],
     ['not_ready', true],
     ['failed', false],
     ['ejected', false],
@@ -124,10 +128,14 @@ describe('externalQueueStatusFromLabels', () => {
   // so there is no cycle for a push to destroy — and the branch protection it
   // is waiting on is what a fix run produces. Treating it as untouchable
   // deadlocked PostHog/posthog#84450 for 9½ hours.
+  //
+  // `pending_failure` is on the other side of that line: the PRs behind it are
+  // testing on top of it, so a push resets all of them.
   it.each([
     ['queued', true],
     ['testing', true],
     ['passed', true],
+    ['pending_failure', true],
     ['not_ready', false],
     ['failed', false],
     ['ejected', false],
@@ -140,6 +148,13 @@ describe('externalQueueStatusFromLabels', () => {
     // Anything a push would eject must also be a state the provider holds —
     // otherwise the two predicates disagree about who owns the PR.
     if (wouldEject) expect(isExternalQueueHolding(state)).toBe(true);
+  });
+
+  // The backend deploys ahead of installed desktop apps, so a client meets
+  // states newer than itself. Returning nothing crashed every caller that
+  // lowercases the label.
+  it('labels a state newer than the build instead of returning nothing', () => {
+    expect(externalQueueStateLabel('from_the_future' as ExternalQueueState)).toBe('In queue');
   });
 });
 
@@ -180,7 +195,11 @@ describe('externalQueueStatusFromComment — trunk states, as trunk writes them'
       `\u{1F44D} Pull request will be merged soon because tests have passed on [#74640](https://www.github.com/PostHog/posthog/pull/74640) - [details]${LINK}.`],
     ['merged', 'merged',
       `\u{1F60E} Merged successfully - [details]${LINK}.`],
-    ['required check failed', 'failed',
+    // Trunk still has the PR: it waits for the PRs ahead before it retests or
+    // removes it. Read as `failed`, this sent a fix run whose merge-from-master
+    // push ejected the PR and reset every PR behind it (PostHog/posthog#98918,
+    // #99003 and four more over 2026-09-10/11).
+    ['a failed check trunk is still holding', 'pending_failure',
       `\u{26A0}\u{FE0F} The required check [\`LLM Services Tests Pass\`](https://github.com/PostHog/posthog/actions/runs/1) (Failure) has failed. Pull request failed tests and is waiting for other pull requests to finish testing. See more details [here]${LINK}.`],
     ['merge conflict', 'failed',
       `\u{274C} This pull request could not start testing because there was a merge conflict. See more details [here]${LINK}.\n<!-- Start PR Submit Checkbox -->\n- [ ] <!-- End PR Submit Checkbox -->To merge this pull request, check the box to the left or comment \`/trunk merge\` below.`],
@@ -201,6 +220,30 @@ describe('externalQueueStatusFromComment — trunk states, as trunk writes them'
     // Any OTHER removal reason stays terminal — it may be a human.
     ['removed for an unrecognised reason', 'cancelled',
       `\u{1F6AB} This pull request was removed from the merge queue by @someone. See more details [here]${LINK}.`],
+    // Verbatim off PostHog/posthog#94380, #96429, #84887, #96536 and the six
+    // PRs Talyn pushed to (2026-09-08..11). Trunk still has the PR in every one
+    // of these, and the ones that mention a failure, of this PR or of one
+    // AHEAD of it, used to fall through to the bare failure rule.
+    ['waiting behind a PR that failed', 'queued',
+      `\u{23F3} Waiting to start tests on this pull request because a pull request ([#98275](https://www.github.com/PostHog/posthog/pull/98275)) ahead of it failed tests - [details]${LINK}.`],
+    ['waiting behind a batch that failed', 'queued',
+      `\u{23F3} Waiting to start tests on this pull request because a batch ([#95225](https://www.github.com/PostHog/posthog/pull/95225), [#95226](https://www.github.com/PostHog/posthog/pull/95226)) ahead of it failed tests - [details]${LINK}.`],
+    ['waiting on a bisection of its batch', 'queued',
+      `\u{23F3} Waiting for tests to start on a bisection of its batch because tests failed on it - [details]${LINK}.`],
+    ['passed a bisection', 'queued',
+      `\u{1F44D} Pull request will re-enter the queue soon as it passed testing during a batch bisection (tested on PR [#85151](https://www.github.com/PostHog/posthog/pull/85151)) - [details]${LINK}.`],
+    ['re-entering after a bisection', 'queued',
+      `\u{23F3} Re-entering the merge queue because it has passed tests on a bisection of its original batch - [details]${LINK}.`],
+    ['a failed re-run trunk is still holding', 'pending_failure',
+      `\u{26A0}\u{FE0F} Pull request failed tests in a previous identical test run and is waiting for other pull requests to finish testing. [This SHA](https://github.com/PostHog/posthog/commit/abc) was used for testing. See more details [here]${LINK}.`],
+    ['a stack under test', 'testing',
+      `\u{1F9EA} Running tests on this stack (testing on PR [#97226](https://www.github.com/PostHog/posthog/pull/97226)) - [details]${LINK}.`],
+    ['a stack waiting behind a failed batch', 'queued',
+      `\u{23F3} Stack waiting to start tests on this stack because a batch ([#96353](https://www.github.com/PostHog/posthog/pull/96353), [#96643](https://www.github.com/PostHog/posthog/pull/96643)) ahead of it failed tests - [details]${LINK}.`],
+    ['a stack with a pending failure', 'pending_failure',
+      `\u{26A0}\u{FE0F} The required check [\`Playwright tests pass\`](https://github.com/PostHog/posthog/actions/runs/1) (Failure) has failed. Stack failed tests and is waiting for other pull requests to finish testing. PR [#97226](https://www.github.com/PostHog/posthog/pull/97226) was used for testing. See more details [here]${LINK}.`],
+    ['a stack removed for failing tests', 'failed',
+      `\u{274C} This stack was removed from the merge queue because it failed tests. PR [#97245](https://www.github.com/PostHog/posthog/pull/97245) was used for testing. See more details [here]${LINK}.`],
   ])('reads %s as %s', (_name, state, body) => {
     expect(externalQueueStatusFromComment(trunk(body))).toMatchObject({
       provider: 'trunk',
@@ -341,14 +384,17 @@ describe('the run trunk blamed for a failure', () => {
   // lets the queue ask WHY before it spends a fix run.
   const JOB = 'https://github.com/PostHog/posthog/actions/runs/32250916189/job/96064408804';
 
-  it('keeps the failing run link off the status line', () => {
+  // Trunk still holds the PR at this point, so there is nothing to ask WHY
+  // about yet. The removal that follows links the failing run in its failure
+  // table (next test), and that is the reading the queue acts on.
+  it('reads no failing run while trunk is still holding the PR', () => {
     const body =
       `\u{26A0}\u{FE0F} The required check [\`Playwright tests pass\`](${JOB}) (Failure) has ` +
       `failed. Pull request failed tests and is waiting for other pull requests to finish ` +
       `testing. See more details [here]${LINK}.`;
     const status = externalQueueStatusFromComment(trunk(body));
-    expect(status?.state).toBe('failed');
-    expect(status?.failureUrl).toBe(JOB);
+    expect(status?.state).toBe('pending_failure');
+    expect(status?.failureUrl).toBeUndefined();
     // …and never trunk's own link, which is on the same line.
     expect(status?.evidence).not.toContain('app.trunk.io');
   });

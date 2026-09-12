@@ -1525,6 +1525,7 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       ['trunk-queued'],
       ['trunk-testing'],
       ['trunk-tests-passed'],
+      ['trunk-pending-failure'],
     ] as const)('does NOT push at a %s PR, even with a settled blocker', (label) => {
       const d = decide(
         submitted(),
@@ -1566,6 +1567,33 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
         ctx({ externalGate: 'confirmed' })
       );
       expect(workActions(d)).toEqual([]);
+      expect(d.verdict).toBe('advance');
+    });
+
+    // PostHog/posthog#99003 and #98918, 2026-09-11. Trunk reported a failed
+    // check while it still held the PR ("…waiting for other pull requests to
+    // finish testing"). Read as an ejection, it sent a queue_failure fix run
+    // whose first move was merging master in, and that push reset 9 and 13
+    // PRs behind it. The failures came from other PRs in the batch.
+    it('does NOT push at a PR trunk holds with a pending failure, even when it is BEHIND', () => {
+      const d = decide(
+        submitted({ externalSubmitVia: 'comment', automergeArmedBy: null }),
+        behindPr(),
+        ctx({
+          externalGate: 'confirmed',
+          updateBranchAvailable: true,
+          externalQueue: {
+            provider: 'trunk',
+            state: 'pending_failure',
+            source: 'comment',
+            evidence: 'Pull request failed tests and is waiting for other pull requests to finish testing.',
+          },
+        })
+      );
+      expect(kinds(d)).not.toContain('fire_fix_run');
+      expect(kinds(d)).not.toContain('update_branch');
+      expect(kinds(d)).not.toContain('submit_external');
+      expect(recorded(d)).toBe('pending_failure');
       expect(d.verdict).toBe('advance');
     });
 
@@ -1620,7 +1648,7 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
     const holding = (state: ExternalQueueState) =>
       ({ provider: 'trunk', state, source: 'comment', evidence: 'trunk said so' }) as const;
 
-    it.each([['queued'], ['testing'], ['passed'], ['not_ready']] as const)(
+    it.each([['queued'], ['testing'], ['passed'], ['pending_failure'], ['not_ready']] as const)(
       'parks a plain queued entry rather than acting on a PR trunk reports as %s',
       (state) => {
         const d = decide(
@@ -2440,10 +2468,14 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       expect(t.event.code).toBe('external_queue_failed_fixing');
     });
 
-    it('treats a pending-failure label as a tested failure too', () => {
+    // A pending failure is not an ejection yet. Trunk still has the PR and is
+    // waiting on the PRs ahead; a run dispatched now pushes into a live batch.
+    // The run goes out when trunk actually removes the PR (`trunk-failed`).
+    it('waits out a pending failure instead of treating it as a tested failure', () => {
       const d = decide(submitted(), trunkPr('trunk-pending-failure'), ctx({ externalGate: 'confirmed' }));
-      expect(kinds(d)).toContain('fire_fix_run');
+      expect(kinds(d)).not.toContain('fire_fix_run');
       expect(kinds(d)).not.toContain('submit_external');
+      expect(d.verdict).toBe('advance');
     });
 
     it('fixes the PR first when it comes back genuinely broken', () => {

@@ -41,6 +41,24 @@ function entry(o: Partial<EntrySnapshot> = {}): EntrySnapshot {
 /** Every status the engine can persist. */
 
 describe('toPublicMergeQueue', () => {
+  // Desktop builds older than Session 118 crash on a provider state they don't
+  // know, and the backend reaches them before their auto-update does.
+  it('publishes a pending failure as testing, which every installed client knows', () => {
+    const payload = toPublicMergeQueue(
+      entry({ status: 'awaiting_external', externalState: 'pending_failure' }),
+      1
+    );
+    expect(payload).toMatchObject({ external: { state: 'testing' } });
+  });
+
+  it('publishes every other provider state as it is', () => {
+    const payload = toPublicMergeQueue(
+      entry({ status: 'awaiting_external', externalState: 'failed' }),
+      1
+    );
+    expect(payload).toMatchObject({ external: { state: 'failed' } });
+  });
+
   it('carries the stack parent while parked', () => {
     const payload = toPublicMergeQueue(
       entry({ status: 'awaiting_stack', stackParentNumber: 41 }),
