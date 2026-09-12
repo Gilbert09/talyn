@@ -112,8 +112,18 @@ export function workflowRoutes(): Router {
   });
 
   /**
-   * The editor's autocomplete options: labels, branches, people and teams across
-   * the workspace's watched repositories.
+   * The editor's autocomplete options.
+   *
+   * Two modes, and the default is the cheap one. With no query beyond the
+   * workspace this is a pure database read — the watched repositories and their
+   * default branches — which is what the editor wants when it opens, and costs
+   * nothing. `github=1` additionally reads labels for the repositories in
+   * `repos`, plus the collaborators and teams of their owners.
+   *
+   * The split exists because the first version spent 320+ GitHub requests the
+   * moment the editor opened, on a workspace watching 80 repositories. Now
+   * nothing is spent until somebody opens a field that needs it, and then only
+   * for the repositories the workflow names.
    *
    * Mounted ABOVE `/:id` — Express matches in declaration order, and
    * `/suggestions` would otherwise be read as a workflow id and 404.
@@ -126,7 +136,14 @@ export function workflowRoutes(): Router {
   router.get('/suggestions', async (req, res) => {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
-    const data = await workflowSuggestions(workspaceId);
+    const repos = String(req.query.repos ?? '')
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean);
+    const data = await workflowSuggestions(workspaceId, {
+      repos,
+      includeGithub: req.query.github === '1',
+    });
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 

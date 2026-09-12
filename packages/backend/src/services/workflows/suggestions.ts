@@ -4,64 +4,75 @@ import { githubRateGate } from '../githubRateGate.js';
 import { prMonitorService } from '../prMonitor.js';
 
 /**
- * The autocomplete options the workflow editor offers: labels, branches, people
- * and teams, for the repositories a workspace watches.
+ * The autocomplete options the workflow editor offers.
  *
- * # Why this is one call and not four
+ * # Nothing is fetched until somebody asks for it
  *
- * The editor asks once when it opens and then filters in memory. Four endpoints
- * would mean four round-trips per repo per field, and every one of them spends
- * the account's single shared GitHub budget — the same budget the PR poller, the
- * merge queue and every webhook refresh draw on. One answer, cached, keeps the
- * cost of opening the editor bounded whatever the user clicks.
+ * Opening the editor costs ZERO GitHub requests. The repository list and the
+ * branch list come off our own `repositories` rows, which is everything the
+ * first two fields need — and the fields that do need GitHub (labels, people,
+ * teams) only ask when the user opens one of them.
  *
- * # What each thing costs, and why it is fetched at the scope it is
+ * That ordering matters because of what it replaced. The first version fetched
+ * labels, branches, collaborators and teams for EVERY watched repo the moment
+ * the editor opened: on the workspace that watches 80 PostHog repos, 320
+ * requests minimum and up to 1,000 with pagination, spent before the user had
+ * clicked anything. Opening the editor was itself a meaningful contributor to
+ * the rate limiting it then reported.
  *
- * The first version of this fetched all four PER REPO, which on the workspace
- * that watches 80 PostHog repos meant 320 requests minimum — 80 of them
- * byte-identical calls to `/orgs/PostHog/teams`, and up to 800 more from
- * paginating collaborators on every one. On an account already inside a GitHub
- * backoff, opening the editor was a meaningful part of the problem it then
- * reported. So each thing is now fetched at its true scope:
+ * # And only for the repositories in scope
  *
- *  - **labels** are genuinely per-repo, and are the suggestion list that matters
- *    most. One request per repo (paginated only where a repo has >100 labels).
- *  - **teams** belong to the ORG, not the repo. Fetched once per distinct owner.
- *  - **people** are nominally per-repo, but an org's repos share almost all their
- *    collaborators, and this is a suggestion list rather than an authorisation
- *    check. Sampled from ONE repo per owner. Somebody with access to a single
- *    repo is missing from the list and can still be typed in.
- *  - **branches** are not fetched from GitHub at all. The base-branch condition
- *    is overwhelmingly "the default branch", which we already store on the
- *    `repositories` row — and listing every branch of 80 repos to offer
- *    `release/2` as well is wildly out of proportion to that. Typed values work.
+ * Labels are per-repository, and a workflow almost always names the repositories
+ * it applies to. So the caller passes those, and only those are read — one
+ * request for the ordinary "this rule is about posthog/posthog" case, whatever
+ * else the workspace watches.
+ *
+ * A workflow with no repository condition applies to all of them, and there is
+ * no honest way to offer "the labels" of eighty repositories in a dropdown. That
+ * case reads the workspace's repositories up to {@link UNSCOPED_REPO_LIMIT} and
+ * says so with `partial`, which the editor turns into "add a repository
+ * condition to see its labels". Typed values work throughout.
  *
  * # Everything degrades
  *
- * Each part is independent and a failure yields an EMPTY list for that part
- * rather than an error for the whole response. A picker with no suggestions is
- * still a working text field — the user types the label and it saves — whereas a
- * failed request is an editor that will not open. Teams in particular are
- * expected to come back empty: they need `members: read`, which Talyn's App does
- * not request.
+ * Each part is fetched independently and a failure yields an EMPTY list for that
+ * part rather than an error for the whole response. A picker with no suggestions
+ * is still a working text field — GitHub only has to know the label, not us —
+ * whereas a failed request is an editor that will not open. Teams in particular
+ * are expected to come back empty: they need `members: read`, which Talyn's App
+ * does not request.
  */
 
 /**
- * How long a repository's suggestions are served from memory.
+ * How long a repository's labels are served from memory.
  *
  * Long, because this is reference data that changes on a human timescale — a new
- * label or a new collaborator is a weekly event, not a per-minute one — and
- * because the alternative is spending REST budget every time somebody opens the
- * editor.
+ * label is a weekly event, not a per-minute one — and because the alternative is
+ * spending REST budget every time somebody opens a label field.
  */
 const TTL_MS = 10 * 60_000;
+
+/**
+ * How many repositories an UNSCOPED request will read labels from.
+ *
+ * Not a round number picked for looks: a suggestion list is only useful while it
+ * is fast, and these are serialised per account (concurrent reads are what
+ * GitHub's secondary limit punishes). At roughly 150ms a repo, ten is the most
+ * that fits inside the time somebody will wait with a dropdown open. Beyond it
+ * the answer is not "wait longer", it is "name the repository you mean" — which
+ * is also a better workflow.
+ *
+ * Scoped requests are NOT subject to this: naming twelve repositories is an
+ * explicit instruction, and the editor is not guessing on the user's behalf.
+ */
+export const UNSCOPED_REPO_LIMIT = 10;
 
 interface CacheEntry<T> {
   at: number;
   value: T;
 }
 
-/** Per-repo: labels only. */
+/** Per-repo: labels. */
 const labelCache = new Map<string, CacheEntry<string[]>>();
 /** Per-owner: the things that belong to an account rather than a repository. */
 const ownerCache = new Map<
@@ -75,7 +86,7 @@ export function _resetWorkflowSuggestions(): void {
   ownerCache.clear();
 }
 
-/** Read through a cache, recording a miss's failure as `partial` rather than throwing. */
+/** Read through a cache, recording a miss's failure rather than throwing. */
 async function cached<T>(
   store: Map<string, CacheEntry<T>>,
   key: string,
@@ -94,31 +105,45 @@ async function cached<T>(
   return value;
 }
 
+export interface SuggestionScope {
+  /**
+   * `owner/repo` full names the answer should cover — the repositories the
+   * workflow names. Absent or empty means the workflow is unscoped, which reads
+   * the workspace's repositories up to {@link UNSCOPED_REPO_LIMIT}.
+   */
+  repos?: string[];
+  /**
+   * Whether to read anything from GitHub at all. `false` (the default) answers
+   * from local rows only, which is what the editor wants when it opens.
+   */
+  includeGithub?: boolean;
+}
+
 /**
- * Suggestions across every repository the workspace watches, merged.
+ * Suggestions for the editor.
  *
- * Merged rather than per-repo because the editor's fields are workflow-wide: a
- * workflow can name three repositories and a label, and the label has to be
- * offered if ANY of them has it. Per-repo scoping would mean the label list
- * changing as the user edits the repo condition, which reads as the field
- * breaking.
- *
- * Returns whatever it could get. A workspace with no GitHub connection, or one
- * inside a rate-limit backoff, gets empty lists and a `partial` flag so the
- * editor can say "type it in" instead of implying the label does not exist.
+ * With no scope this is a pure database read: the workspace's repositories and
+ * their default branches. With `includeGithub` it also reads labels for the
+ * repositories in scope, and the collaborators and teams of their owners.
  */
-export async function workflowSuggestions(workspaceId: string): Promise<WorkflowSuggestions> {
-  const repos = await prMonitorService.getWatchedRepos(workspaceId).catch(() => []);
+export async function workflowSuggestions(
+  workspaceId: string,
+  scope: SuggestionScope = {}
+): Promise<WorkflowSuggestions> {
+  const watched = await prMonitorService.getWatchedRepos(workspaceId).catch(() => []);
   const out: WorkflowSuggestions = {
-    repos: repos.map((r) => r.fullName),
-    labels: [],
+    repos: watched.map((r) => r.fullName),
     // Straight off the `repositories` rows — no GitHub call, and no failure mode.
-    branches: [...new Set(repos.map((r) => r.defaultBranch).filter(Boolean))].sort(),
+    // A base-branch condition is overwhelmingly "the default branch", and listing
+    // every branch of every watched repo to also offer `release/2` was wildly out
+    // of proportion to that.
+    branches: [...new Set(watched.map((r) => r.defaultBranch).filter(Boolean))].sort(),
+    labels: [],
     people: [],
     teams: [],
     partial: false,
   };
-  if (repos.length === 0) return out;
+  if (!scope.includeGithub || watched.length === 0) return out;
 
   // Never queue behind a backoff for reference data. The editor is interactive,
   // and a picker that takes 300 seconds to populate is worse than one that
@@ -129,14 +154,35 @@ export async function workflowSuggestions(workspaceId: string): Promise<Workflow
     return out;
   }
 
+  // Resolve the scope against what the workspace actually watches: a workflow can
+  // name a repository that has since been removed, and we have no token for one
+  // that was never added.
+  const wanted = new Set((scope.repos ?? []).map((r) => r.trim().toLowerCase()).filter(Boolean));
+  const scoped = wanted.size > 0;
+  let inScope = scoped
+    ? watched.filter((r) => wanted.has(r.fullName.toLowerCase()))
+    : watched;
+
+  if (!scoped && inScope.length > UNSCOPED_REPO_LIMIT) {
+    inScope = inScope.slice(0, UNSCOPED_REPO_LIMIT);
+    // Say it rather than silently answering for a tenth of the repositories —
+    // "this label does not exist" and "we did not look" must not read the same.
+    out.partial = true;
+  }
+  if (inScope.length === 0) return out;
+
   const now = Date.now();
   const fail = () => {
     out.partial = true;
   };
 
   // ---- Per owner: teams, and one repo's collaborators ---------------------
+  // Teams belong to the ORG, and an org's repositories share almost all their
+  // collaborators — this is a suggestion list, not an authorisation check, so
+  // one sample per owner is the right scope. Somebody with access to a single
+  // repository is missing from the list and can still be typed in.
   const owners = new Map<string, { owner: string; repo: string }>();
-  for (const r of repos) if (!owners.has(r.owner)) owners.set(r.owner, { owner: r.owner, repo: r.repo });
+  for (const r of inScope) if (!owners.has(r.owner)) owners.set(r.owner, r);
 
   const people = new Map<string, boolean>();
   const teams = new Set<string>();
@@ -164,7 +210,7 @@ export async function workflowSuggestions(workspaceId: string): Promise<Workflow
 
   // ---- Per repo: labels ---------------------------------------------------
   const labels = new Set<string>();
-  for (const repo of repos) {
+  for (const repo of inScope) {
     const value = await cached(
       labelCache,
       `${workspaceId}:${repo.id}`,

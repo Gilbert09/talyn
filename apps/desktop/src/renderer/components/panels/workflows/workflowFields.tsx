@@ -130,6 +130,7 @@ export function TokenField({
   label,
   hint,
   renderSuggestion,
+  onNeedSuggestions,
 }: {
   values: string[];
   onChange: (next: string[]) => void;
@@ -138,6 +139,12 @@ export function TokenField({
   label?: string;
   hint?: string;
   renderSuggestion?: (value: string) => React.ReactNode;
+  /**
+   * Fired when the field is focused, for suggestion lists that cost a GitHub
+   * request. This is what makes labels on-demand: the editor spends nothing
+   * until somebody opens the field that needs them.
+   */
+  onNeedSuggestions?: () => void;
 }) {
   const [text, setText] = useState('');
   const [focused, setFocused] = useState(false);
@@ -194,7 +201,10 @@ export function TokenField({
             value={text}
             placeholder={values.length === 0 ? placeholder : 'Add another...'}
             onChange={(e) => setText(e.target.value)}
-            onFocus={() => setFocused(true)}
+            onFocus={() => {
+              setFocused(true);
+              onNeedSuggestions?.();
+            }}
             // A blur that fires before a suggestion's click handler would close
             // the list and swallow the pick, so the close is deferred.
             onBlur={() => window.setTimeout(() => setFocused(false), 150)}
@@ -247,6 +257,7 @@ export function PeopleField({
   label,
   hint,
   includeTeams = true,
+  onNeedSuggestions,
 }: {
   logins: string[];
   teams: string[];
@@ -255,6 +266,7 @@ export function PeopleField({
   label?: string;
   hint?: string;
   includeTeams?: boolean;
+  onNeedSuggestions?: () => void;
 }) {
   const TEAM_PREFIX = 'team:';
   // One field over two lists, because "who" is one question. A value prefixed
@@ -271,6 +283,7 @@ export function PeopleField({
   return (
     <TokenField
       label={label}
+      onNeedSuggestions={onNeedSuggestions}
       hint={
         hint ??
         (includeTeams
@@ -313,11 +326,13 @@ export function ActorField({
   onChange,
   suggestions,
   hint,
+  onNeedSuggestions,
 }: {
   value: WorkflowActorMatch | undefined;
   onChange: (next: WorkflowActorMatch) => void;
   suggestions: WorkflowSuggestions | null;
   hint?: string;
+  onNeedSuggestions?: () => void;
 }) {
   const kind = value?.kind ?? 'any';
   const logins = value?.kind === 'logins' ? value.logins : [];
@@ -349,6 +364,7 @@ export function ActorField({
           logins={logins}
           teams={teams}
           suggestions={suggestions}
+          onNeedSuggestions={onNeedSuggestions}
           onChange={(next) => onChange({ kind: 'logins', ...next })}
         />
       )}

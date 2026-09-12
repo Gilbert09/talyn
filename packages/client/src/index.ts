@@ -1718,18 +1718,31 @@ export const workflows = {
     request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
 
   /**
-   * Autocomplete options for the editor — labels, branches, people, teams.
+   * Autocomplete options for the editor.
    *
-   * One call rather than one per field per repo: every GitHub read behind it
-   * spends the account's single shared budget, and the editor filters in memory
-   * anyway. Lists may come back empty with `partial: true`, which is a working
-   * text field and not an error.
+   * Called with no `repos` and no `github` it is a database read — the watched
+   * repositories and their default branches — which is what the editor needs when
+   * it opens, at no cost to the account's GitHub budget.
+   *
+   * `github: true` additionally reads labels for the repositories named in
+   * `repos`, and the people and teams of their owners. Ask for that only when a
+   * field that needs it is opened, and pass the repositories the workflow
+   * actually names: labels are per-repository, and reading every watched
+   * repository's labels to populate one dropdown is what made opening the editor
+   * expensive in the first place.
+   *
+   * Lists may come back empty with `partial: true`, which is a working text
+   * field and not an error.
    */
-  suggestions: (workspaceId: string) =>
-    request<WorkflowSuggestions>(
-      'GET',
-      `/workflows/suggestions?workspaceId=${encodeURIComponent(workspaceId)}`
-    ),
+  suggestions: (
+    workspaceId: string,
+    opts: { repos?: string[]; github?: boolean } = {}
+  ) => {
+    const qs = new URLSearchParams({ workspaceId });
+    if (opts.repos?.length) qs.set('repos', opts.repos.join(','));
+    if (opts.github) qs.set('github', '1');
+    return request<WorkflowSuggestions>('GET', `/workflows/suggestions?${qs.toString()}`);
+  },
 
   create: (workspaceId: string, input: WorkflowInput) =>
     request<WorkflowWithStats>('POST', '/workflows', { workspaceId, ...input }),

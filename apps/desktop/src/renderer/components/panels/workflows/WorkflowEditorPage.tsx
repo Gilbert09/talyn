@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
   WorkflowAction,
@@ -65,6 +65,16 @@ interface Props {
   /** The workflow being edited, or null for a new one. */
   editing: WorkflowWithStats | null;
   suggestions: WorkflowSuggestions | null;
+  /**
+   * Ask for the suggestion lists that cost GitHub requests — labels, people,
+   * teams — for the repositories this workflow names.
+   *
+   * Called when the user opens a field that needs them rather than when the
+   * editor opens, and scoped to the workflow's own repositories: labels are
+   * per-repository, and reading all of them to populate one dropdown is what made
+   * opening the editor expensive.
+   */
+  onNeedGithubSuggestions: (repos: string[]) => void;
   onCancel: () => void;
   onSave: (input: WorkflowInput) => Promise<void>;
 }
@@ -86,11 +96,13 @@ function ConditionInput({
   conditions,
   setConditions,
   suggestions,
+  onNeedSuggestions,
 }: {
   spec: WorkflowConditionSpec;
   conditions: WorkflowConditions;
   setConditions: (next: WorkflowConditions) => void;
   suggestions: WorkflowSuggestions | null;
+  onNeedSuggestions: () => void;
 }) {
   const set = (value: unknown) => setConditions({ ...conditions, [spec.key]: value });
 
@@ -119,6 +131,7 @@ function ConditionInput({
           values={(conditions[spec.key] as string[] | undefined) ?? []}
           suggestions={suggestions?.labels ?? []}
           placeholder="needs-review"
+          onNeedSuggestions={onNeedSuggestions}
           onChange={set}
         />
       );
@@ -130,6 +143,7 @@ function ConditionInput({
           values={conditions.labelName ? [conditions.labelName] : []}
           suggestions={suggestions?.labels ?? []}
           placeholder="needs-review"
+          onNeedSuggestions={onNeedSuggestions}
           onChange={(next) => set(next[next.length - 1] ?? '')}
         />
       );
@@ -146,6 +160,7 @@ function ConditionInput({
         <ActorField
           value={conditions[spec.key] as WorkflowActorMatch | undefined}
           suggestions={suggestions}
+          onNeedSuggestions={onNeedSuggestions}
           onChange={set}
         />
       );
@@ -193,10 +208,12 @@ function ActionInput({
   action,
   onChange,
   suggestions,
+  onNeedSuggestions,
 }: {
   action: WorkflowAction;
   onChange: (next: WorkflowAction) => void;
   suggestions: WorkflowSuggestions | null;
+  onNeedSuggestions: () => void;
 }) {
   switch (action.type) {
     case 'add_labels':
@@ -206,6 +223,7 @@ function ActionInput({
           values={action.labels}
           suggestions={suggestions?.labels ?? []}
           placeholder="needs-review"
+          onNeedSuggestions={onNeedSuggestions}
           onChange={(labels) => onChange({ ...action, labels })}
         />
       );
@@ -215,6 +233,7 @@ function ActionInput({
           logins={action.users ?? []}
           teams={action.teams ?? []}
           suggestions={suggestions}
+          onNeedSuggestions={onNeedSuggestions}
           onChange={({ logins, teams }) =>
             onChange({ ...action, users: logins, teams })
           }
@@ -227,6 +246,7 @@ function ActionInput({
           teams={[]}
           includeTeams={false}
           suggestions={suggestions}
+          onNeedSuggestions={onNeedSuggestions}
           hint="GitHub ignores anyone who is not a collaborator, without erroring, so Talyn checks what came back and reports the difference."
           onChange={({ logins }) => onChange({ ...action, users: logins })}
         />
@@ -321,7 +341,13 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   enqueue_merge_queue: 'Waits for checks and handles a gated base branch.',
 };
 
-export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: Props) {
+export function WorkflowEditorPage({
+  editing,
+  suggestions,
+  onNeedGithubSuggestions,
+  onCancel,
+  onSave,
+}: Props) {
   const [input, setInput] = useState<WorkflowInput>(() =>
     editing ? workflowToInput(editing) : emptyWorkflowInput()
   );
@@ -341,6 +367,16 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
 
   const conditions = input.conditions ?? {};
   const problem = useMemo(() => workflowInputProblem(input), [input]);
+
+  // The scope every GitHub-backed field asks within: the repositories this
+  // workflow names. Empty means the workflow is unscoped, which the backend
+  // answers from a bounded sample and flags `partial` — there is no honest way
+  // to offer "the labels" of eighty repositories in one dropdown.
+  const scopedRepos = useMemo(() => conditions.repos ?? [], [conditions.repos]);
+  const needSuggestions = useCallback(
+    () => onNeedGithubSuggestions(scopedRepos),
+    [onNeedGithubSuggestions, scopedRepos]
+  );
 
   // The menus are generated from the specs, minus what is already on the page —
   // so "Add condition" never offers a duplicate, and never offers a condition the
@@ -561,6 +597,7 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
                       conditions={conditions}
                       setConditions={setConditions}
                       suggestions={suggestions}
+                      onNeedSuggestions={needSuggestions}
                     />
                   </EditorRow>
                 );
@@ -568,7 +605,9 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
             )}
             {suggestions?.partial && (
               <p className="text-xs text-muted-foreground">
-                Some suggestions could not be loaded from GitHub. Typed values still work.
+                {scopedRepos.length === 0
+                  ? 'Showing labels from some of this workspace’s repositories. Add a repository condition to see exactly its labels — or type any value.'
+                  : 'Some suggestions could not be loaded from GitHub. Typed values still work.'}
               </p>
             )}
           </Section>
@@ -612,6 +651,7 @@ export function WorkflowEditorPage({ editing, suggestions, onCancel, onSave }: P
                   <ActionInput
                     action={action}
                     suggestions={suggestions}
+                    onNeedSuggestions={needSuggestions}
                     onChange={(next) =>
                       setInput((p) => ({
                         ...p,

@@ -137,8 +137,17 @@ function WorkflowRow({
 }
 
 export function WorkflowsPanel() {
-  const { workflows, error, create, update, remove, setEnabled, liveRuns, suggestions } =
-    useWorkflows();
+  const {
+    workflows,
+    error,
+    create,
+    update,
+    remove,
+    setEnabled,
+    liveRuns,
+    suggestions,
+    loadGithubSuggestions,
+  } = useWorkflows();
   /**
    * The editor is a PAGE, not a modal — but not a route either.
    *
@@ -187,6 +196,7 @@ export function WorkflowsPanel() {
       <WorkflowEditorPage
         editing={view.workflow}
         suggestions={suggestions}
+        onNeedGithubSuggestions={loadGithubSuggestions}
         onCancel={() => setView({ mode: 'list' })}
         onSave={save}
       />

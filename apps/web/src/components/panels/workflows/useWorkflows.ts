@@ -33,8 +33,23 @@ export interface UseWorkflows {
    * Autocomplete options for the editor. `null` until loaded — the editor treats
    * that as "no suggestions yet" and still accepts typed values, so it never
    * blocks on this.
+   *
+   * Starts as the cheap half: the workspace's repositories and their default
+   * branches, straight from our own rows. The GitHub-backed half arrives only
+   * when {@link loadGithubSuggestions} is called.
    */
   suggestions: WorkflowSuggestions | null;
+  /**
+   * Fetch labels, people and teams for `repos` — the repositories a workflow
+   * names.
+   *
+   * Called when the user opens a field that needs them, not when the editor
+   * opens. Reading every watched repository's labels up front was 320+ requests
+   * on an 80-repo workspace, spent before anybody clicked anything.
+   *
+   * Idempotent per scope: asking twice for the same repositories is free.
+   */
+  loadGithubSuggestions: (repos: string[]) => void;
 }
 
 export function useWorkflows(): UseWorkflows {
@@ -43,6 +58,10 @@ export function useWorkflows(): UseWorkflows {
   const [error, setError] = useState<string | null>(null);
   const [liveRuns, setLiveRuns] = useState<Record<string, WorkflowRun[]>>({});
   const [suggestions, setSuggestions] = useState<WorkflowSuggestions | null>(null);
+  // Which scopes have already been asked for, so re-focusing a field costs
+  // nothing. Keyed by the sorted repo list — a different scope is a different
+  // question.
+  const askedRef = useRef<Set<string>>(new Set());
 
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
@@ -73,10 +92,9 @@ export function useWorkflows(): UseWorkflows {
     load();
   }, [load]);
 
-  // Fetched once per workspace, not per editor open: it is reference data (labels,
-  // branches, collaborators) that the backend caches for ten minutes anyway, and
-  // every GitHub read behind it spends the account's single shared budget. A
-  // failure is swallowed — the editor's fields accept typed values regardless.
+  // The cheap half, once per workspace: repositories and their default branches,
+  // read from our own rows. No GitHub request, so this cannot fail in a way the
+  // user would notice and costs nothing to do on mount.
   useEffect(() => {
     if (!workspaceId) {
       setSuggestions(null);
@@ -84,6 +102,7 @@ export function useWorkflows(): UseWorkflows {
     }
     let cancelled = false;
     setSuggestions(null);
+    askedRef.current = new Set();
     api.workflows
       .suggestions(workspaceId)
       .then((s) => {
@@ -94,6 +113,42 @@ export function useWorkflows(): UseWorkflows {
       cancelled = true;
     };
   }, [workspaceId]);
+
+  const loadGithubSuggestions = useCallback(
+    (repos: string[]) => {
+      if (!workspaceId) return;
+      const key = [...repos].map((r) => r.toLowerCase()).sort().join(',');
+      if (askedRef.current.has(key)) return;
+      askedRef.current.add(key);
+      api.workflows
+        .suggestions(workspaceId, { repos, github: true })
+        .then((next) =>
+          // Merged, not replaced: a narrower scope asked for later must not drop
+          // the labels a wider one already found, and the repo/branch lists are
+          // the same either way.
+          setSuggestions((prev) =>
+            prev
+              ? {
+                  ...next,
+                  labels: [...new Set([...prev.labels, ...next.labels])].sort(),
+                  people: [
+                    ...new Map(
+                      [...prev.people, ...next.people].map((p) => [p.login, p])
+                    ).values(),
+                  ],
+                  teams: [...new Set([...prev.teams, ...next.teams])].sort(),
+                }
+              : next
+          )
+        )
+        .catch(() => {
+          // Let it be asked again: a transient failure should not leave the
+          // field permanently empty for the rest of the session.
+          askedRef.current.delete(key);
+        });
+    },
+    [workspaceId]
+  );
 
   // A finished run changes both the history and the derived stats, and the stats
   // are aggregated server-side — so the event prepends the run locally (instant)
@@ -174,8 +229,20 @@ export function useWorkflows(): UseWorkflows {
       setEnabled,
       liveRuns,
       suggestions,
+      loadGithubSuggestions,
     }),
-    [workflows, error, load, create, update, remove, setEnabled, liveRuns, suggestions]
+    [
+      workflows,
+      error,
+      load,
+      create,
+      update,
+      remove,
+      setEnabled,
+      liveRuns,
+      suggestions,
+      loadGithubSuggestions,
+    ]
   );
 }
 
