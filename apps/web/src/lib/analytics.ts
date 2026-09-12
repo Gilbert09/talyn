@@ -14,6 +14,7 @@
  * until VITE_TALYN_POSTHOG_KEY is set at build time.
  */
 import posthog from 'posthog-js/dist/module.full.no-external';
+import { exceptionDropReason, isConnectivityMessage } from '@talyn/shared';
 // Inlines the session-replay recorder so it never needs to load from the CDN.
 import 'posthog-js/dist/posthog-recorder';
 import {
@@ -129,17 +130,33 @@ export function initAnalytics(): void {
     before_send: (event) => {
       if (event && event.event === '$exception') {
         const list = event.properties?.$exception_list as
-          | Array<{ value?: string }>
+          | Array<{
+              value?: string;
+              stacktrace?: { frames?: Array<{ source?: string }> };
+            }>
           | undefined;
         const message = list?.map((e) => e?.value ?? '').join(' ') ?? '';
-        const connectivity =
-          /failed to fetch|could not reach backend|networkerror|load failed/i.test(
-            message,
-          );
+        const sources =
+          list?.flatMap(
+            (e) =>
+              e?.stacktrace?.frames
+                ?.map((f) => f?.source ?? '')
+                .filter(Boolean) ?? [],
+          ) ?? [];
+        const online = typeof navigator !== 'undefined' ? navigator.onLine : null;
+
+        // Dropped outright, not merely tagged. `exceptionDropReason` only ever
+        // matches events that cannot be acted on in code — a request that
+        // failed with no network, Supabase's auth lock changing hands between
+        // windows, a frame from a dev server's hot update. Together those were
+        // nine in every ten captured events, which buried the real ones.
+        // Returning null here stops the event being sent at all.
+        if (exceptionDropReason({ message, online, sources })) return null;
+
         event.properties = {
           ...event.properties,
-          online: typeof navigator !== 'undefined' ? navigator.onLine : null,
-          connectivity_error: connectivity,
+          online,
+          connectivity_error: isConnectivityMessage(message),
         };
       }
       return event;

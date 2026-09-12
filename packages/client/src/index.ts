@@ -99,8 +99,15 @@ export class ApiNetworkError extends Error {
 
   constructor(method: string, path: string, cause: unknown) {
     const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    // The QUERY STRING is deliberately dropped from the message, though the
+    // full path is kept on the field below. Error tracking groups by message
+    // text, and `?workspaceId=<uuid>&status=…` made every workspace — and every
+    // distinct status filter — its own issue: one fault, fifteen issues, none
+    // of them with a useful count. The route is what identifies the failure;
+    // the arguments belong in the properties.
+    const route = path.split('?')[0];
     super(
-      `Could not reach backend: ${method} ${path} — ${
+      `Could not reach backend: ${method} ${route} — ${
         online ? 'backend unreachable' : 'browser is offline'
       }`,
       { cause }
@@ -1127,6 +1134,14 @@ class WebSocketClient {
   private authenticated = false;
   /** One console.error per outage; later attempts only warn (see onerror). */
   private errorLoggedSinceOpen = false;
+  /**
+   * True from the moment `connect()` commits until its socket is assigned.
+   *
+   * The readyState guard cannot cover that window on its own: `getAuthToken()`
+   * is awaited BEFORE `this.ws` exists, so two calls arriving while the token is
+   * in flight both saw a null socket and both went on to open one.
+   */
+  private connecting = false;
 
   async connect(): Promise<void> {
     this.bindLifecycle();
@@ -1138,86 +1153,127 @@ class WebSocketClient {
     )
       return;
 
-    const token = await getAuthToken();
-    if (!token) {
-      // Defer until we have a session — callers usually gate this behind
-      // the AuthProvider so it's a transient case on cold start.
-      console.log('WebSocket connect deferred: no auth token yet');
-      return;
-    }
-    console.log('Connecting to WebSocket...');
-    // Token rides in the first frame after open, not the URL, so it
-    // doesn't end up in access/edge logs. The backend closes the
-    // socket if auth doesn't arrive within its handshake window.
-    this.authenticated = false;
-    this.ws = new WebSocket(getWebSocketUrl());
+    // …and bail if another call is already between here and `new WebSocket`.
+    // Two callers that both cleared the guard above — a focus wake landing on
+    // top of a reconnect tick — each opened a socket. The loser's was orphaned
+    // but still live, and when it opened it sent its auth frame on `this.ws`:
+    // by then the WINNER's socket, still CONNECTING. That is the
+    // `InvalidStateError: Failed to execute 'send' ... Still in CONNECTING
+    // state.` seen in error tracking.
+    if (this.connecting) return;
+    this.connecting = true;
 
-    this.ws.onopen = () => {
-      console.log('WebSocket opened; authenticating…');
-      this.reconnectAttempts = 0;
-      this.errorLoggedSinceOpen = false;
-      this.ws?.send(JSON.stringify({ type: 'auth', token }));
-      this.startHeartbeat();
-    };
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        // Defer until we have a session — callers usually gate this behind
+        // the AuthProvider so it's a transient case on cold start.
+        console.log('WebSocket connect deferred: no auth token yet');
+        return;
+      }
+      console.log('Connecting to WebSocket...');
+      // Token rides in the first frame after open, not the URL, so it
+      // doesn't end up in access/edge logs. The backend closes the
+      // socket if auth doesn't arrive within its handshake window.
+      this.authenticated = false;
+      // Held in a local as well as on the field. Every handler below belongs to
+      // THIS socket, so it must act on this one and stand down if the field has
+      // moved on — reading `this.ws` inside a handler is what let an orphan
+      // write to its replacement.
+      const socket = new WebSocket(getWebSocketUrl());
+      this.ws = socket;
 
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as WSEvent;
-        const payload = data.payload as
-          | { connected?: boolean; pong?: boolean }
-          | undefined;
-        // Any pong clears the in-flight heartbeat — the socket is alive.
-        if (data.type === 'connection:status' && payload?.pong) {
-          this.awaitingPong = false;
+      socket.onopen = () => {
+        // An orphan: opened by a superseded `connect()`. Close it rather than
+        // leaving a second authenticated socket open against the same account.
+        if (this.ws !== socket) {
+          socket.close();
           return;
         }
-        // The server emits connection:status {connected:true} only
-        // after auth succeeds. That's our signal to resubscribe.
-        if (
-          data.type === 'connection:status' &&
-          payload?.connected &&
-          !this.authenticated
-        ) {
-          this.authenticated = true;
-          for (const workspaceId of this.subscribedWorkspaces) {
-            this.send({ type: 'subscribe', workspaceId });
+        console.log('WebSocket opened; authenticating…');
+        this.reconnectAttempts = 0;
+        this.errorLoggedSinceOpen = false;
+        // Checked even after the identity test: `onopen` can still be delivered
+        // after a sleep/wake close, and `send` throws on anything but OPEN.
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: 'auth', token }));
+        this.startHeartbeat();
+      };
+
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
+        try {
+          const data = JSON.parse(event.data) as WSEvent;
+          const payload = data.payload as
+            | { connected?: boolean; pong?: boolean }
+            | undefined;
+          // Any pong clears the in-flight heartbeat — the socket is alive.
+          if (data.type === 'connection:status' && payload?.pong) {
+            this.awaitingPong = false;
+            return;
           }
-          if (this.debugFilter !== undefined) {
-            this.send({ type: 'debug:filter', owner: this.debugFilter });
+          // The server emits connection:status {connected:true} only
+          // after auth succeeds. That's our signal to resubscribe.
+          if (
+            data.type === 'connection:status' &&
+            payload?.connected &&
+            !this.authenticated
+          ) {
+            this.authenticated = true;
+            for (const workspaceId of this.subscribedWorkspaces) {
+              this.send({ type: 'subscribe', workspaceId });
+            }
+            if (this.debugFilter !== undefined) {
+              this.send({ type: 'debug:filter', owner: this.debugFilter });
+            }
           }
+          this.emit(data.type, data.payload);
+        } catch (err) {
+          console.error('Failed to parse WebSocket message:', err);
         }
-        this.emit(data.type, data.payload);
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
-      }
-    };
+      };
 
-    this.ws.onclose = () => {
-      console.log('WebSocket disconnected');
-      this.authenticated = false;
-      this.stopHeartbeat();
-      this.emit('connection:status', { connected: false });
-      this.scheduleReconnect();
-    };
+      socket.onclose = () => {
+        // An orphan closing is not a disconnect: the live socket is elsewhere.
+        // Reporting it would emit connection:status {connected:false} under a
+        // healthy connection and queue a reconnect that fights it.
+        if (this.ws !== socket) return;
+        console.log('WebSocket disconnected');
+        this.authenticated = false;
+        this.stopHeartbeat();
+        this.emit('connection:status', { connected: false });
+        this.scheduleReconnect();
+      };
 
-    this.ws.onerror = () => {
-      // The browser Event carries no diagnostics ("[object Event]") —
-      // describe the socket state instead. console.error becomes a PostHog
-      // $exception via autocapture, so it's reserved for a REAL outage: the
-      // connection still failing on the 3rd+ reconnect attempt (~7s of
-      // backoff). Single-blip drops — every backend deploy disconnects each
-      // client once — stay at console.warn and never reach error tracking.
-      // errorLoggedSinceOpen keeps it to one $exception per outage (an
-      // extended outage used to flood the project with one identical event
-      // per retry).
-      const detail = `WebSocket error on ${getWebSocketUrl()} (readyState=${this.ws?.readyState}, reconnectAttempts=${this.reconnectAttempts})`;
-      if (this.reconnectAttempts >= 3 && !this.errorLoggedSinceOpen) {
-        this.errorLoggedSinceOpen = true;
-        console.error(detail);
-      } else {
-        console.warn(detail);
-      }
-    };
+      socket.onerror = () => {
+        if (this.ws !== socket) return;
+        // The browser Event carries no diagnostics ("[object Event]") —
+        // describe the socket state instead. console.error becomes a PostHog
+        // $exception via autocapture, so it's reserved for a REAL outage: the
+        // connection still failing on the 3rd+ reconnect attempt (~7s of
+        // backoff). Single-blip drops — every backend deploy disconnects each
+        // client once — stay at console.warn and never reach error tracking.
+        // errorLoggedSinceOpen keeps it to one $exception per outage (an
+        // extended outage used to flood the project with one identical event
+        // per retry).
+        const detail = `readyState=${socket.readyState}, reconnectAttempts=${this.reconnectAttempts}`;
+        if (this.reconnectAttempts >= 3 && !this.errorLoggedSinceOpen) {
+          this.errorLoggedSinceOpen = true;
+          // The counters go on their own console line, NOT into the captured
+          // message. Error tracking groups by message text, so embedding
+          // readyState and reconnectAttempts minted a separate issue per
+          // combination for what is one fault.
+          console.warn(`WebSocket error detail: ${detail}`);
+          console.error(`WebSocket connection failed: ${getWebSocketUrl()}`);
+        } else {
+          console.warn(`WebSocket error on ${getWebSocketUrl()} (${detail})`);
+        }
+      };
+    } finally {
+      // Cleared however we leave: a throw from `getAuthToken()` must not wedge
+      // the guard on and block every later reconnect.
+      this.connecting = false;
+    }
   }
 
   disconnect(): void {

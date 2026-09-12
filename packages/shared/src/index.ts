@@ -27,6 +27,7 @@ export * from './prFilters.js';
 // with. Same argument as prFilters: two copies of the predicate would let one
 // workflow claim different matches on each client.
 export * from './workflows.js';
+export * from './exceptionFilter.js';
 
 // Release notes — the "What's new" feed: version ordering, the commit filter
 // the CI generator runs, and the one rule for whether the modal opens.
