@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type {
   NormalizedWorkflow,
   WorkflowActionOutcome,
+  WorkflowCounts,
   WorkflowDefinition,
   WorkflowRun,
   WorkflowRunStatus,
@@ -130,6 +131,32 @@ export async function listWorkflows(workspaceId: string): Promise<WorkflowWithSt
   const defs = rows.map(rowToWorkflow);
   const stats = await statsFor(defs.map((d) => d.id));
   return defs.map((d) => ({ ...d, stats: stats.get(d.id) ?? emptyStats() }));
+}
+
+/**
+ * How many of a workspace's workflows are enabled.
+ *
+ * Deliberately NOT `listWorkflows(...).filter(...).length`: this runs on every
+ * client boot to draw the nav badge, and `listWorkflows` is a `SELECT *` over
+ * three jsonb columns plus a seven-aggregate group-by across the entire run
+ * history. Here the count never leaves the database and no row ships.
+ *
+ * The query is built by its own exported function purely so the egress guard in
+ * `workflowCount.test.ts` can assert on `.toSQL()` — the same trick
+ * `projectionEgress.test.ts` uses to prove a projection without a live DB.
+ */
+export function countWorkflowsQuery(workspaceId: string) {
+  return getDbClient()
+    .select({
+      enabled: sql<number>`count(*) filter (where ${workflowsTable.enabled})::int`,
+    })
+    .from(workflowsTable)
+    .where(eq(workflowsTable.workspaceId, workspaceId));
+}
+
+export async function countWorkflows(workspaceId: string): Promise<WorkflowCounts> {
+  const rows = await countWorkflowsQuery(workspaceId);
+  return { enabled: Number(rows[0]?.enabled ?? 0) };
 }
 
 export async function getWorkflow(id: string): Promise<WorkflowDefinition | null> {

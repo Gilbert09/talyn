@@ -5,6 +5,7 @@ import {
 } from './config.js';
 import type {
   Features,
+  WorkflowCounts,
   WorkflowInput,
   WorkflowRun,
   WorkflowSuggestions,
@@ -1716,6 +1717,16 @@ export const features = {
 export const workflows = {
   list: (workspaceId: string) =>
     request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * Just the counters, for the sidebar's nav badge.
+   *
+   * Not `list().length`: this is fetched on every boot regardless of whether the
+   * Workflows page is ever opened, and `list` ships each rule's jsonb plus
+   * server-aggregated run stats. Ask for the integer.
+   */
+  count: (workspaceId: string) =>
+    request<WorkflowCounts>('GET', `/workflows/count?workspaceId=${encodeURIComponent(workspaceId)}`),
 
   /**
    * Autocomplete options for the editor.

@@ -54,6 +54,7 @@ export interface UseWorkflows {
 
 export function useWorkflows(): UseWorkflows {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
   const [workflows, setWorkflows] = useState<WorkflowWithStats[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveRuns, setLiveRuns] = useState<Record<string, WorkflowRun[]>>({});
@@ -91,6 +92,21 @@ export function useWorkflows(): UseWorkflows {
     setLiveRuns({});
     load();
   }, [load]);
+
+  // Keep the sidebar's Workflows badge in step with this page.
+  //
+  // `useSystemStatus` seeds the same store value from a lean count endpoint, so
+  // the badge is right for somebody who never opens this screen. While the
+  // screen IS open its list is the fresher truth — including the optimistic
+  // `setEnabled` toggle — so it writes through here and the badge moves with
+  // the switch instead of waiting on a round trip.
+  //
+  // `null` is still loading, never "none": writing 0 there would blank a badge
+  // that is about to come back.
+  useEffect(() => {
+    if (!workflows) return;
+    setEnabledWorkflowCount(workflows.filter((w) => w.enabled).length);
+  }, [workflows, setEnabledWorkflowCount]);
 
   // The cheap half, once per workspace: repositories and their default branches,
   // read from our own rows. No GitHub request, so this cannot fail in a way the

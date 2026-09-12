@@ -490,6 +490,19 @@ export interface WorkflowWithStats extends WorkflowDefinition {
   stats: WorkflowStats;
 }
 
+/**
+ * How many workflows a workspace has, for the nav badge.
+ *
+ * Its own endpoint rather than a `list().length`, because the badge is fetched
+ * on every boot for every user and `listWorkflows` is the expensive read: it
+ * ships each rule's `events`/`conditions`/`actions` jsonb AND aggregates the
+ * whole run history for the per-workflow stats. The badge needs one integer.
+ */
+export interface WorkflowCounts {
+  /** Enabled workflows only — a disabled rule is not automation that is running. */
+  enabled: number;
+}
+
 // ============================================================================
 // The matcher
 // ============================================================================

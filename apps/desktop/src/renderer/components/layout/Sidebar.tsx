@@ -37,6 +37,7 @@ export function Sidebar({ className }: SidebarProps) {
     setActivePanel,
     tasks,
     features,
+    enabledWorkflowCount,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -91,7 +92,11 @@ export function Sidebar({ className }: SidebarProps) {
             id: 'workflows' as const,
             icon: Workflow,
             label: 'Workflows',
-            badge: undefined,
+            // Enabled rules only — a disabled workflow is not automation that
+            // is running, so counting it would overstate what the app is doing
+            // on the user's behalf. `null` is not yet counted and draws
+            // nothing, so the badge never flashes in at 0 and then corrects.
+            badge: enabledWorkflowCount ? enabledWorkflowCount : undefined,
             badgeVariant: 'secondary',
           },
         ]
