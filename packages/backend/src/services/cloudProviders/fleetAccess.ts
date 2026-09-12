@@ -1,72 +1,55 @@
-import { eq } from 'drizzle-orm';
-import { getDbClient } from '../../db/client.js';
-import { users as usersTable, workspaces as workspacesTable } from '../../db/schema.js';
+import { FEATURE_FLAGS, readFlagOverride } from '@talyn/shared';
+import { workspaceHasFeature } from '../featureFlags.js';
 
 /**
  * Who may use the self-hosted Firecracker fleet.
  *
  * The fleet runs on hardware we own, with a memory budget that fits a couple of
- * concurrent runs. It is not a product surface yet — it is one box, and the
- * point of this gate is that turning `FLEET_ENABLED` on for the backend does
- * not simultaneously turn it on for every workspace that happens to configure
+ * concurrent runs, and it spends the workspace's own Claude or Codex
+ * subscription. It is not a product surface yet — it is one box, and the point
+ * of this gate is that turning `FLEET_ENABLED` on for the backend does not
+ * simultaneously turn it on for every workspace that happens to configure
  * credentials.
+ *
+ * # The allow-list became a PostHog flag
+ *
+ * This used to be `FLEET_ALLOWED_EMAILS`, a comma-separated env var. Adding one
+ * person to it was a production restart — and a restart is the exact moment the
+ * advisory locks in `services/advisoryLock.ts` exist to survive. The audience
+ * now lives in the `talyn-fleet` flag, where it can also be a percentage or a
+ * cohort rather than five literal strings; the backend passes the owner's email
+ * as a person property, so an email-based release condition expresses precisely
+ * what the env var used to.
+ *
+ * `FLEET_ALLOWED` is the break-glass override that still wins over PostHog, for
+ * the day the fleet has to be taken away from everybody faster than a flag save
+ * propagates.
  *
  * # Fail closed, and not in the UI
  *
- * `FLEET_ALLOWED_EMAILS` unset means NOBODY, not everybody. That is the
- * opposite of the obvious default and it is deliberate: the failure mode of
- * getting it backwards is "the fleet quietly serves people it should not",
- * which is exactly the shape of the billing `clientGate` bug this codebase
- * already paid for — a paywall that read as opt-in, so the CLI, the MCP server
- * and plain `curl` all bypassed it with no error, no log and no metric.
+ * Unreachable PostHog means NOBODY, not everybody. That is the opposite of the
+ * obvious default and it is deliberate: the failure mode of getting it
+ * backwards is "the fleet quietly serves people it should not", which is
+ * exactly the shape of the billing `clientGate` bug this codebase already paid
+ * for — a paywall that read as opt-in, so the CLI, the MCP server and plain
+ * `curl` all bypassed it with no error, no log and no metric. The `false`
+ * fallback on the `fleet` entry in the shared register is what encodes it.
  *
  * For the same reason the gate is enforced where the work happens — at dispatch
  * and at credential-write — rather than by filtering a list the desktop
  * renders. Hiding a provider from one client is not a gate; it is a decoration
  * that three other callers walk straight past.
- */
-
-/** Parsed once per process. The env is not going to change under us. */
-let cachedRaw: string | undefined;
-let cachedSet: Set<string> | null = null;
-
-function allowedEmails(): Set<string> {
-  const raw = process.env.FLEET_ALLOWED_EMAILS ?? '';
-  if (cachedSet && cachedRaw === raw) return cachedSet;
-  cachedRaw = raw;
-  cachedSet = new Set(
-    raw
-      .split(',')
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean),
-  );
-  return cachedSet;
-}
-
-/** Exposed for tests, which need to change the env between cases. */
-export function resetFleetAccessCache(): void {
-  cachedSet = null;
-  cachedRaw = undefined;
-}
-
-/**
- * True when this email may use the fleet.
  *
- * Case-insensitive, because an allowlist that lets `Tom@Example.com` through
- * and refuses `tom@example.com` is a support ticket rather than a policy.
+ * # `FLEET_ENABLED` stays an env var, on purpose
+ *
+ * That one is not an audience question. It says whether this DEPLOYMENT has
+ * fleet hardware and gateway tokens to reach, and it is read once at boot to
+ * decide whether to register the provider at all. No flag can conjure a
+ * machine, and a boot-time registration should not wait on a network call.
  */
-export function isFleetAllowedEmail(email: string | null | undefined): boolean {
-  if (!email) return false;
-  return allowedEmails().has(email.trim().toLowerCase());
-}
-
-/** Whether anyone at all is allowed — used only to explain a refusal. */
-export function fleetAllowlistIsEmpty(): boolean {
-  return allowedEmails().size === 0;
-}
 
 /**
- * True when the workspace's owner is on the allowlist.
+ * True when the workspace's owner is in the fleet's audience.
  *
  * Keyed on the OWNER rather than on whoever triggered the task. A task can be
  * dispatched by a webhook, the poller, a scheduled sweep or another member —
@@ -75,23 +58,16 @@ export function fleetAllowlistIsEmpty(): boolean {
  * every task provably has.
  */
 export async function workspaceMayUseFleet(workspaceId: string): Promise<boolean> {
-  if (fleetAllowlistIsEmpty()) return false; // fail closed, cheaply
-  const rows = await getDbClient()
-    .select({ email: usersTable.email })
-    .from(workspacesTable)
-    .innerJoin(usersTable, eq(usersTable.id, workspacesTable.ownerId))
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  return isFleetAllowedEmail(rows[0]?.email);
+  return (await workspaceHasFeature('fleet', workspaceId)).enabled;
 }
 
 /**
  * The message a refusal carries. Deliberately says which of the two reasons it
- * is: "nobody is allowed" is a deployment that forgot its config, and "you are
- * not on the list" is working as intended. Reading one as the other is an hour.
+ * is: somebody pulled the override, or this account is simply not in the
+ * audience. Reading one as the other is an hour.
  */
 export function fleetRefusalReason(): string {
-  return fleetAllowlistIsEmpty()
-    ? 'the self-hosted fleet has no allowlist configured (FLEET_ALLOWED_EMAILS is empty), so it is available to nobody'
-    : 'this workspace is not on the self-hosted fleet allowlist';
+  return readFlagOverride('fleet', process.env) === false
+    ? `the self-hosted fleet is switched off on this deployment (${FEATURE_FLAGS.fleet.envOverride}=false)`
+    : 'this workspace is not in the audience for the self-hosted fleet';
 }

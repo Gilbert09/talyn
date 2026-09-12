@@ -67,6 +67,8 @@ const SERVICE_INFO: Record<string, string> = {
     'Claude Managed Agents API — creates agents/sessions in Anthropic’s sandbox, polls the event transcript, and opens PRs via the GitHub MCP.',
   posthog_analytics:
     'PostHog product-analytics capture — server-side task lifecycle events (dispatched/completed/failed).',
+  posthog_flags:
+    'PostHog feature flags — the gates behind Workflows and Talyn Fleet. With a personal API key configured this is only the periodic flag-definition poll (evaluation happens in-process); without one, one request per gate.',
   visual_review:
     'PostHog Visual Review — the merge queue reads which run is gating a PR, and (only where the workspace opted in) finalizes it: approve every changed snapshot and commit the new baseline, which greens the gate.',
   fleet:

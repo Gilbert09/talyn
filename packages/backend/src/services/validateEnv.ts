@@ -98,7 +98,43 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
     }
   }
 
+  // PostHog is optional as a whole (absent → every feature flag answers its
+  // built-in fallback), but a personal API key with no project key is always a
+  // mistake: local evaluation is configured and nothing will ever use it.
+  if (env.TALYN_POSTHOG_PERSONAL_API_KEY && !env.TALYN_POSTHOG_KEY) {
+    errors.push(
+      'TALYN_POSTHOG_PERSONAL_API_KEY is set without TALYN_POSTHOG_KEY — feature flags need the project key too'
+    );
+  }
+
   return errors;
+}
+
+/**
+ * Environment variables that used to do something and no longer do.
+ *
+ * Warnings, not errors: a retired var must not refuse a boot, because the
+ * deployment that still has it set is by definition the one mid-migration. But
+ * it must not be silent either. The failure this exists to stop is an operator
+ * reading `FLEET_ALLOWED_EMAILS=someone@example.com` in the Railway dashboard
+ * and concluding the fleet is gated on it — when the answer has moved to a
+ * PostHog flag and that line is now decoration.
+ *
+ * Each entry says where the setting went, because "this is ignored" without a
+ * forwarding address is the half of the message that costs the time.
+ */
+const RETIRED_ENV: Record<string, string> = {
+  FLEET_ALLOWED_EMAILS:
+    'the fleet audience is now the "talyn-fleet" PostHog flag — move these addresses to a release condition on it, and use FLEET_ALLOWED only to switch the fleet off in a hurry',
+  WORKFLOWS_ALLOWED_EMAILS:
+    'workflows is released to everybody; its audience is the "workflows" PostHog flag',
+};
+
+/** Retired variables that are still set, with what to do about each. */
+export function retiredEnvWarnings(env: NodeJS.ProcessEnv = process.env): string[] {
+  return Object.entries(RETIRED_ENV)
+    .filter(([name]) => Boolean(env[name]))
+    .map(([name, advice]) => `${name} is set but no longer does anything — ${advice}`);
 }
 
 /** Run {@link validateEnv} and throw a single aggregated error on problems. */

@@ -234,62 +234,148 @@ TALYN_ALLOWED_EMAILS=you@example.com
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
 
-### Workflows kill switch (optional)
+### Feature flags (PostHog)
 
-**Workflows** are user-defined PR automation: "on these pull request events,
-matching these conditions, do these things" — label, request reviewers, assign,
-comment, add to My PRs, run a skill or prompt, or send the PR to the merge
-queue. They are **available to every workspace**; there is nothing to configure
-to turn them on.
+**Every feature gate is a PostHog flag.** The register of them — their keys,
+their break-glass env vars and their per-flag fallbacks — is
+`packages/shared/src/featureFlags.ts`, and the backend reads them through
+`packages/backend/src/services/featureFlags.ts`. Nothing gates on `process.env`
+at the call site.
 
-There is one env var, and it only ever turns them OFF:
+| Flag (PostHog key) | Gates | Break glass | Fallback |
+|---|---|---|---|
+| `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** |
+| `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** |
+
+**The fallbacks are deliberately opposite, and they are per flag.** The fallback
+is the answer when PostHog is not configured, is unreachable, or has never heard
+of the key — so it is chosen by asking "if the flag service is down, what is the
+safe answer?" Workflows is released, so a PostHog outage must not hide a page
+that exists. The fleet is one box running on somebody's own subscription, so an
+outage must not open it to everybody. A single shared default would silently
+flip whichever of the two it did not describe.
+
+#### Backend configuration
 
 ```
-WORKFLOWS_ENABLED=false
+TALYN_POSTHOG_KEY=phc_...              # absent ⇒ every flag answers its fallback
+TALYN_POSTHOG_PERSONAL_API_KEY=phx_... # optional, but see below
+TALYN_POSTHOG_HOST=https://us.i.posthog.com
 ```
 
-**Absent means ON.** That is the opposite of how this started, and the inversion
-is deliberate. While the feature was allow-listed, unset meant "nobody" so an
-unconfigured deployment could not hand out a feature nobody had decided to give
-it. Released, that reading fails in both directions: every new deployment would
-ship the page dark, and every developer's local backend would hide a feature
-that exists, until somebody remembered a line of env.
+**Set the personal API key in production.** With it, posthog-node polls the flag
+DEFINITIONS every 30s and evaluates them in-process, so a gate costs no network
+at all. Without it every gate is an HTTP round trip to PostHog — cached here for
+30s to keep it survivable, but the workflows gate runs once per webhook delivery
+per watching workspace, and the engine already dropped a `users` join from that
+path for being too expensive. The boot log says which mode the process is in
+(`[flags] …`).
 
-So this is a kill switch, not an enablement flag. It exists because workflows
-comment on, label and merge other people's pull requests, and a feature with
-that blast radius should have one variable that stops it without a code change.
-Anything other than an explicit `false` or `0` is on — a typo turns the feature
-ON rather than silently off, which is the safer failure here: "it stopped
-working and nobody knows why" is much harder to notice than the thing you were
-trying to stop.
+The key needs the **feature flag read** scope and nothing else.
 
-Pulling it stops the engine, 403s every `/api/v1/workflows` route, and makes
-`GET /api/v1/features` answer `{ workflows: false }` so both clients hide the
-nav item rather than leaving it pointing at routes that refuse.
+#### Audiences
 
-`WORKFLOWS_ALLOWED_EMAILS` is **gone**. Nothing reads it; delete it from any
-deployment that still has it.
+A flag's audience is a PostHog release condition. The backend evaluates against
+the **Supabase user id** as the distinct id — the same one `analytics.ts`
+captures against, so a person targeted in PostHog is the same person in their
+own funnels — and passes their **email** as a person property. So the literal
+thing the old `FLEET_ALLOWED_EMAILS` did is a release condition of
+`email ∈ {…}`; unlike the env var it can also be a percentage, a cohort, or
+everybody-except-one-account, and changing it is a save rather than a restart.
 
-### Talyn Fleet allow-list (required to use the Firecracker fleet)
+Which subject is used depends on the flag:
+
+- **`workflows`** is asked about the **caller** at the routes and at
+  `GET /api/v1/features`, and about the **workspace owner** in the engine (a
+  webhook delivery has no caller).
+- **`talyn-fleet`** is always asked about the **workspace owner**. A task can be
+  dispatched by a webhook, the poller or a sweep — none of which has a user
+  attached — and a gate that passes when it cannot identify a caller is not a
+  gate.
+
+#### The break-glass variables
+
+Each flag keeps one env var that **overrides PostHog entirely**, in both
+directions. Anything other than `false`/`0`/`off`/`no` reads as ON, so a typo
+turns a feature on rather than silently off — the safer failure, because "it
+stopped working and nobody knows why" is harder to notice than the thing you
+were trying to stop.
+
+They exist for two cases a remote flag service cannot serve:
+
+- **Stopping something in a hurry.** Workflows comment on, label and merge other
+  people's pull requests. When that goes wrong, "the flag service is down" must
+  never be why it stays on.
+- **Local development and CI**, which have no project key. `FLEET_ALLOWED=true`
+  is how you work on the fleet locally.
+
+Pulling `WORKFLOWS_ENABLED=false` stops the engine, 403s every
+`/api/v1/workflows` route, and makes `GET /api/v1/features` answer
+`{ workflows: false }` so both clients hide the nav item rather than leaving it
+pointing at routes that refuse.
+
+**Note that setting one of these to `true` disables the flag.** An override
+wins whether it says yes or no, so `WORKFLOWS_ENABLED=true` in a deployment's
+env means PostHog is never consulted for that flag. Leave them unset unless you
+are breaking glass.
+
+#### Retired variables
+
+`FLEET_ALLOWED_EMAILS` and `WORKFLOWS_ALLOWED_EMAILS` are **gone**. Nothing
+reads them; delete them from any deployment that still has them. The backend
+warns at boot (`[env] … no longer does anything`) rather than refusing to start,
+because the deployment that still has them set is by definition the one
+mid-migration.
+
+#### Adding a flag
+
+1. Add an entry to `FEATURE_FLAGS` in `packages/shared/src/featureFlags.ts`,
+   picking `fallback` by the "if PostHog is down" question above.
+2. Create the flag in PostHog under the same `posthogKey`.
+3. Read it through `services/featureFlags.ts` — never `process.env` at the call
+   site, or the override precedence gets reimplemented per gate.
+4. If a client needs to DRAW something from it, add the key to
+   `ACCOUNT_FEATURE_FLAGS` so `GET /features` answers it.
+
+Enforce it where the work happens. A hidden nav item is a decoration that the
+CLI, the MCP server and plain `curl` all walk straight past.
+
+### Talyn Fleet (required to use the Firecracker fleet)
 
 The `selfhosted` provider — **"Talyn Fleet" everywhere in the UI**; the wire and
 DB value stays `selfhosted` because it is persisted in `environments.type` and
 `integrations.type` — runs tasks on hardware we own — one box, with a memory
-budget that fits a couple of concurrent runs. Two flags gate it, and both are
-needed:
+budget that fits a couple of concurrent runs. Two separate things gate it, and
+both are needed:
 
 ```
-FLEET_ENABLED=true
-FLEET_ALLOWED_EMAILS=you@example.com
+FLEET_ENABLED=true     # this deployment has fleet hardware to talk to
 ```
 
-`FLEET_ENABLED` decides whether the provider is registered at all. **`FLEET_ALLOWED_EMAILS` decides who may use it, and unset means NOBODY** — not everybody. That is deliberate: turning the provider on for the backend must not simultaneously turn it on for every workspace that happens to configure credentials.
+plus the `talyn-fleet` PostHog flag turned on for the workspace owner (see
+**Feature flags** above).
 
-A workspace is allowed when its **owner's** email is on the list (comma-separated, case-insensitive). The check runs at dispatch and at credential-write, not in the UI — the settings screen also hides the provider, but that is cosmetic, and the CLI, the MCP server and `curl` never render it.
+**`FLEET_ENABLED` stays an env var on purpose.** It is not an audience question:
+it says whether this deployment has fleet hardware and gateway tokens to reach,
+and it is read once at boot to decide whether to register the provider at all.
+No flag can conjure a machine, and a boot-time registration should not wait on a
+network call. Unregistered is also a stronger off than a runtime branch — with
+it unset, `getCloudProvider('selfhosted')` returns null, so no dispatch path can
+reach the fleet at all.
 
-A task dispatched by a workspace that is not allowed is failed with the reason attached rather than left silently queued.
+The audience check runs at dispatch and at credential-write, not in the UI — the
+settings screen also hides the provider, but that is cosmetic, and the CLI, the
+MCP server and `curl` never render it. A task dispatched by a workspace outside
+the audience is failed with the reason attached rather than left silently
+queued.
 
-**The gate still matters now the fleet is the DEFAULT provider.** `selfhosted` heads `CLOUD_PROVIDER_ORDER` (`services/prCloudFix.ts`), but `resolveCloudEnvChain` drops that link entirely for a workspace that may not use the fleet — so a non-allow-listed workspace gets exactly the behaviour it had before: the chain heads at PostHog Code, no fleet card is offered, and a credential write is 403'd. The fleet is one box; widen the list as capacity allows rather than removing it.
+**The gate still matters now the fleet is the DEFAULT provider.** `selfhosted`
+heads `CLOUD_PROVIDER_ORDER` (`services/prCloudFix.ts`), but
+`resolveCloudEnvChain` drops that link entirely for a workspace that may not use
+the fleet — so a workspace outside the audience gets exactly the behaviour it
+had before: the chain heads at PostHog Code, no fleet card is offered, and a
+credential write is 403'd. The fleet is one box; widen the audience as capacity
+allows rather than removing the gate.
 
 ### Connecting the backend to a self-hosted fleet (Tailscale)
 
@@ -362,7 +448,6 @@ FLEET_HTTP_PROXY=http://localhost:1055 # what the fleet client dials through
 FLEET_REPORT_TOKEN=<shared with every fleet host>
 FLEET_API_TOKEN=<shared with every fleet host>
 FLEET_ENABLED=true
-FLEET_ALLOWED_EMAILS=you@example.com
 TS_DEBUG_MTU=1000                      # optional; the entrypoint defaults to this
 ```
 
@@ -553,7 +638,7 @@ Single source of truth for analytics + error tracking + logs (Phase 18.8).
 **Where the write key goes (both use the same project key):**
 
 - **Desktop** — baked in at webpack build time. The project key is **committed** (`apps/desktop/.erb/configs/posthogKey.ts`) — a project write key is public by design, and defaulting it to `''` meant any build made outside CI emitted no client analytics at all. `TALYN_POSTHOG_KEY` still overrides it (that is how you point a build at another project); a **blank** value falls through to the default, and `TALYN_ANALYTICS_DISABLED=1` is the opt-out. The renderer also bakes `TALYN_APP_VERSION`: a CI-stamped release reports its semver, and every other build reports `dev+<sha>` — identifiable, but never mistakable for a release (`.erb/configs/appVersion.ts`, `renderer/lib/appVersion.ts`).
-- **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`).
+- **Backend** (Railway env) — `TALYN_POSTHOG_KEY` / `TALYN_POSTHOG_HOST` enable server-side task-lifecycle events (`task_dispatched` / `task_completed` / `task_failed`), attributed to the workspace owner. Unset ⇒ server analytics is a no-op (see `packages/backend/src/services/analytics.ts`). **The same key also powers feature flags** — unset there means every flag answers its built-in fallback. See **Feature flags (PostHog)** above, and add `TALYN_POSTHOG_PERSONAL_API_KEY` so flags evaluate locally.
 
 ### 6b. "Connect with PostHog" — the PostHog Code OAuth app
 

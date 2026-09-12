@@ -94,7 +94,7 @@ export function workflowRoutes(): Router {
       handleAccessError(err, res);
       return false;
     }
-    if (!workspaceMayUseWorkflows()) {
+    if (!(await workspaceMayUseWorkflows(workspaceId))) {
       res.status(403).json({
         success: false,
         error: `Workflows are not available: ${workflowsRefusalReason()}.`,

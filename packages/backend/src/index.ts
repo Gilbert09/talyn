@@ -17,7 +17,7 @@ import { handleGithubWebhook } from './routes/webhooks.js';
 import { handlePolarWebhook } from './services/billing/webhook.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
-import { assertValidEnv } from './services/validateEnv.js';
+import { assertValidEnv, retiredEnvWarnings } from './services/validateEnv.js';
 import { createOriginPolicy } from './services/originPolicy.js';
 import { billingEnabled } from './services/billing/entitlements.js';
 import { migrateLegacyPlaintextCredentials } from './services/credentialMigration.js';
@@ -27,8 +27,13 @@ import { githubService } from './services/github.js';
 import { prMonitorService } from './services/prMonitor.js';
 import { postHogCodeStreamer } from './services/posthogCode/streamer.js';
 import { registerCloudProvider } from './services/cloudProviders/registry.js';
-import { workflowsEnabled } from './services/workflowsAccess.js';
+import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
+import {
+  featureFlagsEvaluateLocally,
+  isFeatureFlagServiceConfigured,
+  shutdownFeatureFlags,
+} from './services/featureFlags.js';
 import { postHogCodeProvider } from './services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from './services/cloudProviders/selfhosted/provider.js';
 import { cloudTaskPoller } from './services/cloudProviders/poller.js';
@@ -62,6 +67,7 @@ async function main() {
   // Fail fast on missing/misconfigured env instead of lazy throws on the
   // first request that needs it. Reports every problem at once.
   assertValidEnv();
+  for (const warning of retiredEnvWarnings()) console.warn(`[env] ${warning}`);
 
   // Loud, deliberate: with no Polar env the free-plan task limit is NOT
   // enforced (a paywall nobody can pay would brick task creation). Fine for
@@ -97,24 +103,38 @@ async function main() {
     console.log('[fleet] self-hosted provider registered (FLEET_ENABLED=true)');
   }
 
-  // Say out loud whether the workflow engine is armed.
+  // Say out loud how feature flags will be answered.
   //
-  // This line exists because its absence cost a round trip: workflows are
-  // answered per request through `GET /features`, which needs a signed-in
-  // session, so from outside the app there was no way to tell "switched off"
-  // from "on, and something else is wrong". The fleet has logged its own
-  // registration since it shipped; this is the same courtesy.
-  //
-  // The interesting case is now the OFF one — the feature is on by default, so
-  // a `NOT armed` line means somebody deliberately pulled the switch.
-  if (workflowsEnabled()) {
+  // This line exists because its absence cost a round trip: flags are answered
+  // per request, and `GET /features` needs a signed-in session, so from outside
+  // the app there was no way to tell "switched off" from "on, and something
+  // else is wrong". The three modes read very differently in an incident, so
+  // name which one this process is in.
+  if (!isFeatureFlagServiceConfigured()) {
+    console.log(
+      '[flags] PostHog not configured (TALYN_POSTHOG_KEY unset) — every flag answers its built-in fallback'
+    );
+  } else if (featureFlagsEvaluateLocally()) {
+    console.log('[flags] PostHog flags, evaluated locally (no network per gate)');
+  } else {
+    console.log(
+      '[flags] PostHog flags, evaluated remotely — set TALYN_POSTHOG_PERSONAL_API_KEY for local evaluation'
+    );
+  }
+
+  // The interesting case for workflows is now the OFF one — the feature is on
+  // by default, so a `NOT armed` line means somebody deliberately pulled the
+  // break-glass switch for the whole deployment. An account being outside the
+  // flag's audience is a per-request answer and does not show up here.
+  if (workflowsKillSwitchPulled()) {
+    console.log('[workflows] engine NOT armed — WORKFLOWS_ENABLED=false');
+  } else {
     console.log('[workflows] engine armed');
     // Re-runs actions GitHub rate-limited. Only started when the engine is, so a
     // deployment with workflows switched off has no timer looking for work that
-    // can never be created.
+    // can never be created. The per-account flag is checked when a run is
+    // re-evaluated, not here — a sweep with nothing to do costs nothing.
     initWorkflowRetrySweep();
-  } else {
-    console.log('[workflows] engine NOT armed — WORKFLOWS_ENABLED=false');
   }
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
@@ -328,6 +348,10 @@ async function main() {
     // graceful restart (the sweep would re-derive it, but this avoids the gap).
     await checkCountCoalescer.flushAllNow().catch(() => undefined);
     prReconcileSweep.shutdown();
+    // posthog-node batches the `$feature_flag_called` events that make a flag's
+    // rollout visible in PostHog. Without this flush they are lost on every
+    // deploy — and a deploy is when a rollout is most interesting to look at.
+    await shutdownFeatureFlags();
 
     // `server.close(cb)` only fires once every connection is gone — and live
     // WebSocket clients (the desktop app) never hang up on their own, so

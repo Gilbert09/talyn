@@ -1010,7 +1010,7 @@ export function ProviderConnectCards() {
 
       {/* Talyn Fleet (Firecracker). Rendered ONLY when the backend
           listed it for this workspace: /cloud-providers filters it out for
-          anyone not on FLEET_ALLOWED_EMAILS, so showing the card
+          anyone outside the "talyn-fleet" flag audience, so showing the card
           unconditionally would offer every user a form whose save 403s. */}
       <SelfHostedFleetCard />
     </>

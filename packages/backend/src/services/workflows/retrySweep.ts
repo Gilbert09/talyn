@@ -5,7 +5,7 @@ import { debugBus } from '../debugBus.js';
 import { githubRateGate } from '../githubRateGate.js';
 import { githubService } from '../github.js';
 import { TickGuard } from '../tickGuard.js';
-import { workflowsEnabled } from '../workflowsAccess.js';
+import { workflowsKillSwitchPulled } from '../workflowsAccess.js';
 import { runWorkflowActions } from './actions.js';
 import { workflowFactsFromRun } from './facts.js';
 import { dueRetries, isRetryable, MAX_RETRY_ATTEMPTS, settlementFor, settleRun } from './runs.js';
@@ -86,7 +86,11 @@ class WorkflowRetrySweep {
 
   /** Exposed for tests, which drive a tick directly rather than on a timer. */
   async tick(): Promise<number> {
-    if (!workflowsEnabled()) return 0;
+    // The deployment-wide break glass only. A parked run belongs to a
+    // workspace, but the per-account flag was already checked when the run was
+    // created — re-asking here would let a flag flip strand a half-finished
+    // run, whose comment posted and whose label is still owed, forever.
+    if (workflowsKillSwitchPulled()) return 0;
     if (!this.guard.tryBegin()) return 0;
     const startedAt = Date.now();
     let retried = 0;

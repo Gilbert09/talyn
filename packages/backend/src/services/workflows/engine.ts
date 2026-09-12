@@ -19,7 +19,7 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { emitWorkflowRun } from '../websocket.js';
 import type { WatchTarget } from '../webhookIndex.js';
 import type { WebhookDelivery } from '../webhookPayload.js';
-import { workflowsEnabled } from '../workflowsAccess.js';
+import { workflowsKillSwitchPulled, workspaceMayUseWorkflows } from '../workflowsAccess.js';
 import { ownerOfWorkspace } from './owner.js';
 import { runWorkflowActions } from './actions.js';
 import { workflowFactsFromDelivery } from './facts.js';
@@ -252,7 +252,11 @@ export async function evaluateWorkflowsForDelivery(
   delivery: WebhookDelivery,
   targets: WatchTarget[]
 ): Promise<number> {
-  if (!workflowsEnabled()) return 0;
+  // The deployment-wide break glass only. The per-workspace answer is asked
+  // inside `evaluateForWorkspace`, where there is a workspace to ask about —
+  // this is just the free early-out for a deployment that has pulled the
+  // switch, and it stays subject-free so it costs nothing on the hot path.
+  if (workflowsKillSwitchPulled()) return 0;
 
   const factsList = workflowFactsFromDelivery(delivery);
   if (factsList.length === 0) return 0;
@@ -277,10 +281,17 @@ async function evaluateForWorkspace(
   target: WatchTarget,
   factsList: WorkflowEventFacts[]
 ): Promise<number> {
-  // The kill switch is checked once by the caller, before any of this. What
-  // used to sit here was a per-workspace allow-list lookup — a join against
-  // `users` for every delivery, for every watching workspace — and releasing the
-  // feature removed it rather than making it always answer true.
+  // The deployment-wide switch is checked once by the caller. This is the
+  // per-workspace question, which came back when the audience moved to a
+  // PostHog flag — but not the cost that made it go away. What used to sit here
+  // was a `users` join per delivery per watching workspace; the owner lookup is
+  // now cached, and with a personal API key configured the flag is evaluated
+  // in-process, so the common case is neither a query nor a round trip.
+  //
+  // Asked BEFORE the workflow rows are read, so a workspace outside the
+  // audience costs one cached lookup rather than a table scan.
+  if (!(await workspaceMayUseWorkflows(target.workspaceId))) return 0;
+
   const workflows = await enabledWorkflowsFor(target.workspaceId);
   if (workflows.length === 0) return 0;
 

@@ -2,6 +2,92 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 120 — flags belong to PostHog, not to Railway (2026-09-12)
+
+Every feature gate in the codebase was an environment variable: `WORKFLOWS_ENABLED`
+as a kill switch, `FLEET_ALLOWED_EMAILS` as a literal comma-separated list of
+five addresses. Tom asked to move them to PostHog flags and to make that the
+norm. Three things were wrong with env vars, and only the first is obvious:
+
+- **Changing who gets a feature is a deploy.** Adding one email to the fleet
+  list restarts the backend, and a restart is the exact moment the advisory
+  locks in `services/advisoryLock.ts` exist to survive.
+- **There is no percentage, no cohort, and no audience.** An allow-list can say
+  "these five people". It cannot say "10% of workspaces" or "everyone except
+  the one account melting the fleet" — and the second of those is the question
+  that actually came up.
+- **Nothing records the decision.** PostHog already holds the events, so a flag
+  evaluated there joins the funnel it is meant to move.
+
+**The register is `packages/shared/src/featureFlags.ts`**, shared so a flag key
+is never a string typed twice, and the backend reads it through
+`services/featureFlags.ts`. Precedence is env override → PostHog → the flag's
+own fallback.
+
+**The fallbacks are per flag, and the two live ones are opposite.** `workflows`
+fails OPEN and `fleet` fails CLOSED, because the question behind a fallback is
+"if PostHog is down, what is the safe answer?" — and those answers genuinely
+differ. A single shared default would have silently flipped one of them, and it
+would have been the one that spends a subscription on hardware we own. The same
+reasoning covers PostHog answering `undefined` for a flag nobody created or
+somebody deleted: that is the fallback, **not** `false`. Reading it as `false`
+would make deleting a flag an outage for a released feature, and — in the other
+direction — would be the only case where deleting something made the fleet more
+available.
+
+**The env vars did not go away, and they must not.** Each flag keeps one
+override that WINS over PostHog, and short-circuits rather than outvotes.
+Workflows comment on, label and merge other people's pull requests; when that
+goes wrong, "the flag service is down" can never be why it stays on. The other
+half is local development and CI, which have no project key and should not need
+one to see a page that exists. Note the consequence for prod: `WORKFLOWS_ENABLED=true`
+is now an override too, so it has to come OUT of Railway or PostHog is never
+consulted for that flag.
+
+**The subject is the Supabase user id, matching `analytics.ts`** — a person
+targeted in PostHog is then the same person in their own funnels rather than a
+second profile nobody can join to. Email rides along as a person property, which
+is what lets a release condition do the literal job `FLEET_ALLOWED_EMAILS` did.
+Which subject depends on the flag: routes ask about the caller, while the
+engine, the poller and dispatch ask about the **workspace owner**, because a
+webhook delivery has no caller and a gate that passes when it cannot identify
+one is not a gate.
+
+**Two costs were worth paying attention to.** The workflows gate became
+per-workspace again — the thing Session 118 deliberately removed for being a
+`users` join per delivery per watching workspace. It is affordable now for two
+reasons: the owner lookup is cached, and with `TALYN_POSTHOG_PERSONAL_API_KEY`
+set posthog-node evaluates flag definitions in-process, so a gate costs no
+network at all. Without that key every gate is an HTTP round trip, which is why
+remotely evaluated decisions are cached for 30s here — matched to posthog-node's
+own definition-polling interval, so switching modes changes the cost of a gate
+but never how fast a flag flip lands.
+
+The second cost was quieter: `posthog-node` in `fleetAccess`'s import graph put
+the SDK behind anything that resolves a cloud provider, and `fleetRegistration.test.ts`
+started timing out at 5s under parallel load. The import is lazy now, so a
+deployment with no project key never loads it.
+
+`analytics.ts` still uses a bare `fetch` and still says why. That decision was
+"we need none of the SDK's machinery"; flags ARE the machinery — definition
+polling, property matching, rollout bucketing — and reimplementing PostHog's
+bucketing hash is how a percentage ends up meaning something different on the
+server than in the PostHog UI. The debug-bus discipline survives: the SDK is
+handed our own `fetch`, so `posthog_flags` appears in the Debug panel like any
+other integration.
+
+One place deliberately did NOT become per-account: the retry sweep. A parked
+run belongs to a workspace, but the flag was already checked when the run was
+created, and re-asking on the sweep would let a flag flip strand a
+half-finished run — comment posted, label still owed — forever. The sweep keeps
+the deployment-wide break glass and nothing else.
+
+Retired vars (`FLEET_ALLOWED_EMAILS`, `WORKFLOWS_ALLOWED_EMAILS`) now warn at
+boot rather than failing it — the deployment that still has them set is by
+definition the one mid-migration, but an operator reading
+`FLEET_ALLOWED_EMAILS=someone@example.com` in the Railway dashboard must not
+conclude the fleet is still gated on it.
+
 ## Session 119 — a pending failure is not an ejection (2026-09-11)
 
 PostHog's "push to a queued PR reset 3 or more others" alert fired six times in
