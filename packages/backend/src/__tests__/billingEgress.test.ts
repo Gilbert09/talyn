@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb } from './helpers/testDb.js';
-import { countActiveTasksQuery, countQueuedPrsQuery } from '../services/billing/entitlements.js';
+import {
+  countActiveTasksQuery,
+  countOwnerWorkflowsQuery,
+  countQueuedPrsQuery,
+} from '../services/billing/entitlements.js';
 
 /**
  * Egress regression guard (see projectionEgress.test.ts): the free-limit
@@ -47,5 +51,14 @@ describe('billing count egress', () => {
     expect(sql).toContain('count(*)');
     expect(sql).not.toContain('last_summary');
     expect(params).toContain('pr-1');
+  });
+
+  it('countOwnerWorkflowsQuery is a pure count — none of the three jsonb columns', () => {
+    const { sql, params } = countOwnerWorkflowsQuery('owner-1').toSQL();
+    expect(sql).toContain('count(*)');
+    expect(sql).not.toContain('"conditions"');
+    expect(sql).not.toContain('"actions"');
+    expect(sql).not.toContain('"events"');
+    expect(params).toContain('owner-1');
   });
 });

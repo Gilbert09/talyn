@@ -25,6 +25,7 @@ import {
   AutoKeepDefaultPlanError,
   MergeQueueLimitError,
   TaskLimitError,
+  WorkflowLimitError,
 } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -239,13 +240,14 @@ export function apiErrorHandler(
   }
   // Central mapping for the free-plan gates — task creation/reactivation
   // paths throw TaskLimitError, the merge-queue toggle throws
-  // MergeQueueLimitError, turning on the auto-keep default throws
-  // AutoKeepDefaultPlanError, and all three land here so the 402 + code
-  // contract lives in exactly one place. Expected traffic, not an error — no
-  // console spam.
+  // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
+  // turning on the auto-keep default throws AutoKeepDefaultPlanError, and all
+  // four land here so the 402 + code contract lives in exactly one place.
+  // Expected traffic, not an error — no console spam.
   if (
     err instanceof TaskLimitError ||
     err instanceof MergeQueueLimitError ||
+    err instanceof WorkflowLimitError ||
     err instanceof AutoKeepDefaultPlanError
   ) {
     res.status(402).json({ success: false, error: err.message, code: err.code });

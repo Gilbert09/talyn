@@ -12,12 +12,16 @@ export function Features() {
         <SectionHeading
           kicker="Features"
           title="The PR busywork, handled."
-          sub="Five things Talyn does so you can stay in flow."
+          sub="Six things Talyn does so you can stay in flow."
         />
 
         <div className="mt-14 space-y-20">
           {features.map((f) => (
-            <div key={f.id} className="grid items-center gap-10 lg:grid-cols-2">
+            <div
+              key={f.id}
+              id={f.id}
+              className="grid scroll-mt-24 items-center gap-10 lg:grid-cols-2"
+            >
               {/* min-w-0 on both grid items — see HowItWorks for the why. */}
               <Reveal className={f.flip ? "min-w-0 lg:order-2" : "min-w-0"}>
                 <p className="font-mono text-xs uppercase tracking-[0.2em] text-clay-600">

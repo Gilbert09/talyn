@@ -2,6 +2,50 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 121 — three workflows on the free plan (2026-09-12)
+
+Workflows shipped to everybody in Session 118 with no plan gate at all. Now the
+free plan keeps **3**, counted per OWNER across every workspace they own, and
+Unlimited keeps as many as you like.
+
+**The count is of definitions, not of enabled rules.** Counting only the enabled
+ones turns the cap into a toggle — keep twelve, run three, swap whenever — which
+is not a cap. Deleting a workflow frees the slot; switching one off does not.
+
+**The gate is on creation only.** `POST /workflows` runs inside
+`withWorkflowLimitGate` (the same `withFreePlanGate` choreography the task and
+merge-queue caps use, so the advisory lock still serialises two concurrent
+creations at 2/3). PATCH is deliberately ungated: it replaces a rule rather than
+adding one, and gating it would strand a free user at the cap with a broken rule
+they are not allowed to fix. `WorkflowLimitError` → 402
+`code:'workflow_limit_reached'` through the one central mapping in
+`routes/index.ts`.
+
+**The client refuses before the form, not after it.** `buildBillingStatus` now
+carries `workflows` + `workflowLimit`, and both Workflows pages check that
+snapshot when "New workflow" is clicked: at the cap it opens the UpgradeModal
+with `upgradeReason: 'workflow_limit'` instead of the editor. Filling in a
+trigger, conditions and actions and only THEN being told you may not keep it is
+the worst possible order to learn it in. The snapshot is owner-wide, so it sees
+workflows in workspaces the page cannot list. The 402 path stays — the snapshot
+can be stale (another window, another workspace) — and when it fires the editor
+stays open with the user's work in it while the modal explains. Create and
+delete both refresh the snapshot, so the next click pre-empts on a live count.
+
+A null status (still loading) or a null limit (unlimited, or billing off) means
+"no reason to refuse" and falls through to the editor; the server is the gate
+either way.
+
+**Marketing caught up in the same pass.** Workflows had no presence on
+talyn.dev at all: it is now a feature block of its own (`#workflows`, with a
+hand-built `MockWorkflows` mirroring the real list — rows, On/Off, 7d counts,
+last run — and a Workflows item in the mock sidebar), a "Rules that run
+themselves" card in Why Talyn, an FAQ entry, a line in step 03 of How it works,
+and a bullet in both pricing tiers ("Up to 3 workflows" / "Unlimited
+workflows"). The top nav did NOT get a sixth link: that row is absolutely
+centred and already tight against the right-hand buttons at the `lg` breakpoint
+where it appears. The footer's Product column carries it instead.
+
 ## Session 120 — flags belong to PostHog, not to Railway (2026-09-12)
 
 Every feature gate in the codebase was an environment variable: `WORKFLOWS_ENABLED`

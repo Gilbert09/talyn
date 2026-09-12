@@ -1100,6 +1100,17 @@ export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
 /** Max PRs sitting in the merge queue at once on the free plan. */
 export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
 
+/**
+ * Max workflows an owner may have on the free plan, across every workspace
+ * they own.
+ *
+ * Counts DEFINITIONS, not enabled ones: the cap is on how many rules you keep,
+ * so disabling one does not free a slot. Counting only the enabled ones would
+ * make the limit a toggle — keep twelve, run three, swap whenever — which is
+ * not a limit.
+ */
+export const FREE_PLAN_WORKFLOW_LIMIT = 3;
+
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 /**
  * Why a queued task has not started yet.
@@ -1127,6 +1138,12 @@ export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
 
 /** ApiResponse.code when queueing a PR is rejected by the free merge-queue limit. */
 export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
+
+/**
+ * ApiResponse.code when creating a workflow is rejected by the free-plan cap.
+ * A usage cap like the two above — deleting a workflow frees the slot.
+ */
+export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 
 /**
  * ApiResponse.code when a free plan tries to turn ON the workspace default
@@ -1158,6 +1175,10 @@ export interface BillingStatus {
   queuedPrs: number;
   /** null = unlimited. */
   mergeQueueLimit: number | null;
+  /** Workflow definitions the user owns, across all their workspaces. */
+  workflows: number;
+  /** null = unlimited. */
+  workflowLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

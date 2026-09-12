@@ -2,7 +2,11 @@
  * @jest-environment jsdom
  */
 import type { BillingStatus } from '@talyn/shared';
-import { MERGE_QUEUE_LIMIT_ERROR_CODE, TASK_LIMIT_ERROR_CODE } from '@talyn/shared';
+import {
+  MERGE_QUEUE_LIMIT_ERROR_CODE,
+  TASK_LIMIT_ERROR_CODE,
+  WORKFLOW_LIMIT_ERROR_CODE,
+} from '@talyn/shared';
 import { ApiError } from '../renderer/lib/api';
 import { maybeHandleBillingLimit, useBillingStore } from '../renderer/stores/billing';
 import { trackEvent } from '../renderer/lib/analytics';
@@ -27,6 +31,8 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
     activeTaskLimit: 3,
     queuedPrs: 0,
     mergeQueueLimit: 3,
+    workflows: 0,
+    workflowLimit: 3,
     ...overrides,
   };
 }
@@ -63,10 +69,12 @@ describe('billing store', () => {
     it.each([
       { label: 'task-limit', code: TASK_LIMIT_ERROR_CODE, reason: 'task_limit' },
       { label: 'merge-queue-limit', code: MERGE_QUEUE_LIMIT_ERROR_CODE, reason: 'merge_queue_limit' },
-    ])('opens the upgrade modal for the $label ApiError', ({ code }) => {
+      { label: 'workflow-limit', code: WORKFLOW_LIMIT_ERROR_CODE, reason: 'workflow_limit' },
+    ])('opens the upgrade modal for the $label ApiError with reason $reason', ({ code, reason }) => {
       const err = new ApiError('Free plan is limited…', 402, code);
       expect(maybeHandleBillingLimit(err)).toBe(true);
       expect(useBillingStore.getState().upgradeModalOpen).toBe(true);
+      expect(useBillingStore.getState().upgradeReason).toBe(reason);
     });
 
     it('captures paywall_shown with the reason and trigger', () => {
@@ -80,6 +88,24 @@ describe('billing store', () => {
           trigger: 'task_create',
           active_tasks: 3,
           active_task_limit: 3,
+        }),
+      );
+    });
+
+    it('reports the workflow count on a workflow-limit refusal', () => {
+      useBillingStore.getState().setStatus(status({ workflows: 3 }));
+      trackEventMock.mockClear();
+      maybeHandleBillingLimit(
+        new ApiError('nope', 402, WORKFLOW_LIMIT_ERROR_CODE),
+        'workflow_create',
+      );
+      expect(trackEventMock).toHaveBeenCalledWith(
+        'paywall_shown',
+        expect.objectContaining({
+          reason: 'workflow_limit',
+          trigger: 'workflow_create',
+          workflows: 3,
+          workflow_limit: 3,
         }),
       );
     });

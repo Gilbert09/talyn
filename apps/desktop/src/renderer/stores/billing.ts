@@ -3,6 +3,7 @@ import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
+  WORKFLOW_LIMIT_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
 import { api, ApiError } from '../lib/api';
@@ -98,6 +99,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
 const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
   TASK_LIMIT_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
+  WORKFLOW_LIMIT_ERROR_CODE,
   AUTO_KEEP_DEFAULT_ERROR_CODE,
 ]);
 
@@ -110,6 +112,7 @@ const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
 export type UpgradeReason =
   | 'task_limit'
   | 'merge_queue_limit'
+  | 'workflow_limit'
   | 'auto_keep_default'
   /**
    * Nothing was refused — something silently did not happen. Auto-keep wanted
@@ -126,6 +129,7 @@ export type UpgradeReason =
 
 function reasonFor(code: string): UpgradeReason {
   if (code === MERGE_QUEUE_LIMIT_ERROR_CODE) return 'merge_queue_limit';
+  if (code === WORKFLOW_LIMIT_ERROR_CODE) return 'workflow_limit';
   if (code === AUTO_KEEP_DEFAULT_ERROR_CODE) return 'auto_keep_default';
   return 'task_limit';
 }
@@ -148,7 +152,8 @@ export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean
   const status = store.status;
   const reason = reasonFor(err.code);
   trackEvent('paywall_shown', {
-    // 'task_limit' | 'merge_queue_limit' | 'auto_keep_default' — what was refused.
+    // 'task_limit' | 'merge_queue_limit' | 'workflow_limit' |
+    // 'auto_keep_default' — what was refused.
     reason,
     trigger: trigger ?? 'unknown',
     // Live usage at the moment of the wall (the pre-refresh snapshot).
@@ -156,6 +161,8 @@ export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean
     active_task_limit: status?.activeTaskLimit,
     queued_prs: status?.queuedPrs,
     merge_queue_limit: status?.mergeQueueLimit,
+    workflows: status?.workflows,
+    workflow_limit: status?.workflowLimit,
     plan: status?.plan,
   });
   void store.refresh();

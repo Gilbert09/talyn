@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Loader2, Zap, Check } from 'lucide-react';
-import { FREE_PLAN_ACTIVE_TASK_LIMIT } from '@talyn/shared';
+import { FREE_PLAN_ACTIVE_TASK_LIMIT, FREE_PLAN_WORKFLOW_LIMIT } from '@talyn/shared';
 import {
   Dialog,
   DialogContent,
@@ -75,6 +75,17 @@ export function UpgradeModal({
         'Auto-keeping every new PR mergeable is an Unlimited feature. It arms the ' +
         'watcher on each PR you open, so a cloud agent clears conflicts and red CI ' +
         'without you asking. You can still arm individual PRs by hand on the free plan.'
+      );
+    }
+    // Also a cap, but one the user is not "using" in the moment — the count is
+    // how many rules they keep, so it has to be checked before the two live
+    // usage branches or a busy queue answers a refusal about workflows.
+    if (upgradeReason === 'workflow_limit') {
+      const wLimit = status?.workflowLimit ?? FREE_PLAN_WORKFLOW_LIMIT;
+      return (
+        `The free plan keeps up to ${wLimit} workflows across all your workspaces — ` +
+        `you have ${status?.workflows ?? wLimit}. Upgrade for as many as you want, or ` +
+        'delete one you no longer need.'
       );
     }
     if (atQueueLimit && !atTaskLimit) {
@@ -167,6 +178,9 @@ export function UpgradeModal({
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Merge queue & auto-keep-mergeable never wait for a
                 slot
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="h-4 w-4" /> Unlimited workflows
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Cancel anytime from Settings

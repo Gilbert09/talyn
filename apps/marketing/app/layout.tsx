@@ -40,6 +40,8 @@ export const metadata: Metadata = {
     "PostHog Code",
     "merge queue",
     "auto-merge",
+    "PR automation",
+    "GitHub workflow automation",
     "AI developer tools",
   ],
   openGraph: {
