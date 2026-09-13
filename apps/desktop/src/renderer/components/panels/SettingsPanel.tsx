@@ -1013,7 +1013,7 @@ export function ProviderConnectCards() {
 
       {/* Talyn Fleet (Firecracker). Rendered ONLY when the backend
           listed it for this workspace: /cloud-providers filters it out for
-          anyone not on FLEET_ALLOWED_EMAILS, so showing the card
+          anyone outside the "talyn-fleet" flag audience, so showing the card
           unconditionally would offer every user a form whose save 403s. */}
       <SelfHostedFleetCard />
     </>
@@ -2853,8 +2853,9 @@ function BillingSettings() {
               )}
               {free && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  Up to {limit} tasks running and {status.mergeQueueLimit ?? limit} PRs in the
-                  merge queue at once, across all your workspaces.
+                  Up to {limit} tasks running, {status.mergeQueueLimit ?? limit} PRs in the
+                  merge queue and {status.workflowLimit ?? limit} workflows, across all your
+                  workspaces.
                 </p>
               )}
               {!free && !comped && status.currentPeriodEnd && (
@@ -2874,6 +2875,11 @@ function BillingSettings() {
                 label="Merge queue"
                 used={status.queuedPrs}
                 limit={status.mergeQueueLimit ?? limit}
+              />
+              <UsageMeter
+                label="Workflows"
+                used={status.workflows}
+                limit={status.workflowLimit ?? limit}
               />
             </>
           )}

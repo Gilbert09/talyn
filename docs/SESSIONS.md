@@ -10,10 +10,140 @@ They also protect cached skills, task associations, remote execution metadata, a
 PostHog requests now use approved origins without redirects. Sockets enforce token deadlines, current authorization, and bounded work.
 Queue comments require the known bot identity. External merge claims require independent GitHub confirmation.
 
-Validation passed: 1,856 backend tests across 72 selected files, plus 11 client heartbeat tests.
+Validation passed: 1,856 backend tests across 72 selected files, plus 21 client connection tests after integration with main.
 Root typechecks and changed-file lint passed. The backend production dependency audit reported zero known vulnerabilities.
 This was a source review with local tests, not production penetration testing.
 See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for deployment requirements and remaining work.
+
+## Session 121 — three workflows on the free plan (2026-09-12)
+
+Workflows shipped to everybody in Session 118 with no plan gate at all. Now the
+free plan keeps **3**, counted per OWNER across every workspace they own, and
+Unlimited keeps as many as you like.
+
+**The count is of definitions, not of enabled rules.** Counting only the enabled
+ones turns the cap into a toggle — keep twelve, run three, swap whenever — which
+is not a cap. Deleting a workflow frees the slot; switching one off does not.
+
+**The gate is on creation only.** `POST /workflows` runs inside
+`withWorkflowLimitGate` (the same `withFreePlanGate` choreography the task and
+merge-queue caps use, so the advisory lock still serialises two concurrent
+creations at 2/3). PATCH is deliberately ungated: it replaces a rule rather than
+adding one, and gating it would strand a free user at the cap with a broken rule
+they are not allowed to fix. `WorkflowLimitError` → 402
+`code:'workflow_limit_reached'` through the one central mapping in
+`routes/index.ts`.
+
+**The client refuses before the form, not after it.** `buildBillingStatus` now
+carries `workflows` + `workflowLimit`, and both Workflows pages check that
+snapshot when "New workflow" is clicked: at the cap it opens the UpgradeModal
+with `upgradeReason: 'workflow_limit'` instead of the editor. Filling in a
+trigger, conditions and actions and only THEN being told you may not keep it is
+the worst possible order to learn it in. The snapshot is owner-wide, so it sees
+workflows in workspaces the page cannot list. The 402 path stays — the snapshot
+can be stale (another window, another workspace) — and when it fires the editor
+stays open with the user's work in it while the modal explains. Create and
+delete both refresh the snapshot, so the next click pre-empts on a live count.
+
+A null status (still loading) or a null limit (unlimited, or billing off) means
+"no reason to refuse" and falls through to the editor; the server is the gate
+either way.
+
+**Marketing caught up in the same pass.** Workflows had no presence on
+talyn.dev at all: it is now a feature block of its own (`#workflows`, with a
+hand-built `MockWorkflows` mirroring the real list — rows, On/Off, 7d counts,
+last run — and a Workflows item in the mock sidebar), a "Rules that run
+themselves" card in Why Talyn, an FAQ entry, a line in step 03 of How it works,
+and a bullet in both pricing tiers ("Up to 3 workflows" / "Unlimited
+workflows"). The top nav did NOT get a sixth link: that row is absolutely
+centred and already tight against the right-hand buttons at the `lg` breakpoint
+where it appears. The footer's Product column carries it instead.
+
+## Session 120 — flags belong to PostHog, not to Railway (2026-09-12)
+
+Every feature gate in the codebase was an environment variable: `WORKFLOWS_ENABLED`
+as a kill switch, `FLEET_ALLOWED_EMAILS` as a literal comma-separated list of
+five addresses. Tom asked to move them to PostHog flags and to make that the
+norm. Three things were wrong with env vars, and only the first is obvious:
+
+- **Changing who gets a feature is a deploy.** Adding one email to the fleet
+  list restarts the backend, and a restart is the exact moment the advisory
+  locks in `services/advisoryLock.ts` exist to survive.
+- **There is no percentage, no cohort, and no audience.** An allow-list can say
+  "these five people". It cannot say "10% of workspaces" or "everyone except
+  the one account melting the fleet" — and the second of those is the question
+  that actually came up.
+- **Nothing records the decision.** PostHog already holds the events, so a flag
+  evaluated there joins the funnel it is meant to move.
+
+**The register is `packages/shared/src/featureFlags.ts`**, shared so a flag key
+is never a string typed twice, and the backend reads it through
+`services/featureFlags.ts`. Precedence is env override → PostHog → the flag's
+own fallback.
+
+**The fallbacks are per flag, and the two live ones are opposite.** `workflows`
+fails OPEN and `fleet` fails CLOSED, because the question behind a fallback is
+"if PostHog is down, what is the safe answer?" — and those answers genuinely
+differ. A single shared default would have silently flipped one of them, and it
+would have been the one that spends a subscription on hardware we own. The same
+reasoning covers PostHog answering `undefined` for a flag nobody created or
+somebody deleted: that is the fallback, **not** `false`. Reading it as `false`
+would make deleting a flag an outage for a released feature, and — in the other
+direction — would be the only case where deleting something made the fleet more
+available.
+
+**The env vars did not go away, and they must not.** Each flag keeps one
+override that WINS over PostHog, and short-circuits rather than outvotes.
+Workflows comment on, label and merge other people's pull requests; when that
+goes wrong, "the flag service is down" can never be why it stays on. The other
+half is local development and CI, which have no project key and should not need
+one to see a page that exists. Note the consequence for prod: `WORKFLOWS_ENABLED=true`
+is now an override too, so it has to come OUT of Railway or PostHog is never
+consulted for that flag.
+
+**The subject is the Supabase user id, matching `analytics.ts`** — a person
+targeted in PostHog is then the same person in their own funnels rather than a
+second profile nobody can join to. Email rides along as a person property, which
+is what lets a release condition do the literal job `FLEET_ALLOWED_EMAILS` did.
+Which subject depends on the flag: routes ask about the caller, while the
+engine, the poller and dispatch ask about the **workspace owner**, because a
+webhook delivery has no caller and a gate that passes when it cannot identify
+one is not a gate.
+
+**Two costs were worth paying attention to.** The workflows gate became
+per-workspace again — the thing Session 118 deliberately removed for being a
+`users` join per delivery per watching workspace. It is affordable now for two
+reasons: the owner lookup is cached, and with `TALYN_POSTHOG_PERSONAL_API_KEY`
+set posthog-node evaluates flag definitions in-process, so a gate costs no
+network at all. Without that key every gate is an HTTP round trip, which is why
+remotely evaluated decisions are cached for 30s here — matched to posthog-node's
+own definition-polling interval, so switching modes changes the cost of a gate
+but never how fast a flag flip lands.
+
+The second cost was quieter: `posthog-node` in `fleetAccess`'s import graph put
+the SDK behind anything that resolves a cloud provider, and `fleetRegistration.test.ts`
+started timing out at 5s under parallel load. The import is lazy now, so a
+deployment with no project key never loads it.
+
+`analytics.ts` still uses a bare `fetch` and still says why. That decision was
+"we need none of the SDK's machinery"; flags ARE the machinery — definition
+polling, property matching, rollout bucketing — and reimplementing PostHog's
+bucketing hash is how a percentage ends up meaning something different on the
+server than in the PostHog UI. The debug-bus discipline survives: the SDK is
+handed our own `fetch`, so `posthog_flags` appears in the Debug panel like any
+other integration.
+
+One place deliberately did NOT become per-account: the retry sweep. A parked
+run belongs to a workspace, but the flag was already checked when the run was
+created, and re-asking on the sweep would let a flag flip strand a
+half-finished run — comment posted, label still owed — forever. The sweep keeps
+the deployment-wide break glass and nothing else.
+
+Retired vars (`FLEET_ALLOWED_EMAILS`, `WORKFLOWS_ALLOWED_EMAILS`) now warn at
+boot rather than failing it — the deployment that still has them set is by
+definition the one mid-migration, but an operator reading
+`FLEET_ALLOWED_EMAILS=someone@example.com` in the Railway dashboard must not
+conclude the fleet is still gated on it.
 
 ## Session 119 — a pending failure is not an ejection (2026-09-11)
 

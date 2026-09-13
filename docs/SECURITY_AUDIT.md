@@ -39,7 +39,7 @@ It did not access production data, credentials, or infrastructure.
 ## Verification
 
 - 1,856 backend tests passed across 72 selected files, including row-level security and two-tenant regressions.
-- 11 web heartbeat tests passed against the shared client.
+- 21 web heartbeat and connection tests passed after combining the client changes with main.
 - `npm run typecheck` passed for all configured packages and applications.
 - ESLint passed for all 63 changed or new TypeScript files, without warnings.
 - `npm audit --omit=dev --workspace=@talyn/backend` reported zero vulnerabilities.

@@ -1007,6 +1007,24 @@ export const workflowRuns = pgTable(
     /** `WorkflowActionOutcome[]` — one entry per action, in order. */
     actions: jsonb('actions').notNull().default([]),
     error: text('error'),
+    /**
+     * When a parked run becomes due, or null when nothing is owed.
+     *
+     * Set only for `pending_retry` — a run whose action GitHub rate-limited. The
+     * sweep reads exactly this column; everything else keeps it NULL forever,
+     * which is why its index is partial.
+     */
+    retryAfter: timestamp('retry_after', { withTimezone: true }),
+    /** How many times the actions have been attempted. Starts at 1. */
+    attempts: integer('attempts').notNull().default(1),
+    /**
+     * `WorkflowEventFacts` — what the run was acting on.
+     *
+     * Kept so a retry is faithful: a `comment` action interpolates the PR's
+     * branches, and the webhook payload is long gone by the time the gate clears.
+     * Null on rows written before retries existed.
+     */
+    facts: jsonb('facts'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

@@ -92,7 +92,7 @@ export const how = {
     {
       n: "03",
       title: "Delegate, or let it auto-fix",
-      body: "Hit \"fix this PR\" and an AI agent works out what broke, fixes it, and pushes the fix for you. Run one of your own playbooks on it instead \u2014 a review, a security check. Or hand a PR over entirely and Talyn fixes it the moment anything breaks.",
+      body: "Hit \"fix this PR\" and an AI agent works out what broke, fixes it, and pushes the fix for you. Run one of your own playbooks on it instead \u2014 a review, a security check. Or stop deciding each time: write a workflow once and Talyn labels, reviews, fixes, and queues every matching PR on its own.",
       shot: "task-running",
     },
   ],
@@ -140,6 +140,20 @@ export const features = [
     flip: false,
   },
   {
+    id: "workflows",
+    eyebrow: "Workflows",
+    title: "Write the rule once. It runs on every PR.",
+    body: "A workflow is a rule you set up in the app: when this happens on a pull request, do these things. Label it, pull in a reviewer, post a comment, add it to your list, send an agent to fix it, or drop it straight into the merge queue. It watches every PR in the repos you connect \u2014 including the ones you didn't open \u2014 and it runs whether or not the app is open.",
+    bullets: [
+      "Triggers on what actually happens: opened, checks failed, review requested, approved, commented, merged",
+      "Narrow it with conditions \u2014 this repo, this base branch, this label, this author, drafts or not",
+      "Actions that do real work: labels, reviewers, comments, a skill or prompt run, the merge queue",
+      "Every run is logged, per rule, so you can see what fired and what it did",
+    ],
+    shot: "workflows",
+    flip: true,
+  },
+  {
     id: "skills",
     eyebrow: "Skills",
     title: "Your playbooks, runnable on any PR.",
@@ -150,7 +164,7 @@ export const features = [
       "Output lands on the PR: a single review comment, or commits to the branch",
     ],
     shot: "skill-picker",
-    flip: true,
+    flip: false,
   },
   {
     id: "context",
@@ -163,7 +177,7 @@ export const features = [
       "Queue the ready ones straight to merge",
     ],
     shot: "pr-detail",
-    flip: false,
+    flip: true,
   },
 ];
 
@@ -211,6 +225,10 @@ export const why = {
       body: "Flag a PR keep-mergeable and Talyn re-fixes it the moment it falls behind or breaks.",
     },
     {
+      title: "Rules that run themselves",
+      body: "Write a workflow once \u2014 when this happens on a PR, do this \u2014 and it fires on every matching pull request in your repos, yours or not, app open or not.",
+    },
+    {
       title: "Bring your own agent",
       body: "Connect the agent you already trust. No model lock-in, and you can switch per task.",
     },
@@ -245,6 +263,7 @@ export const pricing = {
         "All agent providers, switch per task",
         "Skills, the merge queue & auto-keep-mergeable on any PR you flag",
         "Up to 3 tasks running and 3 PRs queued at once",
+        "Up to 3 workflows \u2014 your rules, running on every PR they match",
       ],
       cta: "Download for {platform}",
       highlighted: false,
@@ -260,6 +279,7 @@ export const pricing = {
         "Everything in Free",
         "Unlimited concurrent tasks",
         "Unlimited PRs in the merge queue",
+        "Unlimited workflows, so every rule you want is a rule you can keep",
         "Keep every new PR green automatically, without flagging them one by one",
         "Automation never waits for a slot: merge queue and auto-keep always dispatch",
         "Cancel anytime, in-app",
@@ -288,6 +308,10 @@ export const faq = [
     a: "Saved instructions you can re-run \u2014 a review checklist, a security pass, a changelog writer. Write one once and run it on any PR with a click. Talyn finds the ones already in your project or on your machine (the standard SKILL.md format), so if you use Claude you likely have some already. The agent follows the playbook and posts the result back to the PR.",
   },
   {
+    q: "What are workflows?",
+    a: "Rules you set up once that run on their own: when this happens on a pull request, do these things. Pick the trigger (opened, checks failed, review requested, approved, commented, merged), narrow it with conditions (this repo, this base branch, this label, this author), and pick the actions \u2014 add labels, request reviewers, post a comment, add it to your list, run a skill or a prompt, or send it to the merge queue. They watch every PR in the repos you connect, including ones you didn't open, and they keep running with the app closed. The free plan keeps 3; Unlimited keeps as many as you like.",
+  },
+  {
     q: "How does auto-keep-mergeable work?",
     a: "Flag a PR and Talyn watches it. The moment it goes out of date, clashes with someone else's work, or a test starts failing, Talyn sends an agent to fix it. Once it's green again, the merge queue lands it in order. Flagging PRs one at a time is free; having every new PR flagged automatically is an Unlimited feature.",
   },
@@ -297,7 +321,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "The free plan is the full app with up to 3 tasks running and 3 PRs in the merge queue at once, and auto-keep-mergeable on any PR you flag by hand. Unlimited removes both caps and keeps every new PR you open mergeable automatically, for $15/month (or $150/year, 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
+    a: "The free plan is the full app with up to 3 tasks running, 3 PRs in the merge queue and 3 workflows, plus auto-keep-mergeable on any PR you flag by hand. Unlimited removes all three caps and keeps every new PR you open mergeable automatically, for $15/month (or $150/year, 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
   },
   {
     q: "What platforms are supported?",
@@ -325,6 +349,7 @@ export const footer = {
       links: [
         { label: "How it works", href: "/#how" },
         { label: "Features", href: "/#features" },
+        { label: "Workflows", href: "/#workflows" },
         { label: "Providers", href: "/#providers" },
         { label: "Pricing", href: "/#pricing" },
         { label: "Download", href: "/#download" },

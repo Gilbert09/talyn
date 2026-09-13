@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { validateEnv, assertValidEnv, isStrongBase64Key } from '../services/validateEnv.js';
+import {
+  validateEnv,
+  assertValidEnv,
+  isStrongBase64Key,
+  retiredEnvWarnings,
+} from '../services/validateEnv.js';
 import { encryptString } from '../services/tokenCrypto.js';
 
 const STRONG_KEY = randomBytes(32).toString('base64');
@@ -115,6 +120,64 @@ describe('validateEnv', () => {
     expect(() =>
       assertValidEnv(validEnv({ DATABASE_URL: undefined, SUPABASE_URL: undefined }))
     ).toThrow(/DATABASE_URL is not set[\s\S]*SUPABASE_URL is not set/);
+  });
+});
+
+describe('PostHog feature flags', () => {
+  it('accepts no PostHog config at all — every flag answers its fallback', () => {
+    expect(validateEnv(validEnv())).toEqual([]);
+  });
+
+  it('accepts the project key on its own (remote evaluation)', () => {
+    expect(validateEnv(validEnv({ TALYN_POSTHOG_KEY: 'phc_x' }))).toEqual([]);
+  });
+
+  it('accepts both keys (local evaluation)', () => {
+    expect(
+      validateEnv(validEnv({ TALYN_POSTHOG_KEY: 'phc_x', TALYN_POSTHOG_PERSONAL_API_KEY: 'phx_x' }))
+    ).toEqual([]);
+  });
+
+  it('refuses a personal key with no project key', () => {
+    // Local evaluation configured and nothing will ever use it — the same
+    // partial-config mistake the GitHub App and Polar checks exist for.
+    const errors = validateEnv(validEnv({ TALYN_POSTHOG_PERSONAL_API_KEY: 'phx_x' }));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('TALYN_POSTHOG_PERSONAL_API_KEY');
+    expect(errors[0]).toContain('TALYN_POSTHOG_KEY');
+  });
+});
+
+describe('retiredEnvWarnings', () => {
+  it('says nothing for a clean env', () => {
+    expect(retiredEnvWarnings(validEnv())).toEqual([]);
+  });
+
+  it.each(['FLEET_ALLOWED_EMAILS', 'WORKFLOWS_ALLOWED_EMAILS'])(
+    'warns about %s and says where the setting went',
+    (name) => {
+      const warnings = retiredEnvWarnings(validEnv({ [name]: 'someone@example.com' }));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(name);
+      // "This is ignored" without a forwarding address is the half of the
+      // message that costs the time.
+      expect(warnings[0]).toMatch(/PostHog flag/);
+    }
+  );
+
+  it('reports every retired variable at once', () => {
+    const warnings = retiredEnvWarnings(
+      validEnv({ FLEET_ALLOWED_EMAILS: 'a@x.com', WORKFLOWS_ALLOWED_EMAILS: 'b@x.com' })
+    );
+    expect(warnings).toHaveLength(2);
+  });
+
+  it('is a warning, not a boot error', () => {
+    // The deployment that still has these set is by definition the one
+    // mid-migration; refusing to start would be the worse failure.
+    const env = validEnv({ FLEET_ALLOWED_EMAILS: 'a@x.com' });
+    expect(validateEnv(env)).toEqual([]);
+    expect(() => assertValidEnv(env)).not.toThrow();
   });
 });
 

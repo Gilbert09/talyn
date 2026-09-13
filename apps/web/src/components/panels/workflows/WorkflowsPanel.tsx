@@ -9,6 +9,7 @@ import {
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { toast } from '../../../stores/toast';
+import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from './FeedbackButton';
@@ -178,15 +179,54 @@ export function WorkflowsPanel() {
     setView({ mode: 'edit', workflow });
   };
 
-  const openNew = () => openEditor(null);
+  /**
+   * Start a new workflow — unless the free plan has no slot left, in which case
+   * pitch the upgrade instead of opening the editor.
+   *
+   * The server gate is the real one; this only moves the refusal to before the
+   * form. Filling in a trigger, conditions and actions and THEN being told you
+   * may not keep it is the worst order to learn it in. The snapshot is
+   * owner-wide, so it counts the workflows in workspaces this page cannot see.
+   *
+   * `status` may be null (still loading) or the limit null (unlimited / billing
+   * off); both mean "no reason to refuse" and fall through to the editor.
+   */
+  const openNew = () => {
+    const status = useBillingStore.getState().status;
+    if (status && status.workflowLimit != null && status.workflows >= status.workflowLimit) {
+      trackEvent('paywall_shown', {
+        // The same event the 402 path fires, so the funnel keeps one
+        // denominator; `trigger` is what says this one came before the request.
+        reason: 'workflow_limit',
+        trigger: 'workflow_new',
+        workflows: status.workflows,
+        workflow_limit: status.workflowLimit,
+        plan: status.plan,
+      });
+      useBillingStore.getState().setUpgradeModalOpen(true, 'workflow_limit');
+      return;
+    }
+    openEditor(null);
+  };
 
   const save = async (input: WorkflowInput) => {
     if (view.mode === 'edit' && view.workflow) {
       await update(view.workflow.id, input);
       toast.success('Workflow saved');
     } else {
-      await create(input);
+      try {
+        await create(input);
+      } catch (err) {
+        // A free plan that filled its last slot elsewhere (another window, another
+        // workspace) only finds out here. The modal explains it, so swallow the
+        // throw and leave the editor open with the user's work in it.
+        if (maybeHandleBillingLimit(err, 'workflow_create')) return;
+        throw err;
+      }
       toast.success('Workflow created');
+      // Keep the owner-wide count current, so the NEXT click is pre-empted
+      // rather than round-tripping to the same refusal.
+      void useBillingStore.getState().refresh();
     }
     setView({ mode: 'list' });
   };
@@ -217,6 +257,9 @@ export function WorkflowsPanel() {
     try {
       await remove(workflow.id);
       toast.success('Workflow deleted');
+      // A deleted workflow gives its free-plan slot back — re-read the count so
+      // "New workflow" stops pre-empting on a limit the user is no longer at.
+      void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
     }

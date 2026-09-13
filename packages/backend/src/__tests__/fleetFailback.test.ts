@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { taskQueueService } from '../services/taskQueue.js';
 import { registerCloudProvider, getCloudProvider } from '../services/cloudProviders/registry.js';
-import { resetFleetAccessCache } from '../services/cloudProviders/fleetAccess.js';
+import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 import type { CloudTaskProvider, DispatchResult } from '../services/cloudProviders/types.js';
 import type { CloudProviderType } from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -107,8 +107,8 @@ describe('provider fail-back', () => {
     for (const t of ['selfhosted', 'posthog_code'] as CloudProviderType[]) {
       originals.set(t, getCloudProvider(t));
     }
-    process.env.FLEET_ALLOWED_EMAILS = 'tom@example.com';
-    resetFleetAccessCache();
+    process.env.FLEET_ALLOWED = 'true';
+    resetFeatureFlagsForTests();
   });
 
   afterEach(async () => {
@@ -117,8 +117,8 @@ describe('provider fail-back', () => {
     for (const [, p] of originals) if (p) registerCloudProvider(p);
     originals.clear();
     await cleanup();
-    delete process.env.FLEET_ALLOWED_EMAILS;
-    resetFleetAccessCache();
+    delete process.env.FLEET_ALLOWED;
+    resetFeatureFlagsForTests();
   });
 
   async function taskStatus(): Promise<string> {
@@ -218,8 +218,8 @@ describe('provider fail-back', () => {
     registerCloudProvider(fakeProvider('selfhosted', fleet));
     registerCloudProvider(fakeProvider('posthog_code', posthog));
 
-    process.env.FLEET_ALLOWED_EMAILS = 'someone-else@example.com';
-    resetFleetAccessCache();
+    process.env.FLEET_ALLOWED = 'false';
+    resetFeatureFlagsForTests();
 
     await taskQueueService.processQueue();
 

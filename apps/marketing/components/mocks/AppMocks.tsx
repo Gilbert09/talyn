@@ -22,6 +22,8 @@ import {
   Search,
   Sparkles,
   Wand2,
+  Workflow,
+  Plus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -105,6 +107,7 @@ function Sidebar({ active = "prs" }: { active?: string }) {
     { id: "reviews", label: "Reviews", icon: Eye, badge: 5 },
     { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 3 },
     { id: "tasks", label: "Tasks", icon: ListTodo, badge: 2 },
+    { id: "workflows", label: "Workflows", icon: Workflow, badge: 3 },
   ];
   return (
     <div className="hidden w-48 shrink-0 flex-col border-r border-line bg-paper-100 sm:flex">
@@ -561,12 +564,111 @@ export function MockOnboarding(_props: MockProps) {
   );
 }
 
+/* ---------- workflows (mirrors WorkflowsPanel) ---------- */
+
+const workflowRows = [
+  {
+    name: "Label & route new PRs",
+    rule: "When a PR is opened → label it needs-review and ask @dana to review",
+    on: true,
+    runs7d: 18,
+    last: "4m ago",
+  },
+  {
+    name: "Fix red CI on my PRs",
+    rule: "When checks fail on a PR I opened → run the fix-ci skill",
+    on: true,
+    runs7d: 6,
+    last: "1h ago",
+  },
+  {
+    name: "Queue approved PRs",
+    rule: "When a PR is approved and checks pass → add it to the merge queue",
+    on: true,
+    runs7d: 4,
+    last: "2h ago",
+  },
+  {
+    name: "Nudge stale drafts",
+    rule: "When a draft PR goes 7 days without a push → comment on it",
+    on: false,
+    runs7d: 0,
+    last: "never",
+  },
+];
+
+export function MockWorkflows(_props: MockProps) {
+  return (
+    <div className="flex h-[360px] bg-white text-left">
+      <Sidebar active="workflows" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* page header */}
+        <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+          <Workflow className="h-4 w-4 text-clay" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-ink">Workflows</p>
+            <p className="truncate text-[10px] text-ink-400">
+              Fires on every PR in the repos this workspace watches
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-lg bg-clay px-2.5 py-1 text-[10px] font-semibold text-white">
+            <Plus className="h-3 w-3" /> New workflow
+          </span>
+        </div>
+
+        <div className="space-y-2 p-3">
+          {workflowRows.map((w) => (
+            <div key={w.name} className="rounded-lg border border-line px-3 py-2.5">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink">
+                    {w.name}
+                    {!w.on && (
+                      <span className="rounded border border-line px-1 py-px text-[8px] uppercase tracking-wide text-ink-400">
+                        Off
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-ink-400">{w.rule}</p>
+                </div>
+                <div className="hidden items-start gap-3 sm:flex">
+                  <span className="text-right">
+                    <span className="block text-[11px] font-medium tabular-nums text-ink">
+                      {w.runs7d}
+                    </span>
+                    <span className="block text-[9px] text-ink-400">7d</span>
+                  </span>
+                  <span className="text-right">
+                    <span className="block text-[11px] font-medium text-ink">{w.last}</span>
+                    <span className="block text-[9px] text-ink-400">last run</span>
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-md border px-2 py-0.5 text-[10px] font-medium",
+                    w.on
+                      ? "border-status-green/30 bg-status-green/10 text-status-green"
+                      : "border-line bg-paper-200 text-ink-400"
+                  )}
+                >
+                  {w.on ? "On" : "Off"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const MOCKS = {
   dashboard: MockDashboard,
   "task-running": MockTaskRunning,
   "merge-queue": MockMergeQueue,
   "pr-detail": MockPrDetail,
   "skill-picker": MockSkillPicker,
+  workflows: MockWorkflows,
   onboarding: MockOnboarding,
 } as const;
 

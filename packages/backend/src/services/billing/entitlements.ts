@@ -3,8 +3,10 @@ import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   FREE_PLAN_MERGE_QUEUE_LIMIT,
+  FREE_PLAN_WORKFLOW_LIMIT,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
+  WORKFLOW_LIMIT_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
 import {
@@ -17,6 +19,7 @@ import {
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
   users as usersTable,
+  workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
@@ -33,6 +36,7 @@ import { advisoryLockKey, withBlockingAdvisoryLock } from '../advisoryLock.js';
 
 export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
 export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
+export const FREE_WORKFLOW_LIMIT = FREE_PLAN_WORKFLOW_LIMIT;
 
 /** Statuses that occupy a free-plan slot (mirrors the desktop's ACTIVE_TASK_STATUSES). */
 export const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
@@ -77,6 +81,21 @@ export class MergeQueueLimitError extends Error {
           `Upgrade for an unlimited queue, or wait for a queued PR to land.`
     );
     this.name = 'MergeQueueLimitError';
+  }
+}
+
+/** Thrown by the gate when a free owner already has their allowance of workflows. */
+export class WorkflowLimitError extends Error {
+  readonly code = WORKFLOW_LIMIT_ERROR_CODE;
+  constructor(
+    readonly limit: number,
+    readonly count: number
+  ) {
+    super(
+      `Free plan is limited to ${limit} workflows (${count} in use). ` +
+        `Upgrade for unlimited workflows, or delete one you no longer need.`
+    );
+    this.name = 'WorkflowLimitError';
   }
 }
 
@@ -145,6 +164,7 @@ export async function resolveEntitlement(ownerId: string): Promise<Entitlement> 
 export async function buildBillingStatus(ownerId: string): Promise<BillingStatus> {
   const activeTasks = await countActiveTasks(ownerId);
   const queuedPrs = await countQueuedPrs(ownerId);
+  const workflows = await countOwnerWorkflows(ownerId);
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
@@ -155,6 +175,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       activeTaskLimit: null,
       queuedPrs,
       mergeQueueLimit: null,
+      workflows,
+      workflowLimit: null,
     };
   }
 
@@ -183,6 +205,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     activeTaskLimit: entitlement.plan === 'free' ? FREE_ACTIVE_TASK_LIMIT : null,
     queuedPrs,
     mergeQueueLimit: entitlement.plan === 'free' ? FREE_MERGE_QUEUE_LIMIT : null,
+    workflows,
+    workflowLimit: entitlement.plan === 'free' ? FREE_WORKFLOW_LIMIT : null,
   };
 }
 
@@ -243,6 +267,26 @@ export async function countQueuedPrs(
   excludePrIds?: string | string[]
 ): Promise<number> {
   const rows = await countQueuedPrsQuery(ownerId, excludePrIds);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Same contract as the two counts above, for workflows: how many workflow
+ * definitions the owner keeps across every workspace they own. Exported
+ * unexecuted for the egress test — the `workflows` row carries three jsonb
+ * columns (events, conditions, actions) and none of them may ship to count.
+ */
+export function countOwnerWorkflowsQuery(ownerId: string) {
+  return getDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(workflowsTable)
+    .innerJoin(workspacesTable, eq(workflowsTable.workspaceId, workspacesTable.id))
+    .where(eq(workspacesTable.ownerId, ownerId));
+}
+
+/** How many workflows the owner has, across all their workspaces. */
+export async function countOwnerWorkflows(ownerId: string): Promise<number> {
+  const rows = await countOwnerWorkflowsQuery(ownerId);
   return rows[0]?.count ?? 0;
 }
 
@@ -331,7 +375,29 @@ export async function withMergeQueueLimitGate<T>(
   );
 }
 
-/** The shared count-then-act choreography behind both free-plan gates. */
+/**
+ * Run `fn` (which creates one workflow) unless the owner is a free user who
+ * already keeps their allowance, in which case throw WorkflowLimitError.
+ *
+ * Only CREATION goes through here. Editing an existing workflow — including
+ * enabling one — adds nothing, so gating a PATCH would strand a free user at
+ * the limit with a rule they cannot correct.
+ */
+export async function withWorkflowLimitGate<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `workflowLimit:${ownerId}`,
+    async () => {
+      const count = await countOwnerWorkflows(ownerId);
+      if (count >= FREE_WORKFLOW_LIMIT) {
+        throw new WorkflowLimitError(FREE_WORKFLOW_LIMIT, count);
+      }
+    },
+    fn
+  );
+}
+
+/** The shared count-then-act choreography behind the free-plan gates. */
 async function withFreePlanGate<T>(
   ownerId: string,
   lockName: string,

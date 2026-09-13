@@ -5,6 +5,7 @@ import {
 } from './config.js';
 import type {
   Features,
+  WorkflowCounts,
   WorkflowInput,
   WorkflowRun,
   WorkflowSuggestions,
@@ -98,8 +99,15 @@ export class ApiNetworkError extends Error {
 
   constructor(method: string, path: string, cause: unknown) {
     const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    // The QUERY STRING is deliberately dropped from the message, though the
+    // full path is kept on the field below. Error tracking groups by message
+    // text, and `?workspaceId=<uuid>&status=…` made every workspace — and every
+    // distinct status filter — its own issue: one fault, fifteen issues, none
+    // of them with a useful count. The route is what identifies the failure;
+    // the arguments belong in the properties.
+    const route = path.split('?')[0];
     super(
-      `Could not reach backend: ${method} ${path} — ${
+      `Could not reach backend: ${method} ${route} — ${
         online ? 'backend unreachable' : 'browser is offline'
       }`,
       { cause }
@@ -1128,6 +1136,14 @@ class WebSocketClient {
   private connectGeneration = 0;
   /** One console.error per outage; later attempts only warn (see onerror). */
   private errorLoggedSinceOpen = false;
+  /**
+   * True from the moment `connect()` commits until its socket is assigned.
+   *
+   * The readyState guard cannot cover that window on its own: `getAuthToken()`
+   * is awaited BEFORE `this.ws` exists, so two calls arriving while the token is
+   * in flight both saw a null socket and both went on to open one.
+   */
+  private connecting = false;
 
   async connect(): Promise<void> {
     this.shouldReconnect = true;
@@ -1140,105 +1156,135 @@ class WebSocketClient {
     )
       return;
 
+    // Serialize token lookups as well as socket creation.
+    if (this.connecting) return;
+    this.connecting = true;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     const generation = ++this.connectGeneration;
-    const token = await getAuthToken().catch(() => null);
-    // Logout or a newer attempt can supersede this asynchronous token lookup.
-    if (!this.shouldReconnect || generation !== this.connectGeneration) return;
-    if (!token) {
-      // Defer until we have a session — callers usually gate this behind
-      // the AuthProvider so it's a transient case on cold start.
-      console.log('WebSocket connect deferred: no auth token yet');
-      this.scheduleReconnect();
-      return;
-    }
-    console.log('Connecting to WebSocket...');
-    // Token rides in the first frame after open, not the URL, so it
-    // doesn't end up in access/edge logs. The backend closes the
-    // socket if auth doesn't arrive within its handshake window.
-    this.authenticated = false;
-    const ws = new WebSocket(getWebSocketUrl());
-    this.ws = ws;
 
-    ws.onopen = () => {
-      if (this.ws !== ws || !this.shouldReconnect) return;
-      console.log('WebSocket opened; authenticating…');
-      this.reconnectAttempts = 0;
-      this.errorLoggedSinceOpen = false;
-      ws.send(JSON.stringify({ type: 'auth', token }));
-      this.startHeartbeat();
-    };
+    try {
+      const token = await getAuthToken().catch(() => null);
+      // Logout or a newer attempt can supersede this asynchronous token lookup.
+      if (!this.shouldReconnect || generation !== this.connectGeneration) return;
+      if (!token) {
+        // Defer until we have a session — callers usually gate this behind
+        // the AuthProvider so it's a transient case on cold start.
+        console.log('WebSocket connect deferred: no auth token yet');
+        this.scheduleReconnect();
+        return;
+      }
+      console.log('Connecting to WebSocket...');
+      // Token rides in the first frame after open, not the URL, so it
+      // doesn't end up in access/edge logs. The backend closes the
+      // socket if auth doesn't arrive within its handshake window.
+      this.authenticated = false;
+      // Held in a local as well as on the field. Every handler below belongs to
+      // THIS socket, so it must act on this one and stand down if the field has
+      // moved on — reading `this.ws` inside a handler is what let an orphan
+      // write to its replacement.
+      const socket = new WebSocket(getWebSocketUrl());
+      this.ws = socket;
 
-    ws.onmessage = (event) => {
-      if (this.ws !== ws || !this.shouldReconnect) return;
-      try {
-        const data = JSON.parse(event.data) as WSEvent;
-        const payload = data.payload as
-          | { connected?: boolean; pong?: boolean }
-          | undefined;
-        // Any pong clears the in-flight heartbeat — the socket is alive.
-        if (data.type === 'connection:status' && payload?.pong) {
-          this.awaitingPong = false;
+      socket.onopen = () => {
+        // An orphan: opened by a superseded `connect()`. Close it rather than
+        // leaving a second authenticated socket open against the same account.
+        if (this.ws !== socket || !this.shouldReconnect) {
+          socket.close();
           return;
         }
-        // The server emits connection:status {connected:true} only
-        // after auth succeeds. That's our signal to resubscribe.
-        if (
-          data.type === 'connection:status' &&
-          payload?.connected &&
-          !this.authenticated
-        ) {
-          this.authenticated = true;
-          for (const workspaceId of this.subscribedWorkspaces) {
-            this.send({ type: 'subscribe', workspaceId });
+        console.log('WebSocket opened; authenticating…');
+        this.reconnectAttempts = 0;
+        this.errorLoggedSinceOpen = false;
+        // Checked even after the identity test: `onopen` can still be delivered
+        // after a sleep/wake close, and `send` throws on anything but OPEN.
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: 'auth', token }));
+        this.startHeartbeat();
+      };
+
+      socket.onmessage = (event) => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
+        try {
+          const data = JSON.parse(event.data) as WSEvent;
+          const payload = data.payload as
+            | { connected?: boolean; pong?: boolean }
+            | undefined;
+          // Any pong clears the in-flight heartbeat — the socket is alive.
+          if (data.type === 'connection:status' && payload?.pong) {
+            this.awaitingPong = false;
+            return;
           }
-          if (this.debugFilter !== undefined) {
-            this.send({ type: 'debug:filter', owner: this.debugFilter });
+          // The server emits connection:status {connected:true} only
+          // after auth succeeds. That's our signal to resubscribe.
+          if (
+            data.type === 'connection:status' &&
+            payload?.connected &&
+            !this.authenticated
+          ) {
+            this.authenticated = true;
+            for (const workspaceId of this.subscribedWorkspaces) {
+              this.send({ type: 'subscribe', workspaceId });
+            }
+            if (this.debugFilter !== undefined) {
+              this.send({ type: 'debug:filter', owner: this.debugFilter });
+            }
           }
+          this.emit(data.type, data.payload);
+        } catch (err) {
+          console.error('Failed to parse WebSocket message:', err);
         }
-        this.emit(data.type, data.payload);
-      } catch (err) {
-        console.error('Failed to parse WebSocket message:', err);
-      }
-    };
+      };
 
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      console.log('WebSocket disconnected');
-      this.authenticated = false;
-      this.stopHeartbeat();
-      this.emit('connection:status', { connected: false });
-      this.scheduleReconnect();
-    };
+      socket.onclose = () => {
+        // An orphan closing is not a disconnect: the live socket is elsewhere.
+        // Reporting it would emit connection:status {connected:false} under a
+        // healthy connection and queue a reconnect that fights it.
+        if (this.ws !== socket) return;
+        this.ws = null;
+        console.log('WebSocket disconnected');
+        this.authenticated = false;
+        this.stopHeartbeat();
+        this.emit('connection:status', { connected: false });
+        this.scheduleReconnect();
+      };
 
-    ws.onerror = () => {
-      if (this.ws !== ws) return;
-      // The browser Event carries no diagnostics ("[object Event]") —
-      // describe the socket state instead. console.error becomes a PostHog
-      // $exception via autocapture, so it's reserved for a REAL outage: the
-      // connection still failing on the 3rd+ reconnect attempt (~7s of
-      // backoff). Single-blip drops — every backend deploy disconnects each
-      // client once — stay at console.warn and never reach error tracking.
-      // errorLoggedSinceOpen keeps it to one $exception per outage (an
-      // extended outage used to flood the project with one identical event
-      // per retry).
-      const detail = `WebSocket error on ${getWebSocketUrl()} (readyState=${this.ws?.readyState}, reconnectAttempts=${this.reconnectAttempts})`;
-      if (this.reconnectAttempts >= 3 && !this.errorLoggedSinceOpen) {
-        this.errorLoggedSinceOpen = true;
-        console.error(detail);
-      } else {
-        console.warn(detail);
-      }
-    };
+      socket.onerror = () => {
+        if (this.ws !== socket) return;
+        // The browser Event carries no diagnostics ("[object Event]") —
+        // describe the socket state instead. console.error becomes a PostHog
+        // $exception via autocapture, so it's reserved for a REAL outage: the
+        // connection still failing on the 3rd+ reconnect attempt (~7s of
+        // backoff). Single-blip drops — every backend deploy disconnects each
+        // client once — stay at console.warn and never reach error tracking.
+        // errorLoggedSinceOpen keeps it to one $exception per outage (an
+        // extended outage used to flood the project with one identical event
+        // per retry).
+        const detail = `readyState=${socket.readyState}, reconnectAttempts=${this.reconnectAttempts}`;
+        if (this.reconnectAttempts >= 3 && !this.errorLoggedSinceOpen) {
+          this.errorLoggedSinceOpen = true;
+          // The counters go on their own console line, NOT into the captured
+          // message. Error tracking groups by message text, so embedding
+          // readyState and reconnectAttempts minted a separate issue per
+          // combination for what is one fault.
+          console.warn(`WebSocket error detail: ${detail}`);
+          console.error(`WebSocket connection failed: ${getWebSocketUrl()}`);
+        } else {
+          console.warn(`WebSocket error on ${getWebSocketUrl()} (${detail})`);
+        }
+      };
+    } finally {
+      // A cancelled lookup must not release a newer attempt's guard.
+      if (generation === this.connectGeneration) this.connecting = false;
+    }
   }
 
   disconnect(): void {
     this.shouldReconnect = false;
     this.connectGeneration++;
+    this.connecting = false;
     this.reconnectAttempts = 0;
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
@@ -1740,6 +1786,16 @@ export const features = {
 export const workflows = {
   list: (workspaceId: string) =>
     request<WorkflowWithStats[]>('GET', `/workflows?workspaceId=${encodeURIComponent(workspaceId)}`),
+
+  /**
+   * Just the counters, for the sidebar's nav badge.
+   *
+   * Not `list().length`: this is fetched on every boot regardless of whether the
+   * Workflows page is ever opened, and `list` ships each rule's jsonb plus
+   * server-aggregated run stats. Ask for the integer.
+   */
+  count: (workspaceId: string) =>
+    request<WorkflowCounts>('GET', `/workflows/count?workspaceId=${encodeURIComponent(workspaceId)}`),
 
   /**
    * Autocomplete options for the editor.

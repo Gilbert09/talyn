@@ -574,6 +574,9 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
         skill, run a prompt, add to My PRs, add to the merge queue
   - [x] Author/actor matching by exact login, humans only, or bots only
   - [x] Configured per workspace, with a run history and derived stats
+  - [x] Free plan keeps 3 workflows per owner (Session 121); Unlimited keeps as
+        many as you like. Counts definitions, gated on creation only, pre-empted
+        client-side off the billing snapshot
   - [ ] The editor takes a raw skill key rather than using the skill picker
   - [ ] No way to test-fire a workflow against a PR by hand
 

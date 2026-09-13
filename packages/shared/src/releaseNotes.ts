@@ -186,7 +186,8 @@ export const INTERNAL_SCOPES: readonly string[] = [
  * Leaving a scope here after un-gating is the failure mode to watch for: the
  * feature ships to everybody and is never mentioned. The gates as they stand:
  *
- *   - `fleet` — Talyn Fleet, `FLEET_ENABLED` + `FLEET_ALLOWED_EMAILS`
+ *   - `fleet` — Talyn Fleet, `FLEET_ENABLED` (the deployment has hardware) plus
+ *     the `talyn-fleet` PostHog flag (who may use it)
  *
  * `workflows` was here and has been removed, which is the mechanism working: PR
  * automation was released to everybody, so the release that did it is the one

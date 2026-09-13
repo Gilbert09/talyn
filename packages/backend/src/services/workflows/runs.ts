@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, desc, eq, gt, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, lte, ne, sql } from 'drizzle-orm';
 import type {
   WorkflowActionOutcome,
   WorkflowEventFacts,
@@ -61,6 +61,11 @@ export async function claimRun(input: ClaimInput): Promise<ClaimResult> {
     status: 'running' as WorkflowRunStatus,
     actions: [] as WorkflowActionOutcome[],
     error: null,
+    retryAfter: null,
+    attempts: 1,
+    // Kept so a retry is faithful — see the column's note. The webhook payload
+    // is gone by the time a rate-limit gate clears.
+    facts,
     createdAt: new Date(),
   };
 
@@ -90,6 +95,10 @@ export interface SettleInput {
   taskId?: string | null;
   pullRequestId?: string | null;
   error?: string | null;
+  /** When a `pending_retry` run becomes due. Cleared on any other status. */
+  retryAfter?: Date | null;
+  /** Set when re-running, so the sweep can bound how many times it tries. */
+  attempts?: number;
 }
 
 /**
@@ -112,6 +121,10 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
       status: input.status,
       actions: input.actions,
       error: input.error ?? null,
+      // Always written, never merged: a run that has just succeeded must not keep
+      // the schedule that parked it, or the sweep would pick it up forever.
+      retryAfter: input.status === 'pending_retry' ? (input.retryAfter ?? null) : null,
+      ...(input.attempts !== undefined ? { attempts: input.attempts } : {}),
     })
     .where(eq(runsTable.id, runId));
 
@@ -135,12 +148,81 @@ export async function settleRun(runId: string, input: SettleInput): Promise<Work
   return rows[0] ? rowToWorkflowRun(rows[0]) : null;
 }
 
+/**
+ * How many times a run's actions are attempted before it is given up on.
+ *
+ * Each attempt is scheduled for the moment the gate clears, and GitHub's longest
+ * single backoff is five minutes (`MAX_BACKOFF_MS`). So five attempts spans a
+ * sustained ~25-minute throttle — past which the account has a problem that
+ * retrying a label will not fix, and the PR event is old enough that acting on it
+ * is arguably wrong anyway.
+ */
+export const MAX_RETRY_ATTEMPTS = 5;
+
 /** Derive the run status from the actions that ran. */
 export function statusFromOutcomes(outcomes: WorkflowActionOutcome[]): WorkflowRunStatus {
   if (outcomes.length === 0) return 'skipped';
   const failed = outcomes.filter((o) => !o.ok).length;
   if (failed === 0) return 'succeeded';
   return failed === outcomes.length ? 'failed' : 'partial';
+}
+
+/**
+ * Failure codes worth trying again.
+ *
+ * Only `rate_gated`. It is the one failure that is unambiguously TRANSIENT and
+ * that tells us WHEN it clears — the gate holds the instant, so the retry can be
+ * scheduled rather than guessed at.
+ *
+ * Deliberately not the others, each for its own reason:
+ *  - `task_limit_reached` is a plan decision, not a fault. Retrying it in a loop
+ *    would be Talyn nagging its way around a limit the user has chosen to live
+ *    with, and the slot frees on a human timescale anyway.
+ *  - `github_error` covers a 500 and a 422 alike, and nothing in the message
+ *    reliably separates "try again" from "this will never work".
+ *  - `task_already_running` resolves, but by the time it does the PR event that
+ *    triggered the workflow is old news.
+ */
+const RETRYABLE_CODES: ReadonlySet<string> = new Set(['rate_gated']);
+
+/** Whether an outcome is one the sweep should have another go at. */
+export function isRetryable(outcome: WorkflowActionOutcome): boolean {
+  return !outcome.ok && RETRYABLE_CODES.has(outcome.code ?? '');
+}
+
+/**
+ * Never re-run sooner than this after a gate is reported clear.
+ *
+ * The gate's own instant is when GitHub said it would lift, not when it provably
+ * has — retrying on the exact tick walks straight back into it and burns an
+ * attempt. A few seconds past is enough to tell the two apart.
+ */
+const RETRY_GRACE_MS = 5_000;
+
+/**
+ * How a run should settle given what its actions did, and when it is due if
+ * anything is owed.
+ *
+ * `blockedUntilMs` is the gate's own answer (0 when it has already cleared), so
+ * the schedule is read from the thing that knows rather than inferred from an
+ * error string.
+ */
+export function settlementFor(
+  outcomes: WorkflowActionOutcome[],
+  opts: { blockedUntilMs: number; attempts: number; now?: number }
+): { status: WorkflowRunStatus; retryAfter: Date | null } {
+  const status = statusFromOutcomes(outcomes);
+  const owed = outcomes.some(isRetryable);
+  if (!owed || opts.attempts >= MAX_RETRY_ATTEMPTS) {
+    // Out of attempts is a real failure and reads as one — the history should not
+    // claim a run is still waiting when nothing will pick it up again.
+    return { status, retryAfter: null };
+  }
+  const now = opts.now ?? Date.now();
+  return {
+    status: 'pending_retry',
+    retryAfter: new Date(Math.max(opts.blockedUntilMs, now) + RETRY_GRACE_MS),
+  };
 }
 
 // ---- The rate cap ---------------------------------------------------------
@@ -196,4 +278,64 @@ export async function checkRateCap(opts: {
     .orderBy(desc(runsTable.createdAt))
     .limit(1);
   return { allowed: false, announce: latest[0]?.status !== 'skipped' };
+}
+
+
+// ---- The retry sweep's queries -------------------------------------------
+
+/** A parked run the sweep should re-run, with what it needs to do it. */
+export interface DueRetry {
+  id: string;
+  workflowId: string;
+  workspaceId: string;
+  repositoryId: string | null;
+  repoFullName: string;
+  prNumber: number;
+  prTitle: string;
+  prUrl: string;
+  prAuthor: string;
+  pullRequestId: string | null;
+  taskId: string | null;
+  event: string;
+  actions: WorkflowActionOutcome[];
+  attempts: number;
+  facts: unknown;
+}
+
+/**
+ * Runs whose retry has come due, oldest first.
+ *
+ * Oldest first because a workflow action is about a pull request event, and the
+ * one that has been waiting longest is the one closest to being stale. The
+ * `limit` bounds a sweep tick rather than the work: anything left is picked up by
+ * the next one, which is what keeps one tick from trying to drain a whole
+ * outage's backlog through a rate-limited account.
+ */
+export async function dueRetries(limit: number, now = new Date()): Promise<DueRetry[]> {
+  const rows = await getDbClient()
+    .select({
+      id: runsTable.id,
+      workflowId: runsTable.workflowId,
+      workspaceId: runsTable.workspaceId,
+      repositoryId: runsTable.repositoryId,
+      repoFullName: runsTable.repoFullName,
+      prNumber: runsTable.prNumber,
+      prTitle: runsTable.prTitle,
+      prUrl: runsTable.prUrl,
+      prAuthor: runsTable.prAuthor,
+      pullRequestId: runsTable.pullRequestId,
+      taskId: runsTable.taskId,
+      event: runsTable.event,
+      actions: runsTable.actions,
+      attempts: runsTable.attempts,
+      facts: runsTable.facts,
+    })
+    .from(runsTable)
+    .where(and(eq(runsTable.status, 'pending_retry'), lte(runsTable.retryAfter, now)))
+    .orderBy(runsTable.retryAfter)
+    .limit(limit);
+  return rows.map((r) => ({
+    ...r,
+    actions: (r.actions ?? []) as WorkflowActionOutcome[],
+  }));
 }

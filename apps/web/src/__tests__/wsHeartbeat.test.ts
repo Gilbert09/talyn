@@ -158,6 +158,31 @@ describe('session recovery and explicit disconnect', () => {
       expect(FakeWebSocket.instances[1].sent).toContain(JSON.stringify({ type: 'auth', token: 'new-session' }));
     }
   });
+
+  it.each(['old-session', null])('keeps a newer lookup serialized when the old lookup returns %s', async (oldToken) => {
+    const ws = await connect();
+    let resolveOld!: (token: string | null) => void;
+    getAccessToken.mockReturnValueOnce(new Promise<string | null>((done) => { resolveOld = done; }));
+    ws.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    wsClient.disconnect();
+
+    let resolveNew!: (token: string) => void;
+    getAccessToken.mockReturnValueOnce(new Promise<string>((done) => { resolveNew = done; }));
+    const newAttempt = wsClient.connect();
+    resolveOld(oldToken);
+    await vi.advanceTimersByTimeAsync(0);
+    await wsClient.connect();
+    expect(getAccessToken).toHaveBeenCalledTimes(3);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+
+    resolveNew('new-session');
+    await newAttempt;
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1].onopen?.();
+    expect(FakeWebSocket.instances[1].sent).toContain(JSON.stringify({ type: 'auth', token: 'new-session' }));
+  });
 });
 
 describe('heartbeat', () => {

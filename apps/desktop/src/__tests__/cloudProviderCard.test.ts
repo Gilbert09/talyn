@@ -23,8 +23,8 @@ describe('cloudProviderOffered', () => {
   });
 
   it('renders nothing when the backend did not offer the provider', () => {
-    // Talyn Fleet is filtered out server-side for a workspace that is not on
-    // FLEET_ALLOWED_EMAILS. Showing the card anyway would be a form that always
+    // Talyn Fleet is filtered out server-side for a workspace outside the
+    // "talyn-fleet" flag audience. Showing the card anyway would be a form that always
     // 403s on save, which reads as a broken integration rather than one you do
     // not have.
     expect(cloudProviderOffered([{ type: 'posthog_code' }], 'selfhosted')).toBe(false);

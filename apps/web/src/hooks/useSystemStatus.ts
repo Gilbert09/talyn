@@ -1,4 +1,5 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { workflowsOffered } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
@@ -39,6 +40,8 @@ export function useSystemStatus(): void {
   const setPostHogStatus = useWorkspaceStore((s) => s.setPostHogStatus);
   const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
   const setFeatures = useWorkspaceStore((s) => s.setFeatures);
+  const features = useWorkspaceStore((s) => s.features);
+  const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
   const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
@@ -147,4 +150,58 @@ export function useSystemStatus(): void {
   }, [refreshFeatures]);
 
   useOnReconnect(refreshFeatures);
+
+  // The sidebar's Workflows badge.
+  //
+  // Workspace-scoped, unlike `features` — so it re-counts on a workspace switch
+  // — and gated on the feature being offered, because every workflow route 403s
+  // when the kill switch is off and asking anyway spends a request per boot to
+  // be told so.
+  //
+  // This is only the SEED. `useWorkflows` writes the same store value whenever
+  // its list changes, so toggling a rule on the Workflows page moves the badge
+  // with no round trip; this exists so the badge is right for somebody who
+  // never opens that page.
+  const countWorkspaceRef = useRef(currentWorkspaceId);
+  countWorkspaceRef.current = currentWorkspaceId;
+
+  const refreshWorkflowCount = useCallback(() => {
+    if (!currentWorkspaceId || !workflowsOffered(features)) {
+      setEnabledWorkflowCount(null);
+      return;
+    }
+    api.workflows
+      .count(currentWorkspaceId)
+      .then(({ enabled }) => {
+        // Guards a response from a workspace the user has already left.
+        if (countWorkspaceRef.current !== currentWorkspaceId) return;
+        setEnabledWorkflowCount(enabled);
+      })
+      // Left at its last known value on a transient failure: blanking the badge
+      // is a worse lie than a slightly stale number.
+      .catch(() => {});
+  }, [currentWorkspaceId, features, setEnabledWorkflowCount]);
+
+  // Cleared on a workspace switch so the badge never shows the previous
+  // workspace's number while the new count is in flight. `null` draws nothing,
+  // which is honest; the old number would be a confidently wrong one.
+  useEffect(() => {
+    setEnabledWorkflowCount(null);
+  }, [currentWorkspaceId, setEnabledWorkflowCount]);
+
+  useEffect(() => {
+    refreshWorkflowCount();
+  }, [refreshWorkflowCount]);
+
+  // Re-counted on focus as well. The in-app edits already push to the store, so
+  // this is purely for a change made somewhere else — another device, or the
+  // web app alongside the desktop one. One indexed `count(*)`, so it is cheap
+  // enough to make the badge self-healing rather than stale until restart.
+  useEffect(() => {
+    const onFocus = () => refreshWorkflowCount();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshWorkflowCount]);
+
+  useOnReconnect(refreshWorkflowCount);
 }

@@ -1,24 +1,33 @@
+import { FEATURE_FLAGS, readFlagOverride } from '@talyn/shared';
+import {
+  evaluateFlag,
+  workspaceHasFeature,
+  type FlagSubject,
+} from './featureFlags.js';
+
 /**
- * The one switch that can stop Workflows.
+ * Whether Workflows is available.
  *
- * Workflows — user-defined PR automation — is a released feature available to
- * every workspace. This used to be an allow-list keyed on the workspace owner's
- * email (the `fleetAccess.ts` shape); that gate is gone.
+ * # It used to be one boolean for the whole deployment
  *
- * # Absent means ON, and that is the opposite of how it started
+ * Workflows shipped behind an email allow-list, then released to everybody
+ * behind `WORKFLOWS_ENABLED` as a kill switch — one env var that answered the
+ * same for every account. That was the right shape while the only question was
+ * "is the engine armed at all", and the wrong shape the moment the real
+ * question became "can we take this away from the one workspace whose 40
+ * workflows are hammering a repository, without taking it from everybody".
  *
- * While the feature was gated, `WORKFLOWS_ENABLED` unset meant "off for
- * everybody" — fail closed, because an unconfigured deployment must not hand out
- * a feature nobody decided to give it. Released, that reading is wrong in both
- * directions: every new deployment would ship with the feature dark, and every
- * developer's local backend would hide a page that exists, until somebody
- * remembered a line of env.
+ * So the audience moved to a PostHog flag (`workflows`), evaluated per
+ * workspace owner. `WORKFLOWS_ENABLED` survives as the break-glass override and
+ * still wins — see `services/featureFlags.ts` for the precedence and why the
+ * env layer has to stay.
  *
- * So the polarity is inverted. This is now a KILL SWITCH: set
- * `WORKFLOWS_ENABLED=false` to stop the engine and hide the page, and leave it
- * unset the rest of the time. It exists because workflows comment on, label and
- * merge other people's pull requests, and a feature with that blast radius
- * should have one env var that stops it without a code change.
+ * # The polarity did not change
+ *
+ * Absent still means ON. Workflows is a released feature; a deployment with no
+ * PostHog key, a developer's local backend and a PostHog outage must all keep
+ * serving it rather than hiding a page that exists. The flag's `fallback` in
+ * the shared register is what encodes that.
  *
  * # It is still enforced where the work happens
  *
@@ -28,29 +37,48 @@
  */
 
 /**
- * Whether Workflows is available.
+ * The cheap, subject-free check: has somebody pulled the kill switch for the
+ * whole deployment?
  *
- * Anything other than an explicit `false`/`0` is on, so a typo turns the feature
- * ON rather than silently off — the safer failure for a kill switch, because
- * "it stopped working and nobody knows why" is harder to notice than the thing
- * you were trying to stop.
+ * This is ONLY the env override, and it is not a substitute for the per-account
+ * check. It exists for the two places that have no account to ask about — the
+ * boot log, and the early-out at the top of a webhook delivery before any
+ * workspace has been resolved — where the alternative is either a flag
+ * evaluation against nobody or no early-out at all.
  */
-export function workflowsEnabled(): boolean {
-  const raw = (process.env.WORKFLOWS_ENABLED ?? '').trim().toLowerCase();
-  return raw !== 'false' && raw !== '0';
+export function workflowsKillSwitchPulled(): boolean {
+  return readFlagOverride('workflows', process.env) === false;
 }
 
 /**
- * Kept under its old name so the engine and the actions read the same way they
- * did when this was per-workspace. There is nothing workspace-specific left to
- * decide — every workspace gets the same answer — but the call sites are the
- * places the gate must be enforced, and renaming them would only obscure that.
+ * Whether this workspace's owner may use Workflows.
+ *
+ * Kept under its old name so the engine and the actions read the way they did.
+ * It is once again genuinely per-workspace — as it was under the allow-list —
+ * but without the allow-list's cost: the owner lookup is cached, and with
+ * `TALYN_POSTHOG_PERSONAL_API_KEY` set the flag itself is evaluated in-process,
+ * so a delivery pays no query and no round trip.
  */
-export function workspaceMayUseWorkflows(): boolean {
-  return workflowsEnabled();
+export async function workspaceMayUseWorkflows(workspaceId: string): Promise<boolean> {
+  return (await workspaceHasFeature('workflows', workspaceId)).enabled;
 }
 
-/** The message a refusal carries. One reason left: somebody pulled the switch. */
+/** Whether this signed-in user may use Workflows — the route and `/features`. */
+export async function userMayUseWorkflows(subject: FlagSubject): Promise<boolean> {
+  return (await evaluateFlag('workflows', subject)).enabled;
+}
+
+/**
+ * The message a refusal carries.
+ *
+ * Says which of the two reasons it is, because reading one as the other is an
+ * hour: the switch was pulled for this deployment, or the account is not in the
+ * flag's audience. There is no third case — an unreachable PostHog answers the
+ * flag's fallback, which for workflows is ON, so an outage never produces a
+ * refusal to explain.
+ */
 export function workflowsRefusalReason(): string {
-  return 'workflows are switched off on this deployment (WORKFLOWS_ENABLED=false)';
+  return workflowsKillSwitchPulled()
+    ? `workflows are switched off on this deployment (${FEATURE_FLAGS.workflows.envOverride}=false)`
+    : 'this account is not in the audience for the "workflows" feature flag';
 }

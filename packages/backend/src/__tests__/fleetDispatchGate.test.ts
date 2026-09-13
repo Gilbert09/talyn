@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { taskQueueService } from '../services/taskQueue.js';
 import { registerCloudProvider, getCloudProvider } from '../services/cloudProviders/registry.js';
-import { resetFleetAccessCache } from '../services/cloudProviders/fleetAccess.js';
 import type { CloudTaskProvider } from '../services/cloudProviders/types.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -13,8 +12,26 @@ import {
   tasks as tasksTable,
 } from '../db/schema.js';
 
+// The audience now lives in the `talyn-fleet` PostHog flag, so "this owner is
+// not allowed" is a flag answer rather than an env string. Programmable per
+// test; `undefined` is PostHog saying it has never heard of the flag.
+let flagAnswer: () => boolean | undefined = () => undefined;
+
+vi.mock('posthog-node', () => ({
+  PostHog: class {
+    async isFeatureEnabled() {
+      return flagAnswer();
+    }
+    async shutdown() {
+      /* no-op */
+    }
+  },
+}));
+
+const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
+
 /**
- * The fleet allowlist, enforced at the point of work.
+ * The fleet audience, enforced at the point of work.
  *
  * fleetAccess.test.ts covers the predicate. This covers the thing that actually
  * protects the hardware: that a task whose workspace is not allowed never
@@ -91,7 +108,9 @@ describe('fleet dispatch gate', () => {
     // silently no-ops.
     taskQueueService.resetForTests();
     original = getCloudProvider('selfhosted');
-    resetFleetAccessCache();
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    flagAnswer = () => undefined;
+    resetFeatureFlagsForTests();
   });
 
   afterEach(async () => {
@@ -99,48 +118,64 @@ describe('fleet dispatch gate', () => {
     taskQueueService.resetForTests();
     if (original) registerCloudProvider(original);
     await cleanup();
-    delete process.env.FLEET_ALLOWED_EMAILS;
-    resetFleetAccessCache();
+    delete process.env.FLEET_ALLOWED;
+    delete process.env.TALYN_POSTHOG_KEY;
+    resetFeatureFlagsForTests();
   });
 
-  it('does not dispatch to the fleet when the workspace owner is not on the allowlist', async () => {
+  it('does not dispatch to the fleet when the workspace owner is outside the flag audience', async () => {
     await seed(db, 'mallory@example.com');
     const dispatch = vi.fn(async () => ({ ok: true as const }));
     registerCloudProvider(fakeFleetProvider(dispatch));
 
-    process.env.FLEET_ALLOWED_EMAILS = 'tom@example.com';
-    resetFleetAccessCache();
+    flagAnswer = () => false;
+    resetFeatureFlagsForTests();
 
     await taskQueueService.processQueue();
 
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('does not dispatch when the allowlist is empty, which is the deployment default', async () => {
+  it('does not dispatch when the flag does not exist, which is the deployment default', async () => {
     await seed(db, 'tom@example.com');
     const dispatch = vi.fn(async () => ({ ok: true as const }));
     registerCloudProvider(fakeFleetProvider(dispatch));
 
-    delete process.env.FLEET_ALLOWED_EMAILS;
-    resetFleetAccessCache();
+    flagAnswer = () => undefined;
+    resetFeatureFlagsForTests();
+
+    // No flag means nobody. A backend deployed with FLEET_ENABLED=true and a
+    // `talyn-fleet` flag nobody has created must serve the fleet to no one,
+    // rather than to everyone.
+    await taskQueueService.processQueue();
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch when the break-glass switch is pulled, whatever the flag says', async () => {
+    await seed(db, 'tom@example.com');
+    const dispatch = vi.fn(async () => ({ ok: true as const }));
+    registerCloudProvider(fakeFleetProvider(dispatch));
+
+    flagAnswer = () => true;
+    process.env.FLEET_ALLOWED = 'false';
+    resetFeatureFlagsForTests();
 
     await taskQueueService.processQueue();
 
-    // Unset means nobody. A backend deployed with FLEET_ENABLED=true and no
-    // allowlist must serve the fleet to no one, rather than to everyone.
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   // The positive leg. Without it every assertion above would still pass against
   // a dispatch path that was simply broken, and the gate would look like it
   // worked while the feature did not exist.
-  it('DOES dispatch when the workspace owner is on the allowlist', async () => {
+  it('DOES dispatch when the workspace owner is in the flag audience', async () => {
     await seed(db, 'tom@example.com');
     const dispatch = vi.fn(async () => ({ ok: true as const }));
     registerCloudProvider(fakeFleetProvider(dispatch));
 
-    process.env.FLEET_ALLOWED_EMAILS = 'tom@example.com';
-    resetFleetAccessCache();
+    flagAnswer = () => true;
+    resetFeatureFlagsForTests();
 
     await taskQueueService.processQueue();
 
@@ -151,8 +186,8 @@ describe('fleet dispatch gate', () => {
     await seed(db, 'mallory@example.com');
     registerCloudProvider(fakeFleetProvider(vi.fn(async () => ({ ok: true as const }))));
 
-    process.env.FLEET_ALLOWED_EMAILS = 'tom@example.com';
-    resetFleetAccessCache();
+    flagAnswer = () => false;
+    resetFeatureFlagsForTests();
 
     await taskQueueService.processQueue();
 
@@ -165,6 +200,6 @@ describe('fleet dispatch gate', () => {
     // sits queued forever with no reason attached. The dispatch-failure
     // bookkeeping is what surfaces it.
     const meta = JSON.stringify(rows[0]?.metadata ?? {});
-    expect(meta).toContain('allowlist');
+    expect(meta).toContain('audience');
   });
 });

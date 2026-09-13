@@ -3,8 +3,10 @@ import type { ApiResponse } from '@talyn/shared';
 import { validateWorkflow } from '@talyn/shared';
 import type { NormalizedWorkflow } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { withWorkflowLimitGate } from '../services/billing/entitlements.js';
 import {
+  countWorkflows,
   createWorkflow,
   deleteWorkflow,
   getWorkflow,
@@ -93,7 +95,7 @@ export function workflowRoutes(): Router {
       handleAccessError(err, res);
       return false;
     }
-    if (!workspaceMayUseWorkflows()) {
+    if (!(await workspaceMayUseWorkflows(workspaceId))) {
       res.status(403).json({
         success: false,
         error: `Workflows are not available: ${workflowsRefusalReason()}.`,
@@ -108,6 +110,24 @@ export function workflowRoutes(): Router {
     const workspaceId = req.query.workspaceId as string;
     if (!(await gate(req, res, workspaceId))) return;
     const data = await listWorkflows(workspaceId);
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * Just the counters, for the sidebar's nav badge.
+   *
+   * Separate from `GET /` because this one is fetched on every client boot,
+   * whether or not anybody opens the Workflows page, and the list read is the
+   * expensive one — every rule's jsonb plus an aggregate over the whole run
+   * history. This returns a single integer.
+   *
+   * Mounted ABOVE `/:id`, like `/suggestions`: Express matches in declaration
+   * order and `/count` would otherwise be read as a workflow id and 404.
+   */
+  router.get('/count', async (req, res) => {
+    const workspaceId = req.query.workspaceId as string;
+    if (!(await gate(req, res, workspaceId))) return;
+    const data = await countWorkflows(workspaceId);
     res.json({ success: true, data } as ApiResponse<typeof data>);
   });
 
@@ -161,7 +181,12 @@ export function workflowRoutes(): Router {
         error: err instanceof Error ? err.message : 'invalid workflow',
       });
     }
-    const data = await createWorkflow(workspaceId, normalized);
+    // Free-plan cap on how many workflows an owner keeps, counted across every
+    // workspace they own. WorkflowLimitError → 402 via the error middleware.
+    // Creation only: a PATCH replaces a rule rather than adding one.
+    const data = await withWorkflowLimitGate(assertUser(req).id, () =>
+      createWorkflow(workspaceId, normalized)
+    );
     // Server-side, not from the client: `workflow_ran` can tell us how often
     // workflows FIRE but not how many people build one, and a user whose three
     // workflows never match is indistinguishable from a user who built none.

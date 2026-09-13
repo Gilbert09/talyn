@@ -22,7 +22,7 @@ import { encryptString } from '../services/tokenCrypto.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import { postHogCodeProvider } from '../services/cloudProviders/posthog/provider.js';
 import { selfHostedProvider } from '../services/cloudProviders/selfhosted/provider.js';
-import { resetFleetAccessCache } from '../services/cloudProviders/fleetAccess.js';
+import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 
 // resolveCloudEnvId resolves through the registry's hasCredentials check.
 registerCloudProvider(postHogCodeProvider);
@@ -116,16 +116,16 @@ describe('prCloudFix helpers', () => {
       // The fleet gate fails closed and is keyed on the workspace OWNER's
       // email, so without this every selfhosted link is dropped from the chain
       // and these cases would pass for the wrong reason.
-      priorAllow = process.env.FLEET_ALLOWED_EMAILS;
-      process.env.FLEET_ALLOWED_EMAILS = `${TEST_USER_ID}@example.test`;
-      resetFleetAccessCache();
+      priorAllow = process.env.FLEET_ALLOWED;
+      process.env.FLEET_ALLOWED = 'true';
+      resetFeatureFlagsForTests();
     });
     afterAll(() => {
       if (priorKey === undefined) delete process.env.TALYN_TOKEN_KEY;
       else process.env.TALYN_TOKEN_KEY = priorKey;
-      if (priorAllow === undefined) delete process.env.FLEET_ALLOWED_EMAILS;
-      else process.env.FLEET_ALLOWED_EMAILS = priorAllow;
-      resetFleetAccessCache();
+      if (priorAllow === undefined) delete process.env.FLEET_ALLOWED;
+      else process.env.FLEET_ALLOWED = priorAllow;
+      resetFeatureFlagsForTests();
     });
 
     async function connectPostHog() {
@@ -189,13 +189,13 @@ describe('prCloudFix helpers', () => {
       await connectPostHog();
       await connectFleet();
       await setDefault('selfhosted');
-      process.env.FLEET_ALLOWED_EMAILS = 'someone-else@example.test';
-      resetFleetAccessCache();
+      process.env.FLEET_ALLOWED = 'false';
+      resetFeatureFlagsForTests();
       try {
         expect(await resolveCloudEnvId('ws1')).toBe('env-ph');
       } finally {
-        process.env.FLEET_ALLOWED_EMAILS = `${TEST_USER_ID}@example.test`;
-        resetFleetAccessCache();
+        process.env.FLEET_ALLOWED = 'true';
+        resetFeatureFlagsForTests();
       }
     });
 

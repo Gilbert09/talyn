@@ -27,10 +27,17 @@ export * from './prFilters.js';
 // with. Same argument as prFilters: two copies of the predicate would let one
 // workflow claim different matches on each client.
 export * from './workflows.js';
+export * from './exceptionFilter.js';
 
 // Release notes — the "What's new" feed: version ordering, the commit filter
 // the CI generator runs, and the one rule for whether the modal opens.
 export * from './releaseNotes.js';
+
+// Feature flags — the register of every flag Talyn evaluates, their PostHog
+// keys, their env break-glass overrides and their per-flag fallbacks, plus the
+// `Features` shape `GET /features` answers. Shared so a flag key is never a
+// string typed twice.
+export * from './featureFlags.js';
 
 // The operator console's contract (admin.talyn.dev ⇄ /api/v1/admin).
 export * from './admin.js';
@@ -779,26 +786,6 @@ export interface AgentEvent {
 }
 
 // ============================================================================
-// Feature flags
-// ============================================================================
-
-/**
- * Which allow-listed features this account may use — the answer to
- * `GET /api/v1/features`.
- *
- * A capability answer, not a settings object: it is computed per request from
- * the backend's env allow-list keyed on the workspace OWNER's email, so a
- * client cannot set it and there is nothing here to persist. Hiding UI from it
- * is a courtesy; every gated surface is enforced server-side as well, because
- * a hidden nav item is a decoration that the CLI, the MCP server and plain
- * `curl` all walk straight past. See `services/workflowsAccess.ts`.
- */
-export interface Features {
-  /** Workflows — user-defined PR automation. `WORKFLOWS_*` env pair. */
-  workflows: boolean;
-}
-
-// ============================================================================
 // WebSocket Events
 // ============================================================================
 
@@ -1113,6 +1100,17 @@ export const FREE_PLAN_ACTIVE_TASK_LIMIT = 3;
 /** Max PRs sitting in the merge queue at once on the free plan. */
 export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
 
+/**
+ * Max workflows an owner may have on the free plan, across every workspace
+ * they own.
+ *
+ * Counts DEFINITIONS, not enabled ones: the cap is on how many rules you keep,
+ * so disabling one does not free a slot. Counting only the enabled ones would
+ * make the limit a toggle — keep twelve, run three, swap whenever — which is
+ * not a limit.
+ */
+export const FREE_PLAN_WORKFLOW_LIMIT = 3;
+
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 /**
  * Why a queued task has not started yet.
@@ -1140,6 +1138,12 @@ export const TASK_LIMIT_ERROR_CODE = 'task_limit_reached';
 
 /** ApiResponse.code when queueing a PR is rejected by the free merge-queue limit. */
 export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
+
+/**
+ * ApiResponse.code when creating a workflow is rejected by the free-plan cap.
+ * A usage cap like the two above — deleting a workflow frees the slot.
+ */
+export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 
 /**
  * ApiResponse.code when a free plan tries to turn ON the workspace default
@@ -1171,6 +1175,10 @@ export interface BillingStatus {
   queuedPrs: number;
   /** null = unlimited. */
   mergeQueueLimit: number | null;
+  /** Workflow definitions the user owns, across all their workspaces. */
+  workflows: number;
+  /** null = unlimited. */
+  workflowLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {
