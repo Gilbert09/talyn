@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { workflowsOffered } from '@talyn/shared';
+import { loopsOffered, workflowsOffered } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
@@ -42,6 +42,7 @@ export function useSystemStatus(): void {
   const setFeatures = useWorkspaceStore((s) => s.setFeatures);
   const features = useWorkspaceStore((s) => s.features);
   const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
+  const setEnabledLoopCount = useWorkspaceStore((s) => s.setEnabledLoopCount);
   const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
@@ -192,6 +193,31 @@ export function useSystemStatus(): void {
   useEffect(() => {
     refreshWorkflowCount();
   }, [refreshWorkflowCount]);
+
+  // The same seed for Loops. Separate rather than folded into one call because
+  // the two flags are independent — most workspaces have workflows and not
+  // loops — and a combined endpoint would make every boot pay for both.
+  const refreshLoopCount = useCallback(() => {
+    if (!currentWorkspaceId || !loopsOffered(features)) {
+      setEnabledLoopCount(null);
+      return;
+    }
+    api.loops
+      .count(currentWorkspaceId)
+      .then(({ enabled }) => {
+        if (countWorkspaceRef.current !== currentWorkspaceId) return;
+        setEnabledLoopCount(enabled);
+      })
+      .catch(() => {});
+  }, [currentWorkspaceId, features, setEnabledLoopCount]);
+
+  useEffect(() => {
+    setEnabledLoopCount(null);
+  }, [currentWorkspaceId, setEnabledLoopCount]);
+
+  useEffect(() => {
+    refreshLoopCount();
+  }, [refreshLoopCount]);
 
   // Re-counted on focus as well. The in-app edits already push to the store, so
   // this is purely for a change made somewhere else — another device, or the

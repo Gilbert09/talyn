@@ -39,6 +39,16 @@ export * from './releaseNotes.js';
 // string typed twice.
 export * from './featureFlags.js';
 
+// Loops — recurring prompts on a cron schedule: the schedule arithmetic both
+// editors preview from and the scheduler fires on, plus the validator the route
+// 400s with. Same argument as workflows: a "next run" the client computes
+// differently from the server is a bug nobody can see.
+export * from './loops.js';
+
+// The agent picker — which agents a workspace can start a task on. One pure
+// derivation, shared by the per-PR task menu and the Loop editor on both forks.
+export * from './cloudAgents.js';
+
 // The operator console's contract (admin.talyn.dev ⇄ /api/v1/admin).
 export * from './admin.js';
 export * from './transcript.js';
@@ -808,6 +818,10 @@ export type WSEventType =
   // WorkflowRun row, which is what makes the Workflows page's history and its
   // derived stats live rather than poll-shaped.
   | 'workflow:run'
+  // One loop firing reached a terminal state. Carries the whole LoopRun row, so
+  // the Loops page's history and its derived stats are live rather than
+  // poll-shaped — the same reason 'workflow:run' exists.
+  | 'loop:run'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.
@@ -1111,6 +1125,20 @@ export const FREE_PLAN_MERGE_QUEUE_LIMIT = 3;
  */
 export const FREE_PLAN_WORKFLOW_LIMIT = 3;
 
+/**
+ * Max loops an owner may have on the free plan, across every workspace they own.
+ *
+ * Counts DEFINITIONS, like the workflow cap above and for the same reason:
+ * counting only the enabled ones would make the limit a toggle — keep twelve,
+ * run three, swap whenever.
+ *
+ * Note this caps how many SCHEDULES you keep, not how much they run. Each
+ * firing still goes through the active-task limit, so a free user with three
+ * loops on a one-minute cron does not get unlimited agent time; they get three
+ * tasks in flight and a history full of "waiting for a task slot".
+ */
+export const FREE_PLAN_LOOP_LIMIT = 3;
+
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 /**
  * Why a queued task has not started yet.
@@ -1146,6 +1174,12 @@ export const MERGE_QUEUE_LIMIT_ERROR_CODE = 'merge_queue_limit_reached';
 export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 
 /**
+ * ApiResponse.code when creating a loop is rejected by the free-plan cap.
+ * A usage cap like the others — deleting a loop frees the slot.
+ */
+export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
+
+/**
  * ApiResponse.code when a free plan tries to turn ON the workspace default
  * "auto-keep new PRs mergeable". Unlike the two limit codes this is a FEATURE
  * gate, not a usage cap — there is no count to wait out, so the client must
@@ -1179,6 +1213,10 @@ export interface BillingStatus {
   workflows: number;
   /** null = unlimited. */
   workflowLimit: number | null;
+  /** Loop definitions the user owns, across all their workspaces. */
+  loops: number;
+  /** null = unlimited. */
+  loopLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb } from './helpers/testDb.js';
 import {
   countActiveTasksQuery,
+  countOwnerLoopsQuery,
   countOwnerWorkflowsQuery,
   countQueuedPrsQuery,
 } from '../services/billing/entitlements.js';
@@ -59,6 +60,16 @@ describe('billing count egress', () => {
     expect(sql).not.toContain('"conditions"');
     expect(sql).not.toContain('"actions"');
     expect(sql).not.toContain('"events"');
+    expect(params).toContain('owner-1');
+  });
+
+  it('countOwnerLoopsQuery is a pure count — never the prompt', () => {
+    // `loops.prompt` is unbounded user text and this runs on every billing
+    // snapshot, which the desktop refreshes on create, delete and every 402.
+    const { sql, params } = countOwnerLoopsQuery('owner-1').toSQL();
+    expect(sql).toContain('count(*)');
+    expect(sql).not.toContain('"prompt"');
+    expect(sql).not.toContain('"cron"');
     expect(params).toContain('owner-1');
   });
 });

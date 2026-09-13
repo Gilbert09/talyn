@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { workflowsOffered } from '@talyn/shared';
+import { loopsOffered, workflowsOffered } from '@talyn/shared';
 import {
   ListTodo,
   Settings,
@@ -9,6 +9,7 @@ import {
   GitPullRequest,
   GitMerge,
   Eye,
+  Repeat,
   Workflow,
   Check,
   Plus,
@@ -38,6 +39,7 @@ export function Sidebar({ className }: SidebarProps) {
     tasks,
     features,
     enabledWorkflowCount,
+    enabledLoopCount,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -97,6 +99,22 @@ export function Sidebar({ className }: SidebarProps) {
             // on the user's behalf. `null` is not yet counted and draws
             // nothing, so the badge never flashes in at 0 and then corrects.
             badge: enabledWorkflowCount ? enabledWorkflowCount : undefined,
+            badgeVariant: 'secondary',
+          },
+        ]
+      : []),
+    // Loops, gated the same three-state way. The flag fails CLOSED on the
+    // backend, so most workspaces answer `false` here and draw nothing.
+    ...(loopsOffered(features)
+      ? [
+          {
+            id: 'loops' as const,
+            icon: Repeat,
+            label: 'Loops',
+            // Enabled loops only: a paused loop is not a schedule that is
+            // running, and counting it would overstate what the app is doing
+            // unattended — which is the one thing this feature does.
+            badge: enabledLoopCount ? enabledLoopCount : undefined,
             badgeVariant: 'secondary',
           },
         ]

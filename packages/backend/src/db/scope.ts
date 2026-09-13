@@ -8,20 +8,13 @@ import {
 } from './client.js';
 
 /**
- * Owner-scoped database access — the runtime half of RLS enforcement.
+ * Owner-scoped database access enforces RLS on the privileged backend connection.
+ * Each transaction assumes talyn_backend and sets the owner's JWT sub claim.
+ * Existing policies use auth.uid() to filter queries, including shared service queries.
+ * Supabase Data API roles cannot assume this role or access application tables.
  *
- * The backend connects to Postgres as a privileged role that bypasses RLS, so
- * the policies in the migrations are inert on their own. `withOwnerScope` makes
- * them bite: it opens a transaction, drops to Supabase's non-privileged
- * `authenticated` role, and injects the caller's id as the JWT `sub` claim that
- * the policies' `auth.uid()` reads. For the life of that transaction every
- * query — including ones inside shared services reached via `getDbClient()` —
- * is filtered to the owner's rows by Postgres itself.
- *
- * Enforcement is always on against real Postgres. The only exception is the
- * test suite's pglite, which runs as a superuser and has no Supabase
- * `authenticated` role to drop into — there `withOwnerScope` runs the callback
- * on the pool, exercising the same query paths without the role switch.
+ * Real Postgres always enforces RLS here. Tests use pglite without a role switch
+ * unless they explicitly test enforcement.
  */
 
 /** Whether owner-scoped transactions are actually being opened. */
@@ -41,7 +34,7 @@ export async function withOwnerScope<T>(
   if (existing) return fn(existing);
 
   if (!rlsEnforcementEnabled()) {
-    // Flag off or test pglite: preserve current (pool, RLS-bypassing) behaviour.
+    // Most pglite tests use the pool without RLS enforcement.
     return fn(getPoolDbClient());
   }
 
@@ -50,10 +43,10 @@ export async function withOwnerScope<T>(
     // Set both the modern `request.jwt.claims` (what current Supabase
     // `auth.uid()` reads) and the legacy dotted GUC, then drop to the
     // non-privileged role so RLS applies for the rest of this transaction.
-    const claims = JSON.stringify({ sub: ownerId, role: 'authenticated' });
+    const claims = JSON.stringify({ sub: ownerId, role: 'talyn_backend' });
     await scoped.execute(sql`select set_config('request.jwt.claims', ${claims}, true)`);
     await scoped.execute(sql`select set_config('request.jwt.claim.sub', ${ownerId}, true)`);
-    await scoped.execute(sql.raw('set local role authenticated'));
+    await scoped.execute(sql.raw('set local role talyn_backend'));
     return runInScopedDb(scoped, () => fn(scoped));
   });
 }

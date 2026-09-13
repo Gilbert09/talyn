@@ -9,7 +9,7 @@ It did not access production data, credentials, or infrastructure.
 ## Scope
 
 - REST route mounting, JWT verification, owner scoping, and database row-level security.
-- Workspaces, repositories, tasks, pull requests, environments, skills, and workflows.
+- Workspaces, repositories, tasks, pull requests, environments, skills, workflows, and newly merged Loops.
 - GitHub credentials, installation callbacks, repository access, webhooks, and background processing.
 - Cloud dispatch, remote task associations, transcript retrieval, cancellation, and credential restoration.
 - PostHog destinations, OAuth request handling, encrypted credentials, and error responses.
@@ -20,12 +20,14 @@ It did not access production data, credentials, or infrastructure.
 
 | Area | Control |
 | --- | --- |
+| Database boundary | The backend uses a dedicated non-login role with owner policies. Client roles cannot access application tables directly. |
 | GitHub authorization | Workspace operations use user credentials, never globally selected installation credentials. |
 | Credential freshness | Database state controls access. Conditional rotation cannot overwrite replacement or revoked credentials. |
 | Diagnostics | Rate-account identifiers use a digest instead of a token when the login is unknown. |
 | Installation callbacks | Installation hints require user-authorized discovery. Expiry is checked during state redemption. |
 | Repository access | Registration and webhook recipients require current repository access. Cross-workspace response sharing is removed. |
 | Task relationships | Creation, dispatch, and result linking reject foreign repository and PR references. |
+| Loop history | History joins and settlement require matching task and loop workspaces, including historical records. |
 | Task metadata | Public PATCH accepts only supported dispatch settings. Remote identifiers remain server-controlled. |
 | Fleet operations | Transcript retrieval and cancellation require a matching remote workspace. Credential delivery uses verified GitHub credentials. |
 | Skills | Repository authorization precedes every cache lookup, including stale fallback. |
@@ -41,7 +43,7 @@ It did not access production data, credentials, or infrastructure.
 - 1,856 backend tests passed across 72 selected files, including row-level security and two-tenant regressions.
 - 21 web heartbeat and connection tests passed after combining the client changes with main.
 - `npm run typecheck` passed for all configured packages and applications.
-- ESLint passed for all 63 changed or new TypeScript files, without warnings.
+- ESLint passed for changed and new TypeScript files, without warnings.
 - `npm audit --omit=dev --workspace=@talyn/backend` reported zero vulnerabilities.
 - `git diff --check` passed.
 
@@ -50,13 +52,24 @@ A clean dependency scan covers published advisories only. It does not prove that
 
 ## Rollout Requirements
 
-1. Review the loss of installation rate budgets before release. Workspace operations now consume user budgets.
-2. Configure `POSTHOG_ALLOWED_ORIGINS` before release if trusted custom PostHog instances are in use.
-3. Confirm Redis 6.2 or later for pending-delivery recovery through `XAUTOCLAIM`.
-4. Monitor repository authorization failures and `gh:webhooks:authorization-failed`. Exhausted retries require operator replay.
-5. Keep the backend behind the expected single trusted proxy. Do not expose its Node listener directly.
-6. Grant existing administrators explicitly. `TALYN_ADMIN_EMAILS` now applies only when inserting a new user.
-7. Validate normal GitHub, PostHog, and fleet operations in staging before merging this production release.
+**This change requires a coordinated database rollout, not an ordinary overlapping deployment.**
+
+1. Validate migration 0055 with the actual Supabase role configuration in staging.
+2. Drain old backend replicas before migration. Their owner scopes use `authenticated` and cannot work after its grants are revoked.
+3. Apply migration 0055, then start the new backend. Its owner scopes use the non-login `talyn_backend` role.
+4. Verify login, owned-resource CRUD, foreign-resource refusal, and refusal of direct Data API table requests.
+5. Review the loss of installation rate budgets. Workspace operations now consume user budgets.
+6. Configure `POSTHOG_ALLOWED_ORIGINS` if trusted custom PostHog instances are in use.
+7. Confirm Redis 6.2 or later for pending-delivery recovery through `XAUTOCLAIM`.
+8. Monitor authorization failures and `gh:webhooks:authorization-failed`. Exhausted retries require operator replay.
+9. Keep the backend behind the expected single trusted proxy. Do not expose its Node listener directly.
+10. Grant existing administrators explicitly. `TALYN_ADMIN_EMAILS` now applies only when inserting a new user.
+
+The database tests use PGlite. They do not reproduce every managed Supabase role or grant.
+Verify effective `auth.uid()` policy behavior in staging, rather than assuming a successful grant changed privileges.
+Supabase authentication is not disabled. Product clients already use Talyn's REST API for application data.
+Future migrations must grant scoped access to `talyn_backend`, not `anon` or `authenticated`.
+Other roles that create application tables need equivalent default restrictions.
 
 Socket limits are per replica: 20 per owner, 50 per source address, and 1,000 total.
 Authorization refreshes every 15 seconds and expires after 30 seconds without a successful check.

@@ -37,15 +37,22 @@ export async function createTestDb(): Promise<{
     $$;
   `);
 
-  // Supabase ships an `authenticated` role; pglite doesn't. Migration 0024
-  // GRANTs table access to it (and the RLS-enforcement tests `SET ROLE` to
-  // it), so create it here. NOLOGIN/NOINHERIT mirrors Supabase's definition.
+  // Create the Supabase roles used by the privilege migrations.
   await pglite.exec(`
     DO $$ BEGIN
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
         CREATE ROLE authenticated NOLOGIN NOINHERIT;
       END IF;
     END $$;
+    CREATE ROLE anon NOLOGIN NOINHERIT;
+    CREATE ROLE authenticator NOLOGIN NOINHERIT;
+    GRANT anon, authenticated TO authenticator;
+    GRANT USAGE ON SCHEMA auth TO anon, authenticated;
+    -- Supabase can grant table access through both global and schema defaults.
+    ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO PUBLIC, anon, authenticated;
   `);
 
   // Apply the migrations THE JOURNAL LISTS, in journal order — not every .sql

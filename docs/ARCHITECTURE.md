@@ -103,6 +103,15 @@ GitHub can still treat user-to-server tokens as integration credentials for merg
 
 See [the security review](./SECURITY_AUDIT.md) for validation, rollout requirements, and remaining work.
 
+### 11. Backend Database Role
+
+The backend pool remains privileged for background work. Request scopes switch to the non-login `talyn_backend` role.
+Existing `auth.uid()` policies then restrict queries to the caller's rows.
+Supabase client roles have no direct privileges on application tables, columns, or sequences.
+This prevents direct Data API requests from bypassing REST validation of server-managed fields.
+Supabase authentication remains separate and unchanged. Future application grants must target `talyn_backend`.
+Migration 0055 requires draining old replicas before revoking their former role's permissions.
+
 ## References
 
 - **PostHog Code** — https://github.com/PostHog/code

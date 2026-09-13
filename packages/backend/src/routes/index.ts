@@ -13,6 +13,7 @@ import { fleetPublicRoutes, fleetRoutes } from './fleet.js';
 import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
+import { loopRoutes } from './loops.js';
 import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
@@ -26,6 +27,7 @@ import {
   MergeQueueLimitError,
   TaskLimitError,
   WorkflowLimitError,
+  LoopLimitError,
 } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -210,6 +212,10 @@ export function setupRoutes(app: Express): void {
   // Workflows — user-defined PR automation. Below ownerScope like every other
   // workspace-scoped router; each handler also gates on the allow-list.
   app.use(`${api}/workflows`, mount(workflowRoutes()));
+  // Loops — recurring prompts on a cron schedule. Same shape as workflows:
+  // below ownerScope, and every handler gates on the flag independently of
+  // whether the client drew the tab.
+  app.use(`${api}/loops`, mount(loopRoutes()));
   // Personal MCP-token management (mint/list/revoke). The tokens authenticate
   // the `/mcp` endpoint mounted above.
   app.use(`${api}/mcp-tokens`, mount(mcpTokenRoutes()));
@@ -241,13 +247,15 @@ export function apiErrorHandler(
   // Central mapping for the free-plan gates — task creation/reactivation
   // paths throw TaskLimitError, the merge-queue toggle throws
   // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
-  // turning on the auto-keep default throws AutoKeepDefaultPlanError, and all
-  // four land here so the 402 + code contract lives in exactly one place.
-  // Expected traffic, not an error — no console spam.
+  // creating a loop throws LoopLimitError, turning on the auto-keep default
+  // throws AutoKeepDefaultPlanError, and all five land here so the 402 + code
+  // contract lives in exactly one place. Expected traffic, not an error — no
+  // console spam.
   if (
     err instanceof TaskLimitError ||
     err instanceof MergeQueueLimitError ||
     err instanceof WorkflowLimitError ||
+    err instanceof LoopLimitError ||
     err instanceof AutoKeepDefaultPlanError
   ) {
     res.status(402).json({ success: false, error: err.message, code: err.code });
