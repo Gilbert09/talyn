@@ -60,6 +60,35 @@ export function isSlowEvent(eventType: string): boolean {
   ].includes(eventType);
 }
 
+/**
+ * Which lane a delivery belongs in.
+ *
+ * Repository events use the bounded lane because authorization requires a
+ * GitHub request. Installation maintenance, unparseable entries and ignored
+ * events stay in the fast lane.
+ *
+ * A FRESH `check_run` is fast-lane, and that exception is load-bearing. The
+ * lane exists to bound concurrent GITHUB calls, and a non-replayed check_run
+ * now makes none — it buffers into the coalescer above `targetsForRepo` and
+ * returns. Leaving it in the lane meant 85-90% of all traffic queueing behind
+ * the slot holders, and the slot holders are minute-long: a
+ * `pull_request_review` on PostHog/posthog fans out to 17 authorized
+ * workspaces, refreshed one after another with each workspace's own
+ * credentials, and measured 63 SECONDS in production. Six of those is the whole
+ * lane. Worse, the read loop awaits a slot per slow entry IN BATCH ORDER, so a
+ * saturated lane stops the loop reading new entries at all — head-of-line
+ * blocking that capped the worker at ~11 deliveries/s against ~14-20/s
+ * arriving, which is why the queue grew to 56 minutes behind.
+ *
+ * A REPLAYED check_run stays slow: it takes the full path (workflows, then a
+ * real refresh), which does call GitHub.
+ */
+export function laneFor(eventType: string | undefined, replayed: boolean): 'fast' | 'slow' {
+  if (!eventType || !isSlowEvent(eventType)) return 'fast';
+  if (!replayed && eventType === 'check_run') return 'fast';
+  return 'slow';
+}
+
 /** Minimal counting semaphore with fair slot hand-off, for the slow lane. */
 class Semaphore {
   private active = 0;
@@ -651,11 +680,9 @@ export class WebhookWorker {
           .flatMap(([, entries]) => entries)
           .map(([id, fields]) => ({ id, delivery: parseDelivery(fields) }));
 
-        // Repository events use the bounded lane because authorization requires a GitHub request.
-        // Installation maintenance and ignored events stay in the fast lane.
-        const fast = batch.filter((b) => !b.delivery || !isSlowEvent(b.delivery.eventType));
-        const slow = batch.filter((b) => b.delivery && isSlowEvent(b.delivery.eventType));
         const replayed = claimed[1].length > 0;
+        const fast = batch.filter((b) => laneFor(b.delivery?.eventType, replayed) === 'fast');
+        const slow = batch.filter((b) => laneFor(b.delivery?.eventType, replayed) === 'slow');
         await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast', replayed)));
         for (const b of slow) {
           await this.slowGate.acquire();

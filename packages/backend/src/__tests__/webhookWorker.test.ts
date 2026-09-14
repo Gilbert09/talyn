@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import {
   isRefreshEvent,
   isSlowEvent,
+  laneFor,
   extractPrNumbers,
   terminalOutcomeFromPayload,
   processWebhookDelivery,
@@ -61,6 +62,28 @@ describe('webhook classification helpers', () => {
     for (const e of ['push', 'installation', 'status']) {
       expect(isSlowEvent(e)).toBe(false);
     }
+  });
+
+
+  it('sends a fresh check_run down the fast lane, and a replay down the slow one', () => {
+    // The lane bounds concurrent GITHUB calls. A fresh check_run makes none —
+    // it buffers into the coalescer above `targetsForRepo` and returns — so
+    // holding a slot for it just queued 85-90% of all traffic behind the
+    // minute-long fan-outs that legitimately hold slots. A replay takes the
+    // full path (workflows, then a real refresh) and does call GitHub.
+    expect(laneFor('check_run', false)).toBe('fast');
+    expect(laneFor('check_run', true)).toBe('slow');
+
+    // Everything else keeps its lane whether or not it is a replay.
+    for (const e of ['pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment', 'check_suite']) {
+      expect(laneFor(e, false)).toBe('slow');
+      expect(laneFor(e, true)).toBe('slow');
+    }
+    for (const e of ['push', 'installation', 'status']) {
+      expect(laneFor(e, false)).toBe('fast');
+    }
+    // An unparseable entry has no event type and must not hold a slot.
+    expect(laneFor(undefined, false)).toBe('fast');
   });
 
   it('extracts PR numbers per event shape', () => {

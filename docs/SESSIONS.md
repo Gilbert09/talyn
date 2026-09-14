@@ -2,6 +2,71 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 129 — the lane was the constraint, not the database (2026-09-14)
+
+Session 128's fix was real and not enough: the queue kept growing. Tom said so,
+and a second pass (a Fable subagent, given the measurements and the code) found
+both the cause and an error in my arithmetic.
+
+**My throughput number was wrong.** I derived "processed ~16/s" from
+`counters.webhook`, which lumps received-ok — INCLUDING receiver drops, recorded
+with `ok: true` — together with processed-ok, while processed-with-error goes to
+`counters.error` and coalescer flushes to `counters.event`. The honest number is
+the `webhook_worker` poller's `tickCount` delta, one tick per `handleEntry`:
+**8–11.5/s against 14–20/s arriving.** There was never a surplus. The queue was
+never draining, and I reported that it was.
+
+Proof it was growing, from four readings 295s apart: the stream cursor advanced
+202 stream-seconds in 295 wall-seconds — **0.69×** — and lag grew ~0.33 min/min.
+
+**Why capacity was ~11/s when 85-90% of deliveries are now near-free.** The slow
+lane is six slots, and its occupants are minute-long. `refreshPrAcrossWorkspaces`
+(`prMonitor.ts:1187`) iterates workspace groups SEQUENTIALLY, and PostHog/posthog
+is watched by **17** authorized workspaces, each refreshed with its own
+credentials. Measured on live deliveries: `pull_request_review.submitted` fanout
+17, **63,257ms**; `.edited` 63,838ms; `pull_request_review_comment.created`
+64,098ms. Three of those is half the lane.
+
+And `check_run` was still classified slow, so every one of them — free since
+Session 128 — queued behind those. Worse, the read loop awaits a slot per slow
+entry IN BATCH ORDER, so a saturated lane stops it reading new entries at all.
+Head-of-line blocking, not a database limit.
+
+Fixed here: `laneFor(eventType, replayed)`, hoisted out of the loop so the rule
+is readable and testable. A FRESH check_run is fast-lane — the lane bounds
+concurrent GITHUB calls and a fresh check_run makes none. A REPLAYED one stays
+slow, because it takes the full path and does call GitHub.
+
+**Still open, in the order the subagent ranked them:**
+
+1. **Parallelize `refreshPrAcrossWorkspaces` groups** with a small bound (4-6).
+   Groups are per-workspace, i.e. independent accounts with independent rate
+   budgets. 63s → 10-15s. Caveat: two workspaces sharing one token would fire
+   concurrently at one account — group by `credentialIdentityFor` to be strict.
+2. **Batch the `integrations` reads** in `targetsForRepo` — one
+   `WHERE workspace_id IN (…)` instead of 17-23 sequential `resolveAuth` calls.
+   **Preserves the invariant exactly**: the row is still read fresh on every
+   call, so a revoked credential still stops granting access at once. Only the
+   round trips collapse. ~450ms → ~25ms; removes ~70% of DB query volume.
+3. **Stop sleeping the rate gate inside a lane slot** on the webhook path
+   (`githubRateGate.ts:25`, `MAX_GATE_WAIT_MS = 60_000`). A gated account
+   currently sleeps up to a minute holding a slot.
+4. **The 50k MAXLEN cliff.** `routes/webhooks.ts:30` caps the stream at
+   `MAXLEN ~ 50_000`; at ~56 min × ~13/s it holds ~45k. Redis will silently trim
+   the OLDEST unprocessed entries. PR data self-heals through the sweep, but
+   workflow triggers and merge-queue signals ride these deliveries and would
+   just be lost.
+5. **Metric hygiene**, which is what let me report a drain that was not
+   happening: per-action counters instead of one `counters.webhook` bucket, and
+   expose `XLEN`/XPENDING in the snapshot so "is it draining" is one reading
+   rather than an inference.
+
+Disproved, so nobody chases them again: no PEL/XAUTOCLAIM replay livelock (zero
+duplicate delivery ids, zero auth-exhausted events, latencies in a tight FIFO
+band); the lag gauge is honest (it tracks the real cursor, and failed deliveries
+never record a latency at all); no multi-replica confusion; and the `integrations`
+load is real but secondary at ~1.3s DB-time/s.
+
 ## Session 128 — the webhook queue was 47 minutes behind, and it was an auth read (2026-09-14)
 
 Tom: the Debug panel still shows a lot of lag. It did — 47 minutes, and climbing
