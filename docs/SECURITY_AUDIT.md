@@ -21,7 +21,7 @@ It did not access production data, credentials, or infrastructure.
 
 | Area | Control |
 | --- | --- |
-| Database boundary | The backend uses a dedicated non-login role with owner policies. Phase 2 removes `anon`/`authenticated` access to application tables; `service_role` keeps its access deliberately. |
+| Database boundary | The backend uses a dedicated non-login role with owner policies, filtering on `public.talyn_uid()` rather than the unreachable `auth.uid()`. Phase 2 removes `anon`/`authenticated` access to application tables; `service_role` keeps its access deliberately. |
 | GitHub authorization | Workspace operations use user credentials, never globally selected installation credentials. |
 | Credential freshness | Database state controls access. Conditional rotation cannot overwrite replacement or revoked credentials. |
 | Diagnostics | Rate-account identifiers use a digest instead of a token when the login is unknown. |
@@ -69,9 +69,11 @@ The boundary therefore lands in two phases.
 
 ### Phase 1 — this deploy
 
-1. Push. Migration 0056 runs at boot and grants `talyn_backend` its access.
-   The migration FAILS LOUDLY and refuses to boot if a grant did not land —
-   see "What 0056 verifies" below.
+1. Push. Migration 0056 runs at boot, grants `talyn_backend` its access, and
+   repoints every RLS policy at `public.talyn_uid()`. It FAILS LOUDLY and
+   refuses to boot if a grant did not land or a policy was left behind — see
+   "Why the policies moved off `auth.uid()`" below. Verified against production
+   in a rolled-back transaction before merge.
 2. Before the deploy, run `docs/rollout/find_posthog_hosts.sql`. Set
    `POSTHOG_ALLOWED_ORIGINS` for every host it lists. The allowlist accepts
    `us.posthog.com`, `eu.posthog.com` and `app.posthog.com` without
@@ -103,15 +105,37 @@ database work. After PHASE 2, the previous build cannot run without its grants:
 restore them with `docs/rollout/rollback_regrant_authenticated.sql` BEFORE
 redeploying it. Drizzle has no down migrations; that script is the only way back.
 
-### What 0056 verifies
+### Why the policies moved off `auth.uid()`
 
-On Supabase the `auth` schema belongs to `supabase_auth_admin`. A grantor that
-does not own it and holds no grant option gets a WARNING rather than an error,
-so the migration would otherwise commit while every RLS policy — all of which
-call `auth.uid()` — failed at runtime. 0056 asserts both `auth` grants and every
-table grant, and raises if one did not land. The whole migration is one
-transaction, so a failure rolls back cleanly and the boot refuses, which leaves
-the previous build serving. Re-running it is safe.
+On Supabase the `auth` schema belongs to `supabase_auth_admin`, and the role the
+backend connects as holds USAGE on it **without grant option** and is not a
+member of the owner:
+
+```
+auth ACL:  postgres=U/supabase_admin          -- no grant option
+pg_has_role(postgres, supabase_admin)      = f
+pg_has_role(postgres, supabase_auth_admin) = f
+```
+
+So the backend cannot grant `auth` access to a role it creates — on this project
+or any Supabase project. A `GRANT USAGE ON SCHEMA auth` from it raises a WARNING
+and grants nothing, which would have left the migration committed and every
+owner-scoped query failing at runtime, because each policy calls `auth.uid()`.
+This was caught by dry-running the migration against production inside a
+transaction that rolled back; the earlier draft would have taken the backend down.
+
+`auth.uid()` is not privileged machinery, though — it reads two GUCs that
+`withOwnerScope` sets itself. So 0056 defines `public.talyn_uid()` with the same
+body in a schema we own, proves it agrees with `auth.uid()` on the live database
+before anything depends on it, and repoints all 17 policies at it. The policies
+are all `TO PUBLIC`, so the rewrite serves the previous build's `authenticated`
+role too — which is what keeps the deploy overlap working.
+
+0056 also asserts every table grant landed, for the same reason the `auth` grant
+failed: a grant that silently did nothing must not read as a successful
+migration. The whole migration is one transaction, so a failure rolls back
+cleanly and the boot refuses, leaving the previous build serving. Re-running it
+is safe.
 
 ### Operational notes
 

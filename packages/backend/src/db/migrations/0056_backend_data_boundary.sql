@@ -41,35 +41,112 @@ BEGIN
   END LOOP;
 END $$;
 --> statement-breakpoint
-GRANT USAGE ON SCHEMA public, auth TO talyn_backend;
+GRANT USAGE ON SCHEMA public TO talyn_backend;
 --> statement-breakpoint
-GRANT EXECUTE ON FUNCTION auth.uid() TO talyn_backend;
---> statement-breakpoint
--- Prove the two `auth` grants actually landed.
+-- The owner id, without depending on schema `auth`.
 --
--- On Supabase the `auth` schema belongs to `supabase_auth_admin`. A grantor
--- that is not the owner and holds no grant option gets a WARNING, not an
--- error — so the migration would commit "successfully" and every RLS policy
--- (all of them call `auth.uid()`) would then fail at runtime under the new
--- role. Failing here instead rolls the whole migration back and refuses to
--- boot, which leaves the previous build serving.
+-- The policies were written against `auth.uid()`, which no new role can reach
+-- on Supabase: `auth` belongs to `supabase_auth_admin`, and the role the
+-- backend connects as holds USAGE on it WITHOUT grant option and is not a
+-- member of the owner. So it cannot pass that access on — a `GRANT USAGE ON
+-- SCHEMA auth` from it raises a WARNING and grants nothing, which would leave
+-- this migration committed and every owner-scoped query failing at runtime.
+--
+-- `auth.uid()` is not privileged machinery, though: it reads two GUCs that
+-- `withOwnerScope` sets itself. This is the same read, in a schema we own.
+-- Returning text rather than uuid keeps it usable by the policies as written
+-- (they all cast to text) without forcing every owner id to parse as a uuid.
+CREATE OR REPLACE FUNCTION public.talyn_uid() RETURNS text LANGUAGE sql STABLE AS $fn$
+  SELECT coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )
+$fn$;
+--> statement-breakpoint
+-- `authenticated` and `anon` need it too: the policies below are rewritten in
+-- place, and the PREVIOUS build is still serving requests under those roles.
+-- Granted per role that exists, so this also applies to a plain Postgres with
+-- no Supabase roles at all.
 DO $$
+DECLARE
+  grantee text;
 BEGIN
-  IF NOT has_schema_privilege('talyn_backend', 'auth', 'USAGE') THEN
-    RAISE EXCEPTION
-      'talyn_backend lacks USAGE on schema auth. Grant it as the schema owner '
-      '(supabase_auth_admin) before deploying: GRANT USAGE ON SCHEMA auth TO talyn_backend;';
+  FOR grantee IN SELECT rolname FROM pg_roles
+    WHERE rolname IN ('talyn_backend', 'anon', 'authenticated', 'service_role')
+  LOOP
+    EXECUTE format('GRANT EXECUTE ON FUNCTION public.talyn_uid() TO %I', grantee);
+  END LOOP;
+END $$;
+--> statement-breakpoint
+-- Prove the replacement agrees with what it replaces, on THIS database, before
+-- anything depends on it.
+DO $$
+DECLARE
+  sample constant text := '00000000-0000-0000-0000-0000000000ab';
+  theirs text;
+  ours text;
+BEGIN
+  PERFORM set_config('request.jwt.claim.sub', sample, true);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', sample)::text, true);
+  BEGIN
+    EXECUTE 'SELECT (auth.uid())::text' INTO theirs;
+  EXCEPTION WHEN undefined_function OR invalid_schema_name OR insufficient_privilege THEN
+    -- No `auth` schema to compare against (a bare Postgres). Nothing to check.
+    RETURN;
+  END;
+  SELECT public.talyn_uid() INTO ours;
+  -- Put the claim GUCs back. They are transaction-local, but this migration
+  -- shares its transaction with everything below, and a stale sub would
+  -- silently shadow the real owner in any later check.
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  PERFORM set_config('request.jwt.claims', '', true);
+  IF theirs IS DISTINCT FROM ours THEN
+    RAISE EXCEPTION 'public.talyn_uid() = % but auth.uid()::text = % — the owner id would change meaning', ours, theirs;
   END IF;
-  IF NOT has_function_privilege('talyn_backend', 'auth.uid()', 'EXECUTE') THEN
-    RAISE EXCEPTION
-      'talyn_backend lacks EXECUTE on auth.uid(). Grant it as the schema owner '
-      '(supabase_auth_admin): GRANT EXECUTE ON FUNCTION auth.uid() TO talyn_backend;';
+END $$;
+--> statement-breakpoint
+-- Repoint every policy at it. All of them are TO PUBLIC, so they bind every
+-- role — including the previous build's `authenticated` and the new
+-- `talyn_backend` — and the rewrite is a straight substitution inside the
+-- expressions Postgres already parsed.
+DO $$
+DECLARE
+  p record;
+  new_qual text;
+  new_check text;
+BEGIN
+  FOR p IN
+    SELECT tablename, policyname, qual, with_check FROM pg_policies
+    WHERE schemaname = 'public'
+      AND (COALESCE(qual, '') LIKE '%auth.uid()%' OR COALESCE(with_check, '') LIKE '%auth.uid()%')
+  LOOP
+    new_qual := replace(COALESCE(p.qual, ''), 'auth.uid()', 'public.talyn_uid()');
+    new_check := replace(COALESCE(p.with_check, ''), 'auth.uid()', 'public.talyn_uid()');
+    IF p.qual IS NOT NULL AND p.with_check IS NOT NULL THEN
+      EXECUTE format('ALTER POLICY %I ON public.%I USING (%s) WITH CHECK (%s)',
+        p.policyname, p.tablename, new_qual, new_check);
+    ELSIF p.qual IS NOT NULL THEN
+      EXECUTE format('ALTER POLICY %I ON public.%I USING (%s)', p.policyname, p.tablename, new_qual);
+    ELSE
+      EXECUTE format('ALTER POLICY %I ON public.%I WITH CHECK (%s)', p.policyname, p.tablename, new_check);
+    END IF;
+  END LOOP;
+END $$;
+--> statement-breakpoint
+DO $$
+DECLARE
+  remaining int;
+BEGIN
+  SELECT count(*) INTO remaining FROM pg_policies
+  WHERE schemaname = 'public'
+    AND (COALESCE(qual, '') LIKE '%auth.uid()%' OR COALESCE(with_check, '') LIKE '%auth.uid()%');
+  IF remaining > 0 THEN
+    RAISE EXCEPTION '% policies still call auth.uid(), which talyn_backend cannot reach', remaining;
   END IF;
 END $$;
 --> statement-breakpoint
 -- Preserve only the explicit grants from 0024, 0025, 0029, 0033, 0040,
 -- 0047, 0052 and 0054. Do not copy Supabase's broader default grants.
--- All existing owner policies target PUBLIC and still use auth.uid().
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.users, public.workspaces, public.environments, public.repositories,
   public.integrations, public.tasks, public.pull_requests, public.mcp_tokens,
@@ -87,8 +164,9 @@ GRANT SELECT ON TABLE public.release_notes TO talyn_backend;
 --> statement-breakpoint
 GRANT SELECT, INSERT, UPDATE ON TABLE public.workflow_runs, public.loop_runs TO talyn_backend;
 --> statement-breakpoint
--- Prove the table grants landed too, for the same reason as the auth check:
--- a grant that silently did nothing must not read as a successful migration.
+-- Prove the table grants landed. A grant that silently did nothing must not
+-- read as a successful migration — that is exactly how the `auth` grants
+-- above would have failed, had they stayed.
 DO $$
 DECLARE
   missing text;
@@ -104,5 +182,8 @@ BEGIN
   WHERE NOT has_table_privilege('talyn_backend', t, 'SELECT');
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'talyn_backend did not receive SELECT on: %', missing;
+  END IF;
+  IF NOT has_function_privilege('talyn_backend', 'public.talyn_uid()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'talyn_backend cannot execute public.talyn_uid(); every policy would fail';
   END IF;
 END $$;

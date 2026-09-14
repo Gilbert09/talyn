@@ -244,6 +244,40 @@ describe('RLS enforcement (backend role)', () => {
     expect((await testDb.pglite.query(`SELECT task_id FROM ${kind}_runs`)).rows).toEqual([{ task_id: 'task-a' }]);
   });
 
+  it('scopes without any access to schema auth', async () => {
+    // The point of `public.talyn_uid()`. On Supabase the `auth` schema belongs
+    // to `supabase_auth_admin`, and the role the backend connects as holds
+    // USAGE without grant option — so it can never pass that access to a role
+    // it creates. A policy that called `auth.uid()` would fail for every
+    // owner-scoped query. Proven here by checking the backend role genuinely
+    // cannot reach `auth`, while scoping still works.
+    const testDb = await createTestDb();
+    cleanup = testDb.cleanup;
+    await seedTwoOwners(testDb.db);
+
+    expect(
+      (await testDb.pglite.query<{ ok: boolean }>(
+        `SELECT has_schema_privilege('talyn_backend', 'auth', 'USAGE') AS ok`,
+      )).rows,
+    ).toEqual([{ ok: false }]);
+
+    // No policy may depend on it either.
+    expect(
+      (await testDb.pglite.query<{ n: number }>(`
+        SELECT count(*)::int AS n FROM pg_policies WHERE schemaname = 'public'
+          AND (COALESCE(qual, '') LIKE '%auth.uid()%' OR COALESCE(with_check, '') LIKE '%auth.uid()%')
+      `)).rows,
+    ).toEqual([{ n: 0 }]);
+
+    await testDb.pglite.exec(`SELECT set_config('request.jwt.claim.sub', 'owner-a', false)`);
+    await testDb.pglite.exec('SET ROLE talyn_backend');
+    await expect(testDb.pglite.query('SELECT auth.uid()')).rejects.toMatchObject({ code: '42501' });
+    // ...and yet the owner is resolved and the rows are scoped.
+    expect((await testDb.pglite.query('SELECT public.talyn_uid() AS owner')).rows).toEqual([{ owner: 'owner-a' }]);
+    expect((await testDb.pglite.query('SELECT id FROM workspaces ORDER BY id')).rows).toEqual([{ id: 'ws-a' }]);
+    await testDb.pglite.exec('RESET ROLE');
+  });
+
   it.each([false, true])('withOwnerScope sets and clears the backend role (rollback=%s)', async (rollback) => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;
@@ -252,7 +286,9 @@ describe('RLS enforcement (backend role)', () => {
     vi.spyOn(dbClient, 'isRealPostgres').mockReturnValue(true);
     const scope = withOwnerScope('owner-a', async (db) => {
       expect(getDbClient()).toBe(db);
-      const context = await db.execute(sql`SELECT current_user AS role, auth.uid() AS owner,
+      // `public.talyn_uid()`, not `auth.uid()`: the backend role cannot reach
+      // schema `auth` at all, which is the whole reason the policies moved.
+      const context = await db.execute(sql`SELECT current_user AS role, public.talyn_uid() AS owner,
         current_setting('request.jwt.claims')::jsonb->>'role' AS claim_role`);
       expect(context.rows).toEqual([{ role: 'talyn_backend', owner: 'owner-a', claim_role: 'talyn_backend' }]);
       await withOwnerScope('owner-a', async (inner) => {
@@ -267,7 +303,7 @@ describe('RLS enforcement (backend role)', () => {
 
     expect(dbClient.getScopedDb()).toBeUndefined();
     const context = await testDb.pglite.query<{ role: string; owner: string | null }>(
-      'SELECT current_user AS role, auth.uid() AS owner',
+      'SELECT current_user AS role, public.talyn_uid() AS owner',
     );
     expect(context.rows[0].role).not.toBe('talyn_backend');
     expect(context.rows[0].owner).toBeNull();

@@ -10,7 +10,9 @@ import {
 /**
  * Owner-scoped database access enforces RLS on the privileged backend connection.
  * Each transaction assumes talyn_backend and sets the owner's JWT sub claim.
- * Existing policies use auth.uid() to filter queries, including shared service queries.
+ * Policies filter on `public.talyn_uid()`, which reads the same two GUCs that
+ * `auth.uid()` does. They call ours because no role the backend can create is
+ * able to reach schema `auth` on Supabase — see migration 0056.
  * Supabase Data API roles cannot assume this role or access application tables.
  *
  * Real Postgres always enforces RLS here. Tests use pglite without a role switch
@@ -40,9 +42,10 @@ export async function withOwnerScope<T>(
 
   return getPoolDbClient().transaction(async (tx) => {
     const scoped = tx as unknown as Database;
-    // Set both the modern `request.jwt.claims` (what current Supabase
-    // `auth.uid()` reads) and the legacy dotted GUC, then drop to the
-    // non-privileged role so RLS applies for the rest of this transaction.
+    // Set both the modern `request.jwt.claims` and the legacy dotted GUC —
+    // `public.talyn_uid()` prefers the dotted one and falls back to the JSON,
+    // exactly as `auth.uid()` does — then drop to the non-privileged role so
+    // RLS applies for the rest of this transaction.
     const claims = JSON.stringify({ sub: ownerId, role: 'talyn_backend' });
     await scoped.execute(sql`select set_config('request.jwt.claims', ${claims}, true)`);
     await scoped.execute(sql`select set_config('request.jwt.claim.sub', ${ownerId}, true)`);

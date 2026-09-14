@@ -64,6 +64,9 @@ export async function createTestDb(): Promise<{
     END $$;
     CREATE ROLE anon NOLOGIN NOINHERIT;
     CREATE ROLE authenticator NOLOGIN NOINHERIT;
+    -- Supabase's server-side role. It exists here so the migration grants the
+    -- same set it grants in production.
+    CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
     GRANT anon, authenticated TO authenticator;
     GRANT USAGE ON SCHEMA auth TO anon, authenticated;
     -- Supabase can grant table access through both global and schema defaults.
