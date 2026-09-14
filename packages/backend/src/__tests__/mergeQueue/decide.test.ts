@@ -438,6 +438,89 @@ describe('decide — fix-run accounting bounded by PROGRESS, not a retry count',
     expect(d.verdict).toBe('hold');
   });
 
+  it('parks on agent_needs_human WITHOUT spending an attempt', () => {
+    // A refusal is an answer, not a try that failed. Charging it an attempt is
+    // what turned one un-greenable gate into four runs of the same PR.
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, fixAttempts: 0 }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'terminal', fixTaskNeedsHumanReason: 'Approve the VR baselines.' })
+    );
+    const acct = transitions(d)[0]!;
+    expect(acct.to).toBe('blocked');
+    expect(acct.blockedCode).toBe('agent_needs_human');
+    expect(acct.blockedReason).toBe('Approve the VR baselines.');
+    expect(acct.set?.fixAttempts).toBeUndefined();
+    expect(acct.set?.fixTaskAccounted).toBe(true);
+    expect(acct.set?.seenSignatures).toEqual([sigOf(conflictingPr())]);
+    // No follow-up run, and the human is told exactly once.
+    expect(fixRun(d)).toBeFalsy();
+    expect(d.actions.some((a) => a.kind === 'notify_blocked')).toBe(true);
+  });
+
+  it('supplies wording when the run gave no reason', () => {
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'terminal', fixTaskNeedsHumanReason: '' })
+    );
+    expect(transitions(d)[0]!.blockedReason).toMatch(/needs a person/i);
+  });
+
+  it('holds on the next pass while the same thing is still blocking', () => {
+    const d = decide(
+      entry({
+        status: 'blocked',
+        blockedCode: 'agent_needs_human',
+        fixTaskAccounted: true,
+        seenSignatures: [sigOf(conflictingPr())],
+      }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'none' })
+    );
+    expect(fixRun(d)).toBeFalsy();
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('releases once the blockers have actually moved', () => {
+    // The human did the thing. What is left is a different problem, so a fresh
+    // run is worth firing — this is the self-heal that makes the park safe.
+    const moved = pr(
+      { mergeStateStatus: 'BLOCKED' },
+      {
+        blockingReason: 'checks_failed',
+        checks: { total: 3, failed: 1, inProgress: 0 },
+        failingChecksDigest: 'a-different-check',
+      }
+    );
+    const d = decide(
+      entry({
+        status: 'blocked',
+        blockedCode: 'agent_needs_human',
+        fixTaskAccounted: true,
+        seenSignatures: [sigOf(conflictingPr())],
+      }),
+      moved,
+      ctx({ fixTaskState: 'none' })
+    );
+    expect(transitions(d).some((t) => t.to === 'queued')).toBe(true);
+    expect(fixRun(d)).toBeTruthy();
+  });
+
+  it('accounts an ordinary terminal run the old way when no reason is present', () => {
+    // The regression guard for the absent-field case: every context built
+    // before this field existed leaves it undefined, and undefined must mean
+    // "no", never "yes".
+    const d = decide(
+      entry({ status: 'fixing', fixTaskId: 't1', fixTaskAccounted: false, fixAttempts: 0 }),
+      conflictingPr(),
+      ctx({ fixTaskState: 'terminal' })
+    );
+    const acct = transitions(d)[0]!;
+    expect(acct.blockedCode).not.toBe('agent_needs_human');
+    expect(acct.set?.fixAttempts).toBe(1);
+  });
+
   // THE point of the rewrite: a PR clearing one blocker per run used to be
   // declared blocked on the 4th, however well it was going.
   it('keeps going indefinitely while each run changes what is blocking the PR', () => {

@@ -716,6 +716,15 @@ export interface PRRow {
      * this is the ONLY way a user learns their PRs stopped being kept green.
      */
     deferredSince?: string | null;
+    /**
+     * Set while the watcher is standing down because the run it fired reported
+     * that only a person can carry the PR forward.
+     *
+     * Distinct from `paused`, which means the attempt budget ran out. No
+     * attempt was spent here, and the watcher re-arms itself as soon as the
+     * PR's blockers change — so the UI must not say "gave up".
+     */
+    needsHuman?: { reason: string; since: string } | null;
   } | null;
   /** True when this PR is in the Talyn merge queue (merges one-by-one per
    *  repo+base, auto-fixing conflicts via a cloud run). */

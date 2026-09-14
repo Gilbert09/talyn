@@ -372,6 +372,8 @@ async function buildBaseContext(
     fixTaskState:
       ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix.status) ? 'active' : 'terminal',
     fixTaskStartedAt: ourFix?.startedAt.toISOString() ?? null,
+    fixTaskNeedsHumanReason:
+      ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
     otherLinkedTaskActive: otherFix !== null,
     signingRequired,
     autoMergeCapability,

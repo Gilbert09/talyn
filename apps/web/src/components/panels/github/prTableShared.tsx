@@ -13,6 +13,7 @@ import {
   Bookmark,
   BookmarkX,
   AlertTriangle,
+  UserRoundCheck,
   ListChecks,
   Settings,
   Wand2,
@@ -682,7 +683,19 @@ function PRTableRow({
                   PR is NOT being kept green, and saying "Watching" there would
                   be a lie the user has no way to catch. */}
               {row.autoKeepMergeable &&
-                (row.autoMergeState?.paused ? (
+                (row.autoMergeState?.needsHuman ? (
+                  // Ahead of `paused`, and worded as a request rather than a
+                  // verdict: the watcher has not given up, it is waiting on
+                  // this person and will pick the PR back up by itself the
+                  // moment the blockers change.
+                  <span
+                    className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                    title={`The run stopped and needs you: ${row.autoMergeState.needsHuman.reason}`}
+                  >
+                    <UserRoundCheck className="h-2.5 w-2.5" />
+                    Needs you
+                  </span>
+                ) : row.autoMergeState?.paused ? (
                   <span
                     className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
                     title="Auto-keep-mergeable paused after 3 attempts — needs attention"

@@ -211,15 +211,29 @@ export async function linkedTaskStatus(taskId: string | null): Promise<string | 
  */
 export async function linkedTaskRun(
   taskId: string | null
-): Promise<{ status: string; startedAt: Date } | null> {
+): Promise<{ status: string; startedAt: Date; needsHumanReason: string | null } | null> {
   if (!taskId) return null;
   const rows = await getDbClient()
-    .select({ status: tasksTable.status, createdAt: tasksTable.createdAt })
+    .select({
+      status: tasksTable.status,
+      createdAt: tasksTable.createdAt,
+      // `result` is a small jsonb (never the transcript), and reading it here
+      // is what lets the queue tell a refusal from a failure without a second
+      // round trip per entry.
+      result: tasksTable.result,
+    })
     .from(tasksTable)
     .where(eq(tasksTable.id, taskId))
     .limit(1);
   const row = rows[0];
-  return row ? { status: row.status, startedAt: row.createdAt } : null;
+  if (!row) return null;
+  const result = (row.result ?? {}) as { needsHuman?: { reason?: unknown } };
+  return {
+    status: row.status,
+    startedAt: row.createdAt,
+    needsHumanReason:
+      typeof result.needsHuman?.reason === 'string' ? result.needsHuman.reason : null,
+  };
 }
 
 /** Minimal PR shape needed to fire a "get mergeable" run. */

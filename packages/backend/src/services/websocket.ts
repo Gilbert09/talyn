@@ -9,6 +9,7 @@ import type {
   Environment,
   LoopRun,
   MergeQueueBlockedEvent,
+  AutoKeepNeedsHumanEvent,
   Task,
   TaskStatus,
   WorkflowRun,
@@ -618,6 +619,22 @@ export function emitPullRequestUpdated(
  * Fired once when a merge-queue PR transitions into `blocked` (gave up after
  * its retry budget). The desktop surfaces it as an OS notification + toast.
  */
+/**
+ * Fired once when the auto-keep watcher stands down on a PR because the run
+ * reported it needs a person. Distinct from `merge_queue:blocked`: nothing was
+ * given up on, and the watcher re-arms itself when the blockers change.
+ */
+export function emitAutoKeepNeedsHuman(
+  workspaceId: string,
+  payload: AutoKeepNeedsHumanEvent
+): void {
+  broadcastToWorkspace(workspaceId, {
+    type: 'auto_keep:needs_human',
+    payload,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 export function emitMergeQueueBlocked(
   workspaceId: string,
   payload: MergeQueueBlockedEvent

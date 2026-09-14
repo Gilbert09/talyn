@@ -124,6 +124,18 @@ export type BlockedCode =
    * `visualReview.autoApprove` and the queue resolves it itself).
    */
   | 'awaiting_human_check'
+  /**
+   * The fix run itself said only a person can carry this PR forward — a gate
+   * Talyn cannot read: a credential the sandbox does not hold, a policy
+   * approval, a product decision.
+   *
+   * Distinct from `awaiting_human_check`, which is OUR reading of a live
+   * Visual Review check and self-heals when that check goes green. This one is
+   * the AGENT's own verdict, carries its wording, and self-heals on a new head
+   * (R2) or when the blocker signature changes. Costs no fix attempt: a
+   * refusal is an answer, not a try that failed.
+   */
+  | 'agent_needs_human'
   /** Re-sign budget spent on a signed-commits-required base. Self-heals on a new head. */
   | 'unsigned_commits'
   /**
@@ -374,6 +386,13 @@ export interface DecisionContext {
   fixTaskState: 'active' | 'terminal' | 'none';
   /** When the linked fix run was created; null when there is none. */
   fixTaskStartedAt: string | null;
+  /**
+   * The fix run ended `needs_human` and this is what it said it needs.
+   *
+   * Null on every other outcome. Distinct from a failure on purpose: a refusal
+   * is not an attempt that did not work, so R8 must not count it as one.
+   */
+  fixTaskNeedsHumanReason?: string | null;
   /**
    * Another run is linked to the PR (`pull_requests.taskId` differs from our
    * fixTaskId and is active) — a manual task or the keep-mergeable watcher.

@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   prNeedsFollowup,
   buildMergeablePrompt,
+  mergeableBlockerSignature,
   externalQueueProviderLabel,
   isExternalQueueHolding,
   normalizeLabelNames,
@@ -10,7 +11,11 @@ import {
 } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { guardCrossReplica } from './advisoryLock.js';
-import { mergeQueueEntries, pullRequests as pullRequestsTable } from '../db/schema.js';
+import {
+  mergeQueueEntries,
+  pullRequests as pullRequestsTable,
+  tasks as tasksTable,
+} from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { createCloudTask } from './taskCreate.js';
 import { TaskLimitError } from './billing/entitlements.js';
@@ -21,7 +26,7 @@ import { githubService } from './github.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import { githubRateGate } from './githubRateGate.js';
 import { prMonitorService } from './prMonitor.js';
-import { emitPullRequestUpdated } from './websocket.js';
+import { emitAutoKeepNeedsHuman, emitPullRequestUpdated } from './websocket.js';
 import { debugBus } from './debugBus.js';
 import { captureWorkspaceEvent } from './analytics.js';
 import { TickGuard } from './tickGuard.js';
@@ -67,6 +72,25 @@ interface AutoMergeState {
    * going on, and so the client can tell one continuous episode from a new one.
    */
   deferredSince?: string;
+  /**
+   * Set when the last auto-run ended `needs_human` — the agent stopped because
+   * only a person can clear what is left.
+   *
+   * The watcher stands down and burns NO attempt. That is the whole point: an
+   * attempt budget measures "have we tried enough times", and a refusal is not
+   * a try that failed, it is an answer. Counting it spent two more runs on
+   * #100390 learning what the first one had already reported.
+   *
+   * `signature` is the blocker set at stand-down, and it is what ends the
+   * stand-down: when it changes, something about the PR actually moved (the
+   * human approved the gate, new checks failed) and a fresh run can help.
+   */
+  needsHuman?: {
+    reason: string;
+    taskId: string;
+    at: string;
+    signature: string;
+  };
 }
 
 // Only the columns this watcher touches — avoids `select()`-ing every PR
@@ -106,7 +130,26 @@ function readState(row: PRRow): AutoMergeState {
     // like it works — the write lands — and then every read behaves as if it
     // were never set. Add new fields in BOTH places.
     deferredSince: typeof s?.deferredSince === 'string' ? s.deferredSince : undefined,
+    // Validated as a UNIT: a half-written object would stand the watcher down
+    // with no way to ever re-arm (an absent signature can never change), which
+    // is a worse failure than ignoring it and retrying.
+    needsHuman: readNeedsHuman(s?.needsHuman),
   };
+}
+
+/** The stand-down record, or undefined if the stored value is not a whole one. */
+function readNeedsHuman(value: unknown): AutoMergeState['needsHuman'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (
+    typeof v.reason !== 'string' ||
+    typeof v.taskId !== 'string' ||
+    typeof v.at !== 'string' ||
+    typeof v.signature !== 'string'
+  ) {
+    return undefined;
+  }
+  return { reason: v.reason, taskId: v.taskId, at: v.at, signature: v.signature };
 }
 
 export function normalizeWatchLabels(value: unknown): string[] {
@@ -119,6 +162,7 @@ function publicState(s: AutoMergeState): {
   attempts: number;
   paused: boolean;
   deferredSince: string | null;
+  needsHuman: { reason: string; since: string } | null;
 } {
   return {
     attempts: s.attempts,
@@ -127,6 +171,12 @@ function publicState(s: AutoMergeState): {
     // clear its chip, and `??`-merging an absent field would leave a stale
     // "waiting" badge on a PR whose run has since fired.
     deferredSince: s.deferredSince ?? null,
+    // Same reasoning — and distinct from `paused`, which means the attempt
+    // budget ran out. These read very differently to a user: one is "Talyn
+    // gave up", the other is "Talyn is waiting on you".
+    needsHuman: s.needsHuman
+      ? { reason: s.needsHuman.reason, since: s.needsHuman.at }
+      : null,
   };
 }
 
@@ -138,6 +188,31 @@ function publicState(s: AutoMergeState): {
  * `external_covered_by` column (migration 0051) for why the marker is
  * persisted rather than re-derived.
  */
+/**
+ * How the watcher's last auto-run actually ended.
+ *
+ * Two columns, never `select()`: `tasks.transcript` is the big jsonb on this
+ * table and this runs on the watcher's tick. Returns null for a row that has
+ * since been deleted, which the caller treats as "no special outcome" and
+ * accounts the old way.
+ */
+async function readTaskOutcome(
+  taskId: string,
+): Promise<{ status: string; reason: string | null } | null> {
+  const rows = await getDbClient()
+    .select({ status: tasksTable.status, result: tasksTable.result })
+    .from(tasksTable)
+    .where(eq(tasksTable.id, taskId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const result = (row.result ?? {}) as { needsHuman?: { reason?: unknown } };
+  return {
+    status: row.status,
+    reason: typeof result.needsHuman?.reason === 'string' ? result.needsHuman.reason : null,
+  };
+}
+
 async function coveringStackSubmission(pullRequestId: string): Promise<number | null> {
   try {
     const rows = await getDbClient()
@@ -456,6 +531,40 @@ class PRAutoMergeWatcher {
 
     // 3. Account the last auto-run now that it's terminal.
     if (state.lastAutoTaskId && !state.accounted) {
+      // This block used to decide the run's outcome entirely from whether the
+      // PR still looked broken, and never read the task at all. That cannot
+      // tell a crash from a considered refusal, so it treated both as "try
+      // again" — which is how one Visual-Review-gated PR cost four runs.
+      const outcome = await readTaskOutcome(state.lastAutoTaskId);
+      if (outcome?.status === 'needs_human') {
+        // Stand down, burning NO attempt, until the blockers actually change.
+        state.needsHuman = {
+          reason:
+            outcome.reason || 'The run stopped and needs a person to continue.',
+          taskId: state.lastAutoTaskId,
+          at: new Date().toISOString(),
+          signature: mergeableBlockerSignature(summary),
+        };
+        state.accounted = true;
+        await this.persist(row, state);
+        emitAutoKeepNeedsHuman(row.workspaceId, {
+          pullRequestId: row.id,
+          owner: row.owner,
+          repo: row.repo,
+          number: row.number,
+          title: (row.lastSummary as { title?: string } | null)?.title ?? '',
+          url:
+            (row.lastSummary as { url?: string } | null)?.url ??
+            `https://github.com/${row.owner}/${row.repo}/pull/${row.number}`,
+          reason: state.needsHuman.reason,
+          taskId: state.lastAutoTaskId,
+        });
+        console.log(
+          `[autoKeep] ${row.owner}/${row.repo}#${row.number}: standing down — ` +
+            `the run needs a human (${state.needsHuman.reason})`,
+        );
+        return;
+      }
       if (needsFollowup) {
         state.attempts += 1;
         if (state.attempts >= MAX_ATTEMPTS) state.pausedAt = new Date().toISOString();
@@ -470,15 +579,39 @@ class PRAutoMergeWatcher {
     // 4. Re-arm on clean — nothing to fix; reset the guard so a later problem
     //    gets a fresh batch of attempts.
     if (!needsFollowup) {
-      if (state.attempts !== 0 || state.pausedAt || state.deferredSince) {
+      if (
+        state.attempts !== 0 ||
+        state.pausedAt ||
+        state.deferredSince ||
+        state.needsHuman
+      ) {
         state.attempts = 0;
         state.pausedAt = undefined;
         // A clean PR is not waiting on a slot. Leaving this set would show a
         // "waiting for a free slot" chip on a PR with nothing left to fix.
         state.deferredSince = undefined;
+        // Nor is it waiting on a person — whatever they were asked for either
+        // happened or stopped mattering.
+        state.needsHuman = undefined;
         await this.persist(row, state);
       }
       return;
+    }
+
+    // 4b. Standing down for a person. Re-arm only when the blocker set has
+    //     actually changed — the same "progress, not retries" test the merge
+    //     queue uses. An unchanged signature means nothing has moved since the
+    //     agent said it was stuck, so running it again would reach the same
+    //     wall and say the same thing.
+    if (state.needsHuman) {
+      const signature = mergeableBlockerSignature(summary);
+      if (signature === state.needsHuman.signature) return;
+      console.log(
+        `[autoKeep] ${row.owner}/${row.repo}#${row.number}: blockers changed — ` +
+          `re-arming after standing down for a human`,
+      );
+      state.needsHuman = undefined;
+      await this.persist(row, state);
     }
 
     // 5. Fire — blocker present, nothing running, not paused.

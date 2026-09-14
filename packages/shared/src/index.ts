@@ -888,6 +888,7 @@ export type WSEventType =
   | 'task:files_changed'
   | 'pull_request:updated'
   | 'merge_queue:blocked'
+  | 'auto_keep:needs_human'
   | 'environment:status'
   | 'environment:created'
   | 'connection:status'
@@ -1142,6 +1143,33 @@ export interface MergeQueueBlockedEvent {
   reason: string;
   /** How many fix runs were attempted before giving up. */
   attempts: number;
+}
+
+/**
+ * Fired once when the auto-keep watcher stands down on a PR because the run it
+ * fired reported that only a person can carry it forward.
+ *
+ * Deliberately NOT the same event as {@link MergeQueueBlockedEvent}, which
+ * means "we tried our budget of fixes and gave up". This one means "we tried
+ * once, and the answer was a question for you" — no attempts were spent, and
+ * the watcher will pick the PR back up on its own the moment the blockers
+ * change. Saying "gave up" there would misdescribe both what happened and what
+ * happens next.
+ *
+ * Fires exactly once per stand-down: it is emitted from the accounting branch
+ * that runs only while the last run is still unaccounted.
+ */
+export interface AutoKeepNeedsHumanEvent {
+  pullRequestId: string;
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** What the agent said it needs, in its own words. */
+  reason: string;
+  /** The run that reported it, so the client can deep-link to the transcript. */
+  taskId: string;
 }
 
 export interface EnvironmentStatusEvent {

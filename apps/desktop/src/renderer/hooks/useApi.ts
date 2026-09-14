@@ -17,6 +17,7 @@ import type {
   TaskEventBroadcast,
   TaskCreatedEvent,
   MergeQueueBlockedEvent,
+  AutoKeepNeedsHumanEvent,
   EnvironmentStatusEvent,
   EnvironmentCreatedEvent,
   WorkspaceSettings,
@@ -339,6 +340,15 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<MergeQueueBlockedEvent>('merge_queue:blocked', (payload) => {
         notifyMergeQueueBlocked(payload);
+      })
+    );
+
+    // The auto-keep watcher stood down because the run asked for a person.
+    // Same fire-once shape, deliberately different words: nothing was given
+    // up on, and Talyn picks the PR back up by itself once the blockers move.
+    unsubscribers.push(
+      wsClient.on<AutoKeepNeedsHumanEvent>('auto_keep:needs_human', (payload) => {
+        notifyAutoKeepNeedsHuman(payload);
       })
     );
 
@@ -724,6 +734,52 @@ function notifyMergeQueueBlocked(p: MergeQueueBlockedEvent): void {
           window.focus();
           // Jump to the Merge Queue page, where the blocked PR's amber badge lives.
           useWorkspaceStore.getState().setActivePanel('merge_queue');
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // Permission denied / renderer weirdness — the toast already covered it.
+    }
+  };
+  if (Notification.permission === 'granted') {
+    fire();
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission()
+      .then((perm) => {
+        if (perm === 'granted') fire();
+      })
+      .catch(() => {
+        // ignore
+      });
+  }
+}
+
+/**
+ * The watcher is waiting on the user for one specific PR. Reuses the
+ * merge-blocked notification toggle: both answer "tell me when a PR stops
+ * moving without me", and a second switch for the same question is a setting
+ * nobody can predict the meaning of.
+ */
+function notifyAutoKeepNeedsHuman(p: AutoKeepNeedsHumanEvent): void {
+  if (!getMergeBlockedNotifyEnabled()) return;
+
+  const ref = `${p.owner}/${p.repo}#${p.number}`;
+  const body = `${ref} needs you — ${p.reason}`;
+
+  // `info`, not `error`: nothing failed. Someone is being asked for something.
+  toast.info('A PR needs you', body);
+
+  if (typeof Notification === 'undefined') return;
+  const fire = () => {
+    try {
+      const n = new Notification('Talyn — a PR needs you', { body, silent: false });
+      n.onclick = () => {
+        try {
+          window.focus();
+          // 'my_prs' is where a watched PR lives — the same place the
+          // amber "Needs you" chip renders on its row.
+          useWorkspaceStore.getState().setActivePanel('my_prs');
         } catch {
           // ignore
         }

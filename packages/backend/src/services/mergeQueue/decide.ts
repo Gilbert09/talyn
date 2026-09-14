@@ -1146,40 +1146,74 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     const wasBlocked = d.entry.status === 'blocked';
     const stillBlocked = queueBlockedFor(pr, ctx);
     const signature = blockerSignature(pr);
-    // Did this run move the problem? A signature we have already been left
-    // with by a completed remediation means it did not — the run failed at
-    // something it had failed at before, on the same head.
-    const recurred = stillBlocked && signatureSeen(d.entry, signature);
-    const attempts = stillBlocked ? d.entry.fixAttempts + 1 : d.entry.fixAttempts;
-    const to: EntryStatus = recurred ? 'blocked' : d.entry.status;
-    const justBlocked = !wasBlocked && to === 'blocked';
-    d.transition(to, {
-      blockedCode: justBlocked ? 'no_progress' : d.entry.blockedCode,
-      blockedReason: justBlocked ? noProgressReason(pr) : d.entry.blockedReason,
-      set: {
-        fixAttempts: attempts,
-        fixTaskAccounted: true,
-        // Only RECORD a signature we are going to act on again. Recording the
-        // recurrence too would be a no-op (it is already there), and recording
-        // on a clean read would poison the list with a state that is not a
-        // blocker at all.
-        ...(stillBlocked && !recurred
-          ? { seenSignatures: withSignature(d.entry, signature) }
-          : {}),
-      },
-      event: {
-        code: 'fix_run_accounted',
-        message: !stillBlocked
-          ? 'Fix run finished; PR reads clean.'
-          : recurred
-            ? `Fix run finished and the PR is blocked by the same thing as before (${blockerReason(pr)}) — no progress, stopping.`
-            : `Fix run finished; the PR is still blocked but by a different problem (${blockerReason(pr)}) — continuing.`,
-        detail: { taskId: d.entry.fixTaskId, attempt: attempts, signature },
-      },
-    });
-    // Fire-once notification: the queue has stopped making progress and needs
-    // a human (or a new push — R2 re-arms it).
-    if (justBlocked) d.act({ kind: 'notify_blocked' });
+
+    // The run told us only a PERSON can finish this — a gate we cannot read.
+    // Park without spending an attempt: the budget answers "have we tried
+    // enough times", and a considered refusal is not a try that failed.
+    // Recording the signature is what lets the blocked gate release the entry
+    // once the blockers actually move.
+    // `typeof === 'string'`, not `!== null`: the field is absent on contexts
+    // built before it existed, and an absent value must mean "no", never "yes".
+    if (typeof ctx.fixTaskNeedsHumanReason === 'string') {
+      const reason =
+        ctx.fixTaskNeedsHumanReason || 'The run stopped and needs a person to continue.';
+      d.transition('blocked', {
+        blockedCode: 'agent_needs_human',
+        blockedReason: reason,
+        set: {
+          fixTaskAccounted: true,
+          ...(stillBlocked ? { seenSignatures: withSignature(d.entry, signature) } : {}),
+        },
+        event: {
+          code: 'fix_run_needs_human',
+          message: `Fix run stopped for a human: ${reason}`,
+          detail: { taskId: d.entry.fixTaskId, signature },
+        },
+      });
+      if (!wasBlocked) d.act({ kind: 'notify_blocked' });
+      // END THE WALK HERE. The signature we just recorded is in the
+      // transition's `set`, not yet on `d.entry`, so the blocked gate below
+      // would look for it, not find it, conclude the blockers had changed and
+      // release the entry on the very pass that parked it — firing exactly the
+      // run this branch exists to prevent. Next pass sees the committed state
+      // and decides properly.
+      return d.done('advance');
+    } else {
+      // Did this run move the problem? A signature we have already been left
+      // with by a completed remediation means it did not — the run failed at
+      // something it had failed at before, on the same head.
+      const recurred = stillBlocked && signatureSeen(d.entry, signature);
+      const attempts = stillBlocked ? d.entry.fixAttempts + 1 : d.entry.fixAttempts;
+      const to: EntryStatus = recurred ? 'blocked' : d.entry.status;
+      const justBlocked = !wasBlocked && to === 'blocked';
+      d.transition(to, {
+        blockedCode: justBlocked ? 'no_progress' : d.entry.blockedCode,
+        blockedReason: justBlocked ? noProgressReason(pr) : d.entry.blockedReason,
+        set: {
+          fixAttempts: attempts,
+          fixTaskAccounted: true,
+          // Only RECORD a signature we are going to act on again. Recording the
+          // recurrence too would be a no-op (it is already there), and recording
+          // on a clean read would poison the list with a state that is not a
+          // blocker at all.
+          ...(stillBlocked && !recurred
+            ? { seenSignatures: withSignature(d.entry, signature) }
+            : {}),
+        },
+        event: {
+          code: 'fix_run_accounted',
+          message: !stillBlocked
+            ? 'Fix run finished; PR reads clean.'
+            : recurred
+              ? `Fix run finished and the PR is blocked by the same thing as before (${blockerReason(pr)}) — no progress, stopping.`
+              : `Fix run finished; the PR is still blocked but by a different problem (${blockerReason(pr)}) — continuing.`,
+          detail: { taskId: d.entry.fixTaskId, attempt: attempts, signature },
+        },
+      });
+      // Fire-once notification: the queue has stopped making progress and needs
+      // a human (or a new push — R2 re-arms it).
+      if (justBlocked) d.act({ kind: 'notify_blocked' });
+    }
   }
 
   // R8b — a check only a PERSON can clear. PostHog Visual Review diffs
@@ -2087,6 +2121,25 @@ function decideBlockedGate(
       },
     });
     return null;
+  }
+
+  if (code === 'agent_needs_human') {
+    // Parked because the run said a person has to act. Clean now → merge.
+    // Still blocked, but by a DIFFERENT problem than the one it stopped on →
+    // the person did something, so a fresh run is worth firing. Blocked by the
+    // same thing → keep waiting; running again would reach the same wall and
+    // report the same answer, which is the loop this state exists to end.
+    if (!queueBlockedFor(pr, ctx)) return null;
+    if (!signatureSeen(d.entry, blockerSignature(pr))) {
+      d.transition('queued', {
+        event: {
+          code: 'needs_human_cleared',
+          message: 'The blockers changed since the run asked for a human — trying again.',
+        },
+      });
+      return null;
+    }
+    return d.done('advance');
   }
 
   if (code === 'no_progress' || code === 'attempts_exhausted') {

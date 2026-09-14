@@ -884,6 +884,167 @@ describe('prAutoMergeWatcher', () => {
     expect(await countTasks(db)).toBe(2);
   });
 
+  describe('a run that stopped for a human', () => {
+    const REASON = 'Approve the 6 Visual Review snapshot baselines.';
+
+    /** The prior auto-run, settled `needs_human` with its reason. */
+    async function insertNeedsHumanRun(prId: string): Promise<void> {
+      await insertTask(db, 'prev', 'needs_human', prId);
+      await db
+        .update(tasksTable)
+        .set({ result: { success: false, summary: REASON, needsHuman: { reason: REASON } } })
+        .where(eq(tasksTable.id, 'prev'));
+      await db
+        .update(pullRequestsTable)
+        .set({ taskId: 'prev' })
+        .where(eq(pullRequestsTable.id, prId));
+    }
+
+    it('stands down without burning an attempt, and fires nothing', async () => {
+      // The incident in one test. Before this, the run was accounted purely on
+      // "does the PR still look broken", so a refusal cost an attempt and the
+      // watcher went again — four times on PostHog/posthog#100390.
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 0, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertNeedsHumanRun(prId);
+
+      await prAutoMergeWatcher.runOnce();
+
+      const state = (await getPr(db, prId)).autoMergeState as {
+        attempts: number;
+        pausedAt?: string;
+        accounted?: boolean;
+        needsHuman?: { reason: string; signature: string };
+      };
+      expect(state.attempts).toBe(0);
+      expect(state.pausedAt).toBeFalsy();
+      expect(state.accounted).toBe(true);
+      expect(state.needsHuman?.reason).toBe(REASON);
+      expect(state.needsHuman?.signature).toBeTruthy();
+      expect(await countTasks(db)).toBe(1); // only 'prev' — no retry
+    });
+
+    it('survives the jsonb round trip through readState', async () => {
+      // readState is an ALLOW-LIST: a field written but not listed there reads
+      // as absent forever, which would silently un-stand-down the watcher.
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 0, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertNeedsHumanRun(prId);
+      await prAutoMergeWatcher.runOnce();
+
+      // Second tick reads the state back. If the field were dropped on read,
+      // the watcher would fall through and dispatch.
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(1);
+      const state = (await getPr(db, prId)).autoMergeState as {
+        needsHuman?: { reason: string };
+      };
+      expect(state.needsHuman?.reason).toBe(REASON);
+    });
+
+    it('keeps standing down while the blockers are unchanged', async () => {
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 0, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertNeedsHumanRun(prId);
+      await prAutoMergeWatcher.runOnce();
+
+      await prAutoMergeWatcher.runOnce();
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(1);
+    });
+
+    it('re-arms and fires once the blocker set changes', async () => {
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 0, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertNeedsHumanRun(prId);
+      await prAutoMergeWatcher.runOnce();
+      expect(await countTasks(db)).toBe(1);
+
+      // The human acts: the Visual Review gate clears and a different check is
+      // now failing. The blocker signature moves, so a fresh run can help.
+      await db
+        .update(pullRequestsTable)
+        .set({
+          lastSummary: {
+            ...blockedSummary(),
+            checks: { total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 },
+            failingChecksDigest: 'something-else',
+          },
+          lastPolledAt: new Date(),
+        })
+        .where(eq(pullRequestsTable.id, prId));
+
+      await prAutoMergeWatcher.runOnce();
+
+      // One run fires — and it REUSES the same row rather than inserting a
+      // second: a needs_human task is terminal, so findReusableTask picks it
+      // up and redispatchCloudTask rewrites it in place (status back to
+      // queued, previous result cleared).
+      expect(await countTasks(db)).toBe(1);
+      const task = (
+        await db.select().from(tasksTable).where(eq(tasksTable.id, 'prev')).limit(1)
+      )[0];
+      expect(task?.status).toBe('queued');
+      expect(task?.result).toBeFalsy();
+
+      const state = (await getPr(db, prId)).autoMergeState as {
+        needsHuman?: unknown;
+        attempts: number;
+      };
+      expect(state.needsHuman).toBeFalsy();
+      // Re-armed with the budget intact — the stand-down cost nothing.
+      expect(state.attempts).toBe(0);
+    });
+
+    it('clears the stand-down when the PR goes clean on its own', async () => {
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 0, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertNeedsHumanRun(prId);
+      await prAutoMergeWatcher.runOnce();
+
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+        .where(eq(pullRequestsTable.id, prId));
+      await prAutoMergeWatcher.runOnce();
+
+      const state = (await getPr(db, prId)).autoMergeState as { needsHuman?: unknown };
+      expect(state.needsHuman).toBeFalsy();
+      expect(await countTasks(db)).toBe(1); // clean → nothing to fix
+    });
+
+    it('still counts an ordinary failed run as an attempt', async () => {
+      // The guard rail on the change: only an explicit needs_human stands the
+      // watcher down. A crash is still a try that failed.
+      const prId = await insertPr(db, {
+        autoMergeState: { attempts: 2, lastAutoTaskId: 'prev', accounted: false },
+      });
+      await insertTask(db, 'prev', 'failed', prId);
+      await db
+        .update(pullRequestsTable)
+        .set({ taskId: 'prev' })
+        .where(eq(pullRequestsTable.id, prId));
+
+      await prAutoMergeWatcher.runOnce();
+
+      const state = (await getPr(db, prId)).autoMergeState as {
+        attempts: number;
+        pausedAt?: string;
+        needsHuman?: unknown;
+      };
+      expect(state.attempts).toBe(3);
+      expect(state.pausedAt).toBeTruthy();
+      expect(state.needsHuman).toBeFalsy();
+    });
+  });
+
   it('increments attempts and pauses after 3 un-mergeable auto-runs', async () => {
     const prId = await insertPr(db, {
       autoMergeState: { attempts: 2, lastAutoTaskId: 'prev', accounted: false },
