@@ -2,6 +2,10 @@ import { desc, gt } from 'drizzle-orm';
 import { timingSafeEqual } from 'node:crypto';
 import {
   versionSortKey,
+  isFeatureFlagKey,
+  isGatedFeature,
+  GATED_FEATURE_KEYS,
+  FEATURE_FLAG_KEYS,
   type ReleaseHighlight,
   type ReleaseNoteEntry,
   type HighlightKind,
@@ -103,6 +107,26 @@ export function parseHighlights(raw: unknown): { ok: true; value: ReleaseHighlig
         error: `highlights[${i}].surfaces must be a non-empty subset of ${SURFACES.join(', ')}`,
       };
     }
+    // The gate, when the generator tagged one. Validated against the register
+    // rather than waved through as free text: an unknown key here means the
+    // model invented a flag, and a highlight tagged with a gate nothing
+    // recognises is published UNGATED — which is the exact bug this field
+    // exists to close. The generator and this file ship from one commit, so
+    // rejecting is safe and a typo is loud.
+    if (h.requiresFeature !== undefined && h.requiresFeature !== null) {
+      if (!isNonEmptyString(h.requiresFeature) || !isFeatureFlagKey(h.requiresFeature.trim())) {
+        return {
+          ok: false,
+          error:
+            `highlights[${i}].requiresFeature must be one of ` +
+            `${FEATURE_FLAG_KEYS.join(', ')} when present`,
+        };
+      }
+    }
+    const requiresFeature = isNonEmptyString(h.requiresFeature)
+      ? h.requiresFeature.trim()
+      : undefined;
+
     out.push({
       title: h.title.trim(),
       description: h.description.trim(),
@@ -110,6 +134,7 @@ export function parseHighlights(raw: unknown): { ok: true; value: ReleaseHighlig
       // Deduped: a highlight tagged ['web','web'] would render twice on web
       // for no reason a reader could see.
       surfaces: [...new Set(surfaces as ReleaseSurface[])],
+      ...(requiresFeature ? { requiresFeature } : {}),
     });
   }
   return { ok: true, value: out };
@@ -147,6 +172,27 @@ export async function upsertReleaseNote(entry: {
     });
 }
 
+/**
+ * One stored row, as a client should see it — which is not the same thing.
+ *
+ * THIS is where a gated feature is withheld, and it is on the read path rather
+ * than the write path deliberately. The row keeps everything the generator
+ * wrote; what changes over time is the register's `availability`, so the same
+ * row answers differently the day a flag goes general. A write-path filter
+ * would have thrown the text away and left nothing to announce.
+ *
+ * On the server rather than in the clients for two reasons. Anyone can sign up,
+ * so "authenticated" is not an audience — filtering client-side would put an
+ * unreleased feature's name and description one `curl` away for any account.
+ * And the backend redeploys on every push to main, so its register is never
+ * stale: a desktop build three nights behind still withholds correctly without
+ * having to update first.
+ *
+ * `gatedFeatures` carries the whole current gate set on every entry, not the
+ * keys this release happens to use: the client freezes a cursor per gate, and a
+ * gate with nothing in the fetched window still has to be frozen or its backlog
+ * is read past and lost. Keys only — never the withheld text.
+ */
 function toEntry(row: {
   version: string;
   publishedAt: Date;
@@ -155,7 +201,8 @@ function toEntry(row: {
   return {
     version: row.version,
     publishedAt: row.publishedAt.toISOString(),
-    highlights: row.highlights,
+    highlights: row.highlights.filter((h) => !isGatedFeature(h.requiresFeature)),
+    gatedFeatures: GATED_FEATURE_KEYS,
   };
 }
 

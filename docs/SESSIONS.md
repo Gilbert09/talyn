@@ -2,20 +2,180 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
-## Backend security review (2026-09-12)
+## Session 125 — a loop that can reach the internet (2026-09-14)
+
+The first real loop — a daily digest of one author's PRs, posted to a Slack
+webhook — failed twice, and each failure was a different layer saying no.
+
+**First: `GET /search/issues` was not on the fleet's GitHub allowlist.** The
+agent reached for `gh search prs` (no credential in the guest, by design), fell
+back to the REST endpoint, was refused, and correctly stopped rather than
+paginating `/repos/{org}/*/pulls` across dozens of repositories. Fixed in the
+fleet repo, not this one: it is the first entry on `ghAPIAllowed` that is not
+repo-scoped, decided knowingly, bounded to GET and to issues-and-PRs so code
+search stays out of reach. Tom's call after the trade-off was laid out. The
+worry that the App token would only see installed repositories turned out not
+to bite — the next run found 89 PRs across the org.
+
+**Then: the box had no route to hooks.slack.com.** That is the fleet's central
+property working, not a bug.
+
+The generic answer is NOT a yas-side integration, and the reason is worth
+writing down: `FLEET_GATEWAY_TOKEN` is one deployment-wide key, so **all of
+Talyn is a single yas tenant**. A Slack integration with `attach: all` there
+would hand one user's webhook to every other user's microVM. The gateway
+anticipates exactly this — `attachIntegrations` leaves the body alone when the
+caller names `integrations` itself, because "a caller writing it is speaking
+the host's language" — so a per-workspace capability has to be resolved by
+Talyn and sent per dispatch.
+
+What we built instead is simpler, because the fleet already had the knob:
+`policy.egress`, which Talyn was already sending a sibling of. A loop gets one
+boolean. Off (the default) is proxy mode — repository and agent API, nothing
+else. On is `mode: 'open'`.
+
+**Tom's steer: "talyn users shouldn't need to care about egress and policy."**
+So the editor says "Repository only" / "Allow the internet" and explains the
+consequence in a sentence; the words egress, policy, CONNECT and filtered
+appear nowhere in the product.
+
+Three things that decided the shape:
+
+- **It rides on the TASK, not the loop.** `metadata.internetAccess` is read by
+  the executor, so a revived run gets the posture it was dispatched with. Reading
+  the loop would give a re-dispatch whatever the loop says today — a different
+  box from the one being replaced.
+- **Strictly `=== true`, never truthiness.** The value survives a round trip
+  through jsonb; a stored string on the one switch that opens a network is how a
+  run ends up routed because somebody wrote "false".
+- **Fleet-only is enforced twice.** The editor hides it for PostHog Code and
+  clears it when the agent picker moves off the fleet; the route refuses it
+  outright. The editor is the courtesy, the route is the gate — the CLI and the
+  MCP server walk past the first one.
+
+Checked before building, because it would have killed the design: the fleet
+once forced routed egress to drop every credential. That rule is **gone** — the
+proxy attaches credentials in every mode — and the one refusal that survived is
+a routed run whose GitHub token names no repository. Every Talyn dispatch names
+one.
+
+## Session 124 — the release notes stop announcing gated features (2026-09-14)
+
+Tom: the in-app "What's new" modal is showing features that are switched off for
+the user. It was Loops. `feat(loops): run a prompt on a schedule` and
+`feat(billing): cap the free plan at 3 loops` both reached people whose `loops`
+flag is off, which is most people.
+
+Two nets were supposed to stop that and both failed, in the same way:
+
+1. `GATED_SCOPES` in `releaseNotes.ts` — a literal array of commit scopes. It
+   said `['fleet']`. Nobody added `loops`. It duplicated something the flag
+   register already knew, so it drifted by default rather than by accident.
+2. A paragraph in the generator's prompt telling the model not to announce
+   "anything the commit tells you is not available to users yet". A commit
+   subject does not tell you that. The model was asked to infer a fact it had
+   never been given, and inferred wrong.
+
+So the fix is not a better list or a better paragraph. **The register is the
+only place that knows what is gated, so the register is what decides.**
+
+**`availability` is a new field on `FeatureFlagDefinition`, and it is separate
+from `fallback` on purpose.** They agree today — `workflows` is `'general'` with
+a fallback of `true`, `loops` and `fleet` are `'gated'` with `false` — which is
+exactly why deriving one from the other was tempting and wrong. `fallback`
+answers "what do we say when PostHog is unreachable"; `availability` answers "may
+we talk about this yet". Linking them means the day they diverge the release
+notes change behaviour with no edit that says so. `releaseScopes` sits next to
+it and is the scope→flag map the generator reads.
+
+**A gated commit is now TAGGED, not dropped.** That is the second half, and it
+is what makes the first half safe to flip. The old drop was lossy: the release
+was marked read with nothing shown, so the real launch had nothing left to
+announce — the docblock on `GATED_SCOPES` named this as "the failure mode to
+watch for" and answered it with an obligation on a human (remove the scope in
+the same commit that removes the gate). Now the highlight is written, stored,
+and withheld on the way out, so the same row answers differently the day the
+flag flips.
+
+**Filtering is on the READ path, in the backend.** Not at generation (that
+throws the text away and there is nothing to replay), and not in the clients
+(anyone can sign up, so "authenticated" is not an audience — a `curl` would have
+the name and description of every unreleased feature). The backend also
+redeploys on every push, so its register is never stale; a desktop build three
+nights behind still withholds correctly without updating first.
+
+**The seen-state is now one cursor per gate, and that is the whole replay
+mechanism.** A single `lastSeenVersion` was enough while gated work was never
+written down. It stopped being enough the moment a highlight could be withheld,
+because "I have read this far" and "I have been shown everything this far" are
+different facts. A gate's cursor freezes the first time the client hears the
+gate exists, stays put however many launches pass, and is still parked there
+when the gate comes down — so the backlog renders at once, on the first launch
+after the feature became real. Two things that look like details and are not:
+
+- **`gatedFeatures` is the backend's WHOLE current gate set, repeated on every
+  entry** — not "what was stripped from this release". A gate with nothing in
+  the fetched window would otherwise never freeze, and the cursor would walk
+  past its own launch. It is repeated per entry rather than wrapped in an
+  envelope so `GET /release-notes` stays a JSON array: every already-installed
+  desktop build would throw on a shape it does not recognise.
+- **`planWhatsNew` must never walk a cursor backwards.** The window is no longer
+  pre-filtered to "above the cursor" — it cannot be, each stream has its own —
+  so the newest entry in range is routinely older than a cursor already past it.
+  The desktop hits this on every launch where its ceiling sits above the newest
+  published release. Caught by a test, not by review.
+
+**The generator partitions rather than annotates.** The model merges commits
+into highlights, so given a mixed list there is no way to attribute a merged
+highlight back to a gate. Each gated feature gets its own call and this script
+stamps the result; only the ungated call is asked to think about gating, and it
+is given the flag keys and descriptions — the fact it was missing before. It can
+add a gate, never remove one. An invented gate name drops the highlight.
+
+Verified against the actual regression: `feat(loops)` is stamped mechanically,
+`feat(billing): cap the free plan at 3 loops` is tagged by the model, and a
+cross-scope case the prompt does not use as an example (`feat(tasks): show which
+microVM a run landed on`) came back tagged `fleet`.
+
+Not done: the generator has no unit tests, because it is a script with no test
+harness and `main()` runs on import. The backend rejects an unknown gate with a
+400 and that path IS tested, so the generator's own drop is a nicety — it keeps
+one bad line from costing a release its whole set of notes.
+
+## Backend security review (2026-09-12, rolled out 2026-09-14)
 
 Reviewed backend authorization, tenant isolation, credential handling, webhooks, sockets, MCP, and runtime dependencies.
 The fixes enforce workspace user credentials for GitHub and authorize webhook recipients before processing private payloads.
 They also protect cached skills, task associations, remote execution metadata, and fleet transcript access.
-Migration 0055 separates backend database access from direct client access, while retaining owner-scoped row policies.
-Loop history and settlement reject historical foreign task links. Deployment must drain old replicas before this migration.
+Loop history and settlement reject historical foreign task links.
 PostHog requests now use approved origins without redirects. Sockets enforce token deadlines, current authorization, and bounded work.
 Queue comments require the known bot identity. External merge claims require independent GitHub confirmation.
 
-Validation passed: 1,856 backend tests across 72 selected files, plus 21 client connection tests after integration with main.
-Root typechecks and changed-file lint passed. The backend production dependency audit reported zero known vulnerabilities.
-This was a source review with local tests, not production penetration testing.
-See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for deployment requirements and remaining work.
+**Two things the first draft got wrong, both found by review and fixed before merge.**
+
+Migration 0056 originally revoked the Data API roles' grants in the same deploy that
+introduced the `talyn_backend` role, and the PR asked the operator to drain old replicas
+first. No step in this pipeline can do that: migrations run at backend boot and Railway's
+cutover overlaps old and new deliberately, so the revocation would have broken the replica
+still serving every request — and the health gate would then have pinned the broken build
+in place if the new one failed to start. Merging the PR *is* the deploy. The migration is
+now additive, the revocations wait for a later push (`docs/rollout/phase2_revoke_data_api_grants.sql`),
+and 0056 asserts its own grants landed, because on Supabase a non-owner grantor of `auth`
+gets a warning rather than an error.
+
+The webhook fan-out checked repository access with a live, uncached GitHub call per watching
+workspace per delivery — above the coalescer that exists to collapse the `check_run` firehose
+— while all three cross-workspace dedupes were removed and the budget moved to per-user.
+Access decisions are now cached per CREDENTIAL, which is what lets the cache coexist with
+"the database is the authority": a credential deleted, disabled or replaced stops granting
+access at once, because a different credential is a different cache key. Poll fetches and
+REST sweeps are shared again, but only between workspaces holding the same token.
+
+Validation: 1,059 backend tests across 54 suites after the fixes, plus the client and web
+socket suites. Root typecheck and changed-file lint passed. The backend production dependency
+audit reported zero known vulnerabilities. This was a source review with local tests, not
+production penetration testing.
+See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for the two-phase rollout and remaining work.
 
 ## Session 123 — three loops on the free plan (2026-09-12)
 

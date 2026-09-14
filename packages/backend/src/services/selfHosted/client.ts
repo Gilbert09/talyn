@@ -282,7 +282,20 @@ export interface CreateSandboxInput {
    * nulls its whole refresh hook when everything is suppressed, which would
    * strip the key this dispatch supplied.
    */
-  policy?: { credentials?: { github?: 'none'; anthropic?: 'none'; openai?: 'none' } };
+  policy?: {
+    credentials?: { github?: 'none'; anthropic?: 'none'; openai?: 'none' };
+    /**
+     * How far the box may reach. Absent means the fleet's default, `proxy`:
+     * no routed network at all, everything through the credential proxy.
+     *
+     * `open` is routed and unbounded, and it does NOT change what the box may
+     * spend — the fleet deleted the rule that coupled the two, so the proxy
+     * still attaches credentials in every mode. One refusal survives and Talyn
+     * satisfies it by construction: a routed run may not carry a GitHub token
+     * that names no repository, and every Talyn dispatch names one.
+     */
+    egress?: { mode?: 'proxy' | 'filtered' | 'open' };
+  };
 }
 
 /**

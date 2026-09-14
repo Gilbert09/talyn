@@ -104,7 +104,7 @@ describe('Data API database boundary', () => {
       GRANT ALL ON auth.login_probe TO anon, authenticated;
       GRANT ALL ON SEQUENCE auth.login_probe_id_seq TO anon, authenticated;
     `);
-    const migration = fs.readFileSync(path.resolve(__dirname, '../db/migrations/0055_backend_data_boundary.sql'), 'utf8');
+    const migration = fs.readFileSync(path.resolve(__dirname, '../db/migrations/0056_backend_data_boundary.sql'), 'utf8');
     await testDb.pglite.exec(migration);
     for (const role of ['anon', 'authenticated']) {
       await testDb.pglite.exec(`SET ROLE ${role}`);

@@ -21,7 +21,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
  * MainLayout, opened either by useWhatsNew on launch or by the button in
  * Settings → About. It renders whatever it is handed and never fetches; the
  * decision about whether there is anything worth showing is made before it
- * opens (see @talyn/shared's shouldShowWhatsNew).
+ * opens (see @talyn/shared's planWhatsNew).
  *
  * Several releases at once is the normal case, not the exception — Talyn ships
  * every night, so a user who has been away for a week sees a week of them.

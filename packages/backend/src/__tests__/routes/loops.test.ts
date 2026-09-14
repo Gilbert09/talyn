@@ -271,6 +271,26 @@ describe('loop routes', () => {
     });
   });
 
+  describe('internet access', () => {
+    it('refuses it on a PostHog Code loop', async () => {
+      // The editor hides the switch for a non-fleet loop; this is the half that
+      // holds for the CLI, the MCP server and plain `curl`. Storing it here
+      // would be a setting the user can see and the dispatch cannot keep.
+      const res = await fetch(`${url}/api/v1/loops`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body({ internetAccess: true })),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toMatch(/Talyn Fleet capability/);
+    });
+
+    it('is off by default on a loop that never mentions it', async () => {
+      const made = await create();
+      expect(made.internetAccess).toBe(false);
+    });
+  });
+
   describe('PATCH', () => {
     it('is a whole-loop replace, and recomputes the schedule', async () => {
       const made = await create();

@@ -54,7 +54,7 @@ A clean dependency scan covers published advisories only. It does not prove that
 
 ## Rollout Requirements
 
-**This deploys as an ordinary push.** Migration 0055 is additive: it creates the
+**This deploys as an ordinary push.** Migration 0056 is additive: it creates the
 `talyn_backend` role and grants it scoped access, and it revokes nothing. A
 replica running the previous build keeps working while the new one boots.
 
@@ -69,9 +69,9 @@ The boundary therefore lands in two phases.
 
 ### Phase 1 — this deploy
 
-1. Push. Migration 0055 runs at boot and grants `talyn_backend` its access.
+1. Push. Migration 0056 runs at boot and grants `talyn_backend` its access.
    The migration FAILS LOUDLY and refuses to boot if a grant did not land —
-   see "What 0055 verifies" below.
+   see "What 0056 verifies" below.
 2. Before the deploy, run `docs/rollout/find_posthog_hosts.sql`. Set
    `POSTHOG_ALLOWED_ORIGINS` for every host it lists. The allowlist accepts
    `us.posthog.com`, `eu.posthog.com` and `app.posthog.com` without
@@ -90,7 +90,7 @@ The boundary therefore lands in two phases.
 
 6. Once no replica runs the old build, copy
    `docs/rollout/phase2_revoke_data_api_grants.sql` to
-   `packages/backend/src/db/migrations/0056_revoke_data_api_grants.sql`, add its
+   `packages/backend/src/db/migrations/0057_revoke_data_api_grants.sql`, add its
    journal entry, and push. This removes `anon`/`authenticated` access to
    application tables. **Until it ships the boundary is incomplete**: the
    backend uses the scoped role, but the Data API roles keep their old grants.
@@ -98,17 +98,17 @@ The boundary therefore lands in two phases.
 
 ### Rollback
 
-Migration 0055 revokes nothing, so rolling back to the previous build needs no
+Migration 0056 revokes nothing, so rolling back to the previous build needs no
 database work. After PHASE 2, the previous build cannot run without its grants:
 restore them with `docs/rollout/rollback_regrant_authenticated.sql` BEFORE
 redeploying it. Drizzle has no down migrations; that script is the only way back.
 
-### What 0055 verifies
+### What 0056 verifies
 
 On Supabase the `auth` schema belongs to `supabase_auth_admin`. A grantor that
 does not own it and holds no grant option gets a WARNING rather than an error,
 so the migration would otherwise commit while every RLS policy — all of which
-call `auth.uid()` — failed at runtime. 0055 asserts both `auth` grants and every
+call `auth.uid()` — failed at runtime. 0056 asserts both `auth` grants and every
 table grant, and raises if one did not land. The whole migration is one
 transaction, so a failure rolls back cleanly and the boot refuses, which leaves
 the previous build serving. Re-running it is safe.

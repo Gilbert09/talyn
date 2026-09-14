@@ -4,7 +4,7 @@ import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/re
 import type { ReleaseHighlight, ReleaseNoteEntry } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
-import { useWhatsNew, LAST_SEEN_KEY } from '../hooks/useWhatsNew';
+import { useWhatsNew, LAST_SEEN_KEY, CURSORS_KEY } from '../hooks/useWhatsNew';
 import { WhatsNewModal } from '../components/modals/WhatsNewModal';
 
 /**
@@ -35,11 +35,13 @@ const highlight = (over: Partial<ReleaseHighlight> = {}): ReleaseHighlight => ({
 
 const entry = (
   version: string,
-  highlights: ReleaseHighlight[] = [highlight()]
+  highlights: ReleaseHighlight[] = [highlight()],
+  gatedFeatures: string[] = []
 ): ReleaseNoteEntry => ({
   version,
   publishedAt: '2026-08-30T03:00:00.000Z',
   highlights,
+  gatedFeatures,
 });
 
 function Harness() {
@@ -61,6 +63,7 @@ function seed(lastSeen: string | null, opts: { justOnboarded?: boolean } = {}) {
 // The title uses a typographic apostrophe (&rsquo;), so match loosely.
 const modalOpen = () => Boolean(screen.queryByText(/What.s new/));
 const stored = () => localStorage.getItem(LAST_SEEN_KEY);
+const storedCursors = () => JSON.parse(localStorage.getItem(CURSORS_KEY) ?? 'null');
 
 describe('useWhatsNew — deciding whether to interrupt', () => {
   let list: MockInstance;
@@ -169,6 +172,61 @@ describe('useWhatsNew — deciding whether to interrupt', () => {
     await waitFor(() => expect(stored()).toBe('0.2.62'));
     expect(list).not.toHaveBeenCalled();
     expect(modalOpen()).toBe(false);
+  });
+
+
+  // --- gated features ----------------------------------------------------
+
+  it('migrates the old single version into the cursor map', async () => {
+    // Every user Talyn already has arrives with only the scalar. Seeding the
+    // ungated stream from it is what stops the first cursor-aware launch
+    // replaying the whole changelog at them.
+    seed('0.2.60');
+    list.mockResolvedValue([entry('0.2.61')]);
+
+    render(<Harness />);
+
+    await waitFor(() => expect(storedCursors()).toEqual({ '': '0.2.61' }));
+    // Still written, so a rollback to a build that only knows the scalar does
+    // not re-show months of notes.
+    expect(stored()).toBe('0.2.61');
+  });
+
+  it('freezes a gated stream instead of reading past it', async () => {
+    // The backend has already stripped the Loops highlights; all this client
+    // learns is that the gate is up. Its cursor parks, so the release is still
+    // owed to them.
+    seed('0.2.60');
+    list.mockResolvedValue([entry('0.2.61', [highlight()], ['loops'])]);
+
+    render(<Harness />);
+
+    await waitFor(() => expect(storedCursors()).toEqual({ '': '0.2.61', loops: '0.2.60' }));
+  });
+
+  it('replays the backlog on the first load after a feature is released', async () => {
+    // The regression that started all of this, from the other side: Loops was
+    // announced to people who could not open it, and the release was then
+    // marked read — so the real launch had nothing left to say.
+    localStorage.clear();
+    localStorage.setItem(CURSORS_KEY, JSON.stringify({ '': '0.2.61', loops: '0.2.60' }));
+    useWorkspaceStore.setState({
+      whatsNewOpen: false,
+      whatsNewEntries: [],
+      whatsNewChecked: false,
+      justOnboarded: false,
+    } as never);
+    list.mockResolvedValue([
+      entry('0.2.61', [highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' })]),
+    ]);
+
+    render(<Harness />);
+
+    await waitFor(() => expect(modalOpen()).toBe(true));
+    expect(screen.getByText('Run a prompt on a schedule')).toBeTruthy();
+    // Asked from the OLDEST cursor, or the backlog is outside the window.
+    expect(list).toHaveBeenCalledWith('0.2.60');
+    await waitFor(() => expect(storedCursors()).toEqual({ '': '0.2.61', loops: '0.2.61' }));
   });
 
   it('checks once, however many times the layout remounts', async () => {

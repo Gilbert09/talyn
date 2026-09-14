@@ -67,6 +67,7 @@ function loopShape(id: string, loop: NormalizedLoop): Record<string, unknown> {
     provider: loop.provider,
     model: loop.model,
     concurrency: loop.concurrency,
+    internet_access: loop.internetAccess,
     prompt_length: loop.prompt.length,
   };
 }
@@ -125,6 +126,14 @@ export function loopRoutes(): Router {
 
     if (!getCloudProvider(loop.provider)) {
       return `${loop.provider} is not available on this deployment.`;
+    }
+
+    // Only the fleet can honour it, so storing it against any other provider
+    // would be a setting the user can see and the dispatch cannot keep. The
+    // editor already hides the switch; this is the half that holds for the CLI,
+    // the MCP server and plain `curl`.
+    if (loop.internetAccess && loop.provider !== 'selfhosted') {
+      return 'Internet access is a Talyn Fleet capability — PostHog Code runs cannot be given it.';
     }
 
     if (loop.provider === 'selfhosted') {
@@ -290,6 +299,7 @@ export function loopRoutes(): Router {
       provider: existing.provider,
       model: existing.model,
       concurrency: existing.concurrency,
+      internetAccess: existing.internetAccess,
       repositoryId: existing.repositoryId,
       repoFullName: existing.repoFullName,
       nextRunAt: existing.nextRunAt ? new Date(existing.nextRunAt) : null,

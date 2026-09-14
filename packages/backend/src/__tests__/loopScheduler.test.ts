@@ -196,6 +196,43 @@ describe('loop scheduler', () => {
     });
   });
 
+  describe('internet access', () => {
+    it('is not requested by default', async () => {
+      await dueLoop(db);
+      await loopScheduler.tick();
+      const input = createTask.mock.calls[0][0] as { internetAccess?: boolean };
+      // Absent, not false: the executor only adds an egress policy when asked,
+      // and every task that never asks must look identical to one from before
+      // the switch existed.
+      expect(input.internetAccess).toBeFalsy();
+    });
+
+    it('is passed through when a fleet loop asks for it', async () => {
+      // The realistic combination, so the fleet fixtures have to be real too:
+      // it is a fleet-only capability, and dispatching one into a PostHog-only
+      // setup refuses before it ever reaches createCloudTask.
+      vi.spyOn(registry, 'getCloudProvider').mockReturnValue({ type: 'selfhosted' } as never);
+      vi.spyOn(fleetAccess, 'workspaceMayUseFleet').mockResolvedValue(true);
+      vi.spyOn(fleetCredentials, 'fleetAgentStatus').mockResolvedValue({
+        connectedAgents: ['claude'],
+        reauthAgents: [],
+      });
+      await db.insert(environmentsTable).values({
+        id: 'env-fleet',
+        ownerId: TEST_USER_ID,
+        name: 'Talyn Fleet',
+        type: 'selfhosted',
+        config: {},
+      });
+
+      await dueLoop(db, { provider: 'selfhosted', model: 'claude-sonnet-5', internetAccess: true });
+      await loopScheduler.tick();
+
+      const input = createTask.mock.calls[0][0] as { internetAccess?: boolean };
+      expect(input.internetAccess).toBe(true);
+    });
+  });
+
   describe('catch-up', () => {
     it('fires ONCE for a loop overdue by days, then jumps to the future', async () => {
       // A weekend outage must not replay every missed occurrence: that is a

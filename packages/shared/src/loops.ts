@@ -183,6 +183,20 @@ export interface LoopDefinition {
   provider: LoopProvider;
   model: string;
   concurrency: LoopConcurrency;
+  /**
+   * Whether this loop's sandbox may reach the internet.
+   *
+   * Off by default, and off is the whole product for most loops: the agent gets
+   * the repository and its own API and nothing else, so a prompt that has read
+   * somebody's pull request title cannot post that anywhere.
+   *
+   * On is for a prompt whose job ends OUTSIDE the repository — posting a digest
+   * to a webhook, calling an API. It is deliberately one switch and not a list
+   * of hosts: the person writing a loop is thinking about what their prompt
+   * needs to do, not about egress rules, and a half-understood allow-list is
+   * worse than an honest yes.
+   */
+  internetAccess: boolean;
   /** Null only after the repository row was deleted; `repoFullName` survives. */
   repositoryId: string | null;
   repoFullName: string;
@@ -204,6 +218,7 @@ export interface LoopInput {
   provider: LoopProvider;
   model: string;
   concurrency?: LoopConcurrency;
+  internetAccess?: boolean;
   repositoryId: string;
   repoFullName: string;
 }
@@ -218,6 +233,7 @@ export interface NormalizedLoop {
   provider: LoopProvider;
   model: string;
   concurrency: LoopConcurrency;
+  internetAccess: boolean;
   repositoryId: string;
   repoFullName: string;
 }
@@ -610,6 +626,10 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     concurrency = l.concurrency as LoopConcurrency;
   }
 
+  if (l.internetAccess !== undefined && typeof l.internetAccess !== 'boolean') {
+    fail('internetAccess must be a boolean');
+  }
+
   const repositoryId = typeof l.repositoryId === 'string' ? l.repositoryId.trim() : '';
   if (!repositoryId) fail('a loop must pick a repository — the agent has to have something to clone');
 
@@ -627,6 +647,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     provider,
     model,
     concurrency,
+    internetAccess: l.internetAccess === true,
     repositoryId,
     repoFullName,
   };
@@ -668,6 +689,7 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     provider: 'posthog_code',
     model: DEFAULT_POSTHOG_CODE_MODEL_ID,
     concurrency: DEFAULT_LOOP_CONCURRENCY,
+    internetAccess: false,
     repositoryId: '',
     repoFullName: '',
   };
@@ -683,6 +705,7 @@ export function loopToInput(loop: LoopDefinition): LoopInput {
     provider: loop.provider,
     model: loop.model,
     concurrency: loop.concurrency,
+    internetAccess: loop.internetAccess,
     repositoryId: loop.repositoryId ?? '',
     repoFullName: loop.repoFullName,
   };

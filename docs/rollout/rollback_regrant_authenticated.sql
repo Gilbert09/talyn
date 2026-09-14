@@ -5,8 +5,8 @@
 -- needs the grants phase 2 removed. Drizzle has no down migrations, so this is
 -- the only way back.
 --
--- You do NOT need this to roll back a build that only has migration 0055
--- applied. 0055 revokes nothing, so the old build still works.
+-- You do NOT need this to roll back a build that only has migration 0056
+-- applied. 0056 revokes nothing, so the old build still works.
 --
 -- Connect as the migration/pool user (the owner of these tables) and run the
 -- whole file. It is safe to re-run.

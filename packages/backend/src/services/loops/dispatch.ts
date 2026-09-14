@@ -166,6 +166,10 @@ export async function dispatchRun(
       repositoryId: loop.repositoryId as string,
       assignedEnvironmentId: target.envId,
       model: target.model,
+      // The loop's own switch. The fleet turns it into an egress policy; every
+      // other provider ignores it, which is why the editor only offers it on a
+      // fleet loop.
+      internetAccess: loop.internetAccess,
       loop: { loopId: loop.id, runId, scheduledFor: scheduledFor.toISOString() },
     });
     await markDispatched(runId, task.id);

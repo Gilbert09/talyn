@@ -10,14 +10,20 @@
 //      nothing at all when the span has no user-facing content.
 //   2. What reaches a highlight has to be filtered twice: once mechanically
 //      (`filterReleaseCommits`, which drops merge commits, non-user commit
-//      types, internal scopes, and scopes still behind an allow-list), and once
-//      editorially by the model in CI.
+//      types and internal scopes), and once editorially by the model in CI.
+//   3. A feature that is still behind a flag is NOT dropped — it is TAGGED with
+//      the flag that gates it (`requiresFeature`), withheld from everybody by
+//      the backend while `availability` says `'gated'`, and replayed the moment
+//      that flips. See `planWhatsNew` at the bottom of this file; the seen-state
+//      is one cursor per gate for exactly that reason.
 //
 // Everything in this file is pure and lives in @talyn/shared on purpose. The
 // CI generator, the backend, the desktop renderer and apps/web all depend on
 // the same version ordering and the same show/don't-show rule; `apps/web` is a
 // deliberate fork of the desktop renderer, so a second copy of this logic is
 // how the two clients start disagreeing about what a user has already seen.
+
+import { gateForScope, type FeatureFlagKey } from './featureFlags.js';
 
 /** What kind of change a highlight describes. Drives the modal's icon. */
 export type HighlightKind = 'feature' | 'fix' | 'improvement';
@@ -37,6 +43,16 @@ export interface ReleaseHighlight {
    * been generated at all.
    */
   surfaces: ReleaseSurface[];
+  /**
+   * The feature flag this highlight was published under, when it describes a
+   * gated feature. A flag KEY from `FEATURE_FLAGS`, stored as a plain string so
+   * a row written months ago still parses after the flag has been deleted.
+   *
+   * Absent means "nothing gates this". Present does not mean "hidden": the
+   * backend decides that per request against the CURRENT register, so a
+   * highlight tagged `loops` becomes visible the day Loops goes general.
+   */
+  requiresFeature?: string;
 }
 
 /** One release, as served by `GET /api/v1/release-notes`. */
@@ -48,8 +64,29 @@ export interface ReleaseNoteEntry {
   /**
    * May be empty: a nightly with nothing user-facing still gets a row, so the
    * `?since=` window stays correct and the version is never re-summarised.
+   *
+   * Gated highlights are already gone by the time a client sees this — the
+   * backend strips them, so their text never leaves the server.
    */
   highlights: ReleaseHighlight[];
+  /**
+   * Every feature currently being withheld, as flag keys.
+   *
+   * Response-level metadata rather than a property of this release: it is the
+   * backend's whole gate set at request time, repeated on each entry, and a
+   * client must read it as such. Two consequences that are easy to get wrong:
+   *
+   *   - It is NOT "what was stripped from this release". A gate with no content
+   *     in the fetched range still has to appear, or the client advances that
+   *     gate's cursor past the point it was frozen at and loses the backlog.
+   *   - It is repeated per entry so `GET /release-notes` stays a JSON ARRAY. An
+   *     envelope would be tidier and would also make every already-installed
+   *     desktop build throw on the response it no longer recognises.
+   *
+   * Only flag keys travel — never the withheld text. The keys are already in
+   * every shipped client bundle.
+   */
+  gatedFeatures?: string[];
 }
 
 // ============================================================================
@@ -107,6 +144,14 @@ export interface ParsedCommit {
   pr: number | null;
   /** The line as it appeared, for prompts and debugging. */
   raw: string;
+  /**
+   * The feature flag this commit's scope says it belongs to, or `null`.
+   *
+   * Set by {@link filterReleaseCommits} from the register, never by hand. A
+   * tagged commit is still summarised — it is grouped and stamped rather than
+   * discarded, which is what lets the release be announced later.
+   */
+  gate: FeatureFlagKey | null;
 }
 
 const CONVENTIONAL_RE =
@@ -126,12 +171,14 @@ export function parseConventionalCommit(subject: string): ParsedCommit | null {
   if (!line) return null;
   const m = CONVENTIONAL_RE.exec(line);
   if (!m?.groups) return null;
+  const scope = m.groups.scope?.toLowerCase() ?? null;
   return {
     type: m.groups.type.toLowerCase(),
-    scope: m.groups.scope?.toLowerCase() ?? null,
+    scope,
     subject: m.groups.subject.trim(),
     pr: m.groups.pr ? Number(m.groups.pr) : null,
     raw: line,
+    gate: gateForScope(scope),
   };
 }
 
@@ -148,8 +195,9 @@ export const USER_FACING_TYPES: readonly string[] = ['feat', 'fix', 'perf'];
  * and the rest are build/observability plumbing.
  *
  * These are permanently invisible — nothing will ever make a `chore(deps)` bump
- * worth announcing. For a real product surface that is merely not available
- * YET, see {@link GATED_SCOPES}.
+ * worth announcing. A real product surface that is merely not available YET is
+ * a different thing entirely and is never dropped: see `releaseScopes` and
+ * `availability` in `featureFlags.ts`.
  *
  * Exported so the list can be tuned without editing the filter.
  */
@@ -168,45 +216,17 @@ export const INTERNAL_SCOPES: readonly string[] = [
 ];
 
 /**
- * Scopes for product surfaces that exist but are behind an ALLOW-LIST, so no
- * user can reach them yet.
- *
- * Announcing one of these is worse than announcing nothing: the modal tells
- * somebody about a page they cannot open, and the entry is then burnt — the
- * span has been marked seen, so the real launch is never announced.
- *
- * Kept apart from {@link INTERNAL_SCOPES} because the two need opposite
- * maintenance. An internal scope stays on its list forever; a gated one is
- * temporary, and the obligation is:
- *
- *   **Remove the scope here in the same commit that removes its allow-list
- *   gate.** That release then announces the feature, which is exactly when a
- *   user can first use it.
- *
- * Leaving a scope here after un-gating is the failure mode to watch for: the
- * feature ships to everybody and is never mentioned. The gates as they stand:
- *
- *   - `fleet` — Talyn Fleet, `FLEET_ENABLED` (the deployment has hardware) plus
- *     the `talyn-fleet` PostHog flag (who may use it)
- *
- * `workflows` was here and has been removed, which is the mechanism working: PR
- * automation was released to everybody, so the release that did it is the one
- * that announces it.
- *
- * This is a mechanical backstop, not the whole answer. A gated feature's
- * commits do not all carry its scope — `fix(desktop): hide the Workflows nav
- * item while loading` is scoped `desktop` and slips straight through — so the
- * generator's prompt also tells the model not to announce anything a commit
- * says is behind a flag or an allow-list. Judgement covers what a scope list
- * cannot.
- */
-export const GATED_SCOPES: readonly string[] = ['fleet'];
-
-/**
  * The mechanical pre-filter: what the model in CI is even allowed to consider.
  * Everything it drops is dropped without judgement; everything it keeps is
  * still subject to the model's editorial pass, which is where "would a user
  * notice this?" gets answered.
+ *
+ * Note what it does NOT drop. A commit for a feature still behind a flag comes
+ * back with `gate` set, is summarised like any other, and is withheld later by
+ * the backend. That used to be a drop, against a hand-written list of scopes in
+ * this file, and the list is why Loops was announced to every user who could
+ * not open it: the list said `['fleet']` and nobody remembered to add `loops`.
+ * The register already knew.
  */
 export function filterReleaseCommits(subjects: readonly string[]): ParsedCommit[] {
   const kept: ParsedCommit[] = [];
@@ -215,7 +235,6 @@ export function filterReleaseCommits(subjects: readonly string[]): ParsedCommit[
     if (!parsed) continue;
     if (!USER_FACING_TYPES.includes(parsed.type)) continue;
     if (parsed.scope && INTERNAL_SCOPES.includes(parsed.scope)) continue;
-    if (parsed.scope && GATED_SCOPES.includes(parsed.scope)) continue;
     kept.push(parsed);
   }
   return kept;
@@ -244,47 +263,6 @@ export function kindForCommitType(type: string): HighlightKind {
 // What to show, and what to remember having shown
 // ============================================================================
 
-export interface WhatsNewInput {
-  /**
-   * The newest version this client has already shown, or `null` on a first
-   * run. A first run shows nothing — a brand-new user does not want a
-   * changelog, they want the app.
-   */
-  lastSeenVersion: string | null;
-  /**
-   * The version actually running, when the client has an orderable one. The
-   * desktop passes its semver; `apps/web` passes `null`, because its build id
-   * is a commit sha (`web/<sha>`) that cannot be compared — and because web is
-   * continuously deployed, so it is always at or ahead of the latest cut.
-   */
-  currentVersion: string | null;
-  /** Whatever the backend returned, in any order. */
-  entries: readonly ReleaseNoteEntry[];
-  /** Which client is asking. Highlights for the other one are dropped. */
-  surface: ReleaseSurface;
-}
-
-function relevant(input: WhatsNewInput): ReleaseNoteEntry[] {
-  const lastSeen = parseVersion(input.lastSeenVersion);
-  if (!lastSeen) return [];
-  const lastSeenKey = versionSortKey(lastSeen);
-
-  // The ceiling matters on the desktop: the backend knows about tonight's
-  // release the moment CI posts it, but the user is still running last
-  // night's build. Showing them a feature they don't have yet would both
-  // confuse them AND burn the entry — they'd never see it again after the
-  // update actually landed.
-  const current = parseVersion(input.currentVersion);
-  const ceiling = current ? versionSortKey(current) : Number.POSITIVE_INFINITY;
-
-  return input.entries
-    .filter((e) => {
-      const key = versionSortKey(e.version);
-      return key > lastSeenKey && key <= ceiling;
-    })
-    .sort((a, b) => versionSortKey(b.version) - versionSortKey(a.version));
-}
-
 /**
  * Drop every highlight that doesn't apply to this client, and every entry
  * thereby left empty.
@@ -294,6 +272,10 @@ function relevant(input: WhatsNewInput): ReleaseNoteEntry[] {
  * Shared so the two cannot disagree about what a release contains: a desktop
  * user opening the changelog should not see the line about a web-only change
  * simply because they arrived from a different button.
+ *
+ * Says nothing about gating. By the time an entry is here the backend has
+ * already removed what is withheld, so Settings → About cannot leak a gated
+ * feature either.
  */
 export function highlightsForSurface(
   entries: readonly ReleaseNoteEntry[],
@@ -308,24 +290,165 @@ export function highlightsForSurface(
 }
 
 /**
- * The entries to render on launch, newest first. An empty result means: show
- * nothing.
+ * How far through the feed this client has read — one version per stream.
+ *
+ * The key is a feature flag key, and `''` is the ungated stream that carries
+ * almost everything. A single scalar was enough while gated work was simply
+ * never written down; it stopped being enough the moment a highlight could be
+ * withheld, because "seen" and "not shown to you yet" are different facts and
+ * one number cannot hold both.
+ *
+ * How a gate's cursor behaves is the whole mechanism:
+ *
+ *   - The first time the client hears that a gate exists, that gate's cursor is
+ *     FROZEN at wherever the ungated stream had reached. Nothing published
+ *     after that instant can be read past.
+ *   - While the gate is up the cursor does not move, however many launches go
+ *     by, because nothing under it was ever shown.
+ *   - When the gate comes down, the cursor is still parked where it was, so the
+ *     whole backlog renders at once — on the first launch after the feature
+ *     became real to that user, which is when they can act on it.
+ *
+ * That replaces an obligation a human had to remember (edit a list of scopes in
+ * the same commit that removes the gate, or the feature ships to everybody and
+ * is never mentioned) with something that cannot be forgotten.
  */
-export function shouldShowWhatsNew(input: WhatsNewInput): ReleaseNoteEntry[] {
-  return highlightsForSurface(relevant(input), input.surface);
+export type WhatsNewCursors = Record<string, string>;
+
+/** The ungated stream's key. Spelled out so no call site invents `'none'`. */
+export const UNGATED_STREAM = '';
+
+export interface WhatsNewPlanInput {
+  /** What this client has read so far. `{}` on a first run — see the hooks. */
+  cursors: WhatsNewCursors;
+  /**
+   * The version actually running, when the client has an orderable one. The
+   * desktop passes its semver; `apps/web` passes `null`, because its build id
+   * is a commit sha (`web/<sha>`) that cannot be compared — and because web is
+   * continuously deployed, so it is always at or ahead of the latest cut.
+   */
+  currentVersion: string | null;
+  /** Whatever the backend returned, in any order. */
+  entries: readonly ReleaseNoteEntry[];
+  /** Which client is asking. Highlights for the other one are dropped. */
+  surface: ReleaseSurface;
+}
+
+export interface WhatsNewPlan {
+  /** The entries to render, newest first. Empty means: show nothing. */
+  show: ReleaseNoteEntry[];
+  /**
+   * The cursors to persist, always — including when `show` is empty. A release
+   * whose highlights were all for the other surface is still read, and leaving
+   * it unrecorded means re-fetching and re-evaluating it on every launch
+   * forever.
+   */
+  cursors: WhatsNewCursors;
 }
 
 /**
- * The version to persist as "seen" once the modal is dismissed.
+ * The oldest version any stream still has to read from — the `?since=` the
+ * client must ask the backend for.
  *
- * Deliberately NOT the newest entry the client rendered: a release whose
- * highlights were all for the other surface still counts as seen, or every
- * launch re-fetches and re-evaluates it forever. Equally deliberately NOT the
- * newest entry the backend returned — that can be a release the user hasn't
- * installed yet, and recording it would swallow those notes.
+ * Not the ungated cursor: a gate frozen six months ago needs its backlog in the
+ * response on the day it lifts, and asking from the ungated high-water mark
+ * would return a window that cannot contain it. `null` means "no floor, send
+ * the lot", which is the correct answer on a first run.
  */
-export function nextSeenVersion(input: WhatsNewInput): string | null {
-  const inRange = relevant(input);
-  if (inRange.length === 0) return input.lastSeenVersion;
-  return inRange[0].version;
+export function whatsNewFetchFloor(cursors: WhatsNewCursors): string | null {
+  let floor: string | null = null;
+  let floorKey = Number.POSITIVE_INFINITY;
+  for (const version of Object.values(cursors)) {
+    const key = versionSortKey(version);
+    if (key < 0) return null; // an unparseable cursor: ask for everything
+    if (key < floorKey) {
+      floorKey = key;
+      floor = version;
+    }
+  }
+  return floor;
+}
+
+/**
+ * What to render on launch, and what to write back — answered together.
+ *
+ * Deliberately one function returning both. They were two (`shouldShowWhatsNew`
+ * plus `nextSeenVersion`), each re-deriving the same window from the same
+ * input, and with per-gate cursors that duplication becomes a way for the modal
+ * to show a highlight while the cursor it advances says it never did.
+ */
+export function planWhatsNew(input: WhatsNewPlanInput): WhatsNewPlan {
+  const cursors: WhatsNewCursors = { ...input.cursors };
+  const ungated = cursors[UNGATED_STREAM];
+  // No baseline means this client has never read anything, and a first run
+  // shows nothing — a brand-new user wants the app, not a changelog. The hooks
+  // establish the baseline before ever getting here.
+  if (versionSortKey(ungated ?? '') < 0) return { show: [], cursors: input.cursors };
+
+  // The ceiling matters on the desktop: the backend knows about tonight's
+  // release the moment CI posts it, but the user is still running last night's
+  // build. Showing them a feature they don't have yet would both confuse them
+  // AND burn the entry — they'd never see it again after the update landed.
+  const current = parseVersion(input.currentVersion);
+  const ceiling = current ? versionSortKey(current) : Number.POSITIVE_INFINITY;
+
+  const inRange = input.entries
+    .filter((e) => versionSortKey(e.version) <= ceiling)
+    .sort((a, b) => versionSortKey(b.version) - versionSortKey(a.version));
+  if (inRange.length === 0) return { show: [], cursors: input.cursors };
+
+  // Every gate the backend is currently withholding. Read off the entries
+  // rather than off this client's own copy of the register on purpose: a
+  // desktop build can be nights behind the backend, and a gate it has never
+  // heard of still has to freeze.
+  const withheld = new Set<string>();
+  for (const entry of inRange) {
+    for (const key of entry.gatedFeatures ?? []) withheld.add(key);
+  }
+
+  // Every gate this response mentions at all: the withheld ones, plus any gate
+  // whose highlights are being SERVED because it has already come down.
+  const known = new Set<string>(withheld);
+  for (const entry of inRange) {
+    for (const h of entry.highlights) {
+      if (h.requiresFeature) known.add(h.requiresFeature);
+    }
+  }
+
+  // Freeze on first sight, at the ungated high-water mark. This also handles a
+  // gate that came down before this client ever heard of it: its cursor starts
+  // level with the ungated stream, so its backlog is whatever the ungated
+  // stream had not read either — no replay of ancient history.
+  for (const key of known) {
+    if (cursors[key] === undefined) cursors[key] = ungated;
+  }
+
+  const show = inRange
+    .map((entry) => {
+      const entryKey = versionSortKey(entry.version);
+      return {
+        ...entry,
+        highlights: entry.highlights.filter((h) => {
+          if (!h.surfaces.includes(input.surface)) return false;
+          const stream = h.requiresFeature ?? UNGATED_STREAM;
+          return entryKey > versionSortKey(cursors[stream] ?? ungated);
+        }),
+      };
+    })
+    .filter((entry) => entry.highlights.length > 0);
+
+  // Advance, never retreat. `inRange` is not filtered to "above the cursor" —
+  // it cannot be, because each stream has its own — so the newest entry in the
+  // window is routinely OLDER than a cursor that is already past it. The
+  // desktop hits this on every launch where the ceiling sits above the newest
+  // published release, and an unguarded write would walk the cursor backwards
+  // and re-show the same modal.
+  const newest = inRange[0].version;
+  const newestKey = versionSortKey(newest);
+  for (const key of Object.keys(cursors)) {
+    if (key !== UNGATED_STREAM && withheld.has(key)) continue;
+    if (newestKey > versionSortKey(cursors[key])) cursors[key] = newest;
+  }
+
+  return { show, cursors };
 }

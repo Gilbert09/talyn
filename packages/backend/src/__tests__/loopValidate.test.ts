@@ -152,6 +152,32 @@ describe('validateLoop', () => {
   });
 });
 
+describe('internet access', () => {
+  it('is off unless asked for', () => {
+    // The default has to be the closed one: a loop that quietly had a route off
+    // the box would be the opposite of what somebody who never saw the switch
+    // expects.
+    expect(validateLoop(VALID).internetAccess).toBe(false);
+  });
+
+  it('is on when asked for', () => {
+    expect(validateLoop(withField({ internetAccess: true })).internetAccess).toBe(true);
+  });
+
+  it('reads only a real boolean', () => {
+    expect(() =>
+      validateLoop(withField({ internetAccess: 'yes' as unknown as boolean }))
+    ).toThrow(/must be a boolean/);
+  });
+
+  it('does not read a truthy string as a yes', () => {
+    // The value survives a round trip through jsonb and a stored shape from an
+    // older client. Truthiness on the one switch that opens a network is how a
+    // loop ends up routed because somebody wrote "false".
+    expect(() => validateLoop(withField({ internetAccess: 'false' as unknown as boolean }))).toThrow();
+  });
+});
+
 describe('loopInputProblem', () => {
   it('reports the blank editor as incomplete rather than throwing', () => {
     // It drives the Save button's disabled state, so it must answer for every

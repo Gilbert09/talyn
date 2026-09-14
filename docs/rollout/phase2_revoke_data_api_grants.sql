@@ -1,19 +1,19 @@
 -- PHASE 2 of the backend data boundary. NOT a migration yet, on purpose.
 --
--- Migration 0055 added the `talyn_backend` role and its grants, and revoked
+-- Migration 0056 added the `talyn_backend` role and its grants, and revoked
 -- nothing, so the old and the new build can serve at the same time. This
 -- script removes the Data API roles' direct access to application tables.
 --
 -- WHEN TO APPLY
 --
 -- Only after every replica runs a build that uses `talyn_backend` — that is,
--- one full deploy after 0055 landed. The old build runs `set local role
+-- one full deploy after 0056 landed. The old build runs `set local role
 -- authenticated` on every request, so applying this while one is still serving
 -- gives that replica `permission denied` on every authenticated request.
 --
 -- HOW TO APPLY
 --
--- Copy this file to `packages/backend/src/db/migrations/0056_revoke_data_api_grants.sql`,
+-- Copy this file to `packages/backend/src/db/migrations/0057_revoke_data_api_grants.sql`,
 -- add the entry to `meta/_journal.json`, and push. The next boot applies it.
 -- Rolling it back means re-running `docs/rollout/rollback_regrant_authenticated.sql`.
 --

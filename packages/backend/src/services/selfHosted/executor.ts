@@ -54,6 +54,14 @@ export type { DispatchResult };
  * that git push WILL fail matters as much as telling it the alternative exists,
  * because an agent that believes push should work treats the refusal as
  * something to route around.
+ *
+ * The `gh` sentence is the same lesson, learned twice. "The GitHub API is
+ * already authenticated" is true of the PROXIED REST API and false of the `gh`
+ * CLI, which carries its own credential and holds none here — so an agent told
+ * only the first half reaches for `gh` (the obvious tool for "find the PRs this
+ * person opened") and gets `gh cannot authenticate in a fleet run`. One loop run
+ * spent its whole turn discovering that and shipped nothing. Naming the tool
+ * that will not work costs one clause; finding out costs a run.
  */
 const SYSTEM_PROMPT =
   'You are a coding agent working in an isolated microVM with the repository checked out. ' +
@@ -75,7 +83,10 @@ const SYSTEM_PROMPT =
   'Rung 3 rewrites the PR branch and discards its previous commits, so do not reach for it while (1) or ' +
   '(2) would have worked. Never move the repository default branch; the fleet will refuse.\n\n' +
   'git and the GitHub API are already authenticated — there are no credentials in this VM and you ' +
-  'do not need any. Some API endpoints are deliberately unreachable; if one is refused, that is a ' +
+  'do not need any. THE `gh` CLI IS NOT, and cannot be: it looks for a credential of its own, this ' +
+  'guest holds none by design, and no amount of logging in will change that. Use the REST API ' +
+  'instead of `gh` for everything, including searching. ' +
+  'Some API endpoints are deliberately unreachable; if one is refused, that is a ' +
   'policy decision, not an obstacle to work around. Do not probe for alternatives, and never use a ' +
   'request that creates state (a review, a comment, a ref) to test whether something is permitted.\n\n' +
   'When done, state the URL of the pull request you opened.';
@@ -285,7 +296,18 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       // ONE vendor, never both, and never `github`: suppressing everything
       // nulls the refresh hook outright (`allCredentialsSuppressed`), which
       // would strip the key we just sent.
-      policy: { credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' } },
+      policy: {
+        credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
+        // Only when the task asked for it. Absent means the fleet's default —
+        // no routed network — and absent is what every task except an
+        // internet-enabled loop sends.
+        //
+        // It rides on the task rather than being decided here because a revived
+        // run must get the POSTURE IT HAD: reading the loop instead would give a
+        // re-dispatch whatever the loop says today, which is a different box
+        // from the one being replaced.
+        ...(internetAccessFromTask(task) ? { egress: { mode: 'open' as const } } : {}),
+      },
     });
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
@@ -483,6 +505,17 @@ async function createSandboxRetryingUncertain(
 function modelFromTask(task: Task): string | undefined {
   const m = (task.metadata as Record<string, unknown> | null)?.model;
   return typeof m === 'string' && m ? m : undefined;
+}
+
+/**
+ * Whether this task asked for a sandbox that can reach the internet.
+ *
+ * Strictly `true`, never truthiness: the value arrives from a jsonb column, and
+ * a string left there by an older shape must not read as a yes on the one
+ * switch that opens a network.
+ */
+function internetAccessFromTask(task: Task): boolean {
+  return (task.metadata as Record<string, unknown> | null)?.internetAccess === true;
 }
 
 function modelFromEnv(env: Environment): string | undefined {
