@@ -346,12 +346,42 @@ export type PostHogRunStatus =
   | 'failed'
   | 'cancelled';
 
+/**
+ * The bookkeeping PostHog's runner attaches to a finished run.
+ *
+ * Shaped by the runner rather than by the agent, and the same for every
+ * `runtime_adapter` — a Codex run that pushed nothing comes back as
+ * `{ head_branch: 'main' }`, a Claude run that opened a PR carries `pr_url`
+ * alongside `commit_push` and `head_branches`.
+ *
+ * `pr_url` is the ONLY trustworthy statement that this run opened a PR.
+ * `final_message` is prose and routinely cites other people's pull requests —
+ * see {@link PostHogRun.output}.
+ */
+export interface PostHogRunOutput {
+  /** The PR this run opened. Absent when it opened none. */
+  pr_url?: string | null;
+  /** Every PR it opened, when it opened more than one. */
+  pr_urls?: unknown;
+  /** The branch it pushed. `main` when it pushed nothing of its own. */
+  head_branch?: string | null;
+  [k: string]: unknown;
+}
+
 export interface PostHogRun {
   id: string;
   status?: PostHogRunStatus;
+  /**
+   * The run's working branch. NOT reliably a PR head — a run that pushed
+   * nothing reports `main`.
+   */
   branch?: string | null;
-  /** Free-form output the agent left behind (may contain the PR URL). */
-  output?: unknown;
+  /**
+   * What the runner recorded about the run. Read `pr_url` off it and nothing
+   * else: this object also holds the agent's closing prose, which mentions
+   * PRs it merely read.
+   */
+  output?: PostHogRunOutput | unknown;
   state?: unknown;
   error_message?: string | null;
   log_url?: string | null;

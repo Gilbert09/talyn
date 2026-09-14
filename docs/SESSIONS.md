@@ -2,6 +2,96 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 126 — a cloud run only opened the PR it says it opened (2026-09-14)
+
+Tom, from the Loops panel: two runs of a "Daily PR" loop on PostHog/posthog both
+showed `#99835`. They had not opened it. `PostHog/posthog#99835` was authored by
+Tom, opened the day before, off `posthog/openai-ads-release-status-beta`, and
+already merged.
+
+A loop run has no PR column. It is a two-hop join — `loop_runs.task_id` →
+`tasks.pull_request_id` → `pull_requests.number` (`loops/store.ts`) — so the
+question was how the TASK got its `pull_request_id`. For PostHog Code:
+
+```js
+function findPullRequestUrl(remote, run) {
+  return scanForPrUrl(run) ?? scanForPrUrl(remote);   // JSON.stringify + regex
+}
+```
+
+It stringified the whole run **and the remote task record** and took the first
+thing matching a PR-URL regex. That is not "the PR this run opened", it is "the
+first PR link anywhere in the blob". Both halves were wrong for the same reason
+— they contain text about OTHER people's pull requests:
+
+- the task record carries `description`, which is the user's prompt;
+- the run carries `output.final_message`, the agent's closing prose.
+
+A loop called "Daily PR" reads pull requests for a living, so it writes one of
+those every single firing. Nothing downstream caught it: the cross-repo guard in
+`prCache` only rejects a PR from a DIFFERENT repo, `run.branch` was passed as
+`headBranch` but is only used when INSERTING a placeholder row, and `#99835`
+already existed — so `tasks.pull_request_id` was then set unconditionally, under
+a comment asserting "this task DID open this PR". The task summary read
+*"PostHog Code opened …/99835"*.
+
+**The fix turned out to be smaller than the diagnosis**, because the API already
+answers the question properly. Pulled a real `tasks-runs-retrieve`, and a run
+that opened a PR carries structured runner-level bookkeeping:
+
+```json
+"branch": "posthog/keep-inbox-triage-button-in-place",
+"output": {
+  "pr_url":   "https://github.com/PostHog/posthog/pull/100303",
+  "pr_urls":  ["https://github.com/PostHog/posthog/pull/100303"],
+  "head_branch": "posthog/keep-inbox-triage-button-in-place",
+  "final_message": "… see [#98441](https://github.com/PostHog/posthog/pull/98441) … "
+}
+```
+
+Note the fixture argues the case by itself: `final_message` cites a PR that is
+not the one this run opened. So `findPullRequestUrl` now reads `output.pr_url`
+(then `output.pr_urls`) and nothing else, and the whole value must be a PR URL —
+a sentence with one embedded does not count.
+
+Two things checked before committing to that, both of which killed a worse
+design I had started on:
+
+- **`run.branch` is not a PR head.** A Codex run that pushed nothing reports
+  `branch: "main"`, `output: { head_branch: "main" }`. So "ask GitHub for the
+  open PR on this run's branch" — which was the plan — would have been its own
+  bug. `output.head_branch` is now what seeds a placeholder row's `headBranch`.
+- **The field is runner-level, not adapter-level.** The same `output` keys
+  appear on `claude` and `codex` runs, so reading it does not silently work for
+  one agent and not the other.
+
+There is deliberately no scrape fallback. If PostHog renames the field a PR goes
+unlinked, and that is the right way round: the link is a claim about authorship,
+so a missing one is visibly nothing while a wrong one reads as fact. The fleet
+path never had this bug — `selfHosted/poller.ts` reads `sandbox.prUrl` off a
+sandbox that is 1:1 with the task.
+
+**Migration 0056 is the rows it already wrote**, and the safety argument is
+entirely `type = 'code_writing'`. Every path that creates a task already knowing
+its PR — merge-queue executor, auto-keep watcher, workflow actions — creates a
+`pr_response`; a `code_writing` task is a freeform prompt and starts with
+`pull_request_id` NULL. So a link on one can only have come from the poller, and
+then the test is an impossibility rather than a heuristic: **a PR that was
+already open before the task existed is not one the task opened.** Compared
+against `last_summary ->> 'createdAt'` (GitHub's timestamp), not
+`pull_requests.created_at` (when Talyn first cached the row). A poller-inserted
+placeholder has no real `createdAt`, fails the test, and is left alone — the
+whole thing errs toward keeping a link, never toward inventing one.
+
+The back-pointer is cleared too, and that half is not cosmetic:
+`pull_requests.task_id` is read by the merge queue, the auto-keep watcher,
+prMonitor and the PR routes' "has a task" filter.
+
+Left alone on purpose: the historical `tasks.result.summary` strings that say
+"PostHog Code opened …". They are a record of what the system believed at the
+time, nothing renders a link from them, and rewriting prose in a migration is
+further than a repair should reach.
+
 ## Session 125 — a loop that can reach the internet (2026-09-14)
 
 The first real loop — a daily digest of one author's PRs, posted to a Slack
