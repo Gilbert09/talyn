@@ -8,12 +8,8 @@
 -- still serving every request, with the health gate then pinning the broken
 -- build in place if the new one failed to start.
 --
--- PHASE 2 revokes the Data API roles' access. It must ship in a LATER deploy,
--- once no replica runs the old build. The script is
--- `docs/rollout/phase2_revoke_data_api_grants.sql` — copy it to a numbered
--- migration when the time comes. Until then the boundary is incomplete: the
--- backend uses the scoped role, but `anon`/`authenticated` still hold their
--- old grants.
+-- PHASE 2 revokes the Data API roles' access. It had to ship in a LATER deploy,
+-- once no replica ran the old build, and did: migration 0058.
 --
 -- Product clients use the backend API, not Supabase table access.
 DO $$

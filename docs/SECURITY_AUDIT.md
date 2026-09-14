@@ -88,22 +88,27 @@ The boundary therefore lands in two phases.
    settles loop runs that were linked across workspaces before this change.
 5. Verify login, owned-resource CRUD and foreign-resource refusal.
 
-### Phase 2 — a later deploy
+### Phase 2 — shipped
 
-6. Once no replica runs the old build, copy
-   `docs/rollout/phase2_revoke_data_api_grants.sql` to
-   `packages/backend/src/db/migrations/0058_revoke_data_api_grants.sql`, add its
-   journal entry, and push. This removes `anon`/`authenticated` access to
-   application tables. **Until it ships the boundary is incomplete**: the
-   backend uses the scoped role, but the Data API roles keep their old grants.
-7. Verify that direct Data API table requests are refused.
+6. Migration 0058 removes `anon`/`authenticated` access to application tables
+   and strips the default privileges, so a table created later grants them
+   nothing. Applied one deploy after 0057, with Railway showing a single active
+   deployment — every replica was already on `talyn_backend`.
+7. Verified in production: the Data API roles hold no table privileges, the
+   backend keeps its 18 tables plus the merge-queue sequence, and owner scoping
+   still resolves.
+
+**The boundary is now complete.** `authenticated` was the only Data API role
+that actually held grants (`anon` and `service_role` had none), so it is the one
+this took anything from.
 
 ### Rollback
 
-Migration 0057 revokes nothing, so rolling back to the previous build needs no
-database work. After PHASE 2, the previous build cannot run without its grants:
-restore them with `docs/rollout/rollback_regrant_authenticated.sql` BEFORE
-redeploying it. Drizzle has no down migrations; that script is the only way back.
+Now that phase 2 has shipped, a build older than 0057 cannot run: its owner
+scopes use `authenticated`, whose grants are gone. To go back that far, run
+`docs/rollout/rollback_regrant_authenticated.sql` BEFORE redeploying it. Drizzle
+has no down migrations; that script is the only way back. Rolling back to any
+build from 0057 onwards needs no database work.
 
 ### Why the policies moved off `auth.uid()`
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { applyDataApiRevocations, createTestDb, seedUser } from './helpers/testDb.js';
+import { createTestDb, seedUser } from './helpers/testDb.js';
 import { loopRuns, loops, pullRequests, repositories, tasks, workspaces } from '../db/schema.js';
 import { getLoopRun, listLoopRuns } from '../services/loops/store.js';
 import { activeRunsWithTaskStatus } from '../services/loops/runs.js';
@@ -27,7 +27,6 @@ describe('loop run tenant isolation', () => {
     vi.clearAllMocks();
     vi.stubEnv('LOOPS_ENABLED', 'true');
     testDb = await createTestDb();
-    await applyDataApiRevocations(testDb.pglite);
     await seedUser(testDb.db, { id: 'owner-a' });
     await seedUser(testDb.db, { id: 'owner-b' });
     await testDb.db.insert(workspaces).values([

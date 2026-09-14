@@ -407,6 +407,13 @@
 			"when": 1789450000001,
 			"tag": "0057_backend_data_boundary",
 			"breakpoints": true
+		},
+		{
+			"idx": 58,
+			"version": "7",
+			"when": 1789450000002,
+			"tag": "0058_revoke_data_api_grants",
+			"breakpoints": true
 		}
 	]
 }

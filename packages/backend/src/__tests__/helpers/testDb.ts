@@ -7,24 +7,6 @@ import { setDbClient, resetDbClient, type Database } from '../../db/client.js';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../db/migrations');
 
-/** The deferred phase-2 script, which removes the Data API roles' grants. */
-const PHASE2_REVOKE_SQL = path.resolve(
-  __dirname, '../../../../../docs/rollout/phase2_revoke_data_api_grants.sql',
-);
-
-/**
- * Apply the phase-2 revocations on top of a migrated test database.
- *
- * Migration 0055 is additive on purpose: it must not break the replica still
- * running the previous build. The revocations ship one deploy later. Tests
- * that assert the FINISHED boundary apply them explicitly, so the end state
- * stays pinned even though no migration performs it yet.
- */
-export async function applyDataApiRevocations(pglite: PGlite): Promise<void> {
-  const sql = fs.readFileSync(PHASE2_REVOKE_SQL, 'utf-8');
-  await pglite.exec(sql.replace(/-->\s*statement-breakpoint/g, ''));
-}
-
 /**
  * Spin up a fresh in-memory Postgres via pglite, apply the Drizzle migration,
  * and register it as the process-wide DB client. Returns the client and a

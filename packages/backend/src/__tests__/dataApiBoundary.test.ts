@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyDataApiRevocations, createTestDb, seedUser } from './helpers/testDb.js';
+import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
 
 describe('Data API database boundary', () => {
@@ -14,7 +14,6 @@ describe('Data API database boundary', () => {
   it.each(['anon', 'authenticated', 'authenticator', 'public_probe'])(
     '%s cannot read or write any application table or sequence', async (role) => {
       testDb = await createTestDb();
-    await applyDataApiRevocations(testDb.pglite);
       await seedUser(testDb.db, { id: 'owner-a' });
       await testDb.db.insert(schema.workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
       await testDb.db.insert(schema.tasks).values({
@@ -73,7 +72,6 @@ describe('Data API database boundary', () => {
 
   it('keeps the backend role restricted and unavailable to Data API sessions', async () => {
     testDb = await createTestDb();
-    await applyDataApiRevocations(testDb.pglite);
     const attributes = await testDb.pglite.query(`
       SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolinherit
       FROM pg_roles WHERE rolname = 'talyn_backend'
@@ -94,7 +92,6 @@ describe('Data API database boundary', () => {
 
   it('removes independent column grants without changing auth schema privileges', async () => {
     testDb = await createTestDb();
-    await applyDataApiRevocations(testDb.pglite);
     // Restore a pre-migration role state with additional column-level grants.
     await testDb.pglite.exec(`
       DROP OWNED BY talyn_backend;
@@ -124,7 +121,6 @@ describe('Data API database boundary', () => {
 
   it('grants the backend only the former explicit authenticated privileges', async () => {
     testDb = await createTestDb();
-    await applyDataApiRevocations(testDb.pglite);
     const grants = await testDb.pglite.query<{ table_name: string; privileges: string[] }>(`
       SELECT table_name, array_agg(privilege_type ORDER BY privilege_type) AS privileges
       FROM information_schema.role_table_grants

@@ -1,29 +1,18 @@
--- PHASE 2 of the backend data boundary. NOT a migration yet, on purpose.
+-- PHASE 2 of the backend data boundary: the revocations.
 --
--- Migration 0057 added the `talyn_backend` role and its grants, and revoked
--- nothing, so the old and the new build can serve at the same time. This
--- script removes the Data API roles' direct access to application tables.
+-- Migration 0057 added the `talyn_backend` role and its grants and revoked
+-- nothing, so the previous build could keep serving while it rolled out. This
+-- removes the Data API roles' direct access to application tables.
 --
--- WHEN TO APPLY
+-- SAFE TO APPLY because 0057 has already shipped and cut over: every replica
+-- now runs a build whose owner scopes use `talyn_backend`. Checked before this
+-- was written — Railway had exactly one active deployment (the 0057 build), and
+-- the role plus all 17 rewritten policies were live in production.
 --
--- Only after every replica runs a build that uses `talyn_backend` — that is,
--- one full deploy after 0057 landed. The old build runs `set local role
--- authenticated` on every request, so applying this while one is still serving
--- gives that replica `permission denied` on every authenticated request.
+-- If this ever has to be undone, the previous build cannot run without these
+-- grants: re-run `docs/rollout/rollback_regrant_authenticated.sql` BEFORE
+-- redeploying it. Drizzle has no down migrations.
 --
--- HOW TO APPLY
---
--- Copy this file to `packages/backend/src/db/migrations/0058_revoke_data_api_grants.sql`,
--- add the entry to `meta/_journal.json`, and push. The next boot applies it.
--- Rolling it back means re-running `docs/rollout/rollback_regrant_authenticated.sql`.
---
--- CHECK FIRST — this must return no rows:
---
---   SELECT usename FROM pg_stat_activity
---   WHERE datname = current_database() AND backend_start < now() - interval '1 hour';
---
--- and confirm in Railway that only one deployment is active.
-
 -- Measured on production on 2026-09-14, AFTER phase 1:
 --
 --   role           tasks_select  bypassrls
