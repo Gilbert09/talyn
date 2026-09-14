@@ -104,7 +104,7 @@ export const TOOLS: ToolDefinition[] = [
         status: {
           type: 'string',
           description:
-            'Filter by status: queued, in_progress, completed, failed, cancelled.',
+            'Filter by status: queued, in_progress, completed, failed, needs_human, cancelled.',
         },
         type: {
           type: 'string',

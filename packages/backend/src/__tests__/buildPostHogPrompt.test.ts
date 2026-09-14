@@ -5,6 +5,9 @@ import {
   prNeedsFollowup,
   prHasFixableIssues,
   TALYN_COMMENT_TAGLINE,
+  TALYN_NEEDS_HUMAN_SENTINEL,
+  parseNeedsHumanSentinel,
+  mergeableBlockerSignature,
   type PRMergeableSummary,
   type CloudProviderType,
 } from '@talyn/shared';
@@ -409,5 +412,90 @@ describe('buildMergeablePrompt — replying to human review comments', () => {
       respondToHumanComments: false,
     });
     expect(prompt).toContain('TURNED OFF REPLYING TO HUMAN REVIEW COMMENTS');
+  });
+});
+
+describe('parseNeedsHumanSentinel', () => {
+  it('reads the reason off the last line', () => {
+    expect(
+      parseNeedsHumanSentinel(
+        'I checked the snapshots and they are correct.\n' +
+          `${TALYN_NEEDS_HUMAN_SENTINEL} Someone must approve the 6 Visual Review baselines.`
+      )
+    ).toEqual({ reason: 'Someone must approve the 6 Visual Review baselines.' });
+  });
+
+  it('ignores trailing blank lines before the sentinel', () => {
+    expect(
+      parseNeedsHumanSentinel(`done\n${TALYN_NEEDS_HUMAN_SENTINEL} need a key\n\n   \n`)
+    ).toEqual({ reason: 'need a key' });
+  });
+
+  it('does NOT fire when the agent merely discusses the sentinel', () => {
+    // The whole false-positive defence. An agent explaining the protocol, or
+    // quoting its own instructions, must not be read as invoking it.
+    expect(
+      parseNeedsHumanSentinel(
+        `If I were stuck I would emit ${TALYN_NEEDS_HUMAN_SENTINEL} and stop.\n` +
+          'But I was not stuck, so I fixed the build instead.'
+      )
+    ).toBeNull();
+  });
+
+  it('is null for ordinary closing prose, which is what an override template produces', () => {
+    // A workspace that forked the prompt template loses the instruction. That
+    // must degrade to "unknown" — today's behaviour — never to needs_human.
+    expect(parseNeedsHumanSentinel('All checks are green and the PR is mergeable.')).toBeNull();
+    expect(parseNeedsHumanSentinel('')).toBeNull();
+    expect(parseNeedsHumanSentinel(null)).toBeNull();
+    expect(parseNeedsHumanSentinel(undefined)).toBeNull();
+  });
+
+  it('still counts a bare sentinel, and supplies wording', () => {
+    const parsed = parseNeedsHumanSentinel(`stopping\n${TALYN_NEEDS_HUMAN_SENTINEL}`);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.reason).toMatch(/needs a person/i);
+  });
+
+  it('clamps a runaway reason rather than storing prose', () => {
+    const parsed = parseNeedsHumanSentinel(`${TALYN_NEEDS_HUMAN_SENTINEL} ${'x'.repeat(500)}`);
+    expect(parsed!.reason.length).toBeLessThanOrEqual(300);
+    expect(parsed!.reason.endsWith('…')).toBe(true);
+  });
+
+  it('round-trips the real refusal that prompted this state', () => {
+    // Verbatim from task ae66b426 on PostHog/posthog#100390, plus the line the
+    // agent would now be asked to add.
+    const closing =
+      'PR #100390 is clean except the Visual Review gate. Storybook run 9282adc0 has 6 new / 0 ' +
+      'changed / 0 unresolved snapshots; I verified all 6 PNGs as correct first baselines. ' +
+      'Finalizing commits a baseline and greens a merge gate, which repo policy requires an ' +
+      'explicit per-run human yes for.\n' +
+      `${TALYN_NEEDS_HUMAN_SENTINEL} Finalize the 6 Visual Review baselines, or authorize me to.`;
+    expect(parseNeedsHumanSentinel(closing)).toEqual({
+      reason: 'Finalize the 6 Visual Review baselines, or authorize me to.',
+    });
+  });
+});
+
+describe('mergeableBlockerSignature', () => {
+  it('is stable when nothing about the blockers changed', () => {
+    expect(mergeableBlockerSignature(summary, 'BLOCKED')).toBe(
+      mergeableBlockerSignature({ ...summary }, 'BLOCKED')
+    );
+  });
+
+  it('changes when the failing-check digest changes', () => {
+    // The re-arm trigger: a human approving Visual Review clears a failing
+    // check, which is what tells the watcher its stand-down is over.
+    const after = { ...summary, failingChecksDigest: 'other' } as PRMergeableSummary;
+    expect(mergeableBlockerSignature(after, 'BLOCKED')).not.toBe(
+      mergeableBlockerSignature(summary, 'BLOCKED')
+    );
+  });
+
+  it('treats an absent merge state as UNKNOWN, so the watcher can omit it', () => {
+    expect(mergeableBlockerSignature(summary)).toBe(mergeableBlockerSignature(summary, ''));
+    expect(mergeableBlockerSignature(summary)).toContain('UNKNOWN');
   });
 });

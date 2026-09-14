@@ -516,6 +516,12 @@ export interface AdminTaskDetail extends AdminTaskSummary {
   repositoryId: string | null;
   branch: string | null;
   error: string | null;
+  /**
+   * Why the run handed back to a person, when it ended `needs_human`. Kept
+   * separate from `error` so the console can say "needs a human" rather than
+   * rendering a correct refusal in the red failure banner.
+   */
+  needsHumanReason: string | null;
   prUrl: string | null;
   /** Present only with ?transcript=1, and that read is audited. */
   transcript: unknown[] | null;

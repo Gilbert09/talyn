@@ -57,7 +57,17 @@ export function TaskDetailPage() {
       subtitle={
         <span className="flex flex-wrap items-center gap-3 text-xs">
           <CopyableId value={data.id} />
-          <Pill tone={data.status === 'failed' ? 'critical' : 'muted'}>{data.status}</Pill>
+          <Pill
+            tone={
+              data.status === 'failed'
+                ? 'critical'
+                : data.status === 'needs_human'
+                  ? 'warn'
+                  : 'muted'
+            }
+          >
+            {data.status}
+          </Pill>
           <span>{data.type}</span>
           {data.ownerEmail && <span>{data.ownerEmail}</span>}
           <span title={absolute(data.createdAt)}>created {relativeAge(data.createdAt)} ago</span>
@@ -97,6 +107,17 @@ export function TaskDetailPage() {
         )
       }
     >
+      {/* A refusal is NOT an error. It gets its own amber banner above the
+          red one, because this page rendering "Error: …" over a correct
+          agent handoff is exactly how the incident behind this state read to
+          an operator. */}
+      {data.needsHumanReason && (
+        <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+          <span className="font-medium">Needs a human: </span>
+          {data.needsHumanReason}
+        </div>
+      )}
+
       {data.error && (
         <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <span className="font-medium">Error: </span>

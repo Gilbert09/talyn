@@ -35,6 +35,8 @@ import {
   type TaskStatus,
   type CreateTaskRequest,
   readCloudTaskMeta,
+  isTaskStatus,
+  TASK_STATUSES,
   type ApiResponse,
   type GenerateTaskMetadataRequest,
   type GenerateTaskMetadataResponse,
@@ -218,6 +220,19 @@ export function taskRoutes(): Router {
       result?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
     };
+
+    // `status` is TYPED as TaskStatus and was never CHECKED, so any string a
+    // client sent round-tripped into the column — and every gate downstream
+    // (the plan counter, the reuse path, the watcher's "is a run working this
+    // PR?") reads that column and compares it against a known list. An
+    // unrecognised value is in none of them, which is not a safe default in
+    // any of them.
+    if (body.status !== undefined && !isTaskStatus(body.status)) {
+      return res.status(400).json({
+        success: false,
+        error: `status must be one of: ${TASK_STATUSES.join(', ')}`,
+      });
+    }
 
     // Only dispatch settings are public. Remote handles and PR links belong to the server.
     if (body.metadata !== undefined) {

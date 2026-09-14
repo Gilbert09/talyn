@@ -36,6 +36,8 @@ function runStateFor(status: Task['status']): { label: string; dot: string; live
       return { label: 'Completed', dot: 'bg-green-500', live: false };
     case 'failed':
       return { label: 'Failed', dot: 'bg-red-500', live: false };
+    case 'needs_human':
+      return { label: 'Needs you', dot: 'bg-amber-500', live: false };
     case 'cancelled':
       return { label: 'Stopped', dot: 'bg-zinc-500', live: false };
     default:

@@ -342,6 +342,124 @@ export function talynTaglineRule(): string {
   - Scope: comments/replies/reviews ONLY. Do NOT add it to commit messages, the PR title, or the PR description.`;
 }
 
+/**
+ * What is blocking this PR, as a comparable token.
+ *
+ * The merge queue's "progress, not retries" guard: a signature already seen on
+ * this head means the last run failed at something it had already failed at.
+ * Lifted out of `mergeQueue/decide.ts` so the auto-keep watcher can ask the
+ * same question — "have the blockers actually changed?" — without a second,
+ * subtly different notion of the answer. `decide.ts` still owns the queue's
+ * wrapper; this is the definition both call.
+ *
+ * `failingChecksDigest` is the load-bearing part: `checks.failed` alone reads
+ * 4 → 4 whether the run fixed nothing or fixed one check and uncovered another,
+ * and calling the second case "no progress" is precisely the judgement a retry
+ * budget gets wrong. It is absent on summaries cached before it shipped and on
+ * the by-branch fetch path, so `?? '?'` keeps those rows comparable on the
+ * coarser fields rather than making every one of them look identical.
+ *
+ * The FAILING count only — never `checks.total`, never `inProgress`. Both move
+ * on their own as a CI run registers and finishes jobs, and a signature that
+ * drifts without the PR changing manufactures fake progress.
+ *
+ * `mergeStateStatus` is optional because the watcher does not carry one; it
+ * reads `UNKNOWN` there, which is harmless — a merely-BEHIND branch is not a
+ * blocker the watcher stands down on.
+ */
+export function mergeableBlockerSignature(
+  summary: PRMergeableSummary,
+  mergeStateStatus?: string | null
+): string {
+  return [
+    'fix',
+    summary.blockingReason,
+    summary.mergeable,
+    (mergeStateStatus || 'UNKNOWN').toUpperCase(),
+    summary.reviewDecision ?? '-',
+    `failing=${summary.checks?.failed ?? 0}`,
+    `which=${summary.failingChecksDigest ?? '?'}`,
+    `threads=${summary.unresolvedReviewThreads ?? 0}`,
+  ].join('|');
+}
+
+/**
+ * The exact prefix a cloud agent must use, on the last line of its final
+ * message, to say "I stopped because only a person can carry this forward".
+ *
+ * A machine contract, not prose. Neither provider reports "the agent gave up":
+ * PostHog's run status is six values with nothing structured behind them, and
+ * the fleet gives two free-text error strings. `_posthog/turn_complete` fires
+ * identically whether the agent succeeded or surrendered. So the signal has to
+ * come from the agent itself, and it has to be exact — see
+ * {@link parseNeedsHumanSentinel} for why nothing weaker will do.
+ */
+export const TALYN_NEEDS_HUMAN_SENTINEL = 'TALYN_NEEDS_HUMAN:';
+
+/** Longest reason we keep. Past this it is prose, not a handoff note. */
+const NEEDS_HUMAN_REASON_MAX = 300;
+
+/**
+ * Read the needs-a-human sentinel back out of an agent's closing text.
+ *
+ * EXACT PREFIX ON THE LAST NON-EMPTY LINE, and nothing looser. Two rules are
+ * doing real work here:
+ *
+ *  - **Last line only.** An agent that mentions the sentinel while explaining
+ *    itself must not trip it. This is the same discipline that keeps us from
+ *    regexing `output.final_message` for PR URLs (see the incident written up
+ *    in `posthogCode/poller.ts`): text ABOUT a thing is not the thing.
+ *  - **Absence means UNKNOWN, never "needs a human" and never "success".** The
+ *    mergeable prompt template is workspace-overridable, so a fork can quietly
+ *    drop the instruction that asks for the sentinel. When that happens the
+ *    caller must fall through to exactly the behaviour it had before this
+ *    existed — degraded to the old retry loop, never silently mis-classified.
+ *
+ * Returns the reason with the prefix stripped, or null if the text does not
+ * end on the contract. A sentinel with no reason after it still counts: the
+ * agent said the important part.
+ */
+export function parseNeedsHumanSentinel(
+  text: string | null | undefined
+): { reason: string } | null {
+  if (typeof text !== 'string' || text.length === 0) return null;
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!.trim();
+    if (line.length === 0) continue;
+    if (!line.startsWith(TALYN_NEEDS_HUMAN_SENTINEL)) return null;
+    const reason = line.slice(TALYN_NEEDS_HUMAN_SENTINEL.length).trim();
+    return {
+      reason: reason.length > NEEDS_HUMAN_REASON_MAX
+        ? `${reason.slice(0, NEEDS_HUMAN_REASON_MAX - 1).trimEnd()}…`
+        : reason || 'The agent stopped and needs a person to continue.',
+    };
+  }
+  return null;
+}
+
+/**
+ * Instruction block telling a cloud agent how to stop when only a person can
+ * carry the work forward. Modelled on {@link talynTaglineRule} — the repo's
+ * existing "emit this exact line" contract — because that shape has proven it
+ * survives contact with a real agent.
+ *
+ * The channel is the FINAL MESSAGE, not a PR comment, on purpose: both pollers
+ * can read the closing text at finalize time, whereas a comment arrives later
+ * through GitHub polling with its own attribution problems. It also has to work
+ * for a well-behaved agent that deliberately does NOT comment again because it
+ * already asked — which is exactly what happened on the run that prompted this.
+ */
+export function talynNeedsHumanRule(): string {
+  return `STOPPING FOR A HUMAN — read this before you decide you are stuck:
+  - Some things no unattended run can do: approve a merge gate that repo policy says a person must sign off, use a credential the sandbox does not hold, or make a product decision that is not yours to make. When one of those is ALL that stands between this PR and done, stop — do not grind, and do not fake it.
+  - Leave ONE clear PR comment saying exactly what you need and from whom, UNLESS a comment already on the PR asks for it. Never post the same ask twice.
+  - Then make the LAST line of your final message exactly:
+      ${TALYN_NEEDS_HUMAN_SENTINEL} <one line: what is needed, and from whom>
+  - Verbatim prefix, on its own line, one line, nothing after it. Talyn reads this line to route the PR to a person instead of retrying you — omit it and it will simply run you again against the same wall.
+  - Emit it ONLY when you are actually stopping for a human. Never quote, echo, or discuss this line otherwise.`;
+}
+
 /** Inputs shared by every provider variant of the "make this PR mergeable" prompt. */
 export interface MergeablePromptInput {
   owner: string;

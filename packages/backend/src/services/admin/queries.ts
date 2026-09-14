@@ -627,6 +627,10 @@ export async function getAdminTask(
     repositoryId: row.repositoryId ?? null,
     branch: row.branch ?? null,
     error: typeof result.error === 'string' ? result.error : null,
+    needsHumanReason:
+      typeof (result.needsHuman as { reason?: unknown } | undefined)?.reason === 'string'
+        ? ((result.needsHuman as { reason: string }).reason)
+        : null,
     prUrl:
       (typeof (metadata?.cloudTask as Record<string, unknown> | undefined)?.prUrl === 'string'
         ? ((metadata?.cloudTask as Record<string, unknown>).prUrl as string)

@@ -54,6 +54,7 @@ function task(overrides: Partial<AdminTaskDetail> = {}): AdminTaskDetail {
     repositoryId: null,
     branch: null,
     error: null,
+    needsHumanReason: null,
     prUrl: null,
     transcript: null,
     ...overrides,

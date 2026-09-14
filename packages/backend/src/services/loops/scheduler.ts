@@ -302,11 +302,21 @@ class LoopScheduler {
       }
       return;
     }
-    if (taskStatus === 'failed' || taskStatus === 'cancelled') {
+    // `needs_human` settles here too. Loops are out of scope for the
+    // stand-down behaviour, but a status this chain does not recognise leaves
+    // the run wedged at `running` forever — so it must at least settle.
+    if (
+      taskStatus === 'failed' ||
+      taskStatus === 'cancelled' ||
+      taskStatus === 'needs_human'
+    ) {
       const moved = await settleRun(runId, {
         status: 'failed',
         failureCode: 'dispatch_failed',
-        error: `The task ${taskStatus === 'cancelled' ? 'was cancelled' : 'failed'}.`,
+        error:
+          taskStatus === 'needs_human'
+            ? 'The run stopped and needs a person to continue.'
+            : `The task ${taskStatus === 'cancelled' ? 'was cancelled' : 'failed'}.`,
       });
       if (moved) {
         await recordFailure(loopId);

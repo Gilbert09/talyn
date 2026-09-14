@@ -83,6 +83,12 @@ function toRunStatus(status: string | null): AdminRunRow['status'] {
       return 'failed';
     case 'cancelled':
       return 'cancelled';
+    // The RUN completed — it ran to a conclusion and reported one. That the
+    // conclusion was "a person has to do the next bit" is a task-level fact
+    // the run vocabulary has no word for. Listed explicitly so the `default`
+    // below is never the thing answering for it.
+    case 'needs_human':
+      return 'completed';
     default:
       // A retired host record means the run is over whatever the task row
       // still says, so anything else is reported as completed rather than as

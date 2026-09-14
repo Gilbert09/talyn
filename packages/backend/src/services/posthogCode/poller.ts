@@ -436,7 +436,15 @@ class PostHogCodePoller {
       const dispatchedAtMs = Date.parse(String(meta.dispatchedAt ?? ''));
       captureWorkspaceEvent(
         task.workspaceId,
-        status === 'completed' ? 'task_completed' : 'task_failed',
+        // Three-way, not two. Folding a refusal into `task_failed` is what
+        // made this class of stop invisible in the funnels: the rate of
+        // `task_needs_human` is the signal that tells us whether the sentinel
+        // prompt over-triggers, and there is nowhere else to read it.
+        status === 'completed'
+          ? 'task_completed'
+          : status === 'needs_human'
+            ? 'task_needs_human'
+            : 'task_failed',
         {
           task_id: task.id,
           task_type: row.type,

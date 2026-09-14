@@ -16,6 +16,7 @@ import {
   ExternalLink,
   GitPullRequest,
   Wand2,
+  UserRoundCheck,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -34,7 +35,7 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask, readCloudTaskMeta } from '@talyn/shared';
+import { isAgentTask, readCloudTaskMeta, TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import type { TaskScheduleError } from '@talyn/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority } from '@talyn/shared';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
@@ -55,6 +56,10 @@ const statusConfig: Record<
   in_progress: { icon: Loader2, label: 'In Progress', color: 'text-purple-400' },
   completed: { icon: CheckCircle, label: 'Completed', color: 'text-green-400' },
   failed: { icon: AlertCircle, label: 'Failed', color: 'text-red-400' },
+  // Amber, not red, and never the word "failed": the run did its job and
+  // handed back a question. Showing a correct refusal as a failure is the
+  // whole bug this state exists to fix.
+  needs_human: { icon: UserRoundCheck, label: 'Needs you', color: 'text-amber-400' },
   cancelled: { icon: AlertCircle, label: 'Cancelled', color: 'text-slate-400' },
 };
 
@@ -107,8 +112,10 @@ export function QueuePanel() {
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress');
   // Finished history, newest first — matches the server's cursor order so a
   // lazily-loaded older page slots in below without reshuffling.
+  // Derived from the shared partition, not a literal: a status listed in
+  // neither this nor the queued/in-flight buckets renders in no bucket at all.
   const completedTasks = tasks
-    .filter((t) => ['completed', 'failed', 'cancelled'].includes(t.status))
+    .filter((t) => TERMINAL_TASK_STATUSES.includes(t.status))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   // Infinite scroll: observe a sentinel at the end of the history list within
@@ -584,7 +591,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             {/* PR pill + open-on-GitHub link on any task with a PR linked
                 (started-from-a-PR, or linked once the cloud run opened one). */}
             <TaskPRControls task={task} onOpen={setPRSheetId} />
-            {task.status === 'failed' && (
+            {(task.status === 'failed' || task.status === 'needs_human') && (
               <>
                 <Button size="sm" data-attr="task-retry" onClick={handleRetryTask} disabled={actionInFlight}>
                   {isLoadingFor('retry') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RotateCw className="w-4 h-4 mr-1" />}
@@ -687,9 +694,48 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         </div>
       )}
 
+      {/* Needs-a-human banner. Deliberately AMBER and separate from the red
+          failure banner below: the run did not break, it asked a question and
+          stopped. Rendering that in red is the exact mistake this state was
+          added to stop making. Retry is offered because the person reading it
+          is usually the one who just unblocked the thing. */}
+      {task.status === 'needs_human' && (
+        <div className="px-4 py-3 border-b bg-amber-500/10 text-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2 min-w-0 flex-1">
+              <UserRoundCheck className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="font-medium text-amber-700 dark:text-amber-400">
+                  Needs you
+                </p>
+                <p className="text-xs text-amber-700/80 dark:text-amber-300/80 mt-1 break-words whitespace-pre-wrap">
+                  {task.result?.needsHuman?.reason ||
+                    task.result?.summary ||
+                    'The agent stopped and needs a person to continue.'}
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              onClick={handleRetryTask}
+              disabled={actionInFlight}
+            >
+              {isLoadingFor('retry') ? (
+                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              ) : (
+                <RotateCw className="w-3 h-3 mr-1" />
+              )}
+              Run again
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Failed/cancelled result banner — loud, above the log, with the
           full reason + a Retry action. */}
-      {task.result && !task.result.success && (
+      {task.status !== 'needs_human' && task.result && !task.result.success && (
         <div className="px-4 py-3 border-b bg-red-500/10 text-sm">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2 min-w-0 flex-1">

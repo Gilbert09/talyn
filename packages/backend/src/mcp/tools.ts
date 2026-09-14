@@ -397,7 +397,7 @@ export const TOOLS: McpToolDefinition[] = [
       type: 'object',
       properties: {
         workspace_id: { type: 'string' },
-        status: { type: 'string', description: 'queued | in_progress | completed | failed | cancelled' },
+        status: { type: 'string', description: 'queued | in_progress | completed | failed | needs_human | cancelled' },
         type: { type: 'string', description: 'code_writing | pr_response | pr_review' },
       },
     },

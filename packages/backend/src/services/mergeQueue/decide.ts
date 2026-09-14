@@ -13,6 +13,7 @@
 // round's verdict is the group-walk verdict.
 
 import {
+  mergeableBlockerSignature,
   prBlocksMerge,
   mergeBlockerReason,
   externalQueueProviderLabel,
@@ -373,23 +374,11 @@ function hasSettledBlockerFor(pr: PrSnapshot, ctx: DecisionContext): boolean {
  * coarser fields rather than making every one of them look identical.
  */
 export function blockerSignature(pr: PrSnapshot): string {
-  const s = pr.summary;
-  return [
-    'fix',
-    s.blockingReason,
-    s.mergeable,
-    mergeStateOf(pr),
-    s.reviewDecision ?? '-',
-    // FAILING count only — never `checks.total`, and never `inProgress`. Both
-    // move on their own as a CI run registers and finishes jobs, and a
-    // signature that drifts without the PR changing manufactures fake progress:
-    // the bound here is "we have seen this before", so anything that churns on
-    // its own makes it unreachable. A failure appearing or clearing IS a real
-    // change and is meant to count.
-    `failing=${s.checks?.failed ?? 0}`,
-    `which=${s.failingChecksDigest ?? '?'}`,
-    `threads=${s.unresolvedReviewThreads ?? 0}`,
-  ].join('|');
+  // The definition lives in @talyn/shared so the auto-keep watcher asks the
+  // identical question when deciding whether a needs-a-human stand-down should
+  // re-arm. Output is byte-identical to the literal this replaced, which is
+  // what keeps every `seenSignatures` row already in the DB comparable.
+  return mergeableBlockerSignature(pr.summary, mergeStateOf(pr));
 }
 
 /**

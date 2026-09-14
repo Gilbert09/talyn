@@ -382,6 +382,9 @@ function PRTableRow({
   // reading as a failure.
   const taskStopped = taskStatus === 'cancelled';
   const taskFailed = taskStatus === 'failed' || taskStopped;
+  // Stopped for a person. Actionable like a failure — the badge must show —
+  // but styled and worded as a question, not a breakage.
+  const taskNeedsHuman = taskStatus === 'needs_human';
   // The badge only shows while there's something actionable: a run in
   // flight or a failure to look at. A cleanly completed task (or one not
   // loaded in the store, which in practice means it's long done) renders
@@ -622,7 +625,7 @@ function PRTableRow({
               {/* Linked-task indicator — "Working" (spinner) while running,
                   "Failed" if it errored/was cancelled. Hidden once the task
                   completes cleanly. Deep-links to the run. */}
-              {row.taskId && (taskRunning || taskFailed) && (
+              {row.taskId && (taskRunning || taskFailed || taskNeedsHuman) && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -633,6 +636,8 @@ function PRTableRow({
                     'inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] uppercase',
                     taskFailed
                       ? 'bg-red-200 text-red-800 hover:bg-red-300 dark:bg-red-900 dark:text-red-200 dark:hover:bg-red-800'
+                      : taskNeedsHuman
+                      ? 'bg-amber-200 text-amber-900 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-100 dark:hover:bg-amber-800'
                       : // Neutral, not blue. Every other chip on this row is a
                         // STATE (queued, watching, blocked, failed) and earns a
                         // colour; a running task is transient activity, and the
@@ -647,6 +652,8 @@ function PRTableRow({
                   title={
                     taskRunning
                       ? 'A task is working this PR — click to open it'
+                      : taskNeedsHuman
+                      ? 'The run stopped and needs a person — click to open it'
                       : taskStopped
                       ? 'The linked task was stopped — click to open it'
                       : 'The linked task failed — click to open it'
@@ -658,6 +665,8 @@ function PRTableRow({
                       <Loader2 className="h-2.5 w-2.5 animate-spin" />
                       Working
                     </>
+                  ) : taskNeedsHuman ? (
+                    'Needs you'
                   ) : taskStopped ? (
                     'Stopped'
                   ) : (

@@ -1,4 +1,5 @@
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { TASK_STATUSES } from '@talyn/shared';
 import type { AdminTaskSummary } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { useAdminQuery } from '../../hooks/useAdminQuery';
@@ -14,7 +15,7 @@ import { ROUTES, routeTo } from '../../lib/routes';
  * services/admin/queries.ts, not from shipping each row's metadata blob — this
  * is the one list in the codebase that reads every tenant's rows at once.
  */
-const STATUSES = ['pending', 'queued', 'in_progress', 'completed', 'failed', 'cancelled'] as const;
+const STATUSES = TASK_STATUSES;
 
 export function TasksPage() {
   const navigate = useNavigate();
@@ -163,6 +164,10 @@ function StatusPill({ status }: { status: string }) {
       return <Pill tone="muted">{status}</Pill>;
     case 'failed':
       return <Pill tone="critical">failed</Pill>;
+    // warn, not critical: the run reached a conclusion and reported it. The
+    // thing that needs attention is the PR, not the run.
+    case 'needs_human':
+      return <Pill tone="warn">needs human</Pill>;
     case 'cancelled':
       return <Pill tone="warn">cancelled</Pill>;
     default:

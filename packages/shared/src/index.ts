@@ -716,6 +716,22 @@ export type TaskStatus =
   | 'in_progress'
   | 'completed'
   | 'failed'
+  /**
+   * The run stopped on purpose because only a person can carry the work
+   * forward — a merge gate that repo policy says a human must approve, a
+   * credential the sandbox does not hold, a product decision.
+   *
+   * NOT a failure, and the distinction is expensive to get wrong. Talyn used
+   * to record these as `failed`, which is indistinguishable from a crash, so
+   * the auto-keep watcher retried: one Visual-Review-gated PR took four runs
+   * of ~14 minutes each, and by run two the agent was saying in its own words
+   * that it had already asked twice. A refusal is information, and a loop that
+   * cannot read it just pays for the same answer again.
+   *
+   * Entered ONLY on an explicit sentinel from the agent (see
+   * `parseNeedsHumanSentinel`) — never inferred from prose, never a default.
+   */
+  | 'needs_human'
   | 'cancelled';
 
 /**
@@ -741,6 +757,10 @@ export const TASK_STATUS_TERMINAL: Record<TaskStatus, boolean> = {
   in_progress: false,
   completed: true,
   failed: true,
+  // Terminal: this RUN is over. The work is not done and a person owes it an
+  // answer, but the task is finished with its plan slot, its credentials and
+  // its watcher. Recovery is a fresh dispatch, exactly as for `failed`.
+  needs_human: true,
   cancelled: true,
 };
 
@@ -801,6 +821,16 @@ export interface TaskResult {
   summary?: string;
   output?: string;
   error?: string;
+  /**
+   * Set exactly when the task ended `needs_human`: what the agent needs, in
+   * its own words.
+   *
+   * Deliberately NOT written to `error`. That field is what the admin console
+   * renders in its red failure banner, and a correct refusal shown as an error
+   * is the bug this whole state exists to fix. An object rather than a bare
+   * string so a future `gate` discriminator does not need another shape change.
+   */
+  needsHuman?: { reason: string };
 }
 
 // ============================================================================
