@@ -21,7 +21,7 @@ It did not access production data, credentials, or infrastructure.
 
 | Area | Control |
 | --- | --- |
-| Database boundary | The backend uses a dedicated non-login role with owner policies, filtering on `public.talyn_uid()` rather than the unreachable `auth.uid()`. Phase 2 removes `anon`/`authenticated` access to application tables; `service_role` keeps its access deliberately. |
+| Database boundary | The backend uses a dedicated non-login role with owner policies, filtering on `public.talyn_uid()` rather than the unreachable `auth.uid()`. Phase 2 removes `authenticated`'s access to application tables. |
 | GitHub authorization | Workspace operations use user credentials, never globally selected installation credentials. |
 | Credential freshness | Database state controls access. Conditional rotation cannot overwrite replacement or revoked credentials. |
 | Diagnostics | Rate-account identifiers use a digest instead of a token when the login is unknown. |
@@ -163,8 +163,12 @@ or grant. Verify effective `auth.uid()` policy behavior on a real Supabase
 project rather than assuming a successful grant changed privileges.
 
 Supabase authentication is not disabled. Product clients already use Talyn's
-REST API for application data. `service_role` keeps its access deliberately —
-see the note in the phase-2 script. Future migrations must grant scoped access
+REST API for application data. On this database `authenticated` is the ONLY
+Data API role holding table grants — `anon` and `service_role` have none, so
+phase 2's revoke of them is a no-op kept for other deployments. `service_role`
+does carry `BYPASSRLS`, so it would be unrestricted if it were ever granted a
+table; that is a reason to keep the service key secret, not an access path
+today. Future migrations must grant scoped access
 to `talyn_backend`, not to `anon` or `authenticated`. Other roles that create
 application tables need equivalent default restrictions.
 

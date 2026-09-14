@@ -24,14 +24,20 @@
 --
 -- and confirm in Railway that only one deployment is active.
 
--- `service_role` keeps its access deliberately. Supabase grants it ALL on
--- public tables and it carries BYPASSRLS, so it is a real cross-tenant
--- credential — but revoking it here would also break any Supabase Studio,
--- SQL editor or support tooling that relies on it, and the backend never
--- reaches application tables through it (it uses the service key only for the
--- Auth admin REST API). Treat the service key as a production secret and
--- rotate it on the usual schedule. Revoke it separately, with the tooling
--- impact checked first.
+-- Measured on production on 2026-09-14, AFTER phase 1:
+--
+--   role           tasks_select  bypassrls
+--   anon           f             f
+--   authenticated  t             f
+--   service_role   f             t
+--   talyn_backend  t             f
+--
+-- So `authenticated` is the only role this actually takes anything from. The
+-- `anon` and PUBLIC clauses are kept because they cost nothing and another
+-- deployment may differ. `service_role` is deliberately NOT revoked: it holds
+-- no table grants here, and revoking what it does not have would only risk
+-- breaking Supabase Studio and support tooling on a project where it does.
+-- It does carry BYPASSRLS, so treat the service key as a production secret.
 REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated;
 --> statement-breakpoint
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated;
