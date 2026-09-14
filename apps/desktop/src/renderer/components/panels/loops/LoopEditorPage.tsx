@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import type { CloudAgentChoice, LoopInput, LoopWithStats } from '@talyn/shared';
 import {
@@ -85,11 +85,31 @@ export function LoopEditorPage({
     () => presetForCron(editing?.cron ?? '0 9 * * *').kind
   );
   const [fields, setFields] = useState(() => presetForCron(editing?.cron ?? '0 9 * * *').fields);
-  const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
+  /**
+   * What the last Save attempt objected to, and nothing else.
+   *
+   * NOT a "have they tried yet" latch. That is what this was, copied from the
+   * workflow editor: validation went quiet until the first Save and live
+   * forever after, so one refused click turned every later edit into a nag —
+   * change the agent, still be told the name is empty. The form was commenting
+   * on a field the user had moved on from.
+   *
+   * Captured at submit and cleared by the next edit, so the form speaks when it
+   * is asked a question and otherwise stays out of the way.
+   */
+  const [submitProblem, setSubmitProblem] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const problem = useMemo(() => loopInputProblem(input), [input]);
+
+  // Any edit retracts the last complaint — including the server's. The user has
+  // changed the thing being judged, so the old verdict is about a form that no
+  // longer exists.
+  useEffect(() => {
+    setSubmitProblem(null);
+    setSaveError(null);
+  }, [input]);
 
   /** Re-render the cron string whenever a schedule control moves. */
   const applySchedule = (kind: LoopSchedulePresetKind, next: typeof fields) => {
@@ -133,8 +153,11 @@ export function LoopEditorPage({
   };
 
   const save = async () => {
-    setAttempted(true);
-    if (problem) return;
+    if (problem) {
+      setSubmitProblem(problem);
+      return;
+    }
+    setSubmitProblem(null);
     setSaving(true);
     setSaveError(null);
     try {
@@ -178,9 +201,9 @@ export function LoopEditorPage({
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto max-w-3xl space-y-4 p-6">
-          {(saveError ?? (attempted ? problem : null)) && (
+          {(saveError ?? submitProblem) && (
             <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
-              {saveError ?? problem}
+              {saveError ?? submitProblem}
             </p>
           )}
 
@@ -457,7 +480,7 @@ export function LoopEditorPage({
 
           {/* The same action as the header's, where you finish reading. */}
           <div className="flex items-center justify-end gap-3 border-t pt-4">
-            {attempted && problem && <p className="flex-1 text-xs text-red-500">{problem}</p>}
+            {submitProblem && <p className="flex-1 text-xs text-red-500">{submitProblem}</p>}
             <Button variant="ghost" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
