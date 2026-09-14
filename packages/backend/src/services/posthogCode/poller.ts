@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import type { TaskResult, TaskStatus } from '@talyn/shared';
+import { parseNeedsHumanSentinel, type TaskResult, type TaskStatus } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,
@@ -13,7 +13,7 @@ import { clearWatched } from '../cloudProviders/taskWatch.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
 import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.js';
-import type { AcpLogEntry } from './acpConverter.js';
+import { extractContentText, type AcpLogEntry } from './acpConverter.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 
 const TERMINAL: ReadonlySet<PostHogRunStatus> = new Set([
@@ -99,7 +99,8 @@ class PostHogCodePoller {
     // Revival candidate: an idle run we optimistically completed (see
     // maybeFinalizeIdle) that may have resumed. Re-check is throttled so we
     // don't re-poll every idle-finalized task each 10s tick.
-    const reviving = task.localStatus === 'completed';
+    const reviving =
+      task.localStatus === 'completed' || task.localStatus === 'needs_human';
     if (reviving) {
       const lastCheck = this.lastReviveCheck.get(task.id) ?? 0;
       if (Date.now() - lastCheck < IDLE_RECHECK_MS) return;
@@ -201,6 +202,30 @@ class PostHogCodePoller {
     }
 
     if (!TERMINAL.has(status)) return;
+
+    // Did the agent stop for a person? Ask on EVERY terminal path, because
+    // PostHog puts the agent's own closing words in different places
+    // depending on how the run ended — `error_message` when it lands `failed`
+    // (which is what the incident behind this actually did), `final_message`
+    // when it lands `completed`. Only an exact sentinel counts, so an infra
+    // failure can never be mistaken for a refusal.
+    const needsHuman =
+      parseNeedsHumanSentinel(run?.error_message) ??
+      parseNeedsHumanSentinel(finalMessageOf(run));
+    if (needsHuman) {
+      // Still link the PR: the agent may well have pushed work before hitting
+      // the wall, and the human it is handing to needs somewhere to go.
+      if (prUrl && task.repositoryId) {
+        await this.linkPr(task, run, prUrl);
+      }
+      await this.finalize(task, 'needs_human', {
+        success: false,
+        summary: needsHuman.reason,
+        needsHuman,
+        output: stringifyOutput(run?.output),
+      });
+      return;
+    }
 
     if (status === 'completed') {
       if (prUrl && task.repositoryId) {
@@ -316,19 +341,39 @@ class PostHogCodePoller {
     }
     if (!lastFlowEventIsTurnComplete(entries)) return;
 
+    // The agent may have ended this turn by handing back to a person. This
+    // path is why the check matters: it is the one that writes `success: true`,
+    // so a refusal reaching it is not merely mis-labelled, it is recorded as a
+    // WIN. The closing text has to be reassembled from the log tail — an agent
+    // message arrives as a run of chunks, and the sentinel line can be split
+    // across them.
+    const needsHuman = parseNeedsHumanSentinel(finalAgentMessageText(entries));
+
     const idleMin = Math.round((Date.now() - updatedAtMs) / 60_000);
     console.log(
-      `[posthogCode] task ${task.id.slice(0, 8)}: run idle ${idleMin}m after turn_complete — auto-finalizing as completed`,
+      `[posthogCode] task ${task.id.slice(0, 8)}: run idle ${idleMin}m after turn_complete — ` +
+        `auto-finalizing as ${needsHuman ? 'needs_human' : 'completed'}`,
     );
     postHogCodeStreamer.stop(task.id);
     if (prUrl && task.repositoryId) await this.linkPr(task, run, prUrl);
-    await this.finalize(task, 'completed', {
-      success: true,
-      summary: prUrl
-        ? `PostHog Code went idle after opening ${prUrl}`
-        : 'PostHog Code run went idle — auto-completed',
-      output: stringifyOutput(run.output),
-    });
+    await this.finalize(
+      task,
+      needsHuman ? 'needs_human' : 'completed',
+      needsHuman
+        ? {
+            success: false,
+            summary: needsHuman.reason,
+            needsHuman,
+            output: stringifyOutput(run.output),
+          }
+        : {
+            success: true,
+            summary: prUrl
+              ? `PostHog Code went idle after opening ${prUrl}`
+              : 'PostHog Code run went idle — auto-completed',
+            output: stringifyOutput(run.output),
+          },
+    );
     // This completion is optimistic: the remote run is still `in_progress`, just
     // idle. Mark it revivable so the cloud poller keeps re-checking it — if the
     // run resumes (e.g. CI it was waiting on finished), maybeRevive flips the
@@ -500,6 +545,54 @@ export function lastFlowEventIsTurnComplete(entries: AcpLogEntry[]): boolean {
   return false;
 }
 
+/**
+ * The agent's closing message, reassembled from a session-log tail.
+ *
+ * Walks back to the `turn_complete`/`task_complete` marker and then collects
+ * the contiguous run of agent-message events immediately before it, IN ORDER.
+ * The reassembly is the whole job: PostHog streams an agent message as a run
+ * of `agent_message_chunk`s, so the sentinel line is routinely split across
+ * several entries and reading any one of them finds nothing.
+ *
+ * Stops at the first non-message event (a tool call, a user message) so this
+ * only ever returns the final thing the agent SAID, not a transcript.
+ * Pure — exported for tests.
+ */
+export function finalAgentMessageText(entries: AcpLogEntry[]): string | null {
+  let i = entries.length - 1;
+  for (; i >= 0; i--) {
+    const method = entries[i]?.notification?.method;
+    if (method === '_posthog/turn_complete' || method === '_posthog/task_complete') break;
+  }
+  if (i < 0) return null;
+
+  const parts: string[] = [];
+  for (let j = i - 1; j >= 0; j--) {
+    const note = entries[j]?.notification;
+    if (!note) continue;
+    if (note.method !== 'session/update') {
+      // Keepalives sit between chunks and must not end the run.
+      if (
+        note.method === '_posthog/console' ||
+        note.method === '_posthog/sandbox_output'
+      ) {
+        continue;
+      }
+      break;
+    }
+    const update = (note.params as { update?: { sessionUpdate?: string; content?: unknown } })
+      ?.update;
+    const su = update?.sessionUpdate;
+    if (su === 'agent_message' || su === 'agent_message_chunk') {
+      parts.push(extractContentText(update?.content));
+      continue;
+    }
+    break;
+  }
+  if (parts.length === 0) return null;
+  return parts.reverse().join('');
+}
+
 const PR_URL_RE = /https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
 
 /**
@@ -546,6 +639,24 @@ export function findPullRequestUrl(run: PostHogRun | null): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The agent's closing prose, if the runner recorded one.
+ *
+ * Note the company this keeps: the comment above is a write-up of what went
+ * wrong the last time something in this file read `final_message`. That
+ * incident was a REGEX SWEEP over prose looking for a URL the text merely
+ * mentioned. This is the opposite: an exact, agreed prefix that the agent is
+ * instructed to emit and nothing else produces (see
+ * {@link parseNeedsHumanSentinel}, which only accepts it as the final line).
+ * Reading the field is not the hazard — inferring from it is.
+ */
+function finalMessageOf(run: PostHogRun | null): string | null {
+  const output = run?.output;
+  if (!output || typeof output !== 'object') return null;
+  const value = (output as Record<string, unknown>).final_message;
+  return typeof value === 'string' ? value : null;
 }
 
 /** A value is a PR URL only if the whole of it is one. */

@@ -673,7 +673,9 @@ export function postHogCodeLoopRules(ref: string): string {
   return `Loop discipline:
   - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
   - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
-  - If you genuinely get stuck (e.g. you need credentials you don't have, or a reviewer's request is impossible without product-level decisions), leave a clear PR comment describing exactly what you need and why, then stop. Otherwise keep going.
+  - If you genuinely get stuck, do NOT keep grinding — follow the stopping rule below.
+
+${talynNeedsHumanRule()}
 
 Start by checking out the PR branch (${ref}), fetching the current state of review threads and CI, and then work the loop until done.`;
 }

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { findPullRequestUrl, lastFlowEventIsTurnComplete } from '../services/posthogCode/poller.js';
+import {
+  findPullRequestUrl,
+  lastFlowEventIsTurnComplete,
+  finalAgentMessageText,
+} from '../services/posthogCode/poller.js';
+import { parseNeedsHumanSentinel } from '@talyn/shared';
 import type { PostHogRun } from '../services/posthogCode/client.js';
 import type { AcpLogEntry } from '../services/posthogCode/acpConverter.js';
 
@@ -153,5 +158,64 @@ describe('findPullRequestUrl', () => {
 
   it('links nothing for no run at all', () => {
     expect(findPullRequestUrl(null)).toBeNull();
+  });
+});
+
+describe('finalAgentMessageText', () => {
+  const msg = (text: string): AcpLogEntry =>
+    note('session/update', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text },
+    });
+
+  it('reassembles a sentinel split across chunks', () => {
+    // THE case this exists for. PostHog streams an agent message as a run of
+    // chunks, so the sentinel line is routinely broken up — reading any single
+    // entry finds nothing, and the refusal would be recorded as a success.
+    const entries = [
+      su('tool_call'),
+      msg('All green except Visual Review.\n'),
+      msg('TALYN_NEEDS_'),
+      msg('HUMAN: Approve the 6 '),
+      msg('snapshot baselines.'),
+      note('_posthog/turn_complete'),
+    ];
+    expect(finalAgentMessageText(entries)).toBe(
+      'All green except Visual Review.\nTALYN_NEEDS_HUMAN: Approve the 6 snapshot baselines.'
+    );
+    expect(parseNeedsHumanSentinel(finalAgentMessageText(entries))).toEqual({
+      reason: 'Approve the 6 snapshot baselines.',
+    });
+  });
+
+  it('steps over keepalives sitting between chunks', () => {
+    const entries = [
+      msg('part one '),
+      note('_posthog/console'),
+      msg('part two'),
+      note('_posthog/turn_complete'),
+    ];
+    expect(finalAgentMessageText(entries)).toBe('part one part two');
+  });
+
+  it('stops at the preceding tool call, so it returns only the closing message', () => {
+    const entries = [
+      msg('an earlier thing the agent said'),
+      su('tool_call'),
+      msg('the closing message'),
+      note('_posthog/turn_complete'),
+    ];
+    expect(finalAgentMessageText(entries)).toBe('the closing message');
+  });
+
+  it('is null with no turn marker, and null when the turn ended on a tool call', () => {
+    expect(finalAgentMessageText([msg('still talking')])).toBeNull();
+    expect(finalAgentMessageText([su('tool_call'), note('_posthog/turn_complete')])).toBeNull();
+    expect(finalAgentMessageText([])).toBeNull();
+  });
+
+  it('does not fire the sentinel on an ordinary successful close', () => {
+    const entries = [msg('CI is green and the PR is mergeable.'), note('_posthog/turn_complete')];
+    expect(parseNeedsHumanSentinel(finalAgentMessageText(entries))).toBeNull();
   });
 });

@@ -1,6 +1,10 @@
 import { and, eq } from 'drizzle-orm';
 import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@talyn/shared';
-import { readCloudTaskMeta, readCloudTaskProvider } from '@talyn/shared';
+import {
+  parseNeedsHumanSentinel,
+  readCloudTaskMeta,
+  readCloudTaskProvider,
+} from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable, repositories as repositoriesTable } from '../../db/schema.js';
 import { captureWorkspaceEvent } from '../analytics.js';
@@ -135,6 +139,27 @@ export function toAgentEvent(ev: FleetEvent): AgentEvent {
   const wrapper = ev.event as { raw?: unknown } | undefined;
   const payload = (wrapper?.raw ?? ev.event ?? {}) as object;
   return { ...payload, seq: ev.seq } as AgentEvent;
+}
+
+/**
+ * The text of an `assistant` transcript event, flattened.
+ *
+ * Content is an array of blocks; only `text` blocks are prose. Joined rather
+ * than first-only because a single assistant turn is often several blocks and
+ * the sentinel sits at the very end of the last one.
+ */
+function assistantText(event: AgentEvent): string | null {
+  const content = event.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return '';
+      const b = block as { type?: unknown; text?: unknown };
+      return b.type === 'text' && typeof b.text === 'string' ? b.text : '';
+    })
+    .join('');
+  return text.length > 0 ? text : null;
 }
 
 class SelfHostedPoller {
@@ -625,8 +650,24 @@ class SelfHostedPoller {
     // the same id, and moves the workspace's stored choice off it.
     const withdrawnModel = withdrawnModelFrom(failureDetail);
     if (withdrawnModel) await noteWithdrawnModel(workspaceId, withdrawnModel);
-    const result: TaskResult =
-      status === 'completed'
+
+    // Did the agent hand back to a person? The fleet has no structured field
+    // for it either, so the sentinel is read from the two places its closing
+    // words can land: the task's error string, and the tail of the transcript
+    // we have been accumulating for this run. Exact match only, so an infra
+    // failure is never re-read as a refusal.
+    const needsHuman =
+      parseNeedsHumanSentinel(failureDetail) ??
+      parseNeedsHumanSentinel(this.finalAssistantText(taskId));
+
+    const outcome: TaskStatus = needsHuman ? 'needs_human' : status;
+    const result: TaskResult = needsHuman
+      ? {
+          success: false,
+          summary: needsHuman.reason,
+          needsHuman,
+        }
+      : status === 'completed'
         ? {
             success: true,
             summary: prUrl ? `The fleet opened ${prUrl}` : 'Fleet run completed',
@@ -641,14 +682,45 @@ class SelfHostedPoller {
     await getDbClient()
       .update(tasksTable)
       .set({
-        status,
+        status: outcome,
         result,
-        completedAt: status === 'completed' ? now : null,
+        completedAt: outcome === 'completed' ? now : null,
         updatedAt: now,
       })
       .where(eq(tasksTable.id, taskId));
-    emitTaskStatus(workspaceId, taskId, status, result);
-    void this.captureOutcome(taskId, workspaceId, status, result, sandbox, now);
+    emitTaskStatus(workspaceId, taskId, outcome, result);
+    void this.captureOutcome(taskId, workspaceId, outcome, result, sandbox, now);
+  }
+
+  /**
+   * The last thing the agent said on this run, from the transcript this
+   * process has been accumulating.
+   *
+   * Prefers the Claude Agent SDK `result` event, which carries the run's
+   * closing summary as a plain string and is emitted last. Falls back to the
+   * final assistant text block for a transcript that ended some other way.
+   *
+   * Memory only, deliberately. The persisted copy lives in `tasks.transcript`,
+   * the largest jsonb column we have, and re-reading it on every finalize is
+   * exactly the egress regression the projection rules exist to stop. A
+   * backend restart mid-run therefore loses the sentinel and the task settles
+   * the way it does today — the same degrade-to-status-quo the parser
+   * documents, and much cheaper than the alternative.
+   */
+  private finalAssistantText(taskId: string): string | null {
+    const transcript = this.transcripts.get(taskId);
+    if (!transcript?.length) return null;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const event = transcript[i]!;
+      if (event.type === 'result' && typeof event.result === 'string') {
+        return event.result;
+      }
+      if (event.type === 'assistant') {
+        const text = assistantText(event);
+        if (text) return text;
+      }
+    }
+    return null;
   }
 
   private async captureOutcome(

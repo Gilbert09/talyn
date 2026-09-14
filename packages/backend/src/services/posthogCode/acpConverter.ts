@@ -368,7 +368,7 @@ function asText(value: unknown): string {
  * string, an array of content parts, or a wrapper `{content: {...}}`
  * (tool_call_update content blocks nest a `{type:'content', content}`).
  */
-function extractContentText(content: unknown): string {
+export function extractContentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content.map(extractContentText).join('');

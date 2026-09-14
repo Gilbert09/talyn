@@ -292,6 +292,9 @@ Apply this skill to {{pr.ref}} specifically:
    - If the skill produces code changes: publish them to the PR branch ({{pr.headBranch}}) per the git rules above. Keep the changes scoped to what the skill calls for — do not touch unrelated files.
    - If the skill produces both, do both.
 4. If the skill cannot be applied to this PR (missing context, prerequisites absent, nothing to do), post one concise PR comment explaining why, then stop.
+5. If the ONLY thing left needs a person — a gate repo policy says a human must approve, a credential you do not have, a product decision — stop and make the LAST line of your final message exactly:
+     TALYN_NEEDS_HUMAN: <one line: what is needed, and from whom>
+   Verbatim prefix, own line, nothing after it. Talyn reads that line to route the PR to a person instead of running you again against the same wall. Emit it only when you are actually stopping for a human.
 
 Be decisive: gather what you need in one pass, do the work, publish once, and stop. Do not idle waiting on CI unless the skill explicitly requires it.`;
 
