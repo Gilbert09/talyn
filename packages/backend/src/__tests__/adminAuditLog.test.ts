@@ -301,6 +301,21 @@ describe('listAuditEntries', () => {
         { action, targetKind: 'host', targetId: `t-${i}`, reason: `reason ${i}` },
         async () => null
       );
+      // Pin `at` to a distinct, increasing instant instead of letting three
+      // back-to-back inserts race for one `now()`.
+      //
+      // The listing orders by `at DESC, id DESC`, and `id` is a random uuid —
+      // so the moment two rows share a timestamp the "newest" of them is a coin
+      // flip, and `returns newest first` failed on CI with `expected 't-1' to
+      // be 't-2'`. `now()` is the TRANSACTION timestamp, so whether these three
+      // differ at all depends on how fast the machine gets through the loop.
+      // The tie-break is not worth changing in production (pagination keys on
+      // the same pair, so it is stable, just arbitrary within a tie) — but a
+      // test for ordering must not be the thing that decides it.
+      await db
+        .update(adminAuditLog)
+        .set({ at: new Date(Date.UTC(2026, 0, 1, 0, 0, i)) })
+        .where(eq(adminAuditLog.targetId, `t-${i}`));
     }
   });
 
