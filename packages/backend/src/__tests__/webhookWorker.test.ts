@@ -191,10 +191,12 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       { id: 'rA', workspaceId: 'wsA', name: 'acme/widget', url: 'https://github.com/acme/widget', defaultBranch: 'main', createdAt: new Date() },
       { id: 'rB', workspaceId: 'wsB', name: 'acme/widget', url: 'https://github.com/acme/widget', defaultBranch: 'main', createdAt: new Date() },
     ]);
+    // BEFORE the index is built: authorization is decided at build time now, so
+    // a build that ran against the real service would authorize nobody.
+    vi.spyOn(githubService, 'canAccessRepository').mockResolvedValue(true);
     _resetWebhookIndex();
     await refreshWebhookIndex();
     _resetCoalesce();
-    vi.spyOn(githubService, 'canAccessRepository').mockResolvedValue(true);
     // Stub the shared cross-workspace refresh so we assert dispatch without
     // hitting GitHub. The webhook fan-out now makes ONE call per PR number with
     // every watching workspace as a target (deduped fetch), not one refreshPr
@@ -272,6 +274,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
         if (ws === 'wsB') throw new GitHubAuthorizationUnavailableError();
         return true;
       });
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await processWebhookDelivery(delivery({ action: 'closed', payload: {
         pull_request: { number: 7, merged: true },
@@ -290,6 +294,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       vi.mocked(githubService.canAccessRepository).mockRejectedValue(
         new GitHubAuthorizationUnavailableError()
       );
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await expect(processWebhookDelivery(delivery({ action: 'closed', payload: {
         pull_request: { number: 7, merged: true },
@@ -318,6 +324,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       await seedTrackedPr('rB', 'wsB', 7);
       const [before] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
       vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsA');
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await processWebhookDelivery(delivery({ eventType, action, payload }), 1_000);
       await checkCountCoalescer.flushAllNow();
@@ -338,7 +346,12 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       await seedTrackedPr('rB', 'wsB', 7);
       const [before] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
       vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsA');
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      // From here on, any access check is one THIS DELIVERY made — the index
+      // build above legitimately makes its own.
+      vi.mocked(githubService.canAccessRepository).mockClear();
 
       await processWebhookDelivery(
         delivery({
@@ -351,22 +364,29 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
         1_000
       );
 
-      // Nothing was authorized to buffer it…
+      // Buffering asked nobody anything — no index read, no credential read.
       expect(vi.mocked(githubService.canAccessRepository)).not.toHaveBeenCalled();
       // …and the engine was not consulted, which costs nothing either way:
       // `workflowFactsFromDelivery` has no case for check_run, so the call it
       // used to make returned 0 without reading a row.
       expect(workflows).not.toHaveBeenCalled();
 
-      // The flush is the write, and it authorizes: wsA is served, wsB is not.
+      // The flush is the write, and it is still authorized — wsB is not served.
+      // Note it does not call GitHub to find that out either: `targetsForRepo`
+      // reads an index that was authorized when it was built. Asserting the
+      // OUTCOME rather than the call is the point; the call is an implementation
+      // detail that has now moved twice.
       await checkCountCoalescer.flushAllNow();
-      expect(vi.mocked(githubService.canAccessRepository)).toHaveBeenCalled();
       const [after] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
       expect(after).toEqual(before);
+      const [servedA] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rA-7'));
+      expect(servedA.lastSummary).not.toEqual(before.lastSummary);
     });
 
     it('checks access before offering an untracked PR to workflows', async () => {
       vi.mocked(githubService.canAccessRepository).mockResolvedValue(false);
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await processWebhookDelivery(delivery({ action: 'opened', payload: { pull_request: { number: 99 } } }));
       expect(workflows).not.toHaveBeenCalled();
@@ -383,6 +403,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       } }));
       const before = await db.select().from(pullRequestsTable);
       vi.mocked(githubService.canAccessRepository).mockResolvedValue(false);
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       await checkCountCoalescer.flushAllNow();
       expect(await db.select().from(pullRequestsTable)).toEqual(before);
     });
@@ -394,6 +416,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
         state: 'open', lastSummary: { headSha: 'sha-1', title: 'must not change' },
       });
       vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsB');
+      // The index decides authorization, so re-ask it after changing the answer.
+      await refreshWebhookIndex();
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       const before = await db.select().from(pullRequestsTable);
       await processWebhookDelivery(delivery({ eventType: 'check_run', payload: {

@@ -2,6 +2,80 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 130 — the webhook lag was a regression, not a capacity limit (2026-09-14)
+
+Tom pushed back on two things, and was right about both: `integrations` is a
+tiny table, and the lag was fine before. So this was a regression, and I had
+spent two commits treating it as a capacity problem.
+
+**`git log` found it.** `873384e5e6 fix(security): enforce backend tenant and
+credential boundaries` (09-12) changed `targetsForRepo` from
+
+```ts
+await ensureFresh();
+return index.get(fullName.toLowerCase()) ?? [];   // in-memory map. no DB, no GitHub.
+```
+
+into a `selectDistinct` join over `repositories × pull_requests` PLUS
+`canAccessRepository` for every candidate workspace — each of which re-reads
+`integrations`, because `resolveAuth` reads the row every call by design. On
+PostHog/posthog that is 17 workspaces, per delivery, at 8-20 deliveries/s:
+~136 credential reads a second on a path that previously cost nothing.
+
+Today's `67d0741f10` ("stop the GitHub fan-out") fixed a FAILURE mode inside
+that loop — one unavailable workspace used to throw and park the whole delivery,
+stalling the lane for everybody — but kept the per-delivery shape. Best guess at
+the timeline: the cost landed on the 12th, the stall masked it, and fixing the
+stall today let the real throughput ceiling show.
+
+**19ms is not a slow table, it is a round trip.** The table was never the
+problem; the count was. That is worth remembering the next time a hot table
+shows up at the top of a query profile.
+
+**What made the fix easy to justify: the per-delivery check was not buying
+per-delivery freshness.** `canAccessRepository` caches its decision for
+`REPO_ACCESS_TTL_MS = 60_000` (deny 15s). Asking per delivery bought a
+*credential read*, not a fresher answer — and we were paying for
+millisecond-fresh credentials on a pipeline delivering events 56 minutes late.
+
+So authorization moved into the index build. `build()` now does one
+malformed-link probe for every watched repo (instead of the same join per
+delivery with a different id list) and authorizes each candidate at
+AUTH_CONCURRENCY 8. `targetsForRepo` is a map read. The index rebuilds every
+30s, so **a revoked workspace now drops out sooner than it did before** — this
+is a stronger guarantee, not a weaker one, which is the only reason it was
+worth doing to a boundary two days old.
+
+Three details that matter:
+
+- **Stale-while-revalidate.** `ensureFresh` no longer blocks a delivery on a
+  rebuild; only the very first build awaits. Blocking would trade real latency
+  for freshness the caller was never promised, and a rebuild now does GitHub
+  work. A failed rebuild keeps the previous view and does not advance
+  `lastBuiltAt`, so the next call retries.
+- **The receiver-side view stays on WATCHED repos.** `isRepoWatchedSync` and
+  `allWatchedRepoFullNames` answer "is this a repo we know about", which is not
+  a permission question and must not change when a credential lapses.
+- **"Nobody could be asked" is still distinct from "nobody may see this".** The
+  per-repo `unavailable` count survives the move, so the first still throws
+  `GitHubAuthorizationUnavailableError` and parks the delivery; the second is an
+  empty list and a drop.
+
+The webhookWorker tests needed reordering rather than weakening: the access mock
+now has to be installed BEFORE the index is built, and a test that changes the
+answer mid-way has to rebuild. One assertion of mine went the other way — it
+pinned `canAccessRepository` being called at coalescer flush, which is now an
+implementation detail that has moved twice; it asserts the outcome instead.
+
+**Still open:** `WEBHOOK_STREAM_MAXLEN` defaults to 50,000, which at ~13/s is
+~64 minutes of stream — the backlog reached ~56 and Redis was trimming the
+oldest unprocessed deliveries. PR data self-heals through the sweep; workflow
+triggers and merge-queue signals on those deliveries do not. Raise it via the
+env var if the backlog ever approaches the cap again. Also still sequential:
+`refreshPrAcrossWorkspaces` (prMonitor.ts:1187) iterates workspace groups one at
+a time, which is what makes a single `pull_request_review` delivery take 63
+seconds across 17 workspaces.
+
 ## Session 129 — the lane was the constraint, not the database (2026-09-14)
 
 Session 128's fix was real and not enough: the queue kept growing. Tom said so,
