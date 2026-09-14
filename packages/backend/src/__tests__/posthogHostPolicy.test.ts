@@ -21,11 +21,20 @@ describe('PostHog origins', () => {
     'https://169.254.169.254', 'https://[fe80::1]', 'https://[fd00::1]',
     'https://metadata.google.internal', 'https://posthog.example',
     'https://us.posthog.com.evil.example', 'https://evil-us.posthog.com',
-    'https://app.posthog.com', 'https://us.i.posthog.com',
+    'https://us.i.posthog.com',
   ])('refuses an unapproved origin: %s', (host) => {
     vi.stubEnv('POSTHOG_ALLOWED_ORIGINS', '');
     expect(() => normalizeHost(host)).toThrow('not allowed');
   });
+
+  // PostHog's legacy US cloud domain. A workspace connected before the regional
+  // split still stores it, and it is PostHog's own host — not something an
+  // operator should have to allowlist to keep a cloud user working.
+  it.each(['https://app.posthog.com', 'https://app.posthog.com/'])(
+    'accepts the legacy cloud origin without operator configuration: %s', (host) => {
+      vi.stubEnv('POSTHOG_ALLOWED_ORIGINS', '');
+      expect(normalizeHost(host)).toBe('https://app.posthog.com');
+    });
 
   it.each([
     'http://us.posthog.com', 'file:///etc/passwd', 'ftp://localhost',

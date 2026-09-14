@@ -27,6 +27,7 @@ import {
   isGitHubAppConfigured,
   refreshUserToken,
   fetchUserInstallations,
+  UserTokenRefreshError,
 } from './githubApp.js';
 
 // Classic-OAuth-app credentials. Still read for the check-token (token-health)
@@ -474,9 +475,32 @@ class GitHubService extends EventEmitter {
   private searchChains: Map<string, Promise<unknown>> = new Map();
   // Coalesce concurrent user-token refreshes per workspace into one HTTP call.
   private userTokenRefreshes: Map<string, Promise<void>> = new Map();
+  // Refresh tokens GitHub has rejected outright, by workspace, keyed to the
+  // access token they belonged to. Holding the digest means a credential
+  // replaced elsewhere is retried rather than written off with the old one.
+  private deadCredentials: Map<string, string> = new Map();
+  // Repository access decisions per workspace, with the instant of the check.
+  private repoAccessCache: Map<string, { allowed: boolean; at: number }> = new Map();
 
   // Refresh an expiring user token once it's within this window of expiry.
   private static readonly USER_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
+
+  /**
+   * How long a repository access decision is reused per workspace.
+   *
+   * Every webhook delivery checks access once per watching workspace. Without
+   * a cache one CI push on a repo watched by N workspaces costs N live REST
+   * calls per delivery, against a 5,000/hour per-USER budget. Sixty seconds is
+   * the same freshness the PR poll already tolerates.
+   */
+  private static readonly REPO_ACCESS_TTL_MS = 60_000;
+
+  /**
+   * How long a REFUSAL is reused. Shorter than the positive TTL: a user who
+   * has just been granted access should not wait a full minute, and a refusal
+   * costs nothing to re-derive.
+   */
+  private static readonly REPO_ACCESS_DENY_TTL_MS = 15_000;
 
   private get db(): Database {
     return getDbClient();
@@ -672,6 +696,9 @@ class GitHubService extends EventEmitter {
       ...(opts.accessTokenExpiresAt ? { accessTokenExpiresAt: opts.accessTokenExpiresAt } : {}),
       ...(opts.refreshTokenExpiresAt ? { refreshTokenExpiresAt: opts.refreshTokenExpiresAt } : {}),
     });
+    // A reconnect is the one thing that revives a rejected credential, and the
+    // new token must not wait out the read cache before anything uses it.
+    this.forgetResolvedAuth(workspaceId);
     void this.registerWorkspaceOwners([workspaceId]);
     this.emit('connected', workspaceId);
   }
@@ -739,7 +766,58 @@ class GitHubService extends EventEmitter {
     this.tokens.delete(workspaceId);
     this.viewerLoginCache.delete(workspaceId);
     this.viewerTeamsCache.delete(workspaceId);
+    this.forgetResolvedAuth(workspaceId);
     this.emit('disconnected', workspaceId);
+  }
+
+  /**
+   * Drop every cached credential decision for one workspace. Called whenever
+   * the stored credential changes, so a reconnect takes effect at once.
+   */
+  private forgetResolvedAuth(workspaceId: string): void {
+    this.deadCredentials.delete(workspaceId);
+    // Access entries are keyed by credential, so the old token's entries can
+    // never answer for the new one. They age out on their own.
+  }
+
+  /**
+   * Record that GitHub rejected this workspace's refresh token.
+   *
+   * The workspace is now disconnected in every sense that matters: callers see
+   * `GitHubNotConnectedError` and skip it, instead of parking work behind a
+   * credential that cannot recover without the user reconnecting.
+   */
+  private markCredentialDead(workspaceId: string, accessToken: string, reason: string): void {
+    if (this.deadCredentials.get(workspaceId) !== accessToken) {
+      const summary =
+        `[github] workspace ${workspaceId}: user credential rejected — reconnect required (${reason})`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:user-reconnect-required',
+        summary,
+        ok: false,
+        workspaceId,
+        meta: { workspaceId, reason },
+      });
+    }
+    this.deadCredentials.set(workspaceId, accessToken);
+  }
+
+  /**
+   * Test helper — drop every cached authorization decision.
+   *
+   * The service is a singleton, so a cached decision otherwise leaks between
+   * cases and one test's refusal answers the next test's question.
+   */
+  _resetAuthorizationCaches(): void {
+    this.repoAccessCache.clear();
+    this.deadCredentials.clear();
+  }
+
+  /** Whether this workspace needs the user to reconnect GitHub. */
+  needsReconnect(workspaceId: string): boolean {
+    return this.deadCredentials.has(workspaceId);
   }
 
   /**
@@ -913,6 +991,24 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * Identity of the CREDENTIAL a workspace uses, for sharing a fetched response.
+   *
+   * Two workspaces may share one response only when the same token fetched it:
+   * an identical token has identical permissions by construction, so nothing
+   * crosses a tenant boundary. A login is NOT a safe key here — two workspaces
+   * can authenticate as the same user with different scopes — which is why the
+   * per-owner key that used to collapse these fetches was removed.
+   *
+   * Falls back to the workspace id, which shares with nothing.
+   */
+  credentialIdentityFor(workspaceId: string): string {
+    const token = this.tokens.get(workspaceId)?.accessToken;
+    return token
+      ? `tok:${createHash('sha256').update(token).digest('hex')}`
+      : `ws:${workspaceId}`;
+  }
+
+  /**
    * Use the workspace user's permissions for every REST and GraphQL operation.
    * Installation credentials have wider access and cannot authorize a workspace.
    * This spends user API budget and attributes writes to the user instead of the bot.
@@ -920,6 +1016,9 @@ class GitHubService extends EventEmitter {
   private async resolveAuth(
     workspaceId: string,
   ): Promise<ResolvedAuth | null> {
+    // Read the row every time. The database is the authority, so a credential
+    // revoked or replaced by another replica has to stop granting access at
+    // once — a cache here would hold a deleted integration open for its TTL.
     // Reload after a successful refresh or a lost conditional write. Bound concurrent replacement retries.
     for (let attempt = 0; attempt < 3; attempt++) {
       const [row] = await this.db
@@ -961,15 +1060,34 @@ class GitHubService extends EventEmitter {
         return { tokenType: stored.tokenType, accessToken };
       }
       if (!Number.isFinite(expiresAt) || !stored.refreshToken) return null;
+      // The refresh token has its own (~6 month) expiry. Posting a known-expired
+      // one only teaches GitHub's token endpoint to rate-limit us.
+      if (stored.refreshTokenExpiresAt !== undefined && stored.refreshTokenExpiresAt <= Date.now()) {
+        this.markCredentialDead(workspaceId, accessToken, 'refresh token expired');
+        return null;
+      }
+      // GitHub already rejected this exact credential. Only a reconnect fixes
+      // it, so stop re-posting the dead refresh token on every call.
+      if (this.deadCredentials.get(workspaceId) === accessToken) return null;
+      this.deadCredentials.delete(workspaceId);
       let refresh = this.userTokenRefreshes.get(workspaceId);
       if (!refresh) {
         refresh = this.rotateUserToken(workspaceId, stored, { id: row.id, config, version: row.version })
           .finally(() => this.userTokenRefreshes.delete(workspaceId));
         this.userTokenRefreshes.set(workspaceId, refresh);
       }
-      // The OAuth helper also uses its refresh-error type for HTTP 429/5xx.
-      // Do not turn those failures into a definitive disconnected decision.
-      await refresh;
+      // The refresh error type covers both a dead token and a 429/5xx. Only the
+      // first is a disconnected decision; the second must stay retryable, or a
+      // GitHub blip reads as "every workspace lost its credential".
+      try {
+        await refresh;
+      } catch (err) {
+        if (err instanceof UserTokenRefreshError && err.permanent) {
+          this.markCredentialDead(workspaceId, accessToken, err.message);
+          return null;
+        }
+        throw err;
+      }
     }
     throw new Error('GitHub credentials changed repeatedly during refresh');
   }
@@ -1540,16 +1658,53 @@ class GitHubService extends EventEmitter {
     return this.apiRequest<GitHubRepo>(workspaceId, `/repos/${owner}/${repo}`);
   }
 
-  /** Check current user access before accepting data from an installation webhook. */
+  /**
+   * Check current user access before accepting data from an installation webhook.
+   *
+   * Cached per workspace and repository: this runs once per watching workspace
+   * per delivery, and `check_run` alone is a firehose. Without the cache a
+   * single CI push on a repo that N workspaces watch costs N live REST calls
+   * per delivery, against a per-user budget that installation credentials used
+   * to absorb. The TTL is the freshness the PR poll already accepts, so a
+   * revoked permission still stops mattering inside a minute.
+   */
   async canAccessRepository(workspaceId: string, owner: string, repo: string): Promise<boolean> {
+    // Resolve the credential FIRST, and key the cache on it. The database is
+    // the authority: an integration deleted or replaced by another replica must
+    // stop granting access at once, and a cache keyed on the workspace alone
+    // would keep answering yes with a credential that no longer exists.
+    let auth: ResolvedAuth | null;
     try {
-      const repository = await this.getRepository(workspaceId, owner, repo);
-      return repository.full_name?.toLowerCase() === `${owner}/${repo}`.toLowerCase();
+      auth = await this.resolveAuth(workspaceId);
     } catch (err) {
-      if (err instanceof GitHubNotConnectedError ||
-          (err instanceof GitHubApiError && [401, 403, 404].includes(err.status))) return false;
+      if (err instanceof GitHubNotConnectedError) return false;
       throw new GitHubAuthorizationUnavailableError();
     }
+    if (!auth) return false;
+    const identity = createHash('sha256').update(auth.accessToken).digest('hex');
+    const key = `${identity} ${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    const cached = this.repoAccessCache.get(key);
+    if (cached) {
+      const ttl = cached.allowed
+        ? GitHubService.REPO_ACCESS_TTL_MS
+        : GitHubService.REPO_ACCESS_DENY_TTL_MS;
+      if (Date.now() - cached.at < ttl) return cached.allowed;
+    }
+    let allowed: boolean;
+    try {
+      const repository = await this.getRepository(workspaceId, owner, repo);
+      allowed = repository.full_name?.toLowerCase() === `${owner}/${repo}`.toLowerCase();
+    } catch (err) {
+      if (err instanceof GitHubNotConnectedError ||
+          (err instanceof GitHubApiError && [401, 403, 404].includes(err.status))) {
+        allowed = false;
+      } else {
+        // No decision. Do not cache a non-answer as a refusal.
+        throw new GitHubAuthorizationUnavailableError();
+      }
+    }
+    this.repoAccessCache.set(key, { allowed, at: Date.now() });
+    return allowed;
   }
 
   async listPullRequests(

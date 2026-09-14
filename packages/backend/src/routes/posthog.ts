@@ -8,7 +8,7 @@ import {
   removePostHogCodeCredentials,
 } from '../services/posthogCode/credentials.js';
 import { PostHogCodeClient } from '../services/posthogCode/client.js';
-import { normalizeHost } from '../services/posthogCode/hostPolicy.js';
+import { normalizeHost, PostHogHostNotAllowedError } from '../services/posthogCode/hostPolicy.js';
 import {
   completeAuthorization,
   consumeState,
@@ -30,6 +30,11 @@ interface PostHogCodeStatusPayload {
   needsReauth?: boolean;
   /** Whether this deployment can offer the OAuth flow at all. */
   oauthAvailable?: boolean;
+  /**
+   * The stored host is no longer on the allowlist, so nothing can call it.
+   * Reported as a state so the card can name the host and ask for a reconnect.
+   */
+  hostNotAllowed?: boolean;
 }
 
 /**
@@ -154,7 +159,24 @@ export function posthogRoutes(): Router {
     } catch (err) {
       return handleAccessError(err, res);
     }
-    const creds = await getPostHogCodeCredentials(workspaceId);
+    let creds: Awaited<ReturnType<typeof getPostHogCodeCredentials>>;
+    try {
+      creds = await getPostHogCodeCredentials(workspaceId);
+    } catch (err) {
+      // A stored host the allowlist no longer admits is a state to report, not
+      // a server error. The Settings card must say what is wrong and let the
+      // user reconnect, instead of showing an opaque 500.
+      if (!(err instanceof PostHogHostNotAllowedError)) throw err;
+      return res.json({
+        success: true,
+        data: {
+          connected: false,
+          hostNotAllowed: true,
+          host: err.host,
+          oauthAvailable: isPostHogOAuthEnabled(),
+        },
+      } as ApiResponse<PostHogCodeStatusPayload>);
+    }
     res.json({
       success: true,
       data: {

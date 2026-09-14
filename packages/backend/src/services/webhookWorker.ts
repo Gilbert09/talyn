@@ -547,6 +547,8 @@ export class WebhookWorker {
   private running = false;
   private slowGate = new Semaphore(SLOW_LANE_MAX);
   private claimCursor = '0-0';
+  /** Set at start: false only when Redis predates XAUTOCLAIM (6.2). */
+  private supportsAutoClaim = true;
 
   async init(): Promise<void> {
     if (!isRedisEnabled()) {
@@ -568,17 +570,43 @@ export class WebhookWorker {
         console.error('[webhookWorker] xgroup create failed:', err);
       }
     }
+    this.supportsAutoClaim = await this.checkAutoClaimSupport();
     this.running = true;
     void this.loop();
     console.log(`[webhookWorker] consuming ${WEBHOOK_STREAM} as ${REPLICA_ID}`);
   }
 
+  /**
+   * Whether this Redis speaks XAUTOCLAIM (6.2+), which recovers deliveries a
+   * replica left pending. Checked ONCE at start: it is the first call in the
+   * loop, so on an older Redis every iteration threw before `xreadgroup` could
+   * run and the worker consumed nothing at all — silently, forever. Recovery is
+   * lost without it, but ordinary delivery must still work.
+   */
+  private async checkAutoClaimSupport(): Promise<boolean> {
+    try {
+      await this.conn!.xautoclaim(WEBHOOK_STREAM, GROUP, REPLICA_ID, AUTH_RETRY_IDLE_MS, '0-0', 'COUNT', 1);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/unknown command|wrong number of arguments/i.test(message)) return true;
+      console.error(
+        '[webhookWorker] Redis does not support XAUTOCLAIM (needs 6.2 or later). ' +
+        'Deliveries left pending by a stopped replica will NOT be recovered. ' +
+        'Upgrade Redis to restore authorization-retry recovery.'
+      );
+      return false;
+    }
+  }
+
   private async loop(): Promise<void> {
     while (this.running && this.conn) {
       try {
-        const claimed = await this.conn.xautoclaim(
-          WEBHOOK_STREAM, GROUP, REPLICA_ID, AUTH_RETRY_IDLE_MS, this.claimCursor, 'COUNT', WORKER_BATCH,
-        ) as [string, Array<[string, string[]]>];
+        const claimed = this.supportsAutoClaim
+          ? await this.conn.xautoclaim(
+            WEBHOOK_STREAM, GROUP, REPLICA_ID, AUTH_RETRY_IDLE_MS, this.claimCursor, 'COUNT', WORKER_BATCH,
+          ) as [string, Array<[string, string[]]>]
+          : ['0-0', []] as [string, Array<[string, string[]]>];
         this.claimCursor = claimed[0];
         const res = claimed[1].length > 0
           ? [[WEBHOOK_STREAM, claimed[1]]] as Array<[string, Array<[string, string[]]>]>
@@ -671,6 +699,25 @@ export class WebhookWorker {
               'data', JSON.stringify(delivery), 'reason', 'authorization_unavailable',
               'attempts', String(pending[0][3]));
             acknowledge = true;
+            // A distinct, alertable signal. "Monitor exhausted retries" needs
+            // something to key on; a generic processed-with-error record and a
+            // console line are not that.
+            const summary =
+              `[webhooks] ${delivery.repoFullName}: authorization retries exhausted after ` +
+              `${pending[0][3]} attempts — delivery ${delivery.deliveryId} needs an operator replay`;
+            console.error(summary);
+            debugBus.recordEvent({
+              service: 'github',
+              action: 'webhooks:authorization-exhausted',
+              summary,
+              ok: false,
+              meta: {
+                repo: delivery.repoFullName,
+                deliveryId: delivery.deliveryId,
+                eventType: delivery.eventType,
+                attempts: pending[0][3],
+              },
+            });
           }
         } catch {
           // Redis failed: leave the original pending so another worker can recover it.

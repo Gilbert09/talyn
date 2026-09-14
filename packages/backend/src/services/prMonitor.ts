@@ -80,6 +80,12 @@ export function createRestSweepCache(): RestSweepCache {
 // `mergeableSettle.ts` so the inline resolve and the deferred settle answer
 // the same question with the same numbers.
 
+// How long one credential's fetch of a PR may answer another workspace using
+// that same credential. Bounded by the poll's own freshness tolerance, so no
+// workspace sees data staler than it already accepts. Without it, N workspaces
+// watching one busy org each spend their own GraphQL points on the same PRs.
+const BULK_POLL_DEDUPE_MS = 60_000;
+
 // How long a forced poll (user-facing Refresh) waits for an in-flight tick
 // before giving up. Keeps `POST /repositories/poll` bounded — see
 // `drainInFlightTick`.
@@ -444,6 +450,12 @@ class PRMonitorService extends EventEmitter {
             owner: repo.owner,
             repo: repo.repo,
             numbers: staleNumbers,
+            // Many workspaces track one big shared org. Where they use the SAME
+            // credential, one fetch answers all of them — identical token,
+            // identical permissions, so no response crosses a tenant boundary.
+            // Window <= the poll's own freshness tolerance.
+            dedupeWindowMs: BULK_POLL_DEDUPE_MS,
+            dedupeIdentity: githubService.credentialIdentityFor(workspaceId),
           })
         );
 
@@ -799,7 +811,8 @@ class PRMonitorService extends EventEmitter {
    * `merged_at`). A failed list or lookup skips the repo/row; we never close
    * on missing data. Spends core REST budget only, zero GraphQL points.
    *
-   * Cache keys include the workspace. One user's response must never authorize another user.
+   * Cache keys include the credential identity. One user's response must never
+   * authorize another user, but two workspaces on the same token may share one.
    * Returns the number of rows closed.
    */
   async sweepClosedViaRest(workspaceId: string, cache: RestSweepCache): Promise<number> {
@@ -808,7 +821,9 @@ class PRMonitorService extends EventEmitter {
     for (const repo of repos) {
       const rows = await this.getTrackedOpenRows(workspaceId, repo.id);
       if (rows.length === 0) continue;
-      const repoKey = `${workspaceId}:${repo.fullName.toLowerCase()}`;
+      // Scoped to the credential, not the workspace: same token, same
+      // permissions, so one REST list can answer every workspace using it.
+      const repoKey = `${githubService.credentialIdentityFor(workspaceId)}:${repo.fullName.toLowerCase()}`;
       let listPromise = cache.openLists.get(repoKey);
       if (!listPromise) {
         listPromise = githubService

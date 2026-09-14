@@ -237,6 +237,24 @@ describe('refreshUserToken', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockFetchOnce({}, { status: 401, ok: false }));
     await expect(refreshUserToken('ghr_x')).rejects.toBeInstanceOf(UserTokenRefreshError);
   });
+
+  // The two causes need opposite handling. A dead token only recovers when the
+  // user reconnects, so retrying it hammers the token endpoint and parks every
+  // delivery behind a workspace that will never answer. A 429 or 5xx is the
+  // endpoint failing and MUST stay retryable.
+  it.each([
+    ['a dead refresh token', { error: 'bad_refresh_token' }, undefined, true],
+    ['HTTP 401', {}, 401, true],
+    ['HTTP 400', {}, 400, true],
+    ['HTTP 429', {}, 429, false],
+    ['HTTP 500', {}, 500, false],
+    ['HTTP 503', {}, 503, false],
+  ])('marks %s as permanent=%s', async (_name, body, status, permanent) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      status === undefined ? mockFetchOnce(body) : mockFetchOnce(body, { status, ok: false }),
+    );
+    await expect(refreshUserToken('ghr_x')).rejects.toMatchObject({ permanent });
+  });
 });
 
 describe('buildInstallUrl', () => {

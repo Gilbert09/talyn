@@ -294,8 +294,12 @@ interface ByNumberCacheEntry {
 const byNumberCache = new Map<string, ByNumberCacheEntry>();
 const BY_NUMBER_CACHE_MAX = 5000; // ~5k tracked PRs — prune expired once past this.
 
-function byNumberCacheKey(owner: string, repo: string, n: number): string {
-  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${n}`;
+// The key carries the CREDENTIAL that fetched the response, not just the PR.
+// Sharing across workspaces is only safe when the same token fetched it —
+// identical token, identical permissions. Keying on the PR alone let one
+// workspace's response answer another workspace's question.
+function byNumberCacheKey(identity: string, owner: string, repo: string, n: number): string {
+  return `${identity}|${owner.toLowerCase()}/${repo.toLowerCase()}#${n}`;
 }
 
 /** Test helper — clear the by-number fetch cache between cases. */
@@ -319,8 +323,16 @@ export async function batchPullRequestsByNumber(opts: {
   repo: string;
   numbers: number[];
   dedupeWindowMs?: number;
+  /**
+   * Identity of the credential this fetch uses. Required with
+   * `dedupeWindowMs`: it scopes the shared cache to one token, so a response
+   * only ever answers a question asked with the same permissions.
+   */
+  dedupeIdentity?: string;
 }): Promise<BatchPRByNumberResult[]> {
   const { workspaceId, owner, repo, numbers, dedupeWindowMs } = opts;
+  // No identity means no sharing. Fall back to a key nothing else can match.
+  const dedupeIdentity = opts.dedupeIdentity ?? `ws:${workspaceId}`;
   if (numbers.length === 0) return [];
 
   // Split into cache hits (within the window) and the numbers we must fetch.
@@ -329,7 +341,7 @@ export async function batchPullRequestsByNumber(opts: {
   const toFetch: number[] = [];
   if (dedupeWindowMs) {
     for (const n of numbers) {
-      const entry = byNumberCache.get(byNumberCacheKey(owner, repo, n));
+      const entry = byNumberCache.get(byNumberCacheKey(dedupeIdentity, owner, repo, n));
       if (entry && now - entry.at < dedupeWindowMs) hits.set(n, entry.pr);
       else toFetch.push(n);
     }
@@ -374,7 +386,7 @@ export async function batchPullRequestsByNumber(opts: {
         }
       }
       for (const r of fetched) {
-        byNumberCache.set(byNumberCacheKey(owner, repo, r.number), { at: now, pr: r.pr });
+        byNumberCache.set(byNumberCacheKey(dedupeIdentity, owner, repo, r.number), { at: now, pr: r.pr });
       }
     }
   }

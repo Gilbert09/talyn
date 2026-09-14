@@ -38,6 +38,7 @@ describe('workspace GitHub authorization', () => {
   });
 
   afterEach(async () => {
+    githubService._resetAuthorizationCaches();
     for (const ws of githubService.getConnectedWorkspaces()) await githubService.removeToken(ws);
     await cleanup();
     vi.restoreAllMocks();

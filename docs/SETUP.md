@@ -228,6 +228,11 @@ TALYN_ALLOWED_EMAILS=you@example.com
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
 
+Leaving it unset allows everyone — it is a lock, not a default. **Setting it now
+also applies to MCP tokens and internal impersonation**: a token whose owner is
+off the list stops validating and returns 401, which looks to the user like a bad
+token. Include every MCP-token owner's email, not only the people who sign in.
+
 ### Feature flags (PostHog)
 
 **Every feature gate is a PostHog flag.** The register of them — their keys,
@@ -660,12 +665,18 @@ the only way to connect (that is the local-dev default, and the prod kill switch
 | `POSTHOG_OAUTH_CLIENT_ID` | `https://www.talyn.dev/oauth-client` | The CIMD document, served by `apps/marketing/app/oauth-client/route.ts` |
 | `POSTHOG_OAUTH_REDIRECT_URI` | `https://prod.talyn.dev/api/v1/posthog/oauth/callback` | Where PostHog sends the browser back |
 
-PostHog API destinations default to `https://us.posthog.com` and `https://eu.posthog.com`.
+PostHog API destinations default to `https://us.posthog.com`, `https://eu.posthog.com`
+and `https://app.posthog.com` (the legacy US cloud domain, kept so workspaces
+connected before the regional split keep working without configuration).
 For trusted self-hosted instances, set `POSTHOG_ALLOWED_ORIGINS` to a comma-separated list of exact HTTPS origins.
 For example: `POSTHOG_ALLOWED_ORIGINS=https://posthog.example.com,https://posthog.internal:8443`.
 Paths, queries, fragments, userinfo, wildcards, and noncanonical addresses are rejected. Credential-bearing requests never follow redirects.
 These entries authorize credential delivery, including to private addresses. Operators must trust each endpoint and its DNS configuration.
 Existing integrations outside this list stop making requests until the operator approves their origin.
+**Run `docs/rollout/find_posthog_hosts.sql` before deploying** to list every workspace this affects —
+including `http://` hosts and noncanonical spellings, which the allowlist cannot rescue and which need
+the stored value fixed instead. A malformed entry is ignored with a warning and reported at boot,
+rather than refusing every PostHog request.
 
 Three ways to get this wrong, all of which fail on PostHog's side with an error
 the user sees and we don't:

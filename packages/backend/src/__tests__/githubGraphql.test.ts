@@ -1378,9 +1378,10 @@ describe('batchPullRequestsByNumber — cross-workspace fetch de-dup', () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it('serves a PR fetched within the window from cache — one GraphQL call for two workspaces', async () => {
+  it('shares a fetch between two workspaces on the SAME credential', async () => {
     const spy = mockGraphql();
-    const shared = { owner: 'acme', repo: 'w', numbers: [1, 2, 3], dedupeWindowMs: 60_000 };
+    // Same token, so the same permissions — the response answers both.
+    const shared = { owner: 'acme', repo: 'w', numbers: [1, 2, 3], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' };
     const a = await batchPullRequestsByNumber({ workspaceId: 'wsA', ...shared });
     const b = await batchPullRequestsByNumber({ workspaceId: 'wsB', ...shared });
     expect(spy).toHaveBeenCalledTimes(1); // wsB fully served from wsA's fetch
@@ -1388,11 +1389,27 @@ describe('batchPullRequestsByNumber — cross-workspace fetch de-dup', () => {
     expect(b.map((r) => r.number)).toEqual([1, 2, 3]);
   });
 
+  it('never shares a fetch between two DIFFERENT credentials', async () => {
+    const spy = mockGraphql();
+    const shared = { owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 };
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', ...shared, dedupeIdentity: 'tok:a' });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', ...shared, dedupeIdentity: 'tok:b' });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('never shares a fetch when no credential identity is given', async () => {
+    const spy = mockGraphql();
+    const shared = { owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 };
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', ...shared });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', ...shared });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   it('fetches only the numbers not already cached, preserving order', async () => {
     const spy = mockGraphql();
-    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1, 2], dedupeWindowMs: 60_000 });
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1, 2], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
     spy.mockClear();
-    const out = await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1, 2, 4], dedupeWindowMs: 60_000 });
+    const out = await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1, 2, 4], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
     expect(spy).toHaveBeenCalledTimes(1);
     const query = spy.mock.calls[0][1] as string;
     expect(query).toContain('pullRequest(number: 4)'); // only the miss is fetched
@@ -1404,16 +1421,16 @@ describe('batchPullRequestsByNumber — cross-workspace fetch de-dup', () => {
   it('re-fetches once the window has elapsed', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     const spy = mockGraphql();
-    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
     nowSpy.mockReturnValue(1_000_000 + 61_000); // window elapsed
-    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
   it('keys by owner/repo/number — a different repo is a cache miss', async () => {
     const spy = mockGraphql();
-    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000 });
-    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'other', numbers: [1], dedupeWindowMs: 60_000 });
+    await batchPullRequestsByNumber({ workspaceId: 'wsA', owner: 'acme', repo: 'w', numbers: [1], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
+    await batchPullRequestsByNumber({ workspaceId: 'wsB', owner: 'acme', repo: 'other', numbers: [1], dedupeWindowMs: 60_000, dedupeIdentity: 'tok:same' });
     expect(spy).toHaveBeenCalledTimes(2);
   });
 });

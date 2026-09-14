@@ -264,14 +264,17 @@ describe('run credentials serve the vendor the run was dispatched on', () => {
 
   // An empty string would be a credential as far as the fleet's dispatch check
   // is concerned, and would pass a run that cannot call out. Omit the field.
-  it('omits the key entirely when the workspace no longer holds that vendor', async () => {
+  it('refuses when the workspace no longer holds that vendor', async () => {
     const { getSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
     vi.mocked(getSelfHostedCredentials).mockResolvedValueOnce({ claudeToken: CLAUDE_TOKEN });
 
+    // Answering `ok` with the key omitted is not a smaller answer — the gateway
+    // fills an ABSENT credential from its tenant's sealed custody, so it is a
+    // route to spending somebody else's subscription. The push path refuses
+    // here; the pull path has to agree.
     const res = await resolveRunCredentials('hetzner-64', 'talyn-openai');
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.credentials).not.toHaveProperty('openaiKey');
-    expect(res.credentials).not.toHaveProperty('anthropicKey');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('credentials_unavailable');
   });
 });

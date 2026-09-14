@@ -1113,6 +1113,16 @@ const THROTTLED_TICK_FACTOR = 1.5;
 // list permanently frozen until app relaunch) but never wait longer than this.
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/** The server rejected this connection's authorization (token invalid/expired). */
+const WS_CLOSE_UNAUTHORIZED = 4401;
+/** The server refused the connection for capacity (per-owner or global limit). */
+const WS_CLOSE_CAPACITY = 1013;
+/**
+ * Backoff floor for a rejection that will repeat. 2^5 = 32s, so the delay goes
+ * straight to the 30s ceiling instead of climbing from one second.
+ */
+const SLOW_RETRY_ATTEMPTS = 5;
+
 class WebSocketClient {
   private ws: WebSocket | null = null;
   private handlers: Map<string, Set<EventHandler>> = new Map();
@@ -1199,7 +1209,11 @@ class WebSocketClient {
           return;
         }
         console.log('WebSocket opened; authenticating…');
-        this.reconnectAttempts = 0;
+        // NOT `reconnectAttempts = 0` — an open socket is not an accepted one.
+        // The server can still reject us after open (owner connection limit,
+        // an expired or revoked token), and resetting the backoff here made
+        // every such rejection reconnect at a flat one second, forever.
+        // The reset happens once the server confirms the connection.
         this.errorLoggedSinceOpen = false;
         // Checked even after the identity test: `onopen` can still be delivered
         // after a sleep/wake close, and `send` throws on anything but OPEN.
@@ -1228,6 +1242,9 @@ class WebSocketClient {
             !this.authenticated
           ) {
             this.authenticated = true;
+            // Accepted. This is the point a connection has proven itself, so
+            // it is the point the backoff may start over.
+            this.reconnectAttempts = 0;
             for (const workspaceId of this.subscribedWorkspaces) {
               this.send({ type: 'subscribe', workspaceId });
             }
@@ -1241,16 +1258,26 @@ class WebSocketClient {
         }
       };
 
-      socket.onclose = () => {
+      // `event` is optional only for defensiveness: a real CloseEvent always
+      // carries a code, but a caller that closes the socket directly may not.
+      socket.onclose = (event?: CloseEvent) => {
+        const code = event?.code;
         // An orphan closing is not a disconnect: the live socket is elsewhere.
         // Reporting it would emit connection:status {connected:false} under a
         // healthy connection and queue a reconnect that fights it.
         if (this.ws !== socket) return;
         this.ws = null;
-        console.log('WebSocket disconnected');
+        console.log(`WebSocket disconnected${code === undefined ? '' : ` (code ${code})`}`);
         this.authenticated = false;
         this.stopHeartbeat();
         this.emit('connection:status', { connected: false });
+        // A rejection the server will repeat until something changes. Retrying
+        // it fast costs the backend a token verification and a user write per
+        // attempt, and burns this address's upgrade budget — so back off hard
+        // rather than at the usual first-failure speed.
+        if (code === WS_CLOSE_UNAUTHORIZED || code === WS_CLOSE_CAPACITY) {
+          this.reconnectAttempts = Math.max(this.reconnectAttempts, SLOW_RETRY_ATTEMPTS);
+        }
         this.scheduleReconnect();
       };
 

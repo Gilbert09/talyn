@@ -239,14 +239,34 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       expect(await db.select().from(pullRequestsTable)).toEqual(before);
     });
 
-    it('preserves the whole delivery when a later recipient cannot be verified', async () => {
+    it('serves the recipients it can verify when another cannot be verified', async () => {
+      // One workspace that cannot answer must not silence the others. The
+      // all-or-nothing version turned a single revoked authorization into a
+      // stalled webhook lane for every workspace watching the same repository.
       await seedTrackedPr('rA', 'wsA', 7);
       await seedTrackedPr('rB', 'wsB', 7);
-      const before = await db.select().from(pullRequestsTable);
       vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => {
         if (ws === 'wsB') throw new GitHubAuthorizationUnavailableError();
         return true;
       });
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ action: 'closed', payload: {
+        pull_request: { number: 7, merged: true },
+      } }));
+      expect(workflows).toHaveBeenCalled();
+      // wsA proceeds; wsB is skipped for this delivery, not written to.
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows.find((r) => r.workspaceId === 'wsA')?.state).toBe('merged');
+      expect(rows.find((r) => r.workspaceId === 'wsB')?.state).not.toBe('merged');
+    });
+
+    it('preserves the delivery when NO recipient can be verified', async () => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      const before = await db.select().from(pullRequestsTable);
+      vi.mocked(githubService.canAccessRepository).mockRejectedValue(
+        new GitHubAuthorizationUnavailableError()
+      );
       const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await expect(processWebhookDelivery(delivery({ action: 'closed', payload: {
         pull_request: { number: 7, merged: true },

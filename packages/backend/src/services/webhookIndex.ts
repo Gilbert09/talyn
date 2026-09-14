@@ -92,11 +92,22 @@ export async function refreshWebhookIndex(): Promise<void> {
   await build();
 }
 
-/** Check each recipient now, including historical records and delayed check flushes. */
+/**
+ * Check each recipient now, including historical records and delayed check flushes.
+ *
+ * One workspace that cannot answer must not silence the others. A workspace
+ * whose credential is merely unavailable is SKIPPED for this delivery while the
+ * authorized ones proceed; the delivery is only parked for a retry when NO
+ * workspace could be authorized and at least one of them failed to answer.
+ * The all-or-nothing version turned a single revoked authorization into a
+ * stalled webhook lane for every workspace watching the same repository.
+ */
 export async function targetsForRepo(fullName: string): Promise<WatchTarget[]> {
+  let candidates: WatchTarget[];
+  let blocked: Set<string>;
   try {
     await ensureFresh();
-    const candidates = index.get(fullName.toLowerCase()) ?? [];
+    candidates = index.get(fullName.toLowerCase()) ?? [];
     if (candidates.length === 0) return [];
     // Historical task creation allowed cross-workspace PR links. Repo-ID-based writes must not reach them.
     const malformed = await getPoolDbClient()
@@ -107,19 +118,34 @@ export async function targetsForRepo(fullName: string): Promise<WatchTarget[]> {
         inArray(repositoriesTable.id, candidates.map((t) => t.repositoryId)),
         ne(pullRequestsTable.workspaceId, repositoriesTable.workspaceId),
       ));
-    const blocked = new Set(malformed.map((r) => r.id));
-    const authorized: WatchTarget[] = [];
-    for (const target of candidates) {
-      if (blocked.has(target.repositoryId)) continue;
+    blocked = new Set(malformed.map((r) => r.id));
+  } catch (err) {
+    // The index or the malformed-link probe failed. No candidate list, so no
+    // decision is possible for anyone. Log the cause: this used to park
+    // deliveries for 80 minutes with the real error discarded.
+    console.error(`[webhooks] target lookup failed for ${fullName}:`, err);
+    throw new GitHubAuthorizationUnavailableError();
+  }
+
+  const authorized: WatchTarget[] = [];
+  let unavailable = 0;
+  for (const target of candidates) {
+    if (blocked.has(target.repositoryId)) continue;
+    try {
       if (await githubService.canAccessRepository(target.workspaceId, target.owner, target.repo)) {
         authorized.push(target);
       }
+    } catch (err) {
+      if (!(err instanceof GitHubAuthorizationUnavailableError)) throw err;
+      unavailable++;
+      console.warn(
+        `[webhooks] ${fullName}: workspace ${target.workspaceId} could not be authorized — skipped for this delivery`
+      );
     }
-    return authorized;
-  } catch {
-    // A failed lookup is not a denial. Do not lose workflow triggers during an outage.
-    throw new GitHubAuthorizationUnavailableError();
   }
+  // Every answer was a non-answer: keep the delivery rather than drop it.
+  if (authorized.length === 0 && unavailable > 0) throw new GitHubAuthorizationUnavailableError();
+  return authorized;
 }
 
 /** Prime the index at boot. */

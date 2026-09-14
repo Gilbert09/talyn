@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createTestDb, seedUser } from './helpers/testDb.js';
+import { applyDataApiRevocations, createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
 import { rlsEnforcementEnabled, withOwnerScope } from '../db/scope.js';
 import { getDbClient } from '../db/client.js';
@@ -186,6 +186,9 @@ describe('RLS enforcement (backend role)', () => {
   it.each(['loop', 'workflow'])('allows owned %s writes and rejects foreign rows', async (kind) => {
     const testDb = await createTestDb();
     cleanup = testDb.cleanup;
+    // This case also asserts the finished boundary for `authenticated`, which
+    // the deferred phase-2 script performs (migration 0055 is additive).
+    await applyDataApiRevocations(testDb.pglite);
     await seedTwoOwners(testDb.db);
     for (const suffix of ['a', 'b']) {
       if (kind === 'loop') {

@@ -146,11 +146,24 @@ export async function claimFiring(
   return { id: row.id, fresh: false, status: row.status as LoopRunStatus, taskId: row.taskId };
 }
 
-/** Whether this loop has another run in flight — the overlap probe. */
+/**
+ * Whether this loop has another run in flight — the overlap probe.
+ *
+ * Joined to the loop on workspace, exactly like the settlement paths. Without
+ * the join a malformed historical row — one whose run and loop workspaces
+ * disagree — counts as in flight here but is invisible to the code that would
+ * settle it, so the loop skips every future firing forever and the blocking row
+ * never appears in its history. `docs/rollout/repair_mismatched_loop_runs.sql`
+ * clears the rows that already exist.
+ */
 export async function hasActiveRun(loopId: string, excludeRunId: string): Promise<boolean> {
   const rows = await getDbClient()
     .select({ id: runsTable.id })
     .from(runsTable)
+    .innerJoin(loopsTable, and(
+      eq(loopsTable.id, runsTable.loopId),
+      eq(loopsTable.workspaceId, runsTable.workspaceId),
+    ))
     .where(
       and(
         eq(runsTable.loopId, loopId),
@@ -301,6 +314,12 @@ export async function dueWaitingSlots(limit: number): Promise<
       scheduledFor: runsTable.scheduledFor,
     })
     .from(runsTable)
+    // Same workspace join as the settlement paths. Re-dispatching a malformed
+    // row would only mint another run that nothing can ever settle.
+    .innerJoin(loopsTable, and(
+      eq(loopsTable.id, runsTable.loopId),
+      eq(loopsTable.workspaceId, runsTable.workspaceId),
+    ))
     .where(and(eq(runsTable.status, 'waiting_slot'), lte(runsTable.retryAfter, sql`now()`)))
     .orderBy(asc(runsTable.retryAfter))
     .limit(limit);

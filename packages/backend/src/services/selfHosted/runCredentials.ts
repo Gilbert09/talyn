@@ -140,11 +140,23 @@ export async function resolveRunCredentials(
   const openai = extra.llm === 'openai';
   const agentKey = openai ? creds?.openaiKey : creds?.claudeToken;
 
+  // No credential is a REFUSAL, not an answer without one. The gateway fills an
+  // absent key from its tenant's sealed custody, so answering `ok` with the key
+  // omitted is a route to spending somebody else's subscription. The push path
+  // (`poller.recredential`) already refuses here; this used to say yes.
+  if (!agentKey) {
+    console.warn(
+      `[fleet] run credentials refused: workspace has no ` +
+      `${openai ? 'OpenAI' : 'Anthropic'} credential for this run`
+    );
+    return { ok: false, reason: 'credentials_unavailable' };
+  }
+
   return {
     ok: true,
     credentials: {
       githubToken,
-      ...(agentKey ? (openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }) : {}),
+      ...(openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
       ...(extra.repo ? { repo: extra.repo } : {}),
     },
   };

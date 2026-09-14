@@ -18,6 +18,7 @@ import { handlePolarWebhook } from './services/billing/webhook.js';
 import { initDatabase } from './db/index.js';
 import { getDbClient, getPoolDbClient, closeDbClient } from './db/client.js';
 import { assertValidEnv, retiredEnvWarnings } from './services/validateEnv.js';
+import { assertAllowedOriginsConfig } from './services/posthogCode/hostPolicy.js';
 import { createOriginPolicy } from './services/originPolicy.js';
 import { billingEnabled } from './services/billing/entitlements.js';
 import { migrateLegacyPlaintextCredentials } from './services/credentialMigration.js';
@@ -70,6 +71,17 @@ async function main() {
   // first request that needs it. Reports every problem at once.
   assertValidEnv();
   for (const warning of retiredEnvWarnings()) console.warn(`[env] ${warning}`);
+
+  // A typo in POSTHOG_ALLOWED_ORIGINS used to surface as a refused PostHog
+  // request much later. Say it at boot, where an operator is looking.
+  const malformedOrigins = assertAllowedOriginsConfig();
+  if (malformedOrigins.length > 0) {
+    console.error(
+      `[env] POSTHOG_ALLOWED_ORIGINS has ${malformedOrigins.length} malformed entr` +
+      `${malformedOrigins.length === 1 ? 'y' : 'ies'} (ignored): ${malformedOrigins.join(', ')}. ` +
+      'Each entry must be an exact HTTPS origin, e.g. https://posthog.example.com'
+    );
+  }
 
   // Loud, deliberate: with no Polar env the free-plan task limit is NOT
   // enforced (a paywall nobody can pay would brick task creation). Fine for

@@ -274,11 +274,24 @@ export interface UserTokenGrant {
   refreshTokenExpiresInSec?: number;
 }
 
-/** Raised when a user-token refresh fails (refresh token expired/revoked → user must re-auth). */
+/**
+ * Raised when a user-token refresh fails.
+ *
+ * `permanent` separates the two causes, which need opposite handling:
+ * a dead refresh token (the user revoked the App, or the token expired) can
+ * only be fixed by reconnecting, so retrying it hammers GitHub's token
+ * endpoint forever and parks every webhook delivery behind a workspace that
+ * will never recover. A 429 or a 5xx is transient and MUST keep retrying.
+ * Conflating them is what turned one revoked authorization into a stalled
+ * webhook lane for every workspace watching the same repository.
+ */
 export class UserTokenRefreshError extends Error {
-  constructor(message: string) {
+  readonly permanent: boolean;
+
+  constructor(message: string, options: { permanent: boolean }) {
     super(message);
     this.name = 'UserTokenRefreshError';
+    this.permanent = options.permanent;
   }
 }
 
@@ -372,14 +385,20 @@ export async function refreshUserToken(refreshToken: string): Promise<UserTokenG
     ...(response.ok ? {} : { error: `app user token refresh: ${response.statusText}` }),
   });
   if (!response.ok) {
-    throw new UserTokenRefreshError(`user token refresh failed: ${response.status} ${response.statusText}`);
+    // 429 and 5xx are the endpoint failing, not the token. Everything else in
+    // the 4xx range rejects this credential and will keep rejecting it.
+    const permanent = response.status < 500 && response.status !== 429;
+    throw new UserTokenRefreshError(
+      `user token refresh failed: ${response.status} ${response.statusText}`,
+      { permanent },
+    );
   }
   try {
     return parseUserTokenResponse(response.bodyText, 'refresh');
   } catch (err) {
     // A 200 with an `error` body (e.g. bad_refresh_token) means the refresh
     // token is dead — surface as the typed error so the caller prompts re-auth.
-    throw new UserTokenRefreshError(err instanceof Error ? err.message : String(err));
+    throw new UserTokenRefreshError(err instanceof Error ? err.message : String(err), { permanent: true });
   }
 }
 
