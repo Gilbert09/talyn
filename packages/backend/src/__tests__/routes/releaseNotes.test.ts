@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
-import type { ReleaseHighlight, ReleaseNoteEntry } from '@talyn/shared';
+import { GATED_FEATURE_KEYS, type ReleaseHighlight, type ReleaseNoteEntry } from '@talyn/shared';
 import {
   releaseNotesPublicRoutes,
   releaseNotesRoutes,
@@ -96,8 +96,38 @@ describe('routes/release-notes', () => {
         version: '0.2.61',
         publishedAt: '2026-08-30T03:00:00.000Z',
         highlights: [highlight()],
+        gatedFeatures: GATED_FEATURE_KEYS,
       },
     ] satisfies ReleaseNoteEntry[]);
+  });
+
+  it('records a gated highlight but never serves it', async () => {
+    // The regression this whole path exists for: Loops shipped, the notes
+    // announced it, and most users could not open the page it pointed at.
+    expect(
+      (
+        await publish('0.2.61', [
+          highlight({ title: 'Ungated' }),
+          highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' }),
+        ])
+      ).status
+    ).toBe(201);
+
+    const { body } = await read('');
+    const entries = body.data as ReleaseNoteEntry[];
+    expect(entries[0].highlights.map((h) => h.title)).toEqual(['Ungated']);
+    // Only the KEY travels. The withheld title and description stay server-side.
+    expect(entries[0].gatedFeatures).toContain('loops');
+    expect(JSON.stringify(body)).not.toContain('Run a prompt on a schedule');
+  });
+
+  it('rejects a highlight tagged with a gate the register does not know', async () => {
+    const res = await ingest({
+      version: '0.2.61',
+      publishedAt: '2026-08-30T03:00:00.000Z',
+      highlights: [highlight({ requiresFeature: 'loop' } as Partial<ReleaseHighlight>)],
+    });
+    expect(res.status).toBe(400);
   });
 
   it('strips a leading v from the tag, so v0.2.61 and 0.2.61 are one release', async () => {

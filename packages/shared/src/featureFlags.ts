@@ -77,6 +77,33 @@ export interface FeatureFlagDefinition {
   readonly fallback: boolean;
   /** What the flag gates, for the operator reading a log line. */
   readonly description: string;
+  /**
+   * Announcement policy: may the "What's new" modal talk about this feature?
+   *
+   * `'gated'` means every release highlight tagged with this flag is withheld
+   * from EVERYONE — including the accounts the PostHog audience has switched it
+   * on for. Flipping this to `'general'` (or deleting the flag outright) is what
+   * announces the feature, and the withheld backlog replays at that moment. See
+   * `releaseNotes.ts`.
+   *
+   * Deliberately NOT derived from {@link fallback}. The two agree today, but
+   * `fallback` answers "what do we say when PostHog is down" — a question about
+   * an outage, not about who has the feature. Deriving one from the other links
+   * two policies that are only coincidentally aligned, and the day they diverge
+   * the release notes change behaviour with no edit that says so.
+   */
+  readonly availability: 'general' | 'gated';
+  /**
+   * The conventional-commit scopes this flag gates, for the release-notes
+   * generator. `feat(loops): …` is Loops work by definition, so it is tagged
+   * mechanically rather than inferred.
+   *
+   * Only read for a `'gated'` flag. Not exhaustive, and cannot be: a gated
+   * feature's commits do not all carry its scope (`fix(desktop): hide the Loops
+   * nav item while loading` is scoped `desktop`). This is the floor — see
+   * `scripts/release-notes/generate.mjs` for the second net.
+   */
+  readonly releaseScopes: readonly string[];
 }
 
 /**
@@ -99,6 +126,8 @@ export const FEATURE_FLAGS = {
     envOverride: 'WORKFLOWS_ENABLED',
     fallback: true,
     description: 'Workflows — user-defined PR automation',
+    availability: 'general',
+    releaseScopes: ['workflows'],
   },
 
   /**
@@ -120,6 +149,8 @@ export const FEATURE_FLAGS = {
     envOverride: 'LOOPS_ENABLED',
     fallback: false,
     description: 'Loops — recurring prompts on a cron schedule',
+    availability: 'gated',
+    releaseScopes: ['loops'],
   },
 
   /**
@@ -141,6 +172,8 @@ export const FEATURE_FLAGS = {
     envOverride: 'FLEET_ALLOWED',
     fallback: false,
     description: 'Talyn Fleet — self-hosted Firecracker microVMs',
+    availability: 'gated',
+    releaseScopes: ['fleet'],
   },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
@@ -149,6 +182,57 @@ export type FeatureFlagKey = keyof typeof FEATURE_FLAGS;
 
 /** Every key, for iteration (evaluating the whole set, logging at boot). */
 export const FEATURE_FLAG_KEYS = Object.keys(FEATURE_FLAGS) as FeatureFlagKey[];
+
+/** Is this a key the register knows about? Narrows an unvalidated string. */
+export function isFeatureFlagKey(key: string): key is FeatureFlagKey {
+  return Object.prototype.hasOwnProperty.call(FEATURE_FLAGS, key);
+}
+
+/**
+ * The flags whose features the "What's new" modal must not talk about yet.
+ *
+ * Computed, never hand-maintained: the previous version of this list lived in
+ * `releaseNotes.ts` as a literal array of commit scopes and drifted the first
+ * time a gated feature shipped — Loops was announced to every user who could
+ * not open it, because nobody remembered to add the scope.
+ */
+export const GATED_FEATURE_KEYS: FeatureFlagKey[] = FEATURE_FLAG_KEYS.filter(
+  (key) => FEATURE_FLAGS[key].availability === 'gated'
+);
+
+/**
+ * Is a release highlight tagged with `key` still withheld?
+ *
+ * An UNKNOWN key is not gated, and that is the point rather than an oversight.
+ * A highlight published months ago under a flag that has since been deleted
+ * from the register describes a feature everybody now has, so it becomes
+ * visible — which is exactly the replay the modal relies on. Deleting the flag
+ * and flipping `availability` are two ways to say the same thing.
+ */
+export function isGatedFeature(key: string | null | undefined): boolean {
+  if (!key || !isFeatureFlagKey(key)) return false;
+  return FEATURE_FLAGS[key].availability === 'gated';
+}
+
+/**
+ * The gate a commit scope implies, or `null` for an ungated scope.
+ *
+ * Only gated flags can match: once a feature is general its scope must stop
+ * tagging, or the release that announces it would tag itself as withheld.
+ */
+export function gateForScope(scope: string | null | undefined): FeatureFlagKey | null {
+  if (!scope) return null;
+  const needle = scope.trim().toLowerCase();
+  for (const key of GATED_FEATURE_KEYS) {
+    // `as readonly string[]`: each definition's `releaseScopes` is a literal
+    // tuple thanks to `as const`, so the union's `includes` narrows its own
+    // parameter to `never`. Widening here, not in the register, keeps the
+    // literal types available to anything that wants them.
+    const scopes = FEATURE_FLAGS[key].releaseScopes as readonly string[];
+    if (scopes.includes(needle)) return key;
+  }
+  return null;
+}
 
 /**
  * The flags whose subject is the CALLING USER, and therefore the ones

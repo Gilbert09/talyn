@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { shouldShowWhatsNew, nextSeenVersion } from '@talyn/shared';
+import { planWhatsNew, whatsNewFetchFloor, type WhatsNewCursors } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { releaseVersion } from '../lib/appVersion';
@@ -7,17 +7,17 @@ import { releaseVersion } from '../lib/appVersion';
 /**
  * Decides whether to open the "What's new" modal on launch.
  *
- * The version this client last showed lives in localStorage, per device — like
- * the theme and the auto-keep explainer. It gates an explainer, not an
- * entitlement, so there is nothing here worth a schema column: the worst case
- * of losing it is one extra baseline read on a new machine.
+ * How far this client has read lives in localStorage, per device — like the
+ * theme and the auto-keep explainer. It gates an explainer, not an entitlement,
+ * so there is nothing here worth a schema column: the worst case of losing it
+ * is one extra baseline read on a new machine.
  *
  * Three outcomes:
- *   - No stored version (first ever run): record the latest release and show
+ *   - No stored cursors (first ever run): record the latest release and show
  *     nothing. A brand-new user wants the app, not a changelog.
- *   - Stored version, nothing notable since: record the new high-water mark
+ *   - Stored cursors, nothing notable since: record the new high-water mark
  *     and show nothing. Most nightlies land here.
- *   - Stored version with notable releases since: open the modal.
+ *   - Stored cursors with notable releases since: open the modal.
  *
  * A build whose version isn't a semver — which is every local build — opts out
  * of all three. Without a version there is no way to tell which releases this
@@ -29,21 +29,59 @@ import { releaseVersion } from '../lib/appVersion';
  * can never fire over the wizard.
  */
 
+/**
+ * One cursor per stream (`''` plus one per gated feature) rather than the
+ * single version this used to store.
+ *
+ * A gated feature's highlights are withheld by the backend, so "the newest
+ * release I have read" and "the newest release I have been SHOWN everything
+ * from" stopped being the same number the moment anything could be held back.
+ * Keeping one number meant a user read straight past a feature they were never
+ * offered; a cursor per gate freezes that stream until the feature is released
+ * and then replays it. See `planWhatsNew` in @talyn/shared.
+ */
+export const CURSORS_KEY = 'fastowl:whatsNew:cursors';
+
+/**
+ * The single version this stored before cursors, still read for the one-way
+ * migration below and deliberately still WRITTEN alongside them.
+ *
+ * Talyn ships a build every night and the updater can roll a user backwards; a
+ * build that only understands this key must not re-show months of notes because
+ * a newer one stopped maintaining it.
+ */
 export const LAST_SEEN_KEY = 'fastowl:whatsNew:lastSeenVersion';
 
 /** Fail toward showing nothing: private mode shouldn't pop a modal every launch. */
-export function readLastSeenVersion(): string | null {
+export function readCursors(): WhatsNewCursors {
   try {
-    return localStorage.getItem(LAST_SEEN_KEY);
+    const raw = localStorage.getItem(CURSORS_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const out: WhatsNewCursors = {};
+        for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof value === 'string') out[key] = value;
+        }
+        return out;
+      }
+    }
+    // Migration: an existing user arrives here with only the old scalar. Seed
+    // the ungated stream from it and let planWhatsNew freeze the gates at the
+    // same point — anything withheld BEFORE this moment is not replayed, which
+    // is right, because it was already shown to them by the bug this replaced.
+    const legacy = localStorage.getItem(LAST_SEEN_KEY);
+    return legacy ? { '': legacy } : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-export function writeLastSeenVersion(version: string | null): void {
-  if (!version) return;
+export function writeCursors(cursors: WhatsNewCursors): void {
+  if (!cursors['']) return;
   try {
-    localStorage.setItem(LAST_SEEN_KEY, version);
+    localStorage.setItem(CURSORS_KEY, JSON.stringify(cursors));
+    localStorage.setItem(LAST_SEEN_KEY, cursors['']);
   } catch {
     // best-effort
   }
@@ -85,14 +123,18 @@ export function useWhatsNew(): void {
 
     void (async () => {
       try {
-        const lastSeenVersion = readLastSeenVersion();
+        const cursors = readCursors();
 
-        if (!lastSeenVersion) {
+        if (!cursors['']) {
           // A brand-new user gets a baseline and no changelog — they installed
           // the app minutes ago and nothing in the feed is "new" to them.
           if (justOnboarded) {
             const latest = await api.releaseNotes.latest();
-            writeLastSeenVersion(latest?.version ?? currentVersion);
+            const baseline = latest?.version ?? currentVersion;
+            // Every gate baselines here too: `planWhatsNew` freezes each one at
+            // the ungated cursor on first sight, so a feature released later
+            // replays from this instant rather than from the start of time.
+            writeCursors({ '': baseline });
             return;
           }
 
@@ -108,34 +150,40 @@ export function useWhatsNew(): void {
           // whole time is not, and the size of that modal would grow with the
           // table forever.
           const all = await api.releaseNotes.list();
-          writeLastSeenVersion(currentVersion);
-          const toShow = shouldShowWhatsNew({
+          const plan = planWhatsNew({
             // Floor, not a real version: the window is already narrowed to the
             // single entry below, so this just means "no lower bound".
-            lastSeenVersion: '0.0.0',
+            cursors: { '': '0.0.0' },
             currentVersion,
             entries: all.filter((e) => e.version === currentVersion),
             surface: 'desktop' as const,
           });
-          if (toShow.length > 0) openWhatsNew(toShow);
+          // Only the ungated stream is written. Every gate freezes at this same
+          // point on the next launch, on first sight — writing them here would
+          // say the same thing twice and let the two drift.
+          writeCursors({ '': currentVersion });
+          if (plan.show.length > 0) openWhatsNew(plan.show);
           return;
         }
 
-        const entries = await api.releaseNotes.list(lastSeenVersion);
-        const input = {
-          lastSeenVersion,
+        // The floor is the OLDEST cursor, not the ungated one. A gate frozen
+        // months ago needs its backlog inside this response on the day it
+        // lifts, and asking from the ungated high-water mark returns a window
+        // that cannot contain it.
+        const entries = await api.releaseNotes.list(whatsNewFetchFloor(cursors));
+        const plan = planWhatsNew({
+          cursors,
           currentVersion,
           entries,
           surface: 'desktop' as const,
-        };
+        });
 
         // Written back whether or not anything is shown: a release whose
-        // highlights were all web-only is still seen, and leaving it unrecorded
+        // highlights were all web-only is still read, and leaving it unrecorded
         // means re-fetching and re-evaluating it on every launch forever.
-        writeLastSeenVersion(nextSeenVersion(input));
+        writeCursors(plan.cursors);
 
-        const toShow = shouldShowWhatsNew(input);
-        if (toShow.length > 0) openWhatsNew(toShow);
+        if (plan.show.length > 0) openWhatsNew(plan.show);
       } catch {
         // Offline, or the backend is mid-deploy. Nothing is written, so the
         // next launch tries again from the same point.

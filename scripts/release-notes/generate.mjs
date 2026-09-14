@@ -12,13 +12,28 @@
  * @talyn/shared, the same filter the tests pin) → ask Claude to turn what
  * survives into user-facing highlights → POST them.
  *
- * Two filters, deliberately. The mechanical one drops merge commits,
- * non-user commit types, internal scopes, and scopes still behind an allow-list
- * (`GATED_SCOPES`) without any judgement; the model answers the judgement
- * question ("would a user notice this?") on what's left. Either one alone gets
- * it wrong: the filter can't tell a plumbing `fix(github)` from a visible one,
- * it can't tell that a `fix(desktop)` is about a gated page, and the model
- * shouldn't be spending attention on `chore(deps)`.
+ * Two filters, deliberately. The mechanical one drops merge commits, non-user
+ * commit types and internal scopes without any judgement; the model answers the
+ * judgement question ("would a user notice this?") on what's left. Either one
+ * alone gets it wrong: the filter can't tell a plumbing `fix(github)` from a
+ * visible one, and the model shouldn't be spending attention on `chore(deps)`.
+ *
+ * Work that is still behind a feature flag is TAGGED rather than dropped, and
+ * the tagging is two nets because one is not enough:
+ *
+ *   1. Scope. `feat(loops): …` is Loops work by definition, so the register's
+ *      `releaseScopes` decides it and the model has no say. Those commits are
+ *      grouped into their own call and every highlight it returns is stamped by
+ *      this script.
+ *   2. Judgement, on the ungated group only. A gated feature's commits do not
+ *      all carry its scope — `feat(billing): cap the free plan at 3 loops` is
+ *      scoped `billing` and would sail straight through — so that call is TOLD
+ *      which features are still gated and may tag a highlight itself.
+ *
+ * The model can only ADD a gate, never remove one. It previously had the whole
+ * job, as a paragraph asking it not to announce anything a commit "tells you"
+ * is gated; a commit subject does not say that, so it announced Loops to every
+ * user who could not open it.
  *
  * Nothing here may fail a release. The job is `continue-on-error`, this script
  * exits 0 on every soft failure, and an empty highlight list is a normal
@@ -40,7 +55,13 @@
  *   TALYN_RELEASE_INGEST_SECRET  omit to skip the POST
  */
 import { execFile } from 'node:child_process';
-import { filterReleaseCommits, surfacesForScope, kindForCommitType } from '@talyn/shared';
+import {
+  filterReleaseCommits,
+  surfacesForScope,
+  kindForCommitType,
+  FEATURE_FLAGS,
+  GATED_FEATURE_KEYS,
+} from '@talyn/shared';
 
 /**
  * Run the CLI and hand back what it said, without throwing.
@@ -139,15 +160,13 @@ async function fetchCommitSubjects() {
 // 2. Turn the survivors into highlights
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You write the "What's new" notes for Talyn, a desktop and web app for managing GitHub pull requests with cloud coding agents.
+const SYSTEM_PROMPT_HEAD = `You write the "What's new" notes for Talyn, a desktop and web app for managing GitHub pull requests with cloud coding agents.
 
 You are given the commits from one release. Turn them into the short list a Talyn user would want to read after an update.
 
 What earns a highlight: something the user can see or do differently. New capabilities, changed behaviour they would notice, fixes to problems they would have hit, and speedups they would feel.
 
 What does not: internal refactors, test changes, dependency bumps, build and CI work, logging and instrumentation, anything on the operator console or the marketing site, and fixes to bugs that only ever existed on an unreleased branch.
-
-And what must NOT, even when it is the most interesting thing in the release: anything the commit tells you is not available to users yet — behind an allow-list, behind a feature flag, gated to specific accounts, or described as not yet enabled. Announcing one of those is worse than announcing nothing, because the user is told about something they cannot open AND the release is then marked as read, so the real launch is never announced. When a release contains only gated work, the correct answer is an empty list.
 
 Merge commits that tell one story into one highlight. Three commits iterating on the same feature are one highlight describing the finished feature, not three.
 
@@ -158,6 +177,44 @@ For each highlight:
 - description: exactly one sentence, written for someone using the app. Say what they can now do or what now works. No commit-speak, no file paths, no PR or issue numbers, no function or table names, no mention of commits or releases.
 - kind: "feature" for something new, "fix" for something repaired, "improvement" for something that got faster or better without being new.
 - surfaces: which clients it applies to. A commit scoped (desktop) is desktop only, (web) is web only, everything else is both. Backend changes are almost always both.`;
+
+/**
+ * What the model is told about gating, which depends on which group it is
+ * summarising. Both variants end at the same place — the script owns the final
+ * `requiresFeature` — but only the ungated call is asked to think about it.
+ *
+ * `null` as the gate means the ungated group.
+ */
+function gatingSection(gate) {
+  if (gate) {
+    const { description } = FEATURE_FLAGS[gate];
+    return `Every commit below belongs to one feature: ${description}. It is not available to most users yet, and Talyn will hold these notes back until it is — that is handled for you, so write them exactly as you would write any other release note.
+
+Describe the feature itself. Do not mention that it is limited, gated, in beta, in preview, or coming soon, and do not hedge. By the time anybody reads this line the feature is theirs.
+
+Set requiresFeature to null on every highlight. The tag is applied for you.`;
+  }
+
+  if (GATED_FEATURE_KEYS.length === 0) {
+    return 'Set requiresFeature to null on every highlight.';
+  }
+
+  const list = GATED_FEATURE_KEYS.map((key) => `- "${key}": ${FEATURE_FLAGS[key].description}`).join(
+    '\n'
+  );
+  return `Some Talyn features are not available to users yet. A highlight that describes one of them must be TAGGED rather than written as though everyone has it: set requiresFeature to the matching key below. Talyn holds a tagged highlight back and shows it on the day the feature is released, so tagging loses nothing and is always the safe answer when you are unsure.
+
+${list}
+
+Judge it by what the highlight is ABOUT, not by the commit's scope. "Cap the free plan at 3 loops" is about Loops and is tagged "loops", even though it was filed under billing.
+
+Everything else gets requiresFeature: null.`;
+}
+
+/** The system prompt for one group of commits. */
+function systemPrompt(gate) {
+  return `${SYSTEM_PROMPT_HEAD}\n\n${gatingSection(gate)}\n\n${OUTPUT_CONTRACT}`;
+}
 
 /**
  * The JSON contract, spelled out in the prompt.
@@ -171,7 +228,7 @@ For each highlight:
  */
 const OUTPUT_CONTRACT = `Reply with a single JSON object and nothing else. No prose before or after it, no markdown code fences.
 
-{"highlights": [{"title": string, "description": string, "kind": "feature" | "fix" | "improvement", "surfaces": ("desktop" | "web")[]}]}
+{"highlights": [{"title": string, "description": string, "kind": "feature" | "fix" | "improvement", "surfaces": ("desktop" | "web")[], "requiresFeature": string | null}]}
 
 When nothing in the release is worth telling a user about, reply {"highlights": []}.`;
 
@@ -204,14 +261,14 @@ When nothing in the release is worth telling a user about, reply {"highlights": 
  * The prompt goes in as an argv element via execFile — no shell — so a commit
  * subject full of quotes and backticks is data, not syntax.
  */
-async function callClaude(userMessage) {
+async function callClaude(userMessage, system) {
   const { stdout, stderr, err } = await run(
     'claude',
     [
       '-p',
       userMessage,
       '--system-prompt',
-      `${SYSTEM_PROMPT}\n\n${OUTPUT_CONTRACT}`,
+      system,
       '--model',
       'claude-opus-5',
       '--max-turns',
@@ -282,7 +339,22 @@ function extractJson(text) {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-async function generateHighlights(commits) {
+/**
+ * Summarise ONE group of commits — either everything ungated, or everything
+ * belonging to a single gated feature.
+ *
+ * Grouping rather than one call with per-commit annotations is what makes the
+ * scope net deterministic. The model merges commits into highlights, so given a
+ * mixed list there is no way to attribute a merged highlight back to a gate; in
+ * its own call the answer is known before the model speaks, and this function
+ * stamps it. The model's own judgement only ever operates on the ungated group,
+ * where it can add a gate the scope map could not see.
+ *
+ * Costs one extra CLI call per gated feature actually present in the release,
+ * which is normally zero and has never been more than one.
+ */
+async function generateGroup(commits, gate) {
+  const system = systemPrompt(gate);
   const lines = commits.map((c) => {
     const scope = c.scope ? `(${c.scope})` : '';
     const surfaces = surfacesForScope(c.scope).join('+');
@@ -297,29 +369,65 @@ async function generateHighlights(commits) {
   // unreachable API just costs a minute.
   let text;
   try {
-    text = await callClaude(ask);
+    text = await callClaude(ask, system);
   } catch (err) {
     if (!/error_max_turns/.test(err.message)) throw err;
     console.warn('release-notes: the model used its turns without answering — asking once more');
-    text = await callClaude(`${ask}\n\nAnswer directly with the JSON. Do not use any tools.`);
+    text = await callClaude(`${ask}\n\nAnswer directly with the JSON. Do not use any tools.`, system);
   }
   try {
-    return normalize(extractJson(text).highlights ?? []);
+    return normalize(extractJson(text).highlights ?? [], gate);
   } catch (err) {
     console.warn(`release-notes: unparseable reply (${err.message}) — asking once more`);
   }
   text = await callClaude(
-    `${ask}\n\nYour previous reply could not be parsed as JSON. Reply with ONLY the JSON object, starting with { and ending with }.`
+    `${ask}\n\nYour previous reply could not be parsed as JSON. Reply with ONLY the JSON object, starting with { and ending with }.`,
+    system
   );
-  return normalize(extractJson(text).highlights ?? []);
+  return normalize(extractJson(text).highlights ?? [], gate);
+}
+
+/**
+ * Split the release by gate and summarise each part.
+ *
+ * Ungated first so it leads the modal; within a group the model's own ordering
+ * is kept.
+ */
+async function generateHighlights(commits) {
+  const groups = new Map([[null, []]]);
+  for (const commit of commits) {
+    const key = commit.gate ?? null;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(commit);
+  }
+
+  const out = [];
+  for (const [gate, group] of groups) {
+    if (group.length === 0) continue;
+    if (gate) {
+      console.log(`release-notes: ${group.length} commit(s) gated behind "${gate}".`);
+    }
+    out.push(...(await generateGroup(group, gate)));
+  }
+  return out;
 }
 
 /**
  * Last-mile tidying the schema cannot express (structured outputs reject
  * `maxLength`), plus a hard drop of anything malformed — the backend validates
  * the same shape and would reject the whole POST for one bad entry.
+ *
+ * `gate` is the group's own gate, and when it is set it WINS: the model was
+ * told to leave `requiresFeature` null there, but a stamp it cannot override is
+ * cheaper than trusting it not to.
+ *
+ * In the ungated group the model may name a gate itself, and a name that is not
+ * an exact register key means it invented one. That drops the whole highlight
+ * rather than publishing it ungated: losing one line from one nightly is
+ * recoverable, and publishing a line that should have been withheld is the
+ * failure this field exists to prevent.
  */
-function normalize(raw) {
+function normalize(raw, gate = null) {
   const out = [];
   for (const h of raw) {
     const title = String(h?.title ?? '')
@@ -329,7 +437,22 @@ function normalize(raw) {
     const surfaces = [...new Set(h?.surfaces ?? [])].filter((s) => s === 'desktop' || s === 'web');
     if (!title || !description || surfaces.length === 0) continue;
     if (!['feature', 'fix', 'improvement'].includes(h?.kind)) continue;
-    out.push({ title, description, kind: h.kind, surfaces });
+
+    let requiresFeature = gate;
+    if (!requiresFeature && h?.requiresFeature != null) {
+      const claimed = String(h.requiresFeature).trim().toLowerCase();
+      if (claimed && claimed !== 'null') {
+        if (!Object.prototype.hasOwnProperty.call(FEATURE_FLAGS, claimed)) {
+          console.warn(
+            `release-notes: dropping "${title}" — it claims an unknown gate "${claimed}".`
+          );
+          continue;
+        }
+        requiresFeature = claimed;
+      }
+    }
+
+    out.push({ title, description, kind: h.kind, surfaces, ...(requiresFeature ? { requiresFeature } : {}) });
   }
   return out;
 }

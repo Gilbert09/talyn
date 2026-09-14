@@ -2,6 +2,89 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 124 — the release notes stop announcing gated features (2026-09-14)
+
+Tom: the in-app "What's new" modal is showing features that are switched off for
+the user. It was Loops. `feat(loops): run a prompt on a schedule` and
+`feat(billing): cap the free plan at 3 loops` both reached people whose `loops`
+flag is off, which is most people.
+
+Two nets were supposed to stop that and both failed, in the same way:
+
+1. `GATED_SCOPES` in `releaseNotes.ts` — a literal array of commit scopes. It
+   said `['fleet']`. Nobody added `loops`. It duplicated something the flag
+   register already knew, so it drifted by default rather than by accident.
+2. A paragraph in the generator's prompt telling the model not to announce
+   "anything the commit tells you is not available to users yet". A commit
+   subject does not tell you that. The model was asked to infer a fact it had
+   never been given, and inferred wrong.
+
+So the fix is not a better list or a better paragraph. **The register is the
+only place that knows what is gated, so the register is what decides.**
+
+**`availability` is a new field on `FeatureFlagDefinition`, and it is separate
+from `fallback` on purpose.** They agree today — `workflows` is `'general'` with
+a fallback of `true`, `loops` and `fleet` are `'gated'` with `false` — which is
+exactly why deriving one from the other was tempting and wrong. `fallback`
+answers "what do we say when PostHog is unreachable"; `availability` answers "may
+we talk about this yet". Linking them means the day they diverge the release
+notes change behaviour with no edit that says so. `releaseScopes` sits next to
+it and is the scope→flag map the generator reads.
+
+**A gated commit is now TAGGED, not dropped.** That is the second half, and it
+is what makes the first half safe to flip. The old drop was lossy: the release
+was marked read with nothing shown, so the real launch had nothing left to
+announce — the docblock on `GATED_SCOPES` named this as "the failure mode to
+watch for" and answered it with an obligation on a human (remove the scope in
+the same commit that removes the gate). Now the highlight is written, stored,
+and withheld on the way out, so the same row answers differently the day the
+flag flips.
+
+**Filtering is on the READ path, in the backend.** Not at generation (that
+throws the text away and there is nothing to replay), and not in the clients
+(anyone can sign up, so "authenticated" is not an audience — a `curl` would have
+the name and description of every unreleased feature). The backend also
+redeploys on every push, so its register is never stale; a desktop build three
+nights behind still withholds correctly without updating first.
+
+**The seen-state is now one cursor per gate, and that is the whole replay
+mechanism.** A single `lastSeenVersion` was enough while gated work was never
+written down. It stopped being enough the moment a highlight could be withheld,
+because "I have read this far" and "I have been shown everything this far" are
+different facts. A gate's cursor freezes the first time the client hears the
+gate exists, stays put however many launches pass, and is still parked there
+when the gate comes down — so the backlog renders at once, on the first launch
+after the feature became real. Two things that look like details and are not:
+
+- **`gatedFeatures` is the backend's WHOLE current gate set, repeated on every
+  entry** — not "what was stripped from this release". A gate with nothing in
+  the fetched window would otherwise never freeze, and the cursor would walk
+  past its own launch. It is repeated per entry rather than wrapped in an
+  envelope so `GET /release-notes` stays a JSON array: every already-installed
+  desktop build would throw on a shape it does not recognise.
+- **`planWhatsNew` must never walk a cursor backwards.** The window is no longer
+  pre-filtered to "above the cursor" — it cannot be, each stream has its own —
+  so the newest entry in range is routinely older than a cursor already past it.
+  The desktop hits this on every launch where its ceiling sits above the newest
+  published release. Caught by a test, not by review.
+
+**The generator partitions rather than annotates.** The model merges commits
+into highlights, so given a mixed list there is no way to attribute a merged
+highlight back to a gate. Each gated feature gets its own call and this script
+stamps the result; only the ungated call is asked to think about gating, and it
+is given the flag keys and descriptions — the fact it was missing before. It can
+add a gate, never remove one. An invented gate name drops the highlight.
+
+Verified against the actual regression: `feat(loops)` is stamped mechanically,
+`feat(billing): cap the free plan at 3 loops` is tagged by the model, and a
+cross-scope case the prompt does not use as an example (`feat(tasks): show which
+microVM a run landed on`) came back tagged `fleet`.
+
+Not done: the generator has no unit tests, because it is a script with no test
+harness and `main()` runs on import. The backend rejects an unknown gate with a
+400 and that path IS tested, so the generator's own drop is a nicety — it keeps
+one bad line from costing a release its whole set of notes.
+
 ## Session 123 — three loops on the free plan (2026-09-12)
 
 Loops shipped an hour after the workflow cap landed (Session 121), so it shipped

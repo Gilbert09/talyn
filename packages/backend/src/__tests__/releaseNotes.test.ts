@@ -2,16 +2,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   compareVersions,
   filterReleaseCommits,
-  GATED_SCOPES,
+  gateForScope,
+  GATED_FEATURE_KEYS,
   INTERNAL_SCOPES,
+  isGatedFeature,
   kindForCommitType,
   highlightsForSurface,
-  nextSeenVersion,
   parseConventionalCommit,
   parseVersion,
-  shouldShowWhatsNew,
+  planWhatsNew,
   surfacesForScope,
   versionSortKey,
+  whatsNewFetchFloor,
   type ReleaseHighlight,
   type ReleaseNoteEntry,
 } from '@talyn/shared';
@@ -34,10 +36,15 @@ const highlight = (over: Partial<ReleaseHighlight> = {}): ReleaseHighlight => ({
   ...over,
 });
 
-const entry = (version: string, highlights: ReleaseHighlight[] = [highlight()]): ReleaseNoteEntry => ({
+const entry = (
+  version: string,
+  highlights: ReleaseHighlight[] = [highlight()],
+  gatedFeatures: string[] = []
+): ReleaseNoteEntry => ({
   version,
   publishedAt: '2026-08-30T03:00:00.000Z',
   highlights,
+  gatedFeatures,
 });
 
 describe('shared/releaseNotes — versions', () => {
@@ -82,6 +89,7 @@ describe('shared/releaseNotes — commit filtering', () => {
         subject: 'adopt Liquid Glass icon for macOS 26',
         pr: 56,
         raw: 'feat(desktop): adopt Liquid Glass icon for macOS 26 (#56)',
+        gate: null,
       }
     );
     // Direct push: no PR number, which is the common case here.
@@ -142,38 +150,51 @@ describe('shared/releaseNotes — commit filtering', () => {
     expect(kept.map((c) => c.scope)).toEqual(['desktop']);
   });
 
-  it('drops a surface that is still behind an allow-list', () => {
-    // Announcing one of these is worse than announcing nothing: the modal
-    // points at a page the user cannot open, and the span is then marked seen —
-    // so the real launch is never announced. This is what put Workflows into
-    // 0.2.75's notes while it was allow-listed to one account.
+  it('TAGS a surface that is still gated rather than dropping it', () => {
+    // The drop is what burnt Loops: the release was marked read with nothing
+    // shown, so the real launch had nothing left to announce. A tagged commit
+    // is summarised like any other and withheld downstream, where the decision
+    // can be revisited every time somebody asks.
     const kept = filterReleaseCommits([
       'fix(fleet): stop dialling a stale host',
+      'feat(loops): run a prompt on a schedule',
       'feat(desktop): apply a staged update once the machine goes idle',
     ]);
-    expect(kept.map((c) => c.scope)).toEqual(['desktop']);
-  });
-
-  it('keeps the two lists apart, because they need opposite maintenance', () => {
-    // An internal scope stays on its list forever. A gated one is temporary, and
-    // must be removed in the same commit that removes its allow-list gate —
-    // that release is the one where the feature becomes usable. Conflating them
-    // is how a feature ships to everybody and is never mentioned.
-    for (const scope of GATED_SCOPES) {
-      expect(INTERNAL_SCOPES).not.toContain(scope);
-    }
-    expect(GATED_SCOPES).toContain('fleet');
-  });
-
-  it('announces a feature once it is un-gated', () => {
-    // `workflows` WAS on GATED_SCOPES and was removed in the commit that
-    // released PR automation to everybody — which is the mechanism working, not
-    // a hole in it. A `feat(workflows)` commit now reaches the model.
-    expect(GATED_SCOPES).not.toContain('workflows');
-    const kept = filterReleaseCommits([
-      'feat(workflows): run a workflow against a PR by hand',
+    expect(kept.map((c) => [c.scope, c.gate])).toEqual([
+      ['fleet', 'fleet'],
+      ['loops', 'loops'],
+      ['desktop', null],
     ]);
-    expect(kept.map((c) => c.scope)).toEqual(['workflows']);
+  });
+
+  it('reads the gate off the register, so the two lists cannot drift apart', () => {
+    // The predecessor was a literal array of scopes in releaseNotes.ts. It said
+    // ['fleet'] on the day Loops shipped, which is the entire bug: the register
+    // knew Loops was gated and the notes had their own opinion.
+    expect(gateForScope('loops')).toBe('loops');
+    expect(gateForScope('fleet')).toBe('fleet');
+    expect(gateForScope('LOOPS')).toBe('loops');
+    expect(gateForScope('desktop')).toBeNull();
+    expect(gateForScope(null)).toBeNull();
+    // Gated and internal are opposite kinds of invisible and must not overlap:
+    // an internal scope is never announced, a gated one is announced later.
+    for (const key of GATED_FEATURE_KEYS) {
+      expect(INTERNAL_SCOPES).not.toContain(key);
+    }
+  });
+
+  it('stops tagging a feature once it is generally available', () => {
+    // `workflows` is in the register with availability 'general', so its scope
+    // no longer gates. Were it still tagged, the release that announced PR
+    // automation to everybody would have withheld itself.
+    expect(gateForScope('workflows')).toBeNull();
+    expect(isGatedFeature('workflows')).toBe(false);
+    expect(isGatedFeature('loops')).toBe(true);
+    // An unknown key — a flag deleted from the register — is not gated. That
+    // is the second way to release a feature, and it has to replay too.
+    expect(isGatedFeature('a-flag-we-deleted')).toBe(false);
+    expect(isGatedFeature(undefined)).toBe(false);
+    expect(filterReleaseCommits(['feat(workflows): run a workflow by hand'])[0].gate).toBeNull();
   });
 
   it('drops our own release-notes plumbing', () => {
@@ -199,58 +220,69 @@ describe('shared/releaseNotes — commit filtering', () => {
   });
 });
 
-describe('shared/releaseNotes — shouldShowWhatsNew', () => {
+describe('shared/releaseNotes — planWhatsNew', () => {
   const base = {
     currentVersion: '0.2.63',
     surface: 'desktop' as const,
   };
 
   it('shows nothing on a first run, however much is available', () => {
-    expect(
-      shouldShowWhatsNew({ ...base, lastSeenVersion: null, entries: [entry('0.2.62')] })
-    ).toEqual([]);
+    expect(planWhatsNew({ ...base, cursors: {}, entries: [entry('0.2.62')] }).show).toEqual([]);
     // An unparseable stored value is treated the same way: the caller
     // re-baselines rather than blasting a new user with the whole changelog.
     expect(
-      shouldShowWhatsNew({ ...base, lastSeenVersion: 'dev', entries: [entry('0.2.62')] })
+      planWhatsNew({ ...base, cursors: { '': 'dev' }, entries: [entry('0.2.62')] }).show
     ).toEqual([]);
   });
 
-  it('returns everything newer than the last-seen version, newest first', () => {
-    const shown = shouldShowWhatsNew({
-      ...base,
-      lastSeenVersion: '0.2.60',
-      entries: [entry('0.2.61'), entry('0.2.63'), entry('0.2.62'), entry('0.2.60')],
+  it('leaves the stored cursors untouched when it shows nothing', () => {
+    // The caller writes `plan.cursors` unconditionally, so a plan that declines
+    // to decide must hand back exactly what it was given.
+    const cursors = { '': 'dev' };
+    expect(planWhatsNew({ ...base, cursors, entries: [entry('0.2.62')] }).cursors).toBe(cursors);
+    expect(planWhatsNew({ ...base, cursors: { '': '0.2.63' }, entries: [] }).cursors).toEqual({
+      '': '0.2.63',
     });
-    expect(shown.map((e) => e.version)).toEqual(['0.2.63', '0.2.62', '0.2.61']);
   });
 
-  it('never shows a release the running build does not have yet', () => {
+  it('returns everything newer than the ungated cursor, newest first', () => {
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.60' },
+      entries: [entry('0.2.61'), entry('0.2.63'), entry('0.2.62'), entry('0.2.60')],
+    });
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.63', '0.2.62', '0.2.61']);
+    expect(plan.cursors['']).toBe('0.2.63');
+  });
+
+  it('never shows or records a release the running build does not have yet', () => {
     // The backend knows about tonight's release the moment CI posts it; the
-    // desktop user is still on last night's build.
-    const shown = shouldShowWhatsNew({
+    // desktop user is still on last night's build. Recording 0.2.63 here would
+    // swallow its notes — they would update to it and never be told.
+    const plan = planWhatsNew({
       ...base,
       currentVersion: '0.2.62',
-      lastSeenVersion: '0.2.60',
+      cursors: { '': '0.2.60' },
       entries: [entry('0.2.61'), entry('0.2.62'), entry('0.2.63')],
     });
-    expect(shown.map((e) => e.version)).toEqual(['0.2.62', '0.2.61']);
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.62', '0.2.61']);
+    expect(plan.cursors['']).toBe('0.2.62');
   });
 
   it('applies no ceiling when the client has no orderable version (the web fork)', () => {
-    const shown = shouldShowWhatsNew({
-      lastSeenVersion: '0.2.60',
+    const plan = planWhatsNew({
+      cursors: { '': '0.2.60' },
       currentVersion: null,
       surface: 'web',
       entries: [entry('0.2.61'), entry('0.2.63')],
     });
-    expect(shown.map((e) => e.version)).toEqual(['0.2.63', '0.2.61']);
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.63', '0.2.61']);
   });
 
   it('drops highlights for the other client, and releases thereby left empty', () => {
-    const shown = shouldShowWhatsNew({
+    const plan = planWhatsNew({
       ...base,
-      lastSeenVersion: '0.2.60',
+      cursors: { '': '0.2.60' },
       entries: [
         entry('0.2.62', [highlight({ surfaces: ['web'] })]),
         entry('0.2.61', [
@@ -259,20 +291,160 @@ describe('shared/releaseNotes — shouldShowWhatsNew', () => {
         ]),
       ],
     });
-    expect(shown.map((e) => e.version)).toEqual(['0.2.61']);
-    expect(shown[0].highlights.map((h) => h.title)).toEqual(['Desktop only']);
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.61']);
+    expect(plan.show[0].highlights.map((h) => h.title)).toEqual(['Desktop only']);
+  });
+
+  it('records a release whose highlights were all for the other client', () => {
+    // Otherwise this release is re-fetched and re-evaluated on every launch,
+    // forever, and never shown.
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.60' },
+      entries: [entry('0.2.61', [highlight({ surfaces: ['web'] })])],
+    });
+    expect(plan.show).toEqual([]);
+    expect(plan.cursors['']).toBe('0.2.61');
+  });
+
+  it('never walks a cursor backwards', () => {
+    // The window is no longer pre-filtered to "above the cursor" — it cannot
+    // be, because each stream has its own — so the newest entry in range is
+    // routinely older than a cursor already past it. The desktop hits this on
+    // every launch where its ceiling sits above the newest published release.
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.62' },
+      entries: [entry('0.2.61'), entry('0.2.62')],
+    });
+    expect(plan.show).toEqual([]);
+    expect(plan.cursors['']).toBe('0.2.62');
   });
 
   it('shows nothing for a release that carried no highlights at all', () => {
-    expect(
-      shouldShowWhatsNew({ ...base, lastSeenVersion: '0.2.60', entries: [entry('0.2.61', [])] })
-    ).toEqual([]);
+    const plan = planWhatsNew({ ...base, cursors: { '': '0.2.60' }, entries: [entry('0.2.61', [])] });
+    expect(plan.show).toEqual([]);
+    expect(plan.cursors['']).toBe('0.2.61');
+  });
+});
+
+describe('shared/releaseNotes — planWhatsNew, gated features', () => {
+  const base = { currentVersion: '0.2.70', surface: 'desktop' as const };
+
+  it('freezes a gate the first time it hears of one, at the ungated mark', () => {
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.60' },
+      entries: [entry('0.2.62', [highlight()], ['loops'])],
+    });
+    // The ungated stream moves on; the loops stream parks where it was, so
+    // anything published from 0.2.61 onward is still owed to this user.
+    expect(plan.cursors).toEqual({ '': '0.2.62', loops: '0.2.60' });
+  });
+
+  it('holds a frozen gate still across any number of launches', () => {
+    let cursors = { '': '0.2.60' };
+    for (const version of ['0.2.61', '0.2.62', '0.2.63']) {
+      cursors = planWhatsNew({
+        ...base,
+        cursors,
+        entries: [entry(version, [highlight()], ['loops'])],
+      }).cursors;
+    }
+    expect(cursors).toEqual({ '': '0.2.63', loops: '0.2.60' });
+  });
+
+  it('freezes a gate with no content in the window', () => {
+    // The reason `gatedFeatures` is the backend's whole gate set rather than
+    // "what was stripped from this release": a quiet gate that advanced with
+    // the ungated stream would read straight past its own launch later.
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.60' },
+      entries: [entry('0.2.61', [highlight()], ['loops', 'fleet'])],
+    });
+    expect(plan.cursors).toEqual({ '': '0.2.61', loops: '0.2.60', fleet: '0.2.60' });
+  });
+
+  it('replays the backlog on the launch after the gate comes down', () => {
+    // The whole point. While `loops` was gated the backend stripped its
+    // highlights and the cursor stayed at 0.2.60; the day it goes general the
+    // same rows arrive tagged-but-served and render at once.
+    const cursors = { '': '0.2.65', loops: '0.2.60' };
+    const plan = planWhatsNew({
+      ...base,
+      cursors,
+      entries: [
+        entry('0.2.62', [highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' })]),
+        entry('0.2.64', [highlight({ title: 'Pause a loop', requiresFeature: 'loops' })]),
+        entry('0.2.66', [highlight({ title: 'Something ungated' })]),
+      ],
+    });
+    expect(plan.show.map((e) => e.version)).toEqual(['0.2.66', '0.2.64', '0.2.62']);
+    expect(plan.cursors).toEqual({ '': '0.2.66', loops: '0.2.66' });
+  });
+
+  it('does not replay what the ungated stream had already read past', () => {
+    // A gate that came down before this client ever heard of it starts level
+    // with the ungated cursor — no modal full of ancient history.
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.65' },
+      entries: [
+        entry('0.2.62', [highlight({ title: 'Old gated line', requiresFeature: 'loops' })]),
+        entry('0.2.66', [highlight({ title: 'New gated line', requiresFeature: 'loops' })]),
+      ],
+    });
+    expect(plan.show.map((e) => e.highlights[0].title)).toEqual(['New gated line']);
+  });
+
+  it('keeps the streams independent', () => {
+    // One gate lifting must not drag another one forward with it.
+    const plan = planWhatsNew({
+      ...base,
+      cursors: { '': '0.2.65', loops: '0.2.60', fleet: '0.2.55' },
+      entries: [
+        entry('0.2.66', [highlight({ title: 'Loops', requiresFeature: 'loops' })], ['fleet']),
+      ],
+    });
+    expect(plan.show.map((e) => e.highlights[0].title)).toEqual(['Loops']);
+    expect(plan.cursors).toEqual({ '': '0.2.66', loops: '0.2.66', fleet: '0.2.55' });
+  });
+
+  it('still applies the ceiling to a replayed backlog', () => {
+    const plan = planWhatsNew({
+      ...base,
+      currentVersion: '0.2.63',
+      cursors: { '': '0.2.63', loops: '0.2.60' },
+      entries: [
+        entry('0.2.62', [highlight({ title: 'Have it', requiresFeature: 'loops' })]),
+        entry('0.2.64', [highlight({ title: 'Do not have it', requiresFeature: 'loops' })]),
+      ],
+    });
+    expect(plan.show.map((e) => e.highlights[0].title)).toEqual(['Have it']);
+    // 0.2.64 is above the ceiling, so neither stream may record it — the user
+    // updates to that build and is told about it then.
+    expect(plan.cursors).toEqual({ '': '0.2.63', loops: '0.2.62' });
+  });
+});
+
+describe('shared/releaseNotes — whatsNewFetchFloor', () => {
+  it('asks from the OLDEST cursor, not the ungated one', () => {
+    // Asking from the ungated high-water mark returns a window that cannot
+    // contain the backlog a frozen gate is owed.
+    expect(whatsNewFetchFloor({ '': '0.2.70', loops: '0.2.60' })).toBe('0.2.60');
+    expect(whatsNewFetchFloor({ '': '0.2.70' })).toBe('0.2.70');
+  });
+
+  it('asks for everything when there is nothing to go on', () => {
+    expect(whatsNewFetchFloor({})).toBeNull();
+    expect(whatsNewFetchFloor({ '': 'dev' })).toBeNull();
   });
 });
 
 describe('shared/releaseNotes — highlightsForSurface', () => {
   // The Settings → About button reads the whole changelog rather than a span,
-  // so it does not go through shouldShowWhatsNew. Both paths share this filter
+  // so it does not go through planWhatsNew. Both paths share this filter
   // so a desktop user cannot see a web-only line just because they arrived
   // from a different button.
   it('keeps only this client\'s highlights and drops releases left empty', () => {
@@ -295,53 +467,6 @@ describe('shared/releaseNotes — highlightsForSurface', () => {
     const input = [entry('0.2.61', [highlight({ surfaces: ['web'] })])];
     highlightsForSurface(input, 'desktop');
     expect(input[0].highlights).toHaveLength(1);
-  });
-});
-
-describe('shared/releaseNotes — nextSeenVersion', () => {
-  it('records a release whose highlights were all for the other client', () => {
-    // Otherwise this release is re-fetched and re-evaluated on every launch,
-    // forever, and never shown.
-    const input = {
-      lastSeenVersion: '0.2.60',
-      currentVersion: '0.2.63',
-      surface: 'desktop' as const,
-      entries: [entry('0.2.61', [highlight({ surfaces: ['web'] })])],
-    };
-    expect(shouldShowWhatsNew(input)).toEqual([]);
-    expect(nextSeenVersion(input)).toBe('0.2.61');
-  });
-
-  it('never records a release the running build does not have', () => {
-    // Recording 0.2.63 here would swallow its notes: the user would update to
-    // it and never be told what changed.
-    expect(
-      nextSeenVersion({
-        lastSeenVersion: '0.2.60',
-        currentVersion: '0.2.62',
-        surface: 'desktop',
-        entries: [entry('0.2.62'), entry('0.2.63')],
-      })
-    ).toBe('0.2.62');
-  });
-
-  it('leaves the stored version alone when nothing is in range', () => {
-    expect(
-      nextSeenVersion({
-        lastSeenVersion: '0.2.62',
-        currentVersion: '0.2.62',
-        surface: 'desktop',
-        entries: [entry('0.2.63')],
-      })
-    ).toBe('0.2.62');
-    expect(
-      nextSeenVersion({
-        lastSeenVersion: null,
-        currentVersion: '0.2.62',
-        surface: 'desktop',
-        entries: [entry('0.2.61')],
-      })
-    ).toBeNull();
   });
 });
 
@@ -391,6 +516,32 @@ describe('services/releaseNotes — parseHighlights', () => {
     expect(parseHighlights([])).toEqual({ ok: true, value: [] });
   });
 
+  it('keeps a gate the generator tagged, and omits the field when there is none', () => {
+    const res = parseHighlights([
+      { title: 'Run a prompt on a schedule', description: 'x.', kind: 'feature', surfaces: ['web'], requiresFeature: ' loops ' },
+      { title: 'Untagged', description: 'y.', kind: 'fix', surfaces: ['web'], requiresFeature: null },
+    ]);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.value[0].requiresFeature).toBe('loops');
+    expect(res.ok && res.value[1]).not.toHaveProperty('requiresFeature');
+  });
+
+  it('rejects a gate the register does not know', () => {
+    // A name nothing recognises would be published UNGATED, which is the exact
+    // failure `requiresFeature` exists to prevent. The generator and this file
+    // ship from one commit, so refusing is safe and a typo is loud.
+    expect(
+      parseHighlights([
+        { title: 'x', description: 'y.', kind: 'fix', surfaces: ['web'], requiresFeature: 'loop' },
+      ]).ok
+    ).toBe(false);
+    expect(
+      parseHighlights([
+        { title: 'x', description: 'y.', kind: 'fix', surfaces: ['web'], requiresFeature: 42 },
+      ]).ok
+    ).toBe(false);
+  });
+
   it('rejects the whole payload on one malformed entry', () => {
     const bad = [
       [{ title: '', description: 'x', kind: 'fix', surfaces: ['web'] }],
@@ -437,7 +588,36 @@ describe('services/releaseNotes — storage', () => {
       version: '0.2.61',
       publishedAt: '2026-08-30T03:00:00.000Z',
       highlights: [highlight()],
+      gatedFeatures: GATED_FEATURE_KEYS,
     });
+  });
+
+  it('withholds a gated highlight on the way out, and says which gates are up', async () => {
+    // The row keeps everything the generator wrote — what changes over time is
+    // the register. Filtering on the READ path is what lets the same row answer
+    // differently the day the flag goes general; a write-path filter would have
+    // thrown the text away and left nothing to announce.
+    await publish('0.2.61', 30, [
+      highlight({ title: 'Ungated' }),
+      highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' }),
+      highlight({ title: 'Already released', requiresFeature: 'workflows' }),
+      highlight({ title: 'Flag since deleted', requiresFeature: 'a-flag-we-deleted' }),
+    ]);
+    const [row] = await listReleaseNotes();
+    expect(row.highlights.map((h) => h.title)).toEqual([
+      'Ungated',
+      'Already released',
+      'Flag since deleted',
+    ]);
+    expect(row.gatedFeatures).toContain('loops');
+    expect(row.gatedFeatures).not.toContain('workflows');
+  });
+
+  it('withholds on the baseline read too', async () => {
+    // `latest()` is the other read path — a brand-new client's baseline — and
+    // it has to withhold too, or the leak just moves one endpoint over.
+    await publish('0.2.61', 30, [highlight({ title: 'Gated', requiresFeature: 'loops' })]);
+    expect((await latestReleaseNote())?.highlights).toEqual([]);
   });
 
   it('is idempotent on version, and a re-run replaces the highlights', async () => {

@@ -341,12 +341,22 @@ mid-migration.
 #### Adding a flag
 
 1. Add an entry to `FEATURE_FLAGS` in `packages/shared/src/featureFlags.ts`,
-   picking `fallback` by the "if PostHog is down" question above.
+   picking `fallback` by the "if PostHog is down" question above, and
+   `availability` by a different question: may the "What's new" modal talk about
+   this feature yet? A new gate is `'gated'`. Set `releaseScopes` to the commit
+   scopes that belong to it (`['loops']`).
 2. Create the flag in PostHog under the same `posthogKey`.
 3. Read it through `services/featureFlags.ts` — never `process.env` at the call
    site, or the override precedence gets reimplemented per gate.
 4. If a client needs to DRAW something from it, add the key to
    `ACCOUNT_FEATURE_FLAGS` so `GET /features` answers it.
+
+#### Releasing a gated feature
+
+Set `availability: 'general'` (or delete the flag). That one edit is what
+announces it: every release highlight that was withheld under the flag becomes
+visible, and each client replays the backlog it was never shown. Nothing else to
+remember, and nothing to remember it in the same commit as.
 
 Enforce it where the work happens. A hidden nav item is a decoration that the
 CLI, the MCP server and plain `curl` all walk straight past.
