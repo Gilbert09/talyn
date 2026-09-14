@@ -2,6 +2,98 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 132 — a refusal is not a failure (2026-09-14)
+
+Tom asked why task `ae66b426` came back failed. It had not failed. The agent
+wrote, correctly:
+
+> PR #100390 is clean except the Visual Review gate. Storybook run 9282adc0 has
+> 6 new / 0 changed / 0 unresolved snapshots; I verified all 6 PNGs as correct
+> first baselines. Finalizing commits a baseline and greens a merge gate, which
+> repo policy requires an explicit per-run human yes for. This run is unattended
+> and two prior PR comments already state the verdict and ask, so I did not
+> duplicate them. Needs a human to finalize or authorize me.
+
+Railway logs showed **four runs of ~14 minutes each** against one remote PostHog
+task between 18:34 and 19:16, each hitting the identical wall, before
+`MAX_ATTEMPTS = 3` paused the watcher. By run two the agent was telling us it
+had already asked twice.
+
+**Two defects, and the second is the expensive one.**
+
+1. No vocabulary for "a person must act". A refusal and a crash were the same
+   state.
+2. **`prAutoMergeWatcher` never read the task.** Its accounting inferred "the
+   run finished" from `activePrTaskId(...) === null` and decided success purely
+   from `prNeedsFollowup(lastSummary)`. A crash, a run that did not help, and a
+   considered refusal were indistinguishable, and all three burned an attempt.
+   A new status alone would have changed nothing.
+
+**What shipped** — `needs_human`, a terminal `TaskStatus`, plus
+`TaskResult.needsHuman.reason`. `tasks.status` is bare `text` with no enum and
+no CHECK constraint, so no migration.
+
+**Things worth remembering:**
+
+- **The reason does NOT go in `result.error`.** That is the field the admin
+  console renders in its red failure banner — which is exactly how this
+  incident looked to an operator.
+- **Neither provider tells us.** PostHog's run status is six values with
+  nothing structured behind it (`state?: unknown` is never read); the fleet
+  gives two free-text error strings; `_posthog/turn_complete` fires identically
+  whether the agent won or surrendered. So the signal has to come from the
+  agent: `TALYN_NEEDS_HUMAN`, an exact prefix on the last line of its final
+  message, modelled on the `TALYN_COMMENT_TAGLINE` precedent. This is the
+  repo's first *read-back* of an emitted contract.
+- **The planning agent got the parse sites wrong, and the incident proved it.**
+  It concluded `error_message` was infra-only and the `failed` branch could be
+  left alone. But the admin console rendered the refusal prose, and that string
+  reaches it via `result.error` ← `run.error_message`. The `failed` branch is
+  the **primary** parse site. A design that skipped it would have missed the
+  exact case it was written for.
+- **The idle-finalize path wrote `success: true`.** A refusal reaching it was
+  not merely mis-labelled, it was recorded as a win. `finalAgentMessageText`
+  walks back to the turn marker and **rejoins the agent-message chunks in
+  order** — PostHog streams a message as a run of chunks and the sentinel line
+  is routinely split across them, so reading any single entry finds nothing.
+- **Absence of the sentinel means UNKNOWN**, never needs_human and never
+  success. `DEFAULT_MERGEABLE_TEMPLATE` is workspace-overridable, so a fork can
+  silently drop the instruction; that must degrade to today's behaviour.
+- **`blockerSignature` moved to shared** as `mergeableBlockerSignature`,
+  byte-identical so every stored `seenSignatures` row stays comparable. The
+  watcher re-arms on a signature change — the merge queue's own
+  "progress, not retries" test, shared rather than reinvented.
+- **The R8 park must END the decision walk.** The signature it records lives in
+  the transition's `set`, not yet on `d.entry`, so the blocked gate below looked
+  for it, did not find it, concluded the blockers had changed, and released the
+  entry on the very pass that parked it — firing the run the branch exists to
+  prevent. Found by a test, not by review.
+- **`typeof === 'string'`, not `!== null`.** Every `DecisionContext` built
+  before `fixTaskNeedsHumanReason` existed leaves it undefined, and undefined
+  has to mean "no". This broke three existing decide tests until fixed.
+- **A parked task stays REUSABLE.** `needs_human` is terminal, so the next
+  legitimate dispatch rewrites the row in place. Excluding it would insert a
+  duplicate AND leave a stale row shadowing the PR forever. The durable record
+  lives on the PR (`autoMergeState.needsHuman`), the queue's event log and the
+  notification — never the task row, which attempts 2-4 already shared.
+
+**Step 1 was a refactor with no behaviour change**, done first on purpose: six
+hand-written copies of "which statuses are active" existed (billing, admin,
+`prCloudFix`, fleet `runCredentials`, the reuse path, merge-queue triggers) plus
+two in the front-end stores, every one a bare `string[]`. `TASK_STATUS_TERMINAL`
+is a `Record<TaskStatus, boolean>`, so adding a member now fails to typecheck
+until it is classified. That turned most of the silent sites into compile
+errors before the new status existed — including the worst one, where a status
+in neither `ACTIVE_TASK_STATUSES` nor `HISTORY_TASK_STATUSES` is fetched by
+neither query and is **invisible in the UI**.
+
+The merge queue already had `awaiting_human_check` for exactly this gate, but
+only inside the queue — #100390 was driven by the watcher, which had no
+equivalent. It now has one, and the queue gained `agent_needs_human` for gates
+Talyn cannot read at all.
+
+4975 tests pass (3902 backend, 537 desktop, 350 web, 186 admin).
+
 ## Session 131 — the 63-second fan-out, and a loop that waited for it (2026-09-14)
 
 Session 130 fixed the regression and the lag still would not move. The measured
