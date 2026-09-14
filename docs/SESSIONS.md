@@ -2,6 +2,50 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 131 — the 63-second fan-out, and a loop that waited for it (2026-09-14)
+
+Session 130 fixed the regression and the lag still would not move. The measured
+reason: **0.8 deliveries/s while each delivery took 4ms.** The worker was idle
+about 99% of the time, processing in bursts and then stopping dead.
+
+Two things caused that, and they compounded.
+
+**The fan-out was serial.** `refreshPrAcrossWorkspaces` grouped its targets and
+then looped `for (const group of groups.values()) await …`. PostHog/posthog has
+**17 genuine tenants** (Tom confirmed — not duplicate rows), so one
+`pull_request_review` delivery was 17 GraphQL fetches end to end: 63 seconds,
+measured. The grouping key was already
+`githubService.graphqlAccountKeyForOwner`, i.e. the GitHub ACCOUNT — so the
+groups were always independent rate budgets and there was never a reason to
+serialise them. Now bounded-concurrent at `REFRESH_GROUP_CONCURRENCY = 8`,
+roughly three waves instead of seventeen.
+
+**And the read loop waited for a lane slot, per entry, in batch order.** Six
+minute-long deliveries therefore stopped it reading ANYTHING — including the
+fast check_runs that are ~90% of the stream and cost 4ms each since Session 128.
+Textbook head-of-line blocking, and the reason throughput was two orders of
+magnitude below what the per-delivery cost implied.
+
+The lane and the loop are now separate bounds, which is what they always should
+have been: `SLOW_LANE_MAX = 6` still limits how many slow deliveries RUN at
+once, and a new `SLOW_ADMISSION_MAX = 64` limits how far ahead the loop may
+read. The loop takes an admission, hands the entry to `runSlow`, and carries on;
+`runSlow` takes the lane slot. Admission is still bounded on purpose — a loop
+that reads without limit grows the pending-entries list and the heap until
+neither recovers — but at 64 the fast lane never queues behind a slow entry, and
+the backlog stays in Redis where it belongs.
+
+The concurrency is now pinned by a test that would DEADLOCK under the old serial
+code rather than merely be slower: both fetches must be in flight before either
+is allowed to return.
+
+Arithmetic to check against when this is re-measured: slow-lane arrivals were
+~0.8/s against a service rate of 6 slots ÷ 63s = 0.095/s — under-provisioned
+about 8×. Eight-wide groups should take the slot time to ~11s, so ~0.55/s, with
+the fast lane no longer blocked. If that still does not clear the backlog the
+next lever is `SLOW_LANE_MAX` itself, which is far cheaper to raise now each
+slot is held for seconds rather than a minute.
+
 ## Session 130 — the webhook lag was a regression, not a capacity limit (2026-09-14)
 
 Tom pushed back on two things, and was right about both: `integrations` is a

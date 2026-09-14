@@ -272,6 +272,33 @@ describe('refreshPrAcrossWorkspaces (workspace-isolated fetches)', () => {
     expect((shared as PRSummary).reviewRequestVia).toBeUndefined();
   });
 
+  it('fetches the groups CONCURRENTLY, not one tenant after another', async () => {
+    // The point of the change. Each group is a different GitHub ACCOUNT with
+    // its own rate budget, so overlapping them cannot stack load on one of
+    // them — and serially, 17 tenants on one repo made a single
+    // `pull_request_review` delivery take 63 SECONDS in production while
+    // holding one of the webhook worker's six slow-lane slots.
+    let inFlight = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      if (inFlight >= targets.length) release?.();
+      await bothStarted;
+      inFlight -= 1;
+      return [{ number: 10, pr: summary({ number: 10, author: 'octocat' }) }];
+    });
+
+    await prMonitorService.refreshPrAcrossWorkspaces(targets, 10);
+
+    // Serially this would deadlock on `bothStarted` rather than reach 2.
+    expect(peak).toBe(targets.length);
+  });
+
   it.each([false, true])('isolates a denied workspace with reversed order %s', async (reverse) => {
     const fetch2 = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
       { number: 9, pr: summary({ number: 9, author: 'octocat' }) },

@@ -48,6 +48,24 @@ const WORKER_BATCH = 32;
 // Bound concurrent access checks and PR refreshes to protect the user's API budget.
 const SLOW_LANE_MAX = 6;
 
+/**
+ * How many slow deliveries may be OUTSTANDING before the read loop pauses.
+ *
+ * Distinct from SLOW_LANE_MAX, which bounds how many run at once. This bounds
+ * how far ahead the loop may read, and the two used to be the same number by
+ * accident: the loop awaited a LANE slot per slow entry, in batch order, so six
+ * long-running deliveries stopped it reading anything — including the fast
+ * check_runs that are 90% of the stream and now cost 4ms each. That is
+ * head-of-line blocking, and it is why throughput sat at 0.8/s while each
+ * delivery took milliseconds.
+ *
+ * Admission is still bounded, because a loop that reads without limit grows the
+ * pending-entries list and the heap until neither recovers. 64 is ten batches
+ * of slow work queued ahead — enough that fast entries never wait behind a slow
+ * one, small enough that the backlog stays in Redis where it belongs.
+ */
+const SLOW_ADMISSION_MAX = 64;
+
 /** Repository events need a user access check, including incremental check updates. */
 export function isSlowEvent(eventType: string): boolean {
   return [
@@ -592,6 +610,8 @@ export class WebhookWorker {
   private conn: Redis | null = null;
   private running = false;
   private slowGate = new Semaphore(SLOW_LANE_MAX);
+  /** Bounds how far ahead the read loop may run — see SLOW_ADMISSION_MAX. */
+  private slowAdmission = new Semaphore(SLOW_ADMISSION_MAX);
   private claimCursor = '0-0';
   /** Set at start: false only when Redis predates XAUTOCLAIM (6.2). */
   private supportsAutoClaim = true;
@@ -685,8 +705,10 @@ export class WebhookWorker {
         const slow = batch.filter((b) => laneFor(b.delivery?.eventType, replayed) === 'slow');
         await Promise.all(fast.map((b) => this.handleEntry(b.id, b.delivery, 'fast', replayed)));
         for (const b of slow) {
-          await this.slowGate.acquire();
-          void this.handleEntry(b.id, b.delivery, 'slow', replayed).finally(() => this.slowGate.release());
+          // Admission, not a lane slot. The loop is free to carry on reading —
+          // and to keep draining the fast lane — while these wait their turn.
+          await this.slowAdmission.acquire();
+          void this.runSlow(b.id, b.delivery, replayed);
         }
       } catch (err) {
         if (this.running) {
@@ -694,6 +716,30 @@ export class WebhookWorker {
           await new Promise((r) => setTimeout(r, 1_000));
         }
       }
+    }
+  }
+
+  /**
+   * Run one slow delivery: take a lane slot, handle it, give both back.
+   *
+   * Deliberately not awaited by the read loop. The lane still bounds concurrent
+   * GitHub work; what changed is that waiting for a slot no longer happens
+   * inside the loop that reads the stream.
+   */
+  private async runSlow(
+    id: string,
+    delivery: WebhookDelivery | null,
+    replayed: boolean,
+  ): Promise<void> {
+    try {
+      await this.slowGate.acquire();
+      try {
+        await this.handleEntry(id, delivery, 'slow', replayed);
+      } finally {
+        this.slowGate.release();
+      }
+    } finally {
+      this.slowAdmission.release();
     }
   }
 

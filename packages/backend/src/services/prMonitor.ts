@@ -91,6 +91,20 @@ const BULK_POLL_DEDUPE_MS = 60_000;
 // `drainInFlightTick`.
 const FORCE_POLL_DRAIN_MS = 15_000;
 
+/**
+ * How many GitHub ACCOUNTS a single webhook fan-out may refresh at once.
+ *
+ * `refreshPrAcrossWorkspaces` groups its targets by account, so this bounds
+ * concurrent accounts, not concurrent calls against one of them — each group
+ * still makes one shared fetch. Eight because the cost being paid is a
+ * slow-lane slot in the webhook worker: with 17 tenants on one repo, serial
+ * took ~63s and eight-wide takes roughly three waves.
+ *
+ * Raising it shortens the slot further at the cost of more simultaneous
+ * outbound GraphQL; the ceiling is this times the worker's SLOW_LANE_MAX.
+ */
+const REFRESH_GROUP_CONCURRENCY = 8;
+
 // Mirrors webhookWorker's WEBHOOK_TRACE switch (kept local to dodge the import
 // cycle — webhookWorker already imports prMonitor). Lets `refreshPr` log the
 // state it actually resolved + whether it upserted/emitted, which is the
@@ -1184,24 +1198,46 @@ class PRMonitorService extends EventEmitter {
       list.push(t);
       groups.set(key, list);
     }
-    for (const group of groups.values()) {
-      const lead = group[0];
-      const watched = this.watchedFromTarget(lead);
-      try {
-        const results = await this.fetchPrSummaries(lead.workspaceId, watched, [number], {
-          resolveMergeable: false,
-        });
-        for (const target of group) {
-          await this.applyPrResults(
-            { workspaceId: target.workspaceId, repositoryId: target.repositoryId, fullName: watched.fullName },
-            results
-          );
+    // Groups run CONCURRENTLY, bounded. The grouping key above is the GitHub
+    // ACCOUNT (`graphqlAccountKeyForOwner`), so two groups are by construction
+    // two different accounts with two independent rate budgets — concurrency
+    // across them cannot stack load on one of them, and within a group there is
+    // still exactly one fetch shared by every workspace in it.
+    //
+    // Sequentially, this was the single slowest thing in the webhook path.
+    // PostHog/posthog is watched by 17 tenants, so one `pull_request_review`
+    // delivery meant 17 GraphQL fetches end to end and measured 63 SECONDS in
+    // production — holding one of the webhook worker's six slow-lane slots for
+    // the whole minute. Six of those is the lane, and the read loop then stops
+    // reading anything at all.
+    const ordered = [...groups.values()];
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < ordered.length) {
+        const group = ordered[cursor++];
+        const lead = group[0];
+        const watched = this.watchedFromTarget(lead);
+        try {
+          const results = await this.fetchPrSummaries(lead.workspaceId, watched, [number], {
+            resolveMergeable: false,
+          });
+          for (const target of group) {
+            await this.applyPrResults(
+              { workspaceId: target.workspaceId, repositoryId: target.repositoryId, fullName: watched.fullName },
+              results
+            );
+          }
+        } catch (err) {
+          // Still isolated per group: one tenant's failure must not cost the
+          // others their refresh.
+          console.warn(`[prMonitor] refresh failed for workspace ${lead.workspaceId}:`,
+            err instanceof Error ? err.message : String(err));
         }
-      } catch (err) {
-        console.warn(`[prMonitor] refresh failed for workspace ${lead.workspaceId}:`,
-          err instanceof Error ? err.message : String(err));
       }
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(REFRESH_GROUP_CONCURRENCY, ordered.length) }, () => worker())
+    );
   }
 
   /** Resolve the WatchedRepo for a refresh — from a passed repositoryId (hot path) or the DB. */
