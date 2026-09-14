@@ -394,6 +394,33 @@ describe('createCloudTask — reusing a task for the same PR', () => {
     expect(second.completedAt).toBeNull();
   });
 
+  it('reuses a task that stopped for a human, clearing its refusal', async () => {
+    // needs_human is terminal, so it is reusable like any other settled run.
+    // The alternative — excluding it — leaves a stale row shadowing the PR
+    // forever AND inserts a duplicate on the next dispatch. The durable record
+    // of the stand-down lives on the PR, not here, and the old reason must not
+    // survive onto the new run.
+    const first = await run({ prompt: 'first prompt' });
+    await db
+      .update(tasksTable)
+      .set({
+        status: 'needs_human',
+        result: {
+          success: false,
+          summary: 'Approve the baselines.',
+          needsHuman: { reason: 'Approve the baselines.' },
+        },
+      })
+      .where(eq(tasksTable.id, first.id));
+
+    const second = await run({ prompt: 'second prompt' });
+
+    expect(second.id).toBe(first.id);
+    expect(await taskCount()).toBe(1);
+    expect(second.status).toBe('queued');
+    expect(second.result).toBeNull();
+  });
+
   it('does NOT touch a task that is still running', async () => {
     // Rewriting a live task's prompt would redirect a run already in flight.
     const first = await run();
