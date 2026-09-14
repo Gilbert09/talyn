@@ -54,6 +54,14 @@ export type { DispatchResult };
  * that git push WILL fail matters as much as telling it the alternative exists,
  * because an agent that believes push should work treats the refusal as
  * something to route around.
+ *
+ * The `gh` sentence is the same lesson, learned twice. "The GitHub API is
+ * already authenticated" is true of the PROXIED REST API and false of the `gh`
+ * CLI, which carries its own credential and holds none here — so an agent told
+ * only the first half reaches for `gh` (the obvious tool for "find the PRs this
+ * person opened") and gets `gh cannot authenticate in a fleet run`. One loop run
+ * spent its whole turn discovering that and shipped nothing. Naming the tool
+ * that will not work costs one clause; finding out costs a run.
  */
 const SYSTEM_PROMPT =
   'You are a coding agent working in an isolated microVM with the repository checked out. ' +
@@ -75,7 +83,10 @@ const SYSTEM_PROMPT =
   'Rung 3 rewrites the PR branch and discards its previous commits, so do not reach for it while (1) or ' +
   '(2) would have worked. Never move the repository default branch; the fleet will refuse.\n\n' +
   'git and the GitHub API are already authenticated — there are no credentials in this VM and you ' +
-  'do not need any. Some API endpoints are deliberately unreachable; if one is refused, that is a ' +
+  'do not need any. THE `gh` CLI IS NOT, and cannot be: it looks for a credential of its own, this ' +
+  'guest holds none by design, and no amount of logging in will change that. Use the REST API ' +
+  'instead of `gh` for everything, including searching. ' +
+  'Some API endpoints are deliberately unreachable; if one is refused, that is a ' +
   'policy decision, not an obstacle to work around. Do not probe for alternatives, and never use a ' +
   'request that creates state (a review, a comment, a ref) to test whether something is permitted.\n\n' +
   'When done, state the URL of the pull request you opened.';
