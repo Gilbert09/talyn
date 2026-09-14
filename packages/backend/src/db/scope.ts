@@ -12,7 +12,7 @@ import {
  * Each transaction assumes talyn_backend and sets the owner's JWT sub claim.
  * Policies filter on `public.talyn_uid()`, which reads the same two GUCs that
  * `auth.uid()` does. They call ours because no role the backend can create is
- * able to reach schema `auth` on Supabase — see migration 0056.
+ * able to reach schema `auth` on Supabase — see migration 0057.
  * Supabase Data API roles cannot assume this role or access application tables.
  *
  * Real Postgres always enforces RLS here. Tests use pglite without a role switch

@@ -8,6 +8,7 @@ import {
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { useLoopRuns } from './useLoops';
 
 /**
@@ -81,6 +82,8 @@ function lateness(run: LoopRun): string | null {
 }
 
 function RunRow({ run }: { run: LoopRun }) {
+  const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
+  const selectTask = useWorkspaceStore((s) => s.selectTask);
   const late = lateness(run);
   const took = duration(run);
   return (
@@ -122,6 +125,26 @@ function RunRow({ run }: { run: LoopRun }) {
             #{run.task.prNumber}
             <ExternalLink className="h-3 w-3" />
           </a>
+        )}
+        {/* The transcript is where "what did it actually do" lives, and for a
+            loop that is the whole question — most runs never open a PR, so the
+            chip above is not the way in.
+
+            `task_id` is ON DELETE SET NULL, so a deleted task leaves this null
+            and draws nothing rather than a link to a task screen that would
+            open empty. A skipped or slot-waiting run never had one. */}
+        {run.taskId && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => {
+              selectTask(run.taskId);
+              setActivePanel('queue');
+            }}
+          >
+            Open task
+          </Button>
         )}
       </div>
     </div>

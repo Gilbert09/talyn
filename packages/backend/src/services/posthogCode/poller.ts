@@ -181,7 +181,7 @@ class PostHogCodePoller {
       postHogCodeStreamer.stop(task.id);
     }
 
-    const prUrl = findPullRequestUrl(remote, run);
+    const prUrl = findPullRequestUrl(run);
 
     // Keep metadata fresh (status + run id + PR url + log url) even while running.
     await patchTaskMetadata(task.id, (existing) => ({
@@ -256,7 +256,7 @@ class PostHogCodePoller {
         url: prUrl,
         title: '',
         author: '',
-        headBranch: run?.branch ?? '',
+        headBranch: headBranchOf(run),
         baseBranch,
         headSha: '',
       });
@@ -492,20 +492,69 @@ export function lastFlowEventIsTurnComplete(entries: AcpLogEntry[]): boolean {
   return false;
 }
 
-/** Scan the remote task + run for the first GitHub PR URL. */
-function findPullRequestUrl(remote: unknown, run: PostHogRun | null): string | null {
-  const fromRun = scanForPrUrl(run);
-  if (fromRun) return fromRun;
-  return scanForPrUrl(remote);
-}
-
 const PR_URL_RE = /https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/;
 
-function scanForPrUrl(value: unknown): string | null {
-  if (value == null) return null;
-  const haystack = typeof value === 'string' ? value : JSON.stringify(value);
-  const match = haystack.match(PR_URL_RE);
-  return match ? match[0] : null;
+/**
+ * The PR this run opened, or null.
+ *
+ * Reads ONE structured field — `output.pr_url`, which PostHog's runner writes
+ * when the run actually opens a pull request (`output.pr_urls` is the same
+ * statement when there was more than one). Everything else in the run is
+ * ignored, and that restraint is the entire point of this function.
+ *
+ * It used to `JSON.stringify` the whole run AND the remote task record and take
+ * the first thing matching {@link PR_URL_RE}. Both halves of that were wrong:
+ *
+ *   - The task record carries `description`, which is the user's prompt. A loop
+ *     whose prompt names a PR claimed authorship of it on every single firing.
+ *   - The run carries `output.final_message`, the agent's closing prose, which
+ *     cites pull requests it merely read. A loop that reviews PRs for a living
+ *     writes one of those every time it runs.
+ *
+ * What that produced in practice: a "Daily PR" loop on PostHog/posthog filed
+ * two of its runs against #99835 — a PR authored by the user, opened the day
+ * before, off a branch no loop had ever touched, and already merged. The task's
+ * own summary then read "PostHog Code opened <url>".
+ *
+ * `run.branch` is not a usable substitute either: a run that pushed nothing
+ * reports `main`.
+ *
+ * The cost of this being strict is that a PR goes unlinked if PostHog ever
+ * renames the field. That is the right way round — the link is a claim about
+ * authorship, and a missing link is visibly nothing while a wrong one reads as
+ * fact.
+ */
+export function findPullRequestUrl(run: PostHogRun | null): string | null {
+  const output = run?.output;
+  if (!output || typeof output !== 'object') return null;
+  const record = output as Record<string, unknown>;
+
+  const single = asPrUrl(record.pr_url);
+  if (single) return single;
+  if (Array.isArray(record.pr_urls)) {
+    for (const candidate of record.pr_urls) {
+      const url = asPrUrl(candidate);
+      if (url) return url;
+    }
+  }
+  return null;
+}
+
+/** A value is a PR URL only if the whole of it is one. */
+function asPrUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(PR_URL_RE);
+  return match && match[0] === value.trim() ? match[0] : null;
+}
+
+/** The branch the run pushed, preferring the runner's own record of it. */
+function headBranchOf(run: PostHogRun | null): string {
+  const output = run?.output;
+  if (output && typeof output === 'object') {
+    const head = (output as Record<string, unknown>).head_branch;
+    if (typeof head === 'string' && head.trim()) return head.trim();
+  }
+  return run?.branch ?? '';
 }
 
 function parsePrUrl(

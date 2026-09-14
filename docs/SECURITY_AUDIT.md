@@ -54,7 +54,7 @@ A clean dependency scan covers published advisories only. It does not prove that
 
 ## Rollout Requirements
 
-**This deploys as an ordinary push.** Migration 0056 is additive: it creates the
+**This deploys as an ordinary push.** Migration 0057 is additive: it creates the
 `talyn_backend` role and grants it scoped access, and it revokes nothing. A
 replica running the previous build keeps working while the new one boots.
 
@@ -69,7 +69,7 @@ The boundary therefore lands in two phases.
 
 ### Phase 1 — this deploy
 
-1. Push. Migration 0056 runs at boot, grants `talyn_backend` its access, and
+1. Push. Migration 0057 runs at boot, grants `talyn_backend` its access, and
    repoints every RLS policy at `public.talyn_uid()`. It FAILS LOUDLY and
    refuses to boot if a grant did not land or a policy was left behind — see
    "Why the policies moved off `auth.uid()`" below. Verified against production
@@ -92,7 +92,7 @@ The boundary therefore lands in two phases.
 
 6. Once no replica runs the old build, copy
    `docs/rollout/phase2_revoke_data_api_grants.sql` to
-   `packages/backend/src/db/migrations/0057_revoke_data_api_grants.sql`, add its
+   `packages/backend/src/db/migrations/0058_revoke_data_api_grants.sql`, add its
    journal entry, and push. This removes `anon`/`authenticated` access to
    application tables. **Until it ships the boundary is incomplete**: the
    backend uses the scoped role, but the Data API roles keep their old grants.
@@ -100,7 +100,7 @@ The boundary therefore lands in two phases.
 
 ### Rollback
 
-Migration 0056 revokes nothing, so rolling back to the previous build needs no
+Migration 0057 revokes nothing, so rolling back to the previous build needs no
 database work. After PHASE 2, the previous build cannot run without its grants:
 restore them with `docs/rollout/rollback_regrant_authenticated.sql` BEFORE
 redeploying it. Drizzle has no down migrations; that script is the only way back.
@@ -125,13 +125,13 @@ This was caught by dry-running the migration against production inside a
 transaction that rolled back; the earlier draft would have taken the backend down.
 
 `auth.uid()` is not privileged machinery, though — it reads two GUCs that
-`withOwnerScope` sets itself. So 0056 defines `public.talyn_uid()` with the same
+`withOwnerScope` sets itself. So 0057 defines `public.talyn_uid()` with the same
 body in a schema we own, proves it agrees with `auth.uid()` on the live database
 before anything depends on it, and repoints all 17 policies at it. The policies
 are all `TO PUBLIC`, so the rewrite serves the previous build's `authenticated`
 role too — which is what keeps the deploy overlap working.
 
-0056 also asserts every table grant landed, for the same reason the `auth` grant
+0057 also asserts every table grant landed, for the same reason the `auth` grant
 failed: a grant that silently did nothing must not read as a successful
 migration. The whole migration is one transaction, so a failure rolls back
 cleanly and the boot refuses, leaving the previous build serving. Re-running it

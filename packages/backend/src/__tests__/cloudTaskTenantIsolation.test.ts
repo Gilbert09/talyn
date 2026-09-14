@@ -251,7 +251,7 @@ describe('cloud task tenant isolation', () => {
       const prsBefore = await db.select().from(pullRequests);
       const [otherBefore] = await db.select().from(tasks).where(eq(tasks.id, foreignTask.id));
       posthogClient.getTask.mockResolvedValue({
-        latest_run: { id: 'run1', status: 'completed', output: 'https://github.com/private/two/pull/42' },
+        latest_run: { id: 'run1', status: 'completed', output: { pr_url: 'https://github.com/private/two/pull/42' } },
       });
       const link = vi.spyOn(prCache, 'linkTaskToPullRequest');
       await postHogCodePoller.reconcileTask({ ...row(), repositoryId, metadata, watched: false, transcriptEmpty: false });
@@ -267,7 +267,7 @@ describe('cloud task tenant isolation', () => {
 
   it('still links an owned PR when the PostHog run completes', async () => {
     posthogClient.getTask.mockResolvedValue({
-      latest_run: { id: 'run1', status: 'completed', output: 'https://github.com/acme/one/pull/42' },
+      latest_run: { id: 'run1', status: 'completed', output: { pr_url: 'https://github.com/acme/one/pull/42' } },
     });
     await postHogCodePoller.reconcileTask({
       ...row(), metadata: { posthogTaskId: 'posthog1', posthogRunId: 'run1' },
