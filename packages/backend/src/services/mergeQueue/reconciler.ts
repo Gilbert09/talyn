@@ -12,7 +12,7 @@ import { getDbClient } from '../../db/client.js';
 import { mergeQueueEntries, pullRequests as pullRequestsTable } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { disableAutoMerge } from '../githubAutoMerge.js';
-import { debugBus } from '../debugBus.js';
+import { debugBus, describeError } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import {
   closeActiveEntry,
@@ -92,7 +92,7 @@ class MergeQueueReconciler {
           (disarmed ? `, ${disarmed} pending disarm(s) retried` : '') +
           (lock.result!.pruned ? `, ${lock.result!.pruned} terminal entr(ies) pruned` : '');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = describeError(err);
       if (msg.includes('DATABASE_URL is not set')) {
         skipRecord = true;
         return;

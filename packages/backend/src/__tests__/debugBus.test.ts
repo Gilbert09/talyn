@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { debugBus, redactUrl, matchesOwnerFilter } from '../services/debugBus.js';
+import { debugBus, describeError, redactUrl, matchesOwnerFilter } from '../services/debugBus.js';
 import type { DebugCategory } from '@talyn/shared';
 
 /**
@@ -480,5 +480,60 @@ describe('recordWebhook', () => {
     expect(e.meta?.latencyMs).toBe(42);
     expect(e.meta?.repo).toBe('acme/widgets');
     expect(e.meta?.prNumbers).toEqual([7]);
+  });
+});
+
+/**
+ * The panel is only worth looking at if the error on it is the real one.
+ *
+ * A drizzle failure reports `Failed query: select … params: …` and puts the
+ * reason in `cause`. Recording `err.message` turned the loop_scheduler card red
+ * with a string that named the query and not one thing about why it failed.
+ */
+describe('describeError', () => {
+  it('walks the cause chain', () => {
+    const cause = new Error(
+      'The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received an instance of Date'
+    );
+    const err = new Error('Failed query: select "id" from "loop_runs"', { cause });
+    expect(describeError(err)).toBe(
+      'Failed query: select "id" from "loop_runs" ← caused by: ' +
+        'The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received an instance of Date'
+    );
+  });
+
+  it('keeps a lone message unchanged', () => {
+    expect(describeError(new Error('boom'))).toBe('boom');
+  });
+
+  it('reports a non-Error as it is, at either end of the chain', () => {
+    expect(describeError('just a string')).toBe('just a string');
+    expect(describeError(new Error('wrapped', { cause: 'a bare reason' }))).toBe(
+      'wrapped ← caused by: a bare reason'
+    );
+  });
+
+  it('falls back to the name when a link carries no message', () => {
+    expect(describeError(new TypeError())).toBe('TypeError');
+  });
+
+  it('stops on a cycle rather than spinning', () => {
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    (a as { cause?: unknown }).cause = b;
+    expect(describeError(a)).toBe('a ← caused by: b');
+  });
+
+  it('caps a long chain', () => {
+    let err = new Error('deepest');
+    for (const name of ['d', 'c', 'b', 'a']) err = new Error(name, { cause: err });
+    // Four links, then it stops — past that nothing new is being said, and the
+    // whole string is length-capped downstream anyway.
+    expect(describeError(err).split(' ← caused by: ')).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('is empty for nothing at all', () => {
+    expect(describeError(undefined)).toBe('');
+    expect(describeError(null)).toBe('');
   });
 });

@@ -85,7 +85,9 @@ export function instrumentEgress(sql: postgres.Sql): void {
         ok,
         bytes,
         rows,
-        error: ok ? undefined : err instanceof Error ? err.message : err ? String(err) : undefined,
+        // The raw error, not its message: a drizzle failure says "Failed query:
+        // …" and puts the actual reason in `cause`. debugBus walks the chain.
+        error: ok ? undefined : err,
       });
     };
 

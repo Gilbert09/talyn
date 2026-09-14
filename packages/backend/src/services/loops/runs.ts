@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid';
-import { and, asc, eq, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lt, lte, ne, sql } from 'drizzle-orm';
 import {
   LOOP_FAILURE_LIMIT,
   nextLoopRun,
@@ -337,12 +337,11 @@ export async function dueWaitingSlots(limit: number): Promise<
  * cases, and no number chosen in advance would be.
  */
 export async function isSuperseded(loopId: string, scheduledFor: Date): Promise<boolean> {
+  // `gt(...)`, not sql`${col} > ${scheduledFor}` — see orphanedClaims below.
   const rows = await getDbClient()
     .select({ id: runsTable.id })
     .from(runsTable)
-    .where(
-      and(eq(runsTable.loopId, loopId), sql`${runsTable.scheduledFor} > ${scheduledFor}`)
-    )
+    .where(and(eq(runsTable.loopId, loopId), gt(runsTable.scheduledFor, scheduledFor)))
     .limit(1);
   return rows.length > 0;
 }
@@ -417,6 +416,19 @@ export async function runByClaim(
  * DELETED: both end up with a null `task_id`, but only one of them ever had a
  * task. Without that column this query would reap the deleted-task case too,
  * five minutes late and under the wrong name.
+ *
+ * COMPARE DATES WITH `lt`/`gt`/`lte`, NEVER WITH A RAW `sql` FRAGMENT. The two
+ * look interchangeable and are not: a value interpolated into `sql` carries no
+ * column type, so drizzle hands it to the driver unencoded — and postgres-js
+ * then throws `The "string" argument must be of type string … Received an
+ * instance of Date` before the query ever reaches Postgres. `lt()` knows the
+ * column is `timestamptz` and encodes the Date to ISO.
+ *
+ * This is not caught by the test suite: pglite's drizzle session encodes the
+ * Date itself, so the same call passes locally and fails on every tick in
+ * production. It broke the whole scheduler sweep for exactly that reason —
+ * settlement and orphan reaping stopped, and the Debug panel showed
+ * `loop_scheduler` red with a "Failed query" whose real cause was swallowed.
  */
 export async function orphanedClaims(olderThan: Date, limit: number) {
   return getDbClient()
@@ -427,7 +439,7 @@ export async function orphanedClaims(olderThan: Date, limit: number) {
         eq(runsTable.status, 'queued'),
         isNull(runsTable.taskId),
         isNull(runsTable.dispatchedAt),
-        sql`${runsTable.createdAt} < ${olderThan}`
+        lt(runsTable.createdAt, olderThan)
       )
     )
     .limit(limit);

@@ -4,7 +4,7 @@ import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { getRedis, isRedisEnabled } from './redis.js';
 import { allWatchedRepoFullNames } from './webhookIndex.js';
 import { WEBHOOK_TRACE } from './webhookWorker.js';
-import { debugBus } from './debugBus.js';
+import { debugBus, describeError } from './debugBus.js';
 import { TickGuard } from './tickGuard.js';
 
 /**
@@ -241,7 +241,7 @@ class WebhookHeadIndex {
       summary = `webhook_head_index — ${repos} repo${repos === 1 ? '' : 's'}, ${heads} head${heads === 1 ? '' : 's'}`;
     } catch (err) {
       ok = false;
-      error = err instanceof Error ? err.message : String(err);
+      error = describeError(err);
       console.error('[webhookHeadIndex] reseed failed:', error);
     } finally {
       this.guard.end();

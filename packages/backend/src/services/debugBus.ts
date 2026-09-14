@@ -64,6 +64,40 @@ function truncate(s: string): string {
   return s.length > MAX_ERROR_LEN ? `${s.slice(0, MAX_ERROR_LEN)}…` : s;
 }
 
+/**
+ * An error as a line worth reading — INCLUDING its cause chain.
+ *
+ * `err.message` alone is what the panel used to show, and for a whole class of
+ * failure that is the useless half. A drizzle failure reports `Failed query:
+ * select … params: …` and puts the actual reason ("The \"string\" argument must
+ * be of type string … Received an instance of Date") in `cause`; a fetch
+ * failure says `fetch failed` and puts `ECONNREFUSED` there. Showing the
+ * wrapper turned a red poller card into a thing you could only stare at.
+ *
+ * Depth-capped because `cause` is a linked list an ORM or an HTTP client will
+ * happily make several links long, and the whole string is truncated to
+ * MAX_ERROR_LEN anyway — three links is past the point where anything new is
+ * being said. Self-referencing causes terminate on the `seen` set, not on the
+ * cap, so a cycle cannot spin here.
+ */
+export function describeError(err: unknown): string {
+  if (err === null || err === undefined) return '';
+  if (!(err instanceof Error)) return String(err);
+
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current instanceof Error && !seen.has(current); depth += 1) {
+    seen.add(current);
+    parts.push(current.message || current.name);
+    current = (current as { cause?: unknown }).cause;
+  }
+  if (current !== undefined && current !== null && !(current instanceof Error) && !seen.has(current)) {
+    parts.push(String(current));
+  }
+  return parts.join(' ← caused by: ');
+}
+
 /** Human-readable byte size for event summaries (e.g. "4.2 KB"). */
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '0 B';
@@ -179,7 +213,7 @@ class DebugBus {
     durationMs: number;
     ok: boolean;
     bytes?: number;
-    error?: string;
+    error?: unknown;
     /** Workspace the call was made for, so it can be attributed to an owner. */
     workspaceId?: string;
   }): void {
@@ -196,7 +230,7 @@ class DebugBus {
       meta: {
         status: input.status,
         ...(input.bytes !== undefined ? { bytes: input.bytes } : {}),
-        ...(input.error ? { error: truncate(input.error) } : {}),
+        ...(describeError(input.error) ? { error: truncate(describeError(input.error)) } : {}),
       },
     });
   }
@@ -214,7 +248,7 @@ class DebugBus {
     ok: boolean;
     bytes: number;
     rows?: number;
-    error?: string;
+    error?: unknown;
   }): void {
     if (!this.enabled) return;
     const bytes = Number.isFinite(input.bytes) ? Math.max(0, Math.round(input.bytes)) : 0;
@@ -236,7 +270,7 @@ class DebugBus {
         bytes,
         ...(input.rows !== undefined ? { rows: input.rows } : {}),
         ...(input.table ? { table: input.table } : {}),
-        ...(input.error ? { error: truncate(input.error) } : {}),
+        ...(describeError(input.error) ? { error: truncate(describeError(input.error)) } : {}),
       },
     });
   }
@@ -305,7 +339,7 @@ class DebugBus {
     /** Which worker lane processed it — splits the lag gauge by lane. */
     lane?: 'fast' | 'slow';
     workspaceId?: string;
-    error?: string;
+    error?: unknown;
   }): void {
     // Feed the consumer-lag gauge: how long this delivery waited between the
     // receiver enqueuing it and the worker picking it up. The fast firehose feeds
@@ -362,7 +396,7 @@ class DebugBus {
         ...(input.dropReason ? { dropReason: input.dropReason } : {}),
         ...(input.fanout !== undefined ? { fanout: input.fanout } : {}),
         ...(input.latencyMs !== undefined ? { latencyMs: Math.round(input.latencyMs) } : {}),
-        ...(input.error ? { error: truncate(input.error) } : {}),
+        ...(describeError(input.error) ? { error: truncate(describeError(input.error)) } : {}),
       },
     });
   }
@@ -404,7 +438,7 @@ class DebugBus {
 
   pollerTick(
     name: string,
-    input: { durationMs: number; ok: boolean; summary?: string; error?: string },
+    input: { durationMs: number; ok: boolean; summary?: string; error?: unknown },
   ): void {
     let p = this.pollers.get(name);
     if (!p) {
@@ -415,7 +449,8 @@ class DebugBus {
     p.lastTickAt = new Date().toISOString();
     p.lastDurationMs = Math.round(input.durationMs);
     p.lastOk = input.ok;
-    p.lastError = input.error ? truncate(input.error) : null;
+    const described = describeError(input.error);
+    p.lastError = described ? truncate(described) : null;
 
     this.record({
       category: input.ok ? 'polling' : 'error',
@@ -424,7 +459,7 @@ class DebugBus {
       ok: input.ok,
       summary: input.summary ?? `${name} tick ${Math.round(input.durationMs)}ms`,
       durationMs: input.durationMs,
-      meta: input.error ? { error: truncate(input.error) } : undefined,
+      meta: described ? { error: truncate(described) } : undefined,
     });
   }
 

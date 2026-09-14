@@ -2,6 +2,61 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 127 — the loop scheduler was dead, and the panel would not say why (2026-09-14)
+
+Tom, from the admin Debug panel: `loop_scheduler` red, every tick, with
+
+```
+Failed query: select "id", "loop_id", "workspace_id" from "loop_runs" where (…)
+```
+
+and nothing else. That is the whole story of this session twice over — once for
+the bug, once for why it took so long to find.
+
+**The bug.** `orphanedClaims` compared a timestamp with a raw fragment:
+
+```ts
+sql`${runsTable.createdAt} < ${olderThan}`   // dead
+lt(runsTable.createdAt, olderThan)           // fine
+```
+
+A value interpolated into `sql` carries no column type, so drizzle hands it to
+the driver with a noop encoder — and postgres-js throws before Postgres is ever
+asked: *The "string" argument must be of type string or an instance of Buffer or
+ArrayBuffer. Received an instance of Date.* `lt()` knows the column is
+`timestamptz` and encodes to ISO. `isSuperseded` had the same line and the same
+fault; `dueLoops` did not, because it already used `lte`.
+
+The tick is one try block, so the throw took the whole sweep with it:
+`fireDue`, `settleBacklog`, `retryWaitingSlots` and `reapOrphans` all stopped.
+Loops were not firing at all.
+
+**Why the suite said it was fine.** Every backend test runs on pglite, and
+drizzle's pglite session encodes the Date itself. The broken call passes locally
+and fails on every tick in production — the one shape of bug this repo's test
+strategy is blind to. Confirmed by running both forms against a real Postgres
+over postgres-js: the raw one throws, `lt()` returns the row.
+
+So the regression guard does not execute the query, it watches what reaches the
+driver. `loopQueryParams.test.ts` wraps `pglite.query`, runs each scheduler read
+and asserts no parameter is still a `Date` — with a final case that deliberately
+issues the broken form and asserts the check FAILS, so the suite cannot pass for
+the wrong reason if drizzle's behaviour ever changes underneath it.
+
+**Why the panel was useless, which is the more valuable half.** `debugBus` only
+ever recorded `err.message`. For a whole class of failure that is the wrapper
+and not the reason: drizzle says "Failed query: …" and puts the cause in
+`err.cause`; `fetch` says "fetch failed" and puts `ECONNREFUSED` there. The red
+card named the query and not one thing about why it failed, which is what turned
+a five-minute fix into an hour of reading SQL.
+
+`describeError` walks the cause chain (`a ← caused by: b`), depth-capped at four
+links and cycle-safe, and `recordDbQuery` / `recordHttp` / `pollerTick` /
+`recordWebhook` now take the ERROR rather than a string so the chain survives to
+them. The call sites hand over `err` itself. Note this is deliberately only for
+the debug bus — the routes that stringify `err.message` into an API response
+still should, because a cause chain is for an operator, not for a caller.
+
 ## Session 126 — a cloud run only opened the PR it says it opened (2026-09-14)
 
 Tom, from the Loops panel: two runs of a "Daily PR" loop on PostHog/posthog both

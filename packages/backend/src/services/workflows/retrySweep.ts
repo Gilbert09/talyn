@@ -113,7 +113,7 @@ class WorkflowRetrySweep {
       debugBus.pollerTick('workflow_retry_sweep', {
         durationMs: Date.now() - startedAt,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: err,
       });
     } finally {
       this.guard.end();
