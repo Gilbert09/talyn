@@ -204,9 +204,8 @@ describe('the connecting guard releases', () => {
       recoverSession: async () => false,
     });
 
-    // A throw from getAuthToken must not wedge the guard on — that would block
-    // every reconnect for the life of the process.
-    await expect(wsClient.connect()).rejects.toThrow('no session');
+    // Token failures schedule a retry and must release the connecting guard.
+    await expect(wsClient.connect()).resolves.toBeUndefined();
 
     configureApiClient({
       baseUrl: 'http://localhost:4747',

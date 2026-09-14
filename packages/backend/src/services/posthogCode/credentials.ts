@@ -1,7 +1,6 @@
 import { decryptString, encryptString, isEncryptedEnvelope } from '../tokenCrypto.js';
 import { PostHogCodeClient, type PostHogTokenSource } from './client.js';
 import {
-  DEFAULT_POSTHOG_HOST,
   deletePostHogIntegration,
   normalizeHost,
   readAuthMethod,
@@ -110,10 +109,11 @@ export async function storePostHogCodeCredentials(
   workspaceId: string,
   input: { apiKey: string; projectId: string; host?: string }
 ): Promise<void> {
+  const host = normalizeHost(input.host);
   await upsertPostHogIntegration(workspaceId, () => ({
     apiKeyEnc: encryptString(input.apiKey),
     projectId: input.projectId,
-    host: input.host?.replace(/\/+$/, '') || DEFAULT_POSTHOG_HOST,
+    host,
     authMethod: 'personal_api_key',
   }));
 }

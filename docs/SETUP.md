@@ -132,14 +132,11 @@ No scopes are configured on the app itself — the backend requests
 
 Without these, the "Connect GitHub" button in Settings will fail loudly.
 
-### 3b. GitHub App (webhooks + realtime, hybrid auth)
+### 3b. GitHub App (webhooks and user authorization)
 
-The App is what lets us replace polling with **webhooks** and scale across
-replicas. It uses **hybrid auth**: an installation token does all repo/PR/checks
-reads + receives webhooks, while a user-to-server token (requested during
-install) resolves the viewer's login + authored/review-requested buckets. The
-classic OAuth App above still works; the App lights up per workspace as each one
-re-connects via the install flow.
+The App supplies webhooks across replicas. All workspace repository operations use the connected user's token, including automated writes.
+Installation credentials do not authorize workspace access. Repository registration and webhook processing verify the user's current repository access.
+Classic OAuth connections remain supported. User-to-server tokens use the user's rate budget, not a separate installation budget.
 
 > **Make TWO Apps — "Talyn App Dev" (slug `talyn-app-dev`) and "Talyn App"
 > (slug `talyn-app`).** A GitHub App has
@@ -165,11 +162,8 @@ re-connects via the install flow.
 5. Enable **"Request user authorization (OAuth) during installation"**, and set the
    **Callback URL** to `http://localhost:4747/api/v1/github/app/callback` (prod: the
    Railway host equivalent — an App can list multiple callback URLs).
-6. **Leave "Expire user authorization tokens" OFF.** With it on, the user token
-   dies after 8h and we have no refresh-token rotation yet — the workspace would
-   silently break (and a 401 on the user token can tear down the integration).
-   The installation token is separate and always short-lived; we mint/refresh it
-   ourselves regardless. (Turning expiry on is a follow-up, paired with rotation.)
+6. Expiring user tokens are supported through refresh-token rotation. The backend checks persisted credentials before use.
+   Concurrent rotation cannot overwrite a disconnected or replaced integration. An expired refresh grant requires reconnection.
 7. Generate a **private key** (.pem), base64 it, and set the env vars (see the
    `.env` block below): `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`,
    `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`.
@@ -233,6 +227,11 @@ TALYN_ALLOWED_EMAILS=you@example.com
 ```
 
 Multiple emails are comma-separated. Unauthorised callers get a 403 on first request. Once invite flows land (TODO in ROADMAP Phase 19) this can go away.
+
+Leaving it unset allows everyone — it is a lock, not a default. **Setting it now
+also applies to MCP tokens and internal impersonation**: a token whose owner is
+off the list stops validating and returns 401, which looks to the user like a bad
+token. Include every MCP-token owner's email, not only the people who sign in.
 
 ### Feature flags (PostHog)
 
@@ -676,6 +675,19 @@ the only way to connect (that is the local-dev default, and the prod kill switch
 | `POSTHOG_OAUTH_CLIENT_ID` | `https://www.talyn.dev/oauth-client` | The CIMD document, served by `apps/marketing/app/oauth-client/route.ts` |
 | `POSTHOG_OAUTH_REDIRECT_URI` | `https://prod.talyn.dev/api/v1/posthog/oauth/callback` | Where PostHog sends the browser back |
 
+PostHog API destinations default to `https://us.posthog.com`, `https://eu.posthog.com`
+and `https://app.posthog.com` (the legacy US cloud domain, kept so workspaces
+connected before the regional split keep working without configuration).
+For trusted self-hosted instances, set `POSTHOG_ALLOWED_ORIGINS` to a comma-separated list of exact HTTPS origins.
+For example: `POSTHOG_ALLOWED_ORIGINS=https://posthog.example.com,https://posthog.internal:8443`.
+Paths, queries, fragments, userinfo, wildcards, and noncanonical addresses are rejected. Credential-bearing requests never follow redirects.
+These entries authorize credential delivery, including to private addresses. Operators must trust each endpoint and its DNS configuration.
+Existing integrations outside this list stop making requests until the operator approves their origin.
+**Run `docs/rollout/find_posthog_hosts.sql` before deploying** to list every workspace this affects —
+including `http://` hosts and noncanonical spellings, which the allowlist cannot rescue and which need
+the stored value fixed instead. A malformed entry is ignored with a warning and reported at boot,
+rather than refusing every PostHog request.
+
 Three ways to get this wrong, all of which fail on PostHog's side with an error
 the user sees and we don't:
 
@@ -899,10 +911,9 @@ POSTHOG_HOST=https://us.i.posthog.com
 #
 # --- Operator console (admin.talyn.dev) ------------------------------------
 #
-# TALYN_ADMIN_EMAILS: comma-separated allow-list of operator emails. Promotes
-# `users.is_admin` on token verify — PROMOTE-ONLY, it never demotes, and no
-# route can self-promote. This is how you get into admin.talyn.dev at all;
-# without it every request there 403s and the console shows "Operators only".
+# TALYN_ADMIN_EMAILS grants admin access only when a user is first inserted.
+# It does not change existing users or reverse an explicit revocation.
+# Grant access to existing users through the protected console or operator SQL.
 # TALYN_ADMIN_EMAILS=you@example.com
 #
 # TALYN_ADMIN_GRANT_ENABLED: set to exactly "1" to allow granting/revoking
@@ -910,7 +921,7 @@ POSTHOG_HOST=https://us.i.posthog.com
 # is the one mutation that permanently widens the blast radius of every other
 # one, so with this unset a stolen operator session can read and comp — bad,
 # but auditable and reversible — and cannot mint a second operator to survive
-# the first being revoked. Use TALYN_ADMIN_EMAILS or SQL instead.
+# the first being revoked. Use operator SQL for existing users instead.
 # TALYN_ADMIN_GRANT_ENABLED=1
 #
 # The console also needs, in Supabase (dashboard, not config.toml):

@@ -315,13 +315,14 @@ export async function completeAuthorization(input: {
  * actionable rather than guessing and filing every task into the wrong project.
  */
 async function resolveProjectId(host: string, accessToken: string): Promise<string> {
-  const url = `${host}/oauth/introspect/`;
+  const url = `${normalizeHost(host)}/oauth/introspect/`;
   const body = new URLSearchParams({ token: accessToken });
   const startedAt = Date.now();
   const res = await fetchWithTimeout(
     url,
     {
       method: 'POST',
+      redirect: 'error',
       headers: {
         // Self-introspection: the bearer must be the token being introspected.
         Authorization: `Bearer ${accessToken}`,
@@ -339,7 +340,7 @@ async function resolveProjectId(host: string, accessToken: string): Promise<stri
     durationMs: Date.now() - startedAt,
     ok: res.ok,
     bytes: res.bodyText.length,
-    ...(res.ok ? {} : { error: res.bodyText.slice(0, 300) }),
+    ...(res.ok ? {} : { error: `PostHog introspection failed (${res.status}).` }),
   });
   if (!res.ok) {
     throw new PostHogOAuthError(
@@ -392,7 +393,7 @@ export async function ensureFreshAccessToken(
   const current = await readOAuthTokens(workspaceId);
   if (current.reauthRequiredAt) {
     throw new PostHogReauthRequiredError(
-      current.reauthReason ?? 'The PostHog connection was revoked — reconnect to continue.'
+      'The PostHog connection was revoked. Reconnect to continue.'
     );
   }
   if (!opts.force && !isExpiring(current.expiresAt)) {
@@ -417,7 +418,7 @@ async function refreshWithLock(workspaceId: string, force: boolean): Promise<str
     const fresh = await readOAuthTokens(workspaceId);
     if (fresh.reauthRequiredAt) {
       throw new PostHogReauthRequiredError(
-        fresh.reauthReason ?? 'The PostHog connection was revoked — reconnect to continue.'
+        'The PostHog connection was revoked. Reconnect to continue.'
       );
     }
     if (!isExpiring(fresh.expiresAt) && !force) {
@@ -576,6 +577,7 @@ async function postToken(host: string, params: Record<string, string>): Promise<
     url,
     {
       method: 'POST',
+      redirect: 'error',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(params).toString(),
     },
@@ -589,20 +591,17 @@ async function postToken(host: string, params: Record<string, string>): Promise<
     durationMs: Date.now() - startedAt,
     ok: res.ok,
     bytes: res.bodyText.length,
-    // The body carries an OAuth error code, never a token, on a failure —
-    // and debugBus records metadata only, so this stays safe to keep.
-    ...(res.ok ? {} : { error: res.bodyText.slice(0, 300) }),
+    ...(res.ok ? {} : { error: `PostHog token request failed (${res.status}).` }),
   });
 
   if (!res.ok) {
-    const { error, description } = parseOAuthError(res.bodyText);
-    const detail = description || error || `HTTP ${res.status}`;
+    const { error } = parseOAuthError(res.bodyText);
     if (error === 'invalid_grant' || error === 'invalid_client') {
       throw new PostHogReauthRequiredError(
-        `PostHog rejected the stored authorization (${detail}) — reconnect to continue.`
+        `PostHog rejected the stored authorization (${error}). Reconnect to continue.`
       );
     }
-    throw new PostHogOAuthError(`PostHog token request failed (${res.status}): ${detail}`);
+    throw new PostHogOAuthError(`PostHog token request failed (${res.status}).`);
   }
 
   let parsed: TokenResponse;
@@ -617,13 +616,11 @@ async function postToken(host: string, params: Record<string, string>): Promise<
   return parsed;
 }
 
-function parseOAuthError(body: string): { error?: string; description?: string } {
+function parseOAuthError(body: string): { error?: string } {
   try {
-    const parsed = JSON.parse(body) as { error?: unknown; error_description?: unknown };
+    const parsed = JSON.parse(body) as { error?: unknown };
     return {
       error: typeof parsed.error === 'string' ? parsed.error : undefined,
-      description:
-        typeof parsed.error_description === 'string' ? parsed.error_description : undefined,
     };
   } catch {
     return {};

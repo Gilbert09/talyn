@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDbClient, runWithoutScope } from '../../db/client.js';
-import { loopRuns as runsTable } from '../../db/schema.js';
+import { loopRuns as runsTable, loops as loopsTable, tasks as tasksTable } from '../../db/schema.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { debugBus } from '../debugBus.js';
 import { domainEvents, type DomainTaskStatusEvent } from '../events.js';
@@ -323,7 +323,15 @@ class LoopScheduler {
         workspaceId: runsTable.workspaceId,
       })
       .from(runsTable)
-      .where(eq(runsTable.taskId, evt.taskId))
+      .innerJoin(loopsTable, and(
+        eq(loopsTable.id, runsTable.loopId),
+        eq(loopsTable.workspaceId, runsTable.workspaceId),
+      ))
+      .innerJoin(tasksTable, and(
+        eq(tasksTable.id, runsTable.taskId),
+        eq(tasksTable.workspaceId, loopsTable.workspaceId),
+      ))
+      .where(and(eq(runsTable.taskId, evt.taskId), eq(loopsTable.workspaceId, evt.workspaceId)))
       .limit(1);
     const row = rows[0];
     if (!row) return;
@@ -414,7 +422,7 @@ class LoopScheduler {
 
   private async broadcast(workspaceId: string, runId: string): Promise<void> {
     const run = await getLoopRun(runId);
-    if (run) emitLoopRun(workspaceId, run);
+    if (run && run.workspaceId === workspaceId) emitLoopRun(workspaceId, run);
   }
 }
 

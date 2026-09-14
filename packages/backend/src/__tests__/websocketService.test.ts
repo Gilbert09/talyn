@@ -8,6 +8,7 @@ import {
   emitTaskStatus,
   emitEnvironmentCreated,
   emitEnvironmentStatus,
+  WS_MAX_PAYLOAD,
 } from '../services/websocket.js';
 import type { Environment } from '@talyn/shared';
 import * as authModule from '../middleware/auth.js';
@@ -28,7 +29,7 @@ async function makeWsServer(): Promise<{
   close: () => Promise<void>;
 }> {
   const server: Server = createServer();
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: WS_MAX_PAYLOAD });
   setupWebSocket(wss, TEST_HANDSHAKE_TIMEOUT_MS);
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -118,13 +119,13 @@ describe('websocket service', () => {
     // string itself so tests can drive which user they connect as.
     vi.spyOn(authModule, 'verifyTokenAndGetUser').mockImplementation(async (token) => {
       if (token === 'token-mine') {
-        return { id: TEST_USER_ID, email: 'mine@test', isAdmin: false };
+        return { id: TEST_USER_ID, email: 'mine@test', isAdmin: false, expiresAt: Date.now() + 60_000 };
       }
       if (token === 'token-theirs') {
-        return { id: OTHER_USER_ID, email: 'theirs@test', isAdmin: false };
+        return { id: OTHER_USER_ID, email: 'theirs@test', isAdmin: false, expiresAt: Date.now() + 60_000 };
       }
       if (token === 'token-admin') {
-        return { id: 'user-admin', email: 'admin@test', isAdmin: true };
+        return { id: 'user-admin', email: 'admin@test', isAdmin: true, expiresAt: Date.now() + 60_000 };
       }
       return null;
     });
@@ -198,6 +199,15 @@ describe('websocket service', () => {
     };
     expect(status.payload.connected).toBe(true);
     await closeClient(client);
+  });
+
+  it('rejects an oversized frame before authentication', async () => {
+    const ws = new WSClient(serverUrl);
+    await new Promise<void>((resolve) => ws.once('open', resolve));
+    const closed = new Promise<number>((resolve) => ws.once('close', resolve));
+    ws.send('x'.repeat(WS_MAX_PAYLOAD + 1));
+    expect(await closed).toBe(1009);
+    expect(authModule.verifyTokenAndGetUser).not.toHaveBeenCalled();
   });
 
   it('only broadcasts workspace-scoped events to subscribers of that workspace', async () => {

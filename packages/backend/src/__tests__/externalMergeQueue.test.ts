@@ -16,6 +16,7 @@ import {
   externalQueueStatusFromLabels,
   externalQueueStateLabel,
   type ExternalQueueState,
+  type ExternalQueueComment,
   isExternalQueueEjected,
   isExternalQueueHolding,
   externalQueuePushWouldEject,
@@ -177,6 +178,53 @@ const TRUNK_TICKED = TRUNK_UNSUBMITTED.replace('- [ ]', '- [x]');
 const LINK = '(https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/74552)';
 
 const trunk = (body: string) => ({ body, user: { login: 'trunk-io[bot]' } });
+
+describe('Trunk comment author validation', () => {
+  const authors: Array<[string, ExternalQueueComment['user']]> = [
+    ['human with a Trunk prefix', { login: 'trunk-attacker' }],
+    ['human with the bot slug', { login: 'trunk-io' }],
+    ['human with a mixed-case prefix', { login: 'TrUnK-attacker' }],
+    ['unknown Trunk-prefixed bot', { login: 'trunk-attacker[bot]' }],
+    ['unconfirmed bot slug', { login: 'trunk[bot]' }],
+    ['bot login with extra text', { login: 'trunk-io[bot]-attacker' }],
+    ['bot login with whitespace', { login: ' trunk-io[bot] ' }],
+    ['missing author', undefined],
+    ['null author', null],
+    ['missing login', {}],
+    ['null login', { login: null }],
+    ['empty login', { login: '' }],
+    ['blank login', { login: ' ' }],
+  ];
+
+  it.each(authors)('rejects %s across all comment parsers', (_name, user) => {
+    const bodies = [
+      TRUNK_UNSUBMITTED,
+      TRUNK_TICKED.replace('<!-- Trunk Merge -->', ''),
+      `Merged successfully - [details]${LINK}.`,
+    ];
+    for (const body of bodies) {
+      const comment = { body, ...(user === undefined ? {} : { user }) };
+      expect(externalQueueStatusFromComment(comment)).toBeNull();
+      expect(externalQueueStatusFromComments([comment])).toBeNull();
+      expect(externalQueueInstructionFromComments([comment])).toBeNull();
+      expect(externalQueueCommentPresent([comment])).toBeNull();
+      expect(
+        externalQueueStatusFromComments([trunk(TRUNK_TICKED), comment])?.state
+      ).toBe('queued');
+    }
+  });
+
+  it.each(['trunk-io[bot]', 'TrUnK-Io[BoT]'])('accepts the known bot %s', (login) => {
+    const comment = { body: TRUNK_UNSUBMITTED, user: { login } };
+    expect(externalQueueStatusFromComment(comment)?.state).toBe('not_submitted');
+    expect(externalQueueStatusFromComments([comment])?.state).toBe('not_submitted');
+    expect(externalQueueInstructionFromComments([comment])).toEqual({
+      provider: 'trunk',
+      command: '/trunk merge',
+    });
+    expect(externalQueueCommentPresent([comment])).toBe('trunk');
+  });
+});
 
 describe('externalQueueStatusFromComment — trunk states, as trunk writes them', () => {
   it.each([
@@ -650,7 +698,7 @@ describe('submitToExternalQueue', () => {
   // every door was now shut and reported a queued PR as unmergeable.
   describe('the provider already has the PR', () => {
     it('opens no door at all and says where the PR is', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_OWNS_IT }]);
+      listComments.mockResolvedValue([trunk(TRUNK_OWNS_IT)]);
       expect(await submitToExternalQueue(base)).toMatchObject({
         kind: 'already_submitted',
         state: 'not_ready',
@@ -674,14 +722,14 @@ describe('submitToExternalQueue', () => {
             '\u{1F44D} Pull request will be merged soon because tests have passed on #85404 - ' +
             '[details](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/84433).',
         };
-        listComments.mockResolvedValue([{ body: bodies[state] }]);
+        listComments.mockResolvedValue([trunk(bodies[state]!)]);
         expect((await submitToExternalQueue(base)).kind).toBe('already_submitted');
         expect(comment).not.toHaveBeenCalled();
       }
     );
 
     it('still submits a PR the queue says it does NOT have', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]); // box untouched
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]); // box untouched
       expect((await submitToExternalQueue(base)).kind).toBe('submitted');
       expect(comment).toHaveBeenCalled();
     });
@@ -699,18 +747,18 @@ describe('submitToExternalQueue', () => {
 
     it('resubmits off a body that no longer offers the command', async () => {
       // Learned on an earlier PR of the same repo…
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       await submitToExternalQueue({ ...base, number: 1 });
       comment.mockClear();
       // …and spent on this one, whose comment is now just a failure line.
-      listComments.mockResolvedValue([{ body: TRUNK_FAILED }]);
+      listComments.mockResolvedValue([trunk(TRUNK_FAILED)]);
       expect(await submitToExternalQueue(base)).toMatchObject({ kind: 'submitted', via: 'comment' });
       expect(comment).toHaveBeenCalledWith('ws', 'PostHog', 'posthog', 74353, '/trunk merge');
       expect(enable).not.toHaveBeenCalled();
     });
 
     it('never spends a remembered command on a PR no queue has claimed', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       await submitToExternalQueue({ ...base, number: 1 });
       comment.mockClear();
       // A PR in the same repo with no provider comment at all: the memo says
@@ -723,7 +771,7 @@ describe('submitToExternalQueue', () => {
 
   describe('door 1 — the provider says how, on the PR itself', () => {
     it("posts trunk's own submit command and uses no other door", async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       expect(await submitToExternalQueue(base)).toEqual({
         kind: 'submitted',
         via: 'comment',
@@ -737,7 +785,7 @@ describe('submitToExternalQueue', () => {
     });
 
     it('takes the command door even when auto-merge is armable and the PR is clean', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       labels.mockResolvedValue(['trunk-merge-queue-submit']);
       expect((await submitToExternalQueue(base)).via).toBe('comment');
       expect(enable).not.toHaveBeenCalled();
@@ -747,14 +795,14 @@ describe('submitToExternalQueue', () => {
     it('ignores unrelated bot comments, and a trunk comment that offers no command', async () => {
       listComments.mockResolvedValue([
         { body: '<!-- greptile_other_comments_section --> Reviews (1)' },
-        { body: '<!-- Trunk Merge -->\nMerging is managed by Trunk. Check the box above.' },
+        trunk('<!-- Trunk Merge -->\nMerging is managed by Trunk. Check the box above.'),
       ]);
       expect((await submitToExternalQueue(base)).via).toBe('auto_merge');
       expect(comment).not.toHaveBeenCalled();
     });
 
     it('explains the missing App permission when the comment is refused', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       comment.mockRejectedValue(new Error('Resource not accessible by integration'));
       const result = await submitToExternalQueue(base);
       expect(result.kind).toBe('no_mechanism');
@@ -766,7 +814,7 @@ describe('submitToExternalQueue', () => {
     // used to go back as `retry` — which meant "try again on the very next
     // evaluation", forever.
     it('does not call a lost GitHub connection transient', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       comment.mockRejectedValue(new Error('GitHub not connected for this workspace'));
       const result = await submitToExternalQueue(base);
       expect(result.kind).toBe('no_mechanism');
@@ -776,7 +824,7 @@ describe('submitToExternalQueue', () => {
     });
 
     it('retries a transient comment failure without falling through to another door', async () => {
-      listComments.mockResolvedValue([{ body: TRUNK_INSTRUCTION }]);
+      listComments.mockResolvedValue([trunk(TRUNK_INSTRUCTION)]);
       comment.mockRejectedValue(new Error('502 Bad Gateway'));
       expect((await submitToExternalQueue(base)).kind).toBe('retry');
       expect(enable).not.toHaveBeenCalled();

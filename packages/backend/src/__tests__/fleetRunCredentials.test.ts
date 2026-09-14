@@ -27,7 +27,10 @@ const CLAUDE_TOKEN = 'sk-ant-oat-workspace';
 const OPENAI_KEY = 'sk-openai-workspace';
 
 vi.mock('../services/github.js', () => ({
-  githubService: { getAccessToken: vi.fn(() => GH_TOKEN) },
+  githubService: {
+    getAccessToken: vi.fn(() => 'unchecked-token'),
+    getVerifiedAccessToken: vi.fn(async () => GH_TOKEN),
+  },
 }));
 vi.mock('../services/selfHosted/credentials.js', () => ({
   getSelfHostedCredentials: vi.fn(async () => ({ claudeToken: CLAUDE_TOKEN })),
@@ -83,7 +86,7 @@ beforeEach(async () => {
     fleetTask({ id: 'nohost', status: 'in_progress', host: null }),
     fleetTask({ id: 'otherprov', status: 'in_progress', provider: 'posthog_code' }),
   ]);
-  vi.mocked(githubService.getAccessToken).mockReturnValue(GH_TOKEN);
+  vi.mocked(githubService.getVerifiedAccessToken).mockResolvedValue(GH_TOKEN);
 });
 
 afterEach(async () => {
@@ -102,6 +105,8 @@ describe('resolveRunCredentials', () => {
         repo: 'PostHog/posthog',
       },
     });
+    expect(githubService.getVerifiedAccessToken).toHaveBeenCalledWith('ws-1');
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
   });
 
   // A queued task has been dispatched and may already be booting. Refusing it
@@ -161,11 +166,36 @@ describe('resolveRunCredentials', () => {
   // credentials-ready gate on nothing, converting its 90-second wait into an
   // immediate failure — worse than either waiting or refusing honestly.
   it('refuses rather than answering with an empty github token', async () => {
-    vi.mocked(githubService.getAccessToken).mockReturnValue(null);
+    vi.mocked(githubService.getVerifiedAccessToken).mockResolvedValue(null);
     await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).resolves.toEqual({
       ok: false,
       reason: 'credentials_unavailable',
     });
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not return credentials when token verification fails', async () => {
+    vi.mocked(githubService.getVerifiedAccessToken).mockRejectedValueOnce(new Error('verification failed'));
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).rejects.toThrow('verification failed');
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('uses the verified token for the run workspace, not another tenant', async () => {
+    await seedUser(db, { id: 'other-user' });
+    await db.insert(workspacesTable).values({ id: 'ws-2', ownerId: 'other-user', name: 'other' });
+    await db.insert(tasksTable).values({
+      ...fleetTask({ id: 'other', status: 'in_progress' }), workspaceId: 'ws-2',
+    });
+    vi.mocked(githubService.getVerifiedAccessToken).mockImplementation(async (workspaceId) =>
+      workspaceId === 'ws-2' ? 'other-verified-token' : null,
+    );
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-live')).resolves.toEqual({
+      ok: false, reason: 'credentials_unavailable',
+    });
+    await expect(resolveRunCredentials('hetzner-64', 'talyn-other')).resolves.toMatchObject({
+      ok: true, credentials: { githubToken: 'other-verified-token' },
+    });
+    expect(githubService.getAccessToken).not.toHaveBeenCalled();
   });
 
   // The read must not drag `transcript` along. It is megabytes of conversation
@@ -234,14 +264,17 @@ describe('run credentials serve the vendor the run was dispatched on', () => {
 
   // An empty string would be a credential as far as the fleet's dispatch check
   // is concerned, and would pass a run that cannot call out. Omit the field.
-  it('omits the key entirely when the workspace no longer holds that vendor', async () => {
+  it('refuses when the workspace no longer holds that vendor', async () => {
     const { getSelfHostedCredentials } = await import('../services/selfHosted/credentials.js');
     vi.mocked(getSelfHostedCredentials).mockResolvedValueOnce({ claudeToken: CLAUDE_TOKEN });
 
+    // Answering `ok` with the key omitted is not a smaller answer — the gateway
+    // fills an ABSENT credential from its tenant's sealed custody, so it is a
+    // route to spending somebody else's subscription. The push path refuses
+    // here; the pull path has to agree.
     const res = await resolveRunCredentials('hetzner-64', 'talyn-openai');
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.credentials).not.toHaveProperty('openaiKey');
-    expect(res.credentials).not.toHaveProperty('anthropicKey');
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('credentials_unavailable');
   });
 });

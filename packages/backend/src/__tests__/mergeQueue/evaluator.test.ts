@@ -368,6 +368,68 @@ describe('mergeQueue v2 pipeline', () => {
     expect(codes).toContain('merged');
   });
 
+  describe.each(['label', 'comment'] as const)('external merge confirmation from a %s', (source) => {
+    beforeEach(() => {
+      if (source === 'comment') {
+        mockGetGate.mockResolvedValue('confirmed');
+        vi.mocked(githubService.listIssueComments).mockResolvedValue([{
+          user: { login: 'trunk-io[bot]' },
+          body: 'Merged successfully - [details](https://app.trunk.io/acme/merge-queue/1/1).',
+        }] as never);
+      }
+    });
+
+    it('keeps an open PR pending until GitHub confirms the merge', async () => {
+      const { prId, entryId } = await insertQueuedPr(db, {
+        summary: {
+          ...conflictSummary(),
+          labels: source === 'label' ? ['trunk-merged'] : [],
+        },
+      });
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await evaluateGroupNow('repo1', 'main', 'test');
+        expect(await entryOf(db, prId)).toMatchObject({
+          status: 'awaiting_external', externalState: null, fixAttempts: 0,
+        });
+        const [row] = await db
+          .select({ state: pullRequestsTable.state, mergeQueued: pullRequestsTable.mergeQueued })
+          .from(pullRequestsTable).where(eq(pullRequestsTable.id, prId));
+        expect(row).toEqual({ state: 'open', mergeQueued: true });
+      }
+      expect(getPrSpy).toHaveBeenCalledTimes(2);
+      expect(await countTasks(db)).toBe(0);
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect(githubService.createIssueComment).not.toHaveBeenCalled();
+      expect((await eventsOf(db, entryId)).filter((e) => e.code === 'external_merge_unconfirmed'))
+        .toHaveLength(1);
+
+      getPrSpy.mockResolvedValue({
+        merged: true, merged_at: '2026-07-16T12:00:00Z', state: 'closed',
+      } as never);
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(await entryOf(db, prId)).toBeNull();
+      const [row] = await db
+        .select({ state: pullRequestsTable.state, mergeQueued: pullRequestsTable.mergeQueued })
+        .from(pullRequestsTable).where(eq(pullRequestsTable.id, prId));
+      expect(row).toEqual({ state: 'merged', mergeQueued: false });
+      expect(await countTasks(db)).toBe(0);
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps the PR pending when GitHub verification fails', async () => {
+      const { prId } = await insertQueuedPr(db, {
+        summary: { ...conflictSummary(), labels: source === 'label' ? ['trunk-merged'] : [] },
+      });
+      getPrSpy.mockRejectedValue(new Error('GitHub unavailable'));
+      await evaluateGroupNow('repo1', 'main', 'test');
+      expect(getPrSpy).toHaveBeenCalledTimes(1);
+      expect(await entryOf(db, prId)).toMatchObject({ status: 'awaiting_external' });
+      expect(await countTasks(db)).toBe(0);
+      expect(mergeSpy).not.toHaveBeenCalled();
+    });
+  });
+
   // Regression: `pr_merged` used to be captured ONLY by the desktop/web merge
   // button, so every queue merge was invisible and the analytics tile read a
   // near-flat zero while the queue was merging daily.
@@ -679,6 +741,7 @@ describe('mergeQueue v2 pipeline', () => {
       mockCapability.mockResolvedValue('available');
       vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
         {
+          user: { login: 'trunk-io[bot]' },
           body:
             '<!-- Trunk Merge -->\\nMerging to `master` in this repository is managed by Trunk. ' +
             'To merge this pull request, check the box to the left or comment `/trunk merge` below.',
@@ -711,6 +774,7 @@ describe('mergeQueue v2 pipeline', () => {
       mockSubmitLabel.mockResolvedValue(null); // this repo defines no submit label
       vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
         {
+          user: { login: 'trunk-io[bot]' },
           body:
             '\u{2728} Submitted to Merge by talyn-app[bot]. It will be added to the merge queue ' +
             'once all branch protection rules pass. See more details ' +
@@ -756,6 +820,7 @@ describe('mergeQueue v2 pipeline', () => {
       const JOB = 'https://github.com/PostHog/posthog/actions/runs/32250916189/job/96064408804';
       vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
         {
+          user: { login: 'trunk-io[bot]' },
           body:
             '\u{274C} This pull request was removed from the merge queue because it failed ' +
             'tests. PR [#85340](https://www.github.com/PostHog/posthog/pull/85340) was used for ' +
@@ -815,6 +880,7 @@ describe('mergeQueue v2 pipeline', () => {
       const JOB = 'https://github.com/PostHog/posthog/actions/runs/34605745446/job/103288055093';
       vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
         {
+          user: { login: 'trunk-io[bot]' },
           body:
             `\u{26A0}\u{FE0F} The required check [\`Visual regression tests pass\`](${JOB}) ` +
             '(Failure) has failed. Pull request failed tests and is waiting for other pull ' +
@@ -1283,6 +1349,7 @@ describe('mergeQueue v2 pipeline', () => {
         // trunk's instruction comment — the door the submit ladder prefers.
         vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
           {
+            user: { login: 'trunk-io[bot]' },
             body:
               '<!-- Trunk Merge -->\nMerging to `main` in this repository is managed by Trunk. ' +
               'To merge this pull request, check the box to the left or comment `/trunk merge` below.',

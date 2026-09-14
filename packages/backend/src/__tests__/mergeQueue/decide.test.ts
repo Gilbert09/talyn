@@ -1996,7 +1996,7 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
     // one, and remediation fired a paid fix run. Gated groups evaluate eagerly,
     // so it did it again on every webhook — 10+ cloud runs, each concluding
     // "this PR is already merged".
-    it('is TERMINAL when the provider merged the PR — never fires a fix run', () => {
+    it('verifies an external merge before finalizing or starting a fix run', () => {
       const mergedAndDeleted = trunkPr(
         'trunk-merged',
         { mergeStateStatus: 'UNKNOWN' },
@@ -2007,36 +2007,79 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
         mergedAndDeleted,
         ctx({ externalGate: 'confirmed', externalQueue: observed('merged', 'merged successfully') })
       );
-      expect(lastTransition(d)?.to).toBe('merged');
-      expect(fixRun(d)).toBeUndefined();
-      expect(kinds(d)).not.toContain('submit_external');
-      expect(d.verdict).toBe('advance');
+      expect(lastTransition(d)).toBeUndefined();
+      expect(kinds(d)).toEqual(['verify_merged']);
+      expect(d.verdict).toBe('hold');
     });
 
-    it('stays terminal even when Talyn\'s own PR row still reads open', () => {
-      // The lag that made R0 useless here: our row says open, the provider
-      // says merged. The provider is right.
-      const d = decide(
-        entry({ status: 'queued' }),
-        trunkPr('trunk-merged', { state: 'open', mergeStateStatus: 'UNKNOWN' }, { mergeable: 'UNKNOWN' }),
-        ctx({ externalGate: 'confirmed', externalQueue: observed('merged') })
+    describe.each(['label', 'comment'] as const)('external merge from a %s', (source) => {
+      const externalContext = () => ctx({
+        externalGate: 'confirmed',
+        ...(source === 'comment' ? { externalQueue: observed('merged') } : {}),
+      });
+      const openPr = () => pr(
+        { mergeStateStatus: 'UNKNOWN' },
+        { labels: source === 'label' ? ['trunk-merged'] : [], mergeable: 'UNKNOWN' }
       );
-      expect(lastTransition(d)?.to).toBe('merged');
-      expect(fixRun(d)).toBeUndefined();
+
+      it.each([undefined, false])('cannot finalize an open PR with verification %s', (verifiedMerged) => {
+        const d = decide(entry(), openPr(), { ...externalContext(), verifiedMerged });
+        expect(lastTransition(d)).toMatchObject({
+          to: 'awaiting_external',
+          set: { externalState: null },
+          event: { code: 'external_merge_unconfirmed' },
+        });
+        expect(kinds(d)).toEqual(
+          verifiedMerged === undefined ? ['transition', 'verify_merged'] : ['transition']
+        );
+      });
+
+      it('keeps waiting without repeated writes when GitHub still reports open', () => {
+        const d = decide(
+          commented(longAgo), openPr(), { ...externalContext(), verifiedMerged: false }
+        );
+        expect(d).toEqual({ actions: [], verdict: 'advance' });
+      });
+
+      it('waits without a GitHub call while the REST rate gate is blocked', () => {
+        const d = decide(entry(), openPr(), { ...externalContext(), restGateBlocked: true });
+        expect(kinds(d)).toEqual(['transition']);
+        expect(lastTransition(d)?.to).toBe('awaiting_external');
+        expect(d.verdict).toBe('advance');
+      });
+
+      it('finalizes when the trusted PR row confirms the merge', () => {
+        const d = decide(entry(), { ...openPr(), state: 'merged' }, externalContext());
+        expect(kinds(d)).toEqual(['transition']);
+        expect(lastTransition(d)?.to).toBe('merged');
+        expect(d.verdict).toBe('advance');
+      });
+
+      it.each([
+        { verifiedMerged: true },
+        { mergeOutcome: { kind: 'merged' as const } },
+      ])('uses existing GitHub confirmation without another call: %j', (confirmation) => {
+        const d = decide(entry(), openPr(), { ...externalContext(), ...confirmation });
+        expect(d).toEqual({ actions: [{ kind: 'record_merged' }], verdict: 'advance' });
+      });
+
+      it('removes a closed PR instead of trusting the external merge claim', () => {
+        const d = decide(entry(), { ...openPr(), state: 'closed' }, externalContext());
+        expect(kinds(d)).toEqual(['transition']);
+        expect(lastTransition(d)?.to).toBe('removed');
+      });
     });
 
-    it('outranks a stale label the provider has moved past', () => {
-      // The label still says testing; the comment says merged. The comment
-      // wins — and since merged is terminal, it closes the entry out rather
-      // than merely recording the newer state.
+    it('requires confirmation even when a merged comment supersedes a testing label', () => {
       const d = decide(
         submitted({ externalState: 'testing' }),
         trunkPr('trunk-testing'),
         ctx({ externalGate: 'confirmed', externalQueue: observed('merged') })
       );
       const t = lastTransition(d)!;
-      expect(t.to).toBe('merged');
-      expect(t.set?.externalState).toBe('merged');
+      expect(t.to).toBe('awaiting_external');
+      expect(t.set?.externalState).toBeNull();
+      expect(kinds(d)).toEqual(['transition', 'verify_merged']);
     });
 
     it('blocks only on the provider SAYING it has no submission, past the grace window', () => {

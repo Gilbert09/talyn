@@ -1113,6 +1113,16 @@ const THROTTLED_TICK_FACTOR = 1.5;
 // list permanently frozen until app relaunch) but never wait longer than this.
 const MAX_RECONNECT_DELAY_MS = 30_000;
 
+/** The server rejected this connection's authorization (token invalid/expired). */
+const WS_CLOSE_UNAUTHORIZED = 4401;
+/** The server refused the connection for capacity (per-owner or global limit). */
+const WS_CLOSE_CAPACITY = 1013;
+/**
+ * Backoff floor for a rejection that will repeat. 2^5 = 32s, so the delay goes
+ * straight to the 30s ceiling instead of climbing from one second.
+ */
+const SLOW_RETRY_ATTEMPTS = 5;
+
 class WebSocketClient {
   private ws: WebSocket | null = null;
   private handlers: Map<string, Set<EventHandler>> = new Map();
@@ -1135,6 +1145,8 @@ class WebSocketClient {
   // streaming only the selected account's events. undefined = all.
   private debugFilter: string | undefined;
   private authenticated = false;
+  private shouldReconnect = false;
+  private connectGeneration = 0;
   /** One console.error per outage; later attempts only warn (see onerror). */
   private errorLoggedSinceOpen = false;
   /**
@@ -1147,6 +1159,7 @@ class WebSocketClient {
   private connecting = false;
 
   async connect(): Promise<void> {
+    this.shouldReconnect = true;
     this.bindLifecycle();
     // Bail if a socket is already open or mid-handshake — re-entry from a
     // focus/online wake would otherwise orphan the in-flight socket.
@@ -1156,22 +1169,24 @@ class WebSocketClient {
     )
       return;
 
-    // …and bail if another call is already between here and `new WebSocket`.
-    // Two callers that both cleared the guard above — a focus wake landing on
-    // top of a reconnect tick — each opened a socket. The loser's was orphaned
-    // but still live, and when it opened it sent its auth frame on `this.ws`:
-    // by then the WINNER's socket, still CONNECTING. That is the
-    // `InvalidStateError: Failed to execute 'send' ... Still in CONNECTING
-    // state.` seen in error tracking.
+    // Serialize token lookups as well as socket creation.
     if (this.connecting) return;
     this.connecting = true;
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const generation = ++this.connectGeneration;
 
     try {
-      const token = await getAuthToken();
+      const token = await getAuthToken().catch(() => null);
+      // Logout or a newer attempt can supersede this asynchronous token lookup.
+      if (!this.shouldReconnect || generation !== this.connectGeneration) return;
       if (!token) {
         // Defer until we have a session — callers usually gate this behind
         // the AuthProvider so it's a transient case on cold start.
         console.log('WebSocket connect deferred: no auth token yet');
+        this.scheduleReconnect();
         return;
       }
       console.log('Connecting to WebSocket...');
@@ -1189,12 +1204,16 @@ class WebSocketClient {
       socket.onopen = () => {
         // An orphan: opened by a superseded `connect()`. Close it rather than
         // leaving a second authenticated socket open against the same account.
-        if (this.ws !== socket) {
+        if (this.ws !== socket || !this.shouldReconnect) {
           socket.close();
           return;
         }
         console.log('WebSocket opened; authenticating…');
-        this.reconnectAttempts = 0;
+        // NOT `reconnectAttempts = 0` — an open socket is not an accepted one.
+        // The server can still reject us after open (owner connection limit,
+        // an expired or revoked token), and resetting the backoff here made
+        // every such rejection reconnect at a flat one second, forever.
+        // The reset happens once the server confirms the connection.
         this.errorLoggedSinceOpen = false;
         // Checked even after the identity test: `onopen` can still be delivered
         // after a sleep/wake close, and `send` throws on anything but OPEN.
@@ -1204,7 +1223,7 @@ class WebSocketClient {
       };
 
       socket.onmessage = (event) => {
-        if (this.ws !== socket) return;
+        if (this.ws !== socket || !this.shouldReconnect) return;
         try {
           const data = JSON.parse(event.data) as WSEvent;
           const payload = data.payload as
@@ -1223,6 +1242,9 @@ class WebSocketClient {
             !this.authenticated
           ) {
             this.authenticated = true;
+            // Accepted. This is the point a connection has proven itself, so
+            // it is the point the backoff may start over.
+            this.reconnectAttempts = 0;
             for (const workspaceId of this.subscribedWorkspaces) {
               this.send({ type: 'subscribe', workspaceId });
             }
@@ -1236,15 +1258,26 @@ class WebSocketClient {
         }
       };
 
-      socket.onclose = () => {
+      // `event` is optional only for defensiveness: a real CloseEvent always
+      // carries a code, but a caller that closes the socket directly may not.
+      socket.onclose = (event?: CloseEvent) => {
+        const code = event?.code;
         // An orphan closing is not a disconnect: the live socket is elsewhere.
         // Reporting it would emit connection:status {connected:false} under a
         // healthy connection and queue a reconnect that fights it.
         if (this.ws !== socket) return;
-        console.log('WebSocket disconnected');
+        this.ws = null;
+        console.log(`WebSocket disconnected${code === undefined ? '' : ` (code ${code})`}`);
         this.authenticated = false;
         this.stopHeartbeat();
         this.emit('connection:status', { connected: false });
+        // A rejection the server will repeat until something changes. Retrying
+        // it fast costs the backend a token verification and a user write per
+        // attempt, and burns this address's upgrade budget — so back off hard
+        // rather than at the usual first-failure speed.
+        if (code === WS_CLOSE_UNAUTHORIZED || code === WS_CLOSE_CAPACITY) {
+          this.reconnectAttempts = Math.max(this.reconnectAttempts, SLOW_RETRY_ATTEMPTS);
+        }
         this.scheduleReconnect();
       };
 
@@ -1273,20 +1306,26 @@ class WebSocketClient {
         }
       };
     } finally {
-      // Cleared however we leave: a throw from `getAuthToken()` must not wedge
-      // the guard on and block every later reconnect.
-      this.connecting = false;
+      // A cancelled lookup must not release a newer attempt's guard.
+      if (generation === this.connectGeneration) this.connecting = false;
     }
   }
 
   disconnect(): void {
-    if (this.reconnectTimer) {
+    this.shouldReconnect = false;
+    this.connectGeneration++;
+    this.connecting = false;
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
-    this.ws?.close();
+    this.authenticated = false;
+    const ws = this.ws;
     this.ws = null;
+    ws?.close();
+    this.emit('connection:status', { connected: false });
   }
 
   subscribe(workspaceId: string): void {
@@ -1350,7 +1389,7 @@ class WebSocketClient {
   private scheduleReconnect(): void {
     // Already a reconnect queued — don't stack timers (focus/online events
     // and an onclose can all fire near-simultaneously).
-    if (this.reconnectTimer) return;
+    if (!this.shouldReconnect || this.reconnectTimer !== null) return;
 
     const delay = Math.min(
       1000 * Math.pow(2, this.reconnectAttempts),
@@ -1440,6 +1479,7 @@ class WebSocketClient {
     if (this.lifecycleBound || typeof window === 'undefined') return;
     this.lifecycleBound = true;
     const wake = () => {
+      if (!this.shouldReconnect) return;
       if (this.ws?.readyState === WebSocket.OPEN) {
         // Looks open — but after a freeze or sleep "open" is exactly what a
         // half-open socket looks like, and its onclose may never fire. Ping

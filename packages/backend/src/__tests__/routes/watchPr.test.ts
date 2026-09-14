@@ -19,7 +19,6 @@ import type { PRSummary } from '../../services/githubGraphql.js';
 import { githubService } from '../../services/github.js';
 import { prMonitorService } from '../../services/prMonitor.js';
 import { GitHubRateLimitError } from '../../services/githubRateGate.js';
-import * as repoDefaultBranch from '../../services/repoDefaultBranch.js';
 
 /**
  * POST /pull-requests/watch + DELETE /pull-requests/:id/watch.
@@ -211,7 +210,7 @@ describe('POST /pull-requests/watch', () => {
   });
 
   it('adds the repo when confirmed, with GitHub’s real default branch', async () => {
-    vi.spyOn(repoDefaultBranch, 'fetchDefaultBranch').mockResolvedValue('trunk');
+    vi.spyOn(githubService, 'getRepository').mockResolvedValue({ full_name: 'x/y', default_branch: 'trunk' } as never);
     batchSpy.mockResolvedValue([
       { number: 1, pr: summary({ owner: 'x', repo: 'y', number: 1 }) },
     ]);

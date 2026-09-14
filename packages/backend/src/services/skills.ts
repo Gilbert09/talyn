@@ -20,7 +20,7 @@
 // finds every SKILL.md, blob shas skip content that hasn't changed, and the
 // reads that remain run at a bounded concurrency.
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   parseSkillFrontmatter,
   repoSkillKey,
@@ -164,7 +164,7 @@ async function loadRepoIdentity(
       url: repositoriesTable.url,
     })
     .from(repositoriesTable)
-    .where(eq(repositoriesTable.id, repositoryId))
+    .where(and(eq(repositoriesTable.id, repositoryId), eq(repositoriesTable.workspaceId, workspaceId)))
     .limit(1);
   const row = rows[0];
   if (!row || row.workspaceId !== workspaceId) return null;
@@ -257,11 +257,9 @@ async function skillFilesFromWalk(
 
 async function fetchRepoSkills(
   workspaceId: string,
-  repositoryId: string
+  repositoryId: string,
+  repo: { owner: string; repo: string },
 ): Promise<RepoSkillsResult> {
-  const repo = await loadRepoIdentity(repositoryId, workspaceId);
-  if (!repo) return { status: 'error', skills: [], error: 'Repository not found in this workspace' };
-
   // ref deliberately omitted throughout — GitHub resolves the repo's real
   // default branch (see the header comment). The resolved path matters: on
   // posthog/posthog `.claude/skills` is a symlink to `.agents/skills`, and
@@ -341,13 +339,16 @@ export async function listRepoSkills(
   repositoryId: string,
   opts: { refresh?: boolean } = {}
 ): Promise<RepoSkillsResult> {
+  // Authorize before every cache path, outside the stale fallback's error handler.
+  const repo = await loadRepoIdentity(repositoryId, workspaceId);
+  if (!repo) return { status: 'error', skills: [], error: 'Repository not found in this workspace' };
+
   const cached = repoSkillCache.get(repositoryId);
   if (!opts.refresh && cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
     return cached.result;
   }
   try {
-    const result = await fetchRepoSkills(workspaceId, repositoryId);
-    if (result.status === 'error') return cached?.result ?? result;
+    const result = await fetchRepoSkills(workspaceId, repositoryId, repo);
     repoSkillCache.set(repositoryId, { fetchedAt: Date.now(), result });
     return result;
   } catch (err) {

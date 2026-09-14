@@ -42,7 +42,7 @@ Nothing executes on the user's machine. Every task is delegated to a **cloud pro
 - Supabase Postgres via Drizzle ORM; migrations applied at boot (advisory-locked)
 - Supabase Auth (GitHub OAuth) → JWT middleware → per-request RLS scoping
 - Redis consumer group for the webhook queue (fleet-safe)
-- GitHub connectivity via a single shared **GitHub App**: per-user installations, webhook-first PR state, installation tokens for bot actions + user-to-server tokens for user-attributed ones
+- GitHub connectivity uses one shared **GitHub App** and webhook-first PR state. Workspace operations use the connected user's token.
 - Cloud delegation via the `CloudTaskProvider` registry (`services/cloudProviders/`) — each provider is a self-contained client/credentials/converter/executor/poller module
 
 ## Core Concepts (Detail)
@@ -94,7 +94,23 @@ Reference: https://github.com/PostHog/code — informed session persistence, per
 One `CloudTaskProvider` interface (registry + per-provider `dispatch`/`reconcile`/credentials/`cancel`), so a new vendor lands as a self-contained module with no core changes. **Talyn Fleet (`selfhosted`) is the default** and PostHog Code is the fall-back; Codex Cloud stays deferred until OpenAI ships a server-to-server API. Claude Code (Anthropic Managed Agents) was removed in September 2026 — it billed metered API credits with no subscription option, which is the opposite of what the fleet offers, and the fleet runs Claude on the workspace's own subscription instead.
 
 ### 10. GitHub App over OAuth — 2026-06/07
-A single shared GitHub App with per-user installations replaced the classic OAuth app: webhook-first updates, per-installation rate budgets, installation tokens for bot-attributed actions with user-to-server tokens for user-attributed ones (and a documented constraint: GitHub treats both as "the integration" for merge gating).
+A shared GitHub App supplies installations and webhooks. Workspace reads and writes use the connected user's token.
+
+The September 2026 security review removed installation-token routing from workspace operations. Installation discovery does not prove a user's repository access.
+Webhook delivery requires a fresh repository-access check for each workspace. Cached responses are not shared across workspaces.
+This costs additional GitHub calls and uses user rate budgets. Reintroducing installation credentials requires an explicit repository authorization design.
+GitHub can still treat user-to-server tokens as integration credentials for merge rules.
+
+See [the security review](./SECURITY_AUDIT.md) for validation, rollout requirements, and remaining work.
+
+### 11. Backend Database Role
+
+The backend pool remains privileged for background work. Request scopes switch to the non-login `talyn_backend` role.
+Existing `auth.uid()` policies then restrict queries to the caller's rows.
+Supabase client roles have no direct privileges on application tables, columns, or sequences.
+This prevents direct Data API requests from bypassing REST validation of server-managed fields.
+Supabase authentication remains separate and unchanged. Future application grants must target `talyn_backend`.
+Migration 0055 requires draining old replicas before revoking their former role's permissions.
 
 ## References
 

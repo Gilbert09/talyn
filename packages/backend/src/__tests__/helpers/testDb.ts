@@ -7,6 +7,24 @@ import { setDbClient, resetDbClient, type Database } from '../../db/client.js';
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../../db/migrations');
 
+/** The deferred phase-2 script, which removes the Data API roles' grants. */
+const PHASE2_REVOKE_SQL = path.resolve(
+  __dirname, '../../../../../docs/rollout/phase2_revoke_data_api_grants.sql',
+);
+
+/**
+ * Apply the phase-2 revocations on top of a migrated test database.
+ *
+ * Migration 0055 is additive on purpose: it must not break the replica still
+ * running the previous build. The revocations ship one deploy later. Tests
+ * that assert the FINISHED boundary apply them explicitly, so the end state
+ * stays pinned even though no migration performs it yet.
+ */
+export async function applyDataApiRevocations(pglite: PGlite): Promise<void> {
+  const sql = fs.readFileSync(PHASE2_REVOKE_SQL, 'utf-8');
+  await pglite.exec(sql.replace(/-->\s*statement-breakpoint/g, ''));
+}
+
 /**
  * Spin up a fresh in-memory Postgres via pglite, apply the Drizzle migration,
  * and register it as the process-wide DB client. Returns the client and a
@@ -37,15 +55,25 @@ export async function createTestDb(): Promise<{
     $$;
   `);
 
-  // Supabase ships an `authenticated` role; pglite doesn't. Migration 0024
-  // GRANTs table access to it (and the RLS-enforcement tests `SET ROLE` to
-  // it), so create it here. NOLOGIN/NOINHERIT mirrors Supabase's definition.
+  // Create the Supabase roles used by the privilege migrations.
   await pglite.exec(`
     DO $$ BEGIN
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN
         CREATE ROLE authenticated NOLOGIN NOINHERIT;
       END IF;
     END $$;
+    CREATE ROLE anon NOLOGIN NOINHERIT;
+    CREATE ROLE authenticator NOLOGIN NOINHERIT;
+    -- Supabase's server-side role. It exists here so the migration grants the
+    -- same set it grants in production.
+    CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
+    GRANT anon, authenticated TO authenticator;
+    GRANT USAGE ON SCHEMA auth TO anon, authenticated;
+    -- Supabase can grant table access through both global and schema defaults.
+    ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO PUBLIC, anon, authenticated;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO PUBLIC, anon, authenticated;
   `);
 
   // Apply the migrations THE JOURNAL LISTS, in journal order — not every .sql

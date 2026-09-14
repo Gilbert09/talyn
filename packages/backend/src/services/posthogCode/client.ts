@@ -2,6 +2,7 @@ import { DEFAULT_POSTHOG_CODE_MODEL_ID, type PostHogCodeRuntimeAdapter } from '@
 import type { AcpLogEntry } from './acpConverter.js';
 import { debugBus } from '../debugBus.js';
 import { fetchWithTimeout, type TimedFetchResponse } from '../httpTimeout.js';
+import { normalizeHost } from './hostPolicy.js';
 
 /** Headers-in deadline for opening the SSE stream (the body then streams
  *  unbounded — idle detection lives in streamer.ts). */
@@ -22,8 +23,7 @@ export const DEFAULT_POSTHOG_CODE_MODEL: string = DEFAULT_POSTHOG_CODE_MODEL_ID;
  * A non-2xx response from the PostHog Code API, carrying the HTTP `status`
  * so callers can branch (notably the cloud poller backing a workspace off on
  * a 429) without string-matching the message. `retryAfterMs` is the parsed
- * `Retry-After` for a 429, else null. The message is unchanged from the old
- * plain-Error format, so any existing text matching still holds.
+ * `Retry-After` for a 429, else null. Error messages exclude upstream bodies.
  */
 export class PostHogCodeApiError extends Error {
   constructor(
@@ -222,7 +222,7 @@ export class PostHogCodeClient {
     const connectTimer = setTimeout(() => controller.abort(), STREAM_OPEN_TIMEOUT_MS);
     let res: Response;
     try {
-      res = await fetch(url, { method: 'GET', headers, signal: controller.signal });
+      res = await fetch(url, { method: 'GET', headers, signal: controller.signal, redirect: 'error' });
     } catch (err) {
       if (controller.signal.aborted && !opts.signal?.aborted) {
         throw new Error(
@@ -234,9 +234,9 @@ export class PostHogCodeClient {
       clearTimeout(connectTimer);
     }
     if (!res.ok || !res.body) {
-      const text = await res.text().catch(() => '');
+      await res.body?.cancel();
       throw new Error(
-        `PostHog Code stream open failed (${res.status}): ${text.slice(0, 300)}`,
+        `PostHog Code stream open failed (${res.status}).`,
       );
     }
     return res;
@@ -267,6 +267,7 @@ export class PostHogCodeClient {
         url,
         {
           method,
+          redirect: 'error',
           headers: {
             Authorization: `Bearer ${await this.getToken({ forceRefresh })}`,
             'Content-Type': 'application/json',
@@ -295,7 +296,7 @@ export class PostHogCodeClient {
       durationMs: Date.now() - startedAt,
       ok: res.ok,
       bytes: text.length,
-      ...(res.ok ? {} : { error: text.slice(0, 500) }),
+      ...(res.ok ? {} : { error: `PostHog Code request failed (${res.status}).` }),
     });
     // A 401 on a refreshable token means our copy is stale in a way expiry
     // bookkeeping missed — the token was revoked, or a clock drifted. Force one
@@ -308,15 +309,19 @@ export class PostHogCodeClient {
       throw new PostHogCodeApiError(
         res.status,
         res.status === 429 ? parseRetryAfterMs(res.headers) : null,
-        `PostHog Code ${method} ${path} failed (${res.status}): ${text.slice(0, 500)}`,
+        `PostHog Code request failed (${res.status}).`,
       );
     }
-    return { data: (text ? JSON.parse(text) : undefined) as T, headers: res.headers };
+    try {
+      return { data: (text ? JSON.parse(text) : undefined) as T, headers: res.headers };
+    } catch {
+      throw new Error('PostHog Code returned an unreadable response.');
+    }
   }
 
   private get baseUrl(): string {
-    const host = this.host.replace(/\/+$/, '');
-    return `${host}/api/projects/${this.projectId}`;
+    const host = normalizeHost(this.host);
+    return `${host}/api/projects/${encodeURIComponent(this.projectId)}`;
   }
 }
 

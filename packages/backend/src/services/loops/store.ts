@@ -99,7 +99,7 @@ export function rowToLoopRun(
     repoFullName: row.repoFullName,
     provider: row.provider as LoopProvider,
     model: row.model,
-    taskId: row.taskId,
+    taskId: task?.taskStatus ? row.taskId : null,
     status: row.status as LoopRunStatus,
     failureCode: (row.failureCode as LoopRunFailureCode | null) ?? null,
     error: row.error,
@@ -310,6 +310,26 @@ export async function statsFor(loopIds: string[]): Promise<Map<string, LoopStats
 
 // ---- History -------------------------------------------------------------
 
+function loopRunQuery() {
+  // Historical references must agree with the loop, even when the caller bypasses RLS.
+  return getDbClient()
+    .select({ run: runsTable, ...RUN_TASK_COLUMNS })
+    .from(runsTable)
+    .innerJoin(loopsTable, and(
+      eq(loopsTable.id, runsTable.loopId),
+      eq(loopsTable.workspaceId, runsTable.workspaceId),
+    ))
+    .leftJoin(tasksTable, and(
+      eq(tasksTable.id, runsTable.taskId),
+      eq(tasksTable.workspaceId, loopsTable.workspaceId),
+    ))
+    .leftJoin(prTable, and(
+      eq(prTable.id, tasksTable.pullRequestId),
+      eq(prTable.workspaceId, loopsTable.workspaceId),
+      eq(prTable.repositoryId, tasksTable.repositoryId),
+    ));
+}
+
 /**
  * A page of one loop's history, newest first.
  *
@@ -327,11 +347,7 @@ export async function listLoopRuns(
 ): Promise<LoopRun[]> {
   const cursorDate = opts.cursor ? new Date(opts.cursor) : null;
   const valid = cursorDate && !Number.isNaN(cursorDate.getTime()) ? cursorDate : null;
-  const rows = await getDbClient()
-    .select({ run: runsTable, ...RUN_TASK_COLUMNS })
-    .from(runsTable)
-    .leftJoin(tasksTable, eq(tasksTable.id, runsTable.taskId))
-    .leftJoin(prTable, eq(prTable.id, tasksTable.pullRequestId))
+  const rows = await loopRunQuery()
     .where(
       valid
         ? and(eq(runsTable.loopId, loopId), lt(runsTable.createdAt, valid))
@@ -344,11 +360,7 @@ export async function listLoopRuns(
 
 /** One run with its task join — what a settle broadcasts. */
 export async function getLoopRun(id: string): Promise<LoopRun | null> {
-  const rows = await getDbClient()
-    .select({ run: runsTable, ...RUN_TASK_COLUMNS })
-    .from(runsTable)
-    .leftJoin(tasksTable, eq(tasksTable.id, runsTable.taskId))
-    .leftJoin(prTable, eq(prTable.id, tasksTable.pullRequestId))
+  const rows = await loopRunQuery()
     .where(eq(runsTable.id, id))
     .limit(1);
   return rows[0] ? rowToLoopRun(rows[0].run, rows[0]) : null;

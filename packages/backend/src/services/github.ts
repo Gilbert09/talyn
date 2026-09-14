@@ -1,13 +1,12 @@
 import { EventEmitter } from 'events';
 import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { getDbClient, type Database } from '../db/client.js';
 import {
   integrations as integrationsTable,
   workspaces as workspacesTable,
   users as usersTable,
-  githubInstallations as githubInstallationsTable,
 } from '../db/schema.js';
 import {
   encryptString,
@@ -25,13 +24,10 @@ import {
 } from './githubRateGate.js';
 import { graphqlBudget } from './graphqlBudget.js';
 import {
-  getInstallationToken,
-  clearInstallationToken,
   isGitHubAppConfigured,
-  InstallationUnavailableError,
   refreshUserToken,
-  UserTokenRefreshError,
   fetchUserInstallations,
+  UserTokenRefreshError,
 } from './githubApp.js';
 
 // Classic-OAuth-app credentials. Still read for the check-token (token-health)
@@ -333,10 +329,8 @@ interface StoredToken {
   tokenType: string;
   scope: string;
   createdAt: string;
-  // Set for GitHub-App-connected workspaces (hybrid auth): the stored token
-  // above is the user-to-server token (viewer identity); data-plane reads use a
-  // freshly-minted installation token keyed by this id. Absent ⇒ legacy OAuth
-  // workspace, every call uses the stored token (unchanged behaviour).
+  // Installation metadata identifies the OAuth app for token health checks.
+  // Workspace operations always use the user's token, never installation credentials.
   installationId?: string;
   // Set when the App has "Expire user authorization tokens" enabled: the user
   // token lives ~8h and is rotated via `refreshToken` before expiry. Absent ⇒
@@ -350,8 +344,25 @@ interface StoredToken {
 interface ResolvedAuth {
   tokenType: string;
   accessToken: string;
-  kind: 'installation' | 'user';
-  installationId?: string;
+}
+
+class GitHubApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+class GitHubNotConnectedError extends Error {
+  constructor() {
+    super('GitHub not connected for this workspace');
+  }
+}
+
+/** No authorization decision is available. Keep the delivery for a later attempt. */
+export class GitHubAuthorizationUnavailableError extends Error {
+  constructor() {
+    super('GitHub repository authorization is temporarily unavailable');
+  }
 }
 
 /** One GitHub App installation visible to the connected user (per account/org). */
@@ -367,22 +378,11 @@ export function isIntegrationForbiddenMessage(message: string): boolean {
   return message.includes('Resource not accessible by integration');
 }
 
-/**
- * GitHub refused the merge for EVERY token Talyn can mint — the installation
- * (bot) token and the user-to-server token are both "the integration" to
- * GitHub. Observed cause (PostHog/posthog#67815 vs #67814, July 2026): a
- * FAILING check on the head commit — even an "optional, does not block
- * merge" one a human can merge straight past — makes GitHub refuse App
- * tokens with this 403, while the same App merges a fully-green PR on the
- * same protected branch fine. Re-attempting is pointless until the PR's
- * state changes (check goes green, new head commit) or a human merges;
- * callers decide retry semantics from the PR state, not by hammering.
- */
+/** GitHub refused a merge with the workspace user's App token. */
 export class MergeNotPermittedForAppError extends Error {
   constructor(owner: string, repo: string, cause: unknown) {
     super(
-      `GitHub refused to let the Talyn App merge ${owner}/${repo} ` +
-        `(every token Talyn holds counts as the App — the user-token retry gets the same 403).`
+      `GitHub refused to let the Talyn App merge ${owner}/${repo} with this user's permissions.`
     );
     this.name = 'MergeNotPermittedForAppError';
     this.cause = cause;
@@ -418,8 +418,7 @@ interface GitHubIntegrationConfig {
   tokenType?: string;
   scope?: string;
   createdAt?: string;
-  // GitHub App (hybrid auth): when set, `accessTokenEnc` is the user-to-server
-  // token and `installationId` backs the data-plane installation token.
+  // GitHub App connection metadata. This does not grant repository access.
   authMethod?: 'github_app';
   installationId?: string;
   // Rotation state for an expiring user token (App with token expiry enabled).
@@ -428,51 +427,10 @@ interface GitHubIntegrationConfig {
   refreshTokenExpiresAt?: string; // ISO
 }
 
-/**
- * Best-effort repo owner from a REST endpoint, so a data-plane call can pick the
- * installation covering that account. Handles `/repos/{owner}/…` and the
- * `repo:{owner}/{repo}` search qualifier; returns undefined for owner-less
- * endpoints (`/user`, `/rate_limit`, `/app/…`) — those use the user token or the
- * workspace's primary installation.
- */
-function ownerFromEndpoint(endpoint: string): string | undefined {
-  const repos = /\/repos\/([^/]+)\//.exec(endpoint);
-  if (repos) return decodeURIComponent(repos[1]);
-
-  // DECODE THE QUERY FIRST, then look for the qualifier.
-  //
-  // This used to regex the raw endpoint for a literal `repo:`. URLSearchParams
-  // percent-encodes the colon, so a search built as
-  //
-  //   new URLSearchParams({ q: 'repo:PostHog/charts is:pr is:open author:x' })
-  //
-  // reaches here as `q=repo%3APostHog%2Fcharts+is%3Apr…` and never matched. The
-  // old pattern allowed `%2F` for the slash but not `%3A` for the colon, so it
-  // looked handled and was not.
-  //
-  // The consequence was silent and specific: with no owner, resolveAuth falls
-  // back to the workspace's PRIMARY installation, whose token is for a
-  // different account and 403s with "Resource not accessible by integration" —
-  // which prMonitor reports as "the GitHub App has no access to <repo>". The
-  // App had access; we were asking with the wrong installation's token.
-  const q = queryParam(endpoint, 'q');
-  if (q) {
-    const m = /\brepo:([^/\s]+)\//i.exec(q);
-    if (m) return m[1];
-  }
-  return undefined;
-}
-
-/** One decoded query-string value from a relative endpoint. */
-function queryParam(endpoint: string, name: string): string | undefined {
-  const qs = endpoint.indexOf('?');
-  if (qs === -1) return undefined;
-  // A relative endpoint needs a base for URL to parse it; the base is discarded.
-  try {
-    return new URL(endpoint, 'https://api.github.invalid').searchParams.get(name) ?? undefined;
-  } catch {
-    return undefined;
-  }
+interface CredentialSnapshot {
+  id: string;
+  config: GitHubIntegrationConfig;
+  version: string;
 }
 
 /** Decrypt an envelope, returning undefined (not throwing) on failure. */
@@ -502,12 +460,6 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
 
 class GitHubService extends EventEmitter {
   private tokens: Map<string, StoredToken> = new Map();
-  // GitHub App installations keyed by account login (lowercased) → installation
-  // id. Installations are PER-ACCOUNT (a user can install the App on their
-  // personal account + several orgs), so data-plane reads resolve the right
-  // installation by the repo's owner — not by a single per-workspace id.
-  // Loaded from `github_installations` at init + on connect/installation events.
-  private installationsByAccount: Map<string, string> = new Map();
   // Authenticated user's login per workspace. Resolved once via /user
   // and reused — callers (e.g. the rate-limit poller) read it hot, so
   // we can't afford an API round-trip each time.
@@ -522,10 +474,33 @@ class GitHubService extends EventEmitter {
   // same-account workspaces, searches run one-at-a-time. Keyed by account.
   private searchChains: Map<string, Promise<unknown>> = new Map();
   // Coalesce concurrent user-token refreshes per workspace into one HTTP call.
-  private userTokenRefreshes: Map<string, Promise<StoredToken | null>> = new Map();
+  private userTokenRefreshes: Map<string, Promise<void>> = new Map();
+  // Refresh tokens GitHub has rejected outright, by workspace, keyed to the
+  // access token they belonged to. Holding the digest means a credential
+  // replaced elsewhere is retried rather than written off with the old one.
+  private deadCredentials: Map<string, string> = new Map();
+  // Repository access decisions per workspace, with the instant of the check.
+  private repoAccessCache: Map<string, { allowed: boolean; at: number }> = new Map();
 
   // Refresh an expiring user token once it's within this window of expiry.
   private static readonly USER_TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
+
+  /**
+   * How long a repository access decision is reused per workspace.
+   *
+   * Every webhook delivery checks access once per watching workspace. Without
+   * a cache one CI push on a repo watched by N workspaces costs N live REST
+   * calls per delivery, against a 5,000/hour per-USER budget. Sixty seconds is
+   * the same freshness the PR poll already tolerates.
+   */
+  private static readonly REPO_ACCESS_TTL_MS = 60_000;
+
+  /**
+   * How long a REFUSAL is reused. Shorter than the positive TTL: a user who
+   * has just been granted access should not wait a full minute, and a refusal
+   * costs nothing to re-derive.
+   */
+  private static readonly REPO_ACCESS_DENY_TTL_MS = 15_000;
 
   private get db(): Database {
     return getDbClient();
@@ -533,38 +508,6 @@ class GitHubService extends EventEmitter {
 
   async init(): Promise<void> {
     await this.loadStoredTokens();
-    await this.refreshInstallationIndex();
-  }
-
-  /**
-   * Rebuild the account-login → installation-id index from `github_installations`.
-   * Called at init, after an install completes, and on `installation*` webhooks.
-   * Suspended installations are excluded so we don't mint tokens for them.
-   */
-  async refreshInstallationIndex(): Promise<void> {
-    try {
-      const rows = await this.db
-        .select({
-          installationId: githubInstallationsTable.installationId,
-          accountLogin: githubInstallationsTable.accountLogin,
-          suspendedAt: githubInstallationsTable.suspendedAt,
-        })
-        .from(githubInstallationsTable);
-      const next = new Map<string, string>();
-      for (const r of rows) {
-        if (r.suspendedAt) continue;
-        if (r.accountLogin) next.set(r.accountLogin.toLowerCase(), r.installationId);
-      }
-      this.installationsByAccount = next;
-    } catch (err) {
-      console.error('Failed to load GitHub installation index:', err);
-    }
-  }
-
-  /** The installation id covering a repo owner (account login), if the App is installed there. */
-  private installationForOwner(owner: string | undefined): string | undefined {
-    if (!owner) return undefined;
-    return this.installationsByAccount.get(owner.toLowerCase());
   }
 
   private async loadStoredTokens(): Promise<void> {
@@ -647,15 +590,14 @@ class GitHubService extends EventEmitter {
     return isGitHubAppConfigured() || Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
   }
 
-  /**
-   * The decrypted GitHub access token for a workspace, or null if GitHub
-   * isn't connected. This is the same in-memory token the service uses for
-   * its own API calls (kept current on connect), so consumers like the
-   * Claude Code provider can reuse the workspace's connection instead of
-   * asking for a separate PAT.
-   */
+  /** Cached value for local inspection only. Never send this value to another service. */
   getAccessToken(workspaceId: string): string | null {
     return this.tokens.get(workspaceId)?.accessToken ?? null;
+  }
+
+  /** Verify the persisted connection and refresh before releasing credentials to fleet consumers. */
+  async getVerifiedAccessToken(workspaceId: string): Promise<string | null> {
+    return (await this.resolveAuth(workspaceId))?.accessToken ?? null;
   }
 
   async storeToken(
@@ -674,8 +616,7 @@ class GitHubService extends EventEmitter {
     // New rows: encrypt the access token; drop the plaintext field.
     // Existing plaintext rows will be overwritten with the encrypted
     // shape on next storeToken call (disconnect+reconnect, or token
-    // rotation). For an App connection (hybrid auth) the encrypted token is
-    // the user-to-server token and `installationId` backs the data plane.
+    // rotation). App connections also use this user token for repository operations.
     const config: GitHubIntegrationConfig = {
       accessTokenEnc: encryptString(accessToken),
       tokenType,
@@ -755,6 +696,9 @@ class GitHubService extends EventEmitter {
       ...(opts.accessTokenExpiresAt ? { accessTokenExpiresAt: opts.accessTokenExpiresAt } : {}),
       ...(opts.refreshTokenExpiresAt ? { refreshTokenExpiresAt: opts.refreshTokenExpiresAt } : {}),
     });
+    // A reconnect is the one thing that revives a rejected credential, and the
+    // new token must not wait out the read cache before anything uses it.
+    this.forgetResolvedAuth(workspaceId);
     void this.registerWorkspaceOwners([workspaceId]);
     this.emit('connected', workspaceId);
   }
@@ -822,7 +766,58 @@ class GitHubService extends EventEmitter {
     this.tokens.delete(workspaceId);
     this.viewerLoginCache.delete(workspaceId);
     this.viewerTeamsCache.delete(workspaceId);
+    this.forgetResolvedAuth(workspaceId);
     this.emit('disconnected', workspaceId);
+  }
+
+  /**
+   * Drop every cached credential decision for one workspace. Called whenever
+   * the stored credential changes, so a reconnect takes effect at once.
+   */
+  private forgetResolvedAuth(workspaceId: string): void {
+    this.deadCredentials.delete(workspaceId);
+    // Access entries are keyed by credential, so the old token's entries can
+    // never answer for the new one. They age out on their own.
+  }
+
+  /**
+   * Record that GitHub rejected this workspace's refresh token.
+   *
+   * The workspace is now disconnected in every sense that matters: callers see
+   * `GitHubNotConnectedError` and skip it, instead of parking work behind a
+   * credential that cannot recover without the user reconnecting.
+   */
+  private markCredentialDead(workspaceId: string, accessToken: string, reason: string): void {
+    if (this.deadCredentials.get(workspaceId) !== accessToken) {
+      const summary =
+        `[github] workspace ${workspaceId}: user credential rejected — reconnect required (${reason})`;
+      console.warn(summary);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'token:user-reconnect-required',
+        summary,
+        ok: false,
+        workspaceId,
+        meta: { workspaceId, reason },
+      });
+    }
+    this.deadCredentials.set(workspaceId, accessToken);
+  }
+
+  /**
+   * Test helper — drop every cached authorization decision.
+   *
+   * The service is a singleton, so a cached decision otherwise leaks between
+   * cases and one test's refusal answers the next test's question.
+   */
+  _resetAuthorizationCaches(): void {
+    this.repoAccessCache.clear();
+    this.deadCredentials.clear();
+  }
+
+  /** Whether this workspace needs the user to reconnect GitHub. */
+  needsReconnect(workspaceId: string): boolean {
+    return this.deadCredentials.has(workspaceId);
   }
 
   /**
@@ -954,16 +949,15 @@ class GitHubService extends EventEmitter {
 
   /**
    * The GitHub App installations the connected user can access — one per
-   * account/org they installed FastOwl on. Drives the desktop's "is the App
-   * installed on this org?" coverage UI: a watched repo is only tracked if its
-   * owner has an active (non-suspended) installation here. Resolved live via the
+   * account/org they installed FastOwl on. This is discovery information, not a
+   * workspace authorization grant. Resolved live via the
    * user-to-server token (the authoritative per-user view), so it reflects an
    * install the user just added on GitHub without waiting for a webhook. Returns
    * [] when the App isn't configured or the workspace isn't connected.
    */
   async listInstallations(workspaceId: string): Promise<GitHubInstallationInfo[]> {
     if (!isGitHubAppConfigured()) return [];
-    const auth = await this.resolveAuth(workspaceId, { preferUser: true });
+    const auth = await this.resolveAuth(workspaceId);
     if (!auth) return [];
     const installations = await fetchUserInstallations(auth.accessToken);
     return installations.map((i) => ({
@@ -979,120 +973,130 @@ class GitHubService extends EventEmitter {
    * rate-limiting. GitHub budgets (primary and secondary) are per account, but
    * our state is keyed by workspace — and multiple workspaces can share one
    * OAuth token. Prefer the cached login (what the rate-limit poller keys on),
-   * fall back to the raw token, then the workspace id. Synchronous, so it's
+   * fall back to a nonsecret token digest, then the workspace id. Synchronous, so it's
    * safe in the hot request path.
    */
   accountKeyFor(workspaceId: string): string {
     const stored = this.tokens.get(workspaceId);
-    // App workspaces share the installation's rate bucket — key on it so the
-    // gate accounts all of an installation's traffic together.
-    if (stored?.installationId && isGitHubAppConfigured()) {
-      return `inst:${stored.installationId}`;
-    }
     return (
       this.viewerLoginCache.get(workspaceId) ??
-      stored?.accessToken ??
+      (stored?.accessToken ? `token:${createHash('sha256').update(stored.accessToken).digest('hex')}` : undefined) ??
       workspaceId
     );
   }
 
+  /** Separate fetches by workspace. Shared logins can have different token permissions. */
+  graphqlAccountKeyForOwner(workspaceId: string, _owner: string): string {
+    return workspaceId;
+  }
+
   /**
-   * The account key that a data-plane call for `owner` will actually
-   * authenticate as from this workspace. `resolveAuth` resolves the token by the
-   * repo OWNER (an App install covering it), so this can differ from
-   * {@link accountKeyFor} for a workspace whose *primary* installation isn't the
-   * one covering `owner`. The webhook fan-out groups its targets by this key:
-   * every workspace that resolves to the same key shares one identical fetch, so
-   * we make a single GraphQL call for the group instead of one per workspace.
+   * Identity of the CREDENTIAL a workspace uses, for sharing a fetched response.
+   *
+   * Two workspaces may share one response only when the same token fetched it:
+   * an identical token has identical permissions by construction, so nothing
+   * crosses a tenant boundary. A login is NOT a safe key here — two workspaces
+   * can authenticate as the same user with different scopes — which is why the
+   * per-owner key that used to collapse these fetches was removed.
+   *
+   * Falls back to the workspace id, which shares with nothing.
    */
-  graphqlAccountKeyForOwner(workspaceId: string, owner: string): string {
-    const installationId = this.installationForOwner(owner);
-    if (installationId && isGitHubAppConfigured()) return `inst:${installationId}`;
-    // No installation covers this owner → the call falls back to the workspace's
-    // own user token; those are per-workspace, so each is its own group.
-    return (
-      this.viewerLoginCache.get(workspaceId) ??
-      this.tokens.get(workspaceId)?.accessToken ??
-      workspaceId
-    );
+  credentialIdentityFor(workspaceId: string): string {
+    const token = this.tokens.get(workspaceId)?.accessToken;
+    return token
+      ? `tok:${createHash('sha256').update(token).digest('hex')}`
+      : `ws:${workspaceId}`;
   }
 
   /**
-   * Resolve the auth for one outbound call. App workspaces use a freshly-minted
-   * installation token for the data plane (`auto`); viewer-identity endpoints
-   * (`/user`, `/user/teams`, …) force the user token with `preferUser`. Legacy
-   * OAuth workspaces always return the stored token regardless — so their
-   * behaviour (and tests) are unchanged. Returns null when nothing is connected.
+   * Use the workspace user's permissions for every REST and GraphQL operation.
+   * Installation credentials have wider access and cannot authorize a workspace.
+   * This spends user API budget and attributes writes to the user instead of the bot.
    */
   private async resolveAuth(
     workspaceId: string,
-    opts: { preferUser?: boolean; owner?: string } = {},
   ): Promise<ResolvedAuth | null> {
-    const stored = this.tokens.get(workspaceId);
-    // Data-plane calls use an installation token, resolved by the repo's OWNER
-    // (a workspace can span accounts/installations). When the owner is KNOWN but
-    // no installation covers it, do NOT fall back to the workspace's primary
-    // installation — that token is for a different account and would 403
-    // ("Resource not accessible by integration"); fall through to the user
-    // token, which carries the user's actual access. The primary installation
-    // is only the fallback for owner-less calls (e.g. /rate_limit).
-    const installationId = opts.owner
-      ? this.installationForOwner(opts.owner)
-      : stored?.installationId;
-    if (installationId && isGitHubAppConfigured() && !opts.preferUser) {
+    // Read the row every time. The database is the authority, so a credential
+    // revoked or replaced by another replica has to stop granting access at
+    // once — a cache here would hold a deleted integration open for its TTL.
+    // Reload after a successful refresh or a lost conditional write. Bound concurrent replacement retries.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [row] = await this.db
+        .select({
+          id: integrationsTable.id,
+          enabled: integrationsTable.enabled,
+          config: integrationsTable.config,
+          // Text preserves Postgres timestamp precision for the conditional write.
+          version: sql<string>`${integrationsTable.updatedAt}::text`,
+        })
+        .from(integrationsTable)
+        .where(and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github')))
+        .limit(1);
+      const config = row?.config as GitHubIntegrationConfig | undefined;
+      const accessToken = row?.enabled && config ? readAccessToken(config) : null;
+      if (this.tokens.get(workspaceId)?.accessToken !== accessToken) {
+        this.viewerLoginCache.delete(workspaceId);
+        this.viewerTeamsCache.delete(workspaceId);
+      }
+      if (!accessToken || !config) {
+        this.tokens.delete(workspaceId);
+        return null;
+      }
+      const stored: StoredToken = {
+        workspaceId,
+        accessToken,
+        tokenType: config.tokenType || 'bearer',
+        scope: config.scope || '',
+        createdAt: config.createdAt || '',
+        installationId: config.installationId,
+        refreshToken: config.refreshTokenEnc && isEncryptedEnvelope(config.refreshTokenEnc)
+          ? safeDecrypt(config.refreshTokenEnc) : undefined,
+        accessTokenExpiresAt: config.accessTokenExpiresAt ? Date.parse(config.accessTokenExpiresAt) : undefined,
+        refreshTokenExpiresAt: config.refreshTokenExpiresAt ? Date.parse(config.refreshTokenExpiresAt) : undefined,
+      };
+      this.tokens.set(workspaceId, stored);
+      const expiresAt = stored.accessTokenExpiresAt;
+      if (expiresAt === undefined || expiresAt - Date.now() > GitHubService.USER_TOKEN_REFRESH_SKEW_MS) {
+        return { tokenType: stored.tokenType, accessToken };
+      }
+      if (!Number.isFinite(expiresAt) || !stored.refreshToken) return null;
+      // The refresh token has its own (~6 month) expiry. Posting a known-expired
+      // one only teaches GitHub's token endpoint to rate-limit us.
+      if (stored.refreshTokenExpiresAt !== undefined && stored.refreshTokenExpiresAt <= Date.now()) {
+        this.markCredentialDead(workspaceId, accessToken, 'refresh token expired');
+        return null;
+      }
+      // GitHub already rejected this exact credential. Only a reconnect fixes
+      // it, so stop re-posting the dead refresh token on every call.
+      if (this.deadCredentials.get(workspaceId) === accessToken) return null;
+      this.deadCredentials.delete(workspaceId);
+      let refresh = this.userTokenRefreshes.get(workspaceId);
+      if (!refresh) {
+        refresh = this.rotateUserToken(workspaceId, stored, { id: row.id, config, version: row.version })
+          .finally(() => this.userTokenRefreshes.delete(workspaceId));
+        this.userTokenRefreshes.set(workspaceId, refresh);
+      }
+      // The refresh error type covers both a dead token and a 429/5xx. Only the
+      // first is a disconnected decision; the second must stay retryable, or a
+      // GitHub blip reads as "every workspace lost its credential".
       try {
-        const token = await getInstallationToken(installationId);
-        return { tokenType: 'token', accessToken: token, kind: 'installation', installationId };
+        await refresh;
       } catch (err) {
-        if (err instanceof InstallationUnavailableError) {
-          void this.markInstallationUnavailable(installationId, err.status);
+        if (err instanceof UserTokenRefreshError && err.permanent) {
+          this.markCredentialDead(workspaceId, accessToken, err.message);
+          return null;
         }
-        // Fall through to the user token if we have one — better a degraded
-        // viewer-scoped call than a hard failure.
-        if (!stored?.accessToken) throw err;
+        throw err;
       }
     }
-    if (!stored) return null;
-    // User-token path. Rotate first if it's an expiring App token near expiry.
-    const fresh = await this.ensureFreshUserToken(workspaceId);
-    if (!fresh) return null;
-    return { tokenType: fresh.tokenType, accessToken: fresh.accessToken, kind: 'user' };
-  }
-
-  /**
-   * Return the workspace's user token, rotating it first if it's an expiring
-   * App token within the refresh window. A non-expiring token (no
-   * `accessTokenExpiresAt`/`refreshToken` — classic OAuth, or App with expiry
-   * off) is returned as-is. Concurrent callers share one in-flight refresh.
-   * Returns null if there's no token, or if a refresh fails (refresh token dead
-   * → the user must reconnect; surfaced via a debug event).
-   */
-  private async ensureFreshUserToken(workspaceId: string): Promise<StoredToken | null> {
-    const stored = this.tokens.get(workspaceId);
-    if (!stored) return null;
-    // Non-expiring token, or expiry not yet near → use as-is.
-    if (
-      !stored.accessTokenExpiresAt ||
-      !stored.refreshToken ||
-      stored.accessTokenExpiresAt - Date.now() > GitHubService.USER_TOKEN_REFRESH_SKEW_MS
-    ) {
-      return stored;
-    }
-
-    const inFlight = this.userTokenRefreshes.get(workspaceId);
-    if (inFlight) return inFlight;
-
-    const refresh = this.rotateUserToken(workspaceId, stored).finally(() => {
-      this.userTokenRefreshes.delete(workspaceId);
-    });
-    this.userTokenRefreshes.set(workspaceId, refresh);
-    return refresh;
+    throw new Error('GitHub credentials changed repeatedly during refresh');
   }
 
   private async rotateUserToken(
     workspaceId: string,
-    stored: StoredToken
-  ): Promise<StoredToken | null> {
+    stored: StoredToken,
+    original: CredentialSnapshot,
+  ): Promise<void> {
     try {
       const grant = await refreshUserToken(stored.refreshToken!);
       const now = Date.now();
@@ -1107,8 +1111,7 @@ class GitHubService extends EventEmitter {
           ? now + grant.refreshTokenExpiresInSec * 1000
           : stored.refreshTokenExpiresAt,
       };
-      this.tokens.set(workspaceId, updated);
-      await this.persistRotatedUserToken(workspaceId, updated);
+      if (!(await this.persistRotatedUserToken(workspaceId, updated, original))) return;
       debugBus.recordEvent({
         service: 'github',
         action: 'token:user-refreshed',
@@ -1116,98 +1119,50 @@ class GitHubService extends EventEmitter {
         ok: true,
         workspaceId,
       });
-      return updated;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const isDead = err instanceof UserTokenRefreshError;
       debugBus.recordEvent({
         service: 'github',
         action: 'token:user-refresh-failed',
-        summary:
-          `[github] workspace ${workspaceId}: user-token refresh FAILED (${message})` +
-          (isDead ? ' — refresh token dead; user must reconnect via the GitHub App' : ''),
+        summary: `[github] workspace ${workspaceId}: user-token refresh failed`,
         ok: false,
         workspaceId,
       });
-      // A dead refresh token can't recover without re-auth — drop the rotation
-      // state so we stop hammering the endpoint; the (now-expiring) token stays
-      // until the user reconnects. A transient failure (network/5xx) keeps the
-      // refresh token and retries on the next call.
-      if (isDead) {
-        const cur = this.tokens.get(workspaceId);
-        if (cur) {
-          this.tokens.set(workspaceId, {
-            ...cur,
-            refreshToken: undefined,
-            accessTokenExpiresAt: undefined,
-          });
-        }
-      }
-      return null;
+      throw err;
     }
   }
 
-  /**
-   * Quietly persist a rotated user token to the integration row — no connect
-   * logging/events (unlike storeToken). Read-modify-write so App fields
-   * (installationId/authMethod) on the config are preserved.
-   */
-  private async persistRotatedUserToken(workspaceId: string, token: StoredToken): Promise<void> {
-    try {
-      const existing = await this.db
-        .select({ id: integrationsTable.id, config: integrationsTable.config })
-        .from(integrationsTable)
-        .where(
-          and(eq(integrationsTable.workspaceId, workspaceId), eq(integrationsTable.type, 'github'))
-        )
-        .limit(1);
-      if (!existing[0]) return;
-      const prevConfig = (existing[0].config as GitHubIntegrationConfig | null) ?? {};
-      const config: GitHubIntegrationConfig = {
-        ...prevConfig,
-        accessTokenEnc: encryptString(token.accessToken),
-        tokenType: token.tokenType,
-        scope: token.scope,
-        ...(token.refreshToken ? { refreshTokenEnc: encryptString(token.refreshToken) } : {}),
-        accessTokenExpiresAt: token.accessTokenExpiresAt
-          ? new Date(token.accessTokenExpiresAt).toISOString()
-          : undefined,
-        refreshTokenExpiresAt: token.refreshTokenExpiresAt
-          ? new Date(token.refreshTokenExpiresAt).toISOString()
-          : undefined,
-      };
-      await this.db
-        .update(integrationsTable)
-        .set({ config, updatedAt: new Date() })
-        .where(eq(integrationsTable.id, existing[0].id));
-    } catch (err) {
-      // In-memory token is already updated; a failed persist just means we
-      // re-rotate after a restart. Log, don't throw into the request path.
-      console.error(`[github] failed to persist rotated user token for ${workspaceId}:`, err);
-    }
-  }
-
-  /**
-   * Flag an installation as suspended/removed in the DB so the webhook receiver
-   * stops enqueuing its deliveries. Best-effort, fire-and-forget. Defined here
-   * (not imported) to avoid a hard dependency cycle with the install routes.
-   */
-  private async markInstallationUnavailable(installationId: string, status: number): Promise<void> {
-    try {
-      const { githubInstallations } = await import('../db/schema.js');
-      await this.db
-        .update(githubInstallations)
-        .set({ suspendedAt: new Date(), updatedAt: new Date() })
-        .where(eq(githubInstallations.installationId, installationId));
-      debugBus.recordEvent({
-        service: 'github',
-        action: 'installation:unavailable',
-        ok: false,
-        summary: `installation ${installationId} unavailable (${status}) — marked suspended`,
-      });
-    } catch (err) {
-      console.error('Failed to mark installation suspended:', err);
-    }
+  /** Replace only the enabled credential snapshot that authorized this refresh. */
+  private async persistRotatedUserToken(
+    workspaceId: string,
+    token: StoredToken,
+    original: CredentialSnapshot,
+  ): Promise<boolean> {
+    const config: GitHubIntegrationConfig = {
+      ...original.config,
+      accessTokenEnc: encryptString(token.accessToken),
+      tokenType: token.tokenType,
+      scope: token.scope,
+      ...(token.refreshToken ? { refreshTokenEnc: encryptString(token.refreshToken) } : {}),
+      accessTokenExpiresAt: token.accessTokenExpiresAt
+        ? new Date(token.accessTokenExpiresAt).toISOString()
+        : undefined,
+      refreshTokenExpiresAt: token.refreshTokenExpiresAt
+        ? new Date(token.refreshTokenExpiresAt).toISOString()
+        : undefined,
+    };
+    const written = await this.db
+      .update(integrationsTable)
+      .set({ config, updatedAt: new Date() })
+      .where(and(
+        eq(integrationsTable.id, original.id),
+        eq(integrationsTable.workspaceId, workspaceId),
+        eq(integrationsTable.type, 'github'),
+        eq(integrationsTable.enabled, true),
+        sql`${integrationsTable.updatedAt}::text = ${original.version}`,
+        sql`${integrationsTable.config} = ${JSON.stringify(original.config)}::jsonb`,
+      ))
+      .returning({ id: integrationsTable.id });
+    return written.length === 1;
   }
 
   /**
@@ -1233,14 +1188,11 @@ class GitHubService extends EventEmitter {
     workspaceId: string,
     endpoint: string,
     options: RequestInit = {},
-    auth: 'auto' | 'user' = 'auto'
+    _auth: 'auto' | 'user' = 'user'
   ): Promise<T> {
-    const resolved = await this.resolveAuth(workspaceId, {
-      preferUser: auth === 'user',
-      owner: ownerFromEndpoint(endpoint),
-    });
+    const resolved = await this.resolveAuth(workspaceId);
     if (!resolved) {
-      throw new Error('GitHub not connected for this workspace');
+      throw new GitHubNotConnectedError();
     }
 
     const accountKey = this.accountKeyFor(workspaceId);
@@ -1314,27 +1266,17 @@ class GitHubService extends EventEmitter {
         workspaceId,
       });
       if (response.status === 401) {
-        if (resolved.kind === 'installation' && resolved.installationId) {
-          // A stale installation token — drop it from the mint cache so the
-          // next call re-mints from a fresh App JWT. Do NOT touch the user
-          // integration row; the installation token is ephemeral.
-          clearInstallationToken(resolved.installationId);
-        } else {
-          // GitHub's body says WHY ("Bad credentials" = revoked/invalid vs
-          // "...token expired") and the request id lets GitHub support trace it.
-          // Confirm the token is actually dead (check-token 404) before deleting —
-          // a spurious 401 must not nuke a working token. See confirmRevokedThenRemove.
-          await this.confirmRevokedThenRemove(
-            workspaceId,
-            `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
-              `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
-          );
-        }
+        // Confirm revocation before removing the token. The failed request still refuses access.
+        await this.confirmRevokedThenRemove(
+          workspaceId,
+          `401 on ${method} ${redactUrl(url)} — body: ${bodyText.slice(0, 200) || '(empty)'}, ` +
+            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+        );
       }
       if (rl.isRateLimited) {
         throw new GitHubRateLimitError(error, rl.retryAfterMs);
       }
-      throw new Error(error);
+      throw new GitHubApiError(error, response.status);
     }
 
     debugBus.recordHttp({
@@ -1714,6 +1656,55 @@ class GitHubService extends EventEmitter {
 
   async getRepository(workspaceId: string, owner: string, repo: string): Promise<GitHubRepo> {
     return this.apiRequest<GitHubRepo>(workspaceId, `/repos/${owner}/${repo}`);
+  }
+
+  /**
+   * Check current user access before accepting data from an installation webhook.
+   *
+   * Cached per workspace and repository: this runs once per watching workspace
+   * per delivery, and `check_run` alone is a firehose. Without the cache a
+   * single CI push on a repo that N workspaces watch costs N live REST calls
+   * per delivery, against a per-user budget that installation credentials used
+   * to absorb. The TTL is the freshness the PR poll already accepts, so a
+   * revoked permission still stops mattering inside a minute.
+   */
+  async canAccessRepository(workspaceId: string, owner: string, repo: string): Promise<boolean> {
+    // Resolve the credential FIRST, and key the cache on it. The database is
+    // the authority: an integration deleted or replaced by another replica must
+    // stop granting access at once, and a cache keyed on the workspace alone
+    // would keep answering yes with a credential that no longer exists.
+    let auth: ResolvedAuth | null;
+    try {
+      auth = await this.resolveAuth(workspaceId);
+    } catch (err) {
+      if (err instanceof GitHubNotConnectedError) return false;
+      throw new GitHubAuthorizationUnavailableError();
+    }
+    if (!auth) return false;
+    const identity = createHash('sha256').update(auth.accessToken).digest('hex');
+    const key = `${identity} ${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    const cached = this.repoAccessCache.get(key);
+    if (cached) {
+      const ttl = cached.allowed
+        ? GitHubService.REPO_ACCESS_TTL_MS
+        : GitHubService.REPO_ACCESS_DENY_TTL_MS;
+      if (Date.now() - cached.at < ttl) return cached.allowed;
+    }
+    let allowed: boolean;
+    try {
+      const repository = await this.getRepository(workspaceId, owner, repo);
+      allowed = repository.full_name?.toLowerCase() === `${owner}/${repo}`.toLowerCase();
+    } catch (err) {
+      if (err instanceof GitHubNotConnectedError ||
+          (err instanceof GitHubApiError && [401, 403, 404].includes(err.status))) {
+        allowed = false;
+      } else {
+        // No decision. Do not cache a non-answer as a refusal.
+        throw new GitHubAuthorizationUnavailableError();
+      }
+    }
+    this.repoAccessCache.set(key, { allowed, at: Date.now() });
+    return allowed;
   }
 
   async listPullRequests(
@@ -2489,68 +2480,13 @@ class GitHubService extends EventEmitter {
         merge_method: options.merge_method || 'merge',
       }),
     };
-    // Log the credential picture up front so a failed merge is diagnosable from
-    // the logs alone: which token the first ('auto') attempt will actually use
-    // (installation when one covers the repo owner, else the user token), and
-    // whether a user token even exists to fall back to. No secrets — just kinds.
-    const ref = `${owner}/${repo}#${number}`;
-    const stored = this.tokens.get(workspaceId);
-    const login = this.viewerLoginCache.get(workspaceId);
-    const ownerInstallation = this.installationForOwner(owner) ?? stored?.installationId;
-    const firstAttemptToken =
-      ownerInstallation && isGitHubAppConfigured() ? `installation(${ownerInstallation})` : 'user';
-    console.log(
-      `[github] merge ${ref} ws=${workspaceId}${login ? ` login=${login}` : ''} ` +
-        `method=${options.merge_method || 'merge'} firstAttempt=${firstAttemptToken} ` +
-        `userToken=${stored?.accessToken ? 'present' : 'MISSING'}`
-    );
     try {
-      // Merge as the bot (installation token) first — keeps the merge attributed
-      // to FastOwl wherever the org allows it.
-      return await this.apiRequest(workspaceId, endpoint, init, 'auto');
+      return await this.apiRequest(workspaceId, endpoint, init);
     } catch (err) {
-      // Some orgs' branch rulesets only let an allowlist of apps merge to a
-      // protected branch (PostHog's `master` is one). The installation token is
-      // then refused with 403 "Resource not accessible by integration" — a phrase
-      // only an App token produces. Retry as the user: a human with an approved,
-      // mergeable PR satisfies the ruleset where the bot can't. Guarded so we only
-      // do the extra call when a user token actually exists to retry with.
-      const decision = this.mergeFallbackDecision(workspaceId, err);
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[github] merge ${ref} first attempt failed: ${msg} — ` +
-          (decision.retry ? 'retrying as user' : `not retrying (${decision.reason})`)
-      );
-      if (decision.retry) {
-        try {
-          const result = await this.apiRequest<{ sha: string; merged: boolean; message: string }>(
-            workspaceId,
-            endpoint,
-            init,
-            'user'
-          );
-          console.log(`[github] merge ${ref} succeeded on user-token retry`);
-          return result;
-        } catch (userErr) {
-          const umsg = userErr instanceof Error ? userErr.message : String(userErr);
-          console.warn(`[github] merge ${ref} user-token retry also failed: ${umsg}`);
-          // The stored user token is (since the App-only cutover) a
-          // user-to-server App token — GitHub counts it as the SAME
-          // integration, so wherever the bot is refused, this retry is
-          // refused identically. Only a legacy classic-OAuth token (which
-          // isn't an integration) could still pass here. When both flavours
-          // get the integration-403, no token Talyn can mint will ever merge
-          // this PR — surface that as a distinct, terminal error class.
-          if (isIntegrationForbiddenMessage(umsg)) {
-            throw new MergeNotPermittedForAppError(owner, repo, userErr);
-          }
-          throw userErr;
-        }
-      }
       if (
+        !(err instanceof GitHubRateLimitError) &&
         err instanceof Error &&
-        isIntegrationForbiddenMessage(err.message) &&
-        decision.reason === 'no user access token stored for this workspace'
+        isIntegrationForbiddenMessage(err.message)
       ) {
         throw new MergeNotPermittedForAppError(owner, repo, err);
       }
@@ -2586,29 +2522,6 @@ class GitHubService extends EventEmitter {
       console.warn(`[github] update-branch ${owner}/${repo}#${number} failed:`, msg);
       return 'error';
     }
-  }
-
-  /**
-   * Whether a failed bot merge should be retried with the user's own token, plus
-   * a human-readable reason for the logs. Retry only when the failure is the
-   * App-specific "Resource not accessible by integration" 403 (so the
-   * installation token was used and refused) AND a user token exists to fall
-   * back to. Any other failure — a rule the user would also hit ("1 approving
-   * review required"), a rate limit, a user-token 403 — is left to propagate.
-   */
-  private mergeFallbackDecision(
-    workspaceId: string,
-    err: unknown
-  ): { retry: boolean; reason: string } {
-    if (err instanceof GitHubRateLimitError) return { retry: false, reason: 'rate-limited' };
-    if (!(err instanceof Error)) return { retry: false, reason: 'non-Error throw' };
-    if (!isIntegrationForbiddenMessage(err.message)) {
-      return { retry: false, reason: 'not the App integration-403 — a user token would hit the same rule' };
-    }
-    if (!this.tokens.get(workspaceId)?.accessToken) {
-      return { retry: false, reason: 'no user access token stored for this workspace' };
-    }
-    return { retry: true, reason: 'App integration-403 with a user token available' };
   }
 
   async createPullRequest(
@@ -2720,10 +2633,7 @@ class GitHubService extends EventEmitter {
     query: string,
     variables: Record<string, unknown> = {}
   ): Promise<T> {
-    // Every batched query passes `owner` in its variables — use it to resolve
-    // the right installation when the workspace spans multiple accounts.
-    const owner = typeof variables.owner === 'string' ? variables.owner : undefined;
-    const resolved = await this.resolveAuth(workspaceId, { owner });
+    const resolved = await this.resolveAuth(workspaceId);
     if (!resolved) {
       throw new Error('GitHub not connected for this workspace');
     }
@@ -2894,15 +2804,11 @@ class GitHubService extends EventEmitter {
       }
       if (response.status === 401) {
         recordGql(false, 'token expired or revoked');
-        if (resolved.kind === 'installation' && resolved.installationId) {
-          clearInstallationToken(resolved.installationId);
-        } else {
-          await this.confirmRevokedThenRemove(
-            workspaceId,
-            `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
-              `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
-          );
-        }
+        await this.confirmRevokedThenRemove(
+          workspaceId,
+          `401 on POST /graphql — body: ${response.bodyText.slice(0, 200) || '(empty)'}, ` +
+            `request-id: ${response.headers.get('x-github-request-id') ?? 'n/a'}`
+        );
         throw new Error('GitHub token expired or revoked');
       }
       // A secondary-rate-limit 403/429 is NOT retried inline — that would burst

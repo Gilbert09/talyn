@@ -160,10 +160,19 @@ export async function linkTaskToPullRequest(opts: {
     await db
       .select({ url: repositoriesTable.url })
       .from(repositoriesTable)
-      .where(eq(repositoriesTable.id, opts.repositoryId))
+      .innerJoin(tasksTable, and(
+        eq(tasksTable.id, opts.taskId),
+        eq(tasksTable.workspaceId, repositoriesTable.workspaceId),
+        eq(tasksTable.repositoryId, repositoriesTable.id),
+      ))
+      .where(and(
+        eq(repositoriesTable.id, opts.repositoryId),
+        eq(repositoriesTable.workspaceId, opts.workspaceId),
+      ))
       .limit(1)
   )[0];
-  const repoCoords = repoRow ? parseOwnerRepo(repoRow.url) : null;
+  if (!repoRow) throw new Error('Repository not found for this task and workspace');
+  const repoCoords = parseOwnerRepo(repoRow.url);
   if (
     repoCoords &&
     (repoCoords.owner.toLowerCase() !== opts.owner.toLowerCase() ||

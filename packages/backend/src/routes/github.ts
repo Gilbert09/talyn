@@ -129,16 +129,20 @@ export function githubPublicRoutes(): Router {
           (error_description as string) || (error as string) || 'GitHub App error',
       });
     }
-    if (!code || !state) {
+    if (typeof code !== 'string' || typeof state !== 'string' || !code || !state) {
       return finish(originClient(req), {
         ok: false,
         status: 400,
         message: 'Missing code or state',
       });
     }
-    const [workspaceId, stateToken] = (state as string).split(':');
+    const [workspaceId, stateToken, extra] = state.split(':');
     const pendingState = pendingOAuthStates.get(stateToken);
-    if (!pendingState || pendingState.workspaceId !== workspaceId) {
+    if (
+      !pendingState || pendingState.workspaceId !== workspaceId ||
+      extra !== undefined || pendingState.expiresAt <= Date.now()
+    ) {
+      if (pendingState && pendingState.expiresAt <= Date.now()) pendingOAuthStates.delete(stateToken);
       return finish(originClient(req), {
         ok: false,
         status: 400,
@@ -192,11 +196,10 @@ export function githubPublicRoutes(): Router {
 /**
  * Finish connecting GitHub: exchange the OAuth code for the user-to-server
  * token, discover EVERY installation of the App the user can access (a user can
- * install it on their personal account + multiple orgs — data-plane reads then
- * resolve the right installation per repo owner), upsert each into the global
- * `github_installations` table, store the workspace integration (user token +
- * a primary installationId fallback), refresh the in-memory installation index,
- * and trigger a bulk refresh. Returns the number of installations found.
+ * install it on their personal account + multiple orgs), upsert each into the global
+ * installation table, and store the workspace's user credentials. Installation
+ * discovery does not grant workspace access to any repository.
+ * Trigger a bulk refresh and return the number of installations found.
  */
 async function completeAppConnection(
   workspaceId: string,
@@ -204,13 +207,13 @@ async function completeAppConnection(
   installationIdHint: string | undefined
 ): Promise<number> {
   const userToken = await exchangeUserCode(code);
-  const listed = await fetchUserInstallations(userToken.access_token).catch(() => []);
+  const listed = await fetchUserInstallations(userToken.access_token);
 
-  // Union the listing with a fresh-install hint: right after an install, the
-  // `/user/installations` listing can lag, so trust the installation_id GitHub
-  // just handed us too.
+  // The callback hint is untrusted. Only the user-authenticated listing proves access.
   const ids = new Set(listed.map((i) => i.installationId));
-  if (installationIdHint) ids.add(installationIdHint);
+  if (installationIdHint && !ids.has(installationIdHint)) {
+    throw new Error('The installation is not accessible to this GitHub user. Connect again.');
+  }
 
   const db = getPoolDbClient();
   const now = new Date();
@@ -241,8 +244,7 @@ async function completeAppConnection(
   }
 
   const installations = [...ids];
-  // Primary installation (fallback when a call's repo owner can't be resolved):
-  // the hint from a first-install redirect, else the first discovered install.
+  // Connection metadata only. Workspace operations use the user token.
   const primaryInstallationId = installationIdHint ?? installations[0];
 
   const nowMs = Date.now();
@@ -263,9 +265,6 @@ async function completeAppConnection(
         : {}),
     }
   );
-
-  // Make the new installations resolvable by repo owner immediately.
-  await githubService.refreshInstallationIndex();
 
   debugBus.recordEvent({
     service: 'github',

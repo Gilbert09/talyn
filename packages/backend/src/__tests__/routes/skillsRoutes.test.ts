@@ -9,13 +9,15 @@ import { skillRoutes, SKILL_LIST_COLUMNS } from '../../routes/skills.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
-import { workspaces as workspacesTable, skills as skillsTable } from '../../db/schema.js';
+import { workspaces as workspacesTable, skills as skillsTable, repositories } from '../../db/schema.js';
 import { githubService } from '../../services/github.js';
 import { clearRepoSkillCache } from '../../services/skills.js';
 
 vi.mock('../../services/github.js', () => ({
   githubService: {
     getDirectoryListing: vi.fn(),
+    getDirectoryListingResolved: vi.fn(),
+    getTreeRecursive: vi.fn(),
     getFileContent: vi.fn(),
   },
 }));
@@ -69,6 +71,33 @@ describe('routes/skills', () => {
   afterEach(async () => {
     await closeServer();
     await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it.each(['warm', 'expired', 'refresh'] as const)('protects repo listings and content with a %s cache', async (mode) => {
+    await db.insert(repositories).values({
+      id: 'private-repo', workspaceId: 'ws2', name: 'private/repo', url: 'https://github.com/private/repo',
+    });
+    vi.mocked(githubService.getDirectoryListingResolved).mockResolvedValue({
+      path: '.claude/skills', entries: [{ name: 'private-skill', path: '.claude/skills/private-skill', type: 'dir', size: 0 }],
+    });
+    vi.mocked(githubService.getTreeRecursive).mockResolvedValue({
+      truncated: false, entries: [{ path: 'private-skill/SKILL.md', type: 'blob', mode: '100644', sha: 'private-sha', size: 20 }],
+    });
+    vi.mocked(githubService.getFileContent).mockResolvedValue({ content: 'Private instructions', size: 20 });
+    const ownerHeaders = internalProxyHeaders(OTHER_USER_ID);
+    const warm = await fetch(`${serverUrl}/skills?workspaceId=ws2&repositoryId=private-repo`, { headers: ownerHeaders });
+    expect(warm.status).toBe(200);
+    expect((await warm.json()).data.repo).toHaveLength(1);
+    if (mode === 'expired') vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+
+    const list = await fetch(`${serverUrl}/skills?workspaceId=ws1&repositoryId=private-repo&refresh=${mode === 'refresh' ? '1' : '0'}`, { headers: authHeaders });
+    const body = await list.json();
+    expect(body.data.repo).toEqual([]);
+    expect(body.data.repoStatus).toBe('error');
+    const content = await fetch(`${serverUrl}/skills/repo/content?workspaceId=ws1&repositoryId=private-repo&name=private-skill`, { headers: authHeaders });
+    expect(content.status).toBe(404);
+    expect(await content.text()).not.toContain('Private instructions');
   });
 
   async function createSkill(name = 'reviewer', workspaceId = 'ws1') {

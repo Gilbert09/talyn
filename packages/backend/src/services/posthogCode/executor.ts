@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Environment, PostHogCodeRuntimeAdapter, Task } from '@talyn/shared';
 import { isStoredPostHogCodeModelId } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
@@ -60,7 +60,7 @@ export async function dispatchTaskToPostHogCode(
   if (!task.repositoryId) {
     return { ok: false, error: 'PostHog Code tasks require a repository.' };
   }
-  const repository = await resolveRepositorySlug(task.repositoryId);
+  const repository = await resolveRepositorySlug(task.repositoryId, task.workspaceId);
   if (!repository) {
     return {
       ok: false,
@@ -168,11 +168,11 @@ export async function dispatchTaskToPostHogCode(
   }
 }
 
-async function resolveRepositorySlug(repositoryId: string): Promise<string | null> {
+async function resolveRepositorySlug(repositoryId: string, workspaceId: string): Promise<string | null> {
   const rows = await getDbClient()
     .select({ url: repositoriesTable.url, name: repositoriesTable.name })
     .from(repositoriesTable)
-    .where(eq(repositoriesTable.id, repositoryId))
+    .where(and(eq(repositoriesTable.id, repositoryId), eq(repositoriesTable.workspaceId, workspaceId)))
     .limit(1);
   const row = rows[0];
   if (!row) return null;

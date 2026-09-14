@@ -213,6 +213,10 @@ export const selfHostedProvider: CloudTaskProvider = {
     if (!cloud?.remoteTaskId) return; // never dispatched — nothing to cancel.
     const client = await getSelfHostedClient(task.workspaceId);
     if (!client) throw new Error('Talyn Fleet is not configured for this workspace.');
+    const { sandbox } = await client.getSandbox(cloud.remoteTaskId);
+    if (sandbox.workspaceId !== task.workspaceId) {
+      throw new Error('Fleet sandbox not found in this workspace');
+    }
     await client.cancelSandbox(cloud.remoteTaskId);
   },
 };

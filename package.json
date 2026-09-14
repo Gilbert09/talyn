@@ -42,6 +42,11 @@
     "supabase": "^2.105.0",
     "typescript": "^5.8.2"
   },
+  "overrides": {
+    "express@4": {
+      "qs": "^6.16.0"
+    }
+  },
   "engines": {
     "node": ">=18.x"
   }

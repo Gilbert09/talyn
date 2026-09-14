@@ -324,13 +324,14 @@ export interface ExternalQueueComment {
  * Is this trunk's merge-queue comment? Requires trunk's own structure — the
  * instruction marker, the submit checkbox, or the per-PR merge-queue link — so
  * a human quoting "running tests on this pull request" can't be mistaken for
- * the provider. When the author is known it must be a trunk bot.
+ * the provider. The author must be the known Trunk bot.
  */
 function isTrunkQueueComment(comment: ExternalQueueComment): boolean {
   const body = comment.body;
   if (!body) return false;
   const login = comment.user?.login;
-  if (login && !login.toLowerCase().startsWith('trunk')) return false;
+  // GitHub reserves [bot] for apps; a human can claim a trunk-prefixed login.
+  if (login?.toLowerCase() !== 'trunk-io[bot]') return false;
   if (body.includes(TRUNK_TEST_ANALYTICS_MARKER)) return false;
   return (
     body.includes(TRUNK_COMMENT_MARKER) ||

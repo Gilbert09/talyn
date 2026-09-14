@@ -232,6 +232,41 @@ harness and `main()` runs on import. The backend rejects an unknown gate with a
 400 and that path IS tested, so the generator's own drop is a nicety — it keeps
 one bad line from costing a release its whole set of notes.
 
+## Backend security review (2026-09-12, rolled out 2026-09-14)
+
+Reviewed backend authorization, tenant isolation, credential handling, webhooks, sockets, MCP, and runtime dependencies.
+The fixes enforce workspace user credentials for GitHub and authorize webhook recipients before processing private payloads.
+They also protect cached skills, task associations, remote execution metadata, and fleet transcript access.
+Loop history and settlement reject historical foreign task links.
+PostHog requests now use approved origins without redirects. Sockets enforce token deadlines, current authorization, and bounded work.
+Queue comments require the known bot identity. External merge claims require independent GitHub confirmation.
+
+**Two things the first draft got wrong, both found by review and fixed before merge.**
+
+Migration 0056 originally revoked the Data API roles' grants in the same deploy that
+introduced the `talyn_backend` role, and the PR asked the operator to drain old replicas
+first. No step in this pipeline can do that: migrations run at backend boot and Railway's
+cutover overlaps old and new deliberately, so the revocation would have broken the replica
+still serving every request — and the health gate would then have pinned the broken build
+in place if the new one failed to start. Merging the PR *is* the deploy. The migration is
+now additive, the revocations wait for a later push (`docs/rollout/phase2_revoke_data_api_grants.sql`),
+and 0056 asserts its own grants landed, because on Supabase a non-owner grantor of `auth`
+gets a warning rather than an error.
+
+The webhook fan-out checked repository access with a live, uncached GitHub call per watching
+workspace per delivery — above the coalescer that exists to collapse the `check_run` firehose
+— while all three cross-workspace dedupes were removed and the budget moved to per-user.
+Access decisions are now cached per CREDENTIAL, which is what lets the cache coexist with
+"the database is the authority": a credential deleted, disabled or replaced stops granting
+access at once, because a different credential is a different cache key. Poll fetches and
+REST sweeps are shared again, but only between workspaces holding the same token.
+
+Validation: 1,059 backend tests across 54 suites after the fixes, plus the client and web
+socket suites. Root typecheck and changed-file lint passed. The backend production dependency
+audit reported zero known vulnerabilities. This was a source review with local tests, not
+production penetration testing.
+See [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) for the two-phase rollout and remaining work.
+
 ## Session 123 — three loops on the free plan (2026-09-12)
 
 Loops shipped an hour after the workflow cap landed (Session 121), so it shipped
@@ -355,6 +390,7 @@ The agent picker was extracted to `packages/shared/src/cloudAgents.ts` on the
 way: it was a `useMemo` in `useGitHubActions.ts`, copied into the web fork, and
 the Loop editor needed the same answer — three copies of "which agents can this
 workspace use" is three chances to disagree.
+
 ## Session 121 — three workflows on the free plan (2026-09-12)
 
 Workflows shipped to everybody in Session 118 with no plan gate at all. Now the

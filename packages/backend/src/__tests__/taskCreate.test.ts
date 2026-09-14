@@ -139,7 +139,7 @@ describe('createCloudTask', () => {
     expect(prRows[0]?.taskId).toBe(row.id);
   });
 
-  it('skips the PR pointer when the PR belongs to a different workspace', async () => {
+  it('rejects a PR from a different workspace before inserting a task', async () => {
     await seedUser(db, { id: 'user-other' });
     await db.insert(workspacesTable).values({
       id: 'ws2',
@@ -156,16 +156,16 @@ describe('createCloudTask', () => {
     }).onConflictDoNothing();
     const prId = await seedPr({ id: 'pr-foreign', workspaceId: 'ws2' });
 
-    const row = await createCloudTask({
+    await expect(createCloudTask({
       workspaceId: 'ws1',
       type: 'pr_response',
       title: 't',
       description: '',
       repositoryId: 'repo1',
       pullRequestId: prId,
-    });
+    })).rejects.toThrow('Pull request not found in this workspace and repository');
 
-    expect(row.metadata).toBeNull();
+    expect(await db.select({ id: tasksTable.id }).from(tasksTable)).toEqual([]);
     const prRows = await db
       .select({ taskId: pullRequestsTable.taskId })
       .from(pullRequestsTable)

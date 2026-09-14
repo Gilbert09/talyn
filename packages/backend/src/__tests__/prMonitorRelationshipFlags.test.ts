@@ -184,7 +184,7 @@ describe('refreshPr (webhook-driven flags + relevance guard)', () => {
  * budget. The cheap per-workspace post-processing (viewer flags + upsert) still
  * runs once per workspace, independently.
  */
-describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
+describe('refreshPrAcrossWorkspaces (workspace-isolated fetches)', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
   let fetchSpy: ReturnType<typeof vi.spyOn>;
@@ -207,11 +207,9 @@ describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
       { id: 'repo1', workspaceId: 'ws1', name: 'acme/widgets', url: 'https://github.com/acme/widgets', defaultBranch: 'main', createdAt: new Date() },
       { id: 'repo2', workspaceId: 'ws2', name: 'acme/widgets', url: 'https://github.com/acme/widgets', defaultBranch: 'main', createdAt: new Date() },
     ]);
-    // Both workspaces resolve to the SAME installation account → one group, one fetch.
-    vi.spyOn(githubService, 'graphqlAccountKeyForOwner').mockReturnValue('inst:shared');
     vi.spyOn(githubService, 'getViewerTeamSlugs').mockResolvedValue(new Set());
     // Distinct viewer per workspace, so per-workspace relationship derivation is
-    // exercised off the ONE shared summary.
+    // exercised for each workspace's response.
     vi.spyOn(githubService, 'getUser').mockImplementation(
       async (ws: string) => ({ login: ws === 'ws1' ? 'octocat' : 'dev2' }) as never,
     );
@@ -230,7 +228,7 @@ describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
     return rows[0];
   };
 
-  it('makes ONE GitHub fetch for all workspaces yet upserts each independently', async () => {
+  it('fetches with each workspace separately and upserts each independently', async () => {
     // author=dev2 (so ws2 is the author); ws1 is review-requested directly.
     const shared = summary({
       number: 7,
@@ -243,8 +241,9 @@ describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
 
     await prMonitorService.refreshPrAcrossWorkspaces(targets, 7);
 
-    // The whole point: a single shared fetch, not one per workspace.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws1' }));
+    expect(fetchSpy).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws2' }));
 
     // ws1 (review-requested) and ws2 (author) each get their OWN row with the
     // relationship derived from their own viewer identity.
@@ -273,16 +272,16 @@ describe('refreshPrAcrossWorkspaces (deduped fan-out)', () => {
     expect((shared as PRSummary).reviewRequestVia).toBeUndefined();
   });
 
-  it('splits into separate fetches when workspaces resolve to different accounts', async () => {
-    // No shared installation (user-token fallback) → each workspace is its own
-    // group → one fetch each (still correct, just no dedup benefit).
-    vi.spyOn(githubService, 'graphqlAccountKeyForOwner').mockImplementation(
-      (ws: string) => `user:${ws}`,
-    );
+  it.each([false, true])('isolates a denied workspace with reversed order %s', async (reverse) => {
     const fetch2 = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
       { number: 9, pr: summary({ number: 9, author: 'octocat' }) },
-    ]);
-    await prMonitorService.refreshPrAcrossWorkspaces(targets, 9);
+    ]).mockImplementation(async ({ workspaceId }) => {
+      if (workspaceId === 'ws2') throw new Error('Not Found');
+      return [{ number: 9, pr: summary({ number: 9, author: 'octocat' }) }];
+    });
+    await prMonitorService.refreshPrAcrossWorkspaces(reverse ? [...targets].reverse() : targets, 9);
     expect(fetch2).toHaveBeenCalledTimes(2);
+    expect(await rowFor('ws1', 9)).toBeDefined();
+    expect(await rowFor('ws2', 9)).toBeUndefined();
   });
 });

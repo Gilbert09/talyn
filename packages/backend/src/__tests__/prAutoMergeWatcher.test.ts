@@ -718,7 +718,7 @@ describe('prAutoMergeWatcher', () => {
   // trunk themselves is not in it.
   describe('an external merge queue is holding the PR', () => {
     const TRUNK_COMMENT = (status: string) => ({
-      user: { login: 'trunk-io' },
+      user: { login: 'trunk-io[bot]' },
       body:
         `${status}\n\nSee more details [here](https://app.trunk.io/acme/merge-queue/1/7).`,
     });

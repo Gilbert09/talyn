@@ -13,7 +13,7 @@ import { refreshWebhookIndex, _resetWebhookIndex } from '../services/webhookInde
 import { checkCountCoalescer } from '../services/checkCounts.js';
 import * as workflowEngine from '../services/workflows/engine.js';
 import { prMonitorService } from '../services/prMonitor.js';
-import { githubService } from '../services/github.js';
+import { githubService, GitHubAuthorizationUnavailableError } from '../services/github.js';
 import {
   _resetExternalQueueState,
   readExternalQueueState,
@@ -54,13 +54,11 @@ describe('webhook classification helpers', () => {
     }
   });
 
-  it('routes refresh events to the slow lane and the check firehose to the fast lane', () => {
-    // Slow = makes a ~1-2s refreshPr; must run in the bounded background lane so
-    // it never gates the fast check_run/check_suite drain.
-    for (const e of ['pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment']) {
+  it('bounds repository events, including the access checks for incremental updates', () => {
+    for (const e of ['pull_request', 'pull_request_review', 'pull_request_review_comment', 'issue_comment', 'check_run', 'check_suite']) {
       expect(isSlowEvent(e)).toBe(true);
     }
-    for (const e of ['check_run', 'check_suite', 'push', 'installation', 'status']) {
+    for (const e of ['push', 'installation', 'status']) {
       expect(isSlowEvent(e)).toBe(false);
     }
   });
@@ -160,10 +158,11 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     db = testDb.db;
     cleanup = testDb.cleanup;
     await seedUser(db, { id: TEST_USER_ID });
+    await seedUser(db, { id: 'owner-b', email: 'b@example.test' });
     // Two workspaces watching the SAME repo → one event fans to both.
     await db.insert(workspacesTable).values([
       { id: 'wsA', ownerId: TEST_USER_ID, name: 'A', settings: {} },
-      { id: 'wsB', ownerId: TEST_USER_ID, name: 'B', settings: {} },
+      { id: 'wsB', ownerId: 'owner-b', name: 'B', settings: {} },
     ]);
     await db.insert(repositoriesTable).values([
       { id: 'rA', workspaceId: 'wsA', name: 'acme/widget', url: 'https://github.com/acme/widget', defaultBranch: 'main', createdAt: new Date() },
@@ -172,6 +171,7 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     _resetWebhookIndex();
     await refreshWebhookIndex();
     _resetCoalesce();
+    vi.spyOn(githubService, 'canAccessRepository').mockResolvedValue(true);
     // Stub the shared cross-workspace refresh so we assert dispatch without
     // hitting GitHub. The webhook fan-out now makes ONE call per PR number with
     // every watching workspace as a target (deduped fetch), not one refreshPr
@@ -225,6 +225,124 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
    * refresh" is a narrower question than "does a user care".
    */
   describe('workflow engine hook', () => {
+    it.each(['edited', 'closed'])('refreshes current state instead of applying a replayed %s payload', async (action) => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      const before = await db.select().from(pullRequestsTable);
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      const replay = delivery({ action, payload: {
+        pull_request: { number: 7, title: 'old title', merged: true }, changes: { title: {} },
+      } });
+      await processWebhookDelivery(replay, 1_000, true);
+      expect(workflows).toHaveBeenCalledWith(replay, expect.any(Array));
+      expect(refreshSpy).toHaveBeenCalled();
+      // The refresh is mocked. No old payload field may change the stored row before it returns.
+      expect(await db.select().from(pullRequestsTable)).toEqual(before);
+    });
+
+    it('serves the recipients it can verify when another cannot be verified', async () => {
+      // One workspace that cannot answer must not silence the others. The
+      // all-or-nothing version turned a single revoked authorization into a
+      // stalled webhook lane for every workspace watching the same repository.
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => {
+        if (ws === 'wsB') throw new GitHubAuthorizationUnavailableError();
+        return true;
+      });
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ action: 'closed', payload: {
+        pull_request: { number: 7, merged: true },
+      } }));
+      expect(workflows).toHaveBeenCalled();
+      // wsA proceeds; wsB is skipped for this delivery, not written to.
+      const rows = await db.select().from(pullRequestsTable);
+      expect(rows.find((r) => r.workspaceId === 'wsA')?.state).toBe('merged');
+      expect(rows.find((r) => r.workspaceId === 'wsB')?.state).not.toBe('merged');
+    });
+
+    it('preserves the delivery when NO recipient can be verified', async () => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      const before = await db.select().from(pullRequestsTable);
+      vi.mocked(githubService.canAccessRepository).mockRejectedValue(
+        new GitHubAuthorizationUnavailableError()
+      );
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await expect(processWebhookDelivery(delivery({ action: 'closed', payload: {
+        pull_request: { number: 7, merged: true },
+      } }))).rejects.toBeInstanceOf(GitHubAuthorizationUnavailableError);
+      expect(workflows).not.toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
+      expect(await db.select().from(pullRequestsTable)).toEqual(before);
+    });
+
+    it.each([
+      ['pull_request', 'opened', { pull_request: { number: 7 } }],
+      ['pull_request', 'reopened', { pull_request: { number: 7 } }],
+      ['pull_request', 'synchronize', { pull_request: { number: 7 }, before: 'old-sha' }],
+      ['pull_request', 'closed', { pull_request: { number: 7, merged: true } }],
+      ['pull_request', 'edited', { pull_request: { number: 7, title: 'private title' }, changes: { title: {} } }],
+      ['pull_request', 'labeled', { pull_request: { number: 7, labels: [{ name: 'private' }] } }],
+      ['pull_request', 'ready_for_review', { pull_request: { number: 7, draft: false } }],
+      ['pull_request_review', 'submitted', { pull_request: { number: 7 } }],
+      ['pull_request_review_comment', 'created', { pull_request: { number: 7 } }],
+      ['issue_comment', 'created', { issue: { number: 7, pull_request: {} }, comment: { body: 'private' } }],
+      ['check_suite', 'completed', { check_suite: { pull_requests: [] } }],
+      ['check_run', 'completed', { check_run: { name: 'ci', conclusion: 'success', head_sha: 'sha-1', pull_requests: [{ number: 7 }] } }],
+    ])('excludes denied historical recipients for %s/%s', async (eventType, action, payload) => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      const [before] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
+      vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsA');
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ eventType, action, payload }), 1_000);
+      await checkCountCoalescer.flushAllNow();
+      expect(workflows.mock.calls[0]?.[1]).toEqual([target('wsA', 'rA')]);
+      for (const [recipients] of refreshSpy.mock.calls) expect(recipients).toEqual([target('wsA', 'rA')]);
+      const [after] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
+      expect(after).toEqual(before);
+    });
+
+    it('checks access before offering an untracked PR to workflows', async () => {
+      vi.mocked(githubService.canAccessRepository).mockResolvedValue(false);
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ action: 'opened', payload: { pull_request: { number: 99 } } }));
+      expect(workflows).not.toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
+      expect(await db.select({ id: pullRequestsTable.id }).from(pullRequestsTable)).toEqual([]);
+    });
+
+    it('checks access again when buffered checks flush after a disconnect', async () => {
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      await processWebhookDelivery(delivery({ eventType: 'check_run', payload: {
+        check_run: { name: 'ci', conclusion: 'success', head_sha: 'sha-1', pull_requests: [{ number: 7 }] },
+      } }));
+      const before = await db.select().from(pullRequestsTable);
+      vi.mocked(githubService.canAccessRepository).mockResolvedValue(false);
+      await checkCountCoalescer.flushAllNow();
+      expect(await db.select().from(pullRequestsTable)).toEqual(before);
+    });
+
+    it('blocks repository-ID fan-out when historical PR links cross workspace boundaries', async () => {
+      await seedTrackedPr('rB', 'wsB', 7);
+      await db.insert(pullRequestsTable).values({
+        id: 'foreign-link', repositoryId: 'rB', workspaceId: 'wsA', owner: 'acme', repo: 'widget', number: 8,
+        state: 'open', lastSummary: { headSha: 'sha-1', title: 'must not change' },
+      });
+      vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsB');
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+      const before = await db.select().from(pullRequestsTable);
+      await processWebhookDelivery(delivery({ eventType: 'check_run', payload: {
+        check_run: { name: 'ci', conclusion: 'success', head_sha: 'sha-1', pull_requests: [{ number: 7 }] },
+      } }));
+      await checkCountCoalescer.flushAllNow();
+      expect(await db.select().from(pullRequestsTable)).toEqual(before);
+      expect(workflows).not.toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
     it('offers every delivery with a resolved target to the engine', async () => {
       const spy = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
       await processWebhookDelivery(delivery({ action: 'opened', payload: { pull_request: { number: 7 } } }), 1_000);

@@ -104,6 +104,7 @@ describe('skills service', () => {
 
   afterEach(async () => {
     await cleanup();
+    vi.restoreAllMocks();
   });
 
   describe('listRepoSkills', () => {
@@ -379,6 +380,42 @@ describe('skills service', () => {
       expect((await listRepoSkills('ws1', 'nope')).status).toBe('error');
       expect((await listRepoSkills('ws-other', 'repo1')).status).toBe('error');
     });
+
+    it.each(['warm', 'expired', 'refresh'] as const)(
+      'denies another tenant before the %s cache path', async (mode) => {
+        await seedUser(db, { id: 'user-other' });
+        await db.insert(workspacesTable).values({ id: 'ws2', ownerId: 'user-other', name: 'other' });
+        mockTreePath();
+        const first = await listRepoSkills('ws1', 'repo1');
+        expect(first.skills[0].content).toBe(SKILL_MD);
+        if (mode === 'expired') vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+        mockResolved.mockClear();
+        mockContent.mockClear();
+        mockResolved.mockRejectedValue(new Error('GitHub unavailable'));
+
+        const denied = await listRepoSkills('ws2', 'repo1', { refresh: mode === 'refresh' });
+        expect(denied).toEqual({
+          status: 'error', skills: [], error: 'Repository not found in this workspace',
+        });
+        expect(await getRepoSkillContent('ws2', 'repo1', 'reviewer')).toBeNull();
+        expect(mockResolved).not.toHaveBeenCalled();
+        expect(mockContent).not.toHaveBeenCalled();
+        expect((await listRepoSkills('ws1', 'repo1')).skills[0].content).toBe(SKILL_MD);
+      },
+    );
+
+    it.each(['warm', 'expired', 'refresh'] as const)(
+      'does not return cached content after repository deletion (%s)', async (mode) => {
+        mockTreePath();
+        await listRepoSkills('ws1', 'repo1');
+        await db.delete(repositoriesTable);
+        if (mode === 'expired') vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+        mockResolved.mockClear();
+        expect((await listRepoSkills('ws1', 'repo1', { refresh: mode === 'refresh' })).skills).toEqual([]);
+        expect(await getRepoSkillContent('ws1', 'repo1', 'reviewer')).toBeNull();
+        expect(mockResolved).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('getRepoSkillContent', () => {

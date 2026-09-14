@@ -125,6 +125,7 @@ async function request<T>(
       url,
       {
         method,
+        redirect: 'error',
         headers: {
           Authorization: `Bearer ${await creds.getToken()}`,
           'Content-Type': 'application/json',
@@ -153,19 +154,21 @@ async function request<T>(
     durationMs: Date.now() - startedAt,
     ok: res.ok,
     bytes: text.length,
-    ...(res.ok ? {} : { error: text.slice(0, 500) }),
+    ...(res.ok ? {} : { error: `PostHog Visual Review returned HTTP ${res.status}` }),
   });
   if (!res.ok) {
     let code: string | null = null;
-    let detail = text.slice(0, 300);
     try {
-      const parsed = JSON.parse(text) as { code?: string; detail?: string };
-      code = parsed.code ?? null;
-      if (parsed.detail) detail = parsed.detail;
+      const parsed = JSON.parse(text) as { code?: unknown };
+      if (typeof parsed.code === 'string' &&
+          ['not_fully_resolved', 'stale_run', 'sha_mismatch', 'rate_limited'].includes(parsed.code)) {
+        code = parsed.code;
+      }
     } catch {
-      // Non-JSON body (a proxy error page) — the raw slice is the message.
+      // Do not expose upstream bodies through errors or diagnostics.
     }
-    throw new VisualReviewApiError(res.status, code, `${res.status}: ${detail}`);
+    throw new VisualReviewApiError(res.status, code,
+      `PostHog Visual Review returned HTTP ${res.status}${code ? ` (${code})` : ''}`);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
