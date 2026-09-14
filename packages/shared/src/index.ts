@@ -718,6 +718,56 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
+/**
+ * Whether a status means the task has stopped for good.
+ *
+ * THE POINT OF THE `Record` IS THE COMPILER. Adding a member to `TaskStatus`
+ * fails to typecheck here until it is classified, and every list below is
+ * derived from this one — so a new status cannot silently land on the wrong
+ * side of a gate. Before this existed there were six hand-written copies of
+ * "which statuses are active" scattered across billing, admin, the PR-fix
+ * guard, fleet credentials, the reuse path and the merge-queue triggers, plus
+ * two more in the front-end stores. Every one of them was a `string[]` that a
+ * new member would have slipped past in silence.
+ *
+ * "Terminal" here means *this run is over*, not *the work is done*. A terminal
+ * task can still be re-dispatched (that is what `redispatchCloudTask` does);
+ * what it may no longer do is occupy a plan slot, hold credentials, or keep a
+ * watcher waiting on it.
+ */
+export const TASK_STATUS_TERMINAL: Record<TaskStatus, boolean> = {
+  pending: false,
+  queued: false,
+  in_progress: false,
+  completed: true,
+  failed: true,
+  cancelled: true,
+};
+
+const ALL_TASK_STATUSES = Object.keys(TASK_STATUS_TERMINAL) as TaskStatus[];
+
+/** Every task status, for runtime validation of untrusted input. */
+export const TASK_STATUSES: readonly TaskStatus[] = ALL_TASK_STATUSES;
+
+/**
+ * Statuses that mean a run has stopped. A task in one of these is finished
+ * with its slot, its credentials and its watcher.
+ */
+export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] =
+  ALL_TASK_STATUSES.filter((s) => TASK_STATUS_TERMINAL[s]);
+
+/**
+ * Statuses that mean a run is still in flight. Occupies a free-plan slot, may
+ * still fetch secrets, and tells "is anything already working this PR?" yes.
+ */
+export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] =
+  ALL_TASK_STATUSES.filter((s) => !TASK_STATUS_TERMINAL[s]);
+
+/** True when `value` is a status this build knows about. */
+export function isTaskStatus(value: unknown): value is TaskStatus {
+  return typeof value === 'string' && value in TASK_STATUS_TERMINAL;
+}
+
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export interface Task {

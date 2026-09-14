@@ -7,6 +7,7 @@
 
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
+  ACTIVE_TASK_STATUSES,
   buildMergeablePrompt,
   type CloudProviderType,
   type PRMergeableSummary,
@@ -27,7 +28,7 @@ import {
 } from './promptTemplates.js';
 
 /** Task statuses that mean a run is still working the PR. */
-export const ACTIVE_STATUSES = new Set(['pending', 'queued', 'in_progress']);
+export const ACTIVE_STATUSES = new Set<string>(ACTIVE_TASK_STATUSES);
 
 /** The workspace owner's PostHog Code env marker, or null if none. */
 export async function resolvePostHogEnvId(workspaceId: string): Promise<string | null> {

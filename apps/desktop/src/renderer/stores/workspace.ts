@@ -1,4 +1,8 @@
 import { create } from 'zustand';
+import {
+  ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
+  TERMINAL_TASK_STATUSES,
+} from '@talyn/shared';
 import type {
   Workspace,
   Environment,
@@ -42,16 +46,10 @@ export type PendingCloudTask =
  * the store, the initial load, and the queue panel agree on the split. Both are
  * exported as comma-joined strings for the `?status=` list the API accepts.
  */
-export const ACTIVE_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set([
-  'pending',
-  'queued',
-  'in_progress',
-]);
-export const HISTORY_TASK_STATUSES: readonly TaskStatus[] = [
-  'completed',
-  'failed',
-  'cancelled',
-];
+export const ACTIVE_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(
+  SHARED_ACTIVE_TASK_STATUSES
+);
+export const HISTORY_TASK_STATUSES: readonly TaskStatus[] = TERMINAL_TASK_STATUSES;
 export const ACTIVE_STATUS_PARAM = [...ACTIVE_TASK_STATUSES].join(',');
 export const HISTORY_STATUS_PARAM = HISTORY_TASK_STATUSES.join(',');
 

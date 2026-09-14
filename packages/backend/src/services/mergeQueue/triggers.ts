@@ -16,6 +16,7 @@
 //                   and re-evaluate anything deferred on the task limit.
 //   route         — enqueue/dequeue call onQueueMembershipChanged directly.
 
+import { TERMINAL_TASK_STATUSES as SHARED_TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
 import {
   domainEvents,
@@ -32,7 +33,7 @@ import {
 } from './store.js';
 import { scheduleGroupEvaluation } from './evaluator.js';
 
-const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_TASK_STATUSES = new Set<string>(SHARED_TERMINAL_TASK_STATUSES);
 
 let initialized = false;
 

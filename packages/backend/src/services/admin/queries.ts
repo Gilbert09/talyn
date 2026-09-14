@@ -1,6 +1,7 @@
 import { and, count, desc, eq, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
+  ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   ADMIN_PAGE_LIMIT_DEFAULT,
   ADMIN_PAGE_LIMIT_MAX,
   ADMIN_SEARCH_MIN_LENGTH,
@@ -178,7 +179,7 @@ type AdminUserDetailRow = Pick<
 >;
 
 /** Statuses that count against the free plan's active-task allowance. */
-const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
+const ACTIVE_TASK_STATUSES = SHARED_ACTIVE_TASK_STATUSES;
 
 function toUserSummary(row: AdminUserRow, workspaceCount: number): AdminUserSummary {
   return {

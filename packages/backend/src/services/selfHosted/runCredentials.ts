@@ -1,5 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { readCloudTaskMeta } from '@talyn/shared';
+import { ACTIVE_TASK_STATUSES, readCloudTaskMeta } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
@@ -65,7 +65,7 @@ export type RunCredentialsResult =
  * would be handing out secrets for work that is over — the difference between
  * "give me back what I was holding" and "give me a key".
  */
-const LIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
+const LIVE_TASK_STATUSES = ACTIVE_TASK_STATUSES;
 
 /**
  * Columns this read needs. Explicit because `tasks` carries `transcript`, which

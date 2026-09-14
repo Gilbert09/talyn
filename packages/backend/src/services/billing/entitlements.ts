@@ -1,5 +1,6 @@
 import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import {
+  ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   AUTO_KEEP_DEFAULT_ERROR_CODE,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   FREE_PLAN_MERGE_QUEUE_LIMIT,
@@ -42,8 +43,14 @@ export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
 export const FREE_WORKFLOW_LIMIT = FREE_PLAN_WORKFLOW_LIMIT;
 export const FREE_LOOP_LIMIT = FREE_PLAN_LOOP_LIMIT;
 
-/** Statuses that occupy a free-plan slot (mirrors the desktop's ACTIVE_TASK_STATUSES). */
-export const ACTIVE_TASK_STATUSES = ['pending', 'queued', 'in_progress'] as const;
+/**
+ * Statuses that occupy a free-plan slot.
+ *
+ * Re-exported from the shared partition rather than restated: a new task
+ * status now lands on the right side of this gate by construction. Kept as a
+ * named export because callers across routes and admin import it from here.
+ */
+export const ACTIVE_TASK_STATUSES = SHARED_ACTIVE_TASK_STATUSES;
 
 export type EffectivePlan = 'free' | 'unlimited';
 

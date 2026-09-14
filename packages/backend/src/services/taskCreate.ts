@@ -1,11 +1,12 @@
 import { v4 as uuid } from 'uuid';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import type {
-  TaskPriority,
-  TaskType,
-  TaskSkillInfo,
-  PostHogCodeRuntimeAdapter,
-  WorkflowTriggerEvent,
+import {
+  TERMINAL_TASK_STATUSES,
+  type TaskPriority,
+  type TaskType,
+  type TaskSkillInfo,
+  type PostHogCodeRuntimeAdapter,
+  type WorkflowTriggerEvent,
 } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import {
@@ -143,7 +144,7 @@ export async function createCloudTask(
  * still active is left strictly alone — rewriting a running task's prompt
  * would redirect a run already in flight.
  */
-const REUSABLE_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+const REUSABLE_STATUSES = TERMINAL_TASK_STATUSES;
 
 /**
  * The most recent finished task for this exact PR and task type, if any.
