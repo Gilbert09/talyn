@@ -201,6 +201,43 @@ export async function processWebhookDelivery(
     return 0;
   }
 
+  // check_run: update the pill counts INCREMENTALLY — no GraphQL refresh. We
+  // BUFFER the event into the coalescer keyed by (repo, sha) and return
+  // immediately; a short window collapses a CI suite's burst of check_runs for
+  // one commit into a single DB flush (one multi-row upsert + one recompute +
+  // one broadcast per PR) instead of paying that per event. The receiver has
+  // already dropped check_runs whose sha is no PR head (webhookHeadIndex), so
+  // anything reaching here is a live, tracked head worth buffering.
+  //
+  // ABOVE `targetsForRepo`, and that placement is the point. Buffering is not a
+  // write — `checkCountCoalescer.flush` calls `targetsForRepo` itself before it
+  // touches anything, so authorization still gates every write, once per
+  // (repo, sha) window instead of once per delivery. Asking here as well was
+  // pure duplication, and it was the single most expensive thing this service
+  // did: `targetsForRepo` authorizes each watching workspace, and
+  // `canAccessRepository` caches the DECISION but re-reads the credential from
+  // `integrations` every call, deliberately (see github.ts `resolveAuth` — the
+  // database is the authority). With ~23 workspaces watching PostHog/posthog
+  // and its check firehose at ~8 deliveries/s, that was ~184 reads/s of a row
+  // with an encrypted jsonb config at ~19ms each — around 3.5 SECONDS of
+  // database time per wall-clock second, on an answer the flush was about to
+  // ask for anyway. The webhook queue ran 47 minutes behind and climbing.
+  //
+  // NB: NO full-refresh fallback. A check_run whose head_sha ≠ the PR's head
+  // (very common — GitHub runs many checks on a *merge commit*) isn't in the PR
+  // head's statusCheckRollup anyway; a genuinely stale head is corrected by the
+  // PR's own pull_request/synchronize event and the reconcile sweep.
+  //
+  // A REPLAY still falls through to the full path below: it re-runs workflows
+  // and fetches current PR state rather than applying a stale payload.
+  if (!replayed && delivery.eventType === 'check_run') {
+    const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
+    if (!ev) return 0;
+    checkCountCoalescer.enqueue(ev);
+    whTrace(`  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → buffered (coalesced)`);
+    return 0; // the count update is accounted at flush time, not per delivery
+  }
+
   // This checks current user access before workflows or any payload-derived write.
   // The check-count coalescer repeats the check when its delayed batch flushes.
   const targets = await targetsForRepo(delivery.repoFullName);
@@ -257,26 +294,6 @@ export async function processWebhookDelivery(
   if (delivery.eventType === 'check_suite') {
     whTrace(`  check_suite ${delivery.repoFullName}: no-op (counts come from check_run)`);
     return 0;
-  }
-
-  // check_run: update the pill counts INCREMENTALLY — no GraphQL refresh. We
-  // BUFFER the event into the coalescer keyed by (repo, sha) and return
-  // immediately; a short window collapses a CI suite's burst of check_runs for
-  // one commit into a single DB flush (one multi-row upsert + one recompute +
-  // one broadcast per PR) instead of paying that per event. The receiver has
-  // already dropped check_runs whose sha is no PR head (webhookHeadIndex), so
-  // anything reaching here is a live, tracked head worth buffering.
-  //
-  // NB: NO full-refresh fallback. A check_run whose head_sha ≠ the PR's head
-  // (very common — GitHub runs many checks on a *merge commit*) isn't in the PR
-  // head's statusCheckRollup anyway; a genuinely stale head is corrected by the
-  // PR's own pull_request/synchronize event and the reconcile sweep.
-  if (!replayed && delivery.eventType === 'check_run') {
-    const ev = parseCheckRunPayload(delivery.payload, delivery.repoFullName);
-    if (!ev) return 0;
-    checkCountCoalescer.enqueue(ev);
-    whTrace(`  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → buffered (coalesced)`);
-    return 0; // the count update is accounted at flush time, not per delivery
   }
 
   // A PR closing/merging or force-pushing makes its per-check state irrelevant —

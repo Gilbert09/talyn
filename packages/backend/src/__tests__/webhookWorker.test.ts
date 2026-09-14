@@ -288,7 +288,8 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       ['pull_request_review_comment', 'created', { pull_request: { number: 7 } }],
       ['issue_comment', 'created', { issue: { number: 7, pull_request: {} }, comment: { body: 'private' } }],
       ['check_suite', 'completed', { check_suite: { pull_requests: [] } }],
-      ['check_run', 'completed', { check_run: { name: 'ci', conclusion: 'success', head_sha: 'sha-1', pull_requests: [{ number: 7 }] } }],
+      // `check_run` is deliberately absent — it short-circuits above the
+      // authorization lookup now and is covered on its own below.
     ])('excludes denied historical recipients for %s/%s', async (eventType, action, payload) => {
       await seedTrackedPr('rA', 'wsA', 7);
       await seedTrackedPr('rB', 'wsB', 7);
@@ -299,6 +300,44 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
       await checkCountCoalescer.flushAllNow();
       expect(workflows.mock.calls[0]?.[1]).toEqual([target('wsA', 'rA')]);
       for (const [recipients] of refreshSpy.mock.calls) expect(recipients).toEqual([target('wsA', 'rA')]);
+      const [after] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
+      expect(after).toEqual(before);
+    });
+
+    it('buffers a check_run without authorizing anyone, and authorizes at flush', async () => {
+      // The check firehose is the overwhelming majority of deliveries, and
+      // buffering one is not a write. Authorizing per delivery meant re-reading
+      // every watching workspace's `integrations` row — the credential is read
+      // every call by design — for an answer `flush` asks for again moments
+      // later. On PostHog/posthog that was ~184 reads/s and a webhook queue 47
+      // minutes behind.
+      await seedTrackedPr('rA', 'wsA', 7);
+      await seedTrackedPr('rB', 'wsB', 7);
+      const [before] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
+      vi.mocked(githubService.canAccessRepository).mockImplementation(async (ws) => ws === 'wsA');
+      const workflows = vi.spyOn(workflowEngine, 'evaluateWorkflowsForDelivery').mockResolvedValue(0);
+
+      await processWebhookDelivery(
+        delivery({
+          eventType: 'check_run',
+          action: 'completed',
+          payload: {
+            check_run: { name: 'ci', conclusion: 'success', head_sha: 'sha-1', pull_requests: [{ number: 7 }] },
+          },
+        }),
+        1_000
+      );
+
+      // Nothing was authorized to buffer it…
+      expect(vi.mocked(githubService.canAccessRepository)).not.toHaveBeenCalled();
+      // …and the engine was not consulted, which costs nothing either way:
+      // `workflowFactsFromDelivery` has no case for check_run, so the call it
+      // used to make returned 0 without reading a row.
+      expect(workflows).not.toHaveBeenCalled();
+
+      // The flush is the write, and it authorizes: wsA is served, wsB is not.
+      await checkCountCoalescer.flushAllNow();
+      expect(vi.mocked(githubService.canAccessRepository)).toHaveBeenCalled();
       const [after] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-rB-7'));
       expect(after).toEqual(before);
     });

@@ -396,6 +396,10 @@ class DebugBus {
         ...(input.dropReason ? { dropReason: input.dropReason } : {}),
         ...(input.fanout !== undefined ? { fanout: input.fanout } : {}),
         ...(input.latencyMs !== undefined ? { latencyMs: Math.round(input.latencyMs) } : {}),
+        // The lane already splits the two lag gauges; without it on the event
+        // there is no way to tell from the stream WHICH lane a delivery took,
+        // which is exactly the question when the two gauges read the same.
+        ...(input.lane ? { lane: input.lane } : {}),
         ...(describeError(input.error) ? { error: truncate(describeError(input.error)) } : {}),
       },
     });

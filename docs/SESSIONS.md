@@ -2,6 +2,72 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 128 — the webhook queue was 47 minutes behind, and it was an auth read (2026-09-14)
+
+Tom: the Debug panel still shows a lot of lag. It did — 47 minutes, and climbing
+at about two deliveries a second.
+
+Measured rather than guessed, off the admin console's own snapshot and event
+stream:
+
+- **received 8.2/s, processed ~6/s.** A permanent deficit, so the backlog only
+  grows. Both lag gauges read identically, which turned out to be honest and not
+  a bug: nearly every processed delivery right now is `check_run`, which is a
+  slow-lane event, so both windows hold the same samples.
+- The firehose is PostHog/posthog `check_run` — 241 of ~345 sampled webhook
+  events, with PostHog/charts and k8s-rendered-manifests behind it.
+- The receiver's head-SHA index is doing its job: 89 check_runs dropped as
+  `head_sha_not_tracked` against 84 queued. Half the firehose never reaches the
+  worker.
+- Every surviving delivery cost **~536ms** and reported `fanout: 0`.
+- **167–184 DB queries/s, of which 1,836 out of 2,000 sampled were reads of
+  `integrations`** at 19.3ms each. That is ~3.5 seconds of database time per
+  wall-clock second, on one table.
+
+That last number is the whole story. `processWebhookDelivery` called
+`targetsForRepo` before it knew what kind of event it had; `targetsForRepo`
+authorizes every watching workspace through `canAccessRepository`; and that
+caches the DECISION but re-reads the credential from `integrations` on every
+call — **deliberately**, and the docblock on `resolveAuth` says why: the
+database is the authority, so a revoked integration has to stop granting access
+at once rather than at the end of some TTL. With ~23 workspaces watching
+PostHog/posthog and ~8 deliveries a second, that is ~184 reads a second of a row
+carrying an encrypted jsonb config.
+
+**The fix is not to cache it.** `checkCountCoalescer.flush` already calls
+`targetsForRepo` itself, before it writes anything. So the check on the delivery
+path was pure duplication of one the flush was about to do anyway — and a
+`check_run` delivery does nothing but buffer into an in-memory coalescer keyed by
+(repo, sha), which is not a write. Moving the `check_run` branch ABOVE
+`targetsForRepo` removes the duplicate entirely, leaving authorization exactly
+where the invariant needs it: once per (repo, sha) flush window instead of once
+per delivery, for maybe a tenth of the calls.
+
+Nothing about the security posture changes, and `resolveAuth` keeps reading the
+database every time. What changes is how often anyone asks.
+
+Three things checked before committing to that, because "skip the auth check" is
+the kind of fix that is wrong in an interesting way:
+
+- **Workflows do not apply.** `workflowFactsFromDelivery` has no `check_run`
+  case — deliberately, a CI suite fires dozens per commit — so the engine call
+  that used to happen returned 0 without reading a row.
+- **A replay still takes the long path.** The branch stays `!replayed`, so a
+  redelivered check_run falls through to workflows and a real refresh.
+- **The receiver already proved the SHA is a tracked open PR head**, so what
+  reaches the coalescer is live work, not the whole firehose.
+
+The test that broke was parameterised over every event type and asserted the
+workflow engine was handed the authorized targets. For `check_run` that assertion
+was pinning a no-op call. Split it out into a test that pins what actually
+matters now: `canAccessRepository` is NOT called while buffering, IS called at
+flush, and the denied workspace's row is untouched either way.
+
+Also added `lane` to the recorded webhook event. The lag gauges already split by
+lane, but the events did not carry it, so "why do both gauges read the same?"
+could not be answered from the stream — and I spent a while assuming a bug that
+was not there.
+
 ## Session 127 — the loop scheduler was dead, and the panel would not say why (2026-09-14)
 
 Tom, from the admin Debug panel: `loop_scheduler` red, every tick, with
