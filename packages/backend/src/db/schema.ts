@@ -1076,6 +1076,15 @@ export const loops = pgTable(
     /** `LoopConcurrency` — what a firing does when the last run is still going. */
     concurrency: text('concurrency').notNull().default('skip'),
     /**
+     * Whether the run's sandbox may reach the internet.
+     *
+     * Off is the default and the safe one: the box reaches its repository and
+     * its agent API through the credential proxy and has no route anywhere
+     * else, so a prompt that has read untrusted text cannot post it out. On
+     * asks the fleet for `policy.egress.mode: 'open'` — see selfHosted/executor.
+     */
+    internetAccess: boolean('internet_access').notNull().default(false),
+    /**
      * Nullable + set null, NOT cascade: removing a repository must not delete
      * the loop and its whole history. The scheduler re-resolves by
      * `repo_full_name` first, and only then records a skip and switches off.

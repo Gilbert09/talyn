@@ -373,6 +373,7 @@ class LoopScheduler {
           provider: loop.provider,
           model: loop.model,
           concurrency: loop.concurrency,
+          internetAccess: loop.internetAccess,
           repositoryId: loop.repositoryId,
           repoFullName: loop.repoFullName,
           nextRunAt: loop.nextRunAt ? new Date(loop.nextRunAt) : null,

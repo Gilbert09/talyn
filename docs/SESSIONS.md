@@ -2,6 +2,63 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 125 — a loop that can reach the internet (2026-09-14)
+
+The first real loop — a daily digest of one author's PRs, posted to a Slack
+webhook — failed twice, and each failure was a different layer saying no.
+
+**First: `GET /search/issues` was not on the fleet's GitHub allowlist.** The
+agent reached for `gh search prs` (no credential in the guest, by design), fell
+back to the REST endpoint, was refused, and correctly stopped rather than
+paginating `/repos/{org}/*/pulls` across dozens of repositories. Fixed in the
+fleet repo, not this one: it is the first entry on `ghAPIAllowed` that is not
+repo-scoped, decided knowingly, bounded to GET and to issues-and-PRs so code
+search stays out of reach. Tom's call after the trade-off was laid out. The
+worry that the App token would only see installed repositories turned out not
+to bite — the next run found 89 PRs across the org.
+
+**Then: the box had no route to hooks.slack.com.** That is the fleet's central
+property working, not a bug.
+
+The generic answer is NOT a yas-side integration, and the reason is worth
+writing down: `FLEET_GATEWAY_TOKEN` is one deployment-wide key, so **all of
+Talyn is a single yas tenant**. A Slack integration with `attach: all` there
+would hand one user's webhook to every other user's microVM. The gateway
+anticipates exactly this — `attachIntegrations` leaves the body alone when the
+caller names `integrations` itself, because "a caller writing it is speaking
+the host's language" — so a per-workspace capability has to be resolved by
+Talyn and sent per dispatch.
+
+What we built instead is simpler, because the fleet already had the knob:
+`policy.egress`, which Talyn was already sending a sibling of. A loop gets one
+boolean. Off (the default) is proxy mode — repository and agent API, nothing
+else. On is `mode: 'open'`.
+
+**Tom's steer: "talyn users shouldn't need to care about egress and policy."**
+So the editor says "Repository only" / "Allow the internet" and explains the
+consequence in a sentence; the words egress, policy, CONNECT and filtered
+appear nowhere in the product.
+
+Three things that decided the shape:
+
+- **It rides on the TASK, not the loop.** `metadata.internetAccess` is read by
+  the executor, so a revived run gets the posture it was dispatched with. Reading
+  the loop would give a re-dispatch whatever the loop says today — a different
+  box from the one being replaced.
+- **Strictly `=== true`, never truthiness.** The value survives a round trip
+  through jsonb; a stored string on the one switch that opens a network is how a
+  run ends up routed because somebody wrote "false".
+- **Fleet-only is enforced twice.** The editor hides it for PostHog Code and
+  clears it when the agent picker moves off the fleet; the route refuses it
+  outright. The editor is the courtesy, the route is the gate — the CLI and the
+  MCP server walk past the first one.
+
+Checked before building, because it would have killed the design: the fleet
+once forced routed egress to drop every credential. That rule is **gone** — the
+proxy attaches credentials in every mode — and the one refusal that survived is
+a routed run whose GitHub token names no repository. Every Talyn dispatch names
+one.
+
 ## Session 124 — the release notes stop announcing gated features (2026-09-14)
 
 Tom: the in-app "What's new" modal is showing features that are switched off for

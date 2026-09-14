@@ -56,6 +56,15 @@ export interface CreateCloudTaskInput {
    * the rule that fired it. `loop_runs.task_id` is the other half of the link.
    */
   loop?: TaskLoopInfo;
+  /**
+   * Ask the provider for a sandbox that can reach the internet.
+   *
+   * Only the fleet honours it, and only Loops sets it today. Persisted to
+   * `metadata.internetAccess` so it survives a re-dispatch: the executor reads
+   * the task, not the loop, and a revived run must get the same posture as the
+   * one it replaces rather than quietly dropping to the default.
+   */
+  internetAccess?: boolean;
 }
 
 /** Where a loop-started task came from. See {@link CreateCloudTaskInput.loop}. */
@@ -213,6 +222,7 @@ async function buildTaskMetadata(
   // not the one that happened last week.
   if (input.workflow) metadata.workflow = input.workflow;
   if (input.loop) metadata.loop = input.loop;
+  if (input.internetAccess) metadata.internetAccess = true;
   if (input.skill) {
     metadata.skill = input.skill;
     // Best-effort usage bump for the picker's "frequently used" ordering —

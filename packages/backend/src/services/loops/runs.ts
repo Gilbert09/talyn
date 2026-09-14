@@ -48,6 +48,7 @@ export const DUE_LOOP_COLUMNS = {
   provider: loopsTable.provider,
   model: loopsTable.model,
   concurrency: loopsTable.concurrency,
+  internetAccess: loopsTable.internetAccess,
   repositoryId: loopsTable.repositoryId,
   repoFullName: loopsTable.repoFullName,
   nextRunAt: loopsTable.nextRunAt,

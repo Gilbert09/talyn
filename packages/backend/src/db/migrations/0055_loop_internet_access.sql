@@ -1,0 +1,14 @@
+-- A loop may ask for a sandbox that can reach the internet.
+--
+-- Off by default, and off is what most loops want: the box reaches its
+-- repository and its agent API through the credential proxy and has no route
+-- anywhere else. That is what stops a prompt which has just read ninety
+-- untrusted pull request titles from posting anything it learned somewhere.
+--
+-- On is for a loop whose job ends outside the repository — a digest to a
+-- webhook, a call to an API. It becomes `policy.egress.mode: "open"` on the
+-- fleet create body. One switch rather than a list of hosts on purpose: the
+-- person writing a loop is thinking about what their prompt has to do, not
+-- about egress rules, and a half-understood allow-list is worse than an
+-- honest yes.
+ALTER TABLE "loops" ADD COLUMN IF NOT EXISTS "internet_access" boolean DEFAULT false NOT NULL;

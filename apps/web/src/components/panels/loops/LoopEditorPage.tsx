@@ -120,10 +120,15 @@ export function LoopEditorPage({
     // The model moves with the agent. It has to: the fleet's two agents have
     // disjoint catalogues, so keeping the old model when switching from Claude
     // to Codex would leave a pair the validator refuses.
+    const provider = agent.type === 'selfhosted' ? 'selfhosted' : 'posthog_code';
     setInput((p) => ({
       ...p,
-      provider: agent.type === 'selfhosted' ? 'selfhosted' : 'posthog_code',
+      provider,
       model: agent.model ?? agent.models[0]?.id ?? p.model,
+      // Moving off the fleet drops the switch rather than hiding a true value.
+      // Only the fleet honours it, so a loop that kept it while pointed at
+      // PostHog Code would read as having internet access and not have it.
+      internetAccess: provider === 'selfhosted' ? p.internetAccess : false,
     }));
   };
 
@@ -414,6 +419,41 @@ export function LoopEditorPage({
               rather than silent. Start it anyway when the prompt is safe to run twice at once.
             </p>
           </Section>
+
+          {/* Fleet loops only. PostHog Code has no equivalent, so offering the
+              switch there would be a promise the provider cannot keep — and a
+              loop that silently lacked it is the failure that cost a run. */}
+          {input.provider === 'selfhosted' && (
+            <Section
+              title="Internet access"
+              description="Whether this loop can reach sites outside your repository."
+            >
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { value: false, label: 'Repository only' },
+                  { value: true, label: 'Allow the internet' },
+                ].map((o) => (
+                  <button
+                    key={String(o.value)}
+                    onClick={() => setInput((p) => ({ ...p, internetAccess: o.value }))}
+                    className={cn(
+                      'inline-flex items-center rounded-full border px-2.5 py-1 text-xs transition-colors',
+                      (input.internetAccess ?? false) === o.value
+                        ? 'border-transparent bg-primary text-primary-foreground'
+                        : 'hover:bg-accent'
+                    )}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {input.internetAccess
+                  ? 'This loop can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
+                  : 'This loop reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
+              </p>
+            </Section>
+          )}
 
           {/* The same action as the header's, where you finish reading. */}
           <div className="flex items-center justify-end gap-3 border-t pt-4">

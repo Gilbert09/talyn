@@ -296,7 +296,18 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       // ONE vendor, never both, and never `github`: suppressing everything
       // nulls the refresh hook outright (`allCredentialsSuppressed`), which
       // would strip the key we just sent.
-      policy: { credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' } },
+      policy: {
+        credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
+        // Only when the task asked for it. Absent means the fleet's default —
+        // no routed network — and absent is what every task except an
+        // internet-enabled loop sends.
+        //
+        // It rides on the task rather than being decided here because a revived
+        // run must get the POSTURE IT HAD: reading the loop instead would give a
+        // re-dispatch whatever the loop says today, which is a different box
+        // from the one being replaced.
+        ...(internetAccessFromTask(task) ? { egress: { mode: 'open' as const } } : {}),
+      },
     });
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
@@ -494,6 +505,17 @@ async function createSandboxRetryingUncertain(
 function modelFromTask(task: Task): string | undefined {
   const m = (task.metadata as Record<string, unknown> | null)?.model;
   return typeof m === 'string' && m ? m : undefined;
+}
+
+/**
+ * Whether this task asked for a sandbox that can reach the internet.
+ *
+ * Strictly `true`, never truthiness: the value arrives from a jsonb column, and
+ * a string left there by an older shape must not read as a yes on the one
+ * switch that opens a network.
+ */
+function internetAccessFromTask(task: Task): boolean {
+  return (task.metadata as Record<string, unknown> | null)?.internetAccess === true;
 }
 
 function modelFromEnv(env: Environment): string | undefined {

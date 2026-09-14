@@ -176,6 +176,43 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
     expect((body.task as { provider?: string }).provider).toBe('openai');
   });
 
+  describe('the egress posture rides on the task', () => {
+    it('sends no egress policy at all when nothing asked for one', async () => {
+      getSelfHostedCredentials.mockResolvedValue({ claudeToken: 'sk-ant-oat01-mine' });
+      await dispatchTaskToFleet(task({ metadata: { model: 'claude-sonnet-5' } }), env);
+      const body = createSandbox.mock.calls[0][0] as { policy?: Record<string, unknown> };
+      // Absent, not "proxy": the fleet's default IS proxy, and a task from
+      // before this existed must produce a byte-identical create body.
+      expect(body.policy).not.toHaveProperty('egress');
+    });
+
+    it('asks for open egress when the task carries the flag', async () => {
+      getSelfHostedCredentials.mockResolvedValue({ claudeToken: 'sk-ant-oat01-mine' });
+      await dispatchTaskToFleet(
+        task({ metadata: { model: 'claude-sonnet-5', internetAccess: true } }),
+        env,
+      );
+      const body = createSandbox.mock.calls[0][0] as { policy?: Record<string, unknown> };
+      expect(body.policy).toEqual({
+        credentials: { openai: 'none' },
+        egress: { mode: 'open' },
+      });
+    });
+
+    it('reads only a real boolean, never a truthy string', async () => {
+      // The value arrives from a jsonb column. Truthiness on the one switch
+      // that opens a network is how a run ends up routed because somebody
+      // wrote "false".
+      getSelfHostedCredentials.mockResolvedValue({ claudeToken: 'sk-ant-oat01-mine' });
+      await dispatchTaskToFleet(
+        task({ metadata: { model: 'claude-sonnet-5', internetAccess: 'false' } }),
+        env,
+      );
+      const body = createSandbox.mock.calls[0][0] as { policy?: Record<string, unknown> };
+      expect(body.policy).not.toHaveProperty('egress');
+    });
+  });
+
   // Suppressing everything nulls the fleet's whole refresh hook
   // (`allCredentialsSuppressed`), which would strip the key we just sent — and
   // suppressing `github` would take away the token the run clones and pushes
