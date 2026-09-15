@@ -307,12 +307,19 @@ class TaskQueueService extends EventEmitter {
         } = existing;
         return { ...rest, dispatchedAt: new Date().toISOString() };
       });
+      // `metadata.loop` is written by createCloudTask for a loop firing, and is
+      // the only thing that distinguishes one from a freeform task — both are
+      // `code_writing`. Without it, loop-driven work cannot be segmented out of
+      // any task funnel in PostHog.
+      const loop = (task.metadata as { loop?: { loopId?: string } } | null)?.loop;
       captureWorkspaceEvent(task.workspaceId, 'task_dispatched', {
         task_id: task.id,
         task_type: task.type,
         provider: env.type,
         priority: task.priority,
         duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
+        origin: loop?.loopId ? 'loop' : 'user',
+        ...(loop?.loopId ? { loop_id: loop.loopId } : {}),
       });
       return;
     }

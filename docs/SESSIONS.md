@@ -137,6 +137,44 @@ a cold boot occasionally does not bind inside it. Before suspecting the diff,
 re-run the deploy — the cutover is health-gated, so production keeps serving
 the old build either way and a re-run costs nothing but time.
 
+## Session 132 — loops report their firings (2026-09-15)
+
+Tom asked whether the backend sends PostHog events for workflows and loops being
+created or triggered. Workflows: yes, all of it — `workflow_created`,
+`workflow_updated`, `workflow_enabled_toggled`, `workflow_deleted`,
+`workflow_ran` per firing, `workflow_action_failed` per failed action. Loops:
+lifecycle only. No firing event existed at all.
+
+**The consequence was worse than a gap.** The one loop-firing-adjacent event
+that DID reach PostHog was `paywall_deferred`, emitted when the task cap blocks
+a firing. So loops could only ever be seen failing — a feature whose successes
+were invisible and whose refusals were not.
+
+`loop_ran` now mirrors `workflow_ran`, and lives in `settleRun`
+(`services/loops/runs.ts`) rather than at its call sites. That placement is the
+concurrency argument: the UPDATE's `WHERE status IN (ACTIVE_RUN_STATUSES)` means
+exactly one caller on one replica gets the row back, so exactly one emits.
+Capturing from the scheduler would double-count every settlement two replicas
+raced. The properties come off the `.returning()` of that same statement — the
+run row already denormalises provider, model, repo and trigger at fire time, so
+the event costs no extra read.
+
+Terminal transitions only. `running` is progress rather than an outcome, and
+`waiting_slot` is the plan limit, already reported as `paywall_deferred` by the
+dispatcher — reporting it twice would double-count refusals.
+
+Two properties worth keeping:
+
+- **`started_task`** separates "the agent failed" from "we never asked", which
+  is the difference between a product problem and an infrastructure one.
+- **`late_ms`** — how late the firing was against the occurrence it stood for.
+  Small on a healthy sweep; large means catch-up after a deploy or an outage.
+  Neither is visible from a count of firings.
+
+Also `origin` + `loop_id` on `task_dispatched`. A loop firing creates an
+ordinary `code_writing` task, so until now loop-driven work was
+indistinguishable from a freeform task in every task funnel we have.
+
 ## Session 131 — the 63-second fan-out, and a loop that waited for it (2026-09-14)
 
 Session 130 fixed the regression and the lag still would not move. The measured

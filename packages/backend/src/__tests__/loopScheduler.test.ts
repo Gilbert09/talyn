@@ -19,6 +19,7 @@ import * as fleetAccess from '../services/cloudProviders/fleetAccess.js';
 import * as registry from '../services/cloudProviders/registry.js';
 import * as loopsAccess from '../services/loopsAccess.js';
 import * as fleetCredentials from '../services/selfHosted/credentials.js';
+import * as analytics from '../services/analytics.js';
 
 /**
  * The scheduler end to end, against a real Postgres.
@@ -352,6 +353,130 @@ describe('loop scheduler', () => {
       const parked = (await runsFor(db, loop.id)).find((r) => r.id !== 'newer');
       expect(parked?.status).toBe('skipped');
       expect(parked?.failureCode).toBe('task_limit_reached');
+    });
+  });
+
+  describe('analytics', () => {
+    // How anybody finds out whether loops are used and whether they work.
+    // Until this existed the only loop event reaching PostHog was
+    // `paywall_deferred` — the refusal — so the feature could only ever look
+    // broken. Workflows have emitted `workflow_ran` since they shipped; this
+    // is the same event for the other automation.
+    const captureSpy = () => vi.spyOn(analytics, 'captureWorkspaceEvent').mockReturnValue(undefined);
+    const ranEvents = (c: ReturnType<typeof captureSpy>) =>
+      c.mock.calls.filter(([, event]) => event === 'loop_ran');
+
+    it('reports a firing that succeeded, with what ran it', async () => {
+      const loop = await dueLoop(db);
+      await loopScheduler.tick();
+      const [run] = await runsFor(db, loop.id);
+      await db.update(tasksTable).set({ status: 'completed' }).where(eq(tasksTable.id, run.taskId!));
+
+      const capture = captureSpy();
+      await loopScheduler.tick();
+
+      const ran = ranEvents(capture);
+      expect(ran).toHaveLength(1);
+      expect(ran[0][0]).toBe(WORKSPACE);
+      expect(ran[0][2]).toMatchObject({
+        loop_id: loop.id,
+        run_id: run.id,
+        status: 'succeeded',
+        trigger: 'schedule',
+        provider: 'posthog_code',
+        model: 'claude-opus-5',
+        started_task: true,
+        failure_code: null,
+      });
+      expect(ran[0][2]).toHaveProperty('duration_ms');
+      expect(ran[0][2]).toHaveProperty('late_ms');
+    });
+
+    it('reports a failure with its code', async () => {
+      const loop = await dueLoop(db);
+      await loopScheduler.tick();
+      const [run] = await runsFor(db, loop.id);
+      await db.delete(tasksTable).where(eq(tasksTable.id, run.taskId!));
+
+      const capture = captureSpy();
+      await loopScheduler.tick();
+
+      expect(ranEvents(capture)[0]?.[2]).toMatchObject({
+        status: 'failed',
+        failure_code: 'task_deleted',
+      });
+    });
+
+    it('says when a firing never got a task at all', async () => {
+      // The difference between "the agent failed" and "we never asked" — which
+      // is the difference between a product problem and an infrastructure one.
+      await dueLoop(db);
+      createTask.mockRejectedValueOnce(new Error('provider exploded'));
+
+      const capture = captureSpy();
+      await loopScheduler.tick();
+
+      expect(ranEvents(capture)[0]?.[2]).toMatchObject({
+        status: 'failed',
+        started_task: false,
+        duration_ms: null,
+      });
+    });
+
+    it('measures how late the firing was against the occurrence it stood for', async () => {
+      // Small on a healthy sweep. Large means catch-up after a deploy or an
+      // outage, which the count alone cannot show.
+      const loop = await dueLoop(db, {}, new Date(Date.now() - 6 * 60 * 60 * 1000));
+      const capture = captureSpy();
+      await loopScheduler.tick();
+      const [run] = await runsFor(db, loop.id);
+      await db.update(tasksTable).set({ status: 'completed' }).where(eq(tasksTable.id, run.taskId!));
+      await loopScheduler.tick();
+
+      const late = ranEvents(capture)[0]?.[2] as { late_ms: number };
+      expect(late.late_ms).toBeGreaterThan(5 * 60 * 60 * 1000);
+    });
+
+    it('says nothing while the run is merely in progress', async () => {
+      // `running` is progress, not an outcome; a firing must produce ONE event.
+      const loop = await dueLoop(db);
+      await loopScheduler.tick();
+      const [run] = await runsFor(db, loop.id);
+      await db.update(tasksTable).set({ status: 'in_progress' }).where(eq(tasksTable.id, run.taskId!));
+
+      const capture = captureSpy();
+      await loopScheduler.tick();
+
+      expect(ranEvents(capture)).toHaveLength(0);
+    });
+
+    it('says nothing for a run parked on the plan limit', async () => {
+      // Already reported as `paywall_deferred` by the dispatcher, which knows
+      // the limit and the plan. Reporting it twice would double-count refusals.
+      await dueLoop(db);
+      createTask.mockRejectedValueOnce(new TaskLimitError(3, 3));
+
+      const capture = captureSpy();
+      await loopScheduler.tick();
+
+      expect(ranEvents(capture)).toHaveLength(0);
+      expect(capture.mock.calls.some(([, e]) => e === 'paywall_deferred')).toBe(true);
+    });
+
+    it('emits once even when a second settlement races it', async () => {
+      // The UPDATE's `WHERE status IN (active)` is the guard: only one caller
+      // gets the row back, so only one emits. This is why the event lives in
+      // settleRun rather than at its call sites.
+      const loop = await dueLoop(db);
+      await loopScheduler.tick();
+      const [run] = await runsFor(db, loop.id);
+      await db.update(tasksTable).set({ status: 'completed' }).where(eq(tasksTable.id, run.taskId!));
+
+      const capture = captureSpy();
+      await Promise.all([loopScheduler.tick(), loopScheduler.tick()]);
+      await loopScheduler.tick();
+
+      expect(ranEvents(capture)).toHaveLength(1);
     });
   });
 

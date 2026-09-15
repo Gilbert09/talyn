@@ -11,6 +11,7 @@ import {
   type LoopRunTrigger,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
+import { captureWorkspaceEvent } from '../analytics.js';
 import { loopRuns as runsTable, loops as loopsTable, tasks as tasksTable } from '../../db/schema.js';
 
 /**
@@ -194,6 +195,7 @@ export interface SettleInput {
  */
 export async function settleRun(runId: string, input: SettleInput): Promise<boolean> {
   const terminal = input.status !== 'waiting_slot' && input.status !== 'queued' && input.status !== 'running';
+  const settledAt = new Date();
   const rows = await getDbClient()
     .update(runsTable)
     .set({
@@ -202,11 +204,85 @@ export async function settleRun(runId: string, input: SettleInput): Promise<bool
       error: input.error ?? null,
       ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
       retryAfter: input.retryAfter ?? null,
-      settledAt: terminal ? new Date() : null,
+      settledAt: terminal ? settledAt : null,
     })
     .where(and(eq(runsTable.id, runId), inArray(runsTable.status, ACTIVE_RUN_STATUSES)))
-    .returning({ id: runsTable.id });
+    // Everything `loop_ran` reports, returned by the statement that settles the
+    // run. The row already denormalises all of it at fire time, so the event
+    // costs no extra read — and reading it back separately would be a race
+    // against the next transition anyway.
+    .returning({
+      id: runsTable.id,
+      loopId: runsTable.loopId,
+      workspaceId: runsTable.workspaceId,
+      trigger: runsTable.trigger,
+      provider: runsTable.provider,
+      model: runsTable.model,
+      repoFullName: runsTable.repoFullName,
+      taskId: runsTable.taskId,
+      scheduledFor: runsTable.scheduledFor,
+      createdAt: runsTable.createdAt,
+      dispatchedAt: runsTable.dispatchedAt,
+    });
+  const row = rows[0];
+  if (row && terminal) captureLoopRan(row, input, settledAt);
   return rows.length > 0;
+}
+
+/**
+ * `loop_ran` — one event per firing, at the moment it settles.
+ *
+ * Emitted from HERE rather than from the scheduler because this UPDATE is the
+ * concurrency guard: its `WHERE status IN (ACTIVE_RUN_STATUSES)` means exactly
+ * one caller, on one replica, gets the row back. Capturing at the call sites
+ * instead would double-count every time two replicas raced a settlement.
+ *
+ * Terminal transitions only. `running` is progress rather than an outcome, and
+ * `waiting_slot` is the plan limit — already reported as `paywall_deferred` by
+ * the dispatcher, which knows the limit and the plan.
+ *
+ * The asymmetry this closes: workflows have emitted `workflow_ran` since they
+ * shipped, so loops were the one automation whose successes were invisible.
+ * The only loop event reaching PostHog was `paywall_deferred` — the failure —
+ * which made the feature look strictly worse than it is.
+ */
+function captureLoopRan(
+  row: {
+    id: string;
+    loopId: string;
+    workspaceId: string;
+    trigger: string;
+    provider: string;
+    model: string;
+    repoFullName: string;
+    taskId: string | null;
+    scheduledFor: Date;
+    createdAt: Date;
+    dispatchedAt: Date | null;
+  },
+  input: SettleInput,
+  settledAt: Date
+): void {
+  captureWorkspaceEvent(row.workspaceId, 'loop_ran', {
+    loop_id: row.loopId,
+    run_id: row.id,
+    status: input.status,
+    // `schedule` or `manual` — a "Run now" is not evidence the cron works.
+    trigger: row.trigger,
+    provider: row.provider,
+    model: row.model,
+    repo: row.repoFullName,
+    // False for a run that never got a task at all (dispatch refused or lost),
+    // which is the difference between "the agent failed" and "we never asked".
+    started_task: row.taskId !== null,
+    failure_code: input.failureCode ?? null,
+    // How long the agent ran. Null when it was never dispatched.
+    duration_ms: row.dispatchedAt ? settledAt.getTime() - row.dispatchedAt.getTime() : null,
+    // How late the firing was against the occurrence it was FOR. Small on a
+    // healthy sweep; large means catch-up after a deploy or an outage, which is
+    // the thing worth alerting on and cannot be seen from the count alone.
+    late_ms: row.createdAt.getTime() - row.scheduledFor.getTime(),
+  });
 }
 
 /**
