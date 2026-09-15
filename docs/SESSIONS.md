@@ -94,6 +94,15 @@ Talyn cannot read at all.
 
 4975 tests pass (3902 backend, 537 desktop, 350 web, 186 admin).
 
+**A deploy note worth keeping.** The backend deploy failed on the first attempt
+— `/health` "service unavailable", after 14 consecutive green deploys. That
+pattern reads exactly like "your commit broke boot", and it was not: the build
+was clean, requiring every changed module threw nothing, and a re-run of the
+*identical* SHA went green. `railway.toml` sets `healthcheckTimeout = 30`, and
+a cold boot occasionally does not bind inside it. Before suspecting the diff,
+re-run the deploy — the cutover is health-gated, so production keeps serving
+the old build either way and a re-run costs nothing but time.
+
 ## Session 131 — the 63-second fan-out, and a loop that waited for it (2026-09-14)
 
 Session 130 fixed the regression and the lag still would not move. The measured
