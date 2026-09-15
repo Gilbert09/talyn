@@ -42,6 +42,8 @@ export const metadata: Metadata = {
     "auto-merge",
     "PR automation",
     "GitHub workflow automation",
+    "scheduled AI agents",
+    "recurring developer tasks",
     "AI developer tools",
   ],
   openGraph: {

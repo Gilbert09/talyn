@@ -154,6 +154,20 @@ export const features = [
     flip: true,
   },
   {
+    id: "loops",
+    eyebrow: "Loops",
+    title: "Work that happens on a schedule, not on a trigger.",
+    body: "A loop is a prompt you want run again and again: sweep yesterday's failing checks every weekday morning, keep dependencies current every Monday, draft the release notes every Friday at five. Pick a repository, write the prompt, choose when \u2014 and an agent does it on its own, opening a pull request when the work warrants one.",
+    bullets: [
+      "Say when in plain terms: hourly, daily, weekdays, weekly \u2014 or a cron expression if you want one",
+      "Runs in your timezone, so 09:00 means 09:00 to you and stays that way across the clocks changing",
+      "Every run is logged with what it did, including the ones it skipped because the last was still going",
+      "Start one by hand any time, without waiting for its next turn",
+    ],
+    shot: "loops",
+    flip: false,
+  },
+  {
     id: "skills",
     eyebrow: "Skills",
     title: "Your playbooks, runnable on any PR.",
@@ -164,7 +178,7 @@ export const features = [
       "Output lands on the PR: a single review comment, or commits to the branch",
     ],
     shot: "skill-picker",
-    flip: false,
+    flip: true,
   },
   {
     id: "context",
@@ -177,7 +191,7 @@ export const features = [
       "Queue the ready ones straight to merge",
     ],
     shot: "pr-detail",
-    flip: true,
+    flip: false,
   },
 ];
 
@@ -225,6 +239,10 @@ export const why = {
       body: "Flag a PR keep-mergeable and Talyn re-fixes it the moment it falls behind or breaks.",
     },
     {
+      title: "Work that starts without you",
+      body: "Some work is not a reaction to anything \u2014 it just needs doing every morning. Write the prompt once, pick when, and Talyn runs it on a schedule with the app closed.",
+    },
+    {
       title: "Rules that run themselves",
       body: "Write a workflow once \u2014 when this happens on a PR, do this \u2014 and it fires on every matching pull request in your repos, yours or not, app open or not.",
     },
@@ -264,6 +282,7 @@ export const pricing = {
         "Skills, the merge queue & auto-keep-mergeable on any PR you flag",
         "Up to 3 tasks running and 3 PRs queued at once",
         "Up to 3 workflows \u2014 your rules, running on every PR they match",
+        "Up to 3 loops \u2014 your prompts, running on the schedule you set",
       ],
       cta: "Download for {platform}",
       highlighted: false,
@@ -280,6 +299,7 @@ export const pricing = {
         "Unlimited concurrent tasks",
         "Unlimited PRs in the merge queue",
         "Unlimited workflows, so every rule you want is a rule you can keep",
+        "Unlimited loops, so every job worth doing on a schedule can have one",
         "Keep every new PR green automatically, without flagging them one by one",
         "Automation never waits for a slot: merge queue and auto-keep always dispatch",
         "Cancel anytime, in-app",
@@ -312,6 +332,10 @@ export const faq = [
     a: "Rules you set up once that run on their own: when this happens on a pull request, do these things. Pick the trigger (opened, checks failed, review requested, approved, commented, merged), narrow it with conditions (this repo, this base branch, this label, this author), and pick the actions \u2014 add labels, request reviewers, post a comment, add it to your list, run a skill or a prompt, or send it to the merge queue. They watch every PR in the repos you connect, including ones you didn't open, and they keep running with the app closed. The free plan keeps 3; Unlimited keeps as many as you like.",
   },
   {
+    q: "What are loops?",
+    a: "Prompts that run on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when \u2014 hourly, daily, weekdays, weekly, or a cron expression \u2014 and an agent runs it on its own, opening a pull request when the work warrants one. Sweep yesterday's failing checks every weekday morning; keep dependencies current every Monday; draft the release notes every Friday at five. Schedules run in your own timezone and keep their time when the clocks change, every run is logged with what it did, and you can start one by hand without waiting for its next turn. The free plan keeps 3; Unlimited keeps as many as you like.",
+  },
+  {
     q: "How does auto-keep-mergeable work?",
     a: "Flag a PR and Talyn watches it. The moment it goes out of date, clashes with someone else's work, or a test starts failing, Talyn sends an agent to fix it. Once it's green again, the merge queue lands it in order. Flagging PRs one at a time is free; having every new PR flagged automatically is an Unlimited feature.",
   },
@@ -321,7 +345,7 @@ export const faq = [
   },
   {
     q: "What does it cost?",
-    a: "The free plan is the full app with up to 3 tasks running, 3 PRs in the merge queue and 3 workflows, plus auto-keep-mergeable on any PR you flag by hand. Unlimited removes all three caps and keeps every new PR you open mergeable automatically, for $15/month (or $150/year, 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
+    a: "The free plan is the full app with up to 3 tasks running, 3 PRs in the merge queue, 3 workflows and 3 loops, plus auto-keep-mergeable on any PR you flag by hand. Unlimited removes all four caps and keeps every new PR you open mergeable automatically, for $15/month (or $150/year, 2 months free), managed entirely in-app with cancel-anytime. Either way you bring your own cloud-agent credits: runs execute under the provider account you connect.",
   },
   {
     q: "What platforms are supported?",
@@ -350,6 +374,7 @@ export const footer = {
         { label: "How it works", href: "/#how" },
         { label: "Features", href: "/#features" },
         { label: "Workflows", href: "/#workflows" },
+        { label: "Loops", href: "/#loops" },
         { label: "Providers", href: "/#providers" },
         { label: "Pricing", href: "/#pricing" },
         { label: "Download", href: "/#download" },

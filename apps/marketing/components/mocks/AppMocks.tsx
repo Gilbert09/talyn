@@ -23,6 +23,7 @@ import {
   Sparkles,
   Wand2,
   Workflow,
+  Repeat,
   Plus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -108,6 +109,7 @@ function Sidebar({ active = "prs" }: { active?: string }) {
     { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 3 },
     { id: "tasks", label: "Tasks", icon: ListTodo, badge: 2 },
     { id: "workflows", label: "Workflows", icon: Workflow, badge: 3 },
+    { id: "loops", label: "Loops", icon: Repeat, badge: 3 },
   ];
   return (
     <div className="hidden w-48 shrink-0 flex-col border-r border-line bg-paper-100 sm:flex">
@@ -662,6 +664,119 @@ export function MockWorkflows(_props: MockProps) {
   );
 }
 
+/* ---------- loops (mirrors LoopsPanel) ---------- */
+
+// The columns are the ones the real row leads with: a loop's whole question is
+// "is this still happening", which needs both ends of the answer on screen.
+const loopRows = [
+  {
+    name: "Morning CI triage",
+    schedule: "Weekdays at 09:00 (Europe/London)",
+    repo: "sundial/api",
+    next: "in 3h",
+    last: "yesterday",
+    on: true,
+    runs7d: 5,
+  },
+  {
+    name: "Keep dependencies current",
+    schedule: "Every Monday at 08:00 (Europe/London)",
+    repo: "sundial/web",
+    next: "in 2d",
+    last: "6d ago",
+    on: true,
+    runs7d: 1,
+  },
+  {
+    name: "Draft the release notes",
+    schedule: "Every Friday at 17:00 (Europe/London)",
+    repo: "sundial/api",
+    next: "in 4d",
+    last: "3d ago",
+    on: true,
+    runs7d: 1,
+  },
+  {
+    name: "Sweep stale branches",
+    schedule: "Every day at 02:00 (Europe/London)",
+    repo: "sundial/infra",
+    next: "paused",
+    last: "2w ago",
+    on: false,
+    runs7d: 0,
+  },
+];
+
+export function MockLoops(_props: MockProps) {
+  return (
+    <div className="flex h-[360px] bg-white text-left">
+      <Sidebar active="loops" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+          <Repeat className="h-4 w-4 text-clay" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-ink">Loops</p>
+            <p className="truncate text-[10px] text-ink-400">
+              Runs a prompt on a schedule, whether or not the app is open
+            </p>
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-lg bg-clay px-2.5 py-1 text-[10px] font-semibold text-white">
+            <Plus className="h-3 w-3" /> New loop
+          </span>
+        </div>
+
+        <div className="space-y-2 p-3">
+          {loopRows.map((l) => (
+            <div key={l.name} className="rounded-lg border border-line px-3 py-2.5">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink">
+                    {l.name}
+                    {!l.on && (
+                      <span className="rounded border border-line px-1 py-px text-[8px] uppercase tracking-wide text-ink-400">
+                        Off
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-ink-400">
+                    {l.schedule} &middot; {l.repo}
+                  </p>
+                </div>
+                <div className="hidden items-start gap-3 sm:flex">
+                  <span className="text-right">
+                    <span className="block text-[11px] font-medium text-ink">{l.next}</span>
+                    <span className="block text-[9px] text-ink-400">next run</span>
+                  </span>
+                  <span className="text-right">
+                    <span className="block text-[11px] font-medium text-ink">{l.last}</span>
+                    <span className="block text-[9px] text-ink-400">last run</span>
+                  </span>
+                  <span className="text-right">
+                    <span className="block text-[11px] font-medium tabular-nums text-ink">
+                      {l.runs7d}
+                    </span>
+                    <span className="block text-[9px] text-ink-400">7d</span>
+                  </span>
+                </div>
+                <span
+                  className={cn(
+                    "rounded-md border px-2 py-0.5 text-[10px] font-medium",
+                    l.on
+                      ? "border-status-green/30 bg-status-green/10 text-status-green"
+                      : "border-line bg-paper-200 text-ink-400"
+                  )}
+                >
+                  {l.on ? "On" : "Off"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const MOCKS = {
   dashboard: MockDashboard,
   "task-running": MockTaskRunning,
@@ -669,6 +784,7 @@ export const MOCKS = {
   "pr-detail": MockPrDetail,
   "skill-picker": MockSkillPicker,
   workflows: MockWorkflows,
+  loops: MockLoops,
   onboarding: MockOnboarding,
 } as const;
 
