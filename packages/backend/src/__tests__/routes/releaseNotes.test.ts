@@ -104,11 +104,14 @@ describe('routes/release-notes', () => {
   it('records a gated highlight but never serves it', async () => {
     // The regression this whole path exists for: Loops shipped, the notes
     // announced it, and most users could not open the page it pointed at.
+    // `fleet` carries the assertion now that Loops has gone general — the
+    // exemplar has to be a feature the register still gates, or the test
+    // passes for the wrong reason.
     expect(
       (
         await publish('0.2.61', [
           highlight({ title: 'Ungated' }),
-          highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' }),
+          highlight({ title: 'Runs on our own hardware', requiresFeature: 'fleet' }),
         ])
       ).status
     ).toBe(201);
@@ -117,8 +120,8 @@ describe('routes/release-notes', () => {
     const entries = body.data as ReleaseNoteEntry[];
     expect(entries[0].highlights.map((h) => h.title)).toEqual(['Ungated']);
     // Only the KEY travels. The withheld title and description stay server-side.
-    expect(entries[0].gatedFeatures).toContain('loops');
-    expect(JSON.stringify(body)).not.toContain('Run a prompt on a schedule');
+    expect(entries[0].gatedFeatures).toContain('fleet');
+    expect(JSON.stringify(body)).not.toContain('Runs on our own hardware');
   });
 
   it('rejects a highlight tagged with a gate the register does not know', async () => {
