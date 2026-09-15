@@ -241,11 +241,17 @@ their break-glass env vars and their per-flag fallbacks — is
 `packages/backend/src/services/featureFlags.ts`. Nothing gates on `process.env`
 at the call site.
 
-| Flag (PostHog key) | Gates | Break glass | Fallback |
-|---|---|---|---|
-| `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** |
-| `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** |
-| `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** |
+| Flag (PostHog key) | Gates | Break glass | Fallback | Availability |
+|---|---|---|---|---|
+| `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** | general |
+| `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
+| `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | **gated** |
+
+`availability` is a separate question from `fallback`: it says whether the
+"What's new" modal may describe the feature yet. `general` does NOT mean
+everybody has it — the PostHog audience still decides that. It means the notes
+may talk about it, so a flag can be `general` while its rollout is still a
+percentage. Flipping it replays the withheld backlog to everyone who missed it.
 
 **The fallbacks are deliberately opposite, and they are per flag.** The fallback
 is the answer when PostHog is not configured, is unreachable, or has never heard

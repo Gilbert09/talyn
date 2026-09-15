@@ -149,7 +149,7 @@ export const FEATURE_FLAGS = {
     envOverride: 'LOOPS_ENABLED',
     fallback: false,
     description: 'Loops — recurring prompts on a cron schedule',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['loops'],
   },
 

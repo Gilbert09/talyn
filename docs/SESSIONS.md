@@ -2,6 +2,40 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 133 — Loops goes general, the fleet does not (2026-09-15)
+
+One edit, as designed. `availability: 'gated'` → `'general'` on the `loops`
+entry, and the PostHog flag's email condition replaced by an empty property
+list at 100%. Session 124's mechanism did the rest: the withheld backlog of
+Loops highlights replays to everyone who missed it, rather than a human having
+to remember which releases to re-announce.
+
+**Talyn Fleet stayed gated, and the architecture already kept them apart.** A
+non-fleet user opening the Loops editor sees only PostHog Code, because the
+agent picker is built from `GET /cloud-providers`, which filters by
+`workspaceMayUseFleet`; the internet-access switch renders only for
+`provider === 'selfhosted'`. Verified against a real third-party person rather
+than reasoned about: `loops` evaluates true, `talyn-fleet` false.
+
+**A near miss worth recording.** The MCP session's active project had reset to
+PostHog's own project 2, where there is an unrelated flag also called `loops` —
+"Enable the loops feature on the MCP and in the Desktop app", owned by other
+people, targeting the PostHog organisation. Reading it back before writing is
+what caught it. A key lookup is not an identity: check the project and the
+numeric id (`884792`, project `459813`) before any flag write.
+
+The test suite had used `loops` as its exemplar of a gated feature throughout,
+so `fleet` inherited that role — the same move the suite made for `workflows`
+before it. Those assertions are the ones that fail loudly when a feature is
+released, which is the point of writing them against the register.
+
+**Known imperfection, stated rather than hidden.** The generator stamps every
+highlight from a scope-grouped call with that scope's gate, so
+`feat(loops): let a loop reach the internet` is tagged `loops` — but the switch
+it describes is fleet-only. Releasing Loops therefore announces one capability
+that most users cannot see. The row is already published under v0.2.83; fixing
+it means re-tagging that stored highlight to `fleet`, which needs a write to
+the release_notes row rather than a code change.
 ## Session 132 — a refusal is not a failure (2026-09-14)
 
 Tom asked why task `ae66b426` came back failed. It had not failed. The agent

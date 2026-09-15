@@ -162,7 +162,10 @@ describe('shared/releaseNotes — commit filtering', () => {
     ]);
     expect(kept.map((c) => [c.scope, c.gate])).toEqual([
       ['fleet', 'fleet'],
-      ['loops', 'loops'],
+      // Loops went general, so its scope stopped gating — the same transition
+      // `workflows` made before it, and the reason this list is derived from
+      // the register rather than written down here.
+      ['loops', null],
       ['desktop', null],
     ]);
   });
@@ -171,9 +174,10 @@ describe('shared/releaseNotes — commit filtering', () => {
     // The predecessor was a literal array of scopes in releaseNotes.ts. It said
     // ['fleet'] on the day Loops shipped, which is the entire bug: the register
     // knew Loops was gated and the notes had their own opinion.
-    expect(gateForScope('loops')).toBe('loops');
     expect(gateForScope('fleet')).toBe('fleet');
-    expect(gateForScope('LOOPS')).toBe('loops');
+    expect(gateForScope('FLEET')).toBe('fleet');
+    // Loops is general now; its scope answers null like any other.
+    expect(gateForScope('loops')).toBeNull();
     expect(gateForScope('desktop')).toBeNull();
     expect(gateForScope(null)).toBeNull();
     // Gated and internal are opposite kinds of invisible and must not overlap:
@@ -184,12 +188,15 @@ describe('shared/releaseNotes — commit filtering', () => {
   });
 
   it('stops tagging a feature once it is generally available', () => {
-    // `workflows` is in the register with availability 'general', so its scope
-    // no longer gates. Were it still tagged, the release that announced PR
-    // automation to everybody would have withheld itself.
+    // `workflows` and now `loops` are in the register with availability
+    // 'general', so their scopes no longer gate. Were either still tagged, the
+    // release that announced it to everybody would have withheld itself.
     expect(gateForScope('workflows')).toBeNull();
     expect(isGatedFeature('workflows')).toBe(false);
-    expect(isGatedFeature('loops')).toBe(true);
+    expect(gateForScope('loops')).toBeNull();
+    expect(isGatedFeature('loops')).toBe(false);
+    // `fleet` is the one still gated, and carries the assertion loops used to.
+    expect(isGatedFeature('fleet')).toBe(true);
     // An unknown key — a flag deleted from the register — is not gated. That
     // is the second way to release a feature, and it has to replay too.
     expect(isGatedFeature('a-flag-we-deleted')).toBe(false);
@@ -599,7 +606,7 @@ describe('services/releaseNotes — storage', () => {
     // thrown the text away and left nothing to announce.
     await publish('0.2.61', 30, [
       highlight({ title: 'Ungated' }),
-      highlight({ title: 'Run a prompt on a schedule', requiresFeature: 'loops' }),
+      highlight({ title: 'Runs on our own hardware', requiresFeature: 'fleet' }),
       highlight({ title: 'Already released', requiresFeature: 'workflows' }),
       highlight({ title: 'Flag since deleted', requiresFeature: 'a-flag-we-deleted' }),
     ]);
@@ -609,14 +616,17 @@ describe('services/releaseNotes — storage', () => {
       'Already released',
       'Flag since deleted',
     ]);
-    expect(row.gatedFeatures).toContain('loops');
+    expect(row.gatedFeatures).toContain('fleet');
     expect(row.gatedFeatures).not.toContain('workflows');
+    // Loops released, so its rows stop being withheld — the replay this whole
+    // mechanism exists for.
+    expect(row.gatedFeatures).not.toContain('loops');
   });
 
   it('withholds on the baseline read too', async () => {
     // `latest()` is the other read path — a brand-new client's baseline — and
     // it has to withhold too, or the leak just moves one endpoint over.
-    await publish('0.2.61', 30, [highlight({ title: 'Gated', requiresFeature: 'loops' })]);
+    await publish('0.2.61', 30, [highlight({ title: 'Gated', requiresFeature: 'fleet' })]);
     expect((await latestReleaseNote())?.highlights).toEqual([]);
   });
 
