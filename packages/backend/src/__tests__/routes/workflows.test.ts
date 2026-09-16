@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
+import type { Features } from '@talyn/shared';
 import type { WorkflowWithStats } from '@talyn/shared';
 import { workflowRoutes } from '../../routes/workflows.js';
 import { featureRoutes } from '../../routes/features.js';
@@ -217,11 +218,14 @@ describe('workflow routes', () => {
   describe('GET /features', () => {
     it('answers true for an allow-listed caller', async () => {
       const res = await fetch(`${url}/api/v1/features`, { headers });
-      // `loops` rides along because it is account-scoped too, and it is false
-      // here: its flag fails CLOSED, the opposite of this one.
-      expect(((await res.json()) as { data: { workflows: boolean } }).data).toEqual({
+      // `loops` and `mcpServers` ride along because they are account-scoped
+      // too, and both are false here: their flags fail CLOSED, the opposite of
+      // this one. Asserted as a whole object rather than one key, so a flag
+      // that stops being answered is a failure rather than a silent absence.
+      expect(((await res.json()) as { data: Features }).data).toEqual({
         workflows: true,
         loops: false,
+        mcpServers: false,
       });
     });
 
@@ -232,9 +236,13 @@ describe('workflow routes', () => {
       process.env.WORKFLOWS_ENABLED = 'false';
       const res = await fetch(`${url}/api/v1/features`, { headers });
       expect(res.status).toBe(200);
-      expect(((await res.json()) as { data: { workflows: boolean } }).data).toEqual({
+      // Every account flag, because this asserts the SHAPE as well as the
+      // value: a client that draws a nav item off a key this answer stopped
+      // carrying would draw nothing and say nothing.
+      expect(((await res.json()) as { data: Features }).data).toEqual({
         workflows: false,
         loops: false,
+        mcpServers: false,
       });
     });
   });

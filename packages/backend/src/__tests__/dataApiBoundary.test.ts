@@ -132,6 +132,9 @@ describe('Data API database boundary', () => {
       users: crud, workspaces: crud, environments: crud, repositories: crud,
       integrations: crud, tasks: crud, pull_requests: crud, mcp_tokens: crud,
       skills: crud, skill_usage: crud, merge_queue_entries: crud, workflows: crud, loops: crud,
+      // mcp_servers holds an encrypted credential per row, so its grant is the
+      // one in here most worth having to add on purpose.
+      mcp_servers: crud,
       merge_queue_events: ['INSERT', 'SELECT'],
       posthog_oauth_states: ['DELETE', 'INSERT', 'SELECT'],
       release_notes: ['SELECT'],
