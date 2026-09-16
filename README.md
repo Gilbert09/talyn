@@ -1,127 +1,201 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/icon-liquid-glass-dark.png">
+  <img src="docs/assets/icon-liquid-glass-light.png" alt="Talyn" width="128">
+</picture>
+
 # Talyn
 
-**Mission control for your GitHub PRs, powered by cloud coding agents.**
+### Wake up to green PRs.
 
-Talyn is a desktop app that tracks your open and review-requested pull requests, surfaces the ones that need attention (new reviews, comments, CI failures, merge conflicts), and lets you hand the routine work — fixing failing CI, addressing review comments, drafting a review — to **cloud coding agents** that run on their own sandbox and open a PR for you. Flag a PR and Talyn keeps it mergeable on its own, firing a cloud fix run whenever it falls behind or goes red.
+**Mission control for your GitHub pull requests, powered by cloud coding agents.**
 
-If you live in GitHub PRs and want to delegate the rote drudgery without babysitting a local agent, Talyn is for you.
+Half your pull requests are failing, out of date, or waiting on someone. Talyn puts them all in
+one list, worst first, and sends an AI coding agent to fix them — the failing tests, the merge
+conflicts, the review comments. Trust it with a PR and it merges that PR itself, the moment it is
+ready. Overnight included.
 
-**→ Download the app at [talyn.dev](https://talyn.dev)** (macOS, Apple silicon). The rest of this README is for working on Talyn itself.
+Agents run on the **Claude or ChatGPT subscription you already pay for** — no second token bill.
 
----
+[**Download**](https://talyn.dev) · [**Open in browser**](https://app.talyn.dev) · [**talyn.dev**](https://talyn.dev) · [**Docs**](./docs)
 
-## Why Talyn
+[![Latest release](https://img.shields.io/github/v/release/Gilbert09/talyn?label=release&color=7c3aed)](https://github.com/Gilbert09/talyn/releases/latest)
+[![CI](https://github.com/Gilbert09/talyn/actions/workflows/test.yml/badge.svg)](https://github.com/Gilbert09/talyn/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Web-lightgrey)
 
-Keeping on top of your PRs today means:
-
-- Refreshing GitHub to see which PRs got a review, a comment, or a red check
-- Context-switching back into a branch just to push a one-line CI fix
-- Manually kicking off an agent, then watching it, then opening the PR yourself
-
-Talyn consolidates that:
-
-- **A live PR dashboard.** Every watched repo's PRs with a check-rollup status pill, review status, and a detail sheet (summary / checks / files / conversation). Needs-attention / Mine / Review buckets keep the list triaged, stacked PRs group under their parent, and you merge straight from the app. Updates arrive webhook-first, so the dashboard tracks GitHub in near-real-time.
-- **Delegate to a cloud agent.** From a PR row ("fix this PR") or as a freeform task on a repo, Talyn hands the prompt to a cloud provider. The provider runs the whole agent loop on its own sandbox and opens a PR; Talyn streams the transcript back and links the resulting PR.
-- **Self-fixing PRs.** Queue a PR for merge or flag it *keep mergeable*, and Talyn watches it: when it falls behind, hits a conflict, or fails CI, it automatically dispatches a cloud fix run — and the merge queue lands it once it's green (re-running flaky checks and updating the branch itself where GitHub allows).
-- **Run skills on a PR.** Point an agent skill (a `SKILL.md`) at any PR — discovered from the PR's repo (`.claude/skills/`), your machine (`~/.claude/skills`), or skills saved to your Talyn workspace.
-
-Nothing runs on your machine — no CLI to install, no sandbox to babysit. The agent runs in the cloud.
+</div>
 
 ---
 
-## Expected workflow
+## The problem
 
-1. **Open Talyn.** The GitHub panel's needs-attention bucket shows what came in — a review on one of your PRs, a failing check on another, a PR that's now mergeable.
-2. **Triage the dashboard.** Your PRs are listed with live status pills. Open one to see checks, the diff, and the conversation. Merge the ready ones.
-3. **Delegate the rest.** On a PR that needs work, kick off a cloud task (fix CI / address review), queue it for merge, or flag it keep-mergeable and let the auto-fix loop handle future breakage. Or compose a freeform task: pick a repo, write a prompt.
-4. **Watch it run.** Click an in-progress task to see the streamed transcript. When the provider opens a PR, Talyn links it onto the task and the GitHub dashboard.
-5. **Review on GitHub.** The agent's work lands as a normal PR — review and merge it like any other.
+AI writes the change in minutes. Landing it still takes all afternoon.
 
----
+- **The refresh loop.** Ten GitHub tabs, hunting for the PR that just broke, got a comment, or went out of date.
+- **One-line fixes, all afternoon.** A trivial fix still means pulling the branch, re-running everything, pushing, waiting.
+- **It was fine on Tuesday.** You approved it Tuesday. It is Thursday, the project moved on, and now it conflicts.
+- **Watching the robot work.** You start an agent, then sit and read its output so you can press merge yourself.
 
-## Cloud providers
+Talyn closes that loop. You pick the PR; the agent does the work; the merge queue lands it.
 
-Talyn delegates work through a pluggable **cloud task provider** interface (`packages/backend/src/services/cloudProviders/`). A provider runs the agent loop on its own sandbox and opens a PR; Talyn creates the remote run, polls its status, and ingests the transcript.
+## What Talyn does
 
-Two providers are live — bring your own credentials for either (or both):
+### 📊 Every PR, triaged — no tabs required
 
-- **PostHog Code** — connect a PostHog personal API key + project id in **Settings → Integrations**.
-- **Claude Code** (Anthropic Managed Agents) — connect an Anthropic API key; the agent reuses the workspace's GitHub connection.
+A live dashboard sorts your work into **Needs attention**, **Mine**, and **Review**, so the pull
+request that actually blocks you is always on top. Check rollups, review state, stacked PRs grouped
+under their parent, and a detail sheet with the diff, the checks, and the conversation. Updates
+arrive webhook-first, so it tracks GitHub in near real time.
 
-A per-workspace default (or "Ask every time" picker) decides which provider each task goes to. **OpenAI Codex Cloud** is deferred — OpenAI exposes no server-to-server cloud-task API yet. See [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
+### 🤖 Delegate to a cloud agent
 
----
+Point Talyn at a broken or stale PR and it hands the job to a cloud coding agent. The agent runs the
+whole loop in its **own** sandbox — nothing runs on your machine, no CLI to install — and pushes the
+fix back. You watch the transcript stream in live, and what comes back is green checks.
+
+### 🔀 A merge queue that lands PRs for you
+
+Flag a PR **keep-mergeable** and Talyn watches it: the moment it falls behind `main`, hits a
+conflict, or goes red, a fix run dispatches automatically. The merge queue then lands your PRs in
+order the second they are green — rebasing, clearing conflicts, and re-running flaky checks on the
+way in — and drains independent PRs concurrently so one slow branch never holds up the rest.
+
+### ⚡ Workflows — write the rule once, it runs on every PR
+
+*When this happens on a pull request, do these things.* Trigger on opened, checks failed, review
+requested, approved, commented, or merged. Narrow it by repo, base branch, label, author, or draft
+state. Then act: add labels, request reviewers, post a comment, run a skill or a prompt, or send it
+straight to the merge queue. Workflows watch **every** PR in your connected repos — including the
+ones you did not open — and they run whether or not the app is open.
+
+### 🔁 Loops — work that happens on a schedule
+
+A prompt you want run again and again: sweep yesterday's failing checks every weekday morning, keep
+dependencies current every Monday, draft the release notes every Friday at five. Pick a repository,
+write the prompt, choose when — hourly, daily, weekdays, weekly, or a cron expression — and an agent
+does it on its own, opening a pull request when the work warrants one. Schedules run in your own
+timezone and hold their time across daylight-saving changes.
+
+### 🪄 Skills — your playbooks, runnable on any PR
+
+Reusable agent playbooks in the standard `SKILL.md` format: a security sweep, your team's review
+checklist, a changelog writer. Talyn discovers them wherever they already live — committed to the
+repo (`.claude/skills/`), on your machine (`~/.claude/skills`), or saved to your workspace. Pick one
+on any PR and an agent runs it, posting the review or pushing the fix.
 
 ## Getting started
 
-Clone and install (monorepo — npm workspaces):
+1. **Get Talyn.** [Download the desktop app](https://talyn.dev) — macOS (Apple silicon and Intel),
+   Windows, and Linux — or [open it in your browser](https://app.talyn.dev) with nothing to install.
+   Same product, same account; your workspaces follow you between them.
+2. **Connect GitHub.** Sign in and install the Talyn GitHub App on the repos you work in. Your pull
+   requests appear right away.
+3. **Connect an agent** when you send your first fix — not before. Sign in with Claude or ChatGPT
+   to run on your own subscription, or connect PostHog Code.
+4. **Delegate.** Hit *fix this PR*, run a skill, queue it for merge, or write a workflow or loop and
+   stop deciding each time.
+
+> The desktop app adds two things a browser cannot: it reads skills from `~/.claude/skills` on your
+> machine, and it keeps your session in the OS keychain.
+
+## Runs on the plan you already pay for
+
+Talyn conducts the coding agents you already trust rather than replacing them. Every provider sits
+behind one `CloudTaskProvider` interface, so you connect the one you pay for and switch per task.
+
+### Talyn Fleet — the default
+
+Sign in with **Claude** or **ChatGPT** and your tasks run on that subscription. No API bill on top,
+no metered credits. Each task gets its own Firecracker microVM on our hardware, and your credentials
+are attached by a proxy *outside* the machine, so no token is ever inside the VM running the code.
+The VM is destroyed when the task ends.
+
+### PostHog Code
+
+Already at PostHog? Connect a personal API key and project id in **Settings → Integrations** and it
+powers the lot — fixes, conflicts, and review replies, end to end. Runs happen in PostHog's cloud,
+under your account.
+
+More providers are on the way; each is a self-contained module behind the same interface. See
+[`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
+
+## Pricing
+
+**Free** — the whole dashboard, every repo, all providers, skills, and the merge queue, with up to
+3 tasks running, 3 PRs queued, 3 workflows, and 3 loops at a time.
+
+**Unlimited — $15/month** (or $150/year) — removes all four caps, keeps every new PR green
+automatically, and never makes automation wait for a slot. Cancel any time, in app.
+
+Either plan, you bring your own agent: runs execute on the subscription or provider account you
+connect, not on Talyn's. Full details at [talyn.dev](https://talyn.dev/#pricing).
+
+---
+
+## Development
+
+Talyn is an npm-workspaces monorepo. **Node.js ≥ 18** (22 recommended).
 
 ```bash
 git clone git@github.com:Gilbert09/talyn.git
 cd talyn
 npm install
+npm run dev          # backend + Electron desktop shell, hot reload
 ```
 
-Run the app (starts the backend and the Electron desktop shell in parallel):
+The backend listens on `localhost:4747`. See [`docs/SETUP.md`](./docs/SETUP.md) for environment and
+account setup (Supabase auth, database, GitHub App).
 
-```bash
-npm run dev
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Backend + desktop in dev mode with hot reload |
+| `npm run dev:backend` / `dev:desktop` / `dev:web` / `dev:admin` | A single surface |
+| `npm run dev:db` | Local Supabase stack (never point dev at production) |
+| `npm run build` | Build shared → backend → desktop, in order |
+| `npm run typecheck` | Strict type-check of every package, no emit |
+| `npm run lint` | Lint every workspace with a `lint` script |
+| `npm test` | Run every workspace `test` script |
+| `npm run package` | Package the desktop app for the local platform |
+
+### Layout
+
+```
+apps/desktop      Electron + React 19 + Tailwind + shadcn/ui
+apps/web          app.talyn.dev — the browser app (Vite + React 19)
+apps/admin        admin.talyn.dev — operator console
+apps/marketing    talyn.dev — the marketing site (Next.js)
+packages/backend  Express + WebSocket + Postgres (Drizzle); webhooks, merge queue, providers
+packages/client   The single definition of the backend contract, shared by every front end
+packages/cli      The `talyn` CLI
+packages/mcp-server  stdio MCP surface for agents
+packages/shared   Shared TypeScript types
 ```
 
-The backend listens on `localhost:4747`. See [`docs/SETUP.md`](./docs/SETUP.md) for environment/account setup (Supabase auth, hosted backend, database).
+### Docs
 
-### Requirements
+| Document | What is in it |
+| --- | --- |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | System diagram, tech stack, key decisions |
+| [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) | The cloud task provider abstraction |
+| [`docs/SETUP.md`](./docs/SETUP.md) | Environment variables and account setup |
+| [`docs/TESTING.md`](./docs/TESTING.md) | Testing strategy and coverage |
+| [`docs/ROADMAP.md`](./docs/ROADMAP.md) | Phased TODO, backlog, known gaps |
+| [`claude.md`](./claude.md) | Orientation for coding agents working on Talyn |
 
-- Node.js ≥ 18 (22 recommended)
-- A GitHub account (Talyn connects via a GitHub App installation)
-- A cloud provider credential (a PostHog Code API key or an Anthropic API key) to actually run tasks
+Contributions are welcome — see [`CONTRIBUTING.md`](./CONTRIBUTING.md) and our
+[Code of Conduct](./CODE_OF_CONDUCT.md). To report a vulnerability, see
+[`SECURITY.md`](./SECURITY.md).
 
-### Integrations
+## Status
 
-Configured from **Settings → Integrations** inside the app (the onboarding wizard walks through the same steps):
-
-- **GitHub**: installs the Talyn GitHub App on your account/org — enables webhook-driven PR monitoring, the PR dashboard, merging, and PR review/response tasks.
-- **PostHog Code**: a personal API key + project id — enables cloud task delegation.
-- **Claude Code**: an Anthropic API key — same, via Anthropic's Managed Agents.
-
----
-
-## Architecture at a glance
-
-- **`apps/desktop/`** — Electron + React 19 + Tailwind + shadcn/ui. Talks to the backend over HTTP + WebSocket; renders the PR dashboard and cloud task transcripts.
-- **`packages/backend/`** — TypeScript + Express + Postgres (Drizzle). Ingests GitHub webhooks (with polling reconciliation as the safety net), caches PRs, runs the merge queue + auto-keep-mergeable watcher, and delegates tasks to cloud providers via the `CloudTaskProvider` registry + poller.
-- **`packages/cli/`**, **`packages/mcp-server/`** — thin `talyn` CLI + stdio MCP surface for tasks.
-- **`packages/shared/`** — shared TypeScript types.
-
-See [`CLAUDE.md`](./CLAUDE.md) and [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full treatment.
-
----
-
-## Commands
-
-| Command                 | What it does                                                    |
-| ----------------------- | --------------------------------------------------------------- |
-| `npm run dev`           | Run backend + desktop in dev mode with hot reload.              |
-| `npm run dev:backend`   | Backend only (watches `packages/backend`).                      |
-| `npm run dev:desktop`   | Desktop only.                                                   |
-| `npm run build`         | Build shared → backend → desktop in order.                      |
-| `npm run lint`          | Lint all workspaces that have a `lint` script.                  |
-| `npm run typecheck`     | Strict TypeScript type-check of all packages (no emit).         |
-| `npm test`              | Run all workspace `test` scripts.                               |
-| `npm run package`       | Package the desktop app for the local platform.                 |
-
----
-
-## Project status
-
-Talyn is under active development. See [`CLAUDE.md`](./CLAUDE.md) for orientation and active priorities, [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) for the provider abstraction + roadmap, and [`docs/SESSIONS.md`](./docs/SESSIONS.md) for recent session notes.
-
-Shipped: GitHub App connection with webhook-first PR monitoring, the PR dashboard (status pills, stacked PRs, detail sheet, merge), merge queue + auto-keep-mergeable self-fix runs (including flaky-check re-runs and branch updates), two cloud providers behind the `CloudTaskProvider` abstraction (PostHog Code + Claude Code) with a per-task provider picker, agent skills on PRs, live transcript streaming, PR linking, OS notifications, signed + notarized macOS builds with auto-update.
-
-In flight: additional providers as server-side APIs appear (Codex Cloud is deferred — no server-to-server API), desktop test coverage, invite-based access.
-
----
+Talyn is in **public beta** and under active development. Shipped: webhook-first PR monitoring, the
+PR dashboard, the merge queue and auto-keep-mergeable self-fix runs, cloud task delegation behind a
+pluggable provider abstraction with two live providers (Talyn Fleet and PostHog Code), workflows,
+loops, skills on PRs, live transcript streaming, and signed and notarized macOS builds with
+auto-update.
 
 ## License
 
-MIT © Talyn contributors.
+[MIT](./LICENSE).

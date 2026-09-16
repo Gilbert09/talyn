@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Talyn website
+    url: https://talyn.dev
+    about: Downloads, features, and pricing.
+  - name: Documentation
+    url: https://github.com/Gilbert09/talyn/tree/main/docs
+    about: Architecture, setup, cloud providers, and testing.
+  - name: Report a security vulnerability
+    url: https://github.com/Gilbert09/talyn/security/advisories/new
+    about: Please report vulnerabilities privately, not as a public issue.

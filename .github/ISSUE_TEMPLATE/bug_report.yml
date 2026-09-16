@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Talyn is not working the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report this. A clear repro is the fastest route to a fix.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the GitHub panel
+        2. Click "fix this PR" on a failing PR
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did you hit this?
+      options:
+        - Desktop app (macOS)
+        - Desktop app (Windows)
+        - Desktop app (Linux)
+        - Web app (app.talyn.dev)
+        - Running from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Talyn version
+      description: Settings → About, or the release you downloaded.
+      placeholder: "0.2.88"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Which agent provider was involved?
+      options:
+        - Talyn Fleet (Claude)
+        - Talyn Fleet (Codex / ChatGPT)
+        - PostHog Code
+        - Not provider related / not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Anything from the transcript, the console, or a screenshot. Please redact tokens.
+      render: shell
+    validations:
+      required: false
