@@ -482,7 +482,7 @@ export function useGitHubActions() {
   // Connect GitHub for the workspace via the GitHub App install flow.
   const connect = useCallback(async () => {
     if (!currentWorkspaceId) return;
-    trackEvent('github_connect_started');
+    trackEvent('github_connect_started', { source: 'panel' });
     // Shared helper: opens a separate tab (claimed synchronously, before the
     // fetch spends user activation) so this page survives — see
     // lib/githubInstall.

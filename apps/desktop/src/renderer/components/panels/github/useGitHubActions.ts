@@ -482,7 +482,7 @@ export function useGitHubActions() {
   const connect = useCallback(async () => {
     if (!currentWorkspaceId) return;
     const { installUrl } = await api.github.installViaApp(currentWorkspaceId);
-    trackEvent('github_connect_started');
+    trackEvent('github_connect_started', { source: 'panel' });
     if (window.electron?.auth?.openExternal) {
       await window.electron.auth.openExternal(installUrl);
     } else {

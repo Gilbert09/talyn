@@ -83,6 +83,27 @@ describe('OnboardingWizard', () => {
   });
 });
 
+describe('the activation funnel is fed by the step new users actually take', () => {
+  it('reports github_connect_started from onboarding, tagged as such', async () => {
+    const { trackEvent } = await import('../lib/analytics');
+    const { useWorkspaceStore } = await import('../stores/workspace');
+    useWorkspaceStore.setState({ currentWorkspaceId: 'ws1' });
+    vi.stubGlobal('open', vi.fn().mockReturnValue({ closed: false, location: { href: '' } }));
+
+    render(<OnboardingWizard />);
+    const connect = await screen.findByRole('button', { name: /^connect$/i });
+    fireEvent.click(connect);
+
+    // The panel's connect button reported this and onboarding did not, so the
+    // one step every new account takes fired nothing and the funnel read a
+    // total drop-off while the product worked.
+    await waitFor(() =>
+      expect(trackEvent).toHaveBeenCalledWith('github_connect_started', { source: 'onboarding' })
+    );
+    vi.unstubAllGlobals();
+  });
+});
+
 /**
  * The source survey. It is the only acquisition signal the DESKTOP build can
  * have — a browser cookie cannot reach an Electron renderer — so what matters

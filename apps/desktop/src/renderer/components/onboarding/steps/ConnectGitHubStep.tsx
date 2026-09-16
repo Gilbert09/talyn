@@ -5,6 +5,7 @@ import { Badge } from '../../ui/badge';
 import { type GitHubStatus, type GitHubUser } from '../../../lib/api';
 import { useGithubInstallations } from '../../../hooks/useGithubInstallations';
 import { openGithubAppFlow } from '../../../lib/githubInstall';
+import { trackEvent } from '../../../lib/analytics';
 import { GithubInstallStatus } from '../../widgets/GithubInstallStatus';
 
 interface ConnectGitHubStepProps {
@@ -34,6 +35,12 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
     setConnecting(true);
     setError(null);
     try {
+      // The GitHub panel's connect button reported this and onboarding did
+      // not, so the one step every new account takes was the one step that
+      // fired nothing. The activation funnel reads
+      // signup → github_connect_started → onboarding_completed, and it would
+      // have shown a total drop-off here forever while the product worked.
+      trackEvent('github_connect_started', { source: 'onboarding' });
       await openGithubAppFlow(workspaceId, 'connect');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start the GitHub App install');
