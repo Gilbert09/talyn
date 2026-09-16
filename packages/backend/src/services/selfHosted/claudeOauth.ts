@@ -55,25 +55,36 @@ export const CLAUDE_AUTHORIZE_URL = 'https://platform.claude.com/oauth/authorize
 export const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 /**
- * What we ask for, and deliberately LESS than Claude Code asks for.
+ * Exactly the scopes Claude Code documents for a SUBSCRIPTION login.
  *
- * Claude Code's own authorize leg includes `org:create_api_key`, and yas copied
- * it — so the consent screen told a Talyn user their account would be used to
- * "Generate API keys on your behalf". That is a real power, and Talyn never
- * uses it: `claude setup-token` wants it to mint a long-lived key, while we
- * hold the subscription token and call inference with it directly. Asking for a
- * permission we do not exercise is the kind of thing a careful user declines,
- * and they would be right to.
+ * Not a guess, and not a superset. Claude Code's own CLI prints this list when
+ * `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` is set without scopes:
  *
- * Dropping it makes the authorize and refresh scopes identical, which also
- * retires the hazard yas's comment describes — a renewal asking for more than
- * it was granted can be refused, and these two can no longer drift apart.
+ *   e.g. "user:inference" or
+ *        "user:profile user:inference user:sessions:claude_code user:mcp_servers"
  *
- * Verified against the live endpoint: the narrowed set still returns the real
- * consent screen rather than an invalid_scope error.
+ * # Why asking for more broke it
+ *
+ * The first version of this asked for `org:create_api_key` and
+ * `user:file_upload` too, copied from yas which copied Claude Code's OTHER
+ * flow. Anthropic answered with an ORGANIZATION grant — the consent screen read
+ * "connect to your Anthropic organization", offered API-key creation, profile
+ * and file upload, and did not mention inference. The token it issued was then
+ * refused by the Messages API:
+ *
+ *   403 OAuth token does not meet scope requirement
+ *       any_of(org:service_key_inference, user:ccr_inference, user:developer,
+ *              user:inference, …)
+ *
+ * So the extra scope did not merely over-ask, it selected a different KIND of
+ * grant. A subscription login and a console/org connection are two flows behind
+ * one authorize endpoint, and the scope list is what chooses between them.
+ *
+ * The lesson is worth keeping: for this endpoint, request the documented set
+ * and nothing beside it. Anything extra may silently change what you get.
  */
 export const CLAUDE_SCOPE =
-  'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
+  'user:profile user:inference user:sessions:claude_code user:mcp_servers';
 export const CLAUDE_AUTHORIZE_SCOPE = CLAUDE_SCOPE;
 export const CLAUDE_REFRESH_SCOPE = CLAUDE_SCOPE;
 
@@ -213,6 +224,7 @@ export async function postToken(params: Record<string, string>): Promise<{
   access_token: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
 }> {
   // JSON, not form-encoding: Anthropic's token endpoint takes a JSON body, as
   // yas's anthropic_oauth.go does and as Claude Code does. Sending
@@ -254,7 +266,12 @@ export async function postToken(params: Record<string, string>): Promise<{
     throw new ClaudeOAuthError(`Claude token request failed (${res.status}): ${detail}`);
   }
 
-  let parsed: { access_token?: string; refresh_token?: string; expires_in?: number };
+  let parsed: {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+  };
   try {
     parsed = JSON.parse(res.bodyText) as typeof parsed;
   } catch {
@@ -267,7 +284,53 @@ export async function postToken(params: Record<string, string>): Promise<{
     access_token: parsed.access_token,
     refresh_token: parsed.refresh_token,
     expires_in: parsed.expires_in,
+    scope: parsed.scope,
   };
+}
+
+/**
+ * The scopes the Messages API will accept as permission to run inference.
+ *
+ * Lifted verbatim from the 403 it answers without one:
+ *
+ *   OAuth token does not meet scope requirement
+ *   any_of(org:service_key_inference, user:ccr_inference, user:developer,
+ *          user:inference, user:voice, workspace:developer,
+ *          workspace:inference, workspace:messages_create)
+ *
+ * We only ever ask for `user:inference`. The rest are here because the check
+ * below should answer "can this token run a model", not "did we get the exact
+ * scope we asked for" — a grant that carries a different member of the set is
+ * usable, and refusing it would be us second-guessing Anthropic.
+ */
+const INFERENCE_SCOPES = [
+  'org:service_key_inference',
+  'user:ccr_inference',
+  'user:developer',
+  'user:inference',
+  'user:voice',
+  'workspace:developer',
+  'workspace:inference',
+  'workspace:messages_create',
+];
+
+/**
+ * Does this grant carry permission to run inference?
+ *
+ * **An ABSENT scope string answers yes**, and that is deliberate rather than
+ * lax. RFC 6749 §5.1 makes `scope` optional in a token response precisely when
+ * the grant matches the request, so "no scope field" means "you got what you
+ * asked for" — and what we ask for contains `user:inference`. Treating silence
+ * as a refusal would reject every token from a server that follows the spec.
+ *
+ * A scope string that IS present and carries none of the inference scopes is a
+ * different matter: the server is telling us it issued something other than
+ * what we asked for.
+ */
+export function grantCanRunInference(scope: string | undefined): boolean {
+  if (!scope) return true;
+  const granted = new Set(scope.split(' ').filter(Boolean));
+  return INFERENCE_SCOPES.some((s) => granted.has(s));
 }
 
 /** Exchange a pasted authorization code for a credential to store. */
@@ -290,6 +353,22 @@ export async function exchangeCode(input: {
     // than to store a credential that will stop working overnight.
     throw new ClaudeOAuthError(
       'Claude returned no refresh token, so the connection would stop working within hours.',
+    );
+  }
+  // Refuse a grant that cannot run a model, rather than storing it.
+  //
+  // This is the check that was missing when the authorize leg asked for
+  // `org:create_api_key`: Anthropic answered with an organization grant, the
+  // exchange succeeded, the token stored cleanly, the Settings panel said
+  // "connected" — and then every run failed with a 403 about scopes, hours
+  // later and in a place that could not explain why. The connect flow is where
+  // a person is present, looking at the screen, able to try the other sign-in.
+  if (!grantCanRunInference(body.scope)) {
+    throw new ClaudeOAuthError(
+      'That Claude sign-in came back without permission to run models ' +
+        `(granted: ${body.scope}). It is probably an Anthropic Console/organization ` +
+        'account rather than a Claude subscription — sign in with the account that ' +
+        'has your Claude Pro or Max plan.',
     );
   }
   return {
@@ -401,6 +480,18 @@ async function performRefresh(
     client_id: CLAUDE_CLIENT_ID,
     scope: CLAUDE_REFRESH_SCOPE,
   });
+
+  // The same gate as the exchange, on the refresh leg, because a credential
+  // stored BEFORE the exchange learned to check is still sitting in the
+  // database. Treating it as needing reauth is what clears it: the next
+  // refresh — at most an hour away — turns a silent 403 on every run into a
+  // "reconnect Claude" prompt on the Settings panel.
+  if (!grantCanRunInference(body.scope)) {
+    throw new ClaudeReauthRequiredError(
+      'The stored Claude sign-in has no permission to run models ' +
+        `(granted: ${body.scope}) — sign in again with your Claude subscription account.`,
+    );
+  }
 
   const accessToken = body.access_token;
   // Anthropic ROTATES the refresh token, but a response without a new one means

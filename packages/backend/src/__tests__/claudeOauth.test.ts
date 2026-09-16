@@ -8,6 +8,9 @@ import {
   ClaudeReauthRequiredError,
   CLAUDE_CLIENT_ID,
   CLAUDE_REDIRECT_URI,
+  CLAUDE_AUTHORIZE_SCOPE,
+  CLAUDE_REFRESH_SCOPE,
+  grantCanRunInference,
   _resetClaudeOauthInflight,
   type ClaudeOAuthCredential,
 } from '../services/selfHosted/claudeOauth.js';
@@ -81,16 +84,68 @@ describe('claude oauth', () => {
       expect(q.get('code_challenge')).toBe('chal');
     });
 
-    it('does NOT ask to generate API keys', () => {
-      // Claude Code asks for `org:create_api_key` so `setup-token` can mint a
-      // long-lived key. Talyn holds the subscription token and calls inference
-      // with it, so asking would put "Generate API keys on your behalf" on the
-      // consent screen for a power we never use.
+    it('asks for EXACTLY the scopes Claude Code documents, and nothing beside them', () => {
+      // An exact-set assertion rather than a couple of `toContain`s, because
+      // the bug this pins was an over-ask, and no subset check can catch one.
+      //
+      // The first version added `org:create_api_key` and `user:file_upload`.
+      // Anthropic answered with an ORGANIZATION grant — the consent screen read
+      // "connect to your Anthropic organization", listed API-key creation,
+      // profile and file upload, and never mentioned inference. Every fleet run
+      // on the resulting token was then refused:
+      //
+      //   403 OAuth token does not meet scope requirement
+      //       any_of(org:service_key_inference, user:ccr_inference,
+      //              user:developer, user:inference, …)
+      //
+      // So the extra scopes did not merely over-ask, they selected a different
+      // KIND of grant. Subscription login and console/organization connection
+      // are two flows behind one authorize endpoint, and the scope list is what
+      // chooses between them. The set below is the one Claude Code's own CLI
+      // prints for a subscription refresh token.
       const scope = new URL(buildAuthorizeUrl({ codeChallenge: 'c', state: 's' })).searchParams.get(
         'scope',
       )!;
-      expect(scope).not.toContain('org:create_api_key');
-      expect(scope).toContain('user:inference');
+      expect(scope.split(' ').filter(Boolean).sort()).toEqual(
+        ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers'].sort(),
+      );
+    });
+
+    it('refreshes with the same scopes it was granted', () => {
+      // A refresh that widens the scope is a new consent, and Anthropic answers
+      // it with an error rather than a token. Keeping one constant for both
+      // legs is what makes that unrepresentable.
+      expect(CLAUDE_REFRESH_SCOPE).toBe(CLAUDE_AUTHORIZE_SCOPE);
+    });
+  });
+
+  describe('the granted scope', () => {
+    it.each([
+      ['user:profile user:inference user:sessions:claude_code', true, 'what we ask for'],
+      ['user:profile user:file_upload org:create_api_key', false, 'the organization grant'],
+      ['workspace:inference', true, 'another member of the any_of set'],
+      ['user:developer', true, 'and another'],
+      ['', true, 'blank — the server said nothing'],
+      [undefined, true, 'absent — RFC 6749 §5.1 omits it when the grant matches'],
+    ])('%s → %s (%s)', (scope, expected) => {
+      expect(grantCanRunInference(scope as string | undefined)).toBe(expected);
+    });
+
+    it('refuses to store an organization grant', async () => {
+      // The failure this whole guard exists for: the exchange succeeds, the
+      // token is real, and it cannot run a model. Refusing here puts the error
+      // in front of the person who can act on it.
+      fetchWithTimeout.mockResolvedValue(
+        okResponse({
+          access_token: 'at',
+          refresh_token: 'rt',
+          expires_in: 3600,
+          scope: 'user:profile user:file_upload org:create_api_key',
+        }),
+      );
+      await expect(
+        exchangeCode({ code: 'c', codeVerifier: 'v' }),
+      ).rejects.toThrow(/permission to run models/);
     });
   });
 
