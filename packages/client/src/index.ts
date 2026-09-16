@@ -525,6 +525,27 @@ export const cloudProviders = {
       workspaceId,
       ...config,
     }),
+  /**
+   * Start a Claude sign-in and get the URL to open.
+   *
+   * Two calls with a browser trip between them, and the PKCE verifier stays on
+   * the server — so the code the user pastes back is worthless on its own.
+   *
+   * Works on BOTH front ends, unlike the Codex flow: Anthropic redirects to a
+   * page it hosts rather than to a loopback, so nothing has to listen on a port.
+   */
+  startClaudeSignIn: (workspaceId: string) =>
+    request<{ url: string }>('POST', '/cloud-providers/selfhosted/claude/authorize', {
+      workspaceId,
+    }),
+
+  /** Finish it with the code copied off Anthropic's page (`code#state`). */
+  completeClaudeSignIn: (workspaceId: string, code: string) =>
+    request<{ connected: boolean }>('POST', '/cloud-providers/selfhosted/claude/complete', {
+      workspaceId,
+      code,
+    }),
+
   test: (type: string, workspaceId: string) =>
     request<{ connected: boolean; error?: string }>('POST', `/cloud-providers/${type}/test`, {
       workspaceId,

@@ -1126,6 +1126,8 @@ function FleetAgentRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [claudeToken, setClaudeToken] = useState('');
+  const [awaitingClaudeCode, setAwaitingClaudeCode] = useState(false);
+  const [claudeCode, setClaudeCode] = useState('');
   const [pasted, setPasted] = useState('');
 
   const label = agent === 'claude' ? 'Claude subscription' : 'Codex (ChatGPT) subscription';
@@ -1201,6 +1203,49 @@ function FleetAgentRow({
     });
   }, [pasted, save]);
 
+  /**
+   * Claude sign-in: open Anthropic's page, take the code back.
+   *
+   * Two steps with a browser trip between them, and it is the SAME code on the
+   * desktop and the web. Codex needs `window.electron` because OpenAI redirects
+   * to a loopback only the desktop can listen on; Anthropic redirects to a page
+   * it hosts that shows a code, so there is nothing to listen for.
+   */
+  const startClaudeSignIn = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { url } = await api.cloudProviders.startClaudeSignIn(currentWorkspaceId);
+      void openExternal(url);
+      setAwaitingClaudeCode(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start the Claude sign-in');
+    } finally {
+      setBusy(false);
+    }
+  }, [currentWorkspaceId]);
+
+  const finishClaudeSignIn = useCallback(async () => {
+    if (!currentWorkspaceId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.cloudProviders.completeClaudeSignIn(currentWorkspaceId, claudeCode);
+      setAwaitingClaudeCode(false);
+      setClaudeCode('');
+      trackEvent('cloud_provider_connected', { provider: 'selfhosted', agent: 'claude' });
+      setEditing(false);
+      // Re-read rather than guess: the card renders off `connectedAgents`,
+      // which only the backend can compute.
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not finish the Claude sign-in');
+    } finally {
+      setBusy(false);
+    }
+  }, [currentWorkspaceId, claudeCode, refresh]);
+
   const showForm = editing || !connected;
 
   return (
@@ -1234,26 +1279,76 @@ function FleetAgentRow({
         <div className="mt-2 space-y-2">
           {agent === 'claude' ? (
             <>
-              <Input
-                label="Claude OAuth token"
-                type="password"
-                placeholder="sk-ant-oat…"
-                value={claudeToken}
-                onChange={(e) => setClaudeToken(e.target.value)}
-                disabled={busy}
-              />
-              <GetKeyLink
-                url={CLAUDE_SETUP_TOKEN_URL}
-                label="How to get a token"
-                note={'run `claude setup-token` for an OAuth token off your Claude subscription, or paste a Console API key (sk-ant-api…) to be billed per token.'}
-              />
-              <Button
-                size="sm"
-                onClick={() => save({ claudeToken })}
-                disabled={busy || !claudeToken.trim()}
-              >
-                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}
-              </Button>
+              {!awaitingClaudeCode ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Sign in with your Claude account. Talyn opens Anthropic’s own sign-in page in
+                    your browser and never sees your password.
+                  </p>
+                  <Button size="sm" onClick={startClaudeSignIn} disabled={busy}>
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Sign in with Claude'}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Approve the request in your browser, then paste the code Anthropic shows you.
+                  </p>
+                  <Input
+                    label="Code from Anthropic"
+                    value={claudeCode}
+                    onChange={(e) => setClaudeCode(e.target.value)}
+                    disabled={busy}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      onClick={finishClaudeSignIn}
+                      disabled={busy || !claudeCode.trim()}
+                    >
+                      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Finish sign-in'}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setAwaitingClaudeCode(false)}
+                      disabled={busy}
+                    >
+                      Back
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {/* The metered path stays. A workspace billing per token has no
+                  subscription to sign in to, so removing this would strand it. */}
+              <details className="pt-1">
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  Use a Console API key instead
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <Input
+                    label="Anthropic Console API key"
+                    type="password"
+                    placeholder="sk-ant-api…"
+                    value={claudeToken}
+                    onChange={(e) => setClaudeToken(e.target.value)}
+                    disabled={busy}
+                  />
+                  <GetKeyLink
+                    url={CLAUDE_SETUP_TOKEN_URL}
+                    label="Where to find it"
+                    note={'billed per token, rather than against a Claude subscription.'}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => save({ claudeToken })}
+                    disabled={busy || !claudeToken.trim()}
+                  >
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Save & verify'}
+                  </Button>
+                </div>
+              </details>
             </>
           ) : (
             <><div className="space-y-2">

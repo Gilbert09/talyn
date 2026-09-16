@@ -9,6 +9,11 @@ import {
   type EncryptedEnvelope,
 } from '../tokenCrypto.js';
 import { FleetCapacityError, FleetClient } from './client.js';
+import {
+  resolveClaudeAccessToken,
+  type ClaudeCredentialStore,
+  type ClaudeOAuthCredential,
+} from './claudeOauth.js';
 import { resolveCodexAccessToken } from './codexOauth.js';
 import { pickFleetHost } from '../fleetHosts.js';
 
@@ -40,8 +45,37 @@ export interface CodexOAuthCredential {
 }
 
 interface SelfHostedIntegrationConfig {
+  /**
+   * The workspace's Claude SUBSCRIPTION credential, signed in through OAuth and
+   * refreshed in place — see `claudeOauth.ts`.
+   *
+   * Preferred over `anthropicKeyEnc` when both are present, for the reason
+   * `codexOAuth` is preferred over `openaiKeyEnc`: it is the thing the user is
+   * already paying for, and it can be renewed rather than silently expiring.
+   */
+  claudeOAuth?: ClaudeOAuthCredential;
+  /**
+   * A half-finished sign-in: the PKCE verifier, held between the authorize leg
+   * and the pasted code.
+   *
+   * On the integration row rather than in a table of its own, unlike PostHog
+   * Code's `posthog_oauth_states`. That flow needs one because its callback is
+   * a redirect carrying no session, so `state` is the only thing tying the code
+   * back to a workspace. Here the user pastes the code into the app, so the
+   * completing request is authenticated and already names the workspace — the
+   * only thing that has to survive the round trip is the verifier, and it
+   * belongs to the same integration the finished credential lands on.
+   */
+  claudePendingAuth?: {
+    /** Echoed back on the pasted `code#state`, so a stale paste is refused. */
+    state: string;
+    codeVerifierEnc: EncryptedEnvelope;
+    expiresAt: string;
+  };
   /** The workspace's own Claude credential — an OAuth token from a Claude
-   *  subscription (`sk-ant-oat…`), or a Console API key (`sk-ant-api…`). */
+   *  subscription (`sk-ant-oat…`), or a Console API key (`sk-ant-api…`),
+   *  pasted rather than signed in. Still supported: a metered workspace has no
+   *  subscription to sign in to. */
   anthropicKeyEnc?: EncryptedEnvelope;
   /**
    * The workspace's ChatGPT-subscription credential, for runs dispatched at a
@@ -192,6 +226,76 @@ function readEnc(env: EncryptedEnvelope | undefined, label: string): string | nu
 }
 
 /** Resolve a workspace's fleet credentials, or null if unset. */
+/**
+ * How `claudeOauth.ts` reads and writes the stored pair.
+ *
+ * Passed in rather than imported there, so the OAuth module owns the protocol
+ * and this module owns the row — and so its tests need no database.
+ */
+export const claudeStore: ClaudeCredentialStore = {
+  read: async (workspaceId) => (await readSelfHostedConfig(workspaceId))?.claudeOAuth,
+  patch: async (workspaceId, next) => {
+    await patchSelfHostedConfig(workspaceId, { claudeOAuth: next });
+  },
+};
+
+/** The raw integration config for a workspace, or undefined when unconfigured. */
+async function readSelfHostedConfig(
+  workspaceId: string,
+): Promise<SelfHostedIntegrationConfig | undefined> {
+  const rows = await getDbClient()
+    .select({ config: integrationsTable.config, enabled: integrationsTable.enabled })
+    .from(integrationsTable)
+    .where(
+      and(
+        eq(integrationsTable.workspaceId, workspaceId),
+        eq(integrationsTable.type, INTEGRATION_TYPE),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row || !row.enabled) return undefined;
+  return (row.config as SelfHostedIntegrationConfig | null) ?? {};
+}
+
+/**
+ * Merge fields into the stored config, leaving everything else alone.
+ *
+ * A read-modify-write rather than a jsonb patch because the row is small and
+ * written rarely — and because a refresh racing a disconnect should lose the
+ * whole write, not half of it.
+ */
+async function patchSelfHostedConfig(
+  workspaceId: string,
+  patch: Partial<SelfHostedIntegrationConfig>,
+): Promise<void> {
+  const db = getDbClient();
+  const rows = await db
+    .select({ id: integrationsTable.id, config: integrationsTable.config })
+    .from(integrationsTable)
+    .where(
+      and(
+        eq(integrationsTable.workspaceId, workspaceId),
+        eq(integrationsTable.type, INTEGRATION_TYPE),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return;
+  const prior = (row.config as SelfHostedIntegrationConfig | null) ?? {};
+  const next: SelfHostedIntegrationConfig = { ...prior };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete (next as Record<string, unknown>)[key];
+    else (next as Record<string, unknown>)[key] = value;
+  }
+  await db
+    .update(integrationsTable)
+    .set({ config: next, updatedAt: new Date() })
+    .where(eq(integrationsTable.id, row.id));
+}
+
+export { readSelfHostedConfig, patchSelfHostedConfig };
+
 export async function getSelfHostedCredentials(
   workspaceId: string,
 ): Promise<SelfHostedCredentials | null> {
@@ -224,7 +328,16 @@ export async function getSelfHostedCredentials(
   // answers "which host", which the registry answers better. A row written
   // before either existed carries only `fleetTokenEnc`/`fleetEndpoint` and
   // still reads as unconfigured, which is accurate.
-  const claudeToken = readEnc(config.anthropicKeyEnc, 'Claude token');
+  // A SIGNED-IN SUBSCRIPTION WINS OVER A PASTED KEY, the same way `codexOAuth`
+  // wins over `openaiKeyEnc`: it is what the user already pays for, and it is
+  // the one that can be renewed instead of expiring mid-run.
+  const claudeOAuthToken = await resolveClaudeAccessToken(
+    workspaceId,
+    config.claudeOAuth,
+    claudeStore,
+  );
+  const pastedClaude = readEnc(config.anthropicKeyEnc, 'Claude token');
+  const claudeToken = claudeOAuthToken ?? pastedClaude;
 
   // A SUBSCRIPTION WINS OVER A PLATFORM KEY when a workspace holds both: the
   // subscription is the thing the user is already paying for, and the platform
@@ -440,7 +553,19 @@ export async function fleetAgentStatus(
   const config = (row.config as SelfHostedIntegrationConfig | null) ?? {};
   const connectedAgents: ('claude' | 'codex')[] = [];
   const reauthAgents: ('claude' | 'codex')[] = [];
-  if (config.anthropicKeyEnc) connectedAgents.push('claude');
+  // A signed-in subscription counts as connected exactly as a pasted key does —
+  // and, like Codex, it can additionally need REAUTH, which is a different
+  // state from disconnected: the workspace still holds a credential, it is just
+  // one Anthropic will no longer renew.
+  if (config.claudeOAuth || config.anthropicKeyEnc) {
+    connectedAgents.push('claude');
+    if (config.claudeOAuth?.reauthRequiredAt && !config.anthropicKeyEnc) {
+      // Only when there is nothing to fall back to. A workspace that also
+      // pasted a Console key is still able to run, so nagging it to sign in
+      // again would be asking for something it does not need.
+      reauthAgents.push('claude');
+    }
+  }
   if (config.codexOAuth || config.openaiKeyEnc) {
     connectedAgents.push('codex');
     if (config.codexOAuth?.reauthRequiredAt) reauthAgents.push('codex');
