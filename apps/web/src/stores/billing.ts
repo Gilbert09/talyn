@@ -116,6 +116,7 @@ export type UpgradeReason =
   | 'merge_queue_limit'
   | 'workflow_limit'
   | 'loop_limit'
+  | 'mcp_server_limit'
   | 'auto_keep_default'
   /**
    * Nothing was refused — something silently did not happen. Auto-keep wanted

@@ -1,4 +1,9 @@
 import { create } from 'zustand';
+// The panel set lives in lib/panels so lib/routes can constrain PANEL_PATHS to
+// exactly these keys. Imported rather than restated: this file used to carry
+// three hand-written copies of the union, and adding a panel meant finding all
+// of them.
+import type { ActivePanel } from '../lib/panels';
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   TERMINAL_TASK_STATUSES,
@@ -168,7 +173,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings';
+  activePanel: ActivePanel;
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -230,6 +235,8 @@ interface WorkspaceState {
   enabledWorkflowCount: number | null;
   /** Enabled loops, for the nav badge. `null` is not yet counted. */
   enabledLoopCount: number | null;
+  /** Enabled tool servers, for the nav badge. `null` is not yet counted. */
+  enabledMcpServerCount: number | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing
   // connected opens this instead of silently no-oping. `pendingCloudTask` is
@@ -264,6 +271,7 @@ interface WorkspaceState {
   setFeatures: (features: Features | null) => void;
   setEnabledWorkflowCount: (count: number | null) => void;
   setEnabledLoopCount: (count: number | null) => void;
+  setEnabledMcpServerCount: (count: number | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
   openConnectAgent: (pending?: PendingCloudTask | null) => void;
@@ -303,9 +311,7 @@ interface WorkspaceState {
   setRepositories: (repos: WatchedRepo[]) => void;
 
   toggleSidebar: () => void;
-  setActivePanel: (
-    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings'
-  ) => void;
+  setActivePanel: (panel: ActivePanel) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
 }
@@ -335,6 +341,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   features: null,
   enabledWorkflowCount: null,
   enabledLoopCount: null,
+  enabledMcpServerCount: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
   whatsNewOpen: false,
@@ -380,6 +387,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setFeatures: (features) => set({ features }),
   setEnabledWorkflowCount: (enabledWorkflowCount) => set({ enabledWorkflowCount }),
   setEnabledLoopCount: (enabledLoopCount) => set({ enabledLoopCount }),
+  setEnabledMcpServerCount: (enabledMcpServerCount) => set({ enabledMcpServerCount }),
 
   openConnectAgent: (pending = null) =>
     set({ connectAgentOpen: true, pendingCloudTask: pending }),

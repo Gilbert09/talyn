@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { loopsOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
@@ -43,6 +43,7 @@ export function useSystemStatus(): void {
   const features = useWorkspaceStore((s) => s.features);
   const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
   const setEnabledLoopCount = useWorkspaceStore((s) => s.setEnabledLoopCount);
+  const setEnabledMcpServerCount = useWorkspaceStore((s) => s.setEnabledMcpServerCount);
   const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
@@ -218,6 +219,31 @@ export function useSystemStatus(): void {
   useEffect(() => {
     refreshLoopCount();
   }, [refreshLoopCount]);
+
+  // And again for tool servers. Separate for the same reason: the flags are
+  // independent, and folding them into one endpoint would make every boot pay
+  // for a feature most workspaces do not have.
+  const refreshMcpServerCount = useCallback(() => {
+    if (!currentWorkspaceId || !mcpServersOffered(features)) {
+      setEnabledMcpServerCount(null);
+      return;
+    }
+    api.mcpServers
+      .count(currentWorkspaceId)
+      .then(({ enabled }) => {
+        if (countWorkspaceRef.current !== currentWorkspaceId) return;
+        setEnabledMcpServerCount(enabled);
+      })
+      .catch(() => {});
+  }, [currentWorkspaceId, features, setEnabledMcpServerCount]);
+
+  useEffect(() => {
+    setEnabledMcpServerCount(null);
+  }, [currentWorkspaceId, setEnabledMcpServerCount]);
+
+  useEffect(() => {
+    refreshMcpServerCount();
+  }, [refreshMcpServerCount]);
 
   // Re-counted on focus as well. The in-app edits already push to the store, so
   // this is purely for a change made somewhere else — another device, or the

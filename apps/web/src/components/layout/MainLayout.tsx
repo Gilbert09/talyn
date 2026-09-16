@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { loopsOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 
 /**
@@ -27,6 +27,10 @@ const WorkflowsPanel = lazy(() =>
 // every visitor never renders a byte of this.
 const LoopsPanel = lazy(() =>
   import('../panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel }))
+);
+// Lazy for the same reason again: the tool-servers flag also fails closed.
+const McpServersPanel = lazy(() =>
+  import('../panels/mcpServers/McpServersPanel').then((m) => ({ default: m.McpServersPanel }))
 );
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { MyPRsPanel } from '../panels/github/MyPRsPanel';
@@ -80,6 +84,7 @@ export function MainLayout() {
                   403s. */}
               {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
               {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
+            {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
               {activePanel === 'settings' && <SettingsPanel />}
             </Suspense>
           </div>

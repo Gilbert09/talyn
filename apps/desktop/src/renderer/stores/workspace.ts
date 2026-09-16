@@ -1,4 +1,22 @@
 import { create } from 'zustand';
+
+/**
+ * The panels the app can show.
+ *
+ * Named rather than restated at each use: this file used to carry three
+ * hand-written copies of the same union, so adding a panel meant finding all of
+ * them and the compiler only complained about the ones it happened to reach.
+ * apps/web mirrors this in lib/panels.ts, where it also constrains PANEL_PATHS.
+ */
+export type ActivePanel =
+  | 'queue'
+  | 'my_prs'
+  | 'reviews'
+  | 'merge_queue'
+  | 'workflows'
+  | 'loops'
+  | 'mcp_servers'
+  | 'settings';
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   TERMINAL_TASK_STATUSES,
@@ -168,7 +186,14 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings';
+  activePanel: 'queue'
+    | 'my_prs'
+    | 'reviews'
+    | 'merge_queue'
+    | 'workflows'
+    | 'loops'
+    | 'mcp_servers'
+    | 'settings';
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -230,6 +255,8 @@ interface WorkspaceState {
   enabledWorkflowCount: number | null;
   /** Enabled loops, for the nav badge. `null` is not yet counted. */
   enabledLoopCount: number | null;
+  /** Enabled tool servers, for the nav badge. `null` is not yet counted. */
+  enabledMcpServerCount: number | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing
   // connected opens this instead of silently no-oping. `pendingCloudTask` is
@@ -264,6 +291,7 @@ interface WorkspaceState {
   setFeatures: (features: Features | null) => void;
   setEnabledWorkflowCount: (count: number | null) => void;
   setEnabledLoopCount: (count: number | null) => void;
+  setEnabledMcpServerCount: (count: number | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
   openConnectAgent: (pending?: PendingCloudTask | null) => void;
@@ -304,7 +332,14 @@ interface WorkspaceState {
 
   toggleSidebar: () => void;
   setActivePanel: (
-    panel: 'queue' | 'my_prs' | 'reviews' | 'merge_queue' | 'workflows' | 'loops' | 'settings'
+    panel: 'queue'
+    | 'my_prs'
+    | 'reviews'
+    | 'merge_queue'
+    | 'workflows'
+    | 'loops'
+    | 'mcp_servers'
+    | 'settings'
   ) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
@@ -335,6 +370,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   features: null,
   enabledWorkflowCount: null,
   enabledLoopCount: null,
+  enabledMcpServerCount: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
   whatsNewOpen: false,
@@ -380,6 +416,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setFeatures: (features) => set({ features }),
   setEnabledWorkflowCount: (enabledWorkflowCount) => set({ enabledWorkflowCount }),
   setEnabledLoopCount: (enabledLoopCount) => set({ enabledLoopCount }),
+  setEnabledMcpServerCount: (enabledMcpServerCount) => set({ enabledMcpServerCount }),
 
   openConnectAgent: (pending = null) =>
     set({ connectAgentOpen: true, pendingCloudTask: pending }),

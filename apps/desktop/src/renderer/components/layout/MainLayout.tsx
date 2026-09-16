@@ -1,5 +1,5 @@
 import React from 'react';
-import { loopsOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { QueuePanel } from '../panels/QueuePanel';
@@ -9,6 +9,7 @@ import { MergeQueuePanel } from '../panels/github/MergeQueuePanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { WorkflowsPanel } from '../panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../panels/loops/LoopsPanel';
+import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
 import { ConnectAgentModal } from '../modals/ConnectAgentModal';
@@ -52,6 +53,7 @@ export function MainLayout() {
                 backend will refuse every request for. */}
             {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
             {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
+          {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
             {activePanel === 'settings' && <SettingsPanel />}
           </div>
         </main>

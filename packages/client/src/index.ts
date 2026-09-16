@@ -8,6 +8,9 @@ import type {
   LoopInput,
   LoopRun,
   LoopWithStats,
+  McpProbeResult,
+  McpServerDefinition,
+  McpServerInput,
   WorkflowCounts,
   WorkflowInput,
   WorkflowRun,
@@ -1962,6 +1965,56 @@ export const loops = {
   runNow: (id: string) => request<LoopRun>('POST', `/loops/${id}/run`),
 };
 
+// ============================================================================
+// MCP tool servers
+// ============================================================================
+
+export const mcpServers = {
+  list: (workspaceId: string) =>
+    request<McpServerDefinition[]>(
+      'GET',
+      `/mcp-servers?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  /** Just the counter, for the sidebar's nav badge. See `loops.count`. */
+  count: (workspaceId: string) =>
+    request<{ enabled: number }>(
+      'GET',
+      `/mcp-servers/count?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+
+  get: (id: string) => request<McpServerDefinition>('GET', `/mcp-servers/${id}`),
+
+  create: (workspaceId: string, input: McpServerInput) =>
+    request<McpServerDefinition>('POST', '/mcp-servers', { workspaceId, ...input }),
+
+  /**
+   * Whole-server replace, not a field merge — the same rule `loops.update`
+   * follows, and for a sharper reason here: `authKind` and `inject` validate
+   * against each other, so sending one alone could land a pair the server
+   * would have refused as a whole.
+   *
+   * The CREDENTIAL is the exception and is deliberately not part of that
+   * replace: omit `secret` to keep the stored one, send an empty string to
+   * clear it. Collapsing those would make every rename silently disconnect
+   * the server.
+   */
+  update: (id: string, input: McpServerInput) =>
+    request<McpServerDefinition>('PATCH', `/mcp-servers/${id}`, input),
+
+  remove: (id: string) => request<void>('DELETE', `/mcp-servers/${id}`),
+
+  /**
+   * Ask the server to introduce itself, and list its tools.
+   *
+   * One call rather than two because they are one round trip: `tools/list`
+   * needs the session `initialize` opened. The result is stored server-side as
+   * well as returned, so the list can show what a server last said without
+   * re-probing every vendor on every render.
+   */
+  test: (id: string) => request<McpProbeResult>('POST', `/mcp-servers/${id}/test`),
+};
+
 // Singleton instance
 export const wsClient = new WebSocketClient();
 
@@ -1987,6 +2040,7 @@ export const api = {
   features,
   workflows,
   loops,
+  mcpServers,
   admin,
   ws: wsClient,
 };

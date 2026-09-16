@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { loopsOffered, workflowsOffered } from '@talyn/shared';
+import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import {
   ListTodo,
   Settings,
@@ -9,6 +9,7 @@ import {
   GitPullRequest,
   GitMerge,
   Eye,
+  Plug,
   Repeat,
   Workflow,
   Check,
@@ -40,6 +41,7 @@ export function Sidebar({ className }: SidebarProps) {
     features,
     enabledWorkflowCount,
     enabledLoopCount,
+    enabledMcpServerCount,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -115,6 +117,23 @@ export function Sidebar({ className }: SidebarProps) {
             // running, and counting it would overstate what the app is doing
             // unattended — which is the one thing this feature does.
             badge: enabledLoopCount ? enabledLoopCount : undefined,
+            badgeVariant: 'secondary',
+          },
+        ]
+      : []),
+    // Tool servers, gated the same three-state way and failing CLOSED for a
+    // reason of its own: that page stores third-party credentials, so drawing
+    // it during a PostHog outage would offer credential storage to accounts
+    // nobody decided to offer it to.
+    ...(mcpServersOffered(features)
+      ? [
+          {
+            id: 'mcp_servers' as const,
+            icon: Plug,
+            label: 'Tool servers',
+            // Enabled only: a switched-off server is not one the agents have,
+            // and counting it would overstate what a run can reach.
+            badge: enabledMcpServerCount ? enabledMcpServerCount : undefined,
             badgeVariant: 'secondary',
           },
         ]
