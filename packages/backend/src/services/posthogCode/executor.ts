@@ -74,8 +74,22 @@ export async function dispatchTaskToPostHogCode(
     DEFAULT_RUNTIME_ADAPTER;
   // The API requires a model on every cloud run, so resolve to a concrete one:
   // task-level (UI) → workspace setting → env default → the backend default.
+  //
+  // The task-level rung is GUARDED, like the workspace one below it, and the
+  // case that needs it is failover. A task dispatched at the fleet carries a
+  // fleet model on `metadata.model`; when the fleet is at capacity the queue
+  // moves it here (`result.capacity` → the next link in the chain), and six of
+  // the fleet's models are ones PostHog's runtime does not accept —
+  // `claude-fable-5-1` and every `gpt-*`. Sent verbatim they earn a 400 at
+  // dispatch, so a capacity refusal the fall-back exists to absorb became a
+  // failed task instead.
+  //
+  // Dropping to the next rung is right rather than refusing: the user asked for
+  // work to happen, the model was the fleet's choice and not theirs, and the
+  // alternative is a task that fails for a reason they cannot act on.
+  const pinnedModel = typeof meta.model === 'string' ? meta.model : undefined;
   const model =
-    (typeof meta.model === 'string' && meta.model) ||
+    (isStoredPostHogCodeModelId(pinnedModel) ? pinnedModel : undefined) ||
     (await workspacePostHogCodeModel(task.workspaceId)) ||
     modelFromEnv(env) ||
     DEFAULT_POSTHOG_CODE_MODEL;
