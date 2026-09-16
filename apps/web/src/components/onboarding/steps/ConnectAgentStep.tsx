@@ -12,17 +12,23 @@ import { ProviderConnectCards } from '../../panels/SettingsPanel';
  * OWN Claude or Codex subscription — so connecting it up front is what makes
  * the very first task run on their key rather than dead-end at a modal.
  *
- * Skippable, though, and that matters as much. A workspace that is not on the
- * fleet allow-list is served no fleet card at all, and hard-gating Next would
- * strand it on a step it cannot complete. The modal stays as the fallback for
- * anyone who skips.
+ * Skippable, though, and that matters as much. The fleet card is drawn only
+ * when the backend listed the fleet for this workspace, and hard-gating Next
+ * would strand anyone it is switched off for on a step they cannot complete.
+ * The modal stays as the fallback for anyone who skips.
+ *
+ * The cards are ordered by `CLOUD_PROVIDER_ORDER`, so the fleet is the first
+ * thing on this screen. That IS the recommendation: it runs on the Claude or
+ * Codex subscription the reader almost certainly already pays for, while
+ * PostHog Code needs a PostHog account and bills metered credits on top.
  */
 export function ConnectAgentStep() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Talyn hands your PR work to a coding agent running on your own subscription. Connect
-        Claude or Codex — one is enough, and you can add the other later in Settings.
+        Talyn hands your PR work to a coding agent that runs on your own subscription — no
+        second bill for tokens. Connect Claude or Codex to run on Talyn Fleet; one is enough,
+        and you can add the other later in Settings.
       </p>
       <ProviderConnectCards />
     </div>

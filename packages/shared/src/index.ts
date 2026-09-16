@@ -1521,6 +1521,39 @@ export interface PostHogCodeTaskMetadata {
 export type CloudProviderType = 'posthog_code' | 'codex_cloud' | 'selfhosted';
 
 /**
+ * Talyn's preference between cloud providers — best first.
+ *
+ * ONE definition, read by two things that must not disagree: the backend
+ * resolver that picks a provider when nobody pinned one
+ * (`resolveCloudEnvChain`), and every list the user is shown — the Settings
+ * cards, the "Default for new tasks" menu, the per-task agent picker. Before
+ * this, the resolver had its own constant while the lists followed whatever
+ * order the providers happened to REGISTER in at boot. Those pointed opposite
+ * ways: the resolver preferred the fleet, and PostHog Code registered first, so
+ * the app recommended one thing by picking it and another by listing it.
+ *
+ * The fleet leads because it is the better place for the work — a real microVM,
+ * the workspace's own Claude or Codex subscription rather than metered credits,
+ * and a credential proxy that keeps every token out of the guest. PostHog Code
+ * stays second rather than being dropped: it is what a fleet at capacity falls
+ * back to, and what a workspace with the fleet switched off runs on.
+ *
+ * A type not listed here sorts last rather than being hidden — `codex_cloud` is
+ * deferred, not forbidden, and a provider that appears in a list it was left
+ * out of is a much smaller problem than one that silently vanishes.
+ */
+export const CLOUD_PROVIDER_ORDER: readonly CloudProviderType[] = [
+  'selfhosted',
+  'posthog_code',
+];
+
+/** Sort key for {@link CLOUD_PROVIDER_ORDER}; unlisted types sort last. */
+export function cloudProviderRank(type: string): number {
+  const i = (CLOUD_PROVIDER_ORDER as readonly string[]).indexOf(type);
+  return i === -1 ? CLOUD_PROVIDER_ORDER.length : i;
+}
+
+/**
  * A provider id as it may actually arrive at runtime — including one this build
  * has never heard of.
  *

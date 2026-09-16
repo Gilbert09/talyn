@@ -1005,14 +1005,23 @@ function WorkspaceModelSelector({
 export function ProviderConnectCards() {
   return (
     <>
+      {/* Talyn Fleet FIRST, and the order is the recommendation.
+          
+          It runs on the user's own Claude or Codex subscription, which is what
+          most people arriving here already pay for; PostHog Code needs a
+          PostHog account and bills metered credits, so it is the right default
+          for roughly one company. Leading with it was a hangover from the days
+          when it was the only provider.
+
+          Rendered ONLY when the backend listed the fleet for this workspace:
+          /cloud-providers filters it out for anyone outside the "talyn-fleet"
+          flag audience, so showing the card unconditionally would offer a form
+          whose save 403s. Since the fleet's release that audience is everyone,
+          but the gate stays — it is the kill switch. */}
+      <SelfHostedFleetCard />
+
       {/* PostHog Code (cloud tasks) */}
       <PostHogCodeCard />
-
-      {/* Talyn Fleet (Firecracker). Rendered ONLY when the backend
-          listed it for this workspace: /cloud-providers filters it out for
-          anyone outside the "talyn-fleet" flag audience, so showing the card
-          unconditionally would offer every user a form whose save 403s. */}
-      <SelfHostedFleetCard />
     </>
   );
 }

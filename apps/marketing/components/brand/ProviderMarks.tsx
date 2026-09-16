@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { Sparkles } from "lucide-react";
+import { OwlMark } from "@/components/brand/Logo";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,9 +24,11 @@ export function ProviderMark({
   mark,
   className,
 }: {
-  mark: "claude" | "posthog" | "soon";
+  mark: "claude" | "posthog" | "soon" | "fleet";
   className?: string;
 }) {
+  // The fleet is ours, so it wears our own mark rather than a fetched logo.
+  if (mark === "fleet") return <OwlMark className={cn(className)} />;
   if (mark === "soon") return <Sparkles className={cn(className)} aria-hidden />;
   return (
     <Image

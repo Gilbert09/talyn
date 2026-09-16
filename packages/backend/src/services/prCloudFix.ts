@@ -9,6 +9,7 @@ import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
   ACTIVE_TASK_STATUSES,
   buildMergeablePrompt,
+  CLOUD_PROVIDER_ORDER,
   type CloudProviderType,
   type PRMergeableSummary,
 } from '@talyn/shared';
@@ -77,7 +78,8 @@ export async function envIdForType(
  * use the fleet (see `workspaceMayUseFleet`), so a non-allow-listed workspace
  * gets exactly today's behaviour: the chain heads at PostHog Code.
  */
-const CLOUD_PROVIDER_ORDER: CloudProviderType[] = ['selfhosted', 'posthog_code'];
+// Defined in `@talyn/shared` so the lists the user sees sort the same way
+// this resolver picks. See CLOUD_PROVIDER_ORDER there for why.
 
 async function defaultCloudProvider(
   workspaceId: string
@@ -132,7 +134,7 @@ export async function resolveCloudEnvChain(workspaceId: string): Promise<Resolve
   const order: CloudProviderType[] =
     pinned && pinned !== 'ask'
       ? [pinned, ...CLOUD_PROVIDER_ORDER.filter((t) => t !== pinned)]
-      : CLOUD_PROVIDER_ORDER;
+      : [...CLOUD_PROVIDER_ORDER];
 
   const chain: ResolvedCloudEnv[] = [];
   for (const type of order) {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { CloudProviderType, ApiResponse, FleetAgent } from '@talyn/shared';
+import { cloudProviderRank, type CloudProviderType, type ApiResponse, type FleetAgent } from '@talyn/shared';
 import { randomBytes } from 'crypto';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { buildAuthorizeUrl, exchangeCode, splitPastedCode } from '../services/selfHosted/claudeOauth.js';
@@ -79,9 +79,15 @@ export function cloudProviderRoutes(): Router {
     // dispatch and at credential-write below, because a filtered list is not a
     // permission check: the CLI, the MCP server and curl never render it.
     const mayUseFleet = await workspaceMayUseFleet(workspaceId);
+    // Sorted by Talyn's own preference, NOT by the order the providers happened
+    // to register at boot. This list is what the Settings cards, the "Default
+    // for new tasks" menu and the per-task agent picker all render from, so
+    // boot order was quietly deciding what the app recommends — and it
+    // recommended PostHog Code while the resolver picked the fleet.
     const providers: CloudProviderInfo[] = await Promise.all(
       listCloudProviders()
         .filter((p) => p.type !== 'selfhosted' || mayUseFleet)
+        .sort((a, b) => cloudProviderRank(a.type) - cloudProviderRank(b.type))
         .map(async (p) => ({
           type: p.type,
           displayName: p.displayName,

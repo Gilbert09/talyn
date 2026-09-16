@@ -38,14 +38,22 @@ export const hero = {
 };
 
 export const poweredBy = {
-  kicker: "Bring your own agent",
+  kicker: "Runs on the plan you already pay for",
   blurb:
-    "Talyn conducts the coding agents you already trust.",
+    "Talyn conducts the coding agents you already trust — on your own subscription, not a second token bill.",
   // Claude Code was REMOVED as a provider (Session 114 / migration 0050) — it
   // billed metered API credits, and the fleet runs Claude on the workspace's
   // own subscription instead. Do not re-add it here without a registered
   // provider behind it: this section is the promise the download makes.
-  logos: [{ name: "PostHog Code", mark: "posthog" as const }],
+  //
+  // Order matches CLOUD_PROVIDER_ORDER in `@talyn/shared`, which is what the
+  // app itself recommends and picks. Keep them the same: a site that leads
+  // with one provider and an app that leads with another is the kind of
+  // mismatch nobody notices until a new user asks why.
+  logos: [
+    { name: "Talyn Fleet", mark: "fleet" as const },
+    { name: "PostHog Code", mark: "posthog" as const },
+  ],
 };
 
 export const problem = {
@@ -210,9 +218,14 @@ export const providers = {
   sub: "Talyn conducts cloud coding agents rather than replacing them. Use the one you already pay for, and switch per task.",
   items: [
     {
+      name: "Talyn Fleet",
+      mark: "fleet" as const,
+      body: "The default. Sign in with Claude or ChatGPT and your tasks run on that subscription \u2014 no API bill on top. Each one gets its own microVM on our hardware, and your credentials are attached outside the machine, so they never enter it.",
+    },
+    {
       name: "PostHog Code",
       mark: "posthog" as const,
-      body: "Connect PostHog Code and it powers the lot \u2014 fixes, clashes, and review replies, end to end.",
+      body: "Already at PostHog? Connect PostHog Code and it powers the lot \u2014 fixes, clashes, and review replies, end to end.",
     },
     {
       name: "More on the way",
@@ -317,11 +330,11 @@ export const faq = [
   },
   {
     q: "Which AI agents does it use?",
-    a: "You bring your own. PostHog Code is supported today, with more providers on the way. Talyn conducts whichever one you connect, and you can switch per task.",
+    a: "You bring your own. Sign in with Claude or ChatGPT and Talyn Fleet runs your tasks on that subscription \u2014 no separate API bill. PostHog Code is supported too, with more providers on the way. Talyn conducts whichever one you connect, and you can switch per task.",
   },
   {
     q: "Where does the work actually happen?",
-    a: "Agent runs happen in your provider's cloud, under your account. Talyn is the desktop control surface that kicks them off, streams the progress live, and links the resulting PR back onto your dashboard.",
+    a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead. Either way, Talyn is the control surface that kicks it off, streams the progress live, and links the resulting PR back onto your dashboard.",
   },
   {
     q: "What are skills?",
