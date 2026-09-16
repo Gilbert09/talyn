@@ -15,6 +15,7 @@ import { resolveCloudEnvChain, resolveCloudEnvId } from './prCloudFix.js';
 import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
 import { TickGuard } from './tickGuard.js';
+import { notifyTodiex } from './todiex.js';
 import { emitTaskStatus } from './websocket.js';
 import { getDbClient, type Database } from '../db/client.js';
 import {
@@ -324,6 +325,27 @@ class TaskQueueService extends EventEmitter {
         duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
         origin: loop?.loopId ? 'loop' : 'user',
         ...(loop?.loopId ? { loop_id: loop.loopId } : {}),
+      });
+      // Activation, which for a tool like this is the first task a workspace
+      // ever dispatches — not the signup, and not the workspace row, which
+      // every account gets for free on boot. Fired on EVERY dispatch and
+      // deduplicated by the inbox on this key, so it needs no `first_task_at`
+      // column and no read before the write; the thousandth dispatch costs one
+      // POST that stores nothing. Deliberately not the per-task events that
+      // sit beside it in analytics — a phone that buzzes for each of those is
+      // a phone that gets silenced.
+      notifyTodiex({
+        kind: 'workspace.activated',
+        level: 'success',
+        title: 'A Talyn workspace ran its first task',
+        message: `A ${task.type} task went out to ${env.type}.`,
+        metadata: {
+          workspace_id: task.workspaceId,
+          task_id: task.id,
+          task_type: task.type,
+          provider: env.type,
+        },
+        dedupeKey: `workspace:${task.workspaceId}:first_task`,
       });
       return;
     }

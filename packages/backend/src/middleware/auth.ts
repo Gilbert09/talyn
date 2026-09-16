@@ -18,6 +18,7 @@ import {
 } from '../db/schema.js';
 import { getSupabaseServiceClient } from '../services/supabase.js';
 import { captureSignup } from '../services/analytics.js';
+import { notifyTodiex } from '../services/todiex.js';
 
 export interface AuthUser {
   id: string;
@@ -242,6 +243,18 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
   // First insert == the account came into existence. See captureSignup.
   if (row?.inserted) {
     captureSignup({ id: identity.id, email, githubUsername });
+    // Same moment, different job: analytics answers "how many this week",
+    // the inbox says so on a phone now. The user id is the dedupe key, so
+    // even if `xmax = 0` ever regressed the inbox would still report one
+    // signup per account rather than one per request.
+    notifyTodiex({
+      kind: 'user.signed_up',
+      level: 'success',
+      title: `New Talyn signup — ${email}`,
+      message: githubUsername ? `GitHub: @${githubUsername}` : 'No GitHub account linked yet.',
+      metadata: { user_id: identity.id, github_username: githubUsername ?? null },
+      dedupeKey: `user:${identity.id}:signed_up`,
+    });
   }
 
   return {

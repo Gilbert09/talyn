@@ -76,6 +76,22 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
       `Polar billing is partially configured (${setPolarVars.join(', ')} set) — also set ${missing.join(', ')}`
     );
   }
+  // The cross-product inbox is optional as a whole (absent → notifyTodiex is
+  // a no-op), but half of it is always a mistake: a URL without a token posts
+  // nothing but a 401, and a token without a URL posts nothing at all — both
+  // silently, since the client swallows its own failures by design.
+  const todiexVars = ['TODIEX_URL', 'TODIEX_TOKEN'];
+  const setTodiexVars = todiexVars.filter((name) => Boolean(env[name]));
+  if (setTodiexVars.length > 0 && setTodiexVars.length < todiexVars.length) {
+    const missing = todiexVars.filter((name) => !env[name]);
+    errors.push(
+      `todiex inbox is partially configured (${setTodiexVars.join(', ')} set) — also set ${missing.join(', ')}`
+    );
+  }
+  if (env.TODIEX_URL && !/^https?:\/\//.test(env.TODIEX_URL)) {
+    errors.push(`TODIEX_URL must start with http:// or https://, got '${env.TODIEX_URL}'`);
+  }
+
   if (env.POLAR_ENVIRONMENT && !['sandbox', 'production'].includes(env.POLAR_ENVIRONMENT)) {
     errors.push(`POLAR_ENVIRONMENT must be 'sandbox' or 'production', got '${env.POLAR_ENVIRONMENT}'`);
   }

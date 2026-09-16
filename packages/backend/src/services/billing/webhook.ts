@@ -7,6 +7,7 @@ import { debugBus } from '../debugBus.js';
 import { emitSubscriptionUpdated } from '../websocket.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
 import { polarWebhookSecret } from './polar.js';
+import { notifyTodiex, type TodiexLevel } from '../todiex.js';
 
 /**
  * Polar webhook receiver — the ONLY writer of the webhook-driven billing
@@ -83,6 +84,37 @@ async function resolveUserId(sub: PolarSubscription): Promise<string | null> {
  * Apply one subscription event to the users row. Exported for tests; pure
  * state-machine + persistence, no HTTP concerns.
  */
+/**
+ * How a subscription event should read on a phone.
+ *
+ * Polar sends one `subscription.updated` for a great many transitions, so the
+ * status carries the meaning rather than the event type. `past_due` is the
+ * closest thing to a payment failure that reaches us: Polar keeps granting
+ * access through its own dunning, and only a later `revoked` ends it, so this
+ * is the moment worth knowing about while it can still be saved.
+ *
+ * Returns null for the transitions not worth a notification — a `trialing`
+ * heartbeat, a metadata-only update. Exported for tests.
+ */
+export function describeSubscriptionEvent(
+  eventType: string,
+  status: string
+): { kind: string; level: TodiexLevel; title: string } | null {
+  if (eventType === 'subscription.revoked' || status === 'canceled') {
+    return { kind: 'subscription.cancelled', level: 'warn', title: 'Talyn subscription ended' };
+  }
+  if (status === 'past_due') {
+    return { kind: 'payment.failed', level: 'error', title: 'Talyn payment failed — in dunning' };
+  }
+  if (eventType === 'subscription.created' && GRANTING_STATUSES.has(status)) {
+    return { kind: 'subscription.created', level: 'success', title: 'New Talyn subscription' };
+  }
+  if (eventType === 'subscription.active') {
+    return { kind: 'subscription.active', level: 'success', title: 'Talyn subscription active' };
+  }
+  return null;
+}
+
 export async function applySubscriptionEvent(
   eventType: string,
   sub: PolarSubscription,
@@ -222,6 +254,28 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
 
   if (result.applied && result.userId) {
     emitSubscriptionUpdated(result.userId, await buildBillingStatus(result.userId));
+
+    // Money moving is the one billing signal worth a phone buzz. Keyed on the
+    // Polar event id so a redelivery Polar makes after our 200 was lost in
+    // flight cannot notify twice — the idempotency gate above already stops
+    // one that reaches us, but this covers the half-second where it does not.
+    const described = sub ? describeSubscriptionEvent(event.type, sub.status) : null;
+    if (described) {
+      notifyTodiex({
+        kind: described.kind,
+        level: described.level,
+        title: described.title,
+        message: `Status ${sub!.status}${sub!.cancelAtPeriodEnd ? ', cancelling at period end' : ''}.`,
+        metadata: {
+          user_id: result.userId,
+          subscription_id: sub!.id,
+          status: sub!.status,
+          polar_event_type: event.type,
+        },
+        dedupeKey: `polar:${eventId}`,
+        occurredAt: occurredAt.toISOString(),
+      });
+    }
   }
 
   res.status(200).json({ success: true });
