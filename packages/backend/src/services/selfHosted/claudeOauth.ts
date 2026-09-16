@@ -51,40 +51,64 @@ import type { EncryptedEnvelope } from '../tokenCrypto.js';
  */
 export const CLAUDE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 export const CLAUDE_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
-export const CLAUDE_AUTHORIZE_URL = 'https://platform.claude.com/oauth/authorize';
+/**
+ * The CLAUDE.AI authorize host — NOT `platform.claude.com`.
+ *
+ * Anthropic runs two authorize endpoints behind one client id, and they issue
+ * different KINDS of grant. Claude Code's own config names both:
+ *
+ *   CONSOLE_AUTHORIZE_URL:   https://platform.claude.com/oauth/authorize
+ *   CLAUDE_AI_AUTHORIZE_URL: https://claude.com/cai/oauth/authorize
+ *
+ * The console one authorizes an Anthropic **organization** — metered API
+ * credits, `org:create_api_key`, and no permission to run a model on anybody's
+ * subscription. The `cai` one authorizes a **Claude Pro/Max subscription**,
+ * which is the whole point of the fleet: the workspace's own plan, not our
+ * credits.
+ *
+ * This module used to point at the console one, and the failure was patient.
+ * The exchange succeeded, a real token came back, Settings said "connected" —
+ * and every fleet run was refused with a 403 about scopes. Narrowing the scope
+ * list did not help; the second attempt came back granting `user:profile` and
+ * nothing else, which is the console endpoint saying it has no subscription to
+ * give away.
+ *
+ * Claude Code picks between them on ONE question — does the scope list ask for
+ * inference:
+ *
+ *   SK(e) = Array.isArray(e) && e.includes("user:inference")
+ *   let u = loginWithClaudeAi ? CLAUDE_AI_AUTHORIZE_URL : CONSOLE_AUTHORIZE_URL
+ *
+ * Talyn only ever wants inference, so it only ever wants this host.
+ */
+export const CLAUDE_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
 export const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 /**
- * Exactly the scopes Claude Code documents for a SUBSCRIPTION login.
+ * Claude Code's `claude.ai` scope set, verbatim.
  *
- * Not a guess, and not a superset. Claude Code's own CLI prints this list when
- * `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` is set without scopes:
+ * Its config holds two lists and a union of them:
  *
- *   e.g. "user:inference" or
- *        "user:profile user:inference user:sessions:claude_code user:mcp_servers"
+ *   CONSOLE = ["org:create_api_key", "user:profile"]
+ *   CLAUDEAI = ["user:profile", "user:inference",
+ *               "user:sessions:claude_code", "user:mcp_servers",
+ *               "user:file_upload"]
+ *   DEFAULT = dedupe([...CONSOLE, ...CLAUDEAI])
  *
- * # Why asking for more broke it
+ * Claude Code sends DEFAULT to whichever host it picked and lets the host grant
+ * what it recognises. Talyn sends the CLAUDEAI list alone, because we only ever
+ * talk to the `cai` host and `org:create_api_key` buys a power we never use —
+ * it put "Generate API keys on your behalf" on the consent screen for nothing.
  *
- * The first version of this asked for `org:create_api_key` and
- * `user:file_upload` too, copied from yas which copied Claude Code's OTHER
- * flow. Anthropic answered with an ORGANIZATION grant — the consent screen read
- * "connect to your Anthropic organization", offered API-key creation, profile
- * and file upload, and did not mention inference. The token it issued was then
- * refused by the Messages API:
- *
- *   403 OAuth token does not meet scope requirement
- *       any_of(org:service_key_inference, user:ccr_inference, user:developer,
- *              user:inference, …)
- *
- * So the extra scope did not merely over-ask, it selected a different KIND of
- * grant. A subscription login and a console/org connection are two flows behind
- * one authorize endpoint, and the scope list is what chooses between them.
- *
- * The lesson is worth keeping: for this endpoint, request the documented set
- * and nothing beside it. Anything extra may silently change what you get.
+ * Note what this is NOT: a guess, and not a minimal set derived by reasoning.
+ * An earlier version of this file trimmed `user:file_upload` on the theory that
+ * a sandboxed agent has no use for it. That theory may even be right, and it
+ * was still the wrong move — the scope list is an input to Anthropic's flow
+ * selection, so trimming it is changing a variable in a system we do not own.
+ * Match the client that works, then change one thing at a time.
  */
 export const CLAUDE_SCOPE =
-  'user:profile user:inference user:sessions:claude_code user:mcp_servers';
+  'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
 export const CLAUDE_AUTHORIZE_SCOPE = CLAUDE_SCOPE;
 export const CLAUDE_REFRESH_SCOPE = CLAUDE_SCOPE;
 

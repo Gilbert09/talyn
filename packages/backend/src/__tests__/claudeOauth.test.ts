@@ -75,7 +75,7 @@ describe('claude oauth', () => {
       // The whole reason this works on the web where Codex cannot: nothing
       // listens on a port, so the desktop and the browser run the same flow.
       const url = buildAuthorizeUrl({ codeChallenge: 'chal', state: 'st' });
-      expect(url.startsWith('https://platform.claude.com/oauth/authorize?')).toBe(true);
+      expect(url.startsWith('https://claude.com/cai/oauth/authorize?')).toBe(true);
       const q = new URL(url).searchParams;
       expect(q.get('client_id')).toBe(CLAUDE_CLIENT_ID);
       expect(q.get('redirect_uri')).toBe(CLAUDE_REDIRECT_URI);
@@ -84,37 +84,50 @@ describe('claude oauth', () => {
       expect(q.get('code_challenge')).toBe('chal');
     });
 
-    it('asks for EXACTLY the scopes Claude Code documents, and nothing beside them', () => {
+    it('authorizes at the claude.ai host, never the console one', () => {
+      // The two hosts issue different KINDS of grant behind one client id:
+      //
+      //   CONSOLE_AUTHORIZE_URL:   https://platform.claude.com/oauth/authorize
+      //   CLAUDE_AI_AUTHORIZE_URL: https://claude.com/cai/oauth/authorize
+      //
+      // The console one authorizes an Anthropic ORGANIZATION — metered credits
+      // and API-key creation, with no permission to run a model on anybody's
+      // subscription. Pointing at it is what made every fleet run fail with a
+      // 403 about scopes while the connection itself looked healthy, and the
+      // second attempt came back granting `user:profile` alone.
+      const url = buildAuthorizeUrl({ codeChallenge: 'c', state: 's' });
+      expect(url).not.toContain('platform.claude.com/oauth/authorize');
+      expect(url.startsWith('https://claude.com/cai/oauth/authorize?')).toBe(true);
+    });
+
+    it("asks for EXACTLY Claude Code's claude.ai scope set", () => {
       // An exact-set assertion rather than a couple of `toContain`s, because
-      // the bug this pins was an over-ask, and no subset check can catch one.
-      //
-      // The first version added `org:create_api_key` and `user:file_upload`.
-      // Anthropic answered with an ORGANIZATION grant — the consent screen read
-      // "connect to your Anthropic organization", listed API-key creation,
-      // profile and file upload, and never mentioned inference. Every fleet run
-      // on the resulting token was then refused:
-      //
-      //   403 OAuth token does not meet scope requirement
-      //       any_of(org:service_key_inference, user:ccr_inference,
-      //              user:developer, user:inference, …)
-      //
-      // So the extra scopes did not merely over-ask, they selected a different
-      // KIND of grant. Subscription login and console/organization connection
-      // are two flows behind one authorize endpoint, and the scope list is what
-      // chooses between them. The set below is the one Claude Code's own CLI
-      // prints for a subscription refresh token.
+      // the scope list is an INPUT to Anthropic's flow selection, not just a
+      // permission request — Claude Code routes to the claude.ai host on
+      // `scopes.includes("user:inference")`. A subset check cannot see either
+      // an over-ask or a trim, and both change what comes back.
       const scope = new URL(buildAuthorizeUrl({ codeChallenge: 'c', state: 's' })).searchParams.get(
         'scope',
       )!;
       expect(scope.split(' ').filter(Boolean).sort()).toEqual(
-        ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers'].sort(),
+        [
+          'user:profile',
+          'user:inference',
+          'user:sessions:claude_code',
+          'user:mcp_servers',
+          'user:file_upload',
+        ].sort(),
       );
+      // Claude Code's DEFAULT list unions in the console set. We do not, because
+      // we never speak to the console host and this scope is the one that put
+      // "Generate API keys on your behalf" on the consent screen.
+      expect(scope).not.toContain('org:create_api_key');
     });
 
     it('refreshes with the same scopes it was granted', () => {
       // A refresh that widens the scope is a new consent, and Anthropic answers
-      // it with an error rather than a token. Keeping one constant for both
-      // legs is what makes that unrepresentable.
+      // it with an error rather than a token. One constant for both legs makes
+      // that unrepresentable.
       expect(CLAUDE_REFRESH_SCOPE).toBe(CLAUDE_AUTHORIZE_SCOPE);
     });
   });
@@ -122,6 +135,7 @@ describe('claude oauth', () => {
   describe('the granted scope', () => {
     it.each([
       ['user:profile user:inference user:sessions:claude_code', true, 'what we ask for'],
+      ['user:profile', false, 'the console endpoint, with no subscription to give'],
       ['user:profile user:file_upload org:create_api_key', false, 'the organization grant'],
       ['workspace:inference', true, 'another member of the any_of set'],
       ['user:developer', true, 'and another'],
@@ -131,21 +145,21 @@ describe('claude oauth', () => {
       expect(grantCanRunInference(scope as string | undefined)).toBe(expected);
     });
 
-    it('refuses to store an organization grant', async () => {
-      // The failure this whole guard exists for: the exchange succeeds, the
-      // token is real, and it cannot run a model. Refusing here puts the error
-      // in front of the person who can act on it.
+    it('refuses to store a grant that cannot run a model', async () => {
+      // The failure this guard exists for: the exchange succeeds, the token is
+      // real, and it cannot run a model. Refusing here puts the error in front
+      // of the person who can act on it, rather than in a 403 hours later.
       fetchWithTimeout.mockResolvedValue(
         okResponse({
           access_token: 'at',
           refresh_token: 'rt',
           expires_in: 3600,
-          scope: 'user:profile user:file_upload org:create_api_key',
+          scope: 'user:profile',
         }),
       );
-      await expect(
-        exchangeCode({ code: 'c', codeVerifier: 'v' }),
-      ).rejects.toThrow(/permission to run models/);
+      await expect(exchangeCode({ code: 'c', codeVerifier: 'v' })).rejects.toThrow(
+        /permission to run models/,
+      );
     });
   });
 
