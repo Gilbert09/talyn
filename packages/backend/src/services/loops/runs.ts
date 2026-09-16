@@ -50,6 +50,9 @@ export const DUE_LOOP_COLUMNS = {
   model: loopsTable.model,
   concurrency: loopsTable.concurrency,
   internetAccess: loopsTable.internetAccess,
+  // Small — a handful of ids or null — and read on every firing, so it earns
+  // its place in the sweep's projection rather than a second query per due row.
+  mcpServerIds: loopsTable.mcpServerIds,
   repositoryId: loopsTable.repositoryId,
   repoFullName: loopsTable.repoFullName,
   nextRunAt: loopsTable.nextRunAt,

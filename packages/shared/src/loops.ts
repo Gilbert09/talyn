@@ -197,6 +197,21 @@ export interface LoopDefinition {
    * worse than an honest yes.
    */
   internetAccess: boolean;
+  /**
+   * The tool servers this loop pins, or null to inherit whatever the workspace
+   * has switched on.
+   *
+   * Three states and all of them reachable. Null is inherit — what every loop
+   * written before this field said, and what most loops want. An empty array is
+   * "no tool servers", which a prompt that should stay narrow genuinely wants;
+   * collapsing it into null would make that the one thing a loop could not ask
+   * for. A list is exactly those.
+   *
+   * It rides on the TASK at dispatch, not read from the loop at run time, for
+   * the reason `internetAccess` does: a revived run must get the posture it
+   * had, rather than whatever the loop says today.
+   */
+  mcpServerIds: string[] | null;
   /** Null only after the repository row was deleted; `repoFullName` survives. */
   repositoryId: string | null;
   repoFullName: string;
@@ -219,6 +234,7 @@ export interface LoopInput {
   model: string;
   concurrency?: LoopConcurrency;
   internetAccess?: boolean;
+  mcpServerIds?: string[] | null;
   repositoryId: string;
   repoFullName: string;
 }
@@ -234,6 +250,7 @@ export interface NormalizedLoop {
   model: string;
   concurrency: LoopConcurrency;
   internetAccess: boolean;
+  mcpServerIds: string[] | null;
   repositoryId: string;
   repoFullName: string;
 }
@@ -629,6 +646,17 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   if (l.internetAccess !== undefined && typeof l.internetAccess !== 'boolean') {
     fail('internetAccess must be a boolean');
   }
+  // Null and absent both mean inherit; an ARRAY is a pin, including an empty
+  // one. Anything else is refused rather than coerced, because coercing a
+  // string to "inherit" would silently hand a run every tool server the
+  // workspace has.
+  if (
+    l.mcpServerIds !== undefined &&
+    l.mcpServerIds !== null &&
+    (!Array.isArray(l.mcpServerIds) || l.mcpServerIds.some((x) => typeof x !== 'string'))
+  ) {
+    fail('mcpServerIds must be a list of tool server ids, or null to use the workspace default');
+  }
 
   const repositoryId = typeof l.repositoryId === 'string' ? l.repositoryId.trim() : '';
   if (!repositoryId) fail('a loop must pick a repository — the agent has to have something to clone');
@@ -648,6 +676,7 @@ export function validateLoop(raw: unknown): NormalizedLoop {
     model,
     concurrency,
     internetAccess: l.internetAccess === true,
+    mcpServerIds: Array.isArray(l.mcpServerIds) ? (l.mcpServerIds as string[]) : null,
     repositoryId,
     repoFullName,
   };
@@ -690,6 +719,7 @@ export function emptyLoopInput(timezone = localTimezone()): LoopInput {
     model: DEFAULT_POSTHOG_CODE_MODEL_ID,
     concurrency: DEFAULT_LOOP_CONCURRENCY,
     internetAccess: false,
+    mcpServerIds: null,
     repositoryId: '',
     repoFullName: '',
   };
@@ -706,6 +736,7 @@ export function loopToInput(loop: LoopDefinition): LoopInput {
     model: loop.model,
     concurrency: loop.concurrency,
     internetAccess: loop.internetAccess,
+    mcpServerIds: loop.mcpServerIds,
     repositoryId: loop.repositoryId ?? '',
     repoFullName: loop.repoFullName,
   };

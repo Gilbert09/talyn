@@ -170,6 +170,7 @@ export async function dispatchRun(
       // other provider ignores it, which is why the editor only offers it on a
       // fleet loop.
       internetAccess: loop.internetAccess,
+      mcpServerIds: loop.mcpServerIds,
       loop: { loopId: loop.id, runId, scheduledFor: scheduledFor.toISOString() },
     });
     await markDispatched(runId, task.id);

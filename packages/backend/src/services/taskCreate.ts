@@ -67,6 +67,13 @@ export interface CreateCloudTaskInput {
    * one it replaces rather than quietly dropping to the default.
    */
   internetAccess?: boolean;
+  /**
+   * Tool servers this run pins, or absent to inherit the workspace's enabled
+   * set. Persisted onto `metadata.mcpServerIds` for the reason
+   * `internetAccess` is: a revived run must get the posture it HAD, not
+   * whatever the loop says today.
+   */
+  mcpServerIds?: string[] | null;
 }
 
 /** Where a loop-started task came from. See {@link CreateCloudTaskInput.loop}. */

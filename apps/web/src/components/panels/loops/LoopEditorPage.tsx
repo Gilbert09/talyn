@@ -24,6 +24,7 @@ import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { Section, TextField } from '../workflows/workflowFields';
+import { LoopToolServers } from './LoopToolServers';
 
 /**
  * The loop editor.
@@ -475,6 +476,21 @@ export function LoopEditorPage({
                   ? 'This loop can reach any site. Turn it on only for prompts you trust: a run that can read your code can also send it somewhere.'
                   : 'This loop reaches your repository and its agent, and nothing else. Switch it on if the prompt has to call something outside — posting to a webhook, say.'}
               </p>
+            </Section>
+          )}
+
+          {/* Fleet loops only, for the same reason internet access is: PostHog
+              Code has no tool servers, so offering the choice there would be a
+              promise the provider cannot keep. The route refuses it too. */}
+          {input.provider === 'selfhosted' && (
+            <Section
+              title="Tool servers"
+              description="Which of this workspace's tool servers this loop's agent can use."
+            >
+              <LoopToolServers
+                value={input.mcpServerIds ?? null}
+                onChange={(mcpServerIds) => setInput((p) => ({ ...p, mcpServerIds }))}
+              />
             </Section>
           )}
 
