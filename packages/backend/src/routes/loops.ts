@@ -134,11 +134,11 @@ export function loopRoutes(): Router {
     // would be a setting the user can see and the dispatch cannot keep. The
     // editor already hides the switch; this is the half that holds for the CLI,
     // the MCP server and plain `curl`.
-    // PostHog Code has no tool servers, so pinning some there is a promise we
+    // PostHog Code has no MCP servers, so pinning some there is a promise we
     // cannot keep. Refused rather than ignored: a loop that silently dropped
     // its tools would be one whose prompt no longer works and nothing says why.
     if (loop.mcpServerIds !== null && loop.provider !== 'selfhosted') {
-      return 'Tool servers are only available on Talyn Fleet.';
+      return 'MCP servers are only available on Talyn Fleet.';
     }
     if (loop.internetAccess && loop.provider !== 'selfhosted') {
       return 'Internet access is a Talyn Fleet capability — PostHog Code runs cannot be given it.';

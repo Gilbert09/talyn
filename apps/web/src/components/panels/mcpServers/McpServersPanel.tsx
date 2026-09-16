@@ -19,10 +19,10 @@ import { McpServerEditorPage } from './McpServerEditorPage';
 import { LocalImport } from './LocalImport';
 
 /**
- * Tool servers — the MCP servers a workspace connects to its fleet runs.
+ * MCP servers — the ones a workspace connects to its Talyn Fleet runs.
  *
  * Not built on `GitHubPageShell`, for the reason Loops is not: that shell is
- * PR-shaped and a tool server is not a PR.
+ * PR-shaped and an MCP server is not a PR.
  *
  * Each row leads with whether the server ANSWERED, because the question
  * somebody has about a connected server is "is this working?" — and one whose
@@ -77,7 +77,7 @@ export function McpServersPanel() {
   const save = async (input: McpServerInput): Promise<McpServerDefinition> => {
     if (view.mode === 'edit' && view.server) {
       const next = await update(view.server.id, input);
-      toast.success('Tool server saved');
+      toast.success('MCP server saved');
       return next;
     }
     let made: McpServerDefinition;
@@ -92,7 +92,7 @@ export function McpServersPanel() {
       }
       throw err;
     }
-    toast.success('Tool server connected');
+    toast.success('MCP server connected');
     void useBillingStore.getState().refresh();
     // Stay on the editor and switch it into edit mode, because connecting is
     // rarely the last step: the tool list needs a probe, and that needs a saved
@@ -125,7 +125,7 @@ export function McpServersPanel() {
     setConfirmDelete(null);
     try {
       await remove(server.id);
-      toast.success('Tool server removed');
+      toast.success('MCP server removed');
       void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not remove', err instanceof Error ? err.message : undefined);
@@ -139,7 +139,7 @@ export function McpServersPanel() {
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Plug className="h-5 w-5" />
         <div className="flex-1">
-          <h1 className="text-lg font-semibold">Tool servers</h1>
+          <h1 className="text-lg font-semibold">MCP servers</h1>
           <p className="text-sm text-muted-foreground">
             Give your agents tools — Linear, Sentry, your own — with the key held here rather than
             inside the sandbox. Every Talyn Fleet run picks up whatever is switched on.
@@ -158,7 +158,7 @@ export function McpServersPanel() {
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "nothing connected" at somebody who has six. */}
         {servers === null ? (
-          <p className="text-sm text-muted-foreground">Loading tool servers...</p>
+          <p className="text-sm text-muted-foreground">Loading MCP servers...</p>
         ) : (
           <div className="space-y-8">
             {servers.length > 0 && (
@@ -298,7 +298,7 @@ function Catalog({
 }) {
   return (
     <div>
-      <h2 className="mb-1 font-medium">{empty ? 'Connect your first tool server' : 'Add another'}</h2>
+      <h2 className="mb-1 font-medium">{empty ? 'Connect your first MCP server' : 'Add another'}</h2>
       <p className="mb-3 text-sm text-muted-foreground">
         Pick one to fill in its address, or add any server by hand.
       </p>

@@ -220,7 +220,7 @@ export function useSystemStatus(): void {
     refreshLoopCount();
   }, [refreshLoopCount]);
 
-  // And again for tool servers. Separate for the same reason: the flags are
+  // And again for MCP servers. Separate for the same reason: the flags are
   // independent, and folding them into one endpoint would make every boot pay
   // for a feature most workspaces do not have.
   const refreshMcpServerCount = useCallback(() => {

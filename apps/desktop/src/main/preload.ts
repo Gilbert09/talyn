@@ -134,7 +134,7 @@ const electronHandler = {
   },
   mcp: {
     /**
-     * MCP tool servers already configured on this machine — Claude Code (user
+     * MCP MCP servers already configured on this machine — Claude Code (user
      * AND per-project scope), Claude Desktop, Codex.
      *
      * Addresses only: a credential in one of those files is a live secret, and

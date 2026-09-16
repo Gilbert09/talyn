@@ -5,7 +5,7 @@ import { PANEL_PATHS } from '../lib/routes';
 import { StartingSpinner } from '../components/StartingSpinner';
 
 /**
- * Where a tool server's sign-in comes back to.
+ * Where an MCP server's sign-in comes back to.
  *
  * This is the redirect URI the authorization server was given, so it is the
  * only page that ever sees the authorization code — and the code is harmless
@@ -63,7 +63,7 @@ export function McpCallback() {
             className="mt-4 text-sm underline"
             onClick={() => navigate(PANEL_PATHS.mcp_servers, { replace: true })}
           >
-            Back to tool servers
+            Back to MCP servers
           </button>
         </div>
       </div>

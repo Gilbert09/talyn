@@ -461,7 +461,7 @@ describe('featuresForUser', () => {
     // No PostHog at all. Workflows is a released feature and stays ON, so an
     // unconfigured deployment still serves a page that exists. Loops stays OFF,
     // because it creates paid cloud tasks on a timer with nobody watching, and
-    // tool servers stay OFF because that page stores third-party credentials —
+    // MCP servers stay OFF because that page stores third-party credentials —
     // collapsing these to one default would silently flip two of them.
     expect(await featuresForUser(SUBJECT)).toEqual({
       workflows: true,

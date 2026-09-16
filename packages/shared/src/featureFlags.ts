@@ -154,7 +154,7 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * MCP tool servers — the servers a workspace connects and the fleet wires
+   * MCP MCP servers — the servers a workspace connects and the fleet wires
    * into every run.
    *
    * Fallback OFF and `availability: 'gated'`, matching `fleet` rather than
@@ -174,7 +174,7 @@ export const FEATURE_FLAGS = {
     posthogKey: 'mcp-servers',
     envOverride: 'MCP_SERVERS_ENABLED',
     fallback: false,
-    description: 'MCP tool servers — connect tool servers to Talyn Fleet runs',
+    description: 'MCP MCP servers — connect MCP servers to Talyn Fleet runs',
     availability: 'gated',
     releaseScopes: ['mcp'],
   },

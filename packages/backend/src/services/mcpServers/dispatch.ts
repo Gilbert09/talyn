@@ -12,7 +12,7 @@ import { mcpServersForDispatch } from './store.js';
  * `recredential` push, and `runCredentials`' answer to a host's pull. The LLM
  * key already had that problem once — `recredential` sent the Claude key
  * unconditionally and re-credentialed Codex runs with a credential their route
- * table could not reach — so the tool servers get one definition rather than
+ * table could not reach — so the MCP servers get one definition rather than
  * three.
  *
  * The map's KEY is the server's name, because that is what the fleet's proxy
@@ -38,7 +38,7 @@ export async function mcpIntegrationSecrets(task: {
 }
 
 /**
- * Which tool servers a task pinned, or null to inherit the workspace's set.
+ * Which MCP servers a task pinned, or null to inherit the workspace's set.
  *
  * Absent means inherit — what every task written before the field said. An
  * empty array means this run wants none, which is a choice and not the same

@@ -1098,7 +1098,7 @@ export const loops = pgTable(
      * workspace's enabled set.
      *
      * Null and `[]` are different answers and both are reachable: null is
-     * "whatever the workspace has switched on", `[]` is "no tool servers at
+     * "whatever the workspace has switched on", `[]` is "no MCP servers at
      * all". Collapsing them would make "run this one with no tools" the one
      * thing a loop could not say.
      */
@@ -1136,7 +1136,7 @@ export const loops = pgTable(
 );
 
 /**
- * A workspace's MCP tool servers, passed inline to the fleet on every dispatch.
+ * A workspace's MCP MCP servers, passed inline to the fleet on every dispatch.
  *
  * The credential lives HERE rather than on the fleet, and that is the design
  * rather than an accident: the fleet never persists an inline server's secret,

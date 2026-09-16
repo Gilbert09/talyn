@@ -26,7 +26,7 @@ import {
 } from '../services/mcpServers/store.js';
 
 /**
- * MCP tool servers — `/api/v1/mcp-servers`, mounted below `ownerScope`.
+ * MCP MCP servers — `/api/v1/mcp-servers`, mounted below `ownerScope`.
  *
  * Every handler gates on the flag independently of whether the client drew the
  * nav item. `GET /features` decides only what to DRAW: the CLI, the MCP server
@@ -77,7 +77,7 @@ export function mcpServerRoutes(): Router {
     if (!(await workspaceMayUseMcpServers(workspaceId))) {
       res.status(403).json({
         success: false,
-        error: `Tool servers are not available: ${mcpServersRefusalReason()}.`,
+        error: `MCP servers are not available: ${mcpServersRefusalReason()}.`,
         code: 'mcp_servers_unavailable',
       });
       return false;
@@ -98,7 +98,7 @@ export function mcpServerRoutes(): Router {
   ): Promise<McpServerDefinition | null> {
     const server = await getMcpServer(req.params.id as string);
     if (!server) {
-      res.status(404).json({ success: false, error: 'no such tool server' });
+      res.status(404).json({ success: false, error: 'no such MCP server' });
       return null;
     }
     if (!(await gate(req, res, server.workspaceId))) return null;
@@ -142,7 +142,7 @@ export function mcpServerRoutes(): Router {
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid tool server',
+        error: err instanceof Error ? err.message : 'invalid MCP server',
       });
     }
 
@@ -153,7 +153,7 @@ export function mcpServerRoutes(): Router {
     if (existing.some((s) => s.name === normalized.name)) {
       return res.status(409).json({
         success: false,
-        error: `this workspace already has a tool server called "${normalized.name}"`,
+        error: `this workspace already has an MCP server called "${normalized.name}"`,
       });
     }
 
@@ -174,7 +174,7 @@ export function mcpServerRoutes(): Router {
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err instanceof Error ? err.message : 'invalid tool server',
+        error: err instanceof Error ? err.message : 'invalid MCP server',
       });
     }
 
@@ -182,13 +182,13 @@ export function mcpServerRoutes(): Router {
     if (siblings.some((s) => s.id !== server.id && s.name === normalized.name)) {
       return res.status(409).json({
         success: false,
-        error: `this workspace already has a tool server called "${normalized.name}"`,
+        error: `this workspace already has an MCP server called "${normalized.name}"`,
       });
     }
 
     const updated = await updateMcpServer(server.id, normalized);
     if (!updated) {
-      return res.status(404).json({ success: false, error: 'no such tool server' });
+      return res.status(404).json({ success: false, error: 'no such MCP server' });
     }
     captureWorkspaceEvent(server.workspaceId, 'mcp_server_updated', serverShape(updated));
     res.json({ success: true, data: updated } as ApiResponse<typeof updated>);
@@ -315,7 +315,7 @@ export function mcpServerRoutes(): Router {
     }
     const server = await getMcpServer(serverId);
     if (!server) {
-      return res.status(404).json({ success: false, error: 'no such tool server' });
+      return res.status(404).json({ success: false, error: 'no such MCP server' });
     }
     if (!(await gate(req, res, server.workspaceId))) return;
 

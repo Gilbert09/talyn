@@ -11,7 +11,7 @@ import { decryptString, encryptString } from '../tokenCrypto.js';
 import { resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
 
 /**
- * Reading and writing a workspace's MCP tool servers.
+ * Reading and writing a workspace's MCP MCP servers.
  *
  * # The projection is the point
  *
@@ -119,7 +119,7 @@ export async function createMcpServer(
       enabled: input.enabled,
     });
   const created = await getMcpServer(id);
-  if (!created) throw new Error('the tool server was not created');
+  if (!created) throw new Error('the MCP server was not created');
   return created;
 }
 
@@ -215,7 +215,7 @@ export interface McpServerWithSecret {
  *
  * A row whose envelope will not open is SKIPPED and named in the log rather
  * than failing the dispatch. The task itself is still worth doing, and a run
- * that lost one tool server is a much better outcome than a PR that never got
+ * that lost one MCP server is a much better outcome than a PR that never got
  * fixed because a key rotated.
  */
 export async function mcpServersForDispatch(
@@ -239,7 +239,7 @@ export async function mcpServersForDispatch(
     .orderBy(mcpServersTable.name);
 
   // `only` is the per-loop pin. null means inherit the workspace's enabled set;
-  // an empty array means this run wants no tool servers, which is a choice and
+  // an empty array means this run wants no MCP servers, which is a choice and
   // not the same statement as saying nothing.
   const wanted = only === null || only === undefined ? null : new Set(only);
 
@@ -256,7 +256,7 @@ export async function mcpServersForDispatch(
       secret = await resolveMcpAccessToken(row.id, mcpOAuthStore);
       if (!secret) {
         console.warn(
-          `[mcp] the sign-in for tool server "${row.name}" is not usable, so this run goes ` +
+          `[mcp] the sign-in for MCP server "${row.name}" is not usable, so this run goes ` +
             `without it (${grant.status})`
         );
         continue;
@@ -266,7 +266,7 @@ export async function mcpServersForDispatch(
         secret = decryptString(row.secretEnc);
       } catch (err) {
         console.warn(
-          `[mcp] the credential for tool server "${row.name}" could not be opened, so this run ` +
+          `[mcp] the credential for MCP server "${row.name}" could not be opened, so this run ` +
             `goes without it: ${err instanceof Error ? err.message : String(err)}`
         );
         continue;

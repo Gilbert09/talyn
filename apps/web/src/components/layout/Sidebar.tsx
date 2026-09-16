@@ -119,7 +119,7 @@ export function Sidebar({ className }: SidebarProps) {
           },
         ]
       : []),
-    // Tool servers, gated the same three-state way and failing CLOSED for a
+    // MCP servers, gated the same three-state way and failing CLOSED for a
     // reason of its own: that page stores third-party credentials, so drawing
     // it during a PostHog outage would offer credential storage to accounts
     // nobody decided to offer it to.
@@ -128,7 +128,7 @@ export function Sidebar({ className }: SidebarProps) {
           {
             id: 'mcp_servers' as const,
             icon: Plug,
-            label: 'Tool servers',
+            label: 'MCP servers',
             // Enabled only: a switched-off server is not one the agents have,
             // and counting it would overstate what a run can reach.
             badge: enabledMcpServerCount ? enabledMcpServerCount : undefined,

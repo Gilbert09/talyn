@@ -218,7 +218,7 @@ export function setupRoutes(app: Express): void {
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.
   app.use(`${api}/loops`, mount(loopRoutes()));
-  // MCP tool servers — the servers a workspace connects and the fleet wires
+  // MCP MCP servers — the servers a workspace connects and the fleet wires
   // into every run. Same shape again: below ownerScope, every handler gating
   // on the flag whether or not the client drew the tab.
   //
@@ -257,7 +257,7 @@ export function apiErrorHandler(
   // Central mapping for the free-plan gates — task creation/reactivation
   // paths throw TaskLimitError, the merge-queue toggle throws
   // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
-  // creating a loop throws LoopLimitError, connecting a tool server throws
+  // creating a loop throws LoopLimitError, connecting an MCP server throws
   // McpServerLimitError, turning on the auto-keep default throws
   // AutoKeepDefaultPlanError, and all six land here so the 402 + code contract
   // lives in exactly one place. Expected traffic, not an error — no console

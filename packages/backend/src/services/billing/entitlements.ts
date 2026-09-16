@@ -129,7 +129,7 @@ export class LoopLimitError extends Error {
   }
 }
 
-/** Thrown by the gate when a free owner already has their allowance of tool servers. */
+/** Thrown by the gate when a free owner already has their allowance of MCP servers. */
 export class McpServerLimitError extends Error {
   readonly code = MCP_SERVER_LIMIT_ERROR_CODE;
   constructor(
@@ -137,8 +137,8 @@ export class McpServerLimitError extends Error {
     readonly count: number
   ) {
     super(
-      `Free plan is limited to ${limit} tool servers (${count} in use). ` +
-        `Upgrade for unlimited tool servers, or delete one you no longer need.`
+      `Free plan is limited to ${limit} MCP servers (${count} in use). ` +
+        `Upgrade for unlimited MCP servers, or delete one you no longer need.`
     );
     this.name = 'McpServerLimitError';
   }
@@ -366,7 +366,7 @@ export async function countOwnerLoops(ownerId: string): Promise<number> {
 }
 
 /**
- * Same contract again, for MCP tool servers.
+ * Same contract again, for MCP MCP servers.
  *
  * Exported unexecuted for the egress test, and here the reason is sharper than
  * for loops: the `mcp_servers` row carries `secret_enc`, and a `SELECT *` to
@@ -381,7 +381,7 @@ export function countOwnerMcpServersQuery(ownerId: string) {
     .where(eq(workspacesTable.ownerId, ownerId));
 }
 
-/** How many tool servers the owner has connected, across all their workspaces. */
+/** How many MCP servers the owner has connected, across all their workspaces. */
 export async function countOwnerMcpServers(ownerId: string): Promise<number> {
   const rows = await countOwnerMcpServersQuery(ownerId);
   return rows[0]?.count ?? 0;
@@ -523,7 +523,7 @@ export async function withLoopLimitGate<T>(ownerId: string, fn: () => Promise<T>
 }
 
 /**
- * Run `fn` (which connects one tool server) unless the owner is a free user who
+ * Run `fn` (which connects one MCP server) unless the owner is a free user who
  * already keeps their allowance, in which case throw McpServerLimitError.
  *
  * Creation only, exactly as the workflow and loop gates are: a PATCH replaces a

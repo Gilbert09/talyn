@@ -1,6 +1,6 @@
--- Per-workspace MCP tool servers, and the per-loop override that selects them.
+-- Per-workspace MCP MCP servers, and the per-loop override that selects them.
 --
--- A workspace connects the tool servers it wants — Linear, Sentry, Supabase,
+-- A workspace connects the MCP servers it wants — Linear, Sentry, Supabase,
 -- its own — and every Talyn Fleet run wakes up with their tools wired in. The
 -- fleet takes them INLINE on sandbox create, which is why the credential lives
 -- here rather than there: an inline server's secret is never persisted by the
@@ -67,7 +67,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_mcp_servers_workspace_name"
 --> statement-breakpoint
 -- A loop may pin its own set instead of inheriting the workspace's enabled one.
 -- NULL means inherit, which is what every loop written before this column said.
--- An empty array means "no tool servers", the same tri-state `tools` has and
+-- An empty array means "no MCP servers", the same tri-state `tools` has and
 -- for the same reason.
 ALTER TABLE "loops" ADD COLUMN IF NOT EXISTS "mcp_server_ids" jsonb;
 --> statement-breakpoint

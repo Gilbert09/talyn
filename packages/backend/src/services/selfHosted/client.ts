@@ -297,7 +297,7 @@ export interface CreateSandboxInput {
     egress?: { mode?: 'proxy' | 'filtered' | 'open' };
   };
   /**
-   * The workspace's MCP tool servers, defined on the spot.
+   * The workspace's MCP MCP servers, defined on the spot.
    *
    * Inline rather than stored on the fleet, and that is a decision with a
    * consequence. The fleet seals an inline secret on arrival and persists it
@@ -312,7 +312,7 @@ export interface CreateSandboxInput {
    * hostile repository and decides to exfiltrate the Linear key has nothing to
    * find.
    *
-   * Accepted on CREATE only. A sandbox's tool servers are fixed when it boots,
+   * Accepted on CREATE only. A sandbox's MCP servers are fixed when it boots,
    * because the proxy's route table, its DNS names and the guest's agent
    * configuration are all built once. That costs us nothing: every Talyn
    * dispatch creates its own ephemeral sandbox, so per-task is what this
@@ -321,7 +321,7 @@ export interface CreateSandboxInput {
   mcpServers?: FleetMcpServerInline[];
 }
 
-/** One MCP tool server, as the fleet takes it on a create. */
+/** One MCP MCP server, as the fleet takes it on a create. */
 export interface FleetMcpServerInline {
   /** Becomes a hostname label inside the sandbox: lowercase, digits, hyphens. */
   name: string;
@@ -933,7 +933,7 @@ export class FleetClient {
       repo?: string;
       /**
        * One credential per integration, keyed by NAME — which for us means one
-       * per MCP tool server. The fleet spells this `integrations` here and
+       * per MCP MCP server. The fleet spells this `integrations` here and
        * `integrationSecrets` on a create; it is the same map.
        *
        * REPLACES the whole set rather than merging into it, because installing

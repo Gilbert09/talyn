@@ -320,7 +320,7 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
         // from the one being replaced.
         ...(internetAccessFromTask(task) ? { egress: { mode: 'open' as const } } : {}),
       },
-      // The workspace's tool servers, with their credentials, defined on the
+      // The workspace's MCP servers, with their credentials, defined on the
       // spot. Omitted entirely when there are none, so a workspace that has
       // connected nothing sends the body it always sent.
       ...(mcpServers.length > 0 ? { mcpServers } : {}),
@@ -535,11 +535,11 @@ function internetAccessFromTask(task: Task): boolean {
 }
 
 /**
- * The workspace's tool servers, shaped for the fleet's create body.
+ * The workspace's MCP servers, shaped for the fleet's create body.
  *
  * Returns an empty array when the workspace is not in the feature's audience,
  * and that is the right degradation rather than a refusal: the task is still
- * worth doing. A run without its tool servers is a smaller run; a run that
+ * worth doing. A run without its MCP servers is a smaller run; a run that
  * failed because a flag audience changed is a broken one.
  *
  * No count limit and no truncation. The fleet's own caps were removed rather

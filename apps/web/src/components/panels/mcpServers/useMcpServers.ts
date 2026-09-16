@@ -10,13 +10,13 @@ import { useWorkspaceStore } from '../../../stores/workspace';
 import { useOnReconnect } from '../../../hooks/useOnReconnect';
 
 /**
- * The Tool servers page's data.
+ * The MCP servers page's data.
  *
  * Owned here rather than in a global store, for the reason `useLoops` is: this
- * is the only screen that reads a tool server. Only the badge count is lifted
+ * is the only screen that reads an MCP server. Only the badge count is lifted
  * into the store.
  *
- * There is no live WS subscription, deliberately. A tool server changes when a
+ * There is no live WS subscription, deliberately. An MCP server changes when a
  * person edits it, so there is nothing arriving on its own to catch up with —
  * the reconnect handler is still here because a socket drop usually means the
  * page has been asleep, and a stale list after that is the common case.
@@ -61,7 +61,7 @@ export function useMcpServers(): UseMcpServers {
       .catch((err: unknown) => {
         if (workspaceRef.current !== workspaceId) return;
         setServers([]);
-        setError(err instanceof Error ? err.message : 'Could not load tool servers');
+        setError(err instanceof Error ? err.message : 'Could not load MCP servers');
       });
   }, [workspaceId]);
 

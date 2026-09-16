@@ -118,7 +118,7 @@ export function SettingsPanel() {
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
-    { id: 'mcp' as const, icon: Plug, label: 'MCP server' },
+    { id: 'mcp' as const, icon: Plug, label: 'Talyn as an MCP server' },
     { id: 'about' as const, icon: Info, label: 'About' },
   ];
 
@@ -2342,7 +2342,7 @@ function MCPServerSettings() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold mb-1">MCP server</h3>
+        <h3 className="text-lg font-semibold mb-1">Talyn as an MCP server</h3>
         <p className="text-sm text-muted-foreground">
           Drive Talyn from a Claude client (Claude Code or Claude Desktop). Generate a
           personal token, then run the command below to connect.

@@ -67,7 +67,7 @@ describe('mcpServersForDispatch', () => {
     expect(await mcpServersForDispatch('ws-1', null)).toEqual([]);
   });
 
-  // The per-loop pin. An empty array means "this run wants no tool servers",
+  // The per-loop pin. An empty array means "this run wants no MCP servers",
   // which must not read as "inherit the workspace's set".
   it('an empty pin selects nothing, while null inherits', async () => {
     await seed(null);
@@ -79,7 +79,7 @@ describe('mcpServersForDispatch', () => {
 
   // A key that will not open costs its own server and nothing else. The task is
   // still worth doing; a PR that never got fixed because a key rotated is a
-  // much worse outcome than a run missing one tool server.
+  // much worse outcome than a run missing one MCP server.
   it('skips a server whose credential will not open, and keeps the rest', async () => {
     await seed(null);
     await db
@@ -130,7 +130,7 @@ describe('mcpIntegrationSecrets', () => {
     expect(await mcpIntegrationSecrets({ workspaceId: 'ws-1', metadata: null })).toEqual({});
   });
 
-  // Losing the flag mid-run degrades to a run WITHOUT tool servers rather than
+  // Losing the flag mid-run degrades to a run WITHOUT MCP servers rather than
   // a run that fails. The task is still worth doing.
   it('answers empty when the workspace is out of the audience', async () => {
     await seed(null);

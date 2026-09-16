@@ -2,9 +2,9 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
-## Session 137 — MCP tool servers on the fleet (2026-09-16)
+## Session 137 — MCP servers on the fleet (2026-09-16)
 
-A workspace connects the tool servers it wants — Linear, Sentry, Supabase, its
+A workspace connects the MCP servers it wants — Linear, Sentry, Supabase, its
 own — and every Talyn Fleet run wakes up with their tools wired in. Behind the
 `mcp-servers` flag, fleet-only, free plan keeps 3.
 

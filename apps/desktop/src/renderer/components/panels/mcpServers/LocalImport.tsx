@@ -7,7 +7,7 @@ import { Button } from '../../ui/button';
 import { cn } from '../../../lib/utils';
 
 /**
- * Tool servers already configured on this machine.
+ * MCP servers already configured on this machine.
  *
  * Desktop only — reading `~/.claude.json` needs a filesystem, so `apps/web`
  * ships a component of the same name that renders nothing.

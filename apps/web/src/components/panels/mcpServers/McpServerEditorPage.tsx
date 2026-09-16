@@ -84,7 +84,7 @@ export function McpServerEditorPage({
     try {
       await onSave(input);
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Could not save this tool server');
+      setSaveError(err instanceof Error ? err.message : 'Could not save this MCP server');
     } finally {
       setSaving(false);
     }
@@ -108,7 +108,7 @@ export function McpServerEditorPage({
       const saved = await onSave(input);
       setProbe(await onTest(saved.id));
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Could not reach this tool server');
+      setSaveError(err instanceof Error ? err.message : 'Could not reach this MCP server');
     } finally {
       setProbing(false);
     }
@@ -122,11 +122,11 @@ export function McpServerEditorPage({
       <header className="flex items-center gap-3 border-b px-6 py-4">
         <Button variant="ghost" size="sm" onClick={onCancel} data-attr="mcp-editor-back">
           <ArrowLeft className="mr-1 h-4 w-4" />
-          Tool servers
+          MCP servers
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">
-            {input.displayName?.trim() || input.name.trim() || (editing ? 'Tool server' : 'New tool server')}
+            {input.displayName?.trim() || input.name.trim() || (editing ? 'MCP server' : 'New MCP server')}
           </h1>
         </div>
         {/* Only when editing. One you are creating is on — nobody fills in a

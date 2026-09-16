@@ -74,7 +74,7 @@ function AuthedApp() {
   return (
     <Routes>
       <Route index element={<Navigate to={PANEL_PATHS.my_prs} replace />} />
-      {/* The redirect URI a tool server's authorization server was given.
+      {/* The redirect URI an MCP server's authorization server was given.
           Inside RequireAuth because finishing the exchange is an authenticated
           call — and because an unauthenticated visitor could not have started
           the flow it is trying to finish. */}

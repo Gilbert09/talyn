@@ -63,7 +63,7 @@ export interface LocalSkillFile {
 
 /**
  * False on the web: reading `~/.claude.json` and `~/.codex/config.toml` needs a
- * filesystem. The Tool servers page uses this to omit the "Already on this
+ * filesystem. The MCP servers page uses this to omit the "Already on this
  * machine" section entirely rather than render one that is permanently empty.
  *
  * A structural copy of the finding shape lives here too, so the shared code

@@ -1,6 +1,6 @@
-// MCP tool servers — the vocabulary, the validator and the catalog.
+// MCP MCP servers — the vocabulary, the validator and the catalog.
 //
-// A workspace connects the tool servers it wants and every Talyn Fleet run
+// A workspace connects the MCP servers it wants and every Talyn Fleet run
 // wakes up with their tools wired in. The fleet takes them INLINE on sandbox
 // create, and the guest is configured with a plain `http://` address on its own
 // gateway carrying no token at all: the host attaches the credential per
@@ -201,10 +201,10 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
   // the only legal form and "Linear" has exactly one sensible reading; the
   // human spelling survives on `displayName`, which is what the UI shows.
   const name = str(o.name).toLowerCase();
-  if (!name) fail('a tool server needs a name');
+  if (!name) fail('an MCP server needs a name');
   if (!NAME_RE.test(name)) {
     fail(
-      `"${name}" cannot be a tool server name: it becomes a hostname inside the sandbox, so it ` +
+      `"${name}" cannot be an MCP server name: it becomes a hostname inside the sandbox, so it ` +
         'may use only lowercase letters, digits and hyphens, and must start with a letter or digit',
     );
   }
@@ -214,7 +214,7 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
   }
 
   const rawUrl = str(o.url);
-  if (!rawUrl) fail('a tool server needs a URL');
+  if (!rawUrl) fail('an MCP server needs a URL');
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -227,7 +227,7 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
   if (url.username || url.password) {
     fail('put the credential in the key field rather than in the URL');
   }
-  if (url.hash) fail('a tool server URL may not carry a #fragment');
+  if (url.hash) fail('an MCP server URL may not carry a #fragment');
   if (isPrivateHost(url.hostname)) {
     fail(
       `a sandbox cannot reach ${url.hostname}: it has no route to your machine or to a private ` +
@@ -339,7 +339,7 @@ export function mcpServerInputProblem(input: McpServerInput): string | null {
     validateMcpServer(input);
     return null;
   } catch (err) {
-    return err instanceof Error ? err.message : 'this tool server is not valid';
+    return err instanceof Error ? err.message : 'this MCP server is not valid';
   }
 }
 
@@ -420,7 +420,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     authKind: 'bearer',
     credentialLabel: 'Supabase personal access token',
     notes:
-      'The project and read-only options are query parameters, which a tool server URL may not ' +
+      'The project and read-only options are query parameters, which an MCP server URL may not ' +
       'carry here. Use a token scoped to the project you mean.',
   },
   {

@@ -47,7 +47,7 @@ export interface FleetRunCredentials {
   openaiKey?: string;
   repo?: string;
   /**
-   * One credential per MCP tool server, keyed by the server's NAME — which is
+   * One credential per MCP MCP server, keyed by the server's NAME — which is
    * how the fleet's proxy indexes an integration.
    *
    * The fleet's own adoption path reads that tenant's STORED servers, and ours
@@ -169,7 +169,7 @@ export async function resolveRunCredentials(
   // inside as every vendor refusing it at once.
   //
   // Unlike the LLM key above, an empty map is NOT a refusal: a workspace with
-  // no tool servers is the ordinary case, and the run is perfectly usable
+  // no MCP servers is the ordinary case, and the run is perfectly usable
   // without them.
   const integrations = await mcpIntegrationSecrets({
     workspaceId: row.workspaceId,

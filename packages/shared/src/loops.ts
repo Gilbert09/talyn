@@ -198,12 +198,12 @@ export interface LoopDefinition {
    */
   internetAccess: boolean;
   /**
-   * The tool servers this loop pins, or null to inherit whatever the workspace
+   * The MCP servers this loop pins, or null to inherit whatever the workspace
    * has switched on.
    *
    * Three states and all of them reachable. Null is inherit — what every loop
    * written before this field said, and what most loops want. An empty array is
-   * "no tool servers", which a prompt that should stay narrow genuinely wants;
+   * "no MCP servers", which a prompt that should stay narrow genuinely wants;
    * collapsing it into null would make that the one thing a loop could not ask
    * for. A list is exactly those.
    *
@@ -648,14 +648,14 @@ export function validateLoop(raw: unknown): NormalizedLoop {
   }
   // Null and absent both mean inherit; an ARRAY is a pin, including an empty
   // one. Anything else is refused rather than coerced, because coercing a
-  // string to "inherit" would silently hand a run every tool server the
+  // string to "inherit" would silently hand a run every MCP server the
   // workspace has.
   if (
     l.mcpServerIds !== undefined &&
     l.mcpServerIds !== null &&
     (!Array.isArray(l.mcpServerIds) || l.mcpServerIds.some((x) => typeof x !== 'string'))
   ) {
-    fail('mcpServerIds must be a list of tool server ids, or null to use the workspace default');
+    fail('mcpServerIds must be a list of MCP server ids, or null to use the workspace default');
   }
 
   const repositoryId = typeof l.repositoryId === 'string' ? l.repositoryId.trim() : '';

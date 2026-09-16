@@ -5,10 +5,10 @@ import { emptyLoopInput, loopToInput, validateLoop, type LoopInput } from '@taly
  * The per-loop tool-server pin, through the validator.
  *
  * Its three states are the whole point and each has to survive: null is
- * inherit, `[]` is "no tool servers", and a list is exactly those. Collapsing
+ * inherit, `[]` is "no MCP servers", and a list is exactly those. Collapsing
  * null and `[]` would make "run this one with no tools" the one thing a loop
  * could not ask for, and coercing junk to null would silently hand a run every
- * tool server the workspace has.
+ * MCP server the workspace has.
  */
 
 function loop(over: Partial<LoopInput> = {}): LoopInput {
@@ -26,7 +26,7 @@ function loop(over: Partial<LoopInput> = {}): LoopInput {
   };
 }
 
-describe('a loop’s tool servers', () => {
+describe('a loop’s MCP servers', () => {
   it('defaults to inherit', () => {
     expect(validateLoop(loop()).mcpServerIds).toBeNull();
     expect(emptyLoopInput().mcpServerIds).toBeNull();
@@ -42,13 +42,13 @@ describe('a loop’s tool servers', () => {
   });
 
   // Refused rather than coerced. Reading a string as "inherit" would hand the
-  // run every tool server the workspace has, which is the opposite of what
+  // run every MCP server the workspace has, which is the opposite of what
   // somebody trying to narrow a loop meant.
   it.each([['a string', 'all'], ['a number', 7], ['a list of numbers', [1, 2]]])(
     'refuses %s rather than coercing it',
     (_label, value) => {
       expect(() => validateLoop(loop({ mcpServerIds: value as never }))).toThrow(
-        /must be a list of tool server ids/
+        /must be a list of MCP server ids/
       );
     }
   );

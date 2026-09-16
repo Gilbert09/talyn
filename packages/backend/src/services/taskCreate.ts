@@ -68,7 +68,7 @@ export interface CreateCloudTaskInput {
    */
   internetAccess?: boolean;
   /**
-   * Tool servers this run pins, or absent to inherit the workspace's enabled
+   * MCP servers this run pins, or absent to inherit the workspace's enabled
    * set. Persisted onto `metadata.mcpServerIds` for the reason
    * `internetAccess` is: a revived run must get the posture it HAD, not
    * whatever the loop says today.

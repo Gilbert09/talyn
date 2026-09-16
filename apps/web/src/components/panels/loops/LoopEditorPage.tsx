@@ -480,12 +480,12 @@ export function LoopEditorPage({
           )}
 
           {/* Fleet loops only, for the same reason internet access is: PostHog
-              Code has no tool servers, so offering the choice there would be a
+              Code has no MCP servers, so offering the choice there would be a
               promise the provider cannot keep. The route refuses it too. */}
           {input.provider === 'selfhosted' && (
             <Section
-              title="Tool servers"
-              description="Which of this workspace's tool servers this loop's agent can use."
+              title="MCP servers"
+              description="Which of this workspace's MCP servers this loop's agent can use."
             >
               <LoopToolServers
                 value={input.mcpServerIds ?? null}

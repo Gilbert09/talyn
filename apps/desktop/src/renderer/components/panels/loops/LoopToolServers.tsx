@@ -10,7 +10,7 @@ import { cn } from '../../../lib/utils';
  * Three states, kept visible because they are genuinely different answers:
  *
  *   null   use whatever the workspace has switched on, now and in future
- *   []     no tool servers at all
+ *   []     no MCP servers at all
  *   [...]  exactly these
  *
  * Inherit is the default and the one most loops want — a server connected next
@@ -47,7 +47,7 @@ export function LoopToolServers({
   if (servers !== null && servers.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        This workspace has no tool servers connected, so this loop&rsquo;s agent gets the usual
+        This workspace has no MCP servers connected, so this loop&rsquo;s agent gets the usual
         tools and nothing else.
       </p>
     );
@@ -81,7 +81,7 @@ export function LoopToolServers({
         <p className="text-xs text-muted-foreground">
           {servers === null
             ? 'Loading...'
-            : `This loop gets the ${enabled.length} tool server${enabled.length === 1 ? '' : 's'} ` +
+            : `This loop gets the ${enabled.length} MCP server${enabled.length === 1 ? '' : 's'} ` +
               'switched on for the workspace, including any you connect later.'}
         </p>
       ) : (
@@ -105,7 +105,7 @@ export function LoopToolServers({
           </div>
           {value.length === 0 && (
             <p className="text-xs text-amber-600">
-              Nothing is ticked, so this loop runs with no tool servers at all.
+              Nothing is ticked, so this loop runs with no MCP servers at all.
             </p>
           )}
         </>

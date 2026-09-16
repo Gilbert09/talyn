@@ -2,7 +2,7 @@ import { FEATURE_FLAGS, readFlagOverride } from '@talyn/shared';
 import { evaluateFlag, workspaceHasFeature, type FlagSubject } from './featureFlags.js';
 
 /**
- * Who may use MCP tool servers.
+ * Who may use MCP MCP servers.
  *
  * # Why this fails CLOSED
  *
@@ -26,7 +26,7 @@ import { evaluateFlag, workspaceHasFeature, type FlagSubject } from './featureFl
  */
 
 /**
- * The cheap, subject-free check: are tool servers switched off for this whole
+ * The cheap, subject-free check: are MCP servers switched off for this whole
  * deployment?
  *
  * ONLY the env override, and not a substitute for the per-workspace check. It
@@ -37,7 +37,7 @@ export function mcpServersKillSwitchPulled(): boolean {
 }
 
 /**
- * Whether this workspace's owner may use tool servers.
+ * Whether this workspace's owner may use MCP servers.
  *
  * Keyed on the OWNER, for the reason `workspaceMayUseFleet` is: a dispatch may
  * have no caller — a loop firing is the clock, and a merge-queue fix run is a
@@ -47,7 +47,7 @@ export async function workspaceMayUseMcpServers(workspaceId: string): Promise<bo
   return (await workspaceHasFeature('mcpServers', workspaceId)).enabled;
 }
 
-/** Whether this signed-in user may use tool servers — the routes and `/features`. */
+/** Whether this signed-in user may use MCP servers — the routes and `/features`. */
 export async function userMayUseMcpServers(subject: FlagSubject): Promise<boolean> {
   return (await evaluateFlag('mcpServers', subject)).enabled;
 }
@@ -62,10 +62,10 @@ export async function userMayUseMcpServers(subject: FlagSubject): Promise<boolea
  */
 export function mcpServersRefusalReason(): string {
   if (mcpServersKillSwitchPulled()) {
-    return `tool servers are switched off on this deployment (${FEATURE_FLAGS.mcpServers.envOverride}=false)`;
+    return `MCP servers are switched off on this deployment (${FEATURE_FLAGS.mcpServers.envOverride}=false)`;
   }
   if (!process.env.TALYN_POSTHOG_KEY) {
-    return `this deployment has no PostHog key, so tool servers stay off (set ${FEATURE_FLAGS.mcpServers.envOverride}=true to use them anyway)`;
+    return `this deployment has no PostHog key, so MCP servers stay off (set ${FEATURE_FLAGS.mcpServers.envOverride}=true to use them anyway)`;
   }
   return 'this account is not in the audience for the "mcp-servers" feature flag';
 }

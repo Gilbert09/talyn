@@ -235,7 +235,7 @@ interface WorkspaceState {
   enabledWorkflowCount: number | null;
   /** Enabled loops, for the nav badge. `null` is not yet counted. */
   enabledLoopCount: number | null;
-  /** Enabled tool servers, for the nav badge. `null` is not yet counted. */
+  /** Enabled MCP servers, for the nav badge. `null` is not yet counted. */
   enabledMcpServerCount: number | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing

@@ -216,7 +216,7 @@ ipcMain.handle('skills:list-local', async () => {
   return results.filter((r) => r !== null);
 });
 
-// MCP tool servers already configured on this machine, so somebody who has
+// MCP MCP servers already configured on this machine, so somebody who has
 // wired up Supabase for their own Claude does not have to find the URL again.
 // Remote HTTP servers only reach a sandbox; the rest are reported WITH the
 // reason rather than dropped. See main/localMcp.ts for why no key is read.
