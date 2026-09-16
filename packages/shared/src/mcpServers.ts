@@ -150,6 +150,15 @@ const TOOL_NAME_RE = /^[A-Za-z0-9_-]+$/;
  *  remove it, and nothing downstream would say so. */
 const RESERVED_NAMES = new Set(['github']);
 
+/**
+ * An HTTP field name, per RFC 7230's `token` production.
+ *
+ * Wider than letters-digits-hyphen on purpose: underscores are legal and real
+ * vendors use them — Context7 documents its key header as `CONTEXT7_API_KEY`,
+ * and a stricter rule made its own catalog entry unsaveable.
+ */
+const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+
 /** Hosts the fleet refuses as an upstream. A sandbox has no routed egress, so
  *  one of these is not "restricted", it is unreachable — and 169.254.169.254 is
  *  a cloud metadata endpoint, which is the reason the rule exists at all. */
@@ -188,6 +197,9 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
   if (typeof raw !== 'object' || raw === null) fail('an MCP server needs a body');
   const o = raw as Record<string, unknown>;
 
+  // Lower-cased rather than refused. The name is a DNS label, so lowercase is
+  // the only legal form and "Linear" has exactly one sensible reading; the
+  // human spelling survives on `displayName`, which is what the UI shows.
   const name = str(o.name).toLowerCase();
   if (!name) fail('a tool server needs a name');
   if (!NAME_RE.test(name)) {
@@ -216,11 +228,6 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
     fail('put the credential in the key field rather than in the URL');
   }
   if (url.hash) fail('a tool server URL may not carry a #fragment');
-  // A bare host is refused for the fleet's own reason: there is no endpoint to
-  // call, and the failure it produces is a 404 from the vendor an hour later.
-  if (url.pathname === '' || url.pathname === '/') {
-    fail(`"${rawUrl}" needs the endpoint's path — most vendors serve MCP at /mcp`);
-  }
   if (isPrivateHost(url.hostname)) {
     fail(
       `a sandbox cannot reach ${url.hostname}: it has no route to your machine or to a private ` +
@@ -270,7 +277,16 @@ export function validateMcpServer(raw: unknown): NormalizedMcpServer {
   return {
     name,
     displayName: str(o.displayName).slice(0, 120) || null,
-    url: rawUrl,
+    // NORMALISED, not echoed, and the trailing slash is load-bearing.
+    //
+    // The fleet refuses a URL with no path at all — a paste that lost its
+    // /mcp — but accepts an explicit root, because some servers really do
+    // answer there (Stripe's is `https://mcp.stripe.com/`; every /mcp spelling
+    // 404s). Go can tell `https://host` from `https://host/`; the WHATWG parser
+    // used here normalises both to "/" and cannot. So we send the form the
+    // fleet accepts and let the Test button be what says whether anything
+    // answers — a two-second answer beats a guess about what somebody meant.
+    url: url.pathname === '/' && !rawUrl.endsWith('/') ? `${rawUrl}/` : rawUrl,
     description: str(o.description).slice(0, 200) || null,
     catalogHandle: str(o.catalogHandle) || null,
     authKind,
@@ -287,7 +303,7 @@ function normaliseInjection(raw: unknown, kind: McpAuthKind): McpInjection | nul
   if (kind === 'header') {
     out.header = str(o.header);
     if (!out.header) fail('a header credential needs the header name');
-    if (!/^[A-Za-z0-9-]+$/.test(out.header)) fail(`"${out.header}" is not a header name`);
+    if (!HEADER_NAME_RE.test(out.header)) fail(`"${out.header}" is not a header name`);
     const prefix = str(o.prefix);
     if (prefix) out.prefix = prefix;
   }
@@ -303,7 +319,7 @@ function normaliseInjection(raw: unknown, kind: McpAuthKind): McpInjection | nul
   if (extra) {
     const pairs: Record<string, string> = {};
     for (const [k, v] of Object.entries(extra)) {
-      if (!/^[A-Za-z0-9-]+$/.test(k)) fail(`"${k}" is not a header name`);
+      if (!HEADER_NAME_RE.test(k)) fail(`"${k}" is not a header name`);
       pairs[k] = String(v);
     }
     if (Object.keys(pairs).length > 0) out.extra = pairs;
@@ -344,6 +360,14 @@ export function mcpServerInputProblem(input: McpServerInput): string | null {
  */
 export interface McpCatalogEntry {
   handle: string;
+  /**
+   * The server name to create, when it cannot just be the handle.
+   *
+   * It becomes a hostname label in the sandbox and the `mcp_<name>_<tool>`
+   * prefix on every tool, and the fleet reserves `github` for the sandbox's own
+   * GitHub REST API — so the GitHub entry needs a name its handle cannot be.
+   */
+  name?: string;
   title: string;
   summary: string;
   url: string;
@@ -375,15 +399,19 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'github',
+    // Not "github": the sandbox already reaches its own GitHub REST API under
+    // that name, and taking it would silently remove a capability the agent's
+    // briefing promises.
+    name: 'github-mcp',
     title: 'GitHub',
-    summary: "Issues, pull requests and code search across your repositories.",
+    summary: 'Issues, pull requests and code search across your repositories.',
     url: 'https://api.githubcopilot.com/mcp/',
     authKind: 'bearer',
     credentialLabel: 'GitHub personal access token',
     notes:
-      'Name it something other than "github" — that name is the sandbox\'s own GitHub API and is ' +
-      'refused. GitHub also serves read-only and per-toolset variants at /mcp/readonly and ' +
-      '/mcp/x/{toolset}, which cost fewer tokens than filtering tools here does.',
+      'Connected as "github-mcp", because "github" is the sandbox\'s own GitHub API. GitHub also ' +
+      'serves read-only and per-toolset variants at /mcp/readonly and /mcp/x/{toolset}, which ' +
+      'cost fewer tokens than filtering tools here does.',
   },
   {
     handle: 'supabase',
@@ -556,7 +584,7 @@ export function mcpServerToInput(s: McpServerDefinition): McpServerInput {
 
 export function mcpServerFromCatalog(entry: McpCatalogEntry): McpServerInput {
   return {
-    name: entry.handle,
+    name: entry.name ?? entry.handle,
     displayName: entry.title,
     url: entry.url,
     description: entry.summary,

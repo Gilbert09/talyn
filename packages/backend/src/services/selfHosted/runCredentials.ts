@@ -1,9 +1,10 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { ACTIVE_TASK_STATUSES, readCloudTaskMeta } from '@talyn/shared';
+import { ACTIVE_TASK_STATUSES, readCloudTaskMeta, type Task } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { getSelfHostedCredentials } from './credentials.js';
+import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 
 /**
  * Serving an adopted run's credentials back to the host that lost them.
@@ -45,6 +46,14 @@ export interface FleetRunCredentials {
   anthropicKey?: string;
   openaiKey?: string;
   repo?: string;
+  /**
+   * One credential per MCP tool server, keyed by the server's NAME — which is
+   * how the fleet's proxy indexes an integration.
+   *
+   * The fleet's own adoption path reads that tenant's STORED servers, and ours
+   * are inline, so this answer is the only way a restarted host gets them back.
+   */
+  integrations?: Record<string, string>;
 }
 
 /** Why a request was refused, for the route to turn into a status code. */
@@ -152,12 +161,28 @@ export async function resolveRunCredentials(
     return { ok: false, reason: 'credentials_unavailable' };
   }
 
+  // AND THE TOOL SERVERS, for the same reason the push path sends them.
+  //
+  // An inline MCP server's secret is never persisted at the fleet, so this
+  // answer is the only way a restarted host gets one back. Omitting it leaves
+  // the box with its MCP routes and no credentials on them, which reads from
+  // inside as every vendor refusing it at once.
+  //
+  // Unlike the LLM key above, an empty map is NOT a refusal: a workspace with
+  // no tool servers is the ordinary case, and the run is perfectly usable
+  // without them.
+  const integrations = await mcpIntegrationSecrets({
+    workspaceId: row.workspaceId,
+    metadata: row.metadata as Task['metadata'],
+  });
+
   return {
     ok: true,
     credentials: {
       githubToken,
       ...(openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
       ...(extra.repo ? { repo: extra.repo } : {}),
+      ...(Object.keys(integrations).length > 0 ? { integrations } : {}),
     },
   };
 }

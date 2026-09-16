@@ -16,6 +16,7 @@ import { TranscriptCursors } from '../cloudProviders/transcriptStore.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 import { githubService } from '../github.js';
 import { getSelfHostedClient, getSelfHostedCredentials } from './credentials.js';
+import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
@@ -369,10 +370,28 @@ class SelfHostedPoller {
         );
         return;
       }
+      // THE TOOL SERVERS' CREDENTIALS TOO, and this is the whole reason the
+      // fleet's /credentials endpoint takes them.
+      //
+      // An inline MCP server's secret is sealed on arrival at the fleet and
+      // persisted NOWHERE, so the gateway's own adoption pull — which reads
+      // that tenant's STORED servers — has nothing to serve for one. Without
+      // this line an adopted box keeps its MCP routes and loses every tool
+      // credential, and each tool call 401s for the rest of the run: the exact
+      // failure this whole method exists to prevent, one layer down.
+      //
+      // Reconstructed from the workspace rather than from the create body,
+      // which we no longer have. The set can have drifted — a server added
+      // since the box booted has no route and its credential is simply unused;
+      // one disabled since is dropped here and stops working, which is what
+      // disabling it should do.
+      const mcpSecrets = await mcpIntegrationSecrets(row);
+
       await client.setSandboxCredentials(runId, {
         githubToken,
         ...(openai ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
         ...(extra.repo ? { repo: extra.repo } : {}),
+        ...(Object.keys(mcpSecrets).length > 0 ? { integrations: mcpSecrets } : {}),
       });
       // Marked only on success, so a failed attempt is retried next tick.
       this.recredentialed.set(row.id, key);

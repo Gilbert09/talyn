@@ -296,6 +296,58 @@ export interface CreateSandboxInput {
      */
     egress?: { mode?: 'proxy' | 'filtered' | 'open' };
   };
+  /**
+   * The workspace's MCP tool servers, defined on the spot.
+   *
+   * Inline rather than stored on the fleet, and that is a decision with a
+   * consequence. The fleet seals an inline secret on arrival and persists it
+   * NOWHERE — which is exactly what we want, and which makes us the only party
+   * that still holds it. So `poller.recredential` has to hand them back after a
+   * fleetd restart, or an adopted box keeps its MCP routes and 401s on every
+   * tool call for the rest of the run.
+   *
+   * The guest never sees any of this. It is configured with a plain
+   * `http://<name>.<integration-domain><path>` carrying no token, and the
+   * host's proxy attaches the credential per request — so an agent that reads a
+   * hostile repository and decides to exfiltrate the Linear key has nothing to
+   * find.
+   *
+   * Accepted on CREATE only. A sandbox's tool servers are fixed when it boots,
+   * because the proxy's route table, its DNS names and the guest's agent
+   * configuration are all built once. That costs us nothing: every Talyn
+   * dispatch creates its own ephemeral sandbox, so per-task is what this
+   * already is.
+   */
+  mcpServers?: FleetMcpServerInline[];
+}
+
+/** One MCP tool server, as the fleet takes it on a create. */
+export interface FleetMcpServerInline {
+  /** Becomes a hostname label inside the sandbox: lowercase, digits, hyphens. */
+  name: string;
+  /** The endpoint, path and all. A bare host is refused — nothing to call. */
+  url: string;
+  transport?: 'http';
+  /** Reaches the guest through the agent's own prompt, so it is worth writing. */
+  description?: string;
+  /** Write-only at the fleet, and never persisted there for an inline server. */
+  secret?: string;
+  /** How the host attaches the secret. Defaults to bearer when one is given. */
+  inject?: {
+    kind?: '' | 'header' | 'bearer' | 'basic' | 'query';
+    header?: string;
+    prefix?: string;
+    user?: string;
+    param?: string;
+    extra?: Record<string, string>;
+  };
+  /**
+   * An allow-list of tool names. Absent means every tool the server
+   * advertises; an empty array means none, and the fleet keeps the two
+   * distinct. A filtered tool is never registered with the agent at all rather
+   * than refused on call, so it costs no context either.
+   */
+  tools?: string[];
 }
 
 /**
@@ -874,7 +926,22 @@ export class FleetClient {
    */
   async setSandboxCredentials(
     id: string,
-    creds: { githubToken: string; anthropicKey?: string; openaiKey?: string; repo?: string },
+    creds: {
+      githubToken: string;
+      anthropicKey?: string;
+      openaiKey?: string;
+      repo?: string;
+      /**
+       * One credential per integration, keyed by NAME — which for us means one
+       * per MCP tool server. The fleet spells this `integrations` here and
+       * `integrationSecrets` on a create; it is the same map.
+       *
+       * REPLACES the whole set rather than merging into it, because installing
+       * credentials replaces the running proxy's entire struct. A name omitted
+       * here is a credential the box loses.
+       */
+      integrations?: Record<string, string>;
+    },
   ): Promise<void> {
     await this.request(`/v1/sandboxes/${encodeURIComponent(id)}/credentials`, {
       method: 'POST',

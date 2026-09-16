@@ -26,8 +26,15 @@ import {
   FleetClient,
   FleetDispatchUncertainError,
   type CreateSandboxInput,
+  type FleetMcpServerInline,
   type FleetSandbox,
 } from './client.js';
+import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
+import { mcpServerIdsFromMetadata } from '../mcpServers/dispatch.js';
+import {
+  mcpServersForDispatch,
+  type McpServerWithSecret,
+} from '../mcpServers/store.js';
 import { cloudStatusForSandbox } from './poller.js';
 import { getSelfHostedCredentials, resolveFleetTarget } from './credentials.js';
 
@@ -266,6 +273,11 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       return { ok: false, error: missingCredentialError(provider, model, creds) };
     }
 
+    // Resolved before the create rather than inside it, so a workspace whose
+    // credentials will not open costs a log line here instead of an exception
+    // halfway through building a request body.
+    const mcpServers = await mcpServersForTask(task);
+
     const { sandbox, host } = await createSandboxRetryingUncertain(client, {
       id: runId,
       workspaceId: task.workspaceId,
@@ -308,6 +320,10 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
         // from the one being replaced.
         ...(internetAccessFromTask(task) ? { egress: { mode: 'open' as const } } : {}),
       },
+      // The workspace's tool servers, with their credentials, defined on the
+      // spot. Omitted entirely when there are none, so a workspace that has
+      // connected nothing sends the body it always sent.
+      ...(mcpServers.length > 0 ? { mcpServers } : {}),
     });
 
     // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
@@ -516,6 +532,67 @@ function modelFromTask(task: Task): string | undefined {
  */
 function internetAccessFromTask(task: Task): boolean {
   return (task.metadata as Record<string, unknown> | null)?.internetAccess === true;
+}
+
+/**
+ * The workspace's tool servers, shaped for the fleet's create body.
+ *
+ * Returns an empty array when the workspace is not in the feature's audience,
+ * and that is the right degradation rather than a refusal: the task is still
+ * worth doing. A run without its tool servers is a smaller run; a run that
+ * failed because a flag audience changed is a broken one.
+ *
+ * No count limit and no truncation. The fleet's own caps were removed rather
+ * than worked around, so every enabled server is sent.
+ */
+async function mcpServersForTask(task: Task): Promise<FleetMcpServerInline[]> {
+  if (!(await workspaceMayUseMcpServers(task.workspaceId))) return [];
+  const servers = await mcpServersForDispatch(task.workspaceId, mcpServerIdsFromMetadata(task.metadata));
+  return servers.map((s) => ({
+    name: s.name,
+    url: s.url,
+    transport: 'http' as const,
+    ...(s.description ? { description: s.description } : {}),
+    ...(s.secret ? { secret: s.secret } : {}),
+    // `none` is sent explicitly rather than omitted: the fleet defaults an
+    // absent recipe to bearer whenever a secret is present, which is right for
+    // nearly every vendor and wrong for the one server that wants no
+    // credential at all.
+    inject: injectionFor(s),
+    // Absent when unrestricted, so the fleet can tell "every tool" from "no
+    // tools". Sending `[]` for a server nobody restricted would silently give
+    // the agent nothing.
+    ...(s.tools === null ? {} : { tools: s.tools }),
+  }));
+}
+
+function injectionFor(s: McpServerWithSecret): FleetMcpServerInline['inject'] {
+  switch (s.authKind) {
+    case 'bearer':
+      return { kind: 'bearer', ...(s.inject?.extra ? { extra: s.inject.extra } : {}) };
+    case 'header':
+      return {
+        kind: 'header',
+        header: s.inject?.header ?? '',
+        ...(s.inject?.prefix ? { prefix: s.inject.prefix } : {}),
+        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
+      };
+    case 'basic':
+      return {
+        kind: 'basic',
+        user: s.inject?.user ?? '',
+        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
+      };
+    case 'query':
+      return {
+        kind: 'query',
+        param: s.inject?.param ?? '',
+        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
+      };
+    case 'none':
+    default:
+      return { kind: '', ...(s.inject?.extra ? { extra: s.inject.extra } : {}) };
+  }
 }
 
 function modelFromEnv(env: Environment): string | undefined {

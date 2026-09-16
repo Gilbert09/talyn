@@ -14,6 +14,7 @@ import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { loopRoutes } from './loops.js';
+import { mcpServerRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
@@ -28,6 +29,7 @@ import {
   TaskLimitError,
   WorkflowLimitError,
   LoopLimitError,
+  McpServerLimitError,
 } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -216,6 +218,14 @@ export function setupRoutes(app: Express): void {
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.
   app.use(`${api}/loops`, mount(loopRoutes()));
+  // MCP tool servers — the servers a workspace connects and the fleet wires
+  // into every run. Same shape again: below ownerScope, every handler gating
+  // on the flag whether or not the client drew the tab.
+  //
+  // Note the neighbour below is a DIFFERENT thing with a confusingly similar
+  // name: `/mcp-tokens` mints tokens for Talyn's OWN hosted MCP endpoint, which
+  // is Talyn acting as a server. This one is Talyn acting as a client.
+  app.use(`${api}/mcp-servers`, mount(mcpServerRoutes()));
   // Personal MCP-token management (mint/list/revoke). The tokens authenticate
   // the `/mcp` endpoint mounted above.
   app.use(`${api}/mcp-tokens`, mount(mcpTokenRoutes()));
@@ -247,15 +257,17 @@ export function apiErrorHandler(
   // Central mapping for the free-plan gates — task creation/reactivation
   // paths throw TaskLimitError, the merge-queue toggle throws
   // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
-  // creating a loop throws LoopLimitError, turning on the auto-keep default
-  // throws AutoKeepDefaultPlanError, and all five land here so the 402 + code
-  // contract lives in exactly one place. Expected traffic, not an error — no
-  // console spam.
+  // creating a loop throws LoopLimitError, connecting a tool server throws
+  // McpServerLimitError, turning on the auto-keep default throws
+  // AutoKeepDefaultPlanError, and all six land here so the 402 + code contract
+  // lives in exactly one place. Expected traffic, not an error — no console
+  // spam.
   if (
     err instanceof TaskLimitError ||
     err instanceof MergeQueueLimitError ||
     err instanceof WorkflowLimitError ||
     err instanceof LoopLimitError ||
+    err instanceof McpServerLimitError ||
     err instanceof AutoKeepDefaultPlanError
   ) {
     res.status(402).json({ success: false, error: err.message, code: err.code });
