@@ -245,13 +245,19 @@ at the call site.
 |---|---|---|---|---|
 | `workflows` | Workflows — user-defined PR automation | `WORKFLOWS_ENABLED=false` | **ON** | general |
 | `loops` | Loops — recurring prompts on a cron schedule | `LOOPS_ENABLED=false` | **OFF** | general |
-| `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | **gated** |
+| `talyn-fleet` | Talyn Fleet — the Firecracker microVMs | `FLEET_ALLOWED=false` | **OFF** | general |
 
 `availability` is a separate question from `fallback`: it says whether the
 "What's new" modal may describe the feature yet. `general` does NOT mean
 everybody has it — the PostHog audience still decides that. It means the notes
 may talk about it, so a flag can be `general` while its rollout is still a
 percentage. Flipping it replays the withheld backlog to everyone who missed it.
+
+Every flag is `general` as of 2026-09-16, so nothing is withheld today. Note
+what that means for `talyn-fleet`: its `availability` and `fallback` now
+disagree on purpose. The fleet is announced to everybody, and a PostHog outage
+still refuses it, because an announcement does not change the fact that the
+fleet is finite hardware running on a workspace's own agent subscription.
 
 **The fallbacks are deliberately opposite, and they are per flag.** The fallback
 is the answer when PostHog is not configured, is unreachable, or has never heard

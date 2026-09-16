@@ -20,6 +20,8 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 
 ### Shipped
 
+- [x] **Talyn Fleet released to every workspace** (Session 136, 2026-09-16). The `talyn-fleet` PostHog flag's email condition became an empty property list at 100%, and the register entry's `availability` went `gated` → `general`, which replays the withheld backlog of fleet highlights. The flag stays in place as a kill switch and as the way to take the hardware away from one account. `fallback` stays **OFF** and now deliberately disagrees with `availability`: finite hardware must not open to everybody because PostHog is unreachable. Capacity overflow falls back to PostHog Code where the workspace has it — except for a loop, which pins its provider and fails visibly instead. Open follow-up: make the fleet front and centre over PostHog Code in onboarding and marketing.
+
 - [x] **Loops — recurring prompts on a cron schedule** (Session 122, 2026-09-12). A named rule: a prompt, a repository, an agent + model, a cron expression and an IANA timezone. Every firing creates an ordinary `code_writing` cloud task. Behind the `loops` PostHog flag, **fallback OFF** (`LOOPS_ENABLED=true` is how to run it locally). Backend: `services/loops/{store,runs,dispatch,scheduler}.ts` + `routes/loops.ts` + migration `0054`. UI: the Loops tab on the desktop and the web fork. Free plan keeps 3 per owner (Session 123). A loop can be given internet access, off by default and fleet-only (Session 125). Open follow-ups below.
 
 Follow-ups now that Loops has shipped:

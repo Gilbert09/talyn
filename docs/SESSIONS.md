@@ -2,6 +2,70 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 136 — Talyn Fleet goes general, and the last gated flag takes its test with it (2026-09-16)
+
+Two edits, as designed. `availability: 'gated'` → `'general'` on the `fleet`
+entry, and the PostHog flag's email condition replaced by an empty property
+list at 100%. Session 124's mechanism does the rest: the withheld backlog of
+fleet highlights replays to everyone who missed it, rather than a human having
+to remember which releases to re-announce.
+
+**`availability` and `fallback` now disagree, which is the first time they
+have**, and the reason the two fields were kept separate rather than derived
+from one another. The fleet is announced to everybody; a PostHog outage still
+refuses it. An announcement does not change the fact that the fleet is finite
+hardware running on a workspace's own agent subscription, so "the flag service
+is down, let everybody onto the box" stays the wrong answer. The flag itself
+stays in place — no longer an allow-list, but still the kill switch and still
+the way to take the hardware away from one account without taking it from all.
+
+The MCP project check from Session 133 earned its place again: the active
+project had reset to PostHog's own project 2, so the first flag read would have
+gone to the wrong organisation entirely. Switching to 459813 and reading the
+definition back before writing is what caught it. That is twice now.
+
+**The part worth keeping is what the release did to the tests.**
+
+Releasing the fleet empties `GATED_FEATURE_KEYS`. Nothing fails. That is the
+problem: the tests covering the withholding path used a live flag as their
+exemplar of "still gated", and with the set empty they do not break, they go
+VACUOUS. `for (const key of GATED_FEATURE_KEYS)` over an empty array asserts
+nothing and reports green. So the path stops being tested at the exact moment
+production stops exercising it too — and the next gated feature is the thing
+that depends on it still working.
+
+That exemplar had already been re-pointed twice, `workflows` → `loops` →
+`fleet`, each time by a human noticing. The third time there was nothing left
+to re-point it at.
+
+Two changes, and they answer different halves:
+
+- **A synthetic register for the mechanism.** `gateForScopeIn`,
+  `isGatedFeatureIn` and `gatedKeysOf` take a register as a parameter;
+  `filterReleaseCommits`, `parseConventionalCommit`, `listReleaseNotes` and
+  `latestReleaseNote` take an optional one defaulting to the live register.
+  The tests then invent `gated-thing` and `general-thing` and exercise
+  withholding against those. Not a module mock — the functions are pure over a
+  register, so passing one is the honest seam.
+- **Derivation for the live register.** The remaining live assertions name no
+  flag at all. They loop the register, read each entry's `availability` and
+  `releaseScopes`, and require `gateForScope` to agree. Releasing a feature now
+  needs no edit to the test file, ever — which is the failure this had three
+  times.
+
+The route test could not take a register (it goes over real HTTP against the
+live one), so it derives too: publish one highlight per known flag, require the
+response to carry exactly the ungated ones and only gate KEYS. Today the
+interesting half is vacuous and says so in a comment. The day a gated flag
+exists it re-arms by itself.
+
+**A smaller mistake worth recording**, because a build caught what a typecheck
+did not. Rewriting the fleet register entry dropped its `description` field.
+`tsc --noEmit` in `packages/backend` passed — it reads shared's `dist`, which
+was stale — and only `npm run build` in `packages/shared` failed. When a change
+starts in `packages/shared`, building it is not an optional step before
+believing a downstream typecheck.
+
 ## Session 135 — the Claude sign-in authorized the wrong thing (2026-09-16)
 
 Talyn's fleet-Claude OAuth worked end to end — consent screen, pasted code,
