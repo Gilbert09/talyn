@@ -100,9 +100,21 @@ export function initAnalytics(): void {
   posthog.init(KEY, {
     api_host: HOST,
     ui_host: uiHostFor(HOST),
-    // A packaged renderer loads from file://, which has no cookies — keep all
-    // persistence in localStorage.
-    persistence: 'localStorage',
+    // Cookie AND localStorage, which is what joins the marketing site to this
+    // app. www.talyn.dev and app.talyn.dev share a registrable domain, and
+    // posthog-js already writes its cookie on `.talyn.dev` (its
+    // `cross_subdomain_cookie` default is on for every host except
+    // herokuapp.com / vercel.app / netlify.app). Reading that cookie here means
+    // a visitor who lands on the marketing site keeps the SAME anonymous
+    // distinct id when they sign up, so `identify()` merges the two into one
+    // person — without it, the visit and the account are two strangers and no
+    // acquisition source survives to the funnel.
+    //
+    // NOTE this deliberately DIFFERS from the desktop fork, which must stay
+    // 'localStorage': a packaged renderer loads from file://, which has no
+    // cookies at all. The reason that comment gave was the desktop's reason,
+    // and it came across with the fork rather than being true here.
+    persistence: 'localStorage+cookie',
     // Don't materialise person profiles for anonymous usage.
     person_profiles: 'identified_only',
     // A desktop app has no page navigations; panels are tracked as events.

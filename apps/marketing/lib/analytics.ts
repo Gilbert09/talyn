@@ -15,6 +15,18 @@ let started = false;
 
 export function initPostHog(): void {
   if (started || !POSTHOG_KEY || typeof window === "undefined") return;
+  // Persistence is left at the default on purpose. posthog-js writes its
+  // cookie on the registrable domain (`.talyn.dev`) unless the host is one of
+  // herokuapp.com / vercel.app / netlify.app, so the anonymous distinct id
+  // minted here is the SAME one app.talyn.dev reads — which is what lets a
+  // visitor and the account they later create merge into one person, carrying
+  // the referrer and utm_* that brought them.
+  //
+  // Do NOT call posthog.identify() here — not on the waitlist form, not
+  // anywhere. Identifying by email would mint a second *identified* person,
+  // and PostHog will not merge one identified person into another, so the
+  // app's identify(supabaseUserId) could no longer claim this visit. The
+  // anonymous id is the link; leaving it alone is the feature.
   posthog.init(POSTHOG_KEY, {
     api_host: POSTHOG_HOST,
     // We capture pageviews manually on route change (App Router).

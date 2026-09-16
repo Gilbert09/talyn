@@ -8,6 +8,7 @@ import { trackEvent } from '../../lib/analytics';
 import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
+import { SourceSurvey, type SignupSource } from './SourceSurvey';
 
 const STEPS = [
   { title: 'Connect GitHub', optional: false },
@@ -45,6 +46,15 @@ export function OnboardingWizard() {
     useWorkspaceStore();
   const { status, user } = useGithubConnection(currentWorkspaceId);
   const [step, setStep] = useState(0);
+  const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
+
+  // Captured on click rather than on Finish: an answer given by somebody who
+  // then closes the window is still the answer, and this is the only
+  // acquisition signal the desktop has.
+  function handleSourceSelect(source: SignupSource) {
+    setSignupSource(source);
+    trackEvent('signup_source_survey', { signup_source: source });
+  }
 
   const githubConnected = Boolean(status?.connected);
   // Reported on completion, never gated on — see the note above on why the
@@ -62,6 +72,7 @@ export function OnboardingWizard() {
         github_connected: githubConnected,
         repos_watched: repositories.length,
         agent_connected: agentConnected,
+        signup_source: signupSource,
       });
       // Tell the PR sync to force a real poll on first entry (the repos were
       // only just watched, so the cache is empty) — see usePullRequestSync.
@@ -120,6 +131,12 @@ export function OnboardingWizard() {
           {step === 1 && <ConnectAgentStep />}
           {step === 2 && currentWorkspaceId && (
             <WatchReposStep workspaceId={currentWorkspaceId} />
+          )}
+
+          {isLast && (
+            <div className="mt-4">
+              <SourceSurvey value={signupSource} onSelect={handleSourceSelect} />
+            </div>
           )}
         </div>
 
