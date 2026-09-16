@@ -2,6 +2,91 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 135 — the Claude sign-in authorized the wrong thing (2026-09-16)
+
+Talyn's fleet-Claude OAuth worked end to end — consent screen, pasted code,
+exchange, encrypted storage, "connected" in Settings — and every run it
+produced failed:
+
+```
+403 OAuth token does not meet scope requirement
+    any_of(org:service_key_inference, user:ccr_inference, user:developer,
+           user:inference, user:voice, workspace:developer,
+           workspace:inference, workspace:messages_create)
+```
+
+**The cause was the authorize HOST, not the scope list.** Anthropic runs two
+authorize endpoints behind one client id, and they issue different kinds of
+grant. From Claude Code's own config:
+
+```
+CONSOLE_AUTHORIZE_URL:   https://platform.claude.com/oauth/authorize
+CLAUDE_AI_AUTHORIZE_URL: https://claude.com/cai/oauth/authorize
+TOKEN_URL:               https://platform.claude.com/v1/oauth/token
+MANUAL_REDIRECT_URL:     https://platform.claude.com/oauth/code/callback
+```
+
+The console endpoint authorizes an Anthropic **organization** — metered
+credits and `org:create_api_key` — and has no subscription to give away. The
+`cai` endpoint authorizes a **Claude Pro/Max subscription**, which is the whole
+point of the fleet: the workspace's own plan, not our credits. The token URL
+and the manual redirect are shared, so only the authorize host moves.
+
+Claude Code picks between them on one question — does the scope list ask for
+inference:
+
+```js
+SK(e) = Array.isArray(e) && e.includes("user:inference")
+let u = loginWithClaudeAi ? CLAUDE_AI_AUTHORIZE_URL : CONSOLE_AUTHORIZE_URL
+```
+
+**Two wrong diagnoses came first, and the shape of the error is why.** The
+consent screen listed API-key creation, profile and file upload; asked whether
+that covered inference, the answer given was "included but not itemised". It
+was not. The second attempt blamed the scope list — `org:create_api_key` was
+dropped on the theory that asking for an org scope selected the org flow. That
+was a coherent story and still wrong, and the narrowed request is what finally
+gave the answer away: the console endpoint came back granting `user:profile`
+and nothing else. An endpoint with nothing to offer.
+
+The lesson is about where the evidence came from. Both wrong answers were
+reasoned from a rendered consent screen. The right one came from the Claude
+Code binary's config object and its host-selection function, plus a live probe
+showing `claude.com/cai/oauth/authorize` 307ing to `claude.ai/oauth/authorize`
+with every parameter intact. When integrating against an undocumented flow,
+read the client that works.
+
+**The scope set is now Claude Code's claude.ai list verbatim**, including
+`user:file_upload` — which the previous attempt had trimmed on the theory that
+a sandboxed agent has no use for it. The theory may well be right and acting on
+it was still wrong: the scope list is an *input to that flow selection*, not
+merely a permission request, so trimming it is changing a variable in a system
+we do not own. Match the working client, then change one thing at a time.
+Claude Code's `DEFAULT` unions in the console set; we do not, because we never
+speak to that host and `org:create_api_key` bought "Generate API keys on your
+behalf" on the consent screen for a power Talyn never uses.
+
+**The durable fix is the guard, not the URL.** A wrong constant is a one-line
+correction; what made it expensive was that nothing between the consent screen
+and a run hours later could say the connection was useless. So `exchangeCode`
+now reads the granted `scope` off the token response and REFUSES a grant that
+carries none of the eight inference scopes, naming the likely cause. It is what
+turned the second attempt from another silent 403 into `granted: user:profile`
+— the fact that identified the endpoint. Two details matter:
+
+- **An absent `scope` answers yes.** RFC 6749 §5.1 makes the field optional
+  precisely when the grant matches the request, so silence means "you got what
+  you asked for". Treating it as a refusal would reject every spec-following
+  server.
+- **The same check sits on the refresh leg**, raising `ClaudeReauthRequiredError`.
+  That is what clears a credential stored before the check existed: at most an
+  hour later, a silent 403 on every run becomes a "reconnect Claude" prompt.
+
+The authorize-leg test asserts the scope set **exactly**, not with `toContain`.
+A subset check cannot see an over-ask or a trim, and on this endpoint both
+change what comes back.
+
+Verified by Tom re-signing in against the deployed backend.
 ## Session 134 — the watchdog that could not reach its own lock (2026-09-16)
 
 **Symptom:** two `pr_response` tasks sat at `queued` and never started. Nothing
