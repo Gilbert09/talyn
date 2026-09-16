@@ -81,13 +81,15 @@ describe('claude oauth', () => {
       expect(q.get('code_challenge')).toBe('chal');
     });
 
-    it('asks for the console scope the refresh will not', () => {
-      // Authorize asks for `org:create_api_key`; a renewal must not, or it can
-      // be refused for asking more than it was granted.
+    it('does NOT ask to generate API keys', () => {
+      // Claude Code asks for `org:create_api_key` so `setup-token` can mint a
+      // long-lived key. Talyn holds the subscription token and calls inference
+      // with it, so asking would put "Generate API keys on your behalf" on the
+      // consent screen for a power we never use.
       const scope = new URL(buildAuthorizeUrl({ codeChallenge: 'c', state: 's' })).searchParams.get(
         'scope',
       )!;
-      expect(scope).toContain('org:create_api_key');
+      expect(scope).not.toContain('org:create_api_key');
       expect(scope).toContain('user:inference');
     });
   });

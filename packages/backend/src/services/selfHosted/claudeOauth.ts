@@ -55,18 +55,27 @@ export const CLAUDE_AUTHORIZE_URL = 'https://platform.claude.com/oauth/authorize
 export const CLAUDE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 /**
- * What the authorize leg asks for, and what a renewal carries forward.
+ * What we ask for, and deliberately LESS than Claude Code asks for.
  *
- * The two differ, and deliberately: `org:create_api_key` is a console-account
- * power that a subscription renewal has no use for, and a renewal asking for
- * more than it was granted is a renewal that can be refused. Anthropic's own
- * client draws the same distinction.
+ * Claude Code's own authorize leg includes `org:create_api_key`, and yas copied
+ * it — so the consent screen told a Talyn user their account would be used to
+ * "Generate API keys on your behalf". That is a real power, and Talyn never
+ * uses it: `claude setup-token` wants it to mint a long-lived key, while we
+ * hold the subscription token and call inference with it directly. Asking for a
+ * permission we do not exercise is the kind of thing a careful user declines,
+ * and they would be right to.
+ *
+ * Dropping it makes the authorize and refresh scopes identical, which also
+ * retires the hazard yas's comment describes — a renewal asking for more than
+ * it was granted can be refused, and these two can no longer drift apart.
+ *
+ * Verified against the live endpoint: the narrowed set still returns the real
+ * consent screen rather than an invalid_scope error.
  */
-export const CLAUDE_AUTHORIZE_SCOPE =
-  'org:create_api_key user:profile user:inference user:sessions:claude_code ' +
-  'user:mcp_servers user:file_upload';
-export const CLAUDE_REFRESH_SCOPE =
+export const CLAUDE_SCOPE =
   'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
+export const CLAUDE_AUTHORIZE_SCOPE = CLAUDE_SCOPE;
+export const CLAUDE_REFRESH_SCOPE = CLAUDE_SCOPE;
 
 /** Refresh this long before expiry, so a dispatch never races the clock. */
 const REFRESH_MARGIN_MS = 5 * 60_000;
