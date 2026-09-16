@@ -404,7 +404,11 @@ class PRAutoMergeWatcher {
             );
           }
         }
-      });
+      },
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
+      );
       lockSkipped = !lock.acquired;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

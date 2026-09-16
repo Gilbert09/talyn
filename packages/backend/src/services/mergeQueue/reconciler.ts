@@ -83,7 +83,11 @@ class MergeQueueReconciler {
         }
         const pruned = await pruneTerminalEntries(PRUNE_TERMINAL_DAYS);
         return { healed, groups: groups.length, pruned };
-      });
+      },
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
+      );
       const disarmed = lock.acquired ? await this.retryPendingDisarms() : 0;
       summaryText = !lock.acquired
         ? 'merge_queue_reconcile tick skipped — advisory lock held by another instance'

@@ -101,8 +101,12 @@ class WorkflowRetrySweep {
       // `acquired: false` means another replica is already draining — not an
       // error, and not something to retry here: the next tick will find whatever
       // is left.
-      const outcome = await guardCrossReplica('workflow_retry_sweep:tick', async () =>
-        this.drain()
+      const outcome = await guardCrossReplica(
+        'workflow_retry_sweep:tick',
+        async () => this.drain(),
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
       );
       retried = outcome.acquired ? (outcome.result ?? 0) : 0;
       debugBus.pollerTick('workflow_retry_sweep', {

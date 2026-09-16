@@ -172,8 +172,12 @@ class TaskQueueService extends EventEmitter {
     try {
       // Cross-replica mutex: during a deploy overlap two instances tick this
       // queue — without the lock both dispatch the same queued task.
-      const outcome = await guardCrossReplica('taskQueue:dispatch', () =>
-        this.dispatchQueuedTasks()
+      const outcome = await guardCrossReplica(
+        'taskQueue:dispatch',
+        () => this.dispatchQueuedTasks(),
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
       );
       if (!outcome.acquired) {
         console.log('[TaskQueue] dispatch tick held by another instance — skipping');

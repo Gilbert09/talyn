@@ -141,7 +141,11 @@ class PrReconcileSweep {
         await pruneStaleCheckStates().catch((err) => {
           console.error('[reconcileSweep] pruneStaleCheckStates failed:', err);
         });
-      });
+      },
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
+      );
       lockSkipped = !lock.acquired;
     } catch (err) {
       console.error('[reconcileSweep] tick error:', err instanceof Error ? err.message : err);

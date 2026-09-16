@@ -154,7 +154,11 @@ class LoopScheduler {
         await this.retryWaitingSlots();
         await this.reapOrphans();
         return count;
-      });
+      },
+        // The same budget the in-process watchdog enforces. A lock held past
+        // it makes every later tick skip forever (see advisoryLock.ts).
+        { maxHoldMs: this.guard.maxMs }
+      );
       fired = outcome.acquired ? (outcome.result ?? 0) : 0;
       debugBus.pollerTick('loop_scheduler', { durationMs: Date.now() - startedAt, ok: true });
     } catch (err) {

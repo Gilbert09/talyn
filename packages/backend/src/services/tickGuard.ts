@@ -31,6 +31,16 @@ export class TickGuard {
     return this.running;
   }
 
+  /**
+   * The tick budget this guard enforces. Exposed so a loop can hand the SAME
+   * number to `guardCrossReplica` — an advisory lock held past the watchdog
+   * window is what turns one wedged tick into a permanently dead loop (see
+   * advisoryLock.ts), and the two limits must not be able to drift apart.
+   */
+  get maxMs(): number {
+    return this.maxTickMs;
+  }
+
   /** How long the current holder has been running (0 when idle) — for skip reporting. */
   get heldMs(): number {
     return this.running ? Date.now() - this.startedAt : 0;

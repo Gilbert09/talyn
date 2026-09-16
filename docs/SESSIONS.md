@@ -2,6 +2,62 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 134 — the watchdog that could not reach its own lock (2026-09-16)
+
+**Symptom:** two `pr_response` tasks sat at `queued` and never started. Nothing
+was failing — the dispatch loop had simply stopped.
+
+**What the log said:**
+
+```
+14:08:37  [TaskQueue] Dispatching task "…#101555 mergeable" to Talyn Fleet
+14:13:39  [taskQueue] previous tick wedged for 302405ms — force-releasing the lock
+14:13:39  [cloudPoller] previous tick wedged for 300002ms — force-releasing the lock
+14:13:39  [TaskQueue] dispatch tick held by another instance — skipping   (…then forever)
+```
+
+**The bug is in the seam between the two guards, and both were working as
+written.** `tryWithAdvisoryLock` runs the tick INSIDE the lock transaction, so
+a tick whose await never settles keeps that transaction open and the
+`pg_try_advisory_xact_lock` held for the life of the process. `TickGuard`
+force-released its in-process flag on schedule and ticked again — straight into
+a failed try-lock against its own zombie transaction. Every subsequent tick
+skipped, and the skip message blamed "another instance", which is why it read
+as ordinary deploy contention rather than an outage. Task dispatch and the
+cloud poller were dead for good; only a redeploy cleared it. Seven loops share
+that seam.
+
+**`idle_in_transaction_session_timeout` should have caught this and did not.**
+It is already set to 30s on the pool (the 2026-07-04/07-06 outages), and the
+lock transaction is idle-in-transaction for the whole tick — a textbook match.
+The NOTE in `db/client.ts` had called it: *startup parameters may not survive
+every pooler*. Held for seven minutes, it demonstrably was not in force.
+
+**The fix is a budget the lock enforces itself, in two independent layers.** A
+JS deadline that rejects with `AdvisoryLockWedgedError`, unwinding the
+transaction so the very next tick re-acquires; and `set_config('idle_in_
+transaction_session_timeout', …, true)` issued inside the transaction, so
+Postgres kills the session even if Node is too wedged to roll back. Per
+transaction as a statement, never trusted from the connection's startup
+parameters. It deliberately RAISES the pool's 30s for this one transaction:
+that transaction is idle for the whole tick by design, so the ceiling is now
+the loop's real budget rather than a number that was never reaching the server.
+
+Callers pass `this.guard.maxMs`, so the watchdog window and the lock's ceiling
+cannot drift apart. The abandoned tick is LOUD, not silent — every one of these
+loops is written to be re-run, and half-done work that reports nothing is what
+made this cost an afternoon. A skip on a lock this process itself holds now
+says `wedged, not contended`.
+
+**What I could not determine: what wedged in the first place.** Both loops
+stalled within two seconds of a Talyn Fleet dispatch, so the fleet is the
+suspect, but the fleet client does bound every request with
+`AbortSignal.timeout`, and I could not read `pg_stat_activity` on the running
+process to see the blocked query. The recovery path is fixed and proven; the
+trigger is still open. `captureServerEvent`'s `fetch` in `analytics.ts` has no
+timeout at all — it is `void`-ed so it cannot wedge a tick, but it is the one
+untimed outbound call left in this path and worth closing.
+
 ## Session 133 — Loops goes general, the fleet does not (2026-09-15)
 
 One edit, as designed. `availability: 'gated'` → `'general'` on the `loops`
