@@ -195,6 +195,46 @@ describe('claude oauth', () => {
       ).rejects.toThrow(ClaudeReauthRequiredError);
     });
 
+    it('reads a dead grant out of Anthropic\'s OWN error envelope', async () => {
+      // Anthropic answers in two shapes, and a live probe of the token endpoint
+      // returned the second. Reading only the RFC 6749 one leaves `error` as an
+      // object, `=== invalid_grant` quietly false, and a dead grant retried on
+      // every dispatch forever — the one failure this module exists to catch.
+      const nearly = credential({ expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      fetchWithTimeout.mockResolvedValue(
+        errResponse(400, { error: { type: 'invalid_grant', message: 'grant is gone' } }),
+      );
+      await expect(
+        resolveClaudeAccessToken('ws1', nearly, makeStore(nearly)),
+      ).rejects.toThrow(ClaudeReauthRequiredError);
+    });
+
+    it('treats the rate-limit envelope as transient, not as a dead grant', async () => {
+      // The exact body the probe got back. Clearing the pair on this would sign
+      // the user out because Anthropic was busy.
+      const nearly = credential({ expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      fetchWithTimeout.mockResolvedValue(
+        errResponse(429, {
+          error: { type: 'rate_limit_error', message: 'Rate limited. Please try again later.' },
+        }),
+      );
+      // Still inside the margin, so the token in hand is served rather than
+      // failing the dispatch.
+      expect(await resolveClaudeAccessToken('ws1', nearly, makeStore(nearly))).toBe(
+        'sk-ant-oat01-current',
+      );
+    });
+
+    it('still reads the plain RFC 6749 shape', async () => {
+      const nearly = credential({ expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      fetchWithTimeout.mockResolvedValue(
+        errResponse(400, { error: 'invalid_grant', error_description: 'expired' }),
+      );
+      await expect(
+        resolveClaudeAccessToken('ws1', nearly, makeStore(nearly)),
+      ).rejects.toThrow(ClaudeReauthRequiredError);
+    });
+
     it('retries nothing once reauth is required', async () => {
       const dead = credential({ reauthRequiredAt: new Date().toISOString() });
       expect(await resolveClaudeAccessToken('ws1', dead, makeStore(dead))).toBeNull();

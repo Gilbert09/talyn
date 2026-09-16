@@ -160,13 +160,38 @@ export function buildAuthorizeUrl(params: {
   return `${CLAUDE_AUTHORIZE_URL}?${q.toString()}`;
 }
 
+/**
+ * Read a failure out of `error`, whichever of TWO shapes it arrived in.
+ *
+ * Anthropic's token endpoint answers in both, depending on what went wrong: the
+ * OAuth one from RFC 6749 §5.2, `{"error":"invalid_grant","error_description":…}`,
+ * and Anthropic's own API envelope, `{"error":{"type":"rate_limit_error",
+ * "message":…}}`. A live probe of the endpoint returned the second.
+ *
+ * Reading only the string shape is not merely untidy here, and that is the
+ * point: `error` would be an OBJECT, `error === 'invalid_grant'` would be
+ * quietly false, and a dead grant would be classified transient and retried on
+ * every dispatch forever — the one failure this module exists to tell apart.
+ * yas's `claudeOAuthError` learned the same lesson from the same probe.
+ */
 function parseOAuthError(body: string): { error?: string; description?: string } {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(body) as { error?: string; error_description?: string };
-    return { error: parsed.error, description: parsed.error_description };
+    parsed = JSON.parse(body);
   } catch {
     return {};
   }
+  if (!parsed || typeof parsed !== 'object') return {};
+  const { error, error_description: description } = parsed as {
+    error?: unknown;
+    error_description?: string;
+  };
+  if (typeof error === 'string') return { error, description };
+  if (error && typeof error === 'object') {
+    const envelope = error as { type?: string; message?: string };
+    return { error: envelope.type, description: envelope.message ?? description };
+  }
+  return { description };
 }
 
 /**
