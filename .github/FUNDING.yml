@@ -1,0 +1,16 @@
+# Talyn's own funding links. This file replaced the one inherited from
+# electron-react-boilerplate, which pointed the repo's Sponsor button at that
+# project's OpenCollective and Patreon.
+#
+# `custom` is used deliberately, rather than `github:` or `polar:`:
+#
+#   - `github: [Gilbert09]` needs GitHub Sponsors enabled on the account. It is
+#     not, so the button would render and go nowhere. Enable a sponsors listing
+#     first, then swap this file over.
+#   - `polar:` takes a public Polar page. Polar is wired up here as the merchant
+#     of record for the Unlimited subscription, not as a donation page, so there
+#     is no public slug to point at.
+#
+# Talyn is a commercial product: the way to fund it is to subscribe. Send the
+# Sponsor button at the thing that actually pays for the work.
+custom: https://www.talyn.dev/#pricing
