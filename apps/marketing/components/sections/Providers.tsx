@@ -25,6 +25,22 @@ export function Providers() {
                   <h3 className="font-display text-lg font-semibold text-ink">
                     {p.name}
                   </h3>
+                  {/* The agents this provider runs, where it runs more than
+                      one. Only the fleet does, and without them its card is
+                      headed by our own mark and says nothing about what you
+                      would actually be signing in with. */}
+                  {"agents" in p && p.agents ? (
+                    <span className="ml-auto flex items-center gap-1.5">
+                      {p.agents.map((a) => (
+                        <span
+                          key={a}
+                          className="inline-flex rounded-lg border border-line bg-white p-1"
+                        >
+                          <ProviderMark mark={a} className="h-4 w-4" />
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="text-sm leading-relaxed text-ink-500">{p.body}</p>
               </GlowCard>

@@ -3,6 +3,7 @@ import {
   SELFHOSTED_LOGO,
   POSTHOG_LOGO,
   CODEX_LOGO,
+  CLAUDE_LOGO,
 } from '../renderer/assets/providers/logos';
 
 /**
@@ -81,20 +82,44 @@ describe('inline SVG provider marks', () => {
 });
 
 describe('raster provider marks', () => {
-  it.each([
+  const rasters: Array<[string, string]> = [
     ['PostHog', POSTHOG_LOGO],
     ['Codex', CODEX_LOGO],
-  ])('%s is a non-empty inline PNG', (_name, uri) => {
+    ['Claude', CLAUDE_LOGO],
+  ];
+
+  it.each(rasters)('%s is a non-empty inline PNG', (_name, uri) => {
     expect(uri.startsWith('data:image/png;base64,')).toBe(true);
     // A truncated data URI still "starts with" the prefix and still renders
     // nothing, so assert there is a real payload behind it.
     expect(uri.length).toBeGreaterThan(512);
   });
+
+  it.each(rasters)('%s decodes to real PNG bytes, not to a base64 typo', (_name, uri) => {
+    // These are pasted in by hand from a logo.dev fetch, and base64 that has
+    // been truncated or had a character dropped still satisfies every check
+    // above — it just renders as a broken image. So decode it and read the
+    // header: PNG's 8-byte signature, then the mandatory IHDR chunk.
+    const bytes = Buffer.from(uri.slice('data:image/png;base64,'.length), 'base64');
+    expect([...bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect(bytes.subarray(12, 16).toString('ascii')).toBe('IHDR');
+    // Square, and big enough to stay sharp on a retina badge.
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    expect(width).toBe(height);
+    expect(width).toBeGreaterThanOrEqual(64);
+  });
 });
 
 describe('every mark is distinct', () => {
   it('no two providers share an image', () => {
-    const all = [POSTHOG_LOGO, CODEX_LOGO, SELFHOSTED_LOGO, GENERIC_PROVIDER_LOGO];
+    const all = [
+      POSTHOG_LOGO,
+      CODEX_LOGO,
+      CLAUDE_LOGO,
+      SELFHOSTED_LOGO,
+      GENERIC_PROVIDER_LOGO,
+    ];
     // A copy-paste that points two providers at one mark makes the badge lie
     // about which agent ran a task, which is worse than having no badge.
     expect(new Set(all).size).toBe(all.length);

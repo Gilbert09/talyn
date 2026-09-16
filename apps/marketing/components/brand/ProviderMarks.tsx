@@ -11,20 +11,31 @@ import { cn } from "@/lib/utils";
 const TOKEN =
   process.env.NEXT_PUBLIC_LOGODEV_TOKEN || "pk_dPyp6cM4QayP8Jqj4nW9HA";
 
-const DOMAIN: Record<"claude" | "posthog", string> = {
+const DOMAIN: Record<"claude" | "codex" | "posthog", string> = {
   claude: "claude.ai",
+  // Codex is OpenAI's, so it wears OpenAI's mark — there is no separate Codex
+  // brand to fetch. Matches `CODEX_LOGO` in the apps, which is the same fetch.
+  codex: "openai.com",
   posthog: "posthog.com",
+};
+
+const ALT: Record<"claude" | "codex" | "posthog", string> = {
+  claude: "Claude",
+  codex: "Codex",
+  posthog: "PostHog",
 };
 
 function logoSrc(domain: string): string {
   return `https://img.logo.dev/${domain}?token=${TOKEN}&size=128&format=png`;
 }
 
+export type ProviderMarkName = "claude" | "codex" | "posthog" | "soon" | "fleet";
+
 export function ProviderMark({
   mark,
   className,
 }: {
-  mark: "claude" | "posthog" | "soon" | "fleet";
+  mark: ProviderMarkName;
   className?: string;
 }) {
   // The fleet is ours, so it wears our own mark rather than a fetched logo.
@@ -33,7 +44,7 @@ export function ProviderMark({
   return (
     <Image
       src={logoSrc(DOMAIN[mark])}
-      alt={mark === "claude" ? "Claude" : "PostHog"}
+      alt={ALT[mark]}
       width={64}
       height={64}
       className={cn("object-contain", className)}

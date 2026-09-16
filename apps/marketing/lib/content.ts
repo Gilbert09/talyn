@@ -50,8 +50,13 @@ export const poweredBy = {
   // app itself recommends and picks. Keep them the same: a site that leads
   // with one provider and an app that leads with another is the kind of
   // mismatch nobody notices until a new user asks why.
+  // The AGENT brands, not the provider names, because this strip's whole claim
+  // is "the plan you already pay for" — and what a reader recognises is the
+  // Claude and ChatGPT marks, not ours. Which fleet those two run on is the
+  // providers section's job, further down.
   logos: [
-    { name: "Talyn Fleet", mark: "fleet" as const },
+    { name: "Claude", mark: "claude" as const },
+    { name: "ChatGPT", mark: "codex" as const },
     { name: "PostHog Code", mark: "posthog" as const },
   ],
 };
@@ -220,6 +225,9 @@ export const providers = {
     {
       name: "Talyn Fleet",
       mark: "fleet" as const,
+      // The two agents it runs, shown as their own marks. A card headed by our
+      // owl and nothing else does not say what you would be signing in with.
+      agents: ["claude", "codex"] as const,
       body: "The default. Sign in with Claude or ChatGPT and your tasks run on that subscription \u2014 no API bill on top. Each one gets its own microVM on our hardware, and your credentials are attached outside the machine, so they never enter it.",
     },
     {
