@@ -154,6 +154,32 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * MCP tool servers — the servers a workspace connects and the fleet wires
+   * into every run.
+   *
+   * Fallback OFF and `availability: 'gated'`, matching `fleet` rather than
+   * `workflows`, and for two reasons that both point the same way. It is
+   * fleet-only — PostHog Code has no equivalent — so a workspace that gets it
+   * without the fleet gets a page that cannot do anything. And it is the
+   * surface where somebody pastes a Stripe key: failing open during a PostHog
+   * outage would offer credential storage to accounts nobody decided to offer
+   * it to.
+   *
+   * `availability: 'gated'` also withholds every release note tagged `mcp`
+   * from everybody, including the accounts the PostHog audience has switched
+   * it on for, until we flip it to 'general'. That is what stops Loops's
+   * mistake repeating — announced to every user who could not open it.
+   */
+  mcpServers: {
+    posthogKey: 'mcp-servers',
+    envOverride: 'MCP_SERVERS_ENABLED',
+    fallback: false,
+    description: 'MCP tool servers — connect tool servers to Talyn Fleet runs',
+    availability: 'gated',
+    releaseScopes: ['mcp'],
+  },
+
+  /**
    * Talyn Fleet — the self-hosted Firecracker microVMs.
    *
    * Fallback OFF, and that is the whole point of the gate. The fleet is one
@@ -288,8 +314,18 @@ export function gateForScope(scope: string | null | undefined): FeatureFlagKey |
  * not always the caller, so an account-scoped answer would be wrong for every
  * member of somebody else's workspace. The cloud-provider routes answer that
  * one per workspace instead.
+ *
+ * `mcpServers` IS here, and the distinction is worth keeping straight: this
+ * answer decides what to DRAW, which is a question about the person looking at
+ * the screen. Every route gates again on the workspace owner, the way the
+ * workflows and loops routes do, so a caller who can see the nav item still
+ * cannot act on a workspace the gate refuses.
  */
-export const ACCOUNT_FEATURE_FLAGS = ['workflows', 'loops'] as const satisfies readonly FeatureFlagKey[];
+export const ACCOUNT_FEATURE_FLAGS = [
+  'workflows',
+  'loops',
+  'mcpServers',
+] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
 

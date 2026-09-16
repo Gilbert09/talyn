@@ -14,7 +14,16 @@
 //   - boolean for flags. No more 0/1 int masquerading as boolean.
 
 import { sql } from 'drizzle-orm';
-import type { ReleaseHighlight } from '@talyn/shared';
+import type {
+  McpInjection,
+  McpOAuthGrant,
+  McpProbeResult,
+  ReleaseHighlight,
+} from '@talyn/shared';
+// The envelope every stored credential uses. From services/ rather than
+// shared/ because the key handling is the backend's alone — tokenCrypto
+// imports nothing but node:crypto, so this is a type edge and not a cycle.
+import type { EncryptedEnvelope } from '../services/tokenCrypto.js';
 import {
   pgTable,
   text,
@@ -1085,6 +1094,16 @@ export const loops = pgTable(
      */
     internetAccess: boolean('internet_access').notNull().default(false),
     /**
+     * `string[] | null` — MCP server ids this loop pins, or null to inherit the
+     * workspace's enabled set.
+     *
+     * Null and `[]` are different answers and both are reachable: null is
+     * "whatever the workspace has switched on", `[]` is "no tool servers at
+     * all". Collapsing them would make "run this one with no tools" the one
+     * thing a loop could not say.
+     */
+    mcpServerIds: jsonb('mcp_server_ids').$type<string[] | null>(),
+    /**
      * Nullable + set null, NOT cascade: removing a repository must not delete
      * the loop and its whole history. The scheduler re-resolves by
      * `repo_full_name` first, and only then records a skip and switches off.
@@ -1113,6 +1132,64 @@ export const loops = pgTable(
     // idx_loops_due — the sweep's read — is PARTIAL (`WHERE enabled`) and so
     // lives only in 0054_loops.sql, the way 0053's partial retry index does.
     workspaceIdx: index('idx_loops_workspace').on(t.workspaceId),
+  })
+);
+
+/**
+ * A workspace's MCP tool servers, passed inline to the fleet on every dispatch.
+ *
+ * The credential lives HERE rather than on the fleet, and that is the design
+ * rather than an accident: the fleet never persists an inline server's secret,
+ * so we are the only party that still holds it — which is also why
+ * `poller.recredential` and `runCredentials` have to hand it back after a
+ * fleetd restart, or an adopted box keeps its MCP routes and 401s on every tool
+ * call for the rest of the run.
+ */
+export const mcpServers = pgTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /**
+     * The first label of a hostname inside the sandbox, so it carries the
+     * fleet's integration-name charset: lowercase, digits, hyphens, <= 40.
+     * `github` is refused — that name is the box's own GitHub REST API.
+     */
+    name: text('name').notNull(),
+    /** What a human reads. Separate from `name`, which a DNS label makes a poor display string. */
+    displayName: text('display_name'),
+    /** The endpoint as typed, path and all. A bare host is refused: nothing to call. */
+    url: text('url').notNull(),
+    description: text('description'),
+    /** The `MCP_CATALOG` entry this came from, if any. */
+    catalogHandle: text('catalog_handle'),
+    /** `McpAuthKind` — none | bearer | header | basic | query. The fleet's own vocabulary. */
+    authKind: text('auth_kind').notNull().default('none'),
+    /** `McpInjection` — the header/param details when `authKind` needs them. */
+    inject: jsonb('inject').$type<McpInjection | null>(),
+    /** AES-256-GCM envelope. Never leaves the backend except on a dispatch. */
+    secretEnc: jsonb('secret_enc').$type<EncryptedEnvelope | null>(),
+    /** The grant, for a server connected by signing in. Absent means a pasted key. */
+    oauth: jsonb('oauth').$type<McpOAuthGrant | null>(),
+    /**
+     * The tool allow-list, with three meaningful states: null is every tool the
+     * server advertises, `[]` is none, and a list is exactly those. Nothing
+     * downstream may collapse null and `[]` — reading "ticked nothing" as
+     * "allow everything" is the worst available guess.
+     */
+    tools: jsonb('tools').$type<string[] | null>(),
+    enabled: boolean('enabled').notNull().default(true),
+    /** The last initialize/tools-list probe. Never a credential. */
+    lastProbe: jsonb('last_probe').$type<McpProbeResult | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // Also the by-workspace read's index, `workspaceId` being leftmost, so
+    // there is deliberately no second one.
+    workspaceNameUq: uniqueIndex('uq_mcp_servers_workspace_name').on(t.workspaceId, t.name),
   })
 );
 

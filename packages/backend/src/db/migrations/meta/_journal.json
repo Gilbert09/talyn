@@ -1,419 +1,426 @@
 {
-	"version": "7",
-	"dialect": "postgresql",
-	"entries": [
-		{
-			"idx": 0,
-			"version": "7",
-			"when": 1776430076878,
-			"tag": "0000_initial",
-			"breakpoints": true
-		},
-		{
-			"idx": 1,
-			"version": "7",
-			"when": 1776441525515,
-			"tag": "0001_users_and_ownership",
-			"breakpoints": true
-		},
-		{
-			"idx": 2,
-			"version": "7",
-			"when": 1776442000000,
-			"tag": "0002_enable_rls",
-			"breakpoints": true
-		},
-		{
-			"idx": 3,
-			"version": "7",
-			"when": 1776460744537,
-			"tag": "0003_daemon_tokens",
-			"breakpoints": true
-		},
-		{
-			"idx": 4,
-			"version": "7",
-			"when": 1776502429339,
-			"tag": "0004_backlog_failure_tracking",
-			"breakpoints": true
-		},
-		{
-			"idx": 5,
-			"version": "7",
-			"when": 1776635612002,
-			"tag": "0005_env_bypass_permissions",
-			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "7",
-			"when": 1776677293276,
-			"tag": "0006_structured_renderer",
-			"breakpoints": true
-		},
-		{
-			"idx": 7,
-			"version": "7",
-			"when": 1776678452806,
-			"tag": "0007_env_tool_allowlist",
-			"breakpoints": true
-		},
-		{
-			"idx": 8,
-			"version": "7",
-			"when": 1776685320956,
-			"tag": "0008_default_structured_renderer",
-			"breakpoints": true
-		},
-		{
-			"idx": 9,
-			"version": "7",
-			"when": 1778352000000,
-			"tag": "0009_daemon_everywhere",
-			"breakpoints": true
-		},
-		{
-			"idx": 10,
-			"version": "7",
-			"when": 1778355000000,
-			"tag": "0010_agents_permission_token",
-			"breakpoints": true
-		},
-		{
-			"idx": 11,
-			"version": "7",
-			"when": 1778800000000,
-			"tag": "0011_env_daemon_version",
-			"breakpoints": true
-		},
-		{
-			"idx": 12,
-			"version": "7",
-			"when": 1778810000000,
-			"tag": "0012_env_auto_update_daemon",
-			"breakpoints": true
-		},
-		{
-			"idx": 13,
-			"version": "7",
-			"when": 1782345600000,
-			"tag": "0013_pull_requests",
-			"breakpoints": true
-		},
-		{
-			"idx": 14,
-			"version": "7",
-			"when": 1782950400000,
-			"tag": "0014_pr_review_requested",
-			"breakpoints": true
-		},
-		{
-			"idx": 15,
-			"version": "7",
-			"when": 1783555200000,
-			"tag": "0015_pr_explicit_review_requested",
-			"breakpoints": true
-		},
-		{
-			"idx": 16,
-			"version": "7",
-			"when": 1784160000000,
-			"tag": "0016_pr_authored_flag",
-			"breakpoints": true
-		},
-		{
-			"idx": 17,
-			"version": "7",
-			"when": 1784160000001,
-			"tag": "0017_cloud_only",
-			"breakpoints": true
-		},
-		{
-			"idx": 18,
-			"version": "7",
-			"when": 1784160000002,
-			"tag": "0018_drop_repo_local_path",
-			"breakpoints": true
-		},
-		{
-			"idx": 19,
-			"version": "7",
-			"when": 1784160000003,
-			"tag": "0019_workspace_logo",
-			"breakpoints": true
-		},
-		{
-			"idx": 20,
-			"version": "7",
-			"when": 1784160000004,
-			"tag": "0020_pr_auto_keep_mergeable",
-			"breakpoints": true
-		},
-		{
-			"idx": 21,
-			"version": "7",
-			"when": 1784160000005,
-			"tag": "0021_pr_merge_queue",
-			"breakpoints": true
-		},
-		{
-			"idx": 22,
-			"version": "7",
-			"when": 1784160000006,
-			"tag": "0022_user_is_admin",
-			"breakpoints": true
-		},
-		{
-			"idx": 23,
-			"version": "7",
-			"when": 1784160000007,
-			"tag": "0023_drop_inbox",
-			"breakpoints": true
-		},
-		{
-			"idx": 24,
-			"version": "7",
-			"when": 1784160000008,
-			"tag": "0024_rls_grant_authenticated",
-			"breakpoints": true
-		},
-		{
-			"idx": 25,
-			"version": "7",
-			"when": 1784160000009,
-			"tag": "0025_mcp_tokens",
-			"breakpoints": true
-		},
-		{
-			"idx": 26,
-			"version": "7",
-			"when": 1784160000010,
-			"tag": "0026_github_app",
-			"breakpoints": true
-		},
-		{
-			"idx": 27,
-			"version": "7",
-			"when": 1784160000011,
-			"tag": "0027_pr_check_states",
-			"breakpoints": true
-		},
-		{
-			"idx": 28,
-			"version": "7",
-			"when": 1784160000012,
-			"tag": "0028_pr_check_states_indexes",
-			"breakpoints": true
-		},
-		{
-			"idx": 29,
-			"version": "7",
-			"when": 1784160000013,
-			"tag": "0029_skills",
-			"breakpoints": true
-		},
-		{
-			"idx": 30,
-			"version": "7",
-			"when": 1784160000014,
-			"tag": "0030_billing",
-			"breakpoints": true
-		},
-		{
-			"idx": 31,
-			"version": "7",
-			"when": 1784160000015,
-			"tag": "0031_merge_queue_entries",
-			"breakpoints": true
-		},
-		{
-			"idx": 32,
-			"version": "7",
-			"when": 1784160000016,
-			"tag": "0032_merge_queue_cutover",
-			"breakpoints": true
-		},
-		{
-			"idx": 33,
-			"version": "7",
-			"when": 1784160000017,
-			"tag": "0033_merge_queue_rls",
-			"breakpoints": true
-		},
-		{
-			"idx": 34,
-			"version": "7",
-			"when": 1784160000018,
-			"tag": "0034_disk_io_tuning",
-			"breakpoints": true
-		},
-		{
-			"idx": 35,
-			"version": "7",
-			"when": 1784160000019,
-			"tag": "0035_external_merge_queue",
-			"breakpoints": true
-		},
-		{
-			"idx": 36,
-			"version": "7",
-			"when": 1784160000020,
-			"tag": "0036_external_submitted_at",
-			"breakpoints": true
-		},
-		{
-			"idx": 37,
-			"version": "7",
-			"when": 1784160000021,
-			"tag": "0037_external_queue_state",
-			"breakpoints": true
-		},
-		{
-			"idx": 38,
-			"version": "7",
-			"when": 1784160000022,
-			"tag": "0038_fleet_hosts",
-			"breakpoints": true
-		},
-		{
-			"idx": 39,
-			"version": "7",
-			"when": 1784160000023,
-			"tag": "0039_admin_audit_log",
-			"breakpoints": true
-		},
-		{
-			"idx": 40,
-			"version": "7",
-			"when": 1784160000024,
-			"tag": "0040_posthog_oauth_states",
-			"breakpoints": true
-		},
-		{
-			"idx": 41,
-			"version": "7",
-			"when": 1784160000025,
-			"tag": "0041_merge_stack",
-			"breakpoints": true
-		},
-		{
-			"idx": 42,
-			"version": "7",
-			"when": 1784160000026,
-			"tag": "0042_merge_queue_progress",
-			"breakpoints": true
-		},
-		{
-			"idx": 43,
-			"version": "7",
-			"when": 1784160000027,
-			"tag": "0043_cancelled_checks_are_failures",
-			"breakpoints": true
-		},
-		{
-			"idx": 44,
-			"version": "7",
-			"when": 1784160000028,
-			"tag": "0044_external_queue_submit_routes",
-			"breakpoints": true
-		},
-		{
-			"idx": 45,
-			"version": "7",
-			"when": 1784160000029,
-			"tag": "0045_submit_retry_attempts",
-			"breakpoints": true
-		},
-		{
-			"idx": 46,
-			"version": "7",
-			"when": 1784160000030,
-			"tag": "0046_pr_watching",
-			"breakpoints": true
-		},
-		{
-			"idx": 47,
-			"version": "7",
-			"when": 1784160000031,
-			"tag": "0047_release_notes",
-			"breakpoints": true
-		},
-		{
-			"idx": 48,
-			"version": "7",
-			"when": 1784160000032,
-			"tag": "0048_tasks_pull_request_id",
-			"breakpoints": true
-		},
-		{
-			"idx": 49,
-			"version": "7",
-			"when": 1784160000033,
-			"tag": "0049_drop_merge_queue_engine_flag",
-			"breakpoints": true
-		},
-		{
-			"idx": 50,
-			"version": "7",
-			"when": 1784160000034,
-			"tag": "0050_drop_claude_code",
-			"breakpoints": true
-		},
-		{
-			"idx": 51,
-			"version": "7",
-			"when": 1784160000035,
-			"tag": "0051_merge_queue_stack_batch",
-			"breakpoints": true
-		},
-		{
-			"idx": 52,
-			"version": "7",
-			"when": 1784160000036,
-			"tag": "0052_workflows",
-			"breakpoints": true
-		},
-		{
-			"idx": 53,
-			"version": "7",
-			"when": 1784160000037,
-			"tag": "0053_workflow_run_retries",
-			"breakpoints": true
-		},
-		{
-			"idx": 54,
-			"version": "7",
-			"when": 1789300000000,
-			"tag": "0054_loops",
-			"breakpoints": true
-		},
-		{
-			"idx": 55,
-			"version": "7",
-			"when": 1789400000000,
-			"tag": "0055_loop_internet_access",
-			"breakpoints": true
-		},
-		{
-			"idx": 56,
-			"version": "7",
-			"when": 1789450000000,
-			"tag": "0056_unlink_scraped_pull_requests",
-			"breakpoints": true
-		},
-		{
-			"idx": 57,
-			"version": "7",
-			"when": 1789450000001,
-			"tag": "0057_backend_data_boundary",
-			"breakpoints": true
-		},
-		{
-			"idx": 58,
-			"version": "7",
-			"when": 1789450000002,
-			"tag": "0058_revoke_data_api_grants",
-			"breakpoints": true
-		}
-	]
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1776430076878,
+      "tag": "0000_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776441525515,
+      "tag": "0001_users_and_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776442000000,
+      "tag": "0002_enable_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776460744537,
+      "tag": "0003_daemon_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776502429339,
+      "tag": "0004_backlog_failure_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776635612002,
+      "tag": "0005_env_bypass_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776677293276,
+      "tag": "0006_structured_renderer",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776678452806,
+      "tag": "0007_env_tool_allowlist",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776685320956,
+      "tag": "0008_default_structured_renderer",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778352000000,
+      "tag": "0009_daemon_everywhere",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778355000000,
+      "tag": "0010_agents_permission_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778800000000,
+      "tag": "0011_env_daemon_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1778810000000,
+      "tag": "0012_env_auto_update_daemon",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1782345600000,
+      "tag": "0013_pull_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1782950400000,
+      "tag": "0014_pr_review_requested",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1783555200000,
+      "tag": "0015_pr_explicit_review_requested",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784160000000,
+      "tag": "0016_pr_authored_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784160000001,
+      "tag": "0017_cloud_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1784160000002,
+      "tag": "0018_drop_repo_local_path",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1784160000003,
+      "tag": "0019_workspace_logo",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1784160000004,
+      "tag": "0020_pr_auto_keep_mergeable",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784160000005,
+      "tag": "0021_pr_merge_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784160000006,
+      "tag": "0022_user_is_admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1784160000007,
+      "tag": "0023_drop_inbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784160000008,
+      "tag": "0024_rls_grant_authenticated",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784160000009,
+      "tag": "0025_mcp_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784160000010,
+      "tag": "0026_github_app",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1784160000011,
+      "tag": "0027_pr_check_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1784160000012,
+      "tag": "0028_pr_check_states_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1784160000013,
+      "tag": "0029_skills",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1784160000014,
+      "tag": "0030_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1784160000015,
+      "tag": "0031_merge_queue_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1784160000016,
+      "tag": "0032_merge_queue_cutover",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1784160000017,
+      "tag": "0033_merge_queue_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1784160000018,
+      "tag": "0034_disk_io_tuning",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1784160000019,
+      "tag": "0035_external_merge_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1784160000020,
+      "tag": "0036_external_submitted_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784160000021,
+      "tag": "0037_external_queue_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784160000022,
+      "tag": "0038_fleet_hosts",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1784160000023,
+      "tag": "0039_admin_audit_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1784160000024,
+      "tag": "0040_posthog_oauth_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784160000025,
+      "tag": "0041_merge_stack",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1784160000026,
+      "tag": "0042_merge_queue_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1784160000027,
+      "tag": "0043_cancelled_checks_are_failures",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1784160000028,
+      "tag": "0044_external_queue_submit_routes",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1784160000029,
+      "tag": "0045_submit_retry_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1784160000030,
+      "tag": "0046_pr_watching",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1784160000031,
+      "tag": "0047_release_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1784160000032,
+      "tag": "0048_tasks_pull_request_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1784160000033,
+      "tag": "0049_drop_merge_queue_engine_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1784160000034,
+      "tag": "0050_drop_claude_code",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1784160000035,
+      "tag": "0051_merge_queue_stack_batch",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1784160000036,
+      "tag": "0052_workflows",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1784160000037,
+      "tag": "0053_workflow_run_retries",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0054_loops",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1789400000000,
+      "tag": "0055_loop_internet_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1789450000000,
+      "tag": "0056_unlink_scraped_pull_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1789450000001,
+      "tag": "0057_backend_data_boundary",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1789450000002,
+      "tag": "0058_revoke_data_api_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1789450000003,
+      "tag": "0059_mcp_servers",
+      "breakpoints": true
+    }
+  ]
 }

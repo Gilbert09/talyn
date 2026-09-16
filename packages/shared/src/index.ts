@@ -45,6 +45,12 @@ export * from './featureFlags.js';
 // differently from the server is a bug nobody can see.
 export * from './loops.js';
 
+// MCP tool servers — the servers a workspace connects and the fleet wires into
+// every run. The validator MIRRORS the fleet's own refusals, so somebody hears
+// "an MCP url needs a path" while typing rather than as a dispatch that failed
+// an hour later.
+export * from './mcpServers.js';
+
 // The agent picker — which agents a workspace can start a task on. One pure
 // derivation, shared by the per-PR task menu and the Loop editor on both forks.
 export * from './cloudAgents.js';
@@ -1247,6 +1253,22 @@ export const FREE_PLAN_WORKFLOW_LIMIT = 3;
  */
 export const FREE_PLAN_LOOP_LIMIT = 3;
 
+/**
+ * Max MCP tool servers an owner may connect on the free plan, across every
+ * workspace they own.
+ *
+ * Counts DEFINITIONS, like the workflow and loop caps above and for the same
+ * reason: counting only the enabled ones would make the limit a toggle — keep
+ * twelve, enable three, swap whenever. Deleting one frees the slot.
+ *
+ * This is the only count limit anywhere near tool servers. There is
+ * deliberately no cap on how many a single RUN may use, nor on how many tools
+ * each may expose: those were the fleet's, they were round numbers, and they
+ * have been removed there. What bounds a run's prompt is the per-server tool
+ * allow-list, which is the same saving made as a choice.
+ */
+export const FREE_PLAN_MCP_SERVER_LIMIT = 3;
+
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 /**
  * Why a queued task has not started yet.
@@ -1288,6 +1310,12 @@ export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
 
 /**
+ * ApiResponse.code when connecting a tool server is rejected by the free-plan
+ * cap. A usage cap like the others — deleting a server frees the slot.
+ */
+export const MCP_SERVER_LIMIT_ERROR_CODE = 'mcp_server_limit_reached';
+
+/**
  * ApiResponse.code when a free plan tries to turn ON the workspace default
  * "auto-keep new PRs mergeable". Unlike the two limit codes this is a FEATURE
  * gate, not a usage cap — there is no count to wait out, so the client must
@@ -1325,6 +1353,10 @@ export interface BillingStatus {
   loops: number;
   /** null = unlimited. */
   loopLimit: number | null;
+  /** Tool servers the user has connected, across all their workspaces. */
+  mcpServers: number;
+  /** null = unlimited. */
+  mcpServerLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

@@ -5,10 +5,12 @@ import {
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   FREE_PLAN_MERGE_QUEUE_LIMIT,
   FREE_PLAN_LOOP_LIMIT,
+  FREE_PLAN_MCP_SERVER_LIMIT,
   FREE_PLAN_WORKFLOW_LIMIT,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
   LOOP_LIMIT_ERROR_CODE,
+  MCP_SERVER_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   type BillingStatus,
 } from '@talyn/shared';
@@ -23,6 +25,7 @@ import {
   tasks as tasksTable,
   users as usersTable,
   loops as loopsTable,
+  mcpServers as mcpServersTable,
   workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
@@ -42,6 +45,7 @@ export const FREE_ACTIVE_TASK_LIMIT = FREE_PLAN_ACTIVE_TASK_LIMIT;
 export const FREE_MERGE_QUEUE_LIMIT = FREE_PLAN_MERGE_QUEUE_LIMIT;
 export const FREE_WORKFLOW_LIMIT = FREE_PLAN_WORKFLOW_LIMIT;
 export const FREE_LOOP_LIMIT = FREE_PLAN_LOOP_LIMIT;
+export const FREE_MCP_SERVER_LIMIT = FREE_PLAN_MCP_SERVER_LIMIT;
 
 /**
  * Statuses that occupy a free-plan slot.
@@ -125,6 +129,21 @@ export class LoopLimitError extends Error {
   }
 }
 
+/** Thrown by the gate when a free owner already has their allowance of tool servers. */
+export class McpServerLimitError extends Error {
+  readonly code = MCP_SERVER_LIMIT_ERROR_CODE;
+  constructor(
+    readonly limit: number,
+    readonly count: number
+  ) {
+    super(
+      `Free plan is limited to ${limit} tool servers (${count} in use). ` +
+        `Upgrade for unlimited tool servers, or delete one you no longer need.`
+    );
+    this.name = 'McpServerLimitError';
+  }
+}
+
 /**
  * Thrown when a free owner tries to turn ON the workspace default "auto-keep
  * new PRs mergeable".
@@ -192,6 +211,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
   const queuedPrs = await countQueuedPrs(ownerId);
   const workflows = await countOwnerWorkflows(ownerId);
   const loops = await countOwnerLoops(ownerId);
+  const mcpServers = await countOwnerMcpServers(ownerId);
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
@@ -206,6 +226,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       workflowLimit: null,
       loops,
       loopLimit: null,
+      mcpServers,
+      mcpServerLimit: null,
     };
   }
 
@@ -238,6 +260,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     workflowLimit: entitlement.plan === 'free' ? FREE_WORKFLOW_LIMIT : null,
     loops,
     loopLimit: entitlement.plan === 'free' ? FREE_LOOP_LIMIT : null,
+    mcpServers,
+    mcpServerLimit: entitlement.plan === 'free' ? FREE_MCP_SERVER_LIMIT : null,
   };
 }
 
@@ -338,6 +362,28 @@ export function countOwnerLoopsQuery(ownerId: string) {
 /** How many loops the owner has, across all their workspaces. */
 export async function countOwnerLoops(ownerId: string): Promise<number> {
   const rows = await countOwnerLoopsQuery(ownerId);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Same contract again, for MCP tool servers.
+ *
+ * Exported unexecuted for the egress test, and here the reason is sharper than
+ * for loops: the `mcp_servers` row carries `secret_enc`, and a `SELECT *` to
+ * count rows would ship every workspace credential the owner has out of the
+ * database to be thrown away.
+ */
+export function countOwnerMcpServersQuery(ownerId: string) {
+  return getDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(mcpServersTable)
+    .innerJoin(workspacesTable, eq(mcpServersTable.workspaceId, workspacesTable.id))
+    .where(eq(workspacesTable.ownerId, ownerId));
+}
+
+/** How many tool servers the owner has connected, across all their workspaces. */
+export async function countOwnerMcpServers(ownerId: string): Promise<number> {
+  const rows = await countOwnerMcpServersQuery(ownerId);
   return rows[0]?.count ?? 0;
 }
 
@@ -470,6 +516,34 @@ export async function withLoopLimitGate<T>(ownerId: string, fn: () => Promise<T>
       const count = await countOwnerLoops(ownerId);
       if (count >= FREE_LOOP_LIMIT) {
         throw new LoopLimitError(FREE_LOOP_LIMIT, count);
+      }
+    },
+    fn
+  );
+}
+
+/**
+ * Run `fn` (which connects one tool server) unless the owner is a free user who
+ * already keeps their allowance, in which case throw McpServerLimitError.
+ *
+ * Creation only, exactly as the workflow and loop gates are: a PATCH replaces a
+ * server rather than adding one, and gating it would strand a free user at the
+ * limit with a server they are not allowed to fix — including switching off or
+ * re-keying the one that has stopped working.
+ *
+ * Note what this does NOT gate: how many servers one RUN carries, or how many
+ * tools each exposes. Those have no limit anywhere — the fleet's own count caps
+ * were removed rather than worked around, and the per-server tool allow-list is
+ * what bounds a prompt now.
+ */
+export async function withMcpServerLimitGate<T>(ownerId: string, fn: () => Promise<T>): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `mcpServerLimit:${ownerId}`,
+    async () => {
+      const count = await countOwnerMcpServers(ownerId);
+      if (count >= FREE_MCP_SERVER_LIMIT) {
+        throw new McpServerLimitError(FREE_MCP_SERVER_LIMIT, count);
       }
     },
     fn
