@@ -172,7 +172,13 @@ export const FEATURE_FLAGS = {
     envOverride: 'FLEET_ALLOWED',
     fallback: false,
     description: 'Talyn Fleet — self-hosted Firecracker microVMs',
-    availability: 'gated',
+    // Released 2026-09-16. `availability` and `fallback` say different things
+    // and deliberately disagree from here: the feature is announced to
+    // everybody, while a PostHog outage still refuses it, because no
+    // announcement changes the fact that the fleet is finite hardware running
+    // on somebody's own subscription. This is the divergence the two fields
+    // were kept separate for.
+    availability: 'general',
     releaseScopes: ['fleet'],
   },
 } as const satisfies Record<string, FeatureFlagDefinition>;
@@ -189,16 +195,52 @@ export function isFeatureFlagKey(key: string): key is FeatureFlagKey {
 }
 
 /**
+ * The register shape the announcement helpers read.
+ *
+ * They take one as a PARAMETER rather than closing over {@link FEATURE_FLAGS},
+ * and the reason is a gap that opens the moment the last gated flag ships.
+ * These helpers decide whether a release highlight is withheld — and the tests
+ * covering that used a real flag as their exemplar of "still gated", which had
+ * to be re-pointed every time one was released: `workflows` → `loops` →
+ * `fleet`. Releasing `fleet` empties the set entirely, so every one of those
+ * assertions goes vacuous and the withholding path is untested precisely when
+ * nothing exercises it in production either — which is the worst moment for it
+ * to quietly break, because the next gated feature is what depends on it.
+ *
+ * A synthetic register fixes that without mocking a module: the mechanism is
+ * tested against flags invented for the test, while the live register is
+ * checked separately and by DERIVATION, never by naming a flag.
+ */
+export type FeatureFlagRegister = Readonly<Record<string, FeatureFlagDefinition>>;
+
+/** The keys in `register` whose highlights are still withheld. */
+export function gatedKeysOf(register: FeatureFlagRegister): string[] {
+  return Object.keys(register).filter((key) => register[key].availability === 'gated');
+}
+
+/**
  * The flags whose features the "What's new" modal must not talk about yet.
  *
  * Computed, never hand-maintained: the previous version of this list lived in
  * `releaseNotes.ts` as a literal array of commit scopes and drifted the first
  * time a gated feature shipped — Loops was announced to every user who could
  * not open it, because nobody remembered to add the scope.
+ *
+ * **It is legitimately EMPTY when every feature is released.** Nothing should
+ * read emptiness as a misconfiguration; it means there is nothing to withhold.
  */
-export const GATED_FEATURE_KEYS: FeatureFlagKey[] = FEATURE_FLAG_KEYS.filter(
-  (key) => FEATURE_FLAGS[key].availability === 'gated'
-);
+export const GATED_FEATURE_KEYS: FeatureFlagKey[] = gatedKeysOf(
+  FEATURE_FLAGS,
+) as FeatureFlagKey[];
+
+/** {@link isGatedFeature} against an arbitrary register. */
+export function isGatedFeatureIn(
+  register: FeatureFlagRegister,
+  key: string | null | undefined,
+): boolean {
+  if (!key) return false;
+  return register[key]?.availability === 'gated';
+}
 
 /**
  * Is a release highlight tagged with `key` still withheld?
@@ -210,8 +252,21 @@ export const GATED_FEATURE_KEYS: FeatureFlagKey[] = FEATURE_FLAG_KEYS.filter(
  * and flipping `availability` are two ways to say the same thing.
  */
 export function isGatedFeature(key: string | null | undefined): boolean {
-  if (!key || !isFeatureFlagKey(key)) return false;
-  return FEATURE_FLAGS[key].availability === 'gated';
+  return isGatedFeatureIn(FEATURE_FLAGS, key);
+}
+
+/** {@link gateForScope} against an arbitrary register. */
+export function gateForScopeIn(
+  register: FeatureFlagRegister,
+  scope: string | null | undefined,
+): string | null {
+  if (!scope) return null;
+  const needle = scope.trim().toLowerCase();
+  for (const key of gatedKeysOf(register)) {
+    const scopes = register[key].releaseScopes as readonly string[];
+    if (scopes.includes(needle)) return key;
+  }
+  return null;
 }
 
 /**
@@ -221,17 +276,8 @@ export function isGatedFeature(key: string | null | undefined): boolean {
  * tagging, or the release that announces it would tag itself as withheld.
  */
 export function gateForScope(scope: string | null | undefined): FeatureFlagKey | null {
-  if (!scope) return null;
-  const needle = scope.trim().toLowerCase();
-  for (const key of GATED_FEATURE_KEYS) {
-    // `as readonly string[]`: each definition's `releaseScopes` is a literal
-    // tuple thanks to `as const`, so the union's `includes` narrows its own
-    // parameter to `never`. Widening here, not in the register, keeps the
-    // literal types available to anything that wants them.
-    const scopes = FEATURE_FLAGS[key].releaseScopes as readonly string[];
-    if (scopes.includes(needle)) return key;
-  }
-  return null;
+  // The cast is sound because the keys come from FEATURE_FLAGS itself.
+  return gateForScopeIn(FEATURE_FLAGS, scope) as FeatureFlagKey | null;
 }
 
 /**

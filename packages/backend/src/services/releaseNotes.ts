@@ -3,9 +3,11 @@ import { timingSafeEqual } from 'node:crypto';
 import {
   versionSortKey,
   isFeatureFlagKey,
-  isGatedFeature,
-  GATED_FEATURE_KEYS,
+  isGatedFeatureIn,
+  gatedKeysOf,
+  FEATURE_FLAGS,
   FEATURE_FLAG_KEYS,
+  type FeatureFlagRegister,
   type ReleaseHighlight,
   type ReleaseNoteEntry,
   type HighlightKind,
@@ -193,16 +195,19 @@ export async function upsertReleaseNote(entry: {
  * gate with nothing in the fetched window still has to be frozen or its backlog
  * is read past and lost. Keys only — never the withheld text.
  */
-function toEntry(row: {
-  version: string;
-  publishedAt: Date;
-  highlights: ReleaseHighlight[];
-}): ReleaseNoteEntry {
+function toEntry(
+  row: {
+    version: string;
+    publishedAt: Date;
+    highlights: ReleaseHighlight[];
+  },
+  register: FeatureFlagRegister,
+): ReleaseNoteEntry {
   return {
     version: row.version,
     publishedAt: row.publishedAt.toISOString(),
-    highlights: row.highlights.filter((h) => !isGatedFeature(h.requiresFeature)),
-    gatedFeatures: GATED_FEATURE_KEYS,
+    highlights: row.highlights.filter((h) => !isGatedFeatureIn(register, h.requiresFeature)),
+    gatedFeatures: gatedKeysOf(register),
   };
 }
 
@@ -217,7 +222,13 @@ function toEntry(row: {
  * error: the client's stored value is the only thing that can be malformed
  * here, and answering it with the full list is both harmless and self-healing.
  */
-export async function listReleaseNotes(sinceVersion?: string | null): Promise<ReleaseNoteEntry[]> {
+export async function listReleaseNotes(
+  sinceVersion?: string | null,
+  // Defaults to the live register. A parameter only so the withholding
+  // behaviour stays testable once every real flag is general — see
+  // `FeatureFlagRegister`. Callers in the routes pass nothing.
+  register: FeatureFlagRegister = FEATURE_FLAGS,
+): Promise<ReleaseNoteEntry[]> {
   const db = getPoolDbClient();
   const floor = sinceVersion ? versionSortKey(sinceVersion) : -1;
   const rows = await db
@@ -229,7 +240,7 @@ export async function listReleaseNotes(sinceVersion?: string | null): Promise<Re
     .from(releaseNotesTable)
     .where(floor >= 0 ? gt(releaseNotesTable.sortKey, floor) : undefined)
     .orderBy(desc(releaseNotesTable.sortKey));
-  return rows.map(toEntry);
+  return rows.map((row) => toEntry(row, register));
 }
 
 /**
@@ -239,7 +250,9 @@ export async function listReleaseNotes(sinceVersion?: string | null): Promise<Re
  * records this and shows nothing, because a brand-new user wants the app, not
  * a changelog of everything that ever shipped.
  */
-export async function latestReleaseNote(): Promise<ReleaseNoteEntry | null> {
+export async function latestReleaseNote(
+  register: FeatureFlagRegister = FEATURE_FLAGS,
+): Promise<ReleaseNoteEntry | null> {
   const db = getPoolDbClient();
   const rows = await db
     .select({
@@ -250,5 +263,5 @@ export async function latestReleaseNote(): Promise<ReleaseNoteEntry | null> {
     .from(releaseNotesTable)
     .orderBy(desc(releaseNotesTable.sortKey))
     .limit(1);
-  return rows.length > 0 ? toEntry(rows[0]) : null;
+  return rows.length > 0 ? toEntry(rows[0], register) : null;
 }

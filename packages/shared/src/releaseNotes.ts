@@ -23,7 +23,12 @@
 // deliberate fork of the desktop renderer, so a second copy of this logic is
 // how the two clients start disagreeing about what a user has already seen.
 
-import { gateForScope, type FeatureFlagKey } from './featureFlags.js';
+import {
+  FEATURE_FLAGS,
+  gateForScopeIn,
+  type FeatureFlagKey,
+  type FeatureFlagRegister,
+} from './featureFlags.js';
 
 /** What kind of change a highlight describes. Drives the modal's icon. */
 export type HighlightKind = 'feature' | 'fix' | 'improvement';
@@ -166,7 +171,10 @@ const CONVENTIONAL_RE =
  * GitHub UI carry it; most of Talyn's commits land by direct push and have no
  * PR number at all.
  */
-export function parseConventionalCommit(subject: string): ParsedCommit | null {
+export function parseConventionalCommit(
+  subject: string,
+  register: FeatureFlagRegister = FEATURE_FLAGS,
+): ParsedCommit | null {
   const line = subject.split('\n')[0]?.trim() ?? '';
   if (!line) return null;
   const m = CONVENTIONAL_RE.exec(line);
@@ -178,7 +186,7 @@ export function parseConventionalCommit(subject: string): ParsedCommit | null {
     subject: m.groups.subject.trim(),
     pr: m.groups.pr ? Number(m.groups.pr) : null,
     raw: line,
-    gate: gateForScope(scope),
+    gate: gateForScopeIn(register, scope) as FeatureFlagKey | null,
   };
 }
 
@@ -227,11 +235,18 @@ export const INTERNAL_SCOPES: readonly string[] = [
  * this file, and the list is why Loops was announced to every user who could
  * not open it: the list said `['fleet']` and nobody remembered to add `loops`.
  * The register already knew.
+ *
+ * `register` defaults to the live one and exists so this behaviour stays
+ * testable once every real flag is general — at which point no live flag can
+ * demonstrate a withheld commit. See `FeatureFlagRegister`.
  */
-export function filterReleaseCommits(subjects: readonly string[]): ParsedCommit[] {
+export function filterReleaseCommits(
+  subjects: readonly string[],
+  register: FeatureFlagRegister = FEATURE_FLAGS,
+): ParsedCommit[] {
   const kept: ParsedCommit[] = [];
   for (const subject of subjects) {
-    const parsed = parseConventionalCommit(subject);
+    const parsed = parseConventionalCommit(subject, register);
     if (!parsed) continue;
     if (!USER_FACING_TYPES.includes(parsed.type)) continue;
     if (parsed.scope && INTERNAL_SCOPES.includes(parsed.scope)) continue;

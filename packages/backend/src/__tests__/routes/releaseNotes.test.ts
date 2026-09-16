@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
-import { GATED_FEATURE_KEYS, type ReleaseHighlight, type ReleaseNoteEntry } from '@talyn/shared';
+import {
+  FEATURE_FLAG_KEYS,
+  GATED_FEATURE_KEYS,
+  isGatedFeature,
+  type ReleaseHighlight,
+  type ReleaseNoteEntry,
+} from '@talyn/shared';
 import {
   releaseNotesPublicRoutes,
   releaseNotesRoutes,
@@ -101,27 +107,41 @@ describe('routes/release-notes', () => {
     ] satisfies ReleaseNoteEntry[]);
   });
 
-  it('records a gated highlight but never serves it', async () => {
+  it('serves exactly what the register does not gate, and only gate KEYS', async () => {
     // The regression this whole path exists for: Loops shipped, the notes
     // announced it, and most users could not open the page it pointed at.
-    // `fleet` carries the assertion now that Loops has gone general — the
-    // exemplar has to be a feature the register still gates, or the test
-    // passes for the wrong reason.
+    //
+    // This test used to name whichever flag was still gated — `loops`, then
+    // `fleet` — and had to be re-pointed on every release. It cannot be any
+    // more: every real flag is general, so nothing is withheld and naming one
+    // would assert the opposite of the truth.
+    //
+    // So it derives instead. Publish one highlight per known flag, and require
+    // the route to serve precisely the ungated ones. Today that is all of them
+    // and the interesting half is vacuous — but the day a gated flag is added
+    // this re-arms with no edit, which is the property the old version lacked.
+    // The withholding LOGIC is covered against a synthetic register in
+    // `releaseNotes.test.ts`; what is unique here is that it holds over HTTP.
+    const tagged = FEATURE_FLAG_KEYS.map((key) =>
+      highlight({ title: `About ${key}`, requiresFeature: key }),
+    );
     expect(
-      (
-        await publish('0.2.61', [
-          highlight({ title: 'Ungated' }),
-          highlight({ title: 'Runs on our own hardware', requiresFeature: 'fleet' }),
-        ])
-      ).status
+      (await publish('0.2.61', [highlight({ title: 'Ungated' }), ...tagged])).status
     ).toBe(201);
 
     const { body } = await read('');
     const entries = body.data as ReleaseNoteEntry[];
-    expect(entries[0].highlights.map((h) => h.title)).toEqual(['Ungated']);
-    // Only the KEY travels. The withheld title and description stay server-side.
-    expect(entries[0].gatedFeatures).toContain('fleet');
-    expect(JSON.stringify(body)).not.toContain('Runs on our own hardware');
+    const withheld = FEATURE_FLAG_KEYS.filter((key) => isGatedFeature(key));
+    expect(entries[0].highlights.map((h) => h.title)).toEqual([
+      'Ungated',
+      ...FEATURE_FLAG_KEYS.filter((key) => !isGatedFeature(key)).map((key) => `About ${key}`),
+    ]);
+    expect(entries[0].gatedFeatures).toEqual(GATED_FEATURE_KEYS);
+    // Only the KEY travels. A withheld title and description stay server-side —
+    // the response must never carry the text of something it declined to show.
+    for (const key of withheld) {
+      expect(JSON.stringify(body)).not.toContain(`About ${key}`);
+    }
   });
 
   it('rejects a highlight tagged with a gate the register does not know', async () => {

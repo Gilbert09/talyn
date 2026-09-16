@@ -2,10 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   compareVersions,
   filterReleaseCommits,
+  FEATURE_FLAGS,
+  FEATURE_FLAG_KEYS,
   gateForScope,
+  gateForScopeIn,
+  gatedKeysOf,
   GATED_FEATURE_KEYS,
   INTERNAL_SCOPES,
   isGatedFeature,
+  isGatedFeatureIn,
   kindForCommitType,
   highlightsForSurface,
   parseConventionalCommit,
@@ -14,6 +19,7 @@ import {
   surfacesForScope,
   versionSortKey,
   whatsNewFetchFloor,
+  type FeatureFlagRegister,
   type ReleaseHighlight,
   type ReleaseNoteEntry,
 } from '@talyn/shared';
@@ -46,6 +52,36 @@ const entry = (
   highlights,
   gatedFeatures,
 });
+
+/**
+ * A register invented for these tests, so the withholding mechanism stays
+ * covered when no real flag is gated.
+ *
+ * The assertions below used a live flag as their exemplar of "still gated",
+ * and it had to be re-pointed on every release: `workflows` → `loops` →
+ * `fleet`. Releasing the fleet empties the set, so that style of test would
+ * now assert nothing at all — silently, and exactly when production stops
+ * exercising the path too. The next gated feature is what depends on this
+ * working, and it must not be the thing that discovers it does not.
+ */
+const SYNTHETIC: FeatureFlagRegister = {
+  'gated-thing': {
+    posthogKey: 'gated-thing',
+    envOverride: 'GATED_THING',
+    fallback: false,
+    description: 'a feature that has not been announced yet',
+    availability: 'gated',
+    releaseScopes: ['gated-thing', 'gadget'],
+  },
+  'general-thing': {
+    posthogKey: 'general-thing',
+    envOverride: 'GENERAL_THING',
+    fallback: true,
+    description: 'a feature everybody already has',
+    availability: 'general',
+    releaseScopes: ['general-thing'],
+  },
+};
 
 describe('shared/releaseNotes — versions', () => {
   it('parses X.Y.Z with or without the leading v, and rejects anything else', () => {
@@ -155,53 +191,74 @@ describe('shared/releaseNotes — commit filtering', () => {
     // shown, so the real launch had nothing left to announce. A tagged commit
     // is summarised like any other and withheld downstream, where the decision
     // can be revisited every time somebody asks.
-    const kept = filterReleaseCommits([
-      'fix(fleet): stop dialling a stale host',
-      'feat(loops): run a prompt on a schedule',
-      'feat(desktop): apply a staged update once the machine goes idle',
-    ]);
+    const kept = filterReleaseCommits(
+      [
+        'fix(gated-thing): stop dialling a stale host',
+        'feat(general-thing): run a prompt on a schedule',
+        'feat(desktop): apply a staged update once the machine goes idle',
+      ],
+      SYNTHETIC,
+    );
     expect(kept.map((c) => [c.scope, c.gate])).toEqual([
-      ['fleet', 'fleet'],
-      // Loops went general, so its scope stopped gating — the same transition
-      // `workflows` made before it, and the reason this list is derived from
-      // the register rather than written down here.
-      ['loops', null],
+      ['gated-thing', 'gated-thing'],
+      // A released feature's scope stops gating — the transition `workflows`,
+      // `loops` and `fleet` each made in turn, and the reason this list is
+      // derived from the register rather than written down here.
+      ['general-thing', null],
       ['desktop', null],
     ]);
   });
 
-  it('reads the gate off the register, so the two lists cannot drift apart', () => {
+  it('maps every one of a gated flag\'s scopes, case-insensitively', () => {
     // The predecessor was a literal array of scopes in releaseNotes.ts. It said
     // ['fleet'] on the day Loops shipped, which is the entire bug: the register
     // knew Loops was gated and the notes had their own opinion.
-    expect(gateForScope('fleet')).toBe('fleet');
-    expect(gateForScope('FLEET')).toBe('fleet');
-    // Loops is general now; its scope answers null like any other.
-    expect(gateForScope('loops')).toBeNull();
-    expect(gateForScope('desktop')).toBeNull();
-    expect(gateForScope(null)).toBeNull();
+    expect(gateForScopeIn(SYNTHETIC, 'gated-thing')).toBe('gated-thing');
+    expect(gateForScopeIn(SYNTHETIC, 'GATED-THING')).toBe('gated-thing');
+    // A second scope on the same flag maps to it too — `releaseScopes` is a
+    // list because one feature's commits do not all carry one scope.
+    expect(gateForScopeIn(SYNTHETIC, 'gadget')).toBe('gated-thing');
+    expect(gateForScopeIn(SYNTHETIC, 'general-thing')).toBeNull();
+    expect(gateForScopeIn(SYNTHETIC, 'desktop')).toBeNull();
+    expect(gateForScopeIn(SYNTHETIC, null)).toBeNull();
+  });
+
+  it('withholds only the gated key, and treats an unknown one as released', () => {
+    expect(isGatedFeatureIn(SYNTHETIC, 'gated-thing')).toBe(true);
+    expect(isGatedFeatureIn(SYNTHETIC, 'general-thing')).toBe(false);
+    // An unknown key — a flag deleted from the register — is not gated. That
+    // is the second way to release a feature, and it has to replay too.
+    expect(isGatedFeatureIn(SYNTHETIC, 'a-flag-we-deleted')).toBe(false);
+    expect(isGatedFeatureIn(SYNTHETIC, undefined)).toBe(false);
+    expect(gatedKeysOf(SYNTHETIC)).toEqual(['gated-thing']);
+  });
+
+  it('agrees with the LIVE register, by derivation and never by name', () => {
+    // Deliberately names no flag. Every assertion here is read out of the
+    // register itself, so releasing a feature needs no edit to this file —
+    // which is the whole failure this test has had three times.
+    for (const key of FEATURE_FLAG_KEYS) {
+      const { availability, releaseScopes } = FEATURE_FLAGS[key];
+      const gated = availability === 'gated';
+      expect(isGatedFeature(key)).toBe(gated);
+      for (const scope of releaseScopes) {
+        // A gated flag's scope tags with that flag; a released one's must stop
+        // tagging, or the release announcing it would withhold itself.
+        expect(gateForScope(scope)).toBe(gated ? key : null);
+      }
+    }
+    expect(GATED_FEATURE_KEYS).toEqual(gatedKeysOf(FEATURE_FLAGS));
     // Gated and internal are opposite kinds of invisible and must not overlap:
     // an internal scope is never announced, a gated one is announced later.
     for (const key of GATED_FEATURE_KEYS) {
-      expect(INTERNAL_SCOPES).not.toContain(key);
+      for (const scope of FEATURE_FLAGS[key].releaseScopes) {
+        expect(INTERNAL_SCOPES).not.toContain(scope);
+      }
     }
-  });
-
-  it('stops tagging a feature once it is generally available', () => {
-    // `workflows` and now `loops` are in the register with availability
-    // 'general', so their scopes no longer gate. Were either still tagged, the
-    // release that announced it to everybody would have withheld itself.
-    expect(gateForScope('workflows')).toBeNull();
-    expect(isGatedFeature('workflows')).toBe(false);
-    expect(gateForScope('loops')).toBeNull();
-    expect(isGatedFeature('loops')).toBe(false);
-    // `fleet` is the one still gated, and carries the assertion loops used to.
-    expect(isGatedFeature('fleet')).toBe(true);
-    // An unknown key — a flag deleted from the register — is not gated. That
-    // is the second way to release a feature, and it has to replay too.
+    expect(gateForScope('desktop')).toBeNull();
+    expect(gateForScope(null)).toBeNull();
     expect(isGatedFeature('a-flag-we-deleted')).toBe(false);
     expect(isGatedFeature(undefined)).toBe(false);
-    expect(filterReleaseCommits(['feat(workflows): run a workflow by hand'])[0].gate).toBeNull();
   });
 
   it('drops our own release-notes plumbing', () => {
@@ -604,30 +661,42 @@ describe('services/releaseNotes — storage', () => {
     // the register. Filtering on the READ path is what lets the same row answer
     // differently the day the flag goes general; a write-path filter would have
     // thrown the text away and left nothing to announce.
+    //
+    // Read against SYNTHETIC rather than the live register. Every real flag is
+    // general now, so a live-register version of this test would publish four
+    // highlights, withhold none, and pass while proving nothing.
     await publish('0.2.61', 30, [
       highlight({ title: 'Ungated' }),
-      highlight({ title: 'Runs on our own hardware', requiresFeature: 'fleet' }),
-      highlight({ title: 'Already released', requiresFeature: 'workflows' }),
+      highlight({ title: 'Runs on our own hardware', requiresFeature: 'gated-thing' }),
+      highlight({ title: 'Already released', requiresFeature: 'general-thing' }),
       highlight({ title: 'Flag since deleted', requiresFeature: 'a-flag-we-deleted' }),
     ]);
-    const [row] = await listReleaseNotes();
+    const [row] = await listReleaseNotes(null, SYNTHETIC);
     expect(row.highlights.map((h) => h.title)).toEqual([
       'Ungated',
       'Already released',
       'Flag since deleted',
     ]);
-    expect(row.gatedFeatures).toContain('fleet');
-    expect(row.gatedFeatures).not.toContain('workflows');
-    // Loops released, so its rows stop being withheld — the replay this whole
-    // mechanism exists for.
-    expect(row.gatedFeatures).not.toContain('loops');
+    expect(row.gatedFeatures).toContain('gated-thing');
+    expect(row.gatedFeatures).not.toContain('general-thing');
+
+    // And the live register, by derivation: a released flag's highlights are
+    // shown, and the gate set is whatever the register says it is.
+    const [live] = await listReleaseNotes();
+    expect(live.highlights.map((h) => h.title)).toEqual([
+      'Ungated',
+      'Runs on our own hardware',
+      'Already released',
+      'Flag since deleted',
+    ]);
+    expect(live.gatedFeatures).toEqual(gatedKeysOf(FEATURE_FLAGS));
   });
 
   it('withholds on the baseline read too', async () => {
     // `latest()` is the other read path — a brand-new client's baseline — and
     // it has to withhold too, or the leak just moves one endpoint over.
-    await publish('0.2.61', 30, [highlight({ title: 'Gated', requiresFeature: 'fleet' })]);
-    expect((await latestReleaseNote())?.highlights).toEqual([]);
+    await publish('0.2.61', 30, [highlight({ title: 'Gated', requiresFeature: 'gated-thing' })]);
+    expect((await latestReleaseNote(SYNTHETIC))?.highlights).toEqual([]);
   });
 
   it('is idempotent on version, and a re-run replaces the highlights', async () => {
