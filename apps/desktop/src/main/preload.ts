@@ -5,6 +5,16 @@ import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterE
 import type { CodexSignInResult } from './codexAuth';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
+export interface LocalMcpFinding {
+  name: string;
+  source: string;
+  url: string | null;
+  transport: string;
+  importable: boolean;
+  reason?: string;
+  hasLocalCredential: boolean;
+}
+
 export interface LocalSkillFile {
   dirName: string;
   /** Absolute path of SKILL.md on this machine. */
@@ -120,6 +130,20 @@ const electronHandler = {
      */
     listLocal(): Promise<LocalSkillFile[]> {
       return ipcRenderer.invoke('skills:list-local');
+    },
+  },
+  mcp: {
+    /**
+     * MCP tool servers already configured on this machine — Claude Code (user
+     * AND per-project scope), Claude Desktop, Codex.
+     *
+     * Addresses only: a credential in one of those files is a live secret, and
+     * carrying it through here would put it through two more places than it
+     * needs to be. Entries a sandbox could not reach come back with the reason
+     * rather than being dropped.
+     */
+    scanLocal(): Promise<LocalMcpFinding[]> {
+      return ipcRenderer.invoke('mcp:scan-local');
     },
   },
 };

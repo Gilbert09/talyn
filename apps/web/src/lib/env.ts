@@ -60,3 +60,23 @@ export interface LocalSkillFile {
   /** Raw file text; null when the file exceeds the size guard. */
   content: string | null;
 }
+
+/**
+ * False on the web: reading `~/.claude.json` and `~/.codex/config.toml` needs a
+ * filesystem. The Tool servers page uses this to omit the "Already on this
+ * machine" section entirely rather than render one that is permanently empty.
+ *
+ * A structural copy of the finding shape lives here too, so the shared code
+ * paths typecheck without importing anything from `electron`.
+ */
+export const HAS_LOCAL_MCP = false;
+
+export interface LocalMcpFinding {
+  name: string;
+  source: string;
+  url: string | null;
+  transport: string;
+  importable: boolean;
+  reason?: string;
+  hasLocalCredential: boolean;
+}

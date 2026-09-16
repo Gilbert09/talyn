@@ -22,6 +22,7 @@ import { resolveHtmlPath } from './util';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
 import { signInToCodex } from './codexAuth';
+import { scanLocalMcpServers } from './localMcp';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -214,6 +215,12 @@ ipcMain.handle('skills:list-local', async () => {
   );
   return results.filter((r) => r !== null);
 });
+
+// MCP tool servers already configured on this machine, so somebody who has
+// wired up Supabase for their own Claude does not have to find the URL again.
+// Remote HTTP servers only reach a sandbox; the rest are reported WITH the
+// reason rather than dropped. See main/localMcp.ts for why no key is read.
+ipcMain.handle('mcp:scan-local', () => scanLocalMcpServers());
 
 registerDeepLinkProtocol();
 

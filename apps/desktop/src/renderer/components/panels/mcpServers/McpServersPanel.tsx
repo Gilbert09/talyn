@@ -16,6 +16,7 @@ import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useMcpServers } from './useMcpServers';
 import { McpServerEditorPage } from './McpServerEditorPage';
+import { LocalImport } from './LocalImport';
 
 /**
  * Tool servers — the MCP servers a workspace connects to its fleet runs.
@@ -181,6 +182,13 @@ export function McpServersPanel() {
                 ))}
               </div>
             )}
+
+            {/* Above the catalog on purpose: a server somebody already uses
+                is a better first suggestion than one we picked for them. */}
+            <LocalImport
+              connectedUrls={new Set(servers.map((s) => s.url))}
+              onImport={(input) => openNew(input)}
+            />
 
             <Catalog
               connected={connected as Set<string>}
