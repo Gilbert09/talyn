@@ -29,6 +29,7 @@ import {
   verifyTokenAndGetUser,
 } from '../middleware/auth.js';
 import { setSupabaseServiceClientForTesting } from '../services/supabase.js';
+import { captureSignup } from '../services/analytics.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { getDbClient, type Database } from '../db/client.js';
 import {
@@ -38,6 +39,13 @@ import {
   repositories as repositoriesTable,
   users as usersTable,
 } from '../db/schema.js';
+
+// The signup event is fire-and-forget and keyed off the user-row INSERT, so
+// the only way to assert "exactly once, ever" is to watch the call itself.
+vi.mock('../services/analytics.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/analytics.js')>()),
+  captureSignup: vi.fn(),
+}));
 
 const OTHER_USER_ID = 'user-other';
 
@@ -321,6 +329,35 @@ describe('requireAuth (Supabase JWT verification)', () => {
   it('retains the verified ES256 expiry', async () => {
     const token = await signEs256(privateKey);
     expect((await verifyTokenAndGetUser(token))?.expiresAt).toBe(decodeJwt(token).exp! * 1000);
+  });
+
+  it('captures signup on the row-creating request only, never on a later sign-in', async () => {
+    vi.mocked(captureSignup).mockClear();
+    const token = await signEs256(privateKey);
+
+    // First authenticated request: the users row does not exist yet.
+    expect((await verifyTokenAndGetUser(token))?.id).toBe(JWT_USER_ID);
+    expect(captureSignup).toHaveBeenCalledTimes(1);
+    expect(captureSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: JWT_USER_ID, email: 'jwt@test' }),
+    );
+
+    // Every subsequent request takes the ON CONFLICT branch. A returning
+    // user must not look like a new one, which is the whole point of
+    // having this event rather than counting `logged_in`.
+    await verifyTokenAndGetUser(token);
+    expect((await probe(token)).status).toBe(200);
+    expect(captureSignup).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures a signup per distinct account', async () => {
+    vi.mocked(captureSignup).mockClear();
+    await verifyTokenAndGetUser(await signEs256(privateKey));
+    await verifyTokenAndGetUser(await signEs256(privateKey, { sub: OTHER_USER_ID }));
+    expect(captureSignup).toHaveBeenCalledTimes(2);
+    expect(captureSignup).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: OTHER_USER_ID }),
+    );
   });
 
   it('bootstraps only new users and preserves a revoked admin on later HTTP authentication', async () => {

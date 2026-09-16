@@ -136,3 +136,38 @@ export function captureWorkspaceEvent(
       console.warn(`[analytics] capture "${event}" failed:`, msg);
     });
 }
+
+/**
+ * Capture the one-and-only-once `signup` for a brand-new account.
+ *
+ * The clients fire `logged_in` on every sign-in, which cannot answer "how
+ * many people started using Talyn this week" — a returning user and a new
+ * one look identical. Before this, the only source of that number was
+ * `SELECT count(*) FROM users WHERE created_at > …`, which no funnel,
+ * cohort or acquisition breakdown can read.
+ *
+ * Fired from the ONE place a `users` row is created (the JWT-verifying
+ * middleware's upsert). There is no separate sign-up endpoint to hook: the
+ * account comes into existence on the first authenticated request after a
+ * Supabase OAuth round-trip, so "first insert wins" is the only honest
+ * definition of the moment.
+ *
+ * `$set` populates the person profile so a PostHog release condition can
+ * target the same email the feature-flag register already keys on.
+ */
+export function captureSignup(user: {
+  id: string;
+  email: string;
+  githubUsername?: string | null;
+}): void {
+  if (!isServerAnalyticsConfigured()) return;
+  void captureServerEvent(user.id, 'signup', {
+    $set: {
+      email: user.email,
+      github_username: user.githubUsername ?? null,
+    },
+  }).catch((err) => {
+    const msg = err instanceof Error ? err.message : 'unknown error';
+    console.warn('[analytics] capture "signup" failed:', msg);
+  });
+}

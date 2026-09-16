@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { randomBytes, timingSafeEqual } from 'crypto';
 import {
   createRemoteJWKSet,
@@ -17,6 +17,7 @@ import {
   repositories as repositoriesTable,
 } from '../db/schema.js';
 import { getSupabaseServiceClient } from '../services/supabase.js';
+import { captureSignup } from '../services/analytics.js';
 
 export interface AuthUser {
   id: string;
@@ -227,7 +228,21 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
         updatedAt: now,
       },
     })
-    .returning({ isAdmin: usersTable.isAdmin });
+    .returning({
+      isAdmin: usersTable.isAdmin,
+      // Did this statement INSERT, or did it take the ON CONFLICT branch?
+      // `xmax = 0` is the canonical one-round-trip answer: a freshly
+      // inserted tuple carries no updating transaction id, a
+      // conflict-updated one carries the locker's. Deliberately not
+      // "created_at === now" — that silently stops counting the day
+      // anyone drops the explicit `createdAt` and leans on defaultNow().
+      inserted: sql<boolean>`xmax = 0`,
+    });
+
+  // First insert == the account came into existence. See captureSignup.
+  if (row?.inserted) {
+    captureSignup({ id: identity.id, email, githubUsername });
+  }
 
   return {
     id: identity.id,
