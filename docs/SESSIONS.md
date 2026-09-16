@@ -2,6 +2,79 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 137 — MCP tool servers on the fleet (2026-09-16)
+
+A workspace connects the tool servers it wants — Linear, Sentry, Supabase, its
+own — and every Talyn Fleet run wakes up with their tools wired in. Behind the
+`mcp-servers` flag, fleet-only, free plan keeps 3.
+
+**Tom's call: Talyn holds the credentials, not the fleet.** The alternative was
+storing them in YAS and reusing its OAuth machinery, which is ~115 KB of tested
+Go we already own. What decided it against that was the tenant ceiling — YAS
+allows 50 stored MCP servers per tenant and Talyn is ONE tenant for every
+workspace — plus the coupling to YAS's release cycle. The cost is that Talyn had
+to build the OAuth broker itself. Two things partly repay it: holding the secret
+is what lets our own backend run `tools/list` for the tool picker (YAS exposes no
+such endpoint, only an `initialize` probe), and a fresh implementation could lead
+with **CIMD** rather than DCR, which the 2026-07-28 spec revision deprecated.
+
+**The defect that would have bitten, and did not because it was looked for.**
+An inline MCP server's secret is sealed on arrival at the fleet and persisted
+NOWHERE — that is the point of inline. The fleet's own adoption path reads that
+tenant's STORED servers, so it has nothing to serve for one. Without a fix, every
+fleetd restart would leave a running box with its MCP routes and no credentials
+on them: each tool call 401s for the rest of the run, and from inside it looks
+like every vendor refusing at once. The fix is that Talyn re-supplies them, on
+both the push (`poller.recredential`) and the pull (`runCredentials`). The fleet
+endpoint already accepted `integrations` — only its spec omitted it, which is the
+worst of both, since anybody reading the contract would have concluded it was
+impossible.
+
+**Three credential paths, one definition.** `mcpIntegrationSecrets` is shared by
+the create body, the push and the pull. The LLM key already had this exact bug:
+`recredential` sent the Claude key unconditionally and re-credentialed Codex runs
+with a credential their route table could not reach.
+
+**The tri-state, everywhere.** `tools` and `mcpServerIds` both mean three
+different things: null is "all / inherit", `[]` is "none", a list is "exactly
+these". Collapsing null and `[]` would make "run this with no tools" the one
+thing nobody could ask for. It is preserved through the validator, the column,
+the metadata, the fleet's wire frame and the guest's config file — and the
+runtime contract was bumped to v2 rather than letting an old reader ignore the
+field, because ignoring it means running EVERY tool on a server somebody
+restricted.
+
+**The count caps came out of YAS rather than being worked around.** Servers per
+box (8), tools per server (16), tools in total (32), servers on the wire (32),
+inline per create (16). Each was a round number standing between a tenant and
+capabilities they attached on purpose. What replaced them is the per-server tool
+allow-list: the same saving, made as a choice. Kept: the 64-character tool name,
+which is a hard provider limit — an over-long one 400s the whole request rather
+than failing one call.
+
+**Three defects the tests found before anything ran.** The GitHub catalog entry
+would have created a server named `github`, the one name the fleet refuses (it is
+the sandbox's own REST API) — it connects as `github-mcp`. The header-name rule
+was letters-digits-hyphen, which made Context7's own entry unsaveable
+(`CONTEXT7_API_KEY`). And Stripe's server answers at the ROOT —
+`https://mcp.stripe.com/`, while every `/mcp` and `/v1/mcp` spelling 404s — which
+both the fleet and this validator refused outright. The fleet now accepts an
+explicit root and still refuses a bare host; only Go can tell those apart, since
+the WHATWG URL parser normalises both to `/`, so this side normalises to the form
+the fleet takes.
+
+**The local import is worth having, and only because it reads the per-project
+map.** `~/.claude.json` keys MCP servers under both a top-level `mcpServers` and
+`projects.*.mcpServers`, and in practice almost every remote server anybody has
+is project-scoped: on this machine that is the difference between one importable
+server and six. Everything found is shown including what cannot come along — an
+stdio server has nowhere in a sandbox to keep its key, a `127.0.0.1` one is
+unreachable — because a server somebody can see in their own config and not in
+this list reads as a broken scan. No credential is read: the address is offered,
+the key is typed once into the field that encrypts it.
+
+**Not done:** verified end to end on a real fleet box. See the YAS PR, which has
+to land first — the tool allow-list and the credential re-supply both live there.
 ## Session 136 — Talyn Fleet goes general, and the last gated flag takes its test with it (2026-09-16)
 
 Two edits, as designed. `availability: 'gated'` → `'general'` on the `fleet`

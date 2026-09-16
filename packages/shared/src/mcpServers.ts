@@ -376,9 +376,8 @@ export interface McpCatalogEntry {
    *  server needs no credential at all. */
   credentialLabel?: string;
   /** True when the server authenticates by signing in rather than by a pasted
-   *  key. Until the OAuth broker ships these are shown and refused, rather than
-   *  hidden — somebody looking for Linear should find out why it is not there
-   *  yet, not conclude Talyn has never heard of it. */
+   *  key. The editor offers the sign-in button for these; an entry that ALSO
+   *  has a `credentialLabel` accepts either. */
   oauth?: boolean;
   inject?: McpInjection;
   notes?: string;
@@ -470,7 +469,8 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     authKind: 'bearer',
     credentialLabel: 'Firecrawl API key',
   },
-  // OAuth servers. Listed and refused rather than hidden — see McpCatalogEntry.
+  // Servers connected by signing in. Some also take a pasted key; the ones
+  // that do not are marked in their notes.
   {
     handle: 'linear',
     title: 'Linear',

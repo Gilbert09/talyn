@@ -305,25 +305,24 @@ function Catalog({
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {MCP_CATALOG.map((entry) => {
           const already = connected.has(entry.handle);
-          // Until the sign-in flow ships, an OAuth-only server is one we cannot
-          // connect — say so on the card rather than letting somebody find out
-          // after pasting a key that will not work.
+          // Marked rather than refused: these connect fine, they just need a
+          // trip to the vendor's consent screen instead of a pasted key.
           const signInOnly = entry.oauth === true && !entry.credentialLabel;
           return (
             <button
               key={entry.handle}
               type="button"
-              disabled={already || signInOnly}
+              disabled={already}
               onClick={() => onPick(entry)}
               className={cn(
                 'rounded-lg border px-3 py-2 text-left transition',
-                already || signInOnly ? 'cursor-default opacity-50' : 'hover:bg-accent'
+                already ? 'cursor-default opacity-50' : 'hover:bg-accent'
               )}
             >
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium">{entry.title}</span>
                 {already && <Badge variant="secondary">Connected</Badge>}
-                {!already && signInOnly && <Badge variant="outline">Sign-in soon</Badge>}
+                {!already && signInOnly && <Badge variant="outline">Sign in</Badge>}
                 {!already && !signInOnly && entry.authKind === 'none' && (
                   <Badge variant="outline">No key</Badge>
                 )}
