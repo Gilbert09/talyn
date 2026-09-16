@@ -2013,6 +2013,35 @@ export const mcpServers = {
    * re-probing every vendor on every render.
    */
   test: (id: string) => request<McpProbeResult>('POST', `/mcp-servers/${id}/test`),
+
+  /**
+   * Start the sign-in leg. Returns where to send a browser, and a flow id to
+   * poll — the caller does the redirect, because a POST is what writes the flow
+   * and may register a client at a third party.
+   */
+  startSignIn: (id: string) =>
+    request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
+      'POST',
+      `/mcp-servers/${id}/connect`
+    ),
+
+  /** The poll a client runs while somebody is at the consent screen. */
+  signInStatus: (id: string, flowId: string) =>
+    request<{ status: 'pending' | 'connected' | 'needs_reauth'; pending: boolean; detail?: string }>(
+      'GET',
+      `/mcp-servers/${id}/connect/${flowId}`
+    ),
+
+  /**
+   * Finish a sign-in from the callback page, which holds nothing but these two
+   * values — the state is what names the server.
+   */
+  complete: (state: string, code: string) =>
+    request<McpServerDefinition>('POST', '/mcp-servers/complete', { state, code }),
+
+  /** Hand back the grant, keeping the endpoints so a reconnect is cheap. */
+  disconnect: (id: string) =>
+    request<McpServerDefinition>('POST', `/mcp-servers/${id}/disconnect`),
 };
 
 // Singleton instance

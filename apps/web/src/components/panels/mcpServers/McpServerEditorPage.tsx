@@ -14,6 +14,8 @@ import {
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Section, TextField } from '../workflows/workflowFields';
+import { api } from '../../../lib/api';
+import { openExternal } from '../../../lib/openExternal';
 
 /**
  * The tool-server editor.
@@ -193,6 +195,8 @@ export function McpServerEditorPage({
             />
           </Section>
 
+          <SignIn server={editing} />
+
           <Section
             title="Credential"
             description={
@@ -359,6 +363,101 @@ function ToolPicker({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Sign in to a server that wants OAuth rather than a pasted key.
+ *
+ * Only offered once the server EXISTS: the flow writes a grant against a row,
+ * and there is no row until it is saved. Save first, then sign in — which is
+ * also the order the Test button follows, and for the same reason.
+ *
+ * The consent screen opens in a new tab and this polls. It does not wait on the
+ * tab closing: somebody who finishes in a background tab, or on their phone,
+ * should still see it connect.
+ */
+function SignIn({ server }: { server: McpServerDefinition | null }) {
+  const [busy, setBusy] = useState(false);
+  const [grant, setGrant] = useState(server?.oauth ?? null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!server) {
+    return (
+      <Section
+        title="Sign in"
+        description="Some servers are connected by signing in rather than by pasting a key. Save this one first and the option appears here."
+      >
+        <p className="text-sm text-muted-foreground">Nothing to sign in to yet.</p>
+      </Section>
+    );
+  }
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { authorizeUrl, flowId } = await api.mcpServers.startSignIn(server.id);
+      // Opened BEFORE any further await, so the click's user activation is
+      // still live — the mistake the desktop's OAuth flow already paid for.
+      openExternal(authorizeUrl);
+      // Poll rather than wait on the tab: somebody may finish in a background
+      // tab or on another device, and a closed tab is not the signal anyway.
+      const until = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const status = await api.mcpServers.signInStatus(server.id, flowId);
+        if (status.status === 'connected' && !status.pending) {
+          setGrant({ status: 'connected' });
+          return;
+        }
+        if (status.status === 'needs_reauth') {
+          setError(status.detail ?? 'The server refused that sign-in.');
+          return;
+        }
+      }
+      setError('That sign-in took too long. Try again.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start sign-in.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    const next = await api.mcpServers.disconnect(server.id);
+    setGrant(next.oauth ?? null);
+  };
+
+  return (
+    <Section
+      title="Sign in"
+      description="Some servers are connected by signing in rather than by pasting a key. The token is held here and refreshed automatically; the sandbox never sees it."
+    >
+      <div className="space-y-2">
+        {grant?.status === 'connected' ? (
+          <div className="flex items-center gap-2">
+            <Check className="h-4 w-4 text-emerald-600" />
+            <span className="text-sm">Signed in{grant.issuer ? ` to ${grant.issuer}` : ''}.</span>
+            <Button variant="ghost" size="sm" onClick={() => void disconnect()}>
+              Disconnect
+            </Button>
+          </div>
+        ) : (
+          <Button variant="outline" onClick={() => void start()} disabled={busy}>
+            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            {busy ? 'Waiting for the sign-in...' : 'Sign in to this server'}
+          </Button>
+        )}
+        {/* The vendor's own words. "the refresh token has been revoked" and
+            "this client is no longer registered" are the same status and very
+            different problems. */}
+        {grant?.status === 'needs_reauth' && grant.detail && (
+          <p className="text-xs text-amber-600">{grant.detail}</p>
+        )}
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    </Section>
   );
 }
 

@@ -8,6 +8,7 @@ import type {
 import { getDbClient } from '../../db/client.js';
 import { mcpServers as mcpServersTable } from '../../db/schema.js';
 import { decryptString, encryptString } from '../tokenCrypto.js';
+import { resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
 
 /**
  * Reading and writing a workspace's MCP tool servers.
@@ -168,6 +169,30 @@ export async function deleteMcpServer(id: string): Promise<void> {
   await getDbClient().delete(mcpServersTable).where(eq(mcpServersTable.id, id));
 }
 
+/**
+ * The OAuth grant's storage, as the broker wants it.
+ *
+ * A separate read from `getMcpServer` because this one is the ONLY path that
+ * may see the token envelopes — `getMcpServer` serves clients and deliberately
+ * cannot reach them.
+ */
+export const mcpOAuthStore: McpOAuthStore = {
+  read: async (serverId) => {
+    const rows = await getDbClient()
+      .select({ oauth: mcpServersTable.oauth })
+      .from(mcpServersTable)
+      .where(eq(mcpServersTable.id, serverId))
+      .limit(1);
+    return (rows[0]?.oauth as StoredMcpOAuth | null) ?? null;
+  },
+  write: async (serverId, next) => {
+    await getDbClient()
+      .update(mcpServersTable)
+      .set({ oauth: next as never, updatedAt: new Date() })
+      .where(eq(mcpServersTable.id, serverId));
+  },
+};
+
 /** One server with its credential in the clear. Dispatch, and nothing else. */
 export interface McpServerWithSecret {
   id: string;
@@ -207,6 +232,7 @@ export async function mcpServersForDispatch(
       inject: mcpServersTable.inject,
       tools: mcpServersTable.tools,
       secretEnc: mcpServersTable.secretEnc,
+      oauth: mcpServersTable.oauth,
     })
     .from(mcpServersTable)
     .where(and(eq(mcpServersTable.workspaceId, workspaceId), eq(mcpServersTable.enabled, true)))
@@ -221,7 +247,21 @@ export async function mcpServersForDispatch(
   for (const row of rows) {
     if (wanted && !wanted.has(row.id)) continue;
     let secret: string | null = null;
-    if (row.secretEnc) {
+    // A SIGNED-IN server's token wins over any pasted key, and is refreshed
+    // here if it is close to expiry. Handing a sandbox a stale token would fail
+    // as an upstream 401 naming nothing, which the agent reads as the vendor
+    // refusing it rather than as an authorization to renew.
+    const grant = row.oauth as StoredMcpOAuth | null;
+    if (grant) {
+      secret = await resolveMcpAccessToken(row.id, mcpOAuthStore);
+      if (!secret) {
+        console.warn(
+          `[mcp] the sign-in for tool server "${row.name}" is not usable, so this run goes ` +
+            `without it (${grant.status})`
+        );
+        continue;
+      }
+    } else if (row.secretEnc) {
       try {
         secret = decryptString(row.secretEnc);
       } catch (err) {

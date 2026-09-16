@@ -1,0 +1,19 @@
+{
+  "client_id": "https://app.talyn.dev/.well-known/oauth-client/talyn.json",
+  "client_name": "Talyn",
+  "client_uri": "https://www.talyn.dev",
+  "logo_uri": "https://app.talyn.dev/apple-touch-icon.png",
+  "redirect_uris": [
+    "https://app.talyn.dev/mcp/callback"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "scope": ""
+}

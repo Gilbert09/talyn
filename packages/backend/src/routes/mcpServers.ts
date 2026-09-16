@@ -9,7 +9,14 @@ import {
 } from '../services/mcpServersAccess.js';
 import { probeMcpServer } from '../services/mcpServers/probe.js';
 import {
+  McpOAuthUnavailableError,
+  completeMcpOAuth,
+  serverIdFromState,
+  startMcpOAuth,
+} from '../services/mcpServers/oauth.js';
+import {
   createMcpServer,
+  mcpOAuthStore,
   deleteMcpServer,
   getMcpServer,
   listMcpServers,
@@ -225,6 +232,142 @@ export function mcpServerRoutes(): Router {
       mcp_probe_ok: probe.ok,
     });
     res.json({ success: true, data: probe } as ApiResponse<typeof probe>);
+  });
+
+  /**
+   * Start the sign-in leg, and say where to send a browser.
+   *
+   * A POST and not a redirect, because it WRITES a flow and may register a
+   * client at a third party — neither belongs behind a link a prefetcher will
+   * follow. The caller does the redirect with what it gets back, then polls.
+   */
+  router.post('/:id/connect', async (req: Request, res: Response) => {
+    const server = await loadAndGate(req, res);
+    if (!server) return;
+    try {
+      const stored = await mcpOAuthStore.read(server.id);
+      const started = await startMcpOAuth(server, stored, new Date());
+      await mcpOAuthStore.write(server.id, started.stored);
+      captureWorkspaceEvent(server.workspaceId, 'mcp_server_connect_started', {
+        ...serverShape(server),
+        mcp_client_source: started.stored.clientSource ?? null,
+      });
+      const data = {
+        flowId: started.flowId,
+        authorizeUrl: started.authorizeUrl,
+        expiresAt: started.expiresAt,
+        scopes: started.scopes,
+      };
+      res.json({ success: true, data } as ApiResponse<typeof data>);
+    } catch (err) {
+      // A vendor that cannot be signed in to is not a 500. The message is the
+      // whole answer — "paste an API key instead" is something to act on.
+      const message = err instanceof Error ? err.message : 'could not start sign-in';
+      res.status(err instanceof McpOAuthUnavailableError ? 501 : 409).json({
+        success: false,
+        error: message,
+        code: 'mcp_oauth_unavailable',
+      });
+    }
+  });
+
+  /**
+   * Did that sign-in finish?
+   *
+   * The poll a client runs while somebody is at the consent screen. Returns the
+   * STATUS and never a credential.
+   */
+  router.get('/:id/connect/:flow', async (req: Request, res: Response) => {
+    const server = await loadAndGate(req, res);
+    if (!server) return;
+    const stored = await mcpOAuthStore.read(server.id);
+    // A finished flow has been cleared, so "no flow and connected" is success
+    // rather than a missing row.
+    const data = {
+      status: stored?.status ?? 'pending',
+      pending: stored?.flow?.id === req.params.flow,
+      ...(stored?.detail ? { detail: stored.detail } : {}),
+    };
+    res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  /**
+   * Finish a sign-in, from the callback page.
+   *
+   * The page the vendor's browser lands on is on the WEB APP — it is the
+   * redirect URI the authorization server was told — and it has nothing but
+   * `code` and `state`. The state names the server; the stored flow's hash is
+   * what authorises the exchange.
+   *
+   * Authenticated and workspace-gated like every other route here. The code
+   * passing through the user's browser is harmless on its own: PKCE binds it to
+   * a verifier that never leaves this process.
+   */
+  router.post('/complete', async (req: Request, res: Response) => {
+    const state = String(req.body?.state ?? '');
+    const code = String(req.body?.code ?? '');
+    if (!state || !code) {
+      return res.status(400).json({ success: false, error: 'state and code are required' });
+    }
+    const serverId = serverIdFromState(state);
+    if (!serverId) {
+      return res.status(400).json({ success: false, error: 'that sign-in did not come from here' });
+    }
+    const server = await getMcpServer(serverId);
+    if (!server) {
+      return res.status(404).json({ success: false, error: 'no such tool server' });
+    }
+    if (!(await gate(req, res, server.workspaceId))) return;
+
+    const stored = await mcpOAuthStore.read(server.id);
+    if (!stored) {
+      return res.status(409).json({ success: false, error: 'there is no sign-in waiting to be finished' });
+    }
+    try {
+      const next = await completeMcpOAuth(stored, state, code, new Date());
+      await mcpOAuthStore.write(server.id, next);
+      captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
+      const updated = await getMcpServer(server.id);
+      res.json({ success: true, data: updated } as ApiResponse<typeof updated>);
+    } catch (err) {
+      // The vendor's own words where there are any. A refusal here is a fact
+      // about the grant, not a server fault, so it is a 409 and not a 500.
+      const message = err instanceof Error ? err.message : 'could not finish sign-in';
+      await mcpOAuthStore.write(server.id, {
+        ...stored,
+        status: 'pending',
+        detail: message,
+        flow: undefined,
+      });
+      res.status(409).json({ success: false, error: message });
+    }
+  });
+
+  /**
+   * Hand back the grant, without forgetting who this server is.
+   *
+   * The endpoints and the client id are KEPT: they do not move, and keeping
+   * them is what lets a reconnect skip discovery and registration rather than
+   * leaving another orphan client at the vendor.
+   */
+  router.post('/:id/disconnect', async (req: Request, res: Response) => {
+    const server = await loadAndGate(req, res);
+    if (!server) return;
+    const stored = await mcpOAuthStore.read(server.id);
+    if (stored) {
+      await mcpOAuthStore.write(server.id, {
+        ...stored,
+        status: 'pending',
+        detail: undefined,
+        accessTokenEnc: undefined,
+        refreshTokenEnc: undefined,
+        expiresAt: undefined,
+        flow: undefined,
+      });
+    }
+    captureWorkspaceEvent(server.workspaceId, 'mcp_server_disconnected_oauth', serverShape(server));
+    const updated = await getMcpServer(server.id);
+    res.json({ success: true, data: updated } as ApiResponse<typeof updated>);
   });
 
   return router;

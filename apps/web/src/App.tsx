@@ -10,6 +10,7 @@ import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useClosePopupAfterGithub } from './hooks/useClosePopupAfterGithub';
 import { useWorkspaceStore } from './stores/workspace';
 import { AuthCallback } from './routes/AuthCallback';
+import { McpCallback } from './routes/McpCallback';
 import { PANEL_PATHS } from './lib/routes';
 
 /**
@@ -73,6 +74,11 @@ function AuthedApp() {
   return (
     <Routes>
       <Route index element={<Navigate to={PANEL_PATHS.my_prs} replace />} />
+      {/* The redirect URI a tool server's authorization server was given.
+          Inside RequireAuth because finishing the exchange is an authenticated
+          call — and because an unauthenticated visitor could not have started
+          the flow it is trying to finish. */}
+      <Route path="mcp/callback" element={<McpCallback />} />
       {Object.values(PANEL_PATHS).map((path) => (
         <Route key={path} path={path.slice(1)} element={<MainLayout />} />
       ))}
