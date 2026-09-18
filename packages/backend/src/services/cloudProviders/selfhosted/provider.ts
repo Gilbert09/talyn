@@ -4,6 +4,7 @@ import { pickFleetHost } from '../../fleetHosts.js';
 import {
   getSelfHostedCredentials,
   getSelfHostedClient,
+  fleetAgentStatus,
   storeSelfHostedCredentials,
   removeSelfHostedCredentials,
   type CodexOAuthCredential,
@@ -178,7 +179,25 @@ export const selfHostedProvider: CloudTaskProvider = {
   },
 
   async hasCredentials(workspaceId) {
-    return Boolean(await getSelfHostedCredentials(workspaceId));
+    try {
+      return Boolean(await getSelfHostedCredentials(workspaceId));
+    } catch {
+      // A question about STORAGE, answered without asking a vendor anything.
+      //
+      // Resolving credentials refreshes an expiring subscription token, and a
+      // revoked grant makes that throw. This is the call `GET /cloud-providers`
+      // makes for every provider, so the throw took out the whole listing with
+      // a 500 — and that listing is the Settings cards, the "Default for new
+      // tasks" menu and the per-task agent picker. A dead Claude grant blanked
+      // the one screen with the button to fix it on.
+      //
+      // The honest answer is also the simple one: a workspace with a rejected
+      // grant still HAS credentials. They need reconnecting, which is a
+      // different question, and `fleetAgentStatus` is what answers it — reading
+      // the row, never the vendor.
+      const status = await fleetAgentStatus(workspaceId).catch(() => null);
+      return Boolean(status?.connectedAgents.length);
+    }
   },
 
   async testConnection(workspaceId) {

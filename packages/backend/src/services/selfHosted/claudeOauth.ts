@@ -481,7 +481,32 @@ async function refreshWithLock(
         expiresAt: fresh.expiresAt,
       };
     }
-    return performRefresh(workspaceId, fresh, store);
+    try {
+      return await performRefresh(workspaceId, fresh, store);
+    } catch (err) {
+      // RECORD the death, do not merely report it.
+      //
+      // `reauthRequiredAt` was read in three places and written in none, so the
+      // short-circuit above was unreachable and `fleetAgentStatus` never put
+      // Claude in `reauthAgents`. A workspace whose grant had been revoked went
+      // on saying "Connected" in Settings while every task failed, and every
+      // dispatch re-attempted the same dead refresh token against Anthropic —
+      // for a Loop, once per firing until the circuit breaker disabled it as
+      // `too_many_failures`, which names the symptom and hides the cause.
+      //
+      // Only for a grant Anthropic has REJECTED. A transient failure must not
+      // land here: marking a live subscription as needing reauth would stop
+      // every run and demand a sign-in that was never needed.
+      if (err instanceof ClaudeReauthRequiredError) {
+        await store
+          .patch(workspaceId, { ...fresh, reauthRequiredAt: new Date().toISOString() })
+          .catch(() => {
+            // The write is best-effort: failing it would replace a clear
+            // "sign in again" with whatever went wrong writing the flag.
+          });
+      }
+      throw err;
+    }
   };
 
   // The lock is the CROSS-INSTANCE half of the single-flight; the in-process

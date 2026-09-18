@@ -248,7 +248,24 @@ async function refreshWithLock(
         expiresAt: fresh.expiresAt,
       };
     }
-    return performRefresh(workspaceId, fresh);
+    try {
+      return await performRefresh(workspaceId, fresh);
+    } catch (err) {
+      // The same gap Claude had: `markCodexReauthRequired` existed, was
+      // exported, was covered by its own test — and no production path ever
+      // called it. So `reauthRequiredAt` was read and never written, the
+      // short-circuit above was unreachable, and Settings kept reporting a
+      // revoked Codex sign-in as connected.
+      //
+      // Only for a grant OpenAI has REJECTED; a transient failure must not
+      // demand a sign-in that was never needed.
+      if (err instanceof CodexReauthRequiredError) {
+        await markCodexReauthRequired(workspaceId).catch(() => {
+          // Best-effort: see the note in claudeOauth's twin.
+        });
+      }
+      throw err;
+    }
   };
 
   // The lock is the CROSS-INSTANCE half of the single-flight; the in-process
