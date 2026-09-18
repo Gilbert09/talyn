@@ -13,11 +13,20 @@ import { decryptString, encryptString } from '../services/tokenCrypto.js';
 /**
  * How long a half-finished Claude sign-in stays valid.
  *
- * Long enough to approve in a browser and paste back, short enough that an
- * abandoned attempt does not leave a usable verifier lying in the row. The
- * authorization code Anthropic issues is shorter-lived than this anyway.
+ * Short enough that an abandoned attempt does not leave a usable verifier lying
+ * in the row, long enough for what the user is actually being asked to do — and
+ * the first version budgeted ten minutes for that, which measured the wrong
+ * thing. It is not "approve a prompt": a new user opens Anthropic, signs in or
+ * creates an account, clears 2FA, picks an organisation, and only then gets a
+ * code to copy back. Half an hour covers that without being an eternity for a
+ * secret at rest, and the failure it prevents is the one that reads as the flow
+ * being broken rather than as having taken too long.
+ *
+ * Expiry clears the row, so a user who does overrun is told to start again and
+ * can — which is only true since the authorize leg started creating the row it
+ * writes to. See `patchSelfHostedConfig`.
  */
-const PENDING_AUTH_TTL_MS = 10 * 60_000;
+const PENDING_AUTH_TTL_MS = 30 * 60_000;
 
 /** Opaque, single-use, and only ever compared against what we minted. */
 function randomState(): string {
@@ -225,9 +234,17 @@ export function cloudProviderRoutes(): Router {
       await ensureCloudEnvironment(assertUser(req).id, 'selfhosted');
       res.json({ success: true, data: { connected: true } });
     } catch (err) {
-      // The pending row is cleared either way: a code is single-use, so
-      // whatever went wrong, this attempt cannot be retried with it.
-      await patchSelfHostedConfig(workspaceId, { claudePendingAuth: undefined });
+      // The pending sign-in is KEPT, and the reasoning that cleared it was a
+      // confusion between two different things. The code is single-use; the
+      // pending row is the PKCE verifier and the state, and neither is spent by
+      // a failed exchange. Dropping it meant the real reason was shown exactly
+      // once and every retry after that answered "this one was not found" — an
+      // error that blames the user for not starting a flow they did start, and
+      // sends them to do the one thing that cannot help.
+      //
+      // Keeping it is at worst neutral and usually better: the authorize URL is
+      // still valid, so going back for a fresh code works, and starting over
+      // overwrites the row anyway. The TTL is what ends it.
       res.status(400).json({
         success: false,
         error: err instanceof Error ? err.message : 'Could not complete the Claude sign-in.',

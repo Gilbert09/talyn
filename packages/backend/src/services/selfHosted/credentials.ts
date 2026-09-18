@@ -259,11 +259,35 @@ async function readSelfHostedConfig(
 }
 
 /**
- * Merge fields into the stored config, leaving everything else alone.
+ * Merge fields into the stored config, creating the row if there is none.
  *
  * A read-modify-write rather than a jsonb patch because the row is small and
  * written rarely — and because a refresh racing a disconnect should lose the
  * whole write, not half of it.
+ *
+ * # It used to return silently when the row was missing, and that broke sign-in
+ *
+ * The Claude OAuth authorize leg stores its PKCE verifier here before sending
+ * the user to Anthropic. With no row it wrote NOTHING, answered 200 with a
+ * perfectly good authorize URL, and left the user to complete a real sign-in
+ * against a server that had no memory of starting one — so `/complete` reported
+ * "this one was not found", every time, with no way through.
+ *
+ * Nobody could hit it while the fleet was allow-listed: every allow-listed
+ * workspace had been set up by hand and already had a row. Releasing the fleet
+ * made "no row yet" the normal state for a new user, and the first one to try
+ * it was stuck. Disconnecting DELETES the row outright (see
+ * `removeSelfHostedCredentials`), so disconnect-then-reconnect was the same
+ * dead end for an existing user.
+ *
+ * The no-op was not defensive — a caller asking to store something and getting
+ * silence back cannot tell that from success. `setSelfHostedCredentials` had
+ * always upserted for exactly this reason; this now matches it.
+ *
+ * A patch that only DELETES keys still no-ops on a missing row: clearing a
+ * pending sign-in that was never stored has nothing to write, and creating an
+ * empty row to represent "nothing" would make `hasCredentials` answer for a
+ * workspace that has never connected anything.
  */
 async function patchSelfHostedConfig(
   workspaceId: string,
@@ -281,17 +305,32 @@ async function patchSelfHostedConfig(
     )
     .limit(1);
   const row = rows[0];
-  if (!row) return;
-  const prior = (row.config as SelfHostedIntegrationConfig | null) ?? {};
+  const prior = (row?.config as SelfHostedIntegrationConfig | null) ?? {};
   const next: SelfHostedIntegrationConfig = { ...prior };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) delete (next as Record<string, unknown>)[key];
     else (next as Record<string, unknown>)[key] = value;
   }
-  await db
-    .update(integrationsTable)
-    .set({ config: next, updatedAt: new Date() })
-    .where(eq(integrationsTable.id, row.id));
+
+  const now = new Date();
+  if (row) {
+    await db
+      .update(integrationsTable)
+      .set({ config: next, updatedAt: now })
+      .where(eq(integrationsTable.id, row.id));
+    return;
+  }
+  // Nothing to store and nothing to store it in.
+  if (Object.keys(next).length === 0) return;
+  await db.insert(integrationsTable).values({
+    id: uuid(),
+    workspaceId,
+    type: INTEGRATION_TYPE,
+    enabled: true,
+    config: next,
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 export { readSelfHostedConfig, patchSelfHostedConfig };
