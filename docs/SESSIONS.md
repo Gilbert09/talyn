@@ -2,6 +2,75 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 138 — the Claude sign-in that could never have worked (2026-09-18)
+
+A user, the day after the fleet was released to everybody:
+
+> hey tom! it looks like the sign in with claude flow is not working, it keeps
+> returning: `Start the Claude sign-in again — this one was not found.`
+
+It did keep returning, and no amount of starting again could have helped.
+
+**`patchSelfHostedConfig` returned silently when the workspace had no
+`selfhosted` integration row.**
+
+```ts
+const row = rows[0];
+if (!row) return;      // <- silent no-op
+```
+
+The Claude authorize leg stores its PKCE verifier through that helper before
+sending the user to Anthropic. With no row it wrote NOTHING, answered 200 with a
+perfectly good authorize URL, and left the user to complete a real sign-in
+against a server that had no memory of starting one. `/complete` looked for the
+pending row, found none, and said exactly that — every time.
+
+**The release is what exposed it.** While the fleet was allow-listed, every
+workspace on it had been set up by hand and already had a row; the maintainer's
+own end-to-end test of this flow passed for that reason. Opening the fleet to
+everybody made "no row yet" the NORMAL state for a new user, and the first one
+to try was stuck. Disconnecting deletes the row outright
+(`removeSelfHostedCredentials`), so disconnect-then-reconnect was the same dead
+end for an existing user.
+
+`setSelfHostedCredentials` had upserted all along, for exactly this reason. The
+patch helper now matches it. A patch that only DELETES keys still no-ops on a
+missing row: clearing a pending sign-in that was never stored has nothing to
+write, and an empty row would make `hasCredentials` answer for a workspace that
+has never connected anything.
+
+**The no-op was not defensive, and that is the transferable half.** A caller
+that asks to store something and gets silence back cannot tell that from
+success. `if (!row) return` reads as caution and is an assertion: *no caller
+ever needs this to create the row*. That was true when it was written and stopped
+being true when the OAuth flow was added, with nothing anywhere to notice. This
+is the same shape as the fleet's own recurring bug — a check that passed every
+time anyone looked at it and was wrong anyway — and the same instruction applies:
+a write path that can do nothing should be made to prove it was asked to.
+
+**Two things nearby turned one bug into an unexplainable one**, both fixed here:
+
+- **The failure path cleared the pending sign-in**, on the reasoning that "a
+  code is single-use, so this attempt cannot be retried". That confuses the code
+  with the verifier. The code is single-use; the PKCE verifier and the state are
+  not spent by a failed exchange. Dropping them showed the real reason exactly
+  once and answered "this one was not found" to every retry after — which is how
+  a specific, nameable failure turns into a flow that merely looks broken.
+  Keeping it is at worst neutral: the authorize URL is still valid, and starting
+  over overwrites the row anyway. The TTL is what ends it.
+- **The TTL measured the wrong thing.** Ten minutes budgets for approving a
+  prompt. What a new user actually does is open Anthropic, sign in or create an
+  account, clear 2FA, pick an organisation, and only then copy a code back.
+  Thirty.
+
+Reproduced as a failing route test against a workspace with no integration row
+(`routes/claudeSignIn.test.ts`) — same error string as the report — before
+anything was changed. The other `if (!row) return` write paths were checked:
+`codexOauth`'s two are correctly scoped, since they rotate an EXISTING
+credential and "no row" really does mean nothing to rotate, and Codex's
+authorize leg runs in the desktop main process over a loopback redirect so its
+verifier never reaches the database. Claude's flow was the only one exposed.
+
 ## Session 137 — MCP servers on the fleet (2026-09-16)
 
 A workspace connects the MCP servers it wants — Linear, Sentry, Supabase, its
