@@ -6,11 +6,20 @@ import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
 import { nav, site } from "@/lib/content";
+import { isBlogEnabled } from "@/lib/flags";
 import { cn } from "@/lib/utils";
 
 export function Nav() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+
+  // Build-time constant, inlined into this bundle — not a runtime flag and not
+  // a reason to re-render. Every other nav item is an on-page anchor, so this
+  // is appended rather than living in `nav` in content.ts, which the homepage
+  // scroll-spy also reads.
+  const links = isBlogEnabled()
+    ? [...nav, { label: "Writing", href: "blog" }]
+    : nav;
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -36,7 +45,7 @@ export function Nav() {
         {/* lg (not md): the link row is absolutely centered, so at md widths
             it collides with the right-side buttons — hamburger until lg. */}
         <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 lg:flex">
-          {nav.map((item) => (
+          {links.map((item) => (
             <a
               key={item.href}
               href={`/${item.href}`}
@@ -73,7 +82,7 @@ export function Nav() {
       {open && (
         <div className="border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl lg:hidden">
           <div className="flex flex-col gap-1">
-            {nav.map((item) => (
+            {links.map((item) => (
               <a
                 key={item.href}
                 href={`/${item.href}`}

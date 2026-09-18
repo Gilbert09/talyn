@@ -1,8 +1,20 @@
 import { Logo } from "@/components/brand/Logo";
 import { AsciiOwl } from "@/components/brand/AsciiOwl";
 import { footer, site } from "@/lib/content";
+import { isBlogEnabled } from "@/lib/flags";
 
 export function Footer() {
+  // Gated here rather than in content.ts, which is a plain copy file with no
+  // business reading the environment. Company is the right column: the
+  // writing is about how the thing is built, not a product surface.
+  const columns = isBlogEnabled()
+    ? footer.columns.map((col) =>
+        col.title === "Company"
+          ? { ...col, links: [{ label: "Writing", href: "/blog" }, ...col.links] }
+          : col
+      )
+    : footer.columns;
+
   return (
     <footer className="border-t border-line bg-paper-100">
       <div className="container grid gap-10 py-14 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
@@ -14,7 +26,7 @@ export function Footer() {
           </div>
         </div>
 
-        {footer.columns.map((col) => (
+        {columns.map((col) => (
           <div key={col.title}>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
               {col.title}
