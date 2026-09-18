@@ -6,6 +6,7 @@ import { environments as environmentsTable } from '../../db/schema.js';
 import { emitEnvironmentCreated } from '../websocket.js';
 import { rowToEnvironment } from '../../routes/environments.js';
 import { getCloudProvider } from './registry.js';
+import { notifyTodiex } from '../todiex.js';
 
 /**
  * Ensure the user has a secret-free env marker for a cloud provider.
@@ -48,4 +49,45 @@ export async function ensureCloudEnvironment(
   // Tell the owner's connected clients live so the env appears without an
   // app restart (scoped — other tenants must not see this row).
   emitEnvironmentCreated(userId, rowToEnvironment(inserted ?? (row as typeof inserted)));
+}
+
+
+/**
+ * Tell the inbox a workspace can now run cloud tasks.
+ *
+ * Activation for Talyn has two halves — connecting a provider, then actually
+ * dispatching — and this is the first. Worth knowing about because it is the
+ * step someone gets stuck on: credentials, an OAuth round-trip and a fleet
+ * reachability check all have to go right.
+ *
+ * Deliberately NOT called from inside ensureCloudEnvironment, even though that
+ * is the choke point all three connect routes funnel through. That function
+ * keys its marker on (user, provider) and never sees a workspaceId, so the
+ * notification would be wrong for the second workspace a user connects — and
+ * it is also reached by the disconnect path, which must never announce itself
+ * as a setup.
+ *
+ * Fired unconditionally: the dedupe key is per workspace and provider, so a
+ * reconnect, a credential swap or a second agent on the same fleet all resolve
+ * to the setup that already happened and store nothing.
+ */
+export function notifyProviderConnected(args: {
+  workspaceId: string;
+  type: CloudProviderType;
+  /** Free-form detail for the feed — a PostHog project, a fleet agent name. */
+  detail?: string;
+}): void {
+  const name = getCloudProvider(args.type)?.displayName ?? args.type;
+  notifyTodiex({
+    kind: 'workspace.provider_connected',
+    level: 'success',
+    title: `A Talyn workspace connected ${name}`,
+    message: args.detail ?? 'It can run cloud tasks now.',
+    metadata: {
+      workspace_id: args.workspaceId,
+      provider: args.type,
+      ...(args.detail ? { detail: args.detail } : {}),
+    },
+    dedupeKey: `workspace:${args.workspaceId}:provider:${args.type}:connected`,
+  });
 }

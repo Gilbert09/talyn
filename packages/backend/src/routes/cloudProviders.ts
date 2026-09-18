@@ -33,7 +33,10 @@ function randomState(): string {
   return randomBytes(16).toString('hex');
 }
 import { getCloudProvider, listCloudProviders } from '../services/cloudProviders/registry.js';
-import { ensureCloudEnvironment } from '../services/cloudProviders/environment.js';
+import {
+  ensureCloudEnvironment,
+  notifyProviderConnected,
+} from '../services/cloudProviders/environment.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
 import { fleetAgentStatus } from '../services/selfHosted/credentials.js';
 
@@ -137,6 +140,22 @@ export function cloudProviderRoutes(): Router {
       return res.status(400).json({ success: false, error: result.error });
     }
     await ensureCloudEnvironment(assertUser(req).id, provider.type);
+    // This route is the Settings card's save button, so it is also how a
+    // credential is REMOVED — a clear still validates, still provisions the
+    // marker, and still returns connected:true. Announcing a disconnect as a
+    // setup is the one wrong thing this hook could do, so a credential has to
+    // have actually arrived before it counts as one.
+    const body = req.body as {
+      claudeToken?: string;
+      codexAccessToken?: string;
+      openaiKey?: string;
+      clearClaude?: boolean;
+      clearCodex?: boolean;
+    };
+    const supplied = Boolean(body.claudeToken || body.codexAccessToken || body.openaiKey);
+    if (supplied && !body.clearClaude && !body.clearCodex) {
+      notifyProviderConnected({ workspaceId, type: provider.type });
+    }
     res.json({ success: true, data: { connected: true } });
   });
 
@@ -232,6 +251,11 @@ export function cloudProviderRoutes(): Router {
         claudePendingAuth: undefined,
       });
       await ensureCloudEnvironment(assertUser(req).id, 'selfhosted');
+      notifyProviderConnected({
+        workspaceId,
+        type: 'selfhosted',
+        detail: 'Claude subscription linked.',
+      });
       res.json({ success: true, data: { connected: true } });
     } catch (err) {
       // The pending sign-in is KEPT, and the reasoning that cleared it was a

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { isTodiexConfigured, notifyTodiex, postTodiexEvent } from '../services/todiex.js';
+import { notifyProviderConnected } from '../services/cloudProviders/environment.js';
+import { registerCloudProvider } from '../services/cloudProviders/registry.js';
+import type { CloudTaskProvider } from '../services/cloudProviders/types.js';
 import { describeSubscriptionEvent } from '../services/billing/webhook.js';
 
 /**
@@ -205,5 +208,137 @@ describe('which subscription transitions are worth a notification', () => {
     ['a created event that grants nothing', 'subscription.created', 'incomplete'],
   ])('stays quiet for %s', (_label, eventType, status) => {
     expect(describeSubscriptionEvent(eventType, status)).toBeNull();
+  });
+});
+
+describe('the cloud-provider setup notification', () => {
+  const origFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+      text: async () => '{"ok":true}',
+    } as unknown as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    process.env.TODIEX_URL = 'https://todiex.test';
+    process.env.TODIEX_TOKEN = 'tdx_abc';
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    delete process.env.TODIEX_URL;
+    delete process.env.TODIEX_TOKEN;
+  });
+
+  it('names the provider the way the product does', async () => {
+    // Providers register themselves at boot, so the registry is empty in a
+    // unit test — register the one under test rather than asserting a name
+    // that only appears once index.ts has run.
+    registerCloudProvider({
+      type: 'selfhosted',
+      displayName: 'Talyn Fleet',
+    } as unknown as CloudTaskProvider);
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted' });
+    await flushMicrotasks();
+    expect(sentBody().title).toBe('A Talyn workspace connected Talyn Fleet');
+  });
+
+  it('falls back to the raw type rather than saying "undefined"', async () => {
+    // The same `?? type` fallback ensureCloudEnvironment uses for the env
+    // name. A notification naming an unregistered provider is still useful;
+    // one naming `undefined` is not.
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'not_registered' as never });
+    await flushMicrotasks();
+    expect(sentBody().title).toBe('A Talyn workspace connected not_registered');
+  });
+
+  it('keys on the workspace AND the provider', async () => {
+    // Per workspace, not per user: the env marker ensureCloudEnvironment
+    // writes is keyed (user, provider), so a user's second workspace would
+    // never be reported if the key followed that instead.
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'posthog_code' });
+    await flushMicrotasks();
+    expect(sentBody().dedupeKey).toBe('workspace:ws1:provider:posthog_code:connected');
+  });
+
+  it.each([
+    ['a second workspace', { workspaceId: 'ws2', type: 'selfhosted' as const }],
+    ['a second provider', { workspaceId: 'ws1', type: 'posthog_code' as const }],
+  ])('gives %s its own key', async (_label, args) => {
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted' });
+    await flushMicrotasks();
+    const first = sentBody().dedupeKey;
+    fetchMock.mockClear();
+    notifyProviderConnected(args);
+    await flushMicrotasks();
+    expect(sentBody().dedupeKey).not.toBe(first);
+  });
+
+  it('carries the detail into both the message and the metadata', async () => {
+    notifyProviderConnected({
+      workspaceId: 'ws1',
+      type: 'posthog_code',
+      detail: 'PostHog project 42, via OAuth.',
+    });
+    await flushMicrotasks();
+    expect(sentBody()).toMatchObject({
+      message: 'PostHog project 42, via OAuth.',
+      metadata: { workspace_id: 'ws1', provider: 'posthog_code', detail: 'PostHog project 42, via OAuth.' },
+    });
+  });
+
+  it('says something useful when there is no detail', async () => {
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted' });
+    await flushMicrotasks();
+    expect(sentBody().message).toBe('It can run cloud tasks now.');
+    expect(sentBody().metadata).not.toHaveProperty('detail');
+  });
+
+  it('stays silent when the inbox is not configured', async () => {
+    delete process.env.TODIEX_URL;
+    notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted' });
+    await flushMicrotasks();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The guard at PUT /cloud-providers/:type/config. That route is the Settings
+ * card's save button, so it is also how a credential is removed — a clear
+ * validates, provisions the marker and returns connected:true exactly like a
+ * connect does. Announcing a disconnect as a setup is the one wrong thing this
+ * hook could do, so the condition is pinned here rather than only in the route.
+ */
+describe('a disconnect is not a setup', () => {
+  const shouldNotify = (body: {
+    claudeToken?: string;
+    codexAccessToken?: string;
+    openaiKey?: string;
+    clearClaude?: boolean;
+    clearCodex?: boolean;
+  }): boolean =>
+    Boolean(body.claudeToken || body.codexAccessToken || body.openaiKey) &&
+    !body.clearClaude &&
+    !body.clearCodex;
+
+  it.each([
+    ['a Claude token', { claudeToken: 'sk-ant-x' }],
+    ['a Codex token', { codexAccessToken: 'codex-x' }],
+    ['an OpenAI key', { openaiKey: 'sk-x' }],
+  ])('notifies when %s arrives', (_label, body) => {
+    expect(shouldNotify(body)).toBe(true);
+  });
+
+  it.each([
+    ['clearing Claude', { clearClaude: true }],
+    ['clearing Codex', { clearCodex: true }],
+    ['a clear that also carries the old token', { claudeToken: 'sk-ant-x', clearClaude: true }],
+    ['a save with no credential at all', {}],
+  ])('stays silent for %s', (_label, body) => {
+    expect(shouldNotify(body)).toBe(false);
   });
 });

@@ -15,7 +15,10 @@ import {
   startAuthorization,
 } from '../services/posthogCode/oauth.js';
 import { isPostHogOAuthEnabled } from '../services/posthogCode/oauthConfig.js';
-import { ensureCloudEnvironment } from '../services/cloudProviders/environment.js';
+import {
+  ensureCloudEnvironment,
+  notifyProviderConnected,
+} from '../services/cloudProviders/environment.js';
 import { renderCallbackPage } from '../services/callbackPage.js';
 import { getWebAppUrl, webAppUrl } from '../services/webApp.js';
 import type { ApiResponse } from '@talyn/shared';
@@ -124,6 +127,11 @@ export function posthogPublicRoutes(): Router {
       // personal-API-key path — without it the workspace has credentials but no
       // environment to resolve a provider through.
       await ensureCloudEnvironment(result.userId, 'posthog_code');
+      notifyProviderConnected({
+        workspaceId: result.workspaceId,
+        type: 'posthog_code',
+        detail: `PostHog project ${result.projectId}, via OAuth.`,
+      });
       return finish(pending.client, {
         ok: true,
         message: `Talyn can now run cloud tasks in PostHog project ${result.projectId}.`,
@@ -290,6 +298,11 @@ export function posthogRoutes(): Router {
     // secret-free marker; the per-workspace credentials above are what
     // actually authorise a run.
     await ensureCloudEnvironment(assertUser(req).id, 'posthog_code');
+    notifyProviderConnected({
+      workspaceId,
+      type: 'posthog_code',
+      detail: `PostHog project ${projectId}, via a personal API key.`,
+    });
 
     res.json({
       success: true,
