@@ -655,6 +655,41 @@ OAuth app's callback to
 The Supabase-auth GitHub OAuth app (for user sign-in) is separate and
 already points at Supabase's domain, not ours.
 
+### 5b. todiex inbox (optional — phone notifications)
+
+The cross-product inbox at https://todiex.com. Talyn posts the handful of
+moments worth interrupting someone for — a signup, a cloud provider being
+connected, a workspace's first task, a subscription starting, cancelling or
+going `past_due` — and each one arrives as a push notification. Everything
+else stays in PostHog: a phone that buzzes for every task dispatch is a phone
+that gets silenced.
+
+Two variables on the **`fastowl-backend`** Railway service, both or neither:
+
+```bash
+railway variables --service fastowl-backend \
+  --set 'TODIEX_URL=https://todiex.com' \
+  --set 'TODIEX_TOKEN=tdx_...'
+```
+
+- `TODIEX_URL` — the inbox base URL. No trailing slash needed.
+- `TODIEX_TOKEN` — a bearer token minted in todiex
+  (`pnpm exec tsx scripts/mktoken.ts products`, or the New token button on
+  `/app/build-in-public/settings`). One token is shared across every product;
+  the `source` field in the payload is what tells them apart, not the token.
+
+**Leave both unset and every call is a no-op** — which is the right state for
+local dev. A *partial* config is a boot error (`services/validateEnv.ts`): a
+URL without a token posts nothing but 401s and a token without a URL posts
+nothing at all, both silently, because the client swallows its own failures
+by design.
+
+Nothing here can break a request. The client is fire-and-forget with a 5s
+timeout, and todiex commits the event before it attempts the push — so even a
+notification that never arrives leaves the event in the feed.
+
+See `packages/backend/src/services/todiex.ts`.
+
 ### 6. PostHog project
 
 Single source of truth for analytics + error tracking + logs (Phase 18.8).
