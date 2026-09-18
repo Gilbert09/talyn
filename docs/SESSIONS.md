@@ -2,6 +2,65 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Session 139 — the reconnect prompt nothing could ever show (2026-09-18)
+
+Asked a plain question after Session 138's fix: what happens when a Claude
+login expires, and do we handle it?
+
+Partly. It was **detected** and never **recorded**.
+
+`reauthRequiredAt` was read in four places and written in none. Both fleet
+agents defined the field, `fleetAgentStatus` consumed it to drive the
+"Reconnect needed" badge, and both had tests — which called the writer
+DIRECTLY. That is why nothing noticed that no production path ever did. Codex
+went further and exported `markCodexReauthRequired` with zero callers outside
+its own test file.
+
+Probed before changing anything, with a revoked grant:
+
+```
+hasCredentials threw: Anthropic rejected the stored sign-in — sign in to Claude again.
+reauthRequiredAt persisted: NO
+fleetAgentStatus: {"connectedAgents":["claude"],"reauthAgents":[]}
+```
+
+Three consequences, and the third is the one that matters:
+
+1. Settings kept saying "Connected". The badge was unreachable.
+2. The `if (reauthRequiredAt) stop` short-circuit was unreachable, so every
+   dispatch re-attempted the same dead refresh token. For a Loop that is once
+   per firing until the circuit breaker disables it as `too_many_failures` — a
+   message naming the symptom and burying the cause.
+3. **`hasCredentials` THREW**, and it is what `GET /cloud-providers` calls for
+   every provider. The whole listing 500'd. That listing draws the Settings
+   cards, the default-agent menu and the per-task agent picker, so a dead grant
+   blanked the one screen with the fix on it.
+
+Both refresh paths now mark the credential before rethrowing, and ONLY for an
+explicit vendor rejection: marking a live subscription because the vendor had a
+bad minute would stop every run and demand a reconnection that fixes nothing.
+The write is best-effort — failing it would replace a clear "sign in again" with
+whatever went wrong writing the flag. `hasCredentials` answers from STORAGE
+rather than by asking a vendor; a workspace with a rejected grant still has
+credentials, and "needs reconnecting" is a different question with its own
+answer already.
+
+**The lesson is about the test, not the flag.** Both agents had coverage of
+`reauthRequiredAt` and it asserted the wrong thing: that the writer works, not
+that anything calls it. A test that reaches past the seam it is protecting
+proves the seam exists and nothing about whether it is wired in. The new test
+asserts the CHAIN end to end — vendor rejects, flag lands, status reports it,
+listing survives, vendor is not asked again. This is the fleet's recurring shape
+for the seventh time: a check that passed every time anyone looked at it and was
+wrong anyway.
+
+**A process note worth keeping**, because it is the same failure one level up.
+The first version of the new test used the wrong `vi.mock` path, so it made REAL
+network calls to Anthropic — which duly rejected the fake refresh token with
+`invalid_grant`, so the assertion it existed for passed, for entirely the wrong
+reason. The only thing that gave it away was the mocked fetch's call count
+being zero. Assert the interaction, not just the outcome.
+
 ## Session 138 — the Claude sign-in that could never have worked (2026-09-18)
 
 A user, the day after the fleet was released to everybody:
