@@ -16,6 +16,12 @@ import { rowToTask, taskColumnsNoTranscript } from './taskSerialize.js';
 import { patchTaskMetadata } from './taskMetadataMutex.js';
 import { TickGuard } from './tickGuard.js';
 import { notifyTodiex } from './todiex.js';
+import {
+  describeWorkspace,
+  ownerLine,
+  workspaceLabel,
+  workspaceMetadata,
+} from './todiexContext.js';
 import { emitTaskStatus } from './websocket.js';
 import { getDbClient, type Database } from '../db/client.js';
 import {
@@ -330,22 +336,36 @@ class TaskQueueService extends EventEmitter {
       // ever dispatches — not the signup, and not the workspace row, which
       // every account gets for free on boot. Fired on EVERY dispatch and
       // deduplicated by the inbox on this key, so it needs no `first_task_at`
-      // column and no read before the write; the thousandth dispatch costs one
-      // POST that stores nothing. Deliberately not the per-task events that
-      // sit beside it in analytics — a phone that buzzes for each of those is
-      // a phone that gets silenced.
-      notifyTodiex({
-        kind: 'workspace.activated',
-        level: 'success',
-        title: 'A Talyn workspace ran its first task',
-        message: `A ${task.type} task went out to ${env.type}.`,
-        metadata: {
-          workspace_id: task.workspaceId,
-          task_id: task.id,
-          task_type: task.type,
-          provider: env.type,
-        },
-        dedupeKey: `workspace:${task.workspaceId}:first_task`,
+      // column and no state read before the write; the thousandth dispatch
+      // costs one POST that stores nothing. Deliberately not the per-task
+      // events that sit beside it in analytics — a phone that buzzes for each
+      // of those is a phone that gets silenced. The name lookup behind the
+      // thunk runs off this path entirely and is cached per workspace, so the
+      // dispatch loop pays neither the query nor the POST.
+      const providerName = getCloudProvider(env.type)?.displayName ?? env.type;
+      notifyTodiex(async () => {
+        const ws = await describeWorkspace(task.workspaceId);
+        return {
+          kind: 'workspace.activated',
+          level: 'success',
+          title: `${workspaceLabel(ws)} ran its first Talyn task`,
+          message: [
+            `“${task.title}” went out to ${providerName}.`,
+            ownerLine(ws),
+          ]
+            .filter(Boolean)
+            .join(' '),
+          metadata: {
+            task: task.title,
+            task_type: task.type,
+            provider_name: providerName,
+            provider: env.type,
+            origin: loop?.loopId ? 'loop' : 'user',
+            ...workspaceMetadata(ws),
+            task_id: task.id,
+          },
+          dedupeKey: `workspace:${task.workspaceId}:first_task`,
+        };
       });
       return;
     }

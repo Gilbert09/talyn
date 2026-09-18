@@ -19,6 +19,7 @@ import {
 import { getSupabaseServiceClient } from '../services/supabase.js';
 import { captureSignup } from '../services/analytics.js';
 import { notifyTodiex } from '../services/todiex.js';
+import { personMetadata } from '../services/todiexContext.js';
 
 export interface AuthUser {
   id: string;
@@ -251,8 +252,18 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
       kind: 'user.signed_up',
       level: 'success',
       title: `New Talyn signup — ${email}`,
-      message: githubUsername ? `GitHub: @${githubUsername}` : 'No GitHub account linked yet.',
-      metadata: { user_id: identity.id, github_username: githubUsername ?? null },
+      message: githubUsername
+        ? `Signed up with GitHub as @${githubUsername}.`
+        : 'No GitHub account linked yet.',
+      // The one event that needs no lookup: the JWT already carries the
+      // person. `personMetadata` all the same, so a signup and the owner of
+      // a workspace that did something read as the same shape in the feed.
+      metadata: personMetadata({
+        userId: identity.id,
+        email,
+        githubUsername: githubUsername ?? null,
+        plan: 'free', // every account starts here; Polar moves it later.
+      }),
       dedupeKey: `user:${identity.id}:signed_up`,
     });
   }

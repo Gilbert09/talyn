@@ -1,9 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { isTodiexConfigured, notifyTodiex, postTodiexEvent } from '../services/todiex.js';
 import { notifyProviderConnected } from '../services/cloudProviders/environment.js';
 import { registerCloudProvider } from '../services/cloudProviders/registry.js';
 import type { CloudTaskProvider } from '../services/cloudProviders/types.js';
-import { describeSubscriptionEvent } from '../services/billing/webhook.js';
+import {
+  describeSubscriptionEvent,
+  formatPeriodEnd,
+  formatSubscriptionPrice,
+  summarizeSubscription,
+} from '../services/billing/webhook.js';
+import {
+  personMetadata,
+  resetTodiexContextCacheForTests,
+} from '../services/todiexContext.js';
+import { createTestDb, seedUser } from './helpers/testDb.js';
+import type { Database } from '../db/client.js';
+import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 
 /**
  * The inbox client is env-gated and best-effort: neither var → no HTTP at
@@ -340,5 +353,299 @@ describe('a disconnect is not a setup', () => {
     ['a save with no credential at all', {}],
   ])('stays silent for %s', (_label, body) => {
     expect(shouldNotify(body)).toBe(false);
+  });
+});
+
+/**
+ * The readable half of an event — a workspace's name, its owner's email, the
+ * plan they are on — lives in the database, and the call sites (a webhook, the
+ * JWT middleware, the dispatch loop) hold only ids. `notifyTodiex` therefore
+ * also takes a function that goes and builds the event, run inside the
+ * fire-and-forget POST so none of those paths pays for the lookup.
+ */
+describe('an event that has to be looked up first', () => {
+  const origFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+      text: async () => '{"ok":true}',
+    } as unknown as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    process.env.TODIEX_URL = 'https://todiex.test';
+    process.env.TODIEX_TOKEN = 'tdx_abc';
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    delete process.env.TODIEX_URL;
+    delete process.env.TODIEX_TOKEN;
+  });
+
+  it('posts what the builder returns', async () => {
+    notifyTodiex(async () => ({ kind: 'workspace.activated', title: 'Acme ran its first Talyn task' }));
+    await flushMicrotasks();
+    expect(sentBody().title).toBe('Acme ran its first Talyn task');
+  });
+
+  it('never calls the builder when the inbox is unconfigured', async () => {
+    // The whole point of the thunk: an unconfigured deployment must not pay
+    // for a query to build an event it will never send.
+    delete process.env.TODIEX_URL;
+    const build = vi.fn();
+    notifyTodiex(build);
+    await flushMicrotasks();
+    expect(build).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing when the builder decides there is nothing to say', async () => {
+    notifyTodiex(async () => null);
+    await flushMicrotasks();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('loses the notification rather than the request when the builder throws', async () => {
+    const onUnhandled = vi.fn();
+    process.on('unhandledRejection', onUnhandled);
+    expect(() =>
+      notifyTodiex(async () => {
+        throw new Error('database is down');
+      })
+    ).not.toThrow();
+    await flushMicrotasks();
+    process.off('unhandledRejection', onUnhandled);
+    expect(onUnhandled).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What the ids resolve to. `notifyProviderConnected` is the representative
+ * call site — it holds a workspace id and nothing else, which is exactly the
+ * event that used to read "A Talyn workspace connected Talyn Fleet" and leave
+ * you to go and find out whose.
+ */
+describe('the names behind the ids', () => {
+  const origFetch = globalThis.fetch;
+  let db: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeAll(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seedUser(db, { id: 'owner-1', email: 'tom@example.test' });
+    await db
+      .update(usersTable)
+      .set({ githubUsername: 'gilbert09', plan: 'unlimited' })
+      .where(eq(usersTable.id, 'owner-1'));
+    await db.insert(workspacesTable).values({
+      id: 'ws1',
+      ownerId: 'owner-1',
+      name: 'PostHog',
+      settings: {},
+    });
+    registerCloudProvider({
+      type: 'selfhosted',
+      displayName: 'Talyn Fleet',
+    } as unknown as CloudTaskProvider);
+  });
+
+  afterAll(async () => {
+    await cleanup?.();
+  });
+
+  beforeEach(() => {
+    resetTodiexContextCacheForTests();
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers(),
+      text: async () => '{"ok":true}',
+    } as unknown as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    process.env.TODIEX_URL = 'https://todiex.test';
+    process.env.TODIEX_TOKEN = 'tdx_abc';
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    delete process.env.TODIEX_URL;
+    delete process.env.TODIEX_TOKEN;
+  });
+
+  async function notifyAndRead(args: Parameters<typeof notifyProviderConnected>[0]) {
+    notifyProviderConnected(args);
+    // One query stands between the call and the POST, so give the chain a
+    // little longer than the two turns a bare POST needs.
+    for (let i = 0; i < 50 && fetchMock.mock.calls.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return sentBody();
+  }
+
+  it('names the workspace in the title', async () => {
+    const body = await notifyAndRead({ workspaceId: 'ws1', type: 'selfhosted' });
+    expect(body.title).toBe('PostHog connected Talyn Fleet');
+  });
+
+  it('says who owns it, with their handle and plan', async () => {
+    const body = await notifyAndRead({
+      workspaceId: 'ws1',
+      type: 'selfhosted',
+      detail: 'Claude subscription linked.',
+    });
+    expect(body.message).toBe(
+      'Claude subscription linked. Owner: tom@example.test (@gilbert09, unlimited plan)'
+    );
+  });
+
+  it('carries the names as properties, and keeps the ids', async () => {
+    const body = await notifyAndRead({ workspaceId: 'ws1', type: 'selfhosted' });
+    expect(body.metadata).toEqual({
+      provider_name: 'Talyn Fleet',
+      provider: 'selfhosted',
+      workspace: 'PostHog',
+      owner_email: 'tom@example.test',
+      owner_github_username: 'gilbert09',
+      owner_github_url: 'https://github.com/gilbert09',
+      owner_plan: 'unlimited',
+      owner_user_id: 'owner-1',
+      workspace_id: 'ws1',
+    });
+  });
+
+  it('degrades to the id-only event when the workspace cannot be resolved', async () => {
+    // A deleted workspace, or a database blip. The notification is worth more
+    // than the names on it, so a failed lookup still sends — reading exactly
+    // as it did before any of this existed.
+    const body = await notifyAndRead({ workspaceId: 'ws-gone', type: 'selfhosted' });
+    expect(body.title).toBe('A Talyn workspace connected Talyn Fleet');
+    expect(body.message).toBe('It can run cloud tasks now.');
+    expect(body.metadata).toEqual({
+      provider_name: 'Talyn Fleet',
+      provider: 'selfhosted',
+      workspace_id: 'ws-gone',
+    });
+  });
+
+  it('reports the comped plan, not the one Polar last wrote', async () => {
+    // `plan_override` is the manual comp flag and wins over `plan` in every
+    // entitlement check — a feed that disagreed with the paywall would be
+    // worse than no plan at all.
+    await db
+      .update(usersTable)
+      .set({ planOverride: 'unlimited', plan: 'free' })
+      .where(eq(usersTable.id, 'owner-1'));
+    const body = await notifyAndRead({ workspaceId: 'ws1', type: 'selfhosted' });
+    expect((body.metadata as Record<string, unknown>).owner_plan).toBe('unlimited');
+    await db
+      .update(usersTable)
+      .set({ planOverride: null, plan: 'unlimited' })
+      .where(eq(usersTable.id, 'owner-1'));
+  });
+});
+
+/** The signup event is the one that needs no lookup — the JWT carries it. */
+describe('a person, as properties', () => {
+  it('leads with the email and links the GitHub profile', () => {
+    expect(
+      personMetadata({
+        userId: 'u1',
+        email: 'tom@example.test',
+        githubUsername: 'gilbert09',
+        plan: 'free',
+      })
+    ).toEqual({
+      email: 'tom@example.test',
+      github_username: 'gilbert09',
+      github_url: 'https://github.com/gilbert09',
+      plan: 'free',
+      user_id: 'u1',
+    });
+  });
+
+  it('omits what it does not know rather than sending nulls', () => {
+    expect(
+      personMetadata({ userId: 'u1', email: null, githubUsername: null, plan: null })
+    ).toEqual({ user_id: 'u1' });
+  });
+
+  it('prefixes a bystander so the subject of the event stays unambiguous', () => {
+    expect(
+      personMetadata({ userId: 'u1', email: 'tom@example.test', githubUsername: null, plan: null }, 'owner')
+    ).toEqual({ owner_email: 'tom@example.test', owner_user_id: 'u1' });
+  });
+});
+
+/** Money and dates, as a phone should show them. */
+describe('how a subscription reads', () => {
+  it.each([
+    [2000, 'usd', '$20.00'],
+    [2000, 'USD', '$20.00'],
+    [19900, 'eur', '€199.00'],
+    [0, 'usd', '$0.00'],
+  ])('%i %s → %s', (amount, currency, expected) => {
+    expect(formatSubscriptionPrice(amount, currency)).toBe(expected);
+  });
+
+  it('defaults a missing currency rather than dropping the number', () => {
+    expect(formatSubscriptionPrice(2000, null)).toBe('$20.00');
+  });
+
+  it('still shows the number for a currency code Intl rejects', () => {
+    expect(formatSubscriptionPrice(2000, 'not-a-currency')).toBe('20.00 NOT-A-CURRENCY');
+  });
+
+  it.each([[null], [undefined], [Number.NaN]])('says nothing about a %s amount', (amount) => {
+    expect(formatSubscriptionPrice(amount as number | null | undefined, 'usd')).toBeNull();
+  });
+
+  it.each([
+    ['2026-08-06T00:00:00.000Z', '6 Aug 2026'],
+    [new Date('2026-12-31T23:00:00.000Z'), '31 Dec 2026'],
+  ])('formats a period end', (value, expected) => {
+    expect(formatPeriodEnd(value)).toBe(expected);
+  });
+
+  it.each([[null], [undefined], ['not a date']])('says nothing about %s', (value) => {
+    expect(formatPeriodEnd(value as string | null | undefined)).toBeNull();
+  });
+
+  it('reads as a sentence: product, price, status and the date', () => {
+    expect(
+      summarizeSubscription({
+        id: 'sub-1',
+        status: 'active',
+        amount: 2000,
+        currency: 'usd',
+        recurringInterval: 'month',
+        product: { name: 'Talyn Unlimited' },
+        currentPeriodEnd: '2026-08-06T00:00:00.000Z',
+      })
+    ).toBe('Talyn Unlimited, $20.00/month. Status active, renews 6 Aug 2026.');
+  });
+
+  it('says access ends rather than renews when it is cancelling', () => {
+    // The date alone cannot tell those apart, and they are opposite news.
+    expect(
+      summarizeSubscription({
+        id: 'sub-1',
+        status: 'active',
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: '2026-08-06T00:00:00.000Z',
+      })
+    ).toBe('Status active, access until 6 Aug 2026.');
+  });
+
+  it('degrades to the status alone when the event carries nothing else', () => {
+    expect(summarizeSubscription({ id: 'sub-1', status: 'past_due' })).toBe('Status past_due.');
   });
 });

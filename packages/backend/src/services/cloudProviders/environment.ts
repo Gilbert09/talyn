@@ -7,6 +7,12 @@ import { emitEnvironmentCreated } from '../websocket.js';
 import { rowToEnvironment } from '../../routes/environments.js';
 import { getCloudProvider } from './registry.js';
 import { notifyTodiex } from '../todiex.js';
+import {
+  describeWorkspace,
+  ownerLine,
+  workspaceLabel,
+  workspaceMetadata,
+} from '../todiexContext.js';
 
 /**
  * Ensure the user has a secret-free env marker for a cloud provider.
@@ -78,16 +84,26 @@ export function notifyProviderConnected(args: {
   detail?: string;
 }): void {
   const name = getCloudProvider(args.type)?.displayName ?? args.type;
-  notifyTodiex({
-    kind: 'workspace.provider_connected',
-    level: 'success',
-    title: `A Talyn workspace connected ${name}`,
-    message: args.detail ?? 'It can run cloud tasks now.',
-    metadata: {
-      workspace_id: args.workspaceId,
-      provider: args.type,
-      ...(args.detail ? { detail: args.detail } : {}),
-    },
-    dedupeKey: `workspace:${args.workspaceId}:provider:${args.type}:connected`,
+  // Deferred: this is called from three connect routes, and none of them
+  // should wait on a name lookup to answer the browser. `provider` keeps the
+  // raw type (it is what a query filters on) and `provider_name` adds the
+  // one the product uses out loud.
+  notifyTodiex(async () => {
+    const ws = await describeWorkspace(args.workspaceId);
+    return {
+      kind: 'workspace.provider_connected',
+      level: 'success',
+      title: `${workspaceLabel(ws)} connected ${name}`,
+      message: [args.detail ?? 'It can run cloud tasks now.', ownerLine(ws)]
+        .filter(Boolean)
+        .join(' '),
+      metadata: {
+        provider_name: name,
+        provider: args.type,
+        ...workspaceMetadata(ws),
+        ...(args.detail ? { detail: args.detail } : {}),
+      },
+      dedupeKey: `workspace:${args.workspaceId}:provider:${args.type}:connected`,
+    };
   });
 }

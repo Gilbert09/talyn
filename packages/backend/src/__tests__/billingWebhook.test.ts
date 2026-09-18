@@ -7,6 +7,10 @@ import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import { billingEvents as billingEventsTable, users as usersTable } from '../db/schema.js';
 import * as websocketModule from '../services/websocket.js';
+import {
+  describeUser,
+  resetTodiexContextCacheForTests,
+} from '../services/todiexContext.js';
 
 // Drive the handler with plain JSON events instead of computing
 // standard-webhooks signatures: the mock parses the raw body, and rejects
@@ -302,5 +306,107 @@ describe('applySubscriptionEvent (direct)', () => {
     );
     expect(result.applied).toBe(true);
     expect((await getUser()).plan).toBe('free');
+  });
+});
+
+/**
+ * The phone notification. Money moving is the one billing signal worth
+ * interrupting somebody for, and it used to arrive as "New Talyn subscription
+ * / Status active." — true, and silent about who bought what. The handler
+ * builds the readable version AFTER it has answered Polar (a webhook that
+ * waits on anything gets retried), so these assertions wait for the POST.
+ */
+describe('what the inbox is told about a subscription', () => {
+  let received: Record<string, unknown>[];
+  let closeInbox: () => Promise<void>;
+
+  beforeEach(async () => {
+    resetTodiexContextCacheForTests();
+    received = [];
+    const app = express();
+    app.post('/api/ingest/events', express.json(), (req, res) => {
+      received.push(req.body as Record<string, unknown>);
+      res.json({ ok: true });
+    });
+    const server = createServer(app);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address() as AddressInfo;
+    process.env.TODIEX_URL = `http://127.0.0.1:${addr.port}`;
+    process.env.TODIEX_TOKEN = 'tdx_test';
+    closeInbox = () =>
+      new Promise<void>((res) => {
+        server.closeAllConnections();
+        server.close(() => res());
+      });
+  });
+
+  afterEach(async () => {
+    delete process.env.TODIEX_URL;
+    delete process.env.TODIEX_TOKEN;
+    await closeInbox();
+  });
+
+  async function nextInboxEvent(): Promise<Record<string, unknown>> {
+    for (let i = 0; i < 100 && received.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    if (received.length === 0) throw new Error('no todiex event arrived');
+    return received[0];
+  }
+
+  const paidSubscription = () =>
+    subscription({
+      amount: 2000,
+      currency: 'usd',
+      recurringInterval: 'month',
+      product: { name: 'Talyn Unlimited' },
+      customer: { id: 'cust-1', externalId: TEST_USER_ID, email: 'billing@example.test' },
+    });
+
+  it('names the person, the product and the price', async () => {
+    await post('evt-inbox-1', { type: 'subscription.created', data: paidSubscription() });
+    const event = await nextInboxEvent();
+    expect(event.title).toBe(`New Talyn subscription — ${TEST_USER_ID}@example.test`);
+    expect(event.message).toBe(
+      'Talyn Unlimited, $20.00/month. Status active, renews 6 Aug 2026.'
+    );
+    expect(event.metadata).toMatchObject({
+      email: `${TEST_USER_ID}@example.test`,
+      user_id: TEST_USER_ID,
+      product: 'Talyn Unlimited',
+      price: '$20.00',
+      billing_interval: 'month',
+      status: 'active',
+      renews_on: '6 Aug 2026',
+      subscription_id: 'sub-1',
+      polar_event_type: 'subscription.created',
+    });
+  });
+
+  it('reports the plan this very event just granted', async () => {
+    // The names are cached for five minutes; the plan column was written
+    // moments ago by the same request. A cached read here would announce a
+    // new subscription against the plan it replaced, so this path refreshes.
+    await describeUser(TEST_USER_ID); // warm the cache while the user is free
+    await post('evt-inbox-2', { type: 'subscription.created', data: paidSubscription() });
+    const event = await nextInboxEvent();
+    expect((event.metadata as Record<string, unknown>).plan).toBe('unlimited');
+  });
+
+  it('says a cancellation ends access, and when', async () => {
+    await post('evt-inbox-3', {
+      type: 'subscription.updated',
+      data: subscription({ status: 'active', cancelAtPeriodEnd: true }),
+    });
+    // A cancel-at-period-end update is not itself a notification — the
+    // subscription is still active. The revoke that follows is.
+    await post('evt-inbox-4', {
+      type: 'subscription.revoked',
+      data: subscription({ status: 'canceled', cancelAtPeriodEnd: true }),
+    });
+    const event = await nextInboxEvent();
+    expect(event.title).toBe(`Talyn subscription ended — ${TEST_USER_ID}@example.test`);
+    expect(event.message).toBe('Status canceled, access until 6 Aug 2026.');
+    expect(event.metadata).toMatchObject({ cancel_at_period_end: true, plan: 'free' });
   });
 });
