@@ -678,6 +678,16 @@ railway variables --service fastowl-backend \
   `/app/build-in-public/settings`). One token is shared across every product;
   the `source` field in the payload is what tells them apart, not the token.
 
+Every event carries the **names behind its ids**, not just the ids: the
+workspace's name, its owner's email, GitHub handle and plan; for a
+subscription, the product, the price and the renewal (or cancellation) date.
+The ids are still there — `workspace_id`, `user_id`, `subscription_id` — but
+the notification reads on a lock screen without a database to hand
+(`services/todiexContext.ts`). The lookup runs inside the fire-and-forget POST
+and is cached per workspace for five minutes, so no webhook, login or dispatch
+waits on it, and one that fails degrades to the id-only event rather than
+losing the notification.
+
 **Leave both unset and every call is a no-op** — which is the right state for
 local dev. A *partial* config is a boot error (`services/validateEnv.ts`): a
 URL without a token posts nothing but 401s and a token without a URL posts

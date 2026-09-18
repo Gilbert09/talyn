@@ -120,17 +120,36 @@ export async function postTodiexEvent(event: TodiexEvent): Promise<void> {
 }
 
 /**
+ * An event, or a function that goes and builds one.
+ *
+ * The thunk form exists because the readable half of an event — the
+ * workspace's name, the owner's email, the plan they are on — lives in the
+ * database, and the call sites hold only ids. Resolving it inline would put a
+ * query in front of a webhook, a login and every dispatch; resolving it
+ * inside the fire-and-forget POST costs those paths nothing, and costs
+ * nothing at all when the inbox is unconfigured, because the thunk is never
+ * called. Returning null builds nothing and sends nothing.
+ */
+export type TodiexEventSource = TodiexEvent | (() => Promise<TodiexEvent | null>);
+
+/**
  * Fire-and-forget wrapper, and the one every call site should use.
  *
  * The call sites are a webhook handler, the JWT middleware and the dispatch
  * loop — none of them may wait on an inbox, and none of them may fail because
  * of one. `void` + `.catch()` rather than a bare floating promise so an
- * unhandled rejection can never reach the process.
+ * unhandled rejection can never reach the process; the `.catch()` covers the
+ * thunk too, so a build step that throws loses one notification rather than
+ * the request that triggered it.
  */
-export function notifyTodiex(event: TodiexEvent): void {
+export function notifyTodiex(source: TodiexEventSource): void {
   if (!isTodiexConfigured()) return;
-  void postTodiexEvent(event).catch((err) => {
+  const label = typeof source === 'function' ? 'deferred' : source.kind;
+  void (async () => {
+    const event = typeof source === 'function' ? await source() : source;
+    if (event) await postTodiexEvent(event);
+  })().catch((err) => {
     const msg = err instanceof Error ? err.message : 'unknown error';
-    console.warn(`[todiex] post "${event.kind}" failed:`, msg);
+    console.warn(`[todiex] post "${label}" failed:`, msg);
   });
 }

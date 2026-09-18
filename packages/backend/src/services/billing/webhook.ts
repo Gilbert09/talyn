@@ -8,6 +8,12 @@ import { emitSubscriptionUpdated } from '../websocket.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
 import { polarWebhookSecret } from './polar.js';
 import { notifyTodiex, type TodiexLevel } from '../todiex.js';
+import {
+  compactMetadata,
+  describeUser,
+  personLabel,
+  personMetadata,
+} from '../todiexContext.js';
 
 /**
  * Polar webhook receiver — the ONLY writer of the webhook-driven billing
@@ -33,14 +39,33 @@ import { notifyTodiex, type TodiexLevel } from '../todiex.js';
  *  when Polar transitions the subscription to canceled/revoked. */
 const GRANTING_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
-/** The slice of Polar's subscription entity the state machine reads. */
+/**
+ * The slice of Polar's subscription entity we read.
+ *
+ * The first six fields drive the state machine. The rest are display only —
+ * what somebody actually wants to know when their phone says a subscription
+ * landed: who bought it, which product, and for how much. All optional,
+ * because none of them may decide anything: an older event that lacks them
+ * still applies, it just reads with less detail.
+ */
 export interface PolarSubscription {
   id: string;
   status: string;
   currentPeriodEnd?: Date | string | null;
   cancelAtPeriodEnd?: boolean;
   customerId?: string;
-  customer?: { id?: string; externalId?: string | null };
+  customer?: {
+    id?: string;
+    externalId?: string | null;
+    email?: string | null;
+    name?: string | null;
+  };
+  /** Minor units (cents), as Polar sends them. */
+  amount?: number | null;
+  currency?: string | null;
+  /** 'month' | 'year'. */
+  recurringInterval?: string | null;
+  product?: { name?: string | null } | null;
 }
 
 export interface ApplyResult {
@@ -113,6 +138,66 @@ export function describeSubscriptionEvent(
     return { kind: 'subscription.active', level: 'success', title: 'Talyn subscription active' };
   }
   return null;
+}
+
+/** Polar's minor units as money a person reads: 2000 + 'usd' → "$20.00". */
+export function formatSubscriptionPrice(
+  amount: number | null | undefined,
+  currency: string | null | undefined
+): string | null {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return null;
+  const code = (currency || 'usd').toUpperCase();
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(
+      amount / 100
+    );
+  } catch {
+    // An unknown or malformed currency code — still worth showing the number.
+    return `${(amount / 100).toFixed(2)} ${code}`;
+  }
+}
+
+/** A period end as a date somebody can read: "16 Oct 2026". */
+export function formatPeriodEnd(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date);
+}
+
+/**
+ * The subscription, in one line, for the body of the notification.
+ *
+ * Reads as "Talyn Unlimited, $20.00/month. Status active, renews 16 Oct
+ * 2026." and degrades a clause at a time — an event carrying no product and
+ * no price still says what the status is, which is what the line used to say
+ * on its own. `cancelAtPeriodEnd` turns "renews" into "access until", because
+ * those are opposite pieces of news and the date alone does not distinguish
+ * them.
+ */
+export function summarizeSubscription(sub: PolarSubscription): string {
+  const price = formatSubscriptionPrice(sub.amount, sub.currency);
+  const plan = [
+    sub.product?.name ?? null,
+    price ? `${price}${sub.recurringInterval ? `/${sub.recurringInterval}` : ''}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  const periodEnd = formatPeriodEnd(sub.currentPeriodEnd);
+  const state = [
+    `Status ${sub.status}`,
+    periodEnd ? `${sub.cancelAtPeriodEnd ? 'access until' : 'renews'} ${periodEnd}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  return [plan ? `${plan}.` : null, `${state}.`].filter(Boolean).join(' ');
 }
 
 export async function applySubscriptionEvent(
@@ -261,19 +346,43 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
     // one that reaches us, but this covers the half-second where it does not.
     const described = sub ? describeSubscriptionEvent(event.type, sub.status) : null;
     if (described) {
-      notifyTodiex({
-        kind: described.kind,
-        level: described.level,
-        title: described.title,
-        message: `Status ${sub!.status}${sub!.cancelAtPeriodEnd ? ', cancelling at period end' : ''}.`,
-        metadata: {
-          user_id: result.userId,
-          subscription_id: sub!.id,
-          status: sub!.status,
-          polar_event_type: event.type,
-        },
-        dedupeKey: `polar:${eventId}`,
-        occurredAt: occurredAt.toISOString(),
+      const subscription = sub!;
+      const userId = result.userId;
+      // Deferred so the lookup happens after this handler has answered Polar
+      // — a webhook that waits on anything gets retried. `refresh` because
+      // the plan column was written moments ago by applySubscriptionEvent.
+      notifyTodiex(async () => {
+        const stored = await describeUser(userId, { refresh: true });
+        // Polar's customer email is the address that actually paid; ours is
+        // the one they signed in with. Prefer ours (it is the account the
+        // rest of the feed names) and fall back to Polar's, so an event for
+        // a user row we could not read still says who it was about.
+        const person = {
+          ...stored,
+          email: stored.email ?? subscription.customer?.email ?? null,
+        };
+        const who = personLabel(person);
+        const price = formatSubscriptionPrice(subscription.amount, subscription.currency);
+        return {
+          kind: described.kind,
+          level: described.level,
+          title: who ? `${described.title} — ${who}` : described.title,
+          message: summarizeSubscription(subscription),
+          metadata: compactMetadata({
+            ...personMetadata(person),
+            product: subscription.product?.name ?? null,
+            price,
+            billing_interval: subscription.recurringInterval ?? null,
+            status: subscription.status,
+            cancel_at_period_end: subscription.cancelAtPeriodEnd ?? false,
+            renews_on: formatPeriodEnd(subscription.currentPeriodEnd),
+            customer_name: subscription.customer?.name ?? null,
+            subscription_id: subscription.id,
+            polar_event_type: event.type,
+          }),
+          dedupeKey: `polar:${eventId}`,
+          occurredAt: occurredAt.toISOString(),
+        };
       });
     }
   }

@@ -15,11 +15,16 @@ import type { CloudTaskProvider } from '../services/cloudProviders/types.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
+  users as usersTable,
   workspaces as workspacesTable,
   environments as environmentsTable,
   repositories as repositoriesTable,
   tasks as tasksTable,
 } from '../db/schema.js';
+import { resetTodiexContextCacheForTests } from '../services/todiexContext.js';
+import express from 'express';
+import { createServer } from 'http';
+import type { AddressInfo } from 'net';
 
 /**
  * Build a fake PostHog Code provider whose `dispatch` is a spy, so the
@@ -371,5 +376,106 @@ describe('dispatch backoff policy', () => {
     expect(isBackingOff(task({ nextDispatchAttemptAt: 'not-a-date' }), now)).toBe(false);
     expect(isBackingOff(task({}), now)).toBe(false);
     expect(isBackingOff(task(undefined), now)).toBe(false);
+  });
+});
+
+/**
+ * Activation — the first task a workspace ever dispatches — is the one inbox
+ * event that fires from the hot loop, and the one that most needed a name on
+ * it: "A Talyn workspace ran its first task" identified nobody. The event is
+ * built behind a thunk, so the dispatch itself never waits for the lookup and
+ * these assertions poll for the POST.
+ */
+describe('the activation notification', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+  let originalProvider: CloudTaskProvider | null;
+  let received: Record<string, unknown>[];
+  let closeInbox: () => Promise<void>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seed(db);
+    await db
+      .update(workspacesTable)
+      .set({ name: 'PostHog' })
+      .where(eq(workspacesTable.id, 'ws1'));
+    await db
+      .update(usersTable)
+      .set({ githubUsername: 'gilbert09' })
+      .where(eq(usersTable.id, TEST_USER_ID));
+    originalProvider = getCloudProvider('posthog_code');
+    resetTodiexContextCacheForTests();
+
+    received = [];
+    const app = express();
+    app.post('/api/ingest/events', express.json(), (req, res) => {
+      received.push(req.body as Record<string, unknown>);
+      res.json({ ok: true });
+    });
+    const server = createServer(app);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address() as AddressInfo;
+    process.env.TODIEX_URL = `http://127.0.0.1:${addr.port}`;
+    process.env.TODIEX_TOKEN = 'tdx_test';
+    closeInbox = () =>
+      new Promise<void>((res) => {
+        server.closeAllConnections();
+        server.close(() => res());
+      });
+  });
+
+  afterEach(async () => {
+    delete process.env.TODIEX_URL;
+    delete process.env.TODIEX_TOKEN;
+    await closeInbox();
+    taskQueueService.shutdown();
+    taskQueueService.resetForTests();
+    if (originalProvider) registerCloudProvider(originalProvider);
+    await cleanup();
+    vi.restoreAllMocks();
+  });
+
+  async function dispatchAndRead(): Promise<Record<string, unknown>> {
+    registerCloudProvider(fakeProvider(vi.fn(async () => ({ ok: true as const }))));
+    await taskQueueService.processQueue();
+    for (let i = 0; i < 100 && received.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    if (received.length === 0) throw new Error('no todiex event arrived');
+    return received[0];
+  }
+
+  it('names the workspace, the task and the provider', async () => {
+    await insertQueuedTask(db, { id: 'task-1' });
+    const event = await dispatchAndRead();
+    expect(event.title).toBe('PostHog ran its first Talyn task');
+    expect(event.message).toBe(
+      '“task-task-1” went out to Fake PostHog Code. Owner: user-test@example.test (@gilbert09, free plan)'
+    );
+    expect(event.metadata).toMatchObject({
+      task: 'task-task-1',
+      task_type: 'code_writing',
+      provider_name: 'Fake PostHog Code',
+      provider: 'posthog_code',
+      origin: 'user',
+      workspace: 'PostHog',
+      owner_email: 'user-test@example.test',
+      owner_github_username: 'gilbert09',
+      workspace_id: 'ws1',
+      task_id: 'task-1',
+    });
+    expect(event.dedupeKey).toBe('workspace:ws1:first_task');
+  });
+
+  it('distinguishes a loop firing from a person', async () => {
+    // Both are `code_writing`; `metadata.loop` is the only thing that says a
+    // schedule started it, and "their first task ran itself" is a different
+    // piece of news from "they ran their first task".
+    await insertQueuedTask(db, { id: 'task-2', metadata: { loop: { loopId: 'loop-1' } } });
+    const event = await dispatchAndRead();
+    expect((event.metadata as Record<string, unknown>).origin).toBe('loop');
   });
 });
