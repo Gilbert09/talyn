@@ -320,7 +320,10 @@ function Catalog({
               )}
             >
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{entry.title}</span>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white p-1">
+                  <img src={entry.logo} alt="" width={24} height={24} className="object-contain" />
+                </span>
+                <span className="min-w-0 truncate text-sm font-medium">{entry.title}</span>
                 {already && <Badge variant="secondary">Connected</Badge>}
                 {!already && signInOnly && <Badge variant="outline">Sign in</Badge>}
                 {!already && !signInOnly && entry.authKind === 'none' && (

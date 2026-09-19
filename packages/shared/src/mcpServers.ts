@@ -1,3 +1,5 @@
+import { MCP_CATALOG_LOGOS } from './mcpCatalogLogos.js';
+
 // MCP servers — the vocabulary, the validator and the catalog.
 //
 // A workspace connects the MCP servers it wants and every Talyn Fleet run
@@ -360,6 +362,7 @@ export function mcpServerInputProblem(input: McpServerInput): string | null {
  */
 export interface McpCatalogEntry {
   handle: string;
+  logo: string;
   /**
    * The server name to create, when it cannot just be the handle.
    *
@@ -386,6 +389,7 @@ export interface McpCatalogEntry {
 export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   {
     handle: 'context7',
+    logo: MCP_CATALOG_LOGOS['context7'],
     title: 'Context7',
     summary: 'Up-to-date library and framework documentation.',
     url: 'https://mcp.context7.com/mcp',
@@ -398,6 +402,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'github',
+    logo: MCP_CATALOG_LOGOS['github'],
     // Not "github": the sandbox already reaches its own GitHub REST API under
     // that name, and taking it would silently remove a capability the agent's
     // briefing promises.
@@ -414,6 +419,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'supabase',
+    logo: MCP_CATALOG_LOGOS['supabase'],
     title: 'Supabase',
     summary: 'Query your database, inspect schemas and read logs.',
     url: 'https://mcp.supabase.com/mcp',
@@ -425,6 +431,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'stripe',
+    logo: MCP_CATALOG_LOGOS['stripe'],
     title: 'Stripe',
     summary: 'Customers, payments, subscriptions and the Stripe docs.',
     url: 'https://mcp.stripe.com/',
@@ -436,6 +443,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'posthog',
+    logo: MCP_CATALOG_LOGOS['posthog'],
     title: 'PostHog',
     summary: 'Insights, feature flags, error tracking and HogQL.',
     url: 'https://mcp.posthog.com/mcp',
@@ -445,6 +453,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'huggingface',
+    logo: MCP_CATALOG_LOGOS['huggingface'],
     title: 'Hugging Face',
     summary: 'Models, datasets, papers and Spaces.',
     url: 'https://huggingface.co/mcp',
@@ -454,6 +463,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'exa',
+    logo: MCP_CATALOG_LOGOS['exa'],
     title: 'Exa',
     summary: 'Neural web search built for agents.',
     url: 'https://mcp.exa.ai/mcp',
@@ -463,6 +473,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'firecrawl',
+    logo: MCP_CATALOG_LOGOS['firecrawl'],
     title: 'Firecrawl',
     summary: 'Scrape and crawl web pages into clean markdown.',
     url: 'https://mcp.firecrawl.dev/v2/mcp',
@@ -473,6 +484,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   // that do not are marked in their notes.
   {
     handle: 'linear',
+    logo: MCP_CATALOG_LOGOS['linear'],
     title: 'Linear',
     summary: 'Issues, projects and cycles.',
     url: 'https://mcp.linear.app/mcp',
@@ -483,6 +495,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'sentry',
+    logo: MCP_CATALOG_LOGOS['sentry'],
     title: 'Sentry',
     summary: 'Issues, events and release health.',
     url: 'https://mcp.sentry.dev/mcp',
@@ -491,6 +504,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'notion',
+    logo: MCP_CATALOG_LOGOS['notion'],
     title: 'Notion',
     summary: 'Pages, databases and search.',
     url: 'https://mcp.notion.com/mcp',
@@ -500,6 +514,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'atlassian',
+    logo: MCP_CATALOG_LOGOS['atlassian'],
     title: 'Jira and Confluence',
     summary: "Atlassian's Rovo server: issues, pages and search.",
     url: 'https://mcp.atlassian.com/v2/mcp',
@@ -508,6 +523,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'asana',
+    logo: MCP_CATALOG_LOGOS['asana'],
     title: 'Asana',
     summary: 'Tasks, projects and portfolios.',
     url: 'https://mcp.asana.com/v2/mcp',
@@ -516,6 +532,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'vercel',
+    logo: MCP_CATALOG_LOGOS['vercel'],
     title: 'Vercel',
     summary: 'Projects, deployments and logs.',
     url: 'https://mcp.vercel.com',
@@ -525,6 +542,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'neon',
+    logo: MCP_CATALOG_LOGOS['neon'],
     title: 'Neon',
     summary: 'Postgres branches, queries and migrations.',
     url: 'https://mcp.neon.tech/mcp',
@@ -534,6 +552,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
   },
   {
     handle: 'cloudflare-docs',
+    logo: MCP_CATALOG_LOGOS['cloudflare-docs'],
     title: 'Cloudflare docs',
     summary: "Search Cloudflare's documentation. No account needed.",
     url: 'https://docs.mcp.cloudflare.com/mcp',
