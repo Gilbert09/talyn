@@ -34,7 +34,13 @@ import {
   prime,
   subscribePRStatus,
 } from '../../lib/prSummaryCache';
-import { isAgentTask, readCloudTaskMeta, TERMINAL_TASK_STATUSES } from '@talyn/shared';
+import {
+  cloudModelLabel,
+  isAgentTask,
+  readCloudTaskMeta,
+  readDispatchedModel,
+  TERMINAL_TASK_STATUSES,
+} from '@talyn/shared';
 import type { TaskScheduleError } from '@talyn/shared';
 import type { Task, TaskStatus, TaskType, TaskPriority } from '@talyn/shared';
 import { ProviderIcon, providerLabel, taskCloudProvider } from '../../lib/providerMeta';
@@ -378,6 +384,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   const repo = task?.repositoryId ? repositories.find(r => r.id === task.repositoryId) : null;
   const cloudMeta = task ? readCloudTaskMeta(task) : null;
   const provider = task ? taskCloudProvider(task, environments) : null;
+  const model = task ? readDispatchedModel(task, provider) : null;
 
   // PR detail side-sheet — opened by clicking the PR status pill on
   // the task header. Stays mounted at the TaskDetail root so it
@@ -467,8 +474,6 @@ function TaskDetail({ taskId }: TaskDetailProps) {
 
   // If task is running, show terminal
   if (isRunning) {
-    const env = environments.find((e) => e.id === task.assignedEnvironmentId);
-
     return (
       <>
         {/* Header */}
@@ -493,9 +498,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                       {providerLabel(provider)}
                     </Badge>
                   )}
-                  {env && (
-                    <Badge variant="outline" className="text-xs">
-                      {env.name}
+                  {model && (
+                    <Badge variant="outline" className="text-xs" title={model}>
+                      {cloudModelLabel(model)}
                     </Badge>
                   )}
                   {repo && (
@@ -561,6 +566,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                   <Badge variant="outline" className="gap-1">
                     <ProviderIcon provider={provider} className="h-3 w-3" />
                     {providerLabel(provider)}
+                  </Badge>
+                )}
+                {model && (
+                  <Badge variant="outline" title={model}>
+                    {cloudModelLabel(model)}
                   </Badge>
                 )}
                 {(() => {
