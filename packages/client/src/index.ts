@@ -8,6 +8,7 @@ import type {
   LoopInput,
   LoopRun,
   LoopWithStats,
+  McpAuthDiscovery,
   McpProbeResult,
   McpServerDefinition,
   McpServerInput,
@@ -2019,6 +2020,9 @@ export const mcpServers = {
    * poll — the caller does the redirect, because a POST is what writes the flow
    * and may register a client at a third party.
    */
+  discoverAuth: (workspaceId: string, url: string) =>
+    request<McpAuthDiscovery>('POST', '/mcp-servers/discover-auth', { workspaceId, url }),
+
   startSignIn: (id: string) =>
     request<{ flowId: string; authorizeUrl: string; expiresAt: string; scopes: string[] }>(
       'POST',
@@ -2036,8 +2040,8 @@ export const mcpServers = {
    * Finish a sign-in from the callback page, which holds nothing but these two
    * values — the state is what names the server.
    */
-  complete: (state: string, code: string) =>
-    request<McpServerDefinition>('POST', '/mcp-servers/complete', { state, code }),
+  complete: (state: string, code: string, error?: string) =>
+    request<McpServerDefinition>('POST', '/mcp-servers/complete', { state, code, error }),
 
   /** Hand back the grant, keeping the endpoints so a reconnect is cheap. */
   disconnect: (id: string) =>

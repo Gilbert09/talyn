@@ -1,3 +1,5 @@
+import { mcpFetch, publicHttpsUrl as httpsUrl, readMcpBody } from './http.js';
+
 /**
  * Finding an MCP server's authorization server, per the MCP authorization spec.
  *
@@ -45,14 +47,16 @@ export class McpDiscoveryError extends Error {}
 async function getJson(url: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
   let resp: Response;
   try {
-    resp = await fetch(url, { signal, redirect: 'follow', headers: { accept: 'application/json' } });
+    resp = await mcpFetch(url, { signal, headers: { accept: 'application/json' } });
   } catch {
     return null;
   }
-  if (!resp.ok) return null;
-  const text = await resp.text();
-  if (text.length > MAX_METADATA_BYTES) return null;
+  if (!resp.ok) {
+    await resp.body?.cancel();
+    return null;
+  }
   try {
+    const text = await readMcpBody(resp, MAX_METADATA_BYTES);
     const doc = JSON.parse(text) as unknown;
     return typeof doc === 'object' && doc !== null ? (doc as Record<string, unknown>) : null;
   } catch {
@@ -60,83 +64,111 @@ async function getJson(url: string, signal: AbortSignal): Promise<Record<string,
   }
 }
 
-/** An https URL, or null. The one rule every endpoint in here has to pass. */
-function httpsUrl(v: unknown): string | null {
-  if (typeof v !== 'string') return null;
-  try {
-    const u = new URL(v);
-    // http is refused even on a loopback host: nothing in this flow runs on the
-    // user's machine, so a plaintext endpoint here is a token on the wire.
-    return u.protocol === 'https:' ? u.toString() : null;
-  } catch {
-    return null;
-  }
+interface EndpointChallenge {
+  challenge: string;
+  status: number;
+  anonymous: boolean;
 }
 
-/**
- * Ask the endpoint who authorizes it.
- *
- * The `WWW-Authenticate` header is the documented path. The probe fallbacks
- * below it are the spec's own, in its own order, for a server that answers 401
- * without the header — which several do.
- */
-export async function discoverResourceMetadata(
+function initializeResult(text: string): boolean {
+  const frames = text.trimStart().startsWith('{')
+    ? [text]
+    : text
+        .split(/\r?\n/)
+        .filter((s) => s.startsWith('data:'))
+        .map((s) => s.slice(5));
+  return frames.some((frame) => {
+    try {
+      const doc = JSON.parse(frame);
+      return (
+        doc.id === 1 &&
+        doc.result &&
+        typeof doc.result.protocolVersion === 'string' &&
+        typeof doc.result.serverInfo?.name === 'string'
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+export async function inspectMcpEndpoint(
   endpoint: string,
   signal: AbortSignal
+): Promise<EndpointChallenge> {
+  const resp = await mcpFetch(endpoint, {
+    method: 'POST',
+    signal,
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'talyn', version: '1' },
+      },
+    }),
+  });
+  const challenge = resp.headers.get('www-authenticate') ?? '';
+  let anonymous = false;
+  if (resp.ok)
+    anonymous = initializeResult(await readMcpBody(resp, MAX_METADATA_BYTES, initializeResult));
+  else await resp.body?.cancel();
+  return { challenge, status: resp.status, anonymous };
+}
+
+export function challengeParameter(challenge: string, name: string): string | undefined {
+  const bearer = /(?:^|,)\s*Bearer\s+(.+?)(?=,\s*[a-z][\w-]*\s+(?![=])|$)/i.exec(challenge)?.[1];
+  if (!bearer) return undefined;
+  const match = new RegExp(
+    `(?:^|[,\\s])${name}\\s*=\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|([^,\\s]+))`,
+    'i'
+  ).exec(bearer);
+  return match ? (match[1] ?? match[2]).replace(/\\(.)/g, '$1') : undefined;
+}
+
+export async function resourceMetadataFromChallenge(
+  endpoint: string,
+  challenge: string,
+  signal: AbortSignal
 ): Promise<ResourceMetadata> {
-  let challenge = '';
-  try {
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      signal,
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
-    });
-    if (resp.status !== 401) {
-      // Not a 401 means the server did not ask for authorization on an
-      // unauthenticated call, which is a different situation from a failed
-      // discovery: this server takes a pasted key, or none at all.
-      throw new McpDiscoveryError(
-        'this server did not ask to be signed in to — paste its key instead'
-      );
-    }
-    challenge = resp.headers.get('www-authenticate') ?? '';
-  } catch (err) {
-    if (err instanceof McpDiscoveryError) throw err;
-    throw new McpDiscoveryError(
-      `could not reach the server: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-
-  const named = /resource_metadata="([^"]+)"/.exec(challenge)?.[1];
-  const scope = /scope="([^"]+)"/.exec(challenge)?.[1];
-
+  const named = challengeParameter(challenge, 'resource_metadata');
+  const scope = challengeParameter(challenge, 'scope');
   const base = new URL(endpoint);
   const candidates = named
     ? [named]
     : [
-        // The spec's order for a challenge with no document named: path-ful
-        // first, then the bare one.
-        `${base.origin}/.well-known/oauth-protected-resource${base.pathname}`,
+        `${base.origin}/.well-known/oauth-protected-resource${base.pathname === '/' ? '' : base.pathname}`,
         `${base.origin}/.well-known/oauth-protected-resource`,
       ];
-
-  for (const url of candidates) {
+  for (const url of new Set(candidates)) {
     const doc = await getJson(url, signal);
     if (!doc) continue;
+    // Metadata must describe this resource, not an unrelated token audience.
+    if (!httpsUrl(doc.resource) || new URL(doc.resource as string).toString() !== base.toString())
+      continue;
     const servers = Array.isArray(doc.authorization_servers)
-      ? doc.authorization_servers.map(httpsUrl).filter((s): s is string => s !== null)
+      ? doc.authorization_servers.filter(
+          (s): s is string => typeof s === 'string' && httpsUrl(s) !== null
+        )
       : [];
-    if (servers.length === 0) continue;
-    return {
-      authorizationServers: servers,
-      ...(scope ? { scope } : {}),
-      ...(typeof doc.resource === 'string' ? { resource: doc.resource } : {}),
-    };
+    if (!servers.length) continue;
+    const supported = Array.isArray(doc.scopes_supported)
+      ? doc.scopes_supported.filter((s): s is string => typeof s === 'string').join(' ')
+      : undefined;
+    return { authorizationServers: servers, resource: base.toString(), scope: scope ?? supported };
   }
-  throw new McpDiscoveryError(
-    'this server asked to be signed in to but did not say where, so there is nothing to sign in to'
-  );
+  throw new McpDiscoveryError('The server did not provide usable OAuth resource metadata.');
+}
+
+export async function discoverResourceMetadata(
+  endpoint: string,
+  signal: AbortSignal
+): Promise<ResourceMetadata> {
+  const { challenge } = await inspectMcpEndpoint(endpoint, signal);
+  return resourceMetadataFromChallenge(endpoint, challenge, signal);
 }
 
 /**
@@ -163,6 +195,9 @@ export async function discoverAuthServer(
     const authorizationEndpoint = httpsUrl(doc.authorization_endpoint);
     const tokenEndpoint = httpsUrl(doc.token_endpoint);
     if (!authorizationEndpoint || !tokenEndpoint) continue;
+    if (doc.issuer !== issuer) {
+      throw new McpDiscoveryError('The OAuth issuer does not match its metadata.');
+    }
 
     // PKCE S256 is a MUST, and a client MUST refuse to proceed when the server
     // does not advertise it. Refused here rather than at the token exchange,
@@ -185,7 +220,9 @@ export async function discoverAuthServer(
         ? { registrationEndpoint: httpsUrl(doc.registration_endpoint) as string }
         : {}),
       ...(Array.isArray(doc.scopes_supported)
-        ? { scopesSupported: doc.scopes_supported.filter((s): s is string => typeof s === 'string') }
+        ? {
+            scopesSupported: doc.scopes_supported.filter((s): s is string => typeof s === 'string'),
+          }
         : {}),
       clientIdMetadataDocumentSupported: doc.client_id_metadata_document_supported === true,
     };

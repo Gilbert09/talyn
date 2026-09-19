@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Loader2, X } from 'lucide-react';
 import {
   MCP_AUTH_KINDS,
@@ -6,7 +6,8 @@ import {
   mcpCatalogEntry,
   mcpServerInputProblem,
   mcpServerToInput,
-  type McpAuthKind,
+  type McpAuthMethod,
+  type McpAuthDiscovery,
   type McpProbeResult,
   type McpServerDefinition,
   type McpServerInput,
@@ -16,6 +17,7 @@ import { Input } from '../../ui/input';
 import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
 import { openExternal } from '../../../lib/openExternal';
+import { useWorkspaceStore } from '../../../stores/workspace';
 
 /**
  * The tool-server editor.
@@ -27,7 +29,8 @@ import { openExternal } from '../../../lib/openExternal';
  * contract on both forks.
  */
 
-const AUTH_LABELS: Record<McpAuthKind, string> = {
+const AUTH_LABELS: Record<McpAuthMethod, string> = {
+  oauth: 'Sign in with OAuth',
   none: 'No key needed',
   bearer: 'API key (Bearer)',
   header: 'API key in a header',
@@ -50,8 +53,8 @@ export function McpServerEditorPage({
   /** Saves first, then probes: a server has to exist before it can be asked. */
   onTest: (id: string) => Promise<McpProbeResult>;
 }) {
-  const [input, setInput] = useState<McpServerInput>(
-    () => (editing ? mcpServerToInput(editing) : (initial ?? emptyMcpServerInput()))
+  const [input, setInput] = useState<McpServerInput>(() =>
+    editing ? mcpServerToInput(editing) : (initial ?? emptyMcpServerInput())
   );
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -64,6 +67,81 @@ export function McpServerEditorPage({
   const [submitProblem, setSubmitProblem] = useState<string | null>(null);
   const [probe, setProbe] = useState<McpProbeResult | null>(editing?.lastProbe ?? null);
   const [probing, setProbing] = useState(false);
+
+  const workspaceId = useWorkspaceStore((state) => state.currentWorkspaceId);
+  const [method, setMethod] = useState<McpAuthMethod>(editing?.oauth ? 'oauth' : input.authKind);
+  const [discovery, setDiscovery] = useState<McpAuthDiscovery | null>(null);
+  const [oauthConnected, setOauthConnected] = useState(editing?.oauth?.status === 'connected');
+  const [checking, setChecking] = useState(false);
+  const [manual, setManual] = useState(false);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+
+  useEffect(() => {
+    let cancelled = false;
+    setDiscovery(null);
+    setChecking(false);
+    if (
+      manual ||
+      !workspaceId ||
+      mcpServerInputProblem({ name: 'discovery', url: input.url, authKind: 'none', enabled: true })
+    )
+      return;
+    setChecking(true);
+    const timer = setTimeout(() => {
+      api.mcpServers
+        .discoverAuth(workspaceId, input.url)
+        .then((result) => {
+          if (cancelled) return;
+          setDiscovery(result);
+          const existing = editingRef.current;
+          const keep = existing?.url === input.url && (existing.hasSecret || existing.oauth);
+          const next = keep ? (existing.oauth ? 'oauth' : existing.authKind) : result.methods[0];
+          if (next) {
+            setMethod(next);
+            if (!keep)
+              setInput((prev) => ({
+                ...prev,
+                authKind: next === 'oauth' ? 'bearer' : next,
+                inject: next === 'header' ? result.inject : undefined,
+              }));
+          }
+        })
+        .catch(() => {
+          if (!cancelled)
+            setDiscovery({
+              methods: [],
+              source: 'unknown',
+              detail: 'Authentication could not be checked. Use manual setup.',
+            });
+        })
+        .finally(() => {
+          if (!cancelled) setChecking(false);
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [input.url, workspaceId, manual]);
+
+  const credentialStored =
+    editing?.url === input.url &&
+    editing.authKind === input.authKind &&
+    editing.hasSecret &&
+    input.secret !== '';
+  const manualFields = manual || discovery?.methods.length === 0;
+  const availableMethods = Array.from(new Set([method, ...(discovery?.methods ?? [])]));
+  const authReady = manual || (!checking && discovery !== null);
+  const chooseMethod = (next: McpAuthMethod) => {
+    setMethod(next);
+    setOauthConnected(false);
+    edit({
+      authKind: next === 'oauth' ? 'bearer' : next,
+      secret: '',
+      inject: next === 'header' ? discovery?.inject : undefined,
+    });
+  };
 
   const problem = useMemo(() => mcpServerInputProblem(input), [input]);
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
@@ -83,6 +161,7 @@ export function McpServerEditorPage({
     setSaveError(null);
     try {
       await onSave(input);
+      setInput((prev) => ({ ...prev, secret: undefined }));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not save this MCP server');
     } finally {
@@ -106,6 +185,7 @@ export function McpServerEditorPage({
     setSaveError(null);
     try {
       const saved = await onSave(input);
+      setInput((prev) => ({ ...prev, secret: undefined }));
       setProbe(await onTest(saved.id));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not reach this MCP server');
@@ -126,7 +206,9 @@ export function McpServerEditorPage({
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">
-            {input.displayName?.trim() || input.name.trim() || (editing ? 'MCP server' : 'New MCP server')}
+            {input.displayName?.trim() ||
+              input.name.trim() ||
+              (editing ? 'MCP server' : 'New MCP server')}
           </h1>
         </div>
         {/* Only when editing. One you are creating is on — nobody fills in a
@@ -140,12 +222,17 @@ export function McpServerEditorPage({
             {input.enabled === false ? 'Off' : 'On'}
           </Button>
         )}
-        <Button variant="outline" onClick={testNow} disabled={probing || saving} data-attr="mcp-test">
+        <Button
+          variant="outline"
+          onClick={testNow}
+          disabled={probing || saving || !authReady || (method === 'oauth' && !oauthConnected)}
+          data-attr="mcp-test"
+        >
           {probing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
           {probing ? 'Testing...' : 'Test'}
         </Button>
-        <Button onClick={save} disabled={saving} data-attr="mcp-save">
-          {saving ? 'Saving...' : editing ? 'Save' : 'Connect'}
+        <Button onClick={save} disabled={saving || !authReady} data-attr="mcp-save">
+          {saving ? 'Saving...' : 'Save'}
         </Button>
       </header>
 
@@ -179,7 +266,20 @@ export function McpServerEditorPage({
           <Section title="Address" description="The MCP endpoint, path and all.">
             <TextField
               value={input.url}
-              onChange={(url) => edit({ url })}
+              onChange={(url) => {
+                setManual(false);
+                setDiscovery(null);
+                setMethod('bearer');
+                setOauthConnected(false);
+                setProbe(null);
+                edit({
+                  url,
+                  secret: '',
+                  inject: undefined,
+                  authKind: 'bearer',
+                  catalogHandle: undefined,
+                });
+              }}
               placeholder="https://mcp.linear.app/mcp"
             />
           </Section>
@@ -195,74 +295,142 @@ export function McpServerEditorPage({
             />
           </Section>
 
-          <SignIn server={editing} />
-
           <Section
-            title="Credential"
-            description={
-              editing?.hasSecret
-                ? 'A key is stored. Leave this blank to keep it, or type a new one to replace it.'
-                : catalog?.credentialLabel ?? 'The key this server authenticates with.'
-            }
+            title="Authentication"
+            description="Talyn checks the server address to find its authentication options."
           >
-            <div className="space-y-2">
-              <select
-                className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
-                value={input.authKind}
-                onChange={(e) => edit({ authKind: e.target.value as McpAuthKind })}
-              >
-                {MCP_AUTH_KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {AUTH_LABELS[k]}
-                  </option>
-                ))}
-              </select>
-
-              {input.authKind === 'header' && (
-                <TextField
-                  value={input.inject?.header ?? ''}
-                  onChange={(header) => edit({ inject: { ...input.inject, header } })}
-                  placeholder="X-Api-Key"
-                />
-              )}
-              {input.authKind === 'basic' && (
-                <TextField
-                  value={input.inject?.user ?? ''}
-                  onChange={(user) => edit({ inject: { ...input.inject, user } })}
-                  placeholder="Username"
-                />
-              )}
-              {input.authKind === 'query' && (
-                <TextField
-                  value={input.inject?.param ?? ''}
-                  onChange={(param) => edit({ inject: { ...input.inject, param } })}
-                  placeholder="api_key"
-                />
-              )}
-
-              {input.authKind !== 'none' && (
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  value={input.secret ?? ''}
-                  onChange={(e) => edit({ secret: e.target.value })}
-                  placeholder={editing?.hasSecret ? '••••••••  (unchanged)' : 'Paste the key'}
-                />
-              )}
-
-              <p className="text-xs text-muted-foreground">
-                The key is stored encrypted and never reaches the sandbox. The agent is given a
-                plain address on its own gateway and the key is attached on the way out, so an
-                agent that reads a hostile repository has nothing to find.
+            {checking && (
+              <p role="status" className="text-sm text-muted-foreground">
+                Checking authentication…
               </p>
-            </div>
+            )}
+            {discovery?.detail && (
+              <p className="text-sm text-muted-foreground">{discovery.detail}</p>
+            )}
+            {!checking && !authReady && (
+              <p className="text-sm text-muted-foreground">Enter a valid server address.</p>
+            )}
+            {authReady &&
+              !manualFields &&
+              (availableMethods.length > 1 ? (
+                <select
+                  aria-label="Authentication method"
+                  className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                  value={method}
+                  onChange={(event) => chooseMethod(event.target.value as McpAuthMethod)}
+                >
+                  {availableMethods.map((value) => (
+                    <option key={value} value={value}>
+                      {AUTH_LABELS[value]}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-sm">{AUTH_LABELS[method]}</p>
+              ))}
+            <button
+              type="button"
+              className="mt-2 text-xs text-muted-foreground underline"
+              onClick={() => setManual(!manual)}
+            >
+              {manual ? 'Detect authentication' : 'Set up manually'}
+            </button>
           </Section>
+
+          {authReady && method === 'oauth' && (
+            <SignIn
+              server={editing?.url === input.url && input.secret === undefined ? editing : null}
+              onStatusChange={setOauthConnected}
+              prepare={async () => {
+                if (problem) {
+                  setSubmitProblem(problem);
+                  throw new Error(problem);
+                }
+                const saved = await onSave({ ...input, authKind: 'bearer', inject: undefined });
+                setInput((prev) => ({ ...prev, secret: undefined }));
+                return saved;
+              }}
+            />
+          )}
+
+          {authReady && (method !== 'oauth' || manualFields) && (
+            <Section
+              title="Credential"
+              description={
+                credentialStored
+                  ? 'A key is stored. Leave this blank to keep it, or type a new one to replace it.'
+                  : (discovery?.credentialLabel ??
+                    catalog?.credentialLabel ??
+                    'Enter the credential required by this server.')
+              }
+            >
+              <div className="space-y-2">
+                {manualFields && (
+                  <select
+                    aria-label="Authentication method"
+                    className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                    value={method}
+                    onChange={(e) => chooseMethod(e.target.value as McpAuthMethod)}
+                  >
+                    {(['oauth', ...MCP_AUTH_KINDS] as McpAuthMethod[]).map((k) => (
+                      <option key={k} value={k}>
+                        {AUTH_LABELS[k]}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {input.authKind === 'header' && (manualFields || !discovery?.inject?.header) && (
+                  <TextField
+                    value={input.inject?.header ?? ''}
+                    onChange={(header) => edit({ inject: { ...input.inject, header } })}
+                    placeholder="X-Api-Key"
+                  />
+                )}
+                {input.authKind === 'basic' && (
+                  <TextField
+                    value={input.inject?.user ?? ''}
+                    onChange={(user) => edit({ inject: { ...input.inject, user } })}
+                    placeholder="Username"
+                  />
+                )}
+                {input.authKind === 'query' && (
+                  <TextField
+                    value={input.inject?.param ?? ''}
+                    onChange={(param) => edit({ inject: { ...input.inject, param } })}
+                    placeholder="api_key"
+                  />
+                )}
+
+                {method !== 'none' && method !== 'oauth' && (
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={input.secret ?? ''}
+                    onChange={(e) => edit({ secret: e.target.value })}
+                    placeholder={credentialStored ? '••••••••  (unchanged)' : 'Paste the key'}
+                  />
+                )}
+
+                <p className="text-xs text-muted-foreground">
+                  {method === 'none'
+                    ? 'No credential is needed for this connection.'
+                    : 'Credentials are stored encrypted. The sandbox does not receive them.'}
+                </p>
+              </div>
+            </Section>
+          )}
 
           <Section
             title="Tools"
             description="Every tool costs space in the agent's prompt on every request. Pick the ones you want, or leave it on all."
             action={
-              <Button variant="ghost" size="sm" onClick={testNow} disabled={probing}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={testNow}
+                disabled={probing || !authReady || (method === 'oauth' && !oauthConnected)}
+              >
                 {offered.length > 0 ? 'Refresh' : 'Load tools'}
               </Button>
             }
@@ -366,96 +534,116 @@ function ToolPicker({
   );
 }
 
-/**
- * Sign in to a server that wants OAuth rather than a pasted key.
- *
- * Only offered once the server EXISTS: the flow writes a grant against a row,
- * and there is no row until it is saved. Save first, then sign in — which is
- * also the order the Test button follows, and for the same reason.
- *
- * The consent screen opens in a new tab and this polls. It does not wait on the
- * tab closing: somebody who finishes in a background tab, or on their phone,
- * should still see it connect.
- */
-function SignIn({ server }: { server: McpServerDefinition | null }) {
+function SignIn({
+  server,
+  prepare,
+  onStatusChange,
+}: {
+  server: McpServerDefinition | null;
+  prepare: () => Promise<McpServerDefinition>;
+  onStatusChange: (connected: boolean) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [grant, setGrant] = useState(server?.oauth ?? null);
   const [error, setError] = useState<string | null>(null);
-
-  if (!server) {
-    return (
-      <Section
-        title="Sign in"
-        description="Some servers are connected by signing in rather than by pasting a key. Save this one first and the option appears here."
-      >
-        <p className="text-sm text-muted-foreground">Nothing to sign in to yet.</p>
-      </Section>
-    );
-  }
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
+  const attempt = useRef(0);
+  useEffect(() => {
+    setGrant(server?.oauth ?? null);
+  }, [server?.oauth]);
+  useEffect(
+    () => () => {
+      attempt.current += 1;
+    },
+    []
+  );
 
   const start = async () => {
+    const current = ++attempt.current;
     setBusy(true);
     setError(null);
+    setAuthorizeUrl(null);
     try {
-      const { authorizeUrl, flowId } = await api.mcpServers.startSignIn(server.id);
-      // Opened BEFORE any further await, so the click's user activation is
-      // still live — the mistake the desktop's OAuth flow already paid for.
-      openExternal(authorizeUrl);
-      // Poll rather than wait on the tab: somebody may finish in a background
-      // tab or on another device, and a closed tab is not the signal anyway.
-      const until = Date.now() + 10 * 60 * 1000;
-      while (Date.now() < until) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const status = await api.mcpServers.signInStatus(server.id, flowId);
+      const saved = await prepare();
+      if (current !== attempt.current) return;
+      const flow = await api.mcpServers.startSignIn(saved.id);
+      if (current !== attempt.current) return;
+      // A direct click on this link keeps browser popup rules satisfied.
+      setAuthorizeUrl(flow.authorizeUrl);
+      const until = Math.min(Date.parse(flow.expiresAt), Date.now() + 10 * 60 * 1000);
+      while (Date.now() < until && current === attempt.current) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (current !== attempt.current) return;
+        const status = await api.mcpServers.signInStatus(saved.id, flow.flowId);
+        if (current !== attempt.current) return;
         if (status.status === 'connected' && !status.pending) {
           setGrant({ status: 'connected' });
+          onStatusChange(true);
+          setAuthorizeUrl(null);
           return;
         }
-        if (status.status === 'needs_reauth') {
-          setError(status.detail ?? 'The server refused that sign-in.');
-          return;
+        if (!status.pending || status.status === 'needs_reauth') {
+          throw new Error(status.detail ?? 'Sign-in did not finish. Try again.');
         }
       }
-      setError('That sign-in took too long. Try again.');
+      if (current === attempt.current) setError('Sign-in took too long. Try again.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start sign-in.');
+      if (current === attempt.current)
+        setError(err instanceof Error ? err.message : 'Could not start sign-in.');
+    } finally {
+      if (current === attempt.current) {
+        setBusy(false);
+        setAuthorizeUrl(null);
+      }
+    }
+  };
+
+  const disconnect = async () => {
+    if (!server) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const next = await api.mcpServers.disconnect(server.id);
+      setGrant(next.oauth ?? null);
+      onStatusChange(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not disconnect.');
     } finally {
       setBusy(false);
     }
   };
 
-  const disconnect = async () => {
-    const next = await api.mcpServers.disconnect(server.id);
-    setGrant(next.oauth ?? null);
-  };
-
   return (
     <Section
       title="Sign in"
-      description="Some servers are connected by signing in rather than by pasting a key. The token is held here and refreshed automatically; the sandbox never sees it."
+      description="Connect your account in your browser. Talyn stores and refreshes the token securely."
     >
       <div className="space-y-2">
         {grant?.status === 'connected' ? (
           <div className="flex items-center gap-2">
             <Check className="h-4 w-4 text-emerald-600" />
-            <span className="text-sm">Signed in{grant.issuer ? ` to ${grant.issuer}` : ''}.</span>
-            <Button variant="ghost" size="sm" onClick={() => void disconnect()}>
+            <span className="text-sm">Signed in.</span>
+            <Button variant="ghost" size="sm" onClick={() => void disconnect()} disabled={busy}>
               Disconnect
             </Button>
           </div>
         ) : (
           <Button variant="outline" onClick={() => void start()} disabled={busy}>
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-            {busy ? 'Waiting for the sign-in...' : 'Sign in to this server'}
+            {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+            {busy ? 'Waiting for sign-in…' : 'Connect account'}
           </Button>
         )}
-        {/* The vendor's own words. "the refresh token has been revoked" and
-            "this client is no longer registered" are the same status and very
-            different problems. */}
+        {authorizeUrl && (
+          <Button onClick={() => void openExternal(authorizeUrl)}>Continue in browser</Button>
+        )}
         {grant?.status === 'needs_reauth' && grant.detail && (
           <p className="text-xs text-amber-600">{grant.detail}</p>
         )}
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && (
+          <p role="alert" className="text-xs text-red-500">
+            {error}
+          </p>
+        )}
       </div>
     </Section>
   );
@@ -475,7 +663,9 @@ function ProbeBanner({ probe }: { probe: McpProbeResult }) {
       <span>
         {probe.ok
           ? `Connected to ${probe.serverName ?? 'the server'}${
-              probe.toolNames ? `, which offers ${probe.toolNames.length} tool${probe.toolNames.length === 1 ? '' : 's'}` : ''
+              probe.toolNames
+                ? `, which offers ${probe.toolNames.length} tool${probe.toolNames.length === 1 ? '' : 's'}`
+                : ''
             }.`
           : 'Could not connect.'}
         {probe.detail ? ` ${probe.detail}` : ''}

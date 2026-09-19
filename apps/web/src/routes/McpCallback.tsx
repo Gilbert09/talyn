@@ -37,6 +37,7 @@ export function McpCallback() {
     const denied = params.get('error_description') ?? params.get('error');
 
     if (denied) {
+      if (state) void api.mcpServers.complete(state, '', denied).catch(() => undefined);
       setError(denied);
       return;
     }

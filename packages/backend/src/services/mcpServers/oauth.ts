@@ -1,3 +1,4 @@
+import { mcpFetch } from './http.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { McpOAuthGrant, McpServerDefinition } from '@talyn/shared';
 import { encryptString, decryptString, type EncryptedEnvelope } from '../tokenCrypto.js';
@@ -104,6 +105,7 @@ export interface StoredMcpOAuth {
   refreshTokenEnc?: EncryptedEnvelope;
   expiresAt?: string;
   checkedAt?: string;
+  lastCompletedFlowId?: string;
   /** The one-shot authorize leg in flight, if any. */
   flow?: {
     id: string;
@@ -174,7 +176,7 @@ async function registerClient(
         'by hand yet — paste an API key instead if it has one'
     );
   }
-  const resp = await fetch(server.registrationEndpoint, {
+  const resp = await mcpFetch(server.registrationEndpoint, {
     method: 'POST',
     signal,
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -333,7 +335,7 @@ async function postToken(
   if (stored.clientSecretEnc) {
     body.set('client_secret', decryptString(stored.clientSecretEnc));
   }
-  const resp = await fetch(stored.tokenEndpoint, {
+  const resp = await mcpFetch(stored.tokenEndpoint, {
     method: 'POST',
     signal,
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
@@ -375,6 +377,7 @@ function applyTokens(stored: StoredMcpOAuth, doc: TokenResponse, now: Date): Sto
       : {}),
     expiresAt: new Date(now.getTime() + expiresIn * 1000).toISOString(),
     checkedAt: now.toISOString(),
+    ...(stored.flow ? { lastCompletedFlowId: stored.flow.id } : {}),
     flow: undefined,
   };
 }
@@ -385,12 +388,7 @@ function applyTokens(stored: StoredMcpOAuth, doc: TokenResponse, now: Date): Sto
  * The state is compared by HASH against the stored flow — a compare-and-clear,
  * so a replayed callback finds no flow rather than a second exchange.
  */
-export async function completeMcpOAuth(
-  stored: StoredMcpOAuth,
-  state: string,
-  code: string,
-  now: Date
-): Promise<StoredMcpOAuth> {
+export function validateMcpOAuthState(stored: StoredMcpOAuth, state: string, now: Date) {
   const flow = stored.flow;
   if (!flow) throw new Error('there is no sign-in waiting to be finished');
   if (new Date(flow.expiresAt).getTime() <= now.getTime()) {
@@ -399,6 +397,17 @@ export async function completeMcpOAuth(
   if (base64url(sha256(state)) !== flow.stateHash) {
     throw new Error('that sign-in did not come from here');
   }
+
+  return flow;
+}
+
+export async function completeMcpOAuth(
+  stored: StoredMcpOAuth,
+  state: string,
+  code: string,
+  now: Date
+): Promise<StoredMcpOAuth> {
+  const flow = validateMcpOAuthState(stored, state, now);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EXCHANGE_TIMEOUT_MS);

@@ -77,6 +77,7 @@ export function McpServersPanel() {
   const save = async (input: McpServerInput): Promise<McpServerDefinition> => {
     if (view.mode === 'edit' && view.server) {
       const next = await update(view.server.id, input);
+      setView({ mode: 'edit', server: next });
       toast.success('MCP server saved');
       return next;
     }
@@ -92,7 +93,7 @@ export function McpServersPanel() {
       }
       throw err;
     }
-    toast.success('MCP server connected');
+    toast.success('MCP server saved');
     void useBillingStore.getState().refresh();
     // Stay on the editor and switch it into edit mode, because connecting is
     // rarely the last step: the tool list needs a probe, and that needs a saved

@@ -67,12 +67,12 @@ describe('authorization-server discovery', () => {
   // A path-ful issuer is ambiguous between RFC 8414 and OIDC Discovery, and a
   // client MUST support both spellings.
   it('falls back to the OIDC spellings for a path-ful issuer', async () => {
-    stubFetch({ 'https://auth.example.com/tenant/.well-known/openid-configuration': AS });
+    stubFetch({ 'https://auth.example.com/tenant/.well-known/openid-configuration': { ...AS, issuer: 'https://auth.example.com/tenant' } });
     const meta = await discoverAuthServer(
       'https://auth.example.com/tenant',
       new AbortController().signal
     );
-    expect(meta.issuer).toBe('https://auth.example.com');
+    expect(meta.issuer).toBe('https://auth.example.com/tenant');
   });
 
   // PKCE S256 is a MUST and a client MUST refuse without it. Refused HERE
@@ -204,6 +204,7 @@ describe('finishing a sign-in', () => {
     expect(JSON.stringify(next)).not.toContain('at-1');
     expect(JSON.stringify(next)).not.toContain('rt-1');
     expect(next.flow).toBeUndefined();
+    expect(next.lastCompletedFlowId).toBe(s.flowId);
   });
 
   it('refuses a state that does not match', async () => {

@@ -1,3 +1,4 @@
+import { discoverMcpAuth } from '../services/mcpServers/authDiscovery.js';
 import { Router, type Request, type Response } from 'express';
 import { validateMcpServer, type ApiResponse, type McpServerDefinition } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
@@ -13,6 +14,7 @@ import {
   completeMcpOAuth,
   serverIdFromState,
   startMcpOAuth,
+  validateMcpOAuthState,
 } from '../services/mcpServers/oauth.js';
 import {
   createMcpServer,
@@ -124,6 +126,19 @@ export function mcpServerRoutes(): Router {
     const servers = await listMcpServers(workspaceId);
     const data = { enabled: servers.filter((s) => s.enabled).length };
     res.json({ success: true, data } as ApiResponse<typeof data>);
+  });
+
+  router.post('/discover-auth', async (req: Request, res: Response) => {
+    const workspaceId = String(req.body?.workspaceId ?? '');
+    if (!(await gate(req, res, workspaceId))) return;
+    let url: string;
+    try {
+      url = validateMcpServer({ name: 'discovery', url: req.body?.url, authKind: 'none' }).url;
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'Invalid server address.' });
+    }
+    const data = await discoverMcpAuth(url);
+    res.json({ success: true, data });
   });
 
   router.get('/:id', async (req: Request, res: Response) => {
@@ -244,6 +259,9 @@ export function mcpServerRoutes(): Router {
   router.post('/:id/connect', async (req: Request, res: Response) => {
     const server = await loadAndGate(req, res);
     if (!server) return;
+    if (server.authKind !== 'bearer') {
+      return res.status(400).json({ success: false, error: 'Select OAuth before starting sign-in.' });
+    }
     try {
       const stored = await mcpOAuthStore.read(server.id);
       const started = await startMcpOAuth(server, stored, new Date());
@@ -284,7 +302,9 @@ export function mcpServerRoutes(): Router {
     // A finished flow has been cleared, so "no flow and connected" is success
     // rather than a missing row.
     const data = {
-      status: stored?.status ?? 'pending',
+      status: stored?.status === 'connected' && stored.lastCompletedFlowId !== req.params.flow
+        ? 'pending'
+        : stored?.status ?? 'pending',
       pending: stored?.flow?.id === req.params.flow,
       ...(stored?.detail ? { detail: stored.detail } : {}),
     };
@@ -306,8 +326,9 @@ export function mcpServerRoutes(): Router {
   router.post('/complete', async (req: Request, res: Response) => {
     const state = String(req.body?.state ?? '');
     const code = String(req.body?.code ?? '');
-    if (!state || !code) {
-      return res.status(400).json({ success: false, error: 'state and code are required' });
+    const denied = typeof req.body?.error === 'string' ? req.body.error.slice(0, 500) : '';
+    if (!state || (!code && !denied)) {
+      return res.status(400).json({ success: false, error: 'State and a code or error are required.' });
     }
     const serverId = serverIdFromState(state);
     if (!serverId) {
@@ -324,6 +345,15 @@ export function mcpServerRoutes(): Router {
       return res.status(409).json({ success: false, error: 'there is no sign-in waiting to be finished' });
     }
     try {
+      validateMcpOAuthState(stored, state, new Date());
+    } catch (err) {
+      return res.status(409).json({ success: false, error: err instanceof Error ? err.message : 'Invalid OAuth state.' });
+    }
+    if (denied) {
+      await mcpOAuthStore.write(server.id, { ...stored, status: stored.status === 'connected' ? 'connected' : 'pending', detail: denied, flow: undefined });
+      return res.json({ success: true, data: await getMcpServer(server.id) });
+    }
+    try {
       const next = await completeMcpOAuth(stored, state, code, new Date());
       await mcpOAuthStore.write(server.id, next);
       captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
@@ -335,7 +365,7 @@ export function mcpServerRoutes(): Router {
       const message = err instanceof Error ? err.message : 'could not finish sign-in';
       await mcpOAuthStore.write(server.id, {
         ...stored,
-        status: 'pending',
+        status: stored.status === 'connected' ? 'connected' : 'pending',
         detail: message,
         flow: undefined,
       });

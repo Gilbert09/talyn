@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type {
   McpServerDefinition,
@@ -8,7 +8,7 @@ import type {
 import { getDbClient } from '../../db/client.js';
 import { mcpServers as mcpServersTable } from '../../db/schema.js';
 import { decryptString, encryptString } from '../tokenCrypto.js';
-import { resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
+import { grantStatus, resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
 
 /**
  * Reading and writing a workspace's MCP servers.
@@ -52,7 +52,7 @@ type PublicRow = Pick<typeof mcpServersTable.$inferSelect, keyof typeof PUBLIC_C
  * poller uses for `transcriptEmpty`.
  */
 const HAS_SECRET = {
-  hasSecret: mcpServersTable.secretEnc,
+  hasSecret: sql<boolean>`${mcpServersTable.secretEnc} is not null`,
 } as const;
 
 function rowToDefinition(row: PublicRow, hasSecret: boolean): McpServerDefinition {
@@ -67,7 +67,7 @@ function rowToDefinition(row: PublicRow, hasSecret: boolean): McpServerDefinitio
     authKind: row.authKind as McpServerDefinition['authKind'],
     inject: row.inject,
     hasSecret,
-    oauth: row.oauth,
+    oauth: grantStatus(row.oauth as StoredMcpOAuth | null),
     tools: row.tools,
     enabled: row.enabled,
     lastProbe: row.lastProbe,
@@ -82,7 +82,7 @@ export async function listMcpServers(workspaceId: string): Promise<McpServerDefi
     .from(mcpServersTable)
     .where(eq(mcpServersTable.workspaceId, workspaceId))
     .orderBy(mcpServersTable.name);
-  return rows.map((r) => rowToDefinition(r, r.hasSecret !== null));
+  return rows.map((r) => rowToDefinition(r, r.hasSecret));
 }
 
 export async function getMcpServer(id: string): Promise<McpServerDefinition | null> {
@@ -92,7 +92,7 @@ export async function getMcpServer(id: string): Promise<McpServerDefinition | nu
     .where(eq(mcpServersTable.id, id))
     .limit(1);
   const row = rows[0];
-  return row ? rowToDefinition(row, row.hasSecret !== null) : null;
+  return row ? rowToDefinition(row, row.hasSecret) : null;
 }
 
 export async function createMcpServer(
@@ -140,9 +140,17 @@ export async function updateMcpServer(
       // Absent keeps what is stored; an empty string clears it. A PATCH that
       // did not say anything about the credential must not lose one, or every
       // rename would silently disconnect the server.
-      ...(input.secret === undefined
-        ? {}
-        : { secretEnc: input.secret === '' ? null : encryptString(input.secret) }),
+      secretEnc: input.secret === undefined
+        ? sql`case when ${mcpServersTable.url} = ${input.url}
+            and ${mcpServersTable.authKind} = ${input.authKind}
+            and ${mcpServersTable.inject} is not distinct from ${input.inject === null ? null : JSON.stringify(input.inject)}::jsonb
+          then ${mcpServersTable.secretEnc} else null end`
+        : input.secret === '' ? null : encryptString(input.secret),
+      oauth: input.secret !== undefined ? null : sql`case
+        when ${mcpServersTable.url} = ${input.url}
+          and ${mcpServersTable.authKind} = ${input.authKind}
+          and ${mcpServersTable.inject} is not distinct from ${input.inject === null ? null : JSON.stringify(input.inject)}::jsonb
+        then ${mcpServersTable.oauth} else null end`,
       tools: input.tools,
       enabled: input.enabled,
       updatedAt: new Date(),

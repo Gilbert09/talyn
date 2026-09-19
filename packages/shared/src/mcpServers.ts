@@ -19,6 +19,16 @@ import { MCP_CATALOG_LOGOS } from './mcpCatalogLogos.js';
  *  rather than a second one, because it is passed straight through. */
 export type McpAuthKind = 'none' | 'bearer' | 'header' | 'basic' | 'query';
 
+export type McpAuthMethod = McpAuthKind | 'oauth';
+
+export interface McpAuthDiscovery {
+  methods: McpAuthMethod[];
+  source: 'server' | 'catalog' | 'unknown';
+  detail?: string;
+  inject?: McpInjection;
+  credentialLabel?: string;
+}
+
 export const MCP_AUTH_KINDS: readonly McpAuthKind[] = [
   'none',
   'bearer',
