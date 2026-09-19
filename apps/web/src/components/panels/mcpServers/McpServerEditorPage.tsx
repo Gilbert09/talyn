@@ -6,6 +6,7 @@ import {
   mcpCatalogEntry,
   mcpServerInputProblem,
   mcpServerToInput,
+  mcpServerFromAddress,
   type McpAuthMethod,
   type McpAuthDiscovery,
   type McpProbeResult,
@@ -44,8 +45,10 @@ export function McpServerEditorPage({
   onCancel,
   onSave,
   onTest,
+  existingNames = [],
 }: {
   editing: McpServerDefinition | null;
+  existingNames?: string[];
   /** Prefill for a new server — what the catalog hands over on a one-click. */
   initial?: McpServerInput;
   onCancel: () => void;
@@ -53,9 +56,17 @@ export function McpServerEditorPage({
   /** Saves first, then probes: a server has to exist before it can be asked. */
   onTest: (id: string) => Promise<McpProbeResult>;
 }) {
-  const [input, setInput] = useState<McpServerInput>(() =>
-    editing ? mcpServerToInput(editing) : (initial ?? emptyMcpServerInput())
-  );
+  const [input, setInput] = useState<McpServerInput>(() => {
+    if (editing) return mcpServerToInput(editing);
+    const next = initial ?? emptyMcpServerInput();
+    return next.url && existingNames.includes(next.name)
+      ? { ...next, name: mcpServerFromAddress(next.url, existingNames).name }
+      : next;
+  });
+  const existingNamesRef = useRef(existingNames);
+  existingNamesRef.current = existingNames;
+  const savedId = useRef(editing?.id);
+  const connectionVersion = useRef(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   /**
@@ -134,6 +145,7 @@ export function McpServerEditorPage({
   const availableMethods = Array.from(new Set([method, ...(discovery?.methods ?? [])]));
   const authReady = manual || (!checking && discovery !== null);
   const chooseMethod = (next: McpAuthMethod) => {
+    setProbe(null);
     setMethod(next);
     setOauthConnected(false);
     edit({
@@ -146,7 +158,20 @@ export function McpServerEditorPage({
   const problem = useMemo(() => mcpServerInputProblem(input), [input]);
   const catalog = input.catalogHandle ? mcpCatalogEntry(input.catalogHandle) : undefined;
 
+  const connected = probe?.ok === true || oauthConnected;
+  const validAddress = !mcpServerInputProblem({
+    name: 'discovery',
+    url: input.url,
+    authKind: 'none',
+    enabled: true,
+  });
+
   const edit = useCallback((patch: Partial<McpServerInput>) => {
+    if ('secret' in patch || 'inject' in patch || 'url' in patch || 'authKind' in patch) {
+      connectionVersion.current += 1;
+      setProbe(null);
+      setOauthConnected(false);
+    }
     setSubmitProblem(null);
     setSaveError(null);
     setInput((p) => ({ ...p, ...patch }));
@@ -157,17 +182,27 @@ export function McpServerEditorPage({
       setSubmitProblem(problem);
       return;
     }
+    const version = connectionVersion.current;
     setSaving(true);
     setSaveError(null);
     try {
-      await onSave(input);
-      setInput((prev) => ({ ...prev, secret: undefined }));
+      const saved = await onSave(input);
+      savedId.current = saved.id;
+      setInput((prev) =>
+        prev.url === input.url && prev.secret === input.secret
+          ? { ...prev, secret: undefined }
+          : prev
+      );
+      if (!connected && method !== 'oauth') {
+        const result = await onTest(saved.id);
+        if (version === connectionVersion.current) setProbe(result);
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not save this MCP server');
     } finally {
       setSaving(false);
     }
-  }, [problem, input, onSave]);
+  }, [problem, input, onSave, connected, method, onTest]);
 
   /**
    * Save, then probe.
@@ -181,18 +216,45 @@ export function McpServerEditorPage({
       setSubmitProblem(problem);
       return;
     }
+    const version = connectionVersion.current;
     setProbing(true);
     setSaveError(null);
     try {
       const saved = await onSave(input);
-      setInput((prev) => ({ ...prev, secret: undefined }));
-      setProbe(await onTest(saved.id));
+      savedId.current = saved.id;
+      setInput((prev) =>
+        prev.url === input.url && prev.secret === input.secret
+          ? { ...prev, secret: undefined }
+          : prev
+      );
+      const result = await onTest(saved.id);
+      if (version === connectionVersion.current) setProbe(result);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not reach this MCP server');
     } finally {
       setProbing(false);
     }
   }, [problem, input, onSave, onTest]);
+
+  useEffect(() => {
+    if (editing?.oauth?.status !== 'connected' || probe || !oauthConnected) return;
+    let cancelled = false;
+    const version = connectionVersion.current;
+    setProbing(true);
+    void onTest(editing.id)
+      .then((result) => {
+        if (!cancelled && version === connectionVersion.current) setProbe(result);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setSaveError(err instanceof Error ? err.message : 'Could not load tools.');
+      })
+      .finally(() => {
+        if (version === connectionVersion.current) setProbing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editing?.id, editing?.oauth?.status, oauthConnected, onTest, probe]);
 
   const allowed = input.tools;
   const offered = probe?.toolNames ?? [];
@@ -222,18 +284,22 @@ export function McpServerEditorPage({
             {input.enabled === false ? 'Off' : 'On'}
           </Button>
         )}
-        <Button
-          variant="outline"
-          onClick={testNow}
-          disabled={probing || saving || !authReady || (method === 'oauth' && !oauthConnected)}
-          data-attr="mcp-test"
-        >
-          {probing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-          {probing ? 'Testing...' : 'Test'}
-        </Button>
-        <Button onClick={save} disabled={saving || !authReady} data-attr="mcp-save">
-          {saving ? 'Saving...' : 'Save'}
-        </Button>
+        {connected && (
+          <Button
+            variant="outline"
+            onClick={testNow}
+            disabled={probing || saving || !authReady || (method === 'oauth' && !oauthConnected)}
+            data-attr="mcp-test"
+          >
+            {probing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            {probing ? 'Testing...' : 'Test'}
+          </Button>
+        )}
+        {validAddress && (method !== 'oauth' || connected) && (
+          <Button onClick={save} disabled={saving || !authReady} data-attr="mcp-save">
+            {saving ? 'Connecting…' : connected ? 'Save' : 'Connect'}
+          </Button>
+        )}
       </header>
 
       <div className="flex-1 overflow-auto">
@@ -246,202 +312,236 @@ export function McpServerEditorPage({
 
           {probe && <ProbeBanner probe={probe} />}
 
-          {catalog?.notes && (
-            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-              {catalog.notes}
-            </p>
-          )}
-
-          <Section
-            title="Name"
-            description="Becomes a hostname inside the sandbox and the prefix on every tool it offers. Lowercase letters, digits and hyphens."
-          >
-            <TextField
-              value={input.name}
-              onChange={(name) => edit({ name })}
-              placeholder="linear"
-            />
-          </Section>
-
-          <Section title="Address" description="The MCP endpoint, path and all.">
-            <TextField
-              value={input.url}
-              onChange={(url) => {
-                setManual(false);
-                setDiscovery(null);
-                setMethod('bearer');
-                setOauthConnected(false);
-                setProbe(null);
-                edit({
-                  url,
-                  secret: '',
-                  inject: undefined,
-                  authKind: 'bearer',
-                  catalogHandle: undefined,
-                });
-              }}
-              placeholder="https://mcp.linear.app/mcp"
-            />
-          </Section>
-
-          <Section
-            title="What it is for"
-            description="The agent reads this when it decides whether to reach for these tools, so it is worth a sentence."
-          >
-            <TextField
-              value={input.description ?? ''}
-              onChange={(description) => edit({ description })}
-              placeholder="Issue tracker"
-            />
-          </Section>
-
-          <Section
-            title="Authentication"
-            description="Talyn checks the server address to find its authentication options."
-          >
-            {checking && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Checking authentication…
-              </p>
-            )}
-            {discovery?.detail && (
-              <p className="text-sm text-muted-foreground">{discovery.detail}</p>
-            )}
-            {!checking && !authReady && (
-              <p className="text-sm text-muted-foreground">Enter a valid server address.</p>
-            )}
-            {authReady &&
-              !manualFields &&
-              (availableMethods.length > 1 ? (
-                <select
-                  aria-label="Authentication method"
-                  className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
-                  value={method}
-                  onChange={(event) => chooseMethod(event.target.value as McpAuthMethod)}
-                >
-                  {availableMethods.map((value) => (
-                    <option key={value} value={value}>
-                      {AUTH_LABELS[value]}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <p className="text-sm">{AUTH_LABELS[method]}</p>
-              ))}
-            <button
-              type="button"
-              className="mt-2 text-xs text-muted-foreground underline"
-              onClick={() => setManual(!manual)}
-            >
-              {manual ? 'Detect authentication' : 'Set up manually'}
-            </button>
-          </Section>
-
-          {authReady && method === 'oauth' && (
-            <SignIn
-              server={editing?.url === input.url && input.secret === undefined ? editing : null}
-              onStatusChange={setOauthConnected}
-              prepare={async () => {
-                if (problem) {
-                  setSubmitProblem(problem);
-                  throw new Error(problem);
-                }
-                const saved = await onSave({ ...input, authKind: 'bearer', inject: undefined });
-                setInput((prev) => ({ ...prev, secret: undefined }));
-                return saved;
-              }}
-            />
-          )}
-
-          {authReady && (method !== 'oauth' || manualFields) && (
+          {!catalog && (
             <Section
-              title="Credential"
-              description={
-                credentialStored
-                  ? 'A key is stored. Leave this blank to keep it, or type a new one to replace it.'
-                  : (discovery?.credentialLabel ??
-                    catalog?.credentialLabel ??
-                    'Enter the credential required by this server.')
-              }
+              title="MCP server address"
+              description="Paste the address. Talyn fills in the connection settings."
             >
-              <div className="space-y-2">
-                {manualFields && (
-                  <select
-                    aria-label="Authentication method"
-                    className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
-                    value={method}
-                    onChange={(e) => chooseMethod(e.target.value as McpAuthMethod)}
-                  >
-                    {(['oauth', ...MCP_AUTH_KINDS] as McpAuthMethod[]).map((k) => (
-                      <option key={k} value={k}>
-                        {AUTH_LABELS[k]}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                {input.authKind === 'header' && (manualFields || !discovery?.inject?.header) && (
-                  <TextField
-                    value={input.inject?.header ?? ''}
-                    onChange={(header) => edit({ inject: { ...input.inject, header } })}
-                    placeholder="X-Api-Key"
-                  />
-                )}
-                {input.authKind === 'basic' && (
-                  <TextField
-                    value={input.inject?.user ?? ''}
-                    onChange={(user) => edit({ inject: { ...input.inject, user } })}
-                    placeholder="Username"
-                  />
-                )}
-                {input.authKind === 'query' && (
-                  <TextField
-                    value={input.inject?.param ?? ''}
-                    onChange={(param) => edit({ inject: { ...input.inject, param } })}
-                    placeholder="api_key"
-                  />
-                )}
-
-                {method !== 'none' && method !== 'oauth' && (
-                  <Input
-                    type="password"
-                    autoComplete="off"
-                    value={input.secret ?? ''}
-                    onChange={(e) => edit({ secret: e.target.value })}
-                    placeholder={credentialStored ? '••••••••  (unchanged)' : 'Paste the key'}
-                  />
-                )}
-
-                <p className="text-xs text-muted-foreground">
-                  {method === 'none'
-                    ? 'No credential is needed for this connection.'
-                    : 'Credentials are stored encrypted. The sandbox does not receive them.'}
-                </p>
-              </div>
+              <TextField
+                value={input.url}
+                onChange={(url) => {
+                  setManual(false);
+                  setDiscovery(null);
+                  setMethod('bearer');
+                  setOauthConnected(false);
+                  setProbe(null);
+                  let defaults: Partial<McpServerInput> = {
+                    name: '',
+                    displayName: undefined,
+                    description: undefined,
+                    catalogHandle: undefined,
+                  };
+                  try {
+                    defaults = mcpServerFromAddress(url, existingNamesRef.current);
+                  } catch {
+                    /* Keep incomplete addresses editable. */
+                  }
+                  edit({
+                    ...defaults,
+                    url,
+                    secret: '',
+                    inject: defaults.inject,
+                    authKind: defaults.authKind ?? 'bearer',
+                  });
+                }}
+                placeholder="https://mcp.linear.app/mcp"
+              />
             </Section>
           )}
 
-          <Section
-            title="Tools"
-            description="Every tool costs space in the agent's prompt on every request. Pick the ones you want, or leave it on all."
-            action={
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={testNow}
-                disabled={probing || !authReady || (method === 'oauth' && !oauthConnected)}
+          {connected && (
+            <details className="rounded-lg border p-4">
+              <summary className="cursor-pointer text-sm">Connection settings</summary>
+              <div className="mt-3 space-y-2">
+                <TextField
+                  value={input.name}
+                  onChange={(name) => edit({ name })}
+                  placeholder="Server name"
+                />
+                <p className="break-all text-xs text-muted-foreground">{input.url}</p>
+              </div>
+            </details>
+          )}
+
+          {validAddress && (
+            <>
+              <Section
+                title="Authentication"
+                description="Talyn checks the server address to find its authentication options."
               >
-                {offered.length > 0 ? 'Refresh' : 'Load tools'}
-              </Button>
-            }
-          >
-            <ToolPicker
-              offered={offered}
-              allowed={allowed ?? null}
-              probed={probe !== null}
-              onChange={(tools) => edit({ tools })}
-            />
-          </Section>
+                {checking && (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    Checking authentication…
+                  </p>
+                )}
+                {discovery?.detail && (
+                  <p className="text-sm text-muted-foreground">{discovery.detail}</p>
+                )}
+                {!checking && !authReady && (
+                  <p className="text-sm text-muted-foreground">Enter a valid server address.</p>
+                )}
+                {authReady &&
+                  !manualFields &&
+                  (availableMethods.length > 1 ? (
+                    <select
+                      aria-label="Authentication method"
+                      className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                      value={method}
+                      onChange={(event) => chooseMethod(event.target.value as McpAuthMethod)}
+                    >
+                      {availableMethods.map((value) => (
+                        <option key={value} value={value}>
+                          {AUTH_LABELS[value]}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="text-sm">{AUTH_LABELS[method]}</p>
+                  ))}
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-muted-foreground underline"
+                  onClick={() => setManual(!manual)}
+                >
+                  {manual ? 'Detect authentication' : 'Set up manually'}
+                </button>
+              </Section>
+
+              {authReady && method === 'oauth' && (
+                <SignIn
+                  server={editing?.url === input.url && input.secret === undefined ? editing : null}
+                  onStatusChange={(isConnected) => {
+                    setOauthConnected(isConnected);
+                    if (!isConnected) {
+                      setProbe(null);
+                      return;
+                    }
+                    if (savedId.current) {
+                      setProbing(true);
+                      const version = connectionVersion.current;
+                      void onTest(savedId.current)
+                        .then((result) => {
+                          if (version === connectionVersion.current) setProbe(result);
+                        })
+                        .catch((err: unknown) => {
+                          setSaveError(
+                            err instanceof Error ? err.message : 'Could not load tools.'
+                          );
+                        })
+                        .finally(() => setProbing(false));
+                    }
+                  }}
+                  prepare={async () => {
+                    if (problem) {
+                      setSubmitProblem(problem);
+                      throw new Error(problem);
+                    }
+                    const saved = await onSave({ ...input, authKind: 'bearer', inject: undefined });
+                    savedId.current = saved.id;
+                    setInput((prev) =>
+                      prev.url === input.url && prev.secret === input.secret
+                        ? { ...prev, secret: undefined }
+                        : prev
+                    );
+                    return saved;
+                  }}
+                />
+              )}
+
+              {authReady && (method !== 'oauth' || manualFields) && (
+                <Section
+                  title="Credential"
+                  description={
+                    credentialStored
+                      ? 'A key is stored. Leave this blank to keep it, or type a new one to replace it.'
+                      : (discovery?.credentialLabel ??
+                        catalog?.credentialLabel ??
+                        'Enter the credential required by this server.')
+                  }
+                >
+                  <div className="space-y-2">
+                    {manualFields && (
+                      <select
+                        aria-label="Authentication method"
+                        className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                        value={method}
+                        onChange={(e) => chooseMethod(e.target.value as McpAuthMethod)}
+                      >
+                        {(['oauth', ...MCP_AUTH_KINDS] as McpAuthMethod[]).map((k) => (
+                          <option key={k} value={k}>
+                            {AUTH_LABELS[k]}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
+                    {input.authKind === 'header' &&
+                      (manualFields || !discovery?.inject?.header) && (
+                        <TextField
+                          value={input.inject?.header ?? ''}
+                          onChange={(header) => edit({ inject: { ...input.inject, header } })}
+                          placeholder="X-Api-Key"
+                        />
+                      )}
+                    {input.authKind === 'basic' && (
+                      <TextField
+                        value={input.inject?.user ?? ''}
+                        onChange={(user) => edit({ inject: { ...input.inject, user } })}
+                        placeholder="Username"
+                      />
+                    )}
+                    {input.authKind === 'query' && (
+                      <TextField
+                        value={input.inject?.param ?? ''}
+                        onChange={(param) => edit({ inject: { ...input.inject, param } })}
+                        placeholder="api_key"
+                      />
+                    )}
+
+                    {method !== 'none' && method !== 'oauth' && (
+                      <Input
+                        type="password"
+                        autoComplete="off"
+                        value={input.secret ?? ''}
+                        onChange={(e) => edit({ secret: e.target.value })}
+                        placeholder={credentialStored ? '••••••••  (unchanged)' : 'Paste the key'}
+                      />
+                    )}
+
+                    <p className="text-xs text-muted-foreground">
+                      {method === 'none'
+                        ? 'No credential is needed for this connection.'
+                        : 'Credentials are stored encrypted. The sandbox does not receive them.'}
+                    </p>
+                  </div>
+                </Section>
+              )}
+            </>
+          )}
+
+          {connected && (
+            <Section
+              title="Tools"
+              description="Every tool costs space in the agent's prompt on every request. Pick the ones you want, or leave it on all."
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={testNow}
+                  disabled={probing || !authReady || (method === 'oauth' && !oauthConnected)}
+                >
+                  {offered.length > 0 ? 'Refresh' : 'Load tools'}
+                </Button>
+              }
+            >
+              <ToolPicker
+                offered={offered}
+                allowed={allowed ?? null}
+                probed={probe !== null}
+                onChange={(tools) => edit({ tools })}
+              />
+            </Section>
+          )}
         </div>
       </div>
     </div>

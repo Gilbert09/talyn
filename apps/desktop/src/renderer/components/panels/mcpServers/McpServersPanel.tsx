@@ -105,6 +105,7 @@ export function McpServersPanel() {
   if (view.mode === 'edit') {
     return (
       <McpServerEditorPage
+        existingNames={(servers ?? []).filter((server) => server.id !== view.server?.id).map((server) => server.name)}
         editing={view.server}
         initial={view.initial}
         onCancel={() => setView({ mode: 'list' })}

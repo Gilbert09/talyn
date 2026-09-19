@@ -624,3 +624,22 @@ export function mcpServerFromCatalog(entry: McpCatalogEntry): McpServerInput {
     enabled: true,
   };
 }
+
+/** Fill connection details from an address without asking for a server name. */
+export function mcpServerFromAddress(address: string, existingNames: readonly string[] = []): McpServerInput {
+  const url = new URL(address.trim());
+  const catalog = MCP_CATALOG.find((entry) => new URL(entry.url).toString() === url.toString());
+  const input = catalog ? mcpServerFromCatalog(catalog) : {
+    ...emptyMcpServerInput(),
+    url: url.toString(),
+    name: url.hostname.replace(/^(?:mcp|api|www)\./, '').replace(/[^a-z0-9-]/g, '-').slice(0, 40).replace(/^-+|-+$/g, '') || 'mcp-server',
+    displayName: url.hostname,
+  };
+  const base = RESERVED_NAMES.has(input.name) ? `${input.name}-mcp` : input.name;
+  let name = base;
+  for (let suffix = 2; existingNames.includes(name); suffix += 1) {
+    const ending = `-${suffix}`;
+    name = `${base.slice(0, 40 - ending.length).replace(/-+$/, '')}${ending}`;
+  }
+  return { ...input, name };
+}

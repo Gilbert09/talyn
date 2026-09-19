@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { McpAuthDiscovery, McpServerDefinition } from '@talyn/shared';
+import {
+  mcpServerFromCatalog,
+  mcpCatalogEntry,
+  type McpAuthDiscovery,
+  type McpServerDefinition,
+  type McpServerInput,
+} from '@talyn/shared';
 import { McpServerEditorPage } from './McpServerEditorPage';
 
 const mocks = vi.hoisted(() => ({
@@ -37,20 +43,25 @@ const server: McpServerDefinition = {
   updatedAt: '',
 };
 const onSave = vi.fn();
-function setup(editing: McpServerDefinition | null = null) {
+const onTest = vi.fn();
+function setup(
+  editing: McpServerDefinition | null = null,
+  initial: McpServerInput | undefined = { name: 'example', url, authKind: 'bearer', enabled: true }
+) {
   return render(
     <McpServerEditorPage
       editing={editing}
-      initial={{ name: 'example', url, authKind: 'bearer', enabled: true }}
+      initial={initial}
       onCancel={vi.fn()}
       onSave={onSave}
-      onTest={vi.fn()}
+      onTest={onTest}
     />
   );
 }
 beforeEach(() => {
   vi.resetAllMocks();
   onSave.mockResolvedValue(server);
+  onTest.mockResolvedValue({ ok: true, at: '', toolNames: ['read_documents'] });
 });
 afterEach(cleanup);
 
@@ -92,7 +103,7 @@ describe('MCP authentication setup', () => {
     setup();
     await screen.findByPlaceholderText('Paste the key');
     expect(screen.queryByPlaceholderText('X-Api-Key')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(
         expect.objectContaining({ authKind: 'header', inject: { header: 'CONTEXT7_API_KEY' } })
@@ -117,7 +128,7 @@ describe('MCP authentication setup', () => {
     mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
     setup({ ...server, hasSecret: true });
     await screen.findByPlaceholderText(/unchanged/);
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ authKind: 'bearer' }))
     );
@@ -180,5 +191,107 @@ describe('MCP authentication setup', () => {
     expect((await screen.findByRole('alert', {}, { timeout: 3000 })).textContent).toBe(
       'The grant was refused.'
     );
+  });
+});
+
+describe('guided MCP setup', () => {
+  it('shows only authentication for a catalog connection', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'catalog' });
+    setup(null, mcpServerFromCatalog(mcpCatalogEntry('github')!));
+    await screen.findByPlaceholderText('Paste the key');
+    expect(screen.queryByPlaceholderText('https://mcp.linear.app/mcp')).toBeNull();
+    expect(screen.queryByText('Name')).toBeNull();
+    expect(screen.queryByText('What it is for')).toBeNull();
+    expect(screen.queryByText('Tools')).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('Paste the key'), { target: { value: 'token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'github-mcp',
+          url: 'https://api.githubcopilot.com/mcp/',
+          catalogHandle: 'github',
+        })
+      )
+    );
+    await screen.findByText('Tools');
+    expect(onTest).toHaveBeenCalledWith('srv-1');
+  });
+
+  it('starts a custom connection with only the address field', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });
+    setup(null, { name: '', url: '', authKind: 'bearer', enabled: true });
+    expect(screen.getAllByRole('textbox')).toHaveLength(1);
+    expect(screen.queryByText('Authentication')).toBeNull();
+    expect(screen.queryByText('Tools')).toBeNull();
+    expect(mocks.discoverAuth).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText('https://mcp.linear.app/mcp'), {
+      target: { value: 'https://tools.example.org/mcp' },
+    });
+    await screen.findByText('No credential is needed for this connection.');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'tools-example-org',
+          displayName: 'tools.example.org',
+          url: 'https://tools.example.org/mcp',
+          authKind: 'none',
+        })
+      )
+    );
+    await screen.findByText('Tools');
+  });
+
+  it('keeps tools hidden when the connection check fails', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['bearer'], source: 'server' });
+    onTest.mockResolvedValue({ ok: false, at: '', detail: 'The credential was refused.' });
+    setup();
+    await screen.findByPlaceholderText('Paste the key');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await screen.findByText(/The credential was refused/);
+    expect(screen.queryByText('Tools')).toBeNull();
+  });
+
+  it('loads tools after OAuth succeeds', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
+    mocks.startSignIn.mockResolvedValue({
+      authorizeUrl: 'https://auth.example.com/authorize',
+      flowId: 'flow-1',
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    mocks.signInStatus.mockResolvedValue({ status: 'connected', pending: false });
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }));
+    expect(screen.queryByText('Tools')).toBeNull();
+    await screen.findByText('Tools', {}, { timeout: 3000 });
+    expect(onTest).toHaveBeenCalledWith('srv-1');
+  });
+  it('loads tools when an existing OAuth connection has no probe', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
+    setup({ ...server, oauth: { status: 'connected' } });
+    await waitFor(() => expect(onTest).toHaveBeenCalledTimes(1));
+    await screen.findByText('Connected to the server, which offers 1 tool.');
+    expect(screen.getByText('Tools')).toBeTruthy();
+  });
+
+  it('does not show old tools after the address changes during a connection check', async () => {
+    mocks.discoverAuth.mockResolvedValue({ methods: ['none'], source: 'server' });
+    let finish!: (value: unknown) => void;
+    onTest.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    setup();
+    await screen.findByText('No credential is needed for this connection.');
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(onTest).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText('https://mcp.linear.app/mcp'), {
+      target: { value: 'https://other.example.org/mcp' },
+    });
+    await act(async () => finish({ ok: true, at: '', toolNames: ['old_tool'] }));
+    expect(screen.queryByText('Tools')).toBeNull();
   });
 });
