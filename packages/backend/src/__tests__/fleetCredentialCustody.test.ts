@@ -67,7 +67,8 @@ vi.mock('../services/repoDefaultBranch.js', () => ({
 
 const patchTaskMetadata = vi.fn(async (_id: string, _fn: unknown) => {});
 vi.mock('../services/taskMetadataMutex.js', () => ({ patchTaskMetadata }));
-vi.mock('../services/websocket.js', () => ({ emitTaskStatus: vi.fn() }));
+const emitTaskUpdate = vi.fn();
+vi.mock('../services/websocket.js', () => ({ emitTaskStatus: vi.fn(), emitTaskUpdate }));
 
 const dbRows: unknown[] = [
   { url: 'https://github.com/acme/widgets', name: 'widgets', defaultBranch: 'main' },
@@ -109,6 +110,7 @@ function task(over: Partial<Task> = {}): Task {
 beforeEach(() => {
   createSandbox.mockClear();
   patchTaskMetadata.mockClear();
+  emitTaskUpdate.mockClear();
   getSelfHostedCredentials.mockReset();
 });
 
@@ -253,6 +255,14 @@ describe('a fleet dispatch never lets the gateway supply the agent key', () => {
     const patched = update({});
     expect(patched.cloudTask.extra.llm).toBe('openai');
     expect(patched.cloudTask.extra.model).toBe('gpt-5.6-terra');
+  });
+
+  it('tells clients the model, and nothing about where the run is hosted', async () => {
+    getSelfHostedCredentials.mockResolvedValue({ openaiKey: 'ey.codex.token' });
+    await dispatchTaskToFleet(task({ metadata: { model: 'gpt-5.6-terra' } }), env);
+    expect(emitTaskUpdate).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      metadata: { cloudTask: { provider: 'selfhosted', extra: { model: 'gpt-5.6-terra' } } },
+    });
   });
 
   // A workspace that connected only Codex and never picked a model must not be

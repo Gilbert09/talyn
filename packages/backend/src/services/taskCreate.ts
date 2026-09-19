@@ -389,6 +389,7 @@ async function redispatchCloudTask(
       posthogStatus: null,
       posthogLogUrl: null,
       posthogPrUrl: null,
+      posthogModel: null,
     },
   });
 

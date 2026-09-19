@@ -19,7 +19,7 @@ import {
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
-import { emitTaskStatus } from '../websocket.js';
+import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { githubService } from '../github.js';
 import {
   FleetCapacityError,
@@ -370,6 +370,9 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
       },
     };
     await patchTaskMetadata(task.id, (existing) => ({ ...existing, cloudTask }));
+    emitTaskUpdate(task.workspaceId, task.id, {
+      metadata: { cloudTask: { provider: cloudTask.provider, extra: { model } } },
+    });
 
     await getDbClient()
       .update(tasksTable)

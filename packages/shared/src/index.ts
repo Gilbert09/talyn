@@ -1682,6 +1682,27 @@ export function readCloudTaskMeta(task: {
   return null;
 }
 
+// Never `metadata.model`: that is the pin the task was created with, and a fleet pin that fails over to PostHog Code runs on a different model.
+export function readDispatchedModel(
+  task: { metadata?: Record<string, unknown> | null },
+  provider: AnyCloudProviderType | null | undefined,
+): string | null {
+  const meta = task.metadata ?? {};
+  const cloud = meta.cloudTask as CloudTaskMetadata | undefined;
+  const recorded =
+    provider === 'posthog_code'
+      ? meta.posthogModel
+      : cloud?.provider === provider
+        ? cloud?.extra?.model
+        : undefined;
+  return typeof recorded === 'string' && recorded.trim() ? recorded : null;
+}
+
+export function cloudModelLabel(modelId: string): string {
+  const known = [...FLEET_MODELS, ...POSTHOG_CODE_MODELS].find((m) => m.id === modelId);
+  return known?.label ?? modelId;
+}
+
 export interface GenerateTaskMetadataRequest {
   prompt: string;
   /** Optional env hint for resolving the cloud provider. */
