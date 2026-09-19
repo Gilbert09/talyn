@@ -26,7 +26,7 @@ import {
 } from '../services/mcpServers/store.js';
 
 /**
- * MCP MCP servers — `/api/v1/mcp-servers`, mounted below `ownerScope`.
+ * MCP servers — `/api/v1/mcp-servers`, mounted below `ownerScope`.
  *
  * Every handler gates on the flag independently of whether the client drew the
  * nav item. `GET /features` decides only what to DRAW: the CLI, the MCP server

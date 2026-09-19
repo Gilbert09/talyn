@@ -1136,7 +1136,7 @@ export const loops = pgTable(
 );
 
 /**
- * A workspace's MCP MCP servers, passed inline to the fleet on every dispatch.
+ * A workspace's MCP servers, passed inline to the fleet on every dispatch.
  *
  * The credential lives HERE rather than on the fleet, and that is the design
  * rather than an accident: the fleet never persists an inline server's secret,

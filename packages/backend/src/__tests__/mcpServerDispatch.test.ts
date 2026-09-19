@@ -1,4 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+/** Flipped per test; read by the mock below. Declared with `var` so vitest's
+ *  hoisting of `vi.mock` above the imports can still reach it. */
+// eslint-disable-next-line no-var
+var allowed = true;
+vi.mock('../services/mcpServersAccess.js', () => ({
+  workspaceMayUseMcpServers: () => Promise.resolve(allowed),
+}));
 import { eq } from 'drizzle-orm';
 import { createTestDb } from './helpers/testDb.js';
 import { mcpServers, users, workspaces } from '../db/schema.js';
@@ -106,11 +114,13 @@ describe('mcpServerIdsFromMetadata', () => {
 });
 
 describe('mcpIntegrationSecrets', () => {
+  // The audience is mocked at the ACCESS function rather than driven through an
+  // env var, because this flag deliberately has no override — PostHog is its
+  // only source. That also makes this the right seam anyway: the thing under
+  // test is what `mcpIntegrationSecrets` does with the answer, not how the
+  // answer is reached.
   beforeEach(() => {
-    process.env.MCP_SERVERS_ENABLED = 'true';
-  });
-  afterEach(() => {
-    delete process.env.MCP_SERVERS_ENABLED;
+    allowed = true;
   });
 
   // Keyed by NAME, because that is how the fleet's proxy indexes an integration
@@ -134,7 +144,7 @@ describe('mcpIntegrationSecrets', () => {
   // a run that fails. The task is still worth doing.
   it('answers empty when the workspace is out of the audience', async () => {
     await seed(null);
-    process.env.MCP_SERVERS_ENABLED = 'false';
+    allowed = false;
     expect(await mcpIntegrationSecrets({ workspaceId: 'ws-1', metadata: null })).toEqual({});
   });
 });

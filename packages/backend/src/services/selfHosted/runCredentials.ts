@@ -47,7 +47,7 @@ export interface FleetRunCredentials {
   openaiKey?: string;
   repo?: string;
   /**
-   * One credential per MCP MCP server, keyed by the server's NAME — which is
+   * One credential per MCP server, keyed by the server's NAME — which is
    * how the fleet's proxy indexes an integration.
    *
    * The fleet's own adoption path reads that tenant's STORED servers, and ours

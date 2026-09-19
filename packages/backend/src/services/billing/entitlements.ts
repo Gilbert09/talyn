@@ -366,7 +366,7 @@ export async function countOwnerLoops(ownerId: string): Promise<number> {
 }
 
 /**
- * Same contract again, for MCP MCP servers.
+ * Same contract again, for MCP servers.
  *
  * Exported unexecuted for the egress test, and here the reason is sharper than
  * for loops: the `mcp_servers` row carries `secret_enc`, and a `SELECT *` to

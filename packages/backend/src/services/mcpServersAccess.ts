@@ -1,8 +1,7 @@
-import { FEATURE_FLAGS, readFlagOverride } from '@talyn/shared';
 import { evaluateFlag, workspaceHasFeature, type FlagSubject } from './featureFlags.js';
 
 /**
- * Who may use MCP MCP servers.
+ * Who may use MCP servers.
  *
  * # Why this fails CLOSED
  *
@@ -23,18 +22,21 @@ import { evaluateFlag, workspaceHasFeature, type FlagSubject } from './featureFl
  * changes without anything touching a row. The dispatch-time check is what
  * makes that a run WITHOUT those tools rather than a run that fails, which is
  * the right degradation: the task itself is still worth doing.
- */
-
-/**
- * The cheap, subject-free check: are MCP servers switched off for this whole
- * deployment?
  *
- * ONLY the env override, and not a substitute for the per-workspace check. It
- * exists for the boot log and for an early-out before any row has been read.
+ * # There is no break glass, and that is on purpose
+ *
+ * Every other flag in the register carries an env override that short-circuits
+ * PostHog — `WORKFLOWS_ENABLED`, `LOOPS_ENABLED`, `FLEET_ALLOWED`. This one
+ * carries none: Tom's call is that its audience is PostHog's alone.
+ *
+ * So `readFlagOverride('mcpServers', …)` is always undefined, and every gate
+ * here falls straight through to PostHog and then to `fallback`. Two things
+ * follow that are worth knowing BEFORE you go looking for the switch. There is
+ * no way to run this feature against a deployment with no PostHog project —
+ * the thing `LOOPS_ENABLED=true` exists for. And if PostHog is the broken
+ * thing, the answer is `fallback`, which is false: the feature turns off rather
+ * than on, which is the direction you would have wanted the switch to go.
  */
-export function mcpServersKillSwitchPulled(): boolean {
-  return readFlagOverride('mcpServers', process.env) === false;
-}
 
 /**
  * Whether this workspace's owner may use MCP servers.
@@ -55,17 +57,22 @@ export async function userMayUseMcpServers(subject: FlagSubject): Promise<boolea
 /**
  * The message a refusal carries.
  *
- * Three cases, like loops and for the same reason: this flag's fallback is OFF,
- * so an unreachable PostHog genuinely does produce a refusal, and telling
- * somebody "you are not in the audience" when the real answer is "we could not
- * ask" sends them to the wrong dashboard.
+ * TWO cases, not the three its siblings have, and the missing one is the point:
+ * there is no env override, so "an operator switched this off" is not a state
+ * this flag can be in. What remains is the distinction that actually misleads
+ * people — "you are not in the audience" when the real answer is "we could not
+ * ask PostHog" sends somebody to the wrong dashboard.
+ *
+ * The no-key case is now a dead end rather than a hint. Every other flag can
+ * answer "set X=true to use it anyway"; this one cannot, so it says what is
+ * true instead of offering a switch that does not exist.
  */
 export function mcpServersRefusalReason(): string {
-  if (mcpServersKillSwitchPulled()) {
-    return `MCP servers are switched off on this deployment (${FEATURE_FLAGS.mcpServers.envOverride}=false)`;
-  }
   if (!process.env.TALYN_POSTHOG_KEY) {
-    return `this deployment has no PostHog key, so MCP servers stay off (set ${FEATURE_FLAGS.mcpServers.envOverride}=true to use them anyway)`;
+    return (
+      'this deployment has no PostHog key, and MCP servers are gated on PostHog alone, ' +
+      'so there is no way to switch them on here'
+    );
   }
   return 'this account is not in the audience for the "mcp-servers" feature flag';
 }

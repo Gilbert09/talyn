@@ -11,7 +11,7 @@ import { decryptString, encryptString } from '../tokenCrypto.js';
 import { resolveMcpAccessToken, type McpOAuthStore, type StoredMcpOAuth } from './oauth.js';
 
 /**
- * Reading and writing a workspace's MCP MCP servers.
+ * Reading and writing a workspace's MCP servers.
  *
  * # The projection is the point
  *

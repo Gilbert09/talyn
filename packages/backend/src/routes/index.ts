@@ -218,7 +218,7 @@ export function setupRoutes(app: Express): void {
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.
   app.use(`${api}/loops`, mount(loopRoutes()));
-  // MCP MCP servers — the servers a workspace connects and the fleet wires
+  // MCP servers — the servers a workspace connects and the fleet wires
   // into every run. Same shape again: below ownerScope, every handler gating
   // on the flag whether or not the client drew the tab.
   //

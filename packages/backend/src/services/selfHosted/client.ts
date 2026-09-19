@@ -297,7 +297,7 @@ export interface CreateSandboxInput {
     egress?: { mode?: 'proxy' | 'filtered' | 'open' };
   };
   /**
-   * The workspace's MCP MCP servers, defined on the spot.
+   * The workspace's MCP servers, defined on the spot.
    *
    * Inline rather than stored on the fleet, and that is a decision with a
    * consequence. The fleet seals an inline secret on arrival and persists it
@@ -321,7 +321,7 @@ export interface CreateSandboxInput {
   mcpServers?: FleetMcpServerInline[];
 }
 
-/** One MCP MCP server, as the fleet takes it on a create. */
+/** One MCP server, as the fleet takes it on a create. */
 export interface FleetMcpServerInline {
   /** Becomes a hostname label inside the sandbox: lowercase, digits, hyphens. */
   name: string;
@@ -933,7 +933,7 @@ export class FleetClient {
       repo?: string;
       /**
        * One credential per integration, keyed by NAME — which for us means one
-       * per MCP MCP server. The fleet spells this `integrations` here and
+       * per MCP server. The fleet spells this `integrations` here and
        * `integrationSecrets` on a create; it is the same map.
        *
        * REPLACES the whole set rather than merging into it, because installing

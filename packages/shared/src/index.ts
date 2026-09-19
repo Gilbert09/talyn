@@ -45,7 +45,7 @@ export * from './featureFlags.js';
 // differently from the server is a bug nobody can see.
 export * from './loops.js';
 
-// MCP MCP servers — the servers a workspace connects and the fleet wires into
+// MCP servers — the servers a workspace connects and the fleet wires into
 // every run. The validator MIRRORS the fleet's own refusals, so somebody hears
 // "an MCP url needs a path" while typing rather than as a dispatch that failed
 // an hour later.
@@ -1254,7 +1254,7 @@ export const FREE_PLAN_WORKFLOW_LIMIT = 3;
 export const FREE_PLAN_LOOP_LIMIT = 3;
 
 /**
- * Max MCP MCP servers an owner may connect on the free plan, across every
+ * Max MCP servers an owner may connect on the free plan, across every
  * workspace they own.
  *
  * Counts DEFINITIONS, like the workflow and loop caps above and for the same

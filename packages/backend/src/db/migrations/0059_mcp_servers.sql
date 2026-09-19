@@ -1,4 +1,4 @@
--- Per-workspace MCP MCP servers, and the per-loop override that selects them.
+-- Per-workspace MCP servers, and the per-loop override that selects them.
 --
 -- A workspace connects the MCP servers it wants — Linear, Sentry, Supabase,
 -- its own — and every Talyn Fleet run wakes up with their tools wired in. The

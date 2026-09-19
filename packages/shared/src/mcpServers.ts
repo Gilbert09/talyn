@@ -1,4 +1,4 @@
-// MCP MCP servers — the vocabulary, the validator and the catalog.
+// MCP servers — the vocabulary, the validator and the catalog.
 //
 // A workspace connects the MCP servers it wants and every Talyn Fleet run
 // wakes up with their tools wired in. The fleet takes them INLINE on sandbox

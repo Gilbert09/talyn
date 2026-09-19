@@ -66,8 +66,16 @@
 export interface FeatureFlagDefinition {
   /** The flag key in PostHog. Kebab-case, matching PostHog's own convention. */
   readonly posthogKey: string;
-  /** The env var that overrides PostHog entirely. Break glass + local dev. */
-  readonly envOverride: string;
+  /**
+   * The env var that overrides PostHog entirely. Break glass + local dev.
+   *
+   * OPTIONAL, because a flag may deliberately have none — see `mcpServers`,
+   * whose audience is PostHog's alone. Absent means there is no way to answer
+   * this flag without PostHog, which is a real cost and not a simplification:
+   * the override is what lets somebody run the feature locally with no PostHog
+   * project, and what answers the flag when PostHog is the broken thing.
+   */
+  readonly envOverride?: string;
   /**
    * The answer when PostHog is not configured, is unreachable, or does not
    * know the flag. Chosen per flag: the two live flags have deliberately
@@ -154,7 +162,7 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * MCP MCP servers — the servers a workspace connects and the fleet wires
+   * MCP servers — the servers a workspace connects and the fleet wires
    * into every run.
    *
    * Fallback OFF and `availability: 'gated'`, matching `fleet` rather than
@@ -172,9 +180,18 @@ export const FEATURE_FLAGS = {
    */
   mcpServers: {
     posthogKey: 'mcp-servers',
-    envOverride: 'MCP_SERVERS_ENABLED',
+    // NO env override, deliberately, and alone among these in having none.
+    // Tom's call: this flag's audience is PostHog's and nothing else's.
+    //
+    // The cost is real and worth stating rather than discovering. There is now
+    // no way to answer this flag without PostHog — so it cannot be run locally
+    // against a deployment with no PostHog project (what `LOOPS_ENABLED=true`
+    // is for), and it cannot be switched off if PostHog is the broken thing.
+    // The second matters less than it looks: `fallback` is already false, so an
+    // outage turns this off rather than on, which is the direction you would
+    // have reached for the switch to go anyway.
     fallback: false,
-    description: 'MCP MCP servers — connect MCP servers to Talyn Fleet runs',
+    description: 'MCP servers — connect MCP servers to Talyn Fleet runs',
     availability: 'gated',
     releaseScopes: ['mcp'],
   },
@@ -354,7 +371,16 @@ export function readFlagOverride(
   flag: FeatureFlagKey,
   env: Record<string, string | undefined>
 ): boolean | undefined {
-  const raw = (env[FEATURE_FLAGS[flag].envOverride] ?? '').trim().toLowerCase();
+  // A flag with no override can never be answered from the environment, so
+  // every caller falls straight through to PostHog and then to `fallback`.
+  //
+  // Widened through the interface on purpose: `as const satisfies` narrows each
+  // entry to its own literal type, and the one without an `envOverride` has no
+  // such property to read off the union at all.
+  const def: FeatureFlagDefinition = FEATURE_FLAGS[flag];
+  const name = def.envOverride;
+  if (!name) return undefined;
+  const raw = (env[name] ?? '').trim().toLowerCase();
   if (!raw) return undefined;
   return raw !== 'false' && raw !== '0' && raw !== 'off' && raw !== 'no';
 }

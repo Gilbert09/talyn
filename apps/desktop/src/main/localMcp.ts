@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 
 /**
- * MCP MCP servers already configured on this machine.
+ * MCP servers already configured on this machine.
  *
  * Somebody who has wired up Supabase or Context7 for their own Claude should
  * not have to go and find the URL again, so this reads what is already there
