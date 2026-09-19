@@ -6,6 +6,7 @@ import type { Database } from '../db/client.js';
 import { repositories, workspaces } from '../db/schema.js';
 import { dispatchTaskToPostHogCode } from '../services/posthogCode/executor.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
+import { emitTaskUpdate } from '../services/websocket.js';
 
 /**
  * What PostHog Code runs when a task FAILED OVER to it.
@@ -123,5 +124,16 @@ describe('a task that failed over from the fleet', () => {
   it('falls through to the default when the task names no model', async () => {
     await dispatchTaskToPostHogCode(task({}), env);
     expect(POSTHOG_IDS.has(dispatchedModel())).toBe(true);
+  });
+
+  it.each([
+    { name: 'a fleet-only pin that was replaced', metadata: { model: 'claude-fable-5-1' } },
+    { name: 'a pin PostHog can run', metadata: { model: 'claude-sonnet-4-6' } },
+    { name: 'no pin', metadata: {} },
+  ])('tells clients the model that actually ran: $name', async ({ metadata }) => {
+    await dispatchTaskToPostHogCode(task(metadata), env);
+    expect(emitTaskUpdate).toHaveBeenCalledWith('ws1', 'task-1', {
+      metadata: { posthogModel: dispatchedModel() },
+    });
   });
 });

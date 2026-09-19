@@ -8,7 +8,7 @@ import {
   workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
-import { emitTaskStatus } from '../websocket.js';
+import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { getPostHogCodeClient, getPostHogCodeCredentials } from './credentials.js';
 import { DEFAULT_POSTHOG_CODE_MODEL, PostHogCodeApiError } from './client.js';
 
@@ -155,7 +155,9 @@ export async function dispatchTaskToPostHogCode(
       posthogRunId: runId ?? existing.posthogRunId,
       posthogStatus: startedRun?.status ?? 'queued',
       posthogLogUrl: startedRun?.log_url ?? existing.posthogLogUrl,
+      posthogModel: model,
     }));
+    emitTaskUpdate(task.workspaceId, task.id, { metadata: { posthogModel: model } });
 
     // Pin the env + flip to in_progress so the UI stops showing it as
     // queued. The poller takes it from here.
