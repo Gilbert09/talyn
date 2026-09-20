@@ -3954,3 +3954,12 @@ Both editors include a manifest with user scopes and PKCE, plus steps to enable 
 Existing OAuth connections retain their flow. Pasted tokens use existing encrypted credential storage.
 Users must replace expired or revoked tokens manually. The manifest requests access for all supported Slack tools.
 Slack administrators can still require approval for internal apps.
+
+
+### 2026-09-20 — Expanded MCP catalog
+
+Added 14 hosted MCP entries, informed by exe.dev's integration catalog and checked against provider documentation.
+The additions cover design, deployments, CI, CRM, analytics, and project management.
+Both apps now include catalog search. New logos are bundled for offline display.
+Authentication discovery prefers a documented key when OAuth requires a registered client.
+See [catalog sources](MCP_CATALOG.md) for endpoints, authentication details, and verification limits.

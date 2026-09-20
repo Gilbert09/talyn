@@ -31,7 +31,9 @@ export async function discoverMcpAuth(endpoint: string): Promise<McpAuthDiscover
       oauthAdvertised = true;
       const server = await discoverAuthServer(resource.authorizationServers[0], controller.signal);
       return {
-        methods: ['oauth', ...known.filter((method) => method !== 'oauth' && method !== 'none')],
+        methods: server.clientIdMetadataDocumentSupported || server.registrationEndpoint
+          ? ['oauth', ...known.filter((method) => method !== 'oauth' && method !== 'none')]
+          : [...known.filter((method) => method !== 'oauth' && method !== 'none'), 'oauth'],
         source: 'server',
         ...hints,
         ...(!server.clientIdMetadataDocumentSupported && !server.registrationEndpoint

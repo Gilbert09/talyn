@@ -10,6 +10,7 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { Input } from '../../ui/input';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
@@ -280,14 +281,28 @@ function Catalog({
   onPick: (entry: McpCatalogEntry) => void;
   empty: boolean;
 }) {
+  const [query, setQuery] = useState('');
+  const search = query.trim().toLowerCase();
+  const entries = MCP_CATALOG.filter((entry) =>
+    `${entry.title} ${entry.summary} ${entry.handle}`.toLowerCase().includes(search)
+  );
   return (
     <div>
       <h2 className="mb-1 font-medium">{empty ? 'Connect your first MCP server' : 'Add another'}</h2>
       <p className="mb-3 text-sm text-muted-foreground">
         Pick one to fill in its address, or add any server by hand.
       </p>
+      <Input
+        type="search"
+        aria-label="Search MCP servers"
+        placeholder="Search servers…"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        className="mb-3"
+      />
+      {entries.length === 0 && <p className="text-sm text-muted-foreground">No servers match your search.</p>}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {MCP_CATALOG.map((entry) => {
+        {entries.map((entry) => {
           const already = connected.has(entry.handle);
           return (
             <button
