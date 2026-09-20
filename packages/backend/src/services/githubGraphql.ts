@@ -83,6 +83,27 @@ export interface PRSummary {
    * changes forty files.
    */
   changedFiles?: number;
+  /**
+   * Lines added and removed. A far better size signal than {@link changedFiles}
+   * — a one-line fix across twelve files reads as bigger by file count than a
+   * 900-line rewrite of one — and free, being scalars on a node the poll
+   * already fetches.
+   *
+   * Optional for the same reason as `changedFiles`: a row cached before this
+   * shipped does not know, and absence must not read as a zero-line diff.
+   */
+  additions?: number;
+  deletions?: number;
+  /**
+   * The viewer's own most recent review, if they have looked at all.
+   *
+   * Distinguishes a re-review — changes pushed after your comments, and you
+   * re-requested — from a PR you have never opened. Very different work, and
+   * indistinguishable until now.
+   */
+  viewerLatestReview?: { state: string; submittedAt: string | null } | null;
+  /** How many of the unresolved threads the VIEWER opened. */
+  unresolvedThreadsOpenedByViewer?: number;
   url: string;
   author: string;
   /**
@@ -1063,6 +1084,12 @@ function prFieldsSelection(numberExpr: string | null): string {
   title
   body
   changedFiles
+  # Scalars on a node already being fetched, so they cost NOTHING: GitHub bills
+  # GraphQL by node count, and these add no nodes. changedFiles above is a much
+  # worse size proxy than it looks — a one-line fix to twelve files reads as
+  # bigger than a 900-line rewrite of one.
+  additions
+  deletions
   url
   isDraft
   state
@@ -1092,6 +1119,13 @@ function prFieldsSelection(numberExpr: string | null): string {
   reviews(last: 5) {
     nodes { id author { login } state submittedAt url }
   }
+  # Has the viewer already looked at this PR, and when?
+  #
+  # Until now a re-review — someone pushed changes after your comments and
+  # re-requested you — was indistinguishable from a PR you had never opened.
+  # They are very different pieces of work and deserve different placement.
+  # One object on the PR node; the cheapest field in this selection.
+  viewerLatestReview { state submittedAt }
   reviewThreads(last: 5) {
     nodes {
       comments(last: 1) {
@@ -1107,7 +1141,13 @@ function prFieldsSelection(numberExpr: string | null): string {
       # a bot's nit and a human reviewer's question are indistinguishable — so
       # the watcher could not tell a PR that needs an agent from a conversation
       # between people. See prNeedsFollowup.
-      comments(first: 1) { nodes { author { login __typename } } }
+      # viewerDidAuthor comes free on the Comment interface and is what
+      # separates "somebody is mid-conversation with the author" from "*I* am".
+      # Opposite signals for what to read next: the first is a reason to leave
+      # the PR alone, the second a reason to go back to it. Asking GitHub also
+      # avoids threading the viewer's login down into the decoder, which does
+      # not otherwise know who is asking.
+      comments(first: 1) { nodes { author { login __typename } viewerDidAuthor } }
     }
   }
   comments(last: 5) {
@@ -1221,6 +1261,8 @@ interface RawPullRequest {
   /** How many files the PR touches. One integer, so the detail panel's Files
    *  tab can carry a count before its (REST) file list has loaded. */
   changedFiles?: number;
+  additions?: number;
+  deletions?: number;
   url: string;
   isDraft: boolean;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -1262,6 +1304,7 @@ interface RawPullRequest {
       url: string;
     }>;
   };
+  viewerLatestReview?: { state: string; submittedAt: string | null } | null;
   reviewThreads: {
     nodes: Array<{
       comments: {
@@ -1279,7 +1322,10 @@ interface RawPullRequest {
     nodes: Array<{
       isResolved: boolean;
       comments?: {
-        nodes: Array<{ author: { login: string; __typename?: string } | null }>;
+        nodes: Array<{
+          author: { login: string; __typename?: string } | null;
+          viewerDidAuthor?: boolean;
+        }>;
       };
     }>;
   };
@@ -1436,6 +1482,17 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     return author ? isBotActor(author) : false;
   }).length;
   const unresolvedHumanReviewThreads = unresolvedReviewThreads - unresolvedBotReviewThreads;
+  // Whether the VIEWER is one of the people still waiting on the author.
+  //
+  // The opening comment's login is already in the response — the query pays
+  // for it to do the bot/human split above — and was then discarded. Keeping
+  // one boolean out of it separates "somebody is mid-conversation with the
+  // author" from "*I* am", which are opposite signals for what to read next:
+  // the first is a reason to leave the PR alone, the second is a reason to go
+  // back to it.
+  const unresolvedThreadsOpenedByViewer = unresolved.filter(
+    (t) => t.comments?.nodes?.[0]?.viewerDidAuthor === true,
+  ).length;
   const reviewRequests = {
     users: [] as string[],
     teams: [] as Array<{ slug: string; name: string; combinedSlug: string }>,
@@ -1474,6 +1531,14 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     title: raw.title,
     body: raw.body ?? '',
     changedFiles: raw.changedFiles ?? 0,
+    // NOT `?? 0`, unlike changedFiles above: absent must reach the ranker as
+    // "we do not know how big this is" rather than as an empty diff, which
+    // would make every un-decoded PR look like the smallest possible one and
+    // float it to the top.
+    additions: raw.additions,
+    deletions: raw.deletions,
+    viewerLatestReview: raw.viewerLatestReview ?? null,
+    unresolvedThreadsOpenedByViewer,
     url: raw.url,
     author: raw.author?.login ?? '',
     labels: (raw.labels?.nodes ?? []).map((l) => l.name),

@@ -917,6 +917,18 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     // own the way `body` had to. It is what numbers the detail panel's Files
     // tab before that tab's REST file list has landed.
     changedFiles: s.changedFiles,
+    // Real diff size. Two integers, and a much better signal than the file
+    // count beside them: a one-line fix across twelve files reads as bigger by
+    // file count than a 900-line rewrite of one.
+    additions: s.additions,
+    deletions: s.deletions,
+    // Whether the viewer has already looked, and when. Distinguishes a
+    // re-review from a PR nobody has opened — different work, and until now
+    // indistinguishable on the list.
+    viewerLatestReview: s.viewerLatestReview ?? null,
+    // How many of the unresolved threads are the VIEWER's own. Derived from
+    // logins the query already pays for and used to discard.
+    unresolvedThreadsOpenedByViewer: s.unresolvedThreadsOpenedByViewer,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
     // Persisted because `rowToSummary` has always READ it and nothing ever
     // wrote it — so on any cached-row read it was permanently `undefined`, and
@@ -1005,6 +1017,14 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     // fills it in.
     unresolvedHumanReviewThreads: meta.unresolvedHumanReviewThreads as number | undefined,
     unresolvedBotReviewThreads: meta.unresolvedBotReviewThreads as number | undefined,
+    unresolvedThreadsOpenedByViewer: meta.unresolvedThreadsOpenedByViewer as number | undefined,
+    // Same discipline as the thread split directly above: left undefined on a
+    // row cached before these shipped, never defaulted. A `?? 0` here would
+    // report every such PR as an empty diff, which is the smallest thing the
+    // ranker can see and would float all of them to the top.
+    additions: meta.additions as number | undefined,
+    deletions: meta.deletions as number | undefined,
+    viewerLatestReview: (meta.viewerLatestReview as PRSummary['viewerLatestReview']) ?? null,
     reviewRequestVia: meta.reviewRequestVia as PRSummary['reviewRequestVia'],
     // Left undefined (not '') on rows cached before it shipped: the merge
     // queue reads absent as "unknown", and '' would claim "nothing failing".

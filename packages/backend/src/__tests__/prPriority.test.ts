@@ -3,6 +3,7 @@ import {
   PR_PRIORITY_GATE_RANK,
   PR_PRIORITY_REASON_LABEL,
   agePoints,
+  sizePoints,
   buildPRPriorityMap,
   comparePRByPriority,
   describePRPriorityReason,
@@ -309,6 +310,17 @@ describe('the reason vocabulary', () => {
       ['human_threads', row({ unresolvedHumanReviewThreads: 1 }), ctx],
       ['bot_threads', row({ unresolvedBotReviewThreads: 1 }), ctx],
       ['bot_author', row({ author: 'renovate[bot]' }), ctx],
+      ['size', row({ additions: 10, deletions: 2 }), ctx],
+      [
+        're_review',
+        row({ viewerLatestReview: { state: 'CHANGES_REQUESTED', submittedAt: null } }),
+        ctx,
+      ],
+      [
+        'your_threads',
+        row({ unresolvedHumanReviewThreads: 2, unresolvedThreadsOpenedByViewer: 2 }),
+        ctx,
+      ],
       ['waited', row({ waitedHours: 30 }), ctx],
     ];
 
@@ -509,5 +521,113 @@ describe('gate ranks', () => {
     expect(PR_PRIORITY_GATE_RANK.waiting_on_author).toBeGreaterThan(
       PR_PRIORITY_GATE_RANK.not_ready,
     );
+  });
+});
+
+
+describe('sizePoints', () => {
+  it.each([
+    [0, 8],
+    [100, 8],
+    [101, 3],
+    [400, 3],
+    [401, 0],
+    [800, 0],
+    [801, -6],
+    [5000, -6],
+  ])('%s lines → %s points', (lines, expected) => {
+    expect(sizePoints(lines)).toBe(expected);
+  });
+
+  it('treats UNKNOWN as unknown, not as small', () => {
+    // The trap: a row cached before `additions` shipped has no size, and
+    // scoring that as the smallest possible diff would float every
+    // un-refreshed PR straight to the top of the list.
+    expect(sizePoints(undefined)).toBe(0);
+    expect(sizePoints(Number.NaN)).toBe(0);
+  });
+});
+
+describe('real diff size', () => {
+  it('scores a small PR above a huge one', () => {
+    const small = scorePRForReview(row({ additions: 30, deletions: 5 }), ctx).score;
+    const huge = scorePRForReview(row({ additions: 2000, deletions: 900 }), ctx).score;
+    expect(small).toBeGreaterThan(huge);
+  });
+
+  it('does NOT fall back to changedFiles, which disagrees where it matters', () => {
+    // A one-line fix across twelve files vs a 900-line rewrite of one: by file
+    // count the first is bigger, by lines the second is. Only lines are used.
+    const manyFilesTinyDiff = scorePRForReview(row({ additions: 12, deletions: 0 }), ctx);
+    expect(manyFilesTinyDiff.terms.find((t) => t.reason === 'size')?.points).toBe(8);
+  });
+
+  it('scores nothing for size when the row has never been refreshed', () => {
+    expect(reasonsOf(row())).not.toContain('size');
+  });
+
+  it('counts a deletions-only PR', () => {
+    const v = scorePRForReview(row({ deletions: 40 }), ctx);
+    expect(v.terms.find((t) => t.reason === 'size')?.points).toBe(8);
+  });
+});
+
+describe('re-review', () => {
+  it('rewards a PR the viewer already asked for changes on', () => {
+    const fresh = scorePRForReview(row(), ctx).score;
+    const again = scorePRForReview(
+      row({ viewerLatestReview: { state: 'CHANGES_REQUESTED', submittedAt: null } }),
+      ctx,
+    ).score;
+    expect(again).toBeGreaterThan(fresh);
+  });
+
+  it('does not reward a stale APPROVAL', () => {
+    // Approved, then re-requested, means the PR moved on — that is a fresh
+    // look, not the tail of work already started.
+    expect(
+      reasonsOf(row({ viewerLatestReview: { state: 'APPROVED', submittedAt: null } })),
+    ).not.toContain('re_review');
+  });
+});
+
+describe('whose threads are open', () => {
+  it('rewards threads the VIEWER opened and penalises other people’s', () => {
+    const mine = scorePRForReview(
+      row({ unresolvedHumanReviewThreads: 2, unresolvedThreadsOpenedByViewer: 2 }),
+      ctx,
+    );
+    const theirs = scorePRForReview(row({ unresolvedHumanReviewThreads: 2 }), ctx);
+    expect(mine.score).toBeGreaterThan(theirs.score);
+  });
+
+  it('nets the viewer’s own threads out of the human penalty', () => {
+    // Otherwise the PR is penalised for exactly the threads that make it the
+    // viewer's to come back to, and the two terms cancel to nothing.
+    const allMine = scorePRForReview(
+      row({ unresolvedHumanReviewThreads: 3, unresolvedThreadsOpenedByViewer: 3 }),
+      ctx,
+    );
+    expect(allMine.terms.map((t) => t.reason)).not.toContain('human_threads');
+    expect(allMine.terms.map((t) => t.reason)).toContain('your_threads');
+  });
+
+  it('still penalises the remainder when a thread is someone else’s', () => {
+    const mixed = scorePRForReview(
+      row({ unresolvedHumanReviewThreads: 3, unresolvedThreadsOpenedByViewer: 1 }),
+      ctx,
+    );
+    expect(mixed.terms.map((t) => t.reason)).toContain('human_threads');
+    expect(mixed.terms.map((t) => t.reason)).toContain('your_threads');
+  });
+
+  it('never goes negative when the counts disagree', () => {
+    // Defensive: the two numbers come from different filters over the same
+    // list and a future change could let the viewer count exceed the human one.
+    const odd = scorePRForReview(
+      row({ unresolvedHumanReviewThreads: 1, unresolvedThreadsOpenedByViewer: 5 }),
+      ctx,
+    );
+    expect(odd.terms.map((t) => t.reason)).not.toContain('human_threads');
   });
 });

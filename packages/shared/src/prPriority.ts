@@ -91,6 +91,9 @@ export type PRPriorityReason =
   | 'human_threads'
   | 'bot_threads'
   | 'bot_author'
+  | 'size'
+  | 're_review'
+  | 'your_threads'
   | 'waited';
 
 /**
@@ -116,6 +119,9 @@ export const PR_PRIORITY_REASON_LABEL: Record<PRPriorityReason, string> = {
   human_threads: 'Author replying',
   bot_threads: 'Bot comments open',
   bot_author: 'Bot author',
+  size: 'Quick',
+  re_review: 'Re-review',
+  your_threads: 'Your comments open',
   waited: 'Waited',
 };
 
@@ -194,6 +200,14 @@ export interface PRPriorityTarget {
     checks?: { total: number; passed: number; failed: number; inProgress: number; skipped: number };
     unresolvedHumanReviewThreads?: number;
     unresolvedBotReviewThreads?: number;
+    unresolvedThreadsOpenedByViewer?: number;
+    /**
+     * Real diff size. Absent means UNKNOWN — never treat it as an empty diff,
+     * which is the smallest thing this function can see.
+     */
+    additions?: number;
+    deletions?: number;
+    viewerLatestReview?: { state: string; submittedAt: string | null } | null;
     reviewRequestVia?: { direct: boolean; teams: string[] } | null;
     autoMergeBy?: string | null;
     stack?: { size: number; position: number } | null;
@@ -240,7 +254,33 @@ export const PR_PRIORITY_WEIGHTS = {
   /** Per PR stacked above this one, capped by {@link unblocksStackCap}. */
   unblocksStack: 4,
   unblocksStackCap: 12,
+  /** A re-review is work you have already started. */
+  reReview: 6,
+  /** Threads YOU opened that are still unresolved — you asked, they answered. */
+  yourThreads: 5,
 } as const;
+
+/**
+ * Points for a diff of `lines` changed.
+ *
+ * Bands rather than a curve, so the chip can name one ("Quick") and so the
+ * thresholds are arguable. The numbers are LinearB's published ones, which are
+ * the only widely-cited empirical thresholds in this space: under 100 lines is
+ * small, over 400 is large, over 800 is where they flag real risk. Google's
+ * median change is 24 lines, for scale.
+ *
+ * Deliberately no penalty below the large threshold — a big PR is not less
+ * worth reviewing, it is just a worse thing to start on a Friday afternoon.
+ */
+export function sizePoints(lines: number | undefined): number {
+  // Unknown is NOT small. A row cached before `additions` shipped must not be
+  // rewarded for a diff nobody has measured.
+  if (lines === undefined || !Number.isFinite(lines)) return 0;
+  if (lines <= 100) return 8;
+  if (lines <= 400) return 3;
+  if (lines <= 800) return 0;
+  return -6;
+}
 
 /**
  * The age ramp, in points.
@@ -394,7 +434,14 @@ export function scorePRForReview(
   // attention event until a person promotes it. An unresolved thread a HUMAN
   // opened usually means the author is mid-revision, so the ball is not with
   // you; a bot's nit means only that the diff will churn a little.
-  if ((s.unresolvedHumanReviewThreads ?? 0) > 0) {
+  // Human threads NOT opened by the viewer. Without the subtraction a PR is
+  // penalised for the very threads that make it the viewer's to come back to,
+  // which cancels the `your_threads` reward below and makes both pointless.
+  const othersThreads = Math.max(
+    0,
+    (s.unresolvedHumanReviewThreads ?? 0) - (s.unresolvedThreadsOpenedByViewer ?? 0),
+  );
+  if (othersThreads > 0) {
     push('human_threads', PR_PRIORITY_WEIGHTS.humanThreads);
   }
   if ((s.unresolvedBotReviewThreads ?? 0) > 0) {
@@ -403,6 +450,38 @@ export function scorePRForReview(
 
   if (/\[bot\]$/i.test(s.author ?? '')) {
     push('bot_author', PR_PRIORITY_WEIGHTS.botAuthor);
+  }
+
+  // Real diff size, when the row has been refreshed since it started being
+  // fetched. `changedFiles` is deliberately NOT used as a fallback: a one-line
+  // fix across twelve files reads as bigger by file count than a 900-line
+  // rewrite of one, so the two disagree most on the PRs it matters for.
+  const lines =
+    s.additions === undefined && s.deletions === undefined
+      ? undefined
+      : (s.additions ?? 0) + (s.deletions ?? 0);
+  const sizePts = sizePoints(lines);
+  if (sizePts !== 0) {
+    push('size', sizePts, lines !== undefined && sizePts > 0 ? `(${lines} lines)` : undefined);
+  }
+
+  // You have already read this PR and asked for changes; the author has
+  // pushed and re-requested you. That is work in progress rather than work to
+  // start, and it is cheaper to finish than an equivalent PR you have never
+  // opened. Only a CHANGES_REQUESTED review counts — an approval you later
+  // got re-requested on is a fresh look at a PR that moved on.
+  if (s.viewerLatestReview?.state === 'CHANGES_REQUESTED') {
+    push('re_review', PR_PRIORITY_WEIGHTS.reReview);
+  }
+
+  // Threads YOU opened and nobody has resolved. The mirror of `human_threads`
+  // directly above, and the opposite signal: that one says another person is
+  // mid-conversation with the author, so the ball is not with you; this one
+  // says the conversation is YOURS and is waiting. Netted out of the human
+  // count so a PR is not penalised for the very threads that make it yours.
+  const yours = s.unresolvedThreadsOpenedByViewer ?? 0;
+  if (yours > 0) {
+    push('your_threads', PR_PRIORITY_WEIGHTS.yourThreads, String(yours));
   }
 
   const since =

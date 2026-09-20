@@ -700,6 +700,33 @@ export interface PRSummaryShape {
    *  before this field shipped, which must read as "no count yet" and never
    *  as zero files changed. */
   changedFiles?: number;
+  /**
+   * Lines added and removed — the real size of the diff.
+   *
+   * A much better signal than {@link changedFiles} beside it: a one-line fix
+   * across twelve files reads as bigger by file count than a 900-line rewrite
+   * of one. Absent on rows cached before these shipped, and absence must NOT
+   * be read as a zero-line diff — that is the smallest thing a ranker can see,
+   * so a `?? 0` would float every un-refreshed PR to the top.
+   */
+  additions?: number;
+  deletions?: number;
+  /**
+   * The viewer's own most recent review, or `null` if they have never looked.
+   *
+   * Distinguishes a RE-review — changes pushed after your comments, and you
+   * were re-requested — from a PR you have never opened. Different work, and
+   * indistinguishable on the list until now.
+   */
+  viewerLatestReview?: { state: string; submittedAt: string | null } | null;
+  /**
+   * How many of the unresolved threads the VIEWER opened.
+   *
+   * Separates "somebody is mid-conversation with the author" (a reason to
+   * leave the PR alone) from "*I* am" (a reason to go back to it). Derived
+   * from data the poll already fetched and used to throw away.
+   */
+  unresolvedThreadsOpenedByViewer?: number;
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;
