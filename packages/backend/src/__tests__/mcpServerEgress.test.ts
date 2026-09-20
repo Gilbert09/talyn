@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb } from './helpers/testDb.js';
-import { mcpServers as mcpServersTable, workspaces as workspacesTable } from '../db/schema.js';
-import { countOwnerMcpServersQuery } from '../services/billing/entitlements.js';
+import { mcpServers as mcpServersTable } from '../db/schema.js';
 import type { Database } from '../db/client.js';
 
 /**
@@ -50,18 +49,4 @@ describe('mcp server projection egress', () => {
     expect(sql).toContain('secret_enc');
   });
 
-  // Counting rows for the billing gate must not open every envelope on the way.
-  it('the free-plan count query ships no credential', () => {
-    const { sql } = countOwnerMcpServersQuery('owner-1').toSQL();
-    expect(sql).not.toContain('secret_enc');
-    expect(sql).toContain('count(*)');
-  });
-
-  it('the count query is scoped to the owner, not the workspace', () => {
-    const { sql } = countOwnerMcpServersQuery('owner-1').toSQL();
-    expect(sql).toContain('owner_id');
-    // Joined rather than assumed: a server belongs to a workspace, and the cap
-    // is per OWNER across every workspace they have.
-    expect(sql).toContain(workspacesTable[Symbol.for('drizzle:Name') as never] ?? 'workspaces');
-  });
 });

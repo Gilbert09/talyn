@@ -4,8 +4,7 @@ import { discoverMcpAuth } from '../services/mcpServers/authDiscovery.js';
 import { Router, type Request, type Response } from 'express';
 import { validateMcpServer, type ApiResponse, type McpServerDefinition } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../services/analytics.js';
-import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { withMcpServerLimitGate } from '../services/billing/entitlements.js';
+import { handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import {
   mcpServersRefusalReason,
   workspaceMayUseMcpServers,
@@ -182,9 +181,10 @@ export function mcpServerRoutes(): Router {
       });
     }
 
-    const created = await withMcpServerLimitGate(assertUser(req).id, () =>
-      createMcpServer(workspaceId, normalized)
-    );
+    // No plan gate. An MCP server spends nothing by existing — what a run
+    // costs is bounded by the task cap already — so charging for the
+    // connection was charging twice for one thing.
+    const created = await createMcpServer(workspaceId, normalized);
     captureWorkspaceEvent(workspaceId, 'mcp_server_connected', serverShape(created));
     res.status(201).json({ success: true, data: created } as ApiResponse<typeof created>);
   });

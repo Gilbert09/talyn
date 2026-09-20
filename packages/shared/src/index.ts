@@ -1253,21 +1253,18 @@ export const FREE_PLAN_WORKFLOW_LIMIT = 3;
  */
 export const FREE_PLAN_LOOP_LIMIT = 3;
 
-/**
- * Max MCP servers an owner may connect on the free plan, across every
- * workspace they own.
+/* MCP servers are deliberately UNCAPPED, on every plan.
  *
- * Counts DEFINITIONS, like the workflow and loop caps above and for the same
- * reason: counting only the enabled ones would make the limit a toggle — keep
- * twelve, enable three, swap whenever. Deleting one frees the slot.
+ * They were capped at 3 like the four above, and that turned out to be the
+ * wrong shape for what they are. A task, a queued PR, a workflow and a loop all
+ * SPEND something when they exist — agent time, a merge, a firing. A connected
+ * MCP server spends nothing until a run uses it, and what a run costs is
+ * already bounded by the task cap. Charging for the connection was charging
+ * twice for one thing.
  *
- * This is the only count limit anywhere near MCP servers. There is
- * deliberately no cap on how many a single RUN may use, nor on how many tools
- * each may expose: those were the fleet's, they were round numbers, and they
- * have been removed there. What bounds a run's prompt is the per-server tool
- * allow-list, which is the same saving made as a choice.
- */
-export const FREE_PLAN_MCP_SERVER_LIMIT = 3;
+ * It is also the third time a round number here took away a capability somebody
+ * connected on purpose: the fleet's server and tool counts went for the same
+ * reason, and its 8KB schema cap after them. */
 
 /** ApiResponse.code when task creation/activation is rejected by the free limit. */
 /**
@@ -1310,12 +1307,6 @@ export const WORKFLOW_LIMIT_ERROR_CODE = 'workflow_limit_reached';
 export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
 
 /**
- * ApiResponse.code when connecting an MCP server is rejected by the free-plan
- * cap. A usage cap like the others — deleting a server frees the slot.
- */
-export const MCP_SERVER_LIMIT_ERROR_CODE = 'mcp_server_limit_reached';
-
-/**
  * ApiResponse.code when a free plan tries to turn ON the workspace default
  * "auto-keep new PRs mergeable". Unlike the two limit codes this is a FEATURE
  * gate, not a usage cap — there is no count to wait out, so the client must
@@ -1353,10 +1344,6 @@ export interface BillingStatus {
   loops: number;
   /** null = unlimited. */
   loopLimit: number | null;
-  /** MCP servers the user has connected, across all their workspaces. */
-  mcpServers: number;
-  /** null = unlimited. */
-  mcpServerLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

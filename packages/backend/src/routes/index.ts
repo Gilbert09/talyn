@@ -29,7 +29,6 @@ import {
   TaskLimitError,
   WorkflowLimitError,
   LoopLimitError,
-  McpServerLimitError,
 } from '../services/billing/entitlements.js';
 import { ownerScope } from '../middleware/ownerScope.js';
 import { rateLimit } from '../middleware/rateLimit.js';
@@ -261,17 +260,18 @@ export function apiErrorHandler(
   // Central mapping for the free-plan gates — task creation/reactivation
   // paths throw TaskLimitError, the merge-queue toggle throws
   // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
-  // creating a loop throws LoopLimitError, connecting an MCP server throws
-  // McpServerLimitError, turning on the auto-keep default throws
-  // AutoKeepDefaultPlanError, and all six land here so the 402 + code contract
-  // lives in exactly one place. Expected traffic, not an error — no console
-  // spam.
+  // creating a loop throws LoopLimitError, turning on the auto-keep default
+  // throws AutoKeepDefaultPlanError, and all five land here so the 402 + code
+  // contract lives in exactly one place. Expected traffic, not an error — no
+  // console spam.
+  //
+  // MCP servers are deliberately absent: they are uncapped on every plan, so
+  // there is no limit error for them to throw.
   if (
     err instanceof TaskLimitError ||
     err instanceof MergeQueueLimitError ||
     err instanceof WorkflowLimitError ||
     err instanceof LoopLimitError ||
-    err instanceof McpServerLimitError ||
     err instanceof AutoKeepDefaultPlanError
   ) {
     res.status(402).json({ success: false, error: err.message, code: err.code });

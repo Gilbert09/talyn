@@ -10,9 +10,9 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { Input } from '../../ui/input';
 import { toast } from '../../../stores/toast';
-import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
@@ -38,7 +38,8 @@ export function McpServersPanel() {
     | { mode: 'list' }
     | { mode: 'edit'; server: McpServerDefinition | null; initial?: McpServerInput }
   >({ mode: 'list' });
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<McpServerDefinition | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   /**
    * The one event the server cannot see: somebody who opens the editor and
@@ -53,27 +54,13 @@ export function McpServersPanel() {
   };
 
   /**
-   * Start a new server — unless the free plan has no slot left, in which case
-   * pitch the upgrade instead of opening the editor.
+   * Start a new server.
    *
-   * The server gate is the real one; this only moves the refusal to before the
-   * form. Pasting a URL and a key and THEN being told you may not keep it is
-   * the worst order to learn it in. The snapshot is owner-wide, so it counts
-   * servers in workspaces this page cannot see.
+   * No paywall pre-empt, because there is no cap to pre-empt: MCP servers are
+   * uncapped on every plan. Connecting one spends nothing until a run uses it,
+   * and what a run costs is bounded by the task limit already.
    */
   const openNew = (initial?: McpServerInput) => {
-    const status = useBillingStore.getState().status;
-    if (status && status.mcpServerLimit != null && status.mcpServers >= status.mcpServerLimit) {
-      trackEvent('paywall_shown', {
-        reason: 'mcp_server_limit',
-        trigger: 'mcp_new',
-        mcp_servers: status.mcpServers,
-        mcp_server_limit: status.mcpServerLimit,
-        plan: status.plan,
-      });
-      useBillingStore.getState().setUpgradeModalOpen(true, 'mcp_server_limit');
-      return;
-    }
     openEditor(null, initial);
   };
 
@@ -84,20 +71,8 @@ export function McpServersPanel() {
       toast.success('MCP server saved');
       return next;
     }
-    let made: McpServerDefinition;
-    try {
-      made = await create(input);
-    } catch (err) {
-      // A free plan that filled its last slot elsewhere (another window,
-      // another workspace) only finds out here. The modal explains it, so let
-      // the editor keep the user's work rather than closing it.
-      if (maybeHandleBillingLimit(err, 'mcp_server_create')) {
-        throw err;
-      }
-      throw err;
-    }
+    const made = await create(input);
     toast.success('MCP server saved');
-    void useBillingStore.getState().refresh();
     // Stay on the editor and switch it into edit mode, because connecting is
     // rarely the last step: the tool list needs a probe, and that needs a saved
     // server to probe.
@@ -118,22 +93,28 @@ export function McpServersPanel() {
     );
   }
 
-  const doDelete = async (server: McpServerDefinition) => {
-    // Two clicks rather than a modal. Nothing a run already did with this
-    // server is undone, and a box already holding it is untouched.
-    if (confirmDelete !== server.id) {
-      setConfirmDelete(server.id);
-      window.setTimeout(() => setConfirmDelete((id) => (id === server.id ? null : id)), 4000);
-      toast.info('Click delete again to confirm', 'This also removes its stored key.');
-      return;
-    }
-    setConfirmDelete(null);
+  /**
+   * Perform the delete the dialog is asking about.
+   *
+   * The confirmation is a dialog rather than a second click on the same button.
+   * Click-to-arm put the question in a toast — the corner nobody is looking at
+   * — and made one gesture mean both "ask" and "do", so an impatient second
+   * click on a slow row deleted without anyone reading anything.
+   */
+  const doDelete = async () => {
+    const server = pendingDelete;
+    if (!server) return;
+    setDeleting(true);
     try {
       await remove(server.id);
+      // Closed only on success, so a failure leaves the dialog open with the
+      // error beside it rather than dropping the user back with no explanation.
+      setPendingDelete(null);
       toast.success('MCP server removed');
-      void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not remove', err instanceof Error ? err.message : undefined);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -177,9 +158,8 @@ export function McpServersPanel() {
                   <McpServerRow
                     key={server.id}
                     server={server}
-                    confirmingDelete={confirmDelete === server.id}
                     onEdit={() => openEditor(server)}
-                    onDelete={() => void doDelete(server)}
+                    onDelete={() => setPendingDelete(server)}
                     onSetEnabled={(enabled) => {
                       void setEnabled(server, enabled).catch((err: unknown) =>
                         toast.error(
@@ -201,19 +181,32 @@ export function McpServersPanel() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Remove this MCP server?"
+        description={
+          <>
+            Removing <span className="font-medium text-foreground">{pendingDelete?.name}</span> 
+            also deletes its stored key. Runs already holding it are untouched.
+          </>
+        }
+        confirmLabel="Remove"
+        busy={deleting}
+        onConfirm={() => void doDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
 
 function McpServerRow({
   server,
-  confirmingDelete,
   onEdit,
   onDelete,
   onSetEnabled,
 }: {
   server: McpServerDefinition;
-  confirmingDelete: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onSetEnabled: (enabled: boolean) => void;
@@ -260,7 +253,7 @@ function McpServerRow({
         <Pencil className="h-4 w-4" />
       </Button>
       <Button
-        variant={confirmingDelete ? 'destructive' : 'ghost'}
+        variant="ghost"
         size="sm"
         onClick={onDelete}
         aria-label="Delete"
@@ -327,6 +320,7 @@ function Catalog({
           );
         })}
       </div>
+
     </div>
   );
 }
