@@ -38,7 +38,8 @@ import {
   externalQueueProviderLabel,
   externalQueueStateLabel,
   externalQueueStatusFromLabels,
-  prHasFixableIssues,
+  fixBlockedReason,
+  fixBlockedMessage,
   coarseQueueStatus,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
 } from '@talyn/shared';
@@ -49,6 +50,7 @@ import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
+import { trackEvent } from '../../../lib/analytics';
 import { useBillingStore } from '../../../stores/billing';
 
 /**
@@ -396,8 +398,10 @@ function PRTableRow({
   // Failing NON-required checks count here (the manual button, unlike the
   // auto-watcher, lets the user choose to spend a run on them — they block
   // Talyn's own App-token merge even though a human could merge past them).
-  const canFollowUp =
-    row.state === 'open' && prHasFixableIssues(summary) && !taskRunning;
+  // Derived from the shared reason rather than re-spelled here, so the state
+  // of the control and the reason reported to analytics are the same call.
+  const fixBlocked = fixBlockedReason(summary, { state: row.state, taskRunning });
+  const canFollowUp = fixBlocked === null;
 
   async function copyMarkdownLink(e: React.MouseEvent) {
     e.stopPropagation();
@@ -527,6 +531,22 @@ function PRTableRow({
 
   function runCreatePostHogTask(e: React.MouseEvent) {
     e.stopPropagation();
+    // A control that cannot run REPORTS, rather than doing nothing. This used
+    // to be a `disabled` attribute, which fires no click at all — so "nobody
+    // wants to delegate from here" and "we refuse almost every PR they try"
+    // were the same shape in the funnel, which is to say invisible. The click
+    // is now an event and a sentence.
+    if (fixBlocked) {
+      trackEvent('pr_fix_blocked', {
+        source: 'pr_row',
+        reason: fixBlocked,
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+        blocking_reason: summary.blockingReason,
+      });
+      toast.info('Nothing to hand to an agent', fixBlockedMessage(fixBlocked));
+      return;
+    }
     // "Ask every time" with a real choice → open the provider dropdown rather
     // than dispatching. Otherwise dispatch to the resolved default immediately.
     if (taskMenuEnabled) {
@@ -1046,13 +1066,22 @@ function PRTableRow({
                   data-attr="pr-row-fix-with-posthog"
                   onClick={runCreatePostHogTask}
                   onContextMenu={openTaskMenu}
-                  disabled={!canFollowUp || busy !== null}
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
+                  disabled={busy !== null}
+                  // Deliberately NOT disabled when there is nothing to fix:
+                  // aria-disabled still announces it as unavailable, while the
+                  // click that explains why survives to be counted.
+                  aria-disabled={!canFollowUp}
+                  className={cn(
+                    'inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    canFollowUp
+                      ? 'text-muted-foreground hover:bg-violet-500/10 hover:text-violet-600 dark:hover:text-violet-400'
+                      : 'text-muted-foreground/40 hover:bg-muted hover:text-muted-foreground'
+                  )}
                   title={
                     posthogStarted
                       ? 'Cloud run started — see the Tasks panel'
-                      : !canFollowUp
-                      ? 'Nothing to fix — no conflicts, failing checks, or unresolved review comments'
+                      : fixBlocked
+                      ? fixBlockedMessage(fixBlocked)
                       : atTaskLimit
                       ? `Free plan limit reached (${billingStatus.activeTasks}/${billingStatus.activeTaskLimit} active tasks) — upgrade for unlimited`
                       : taskMenuEnabled
@@ -1069,6 +1098,11 @@ function PRTableRow({
                   ) : (
                     <Bot className="h-3.5 w-3.5" />
                   )}
+                  {/* The label IS the change. This was an unlabelled 14px icon
+                      whose meaning lived only in a title tooltip, and the
+                      autocapture data showed people clicking every labelled
+                      control around it and never this one. */}
+                  <span>{posthogStarted ? 'Started' : 'Fix'}</span>
                 </button>
               )}
 

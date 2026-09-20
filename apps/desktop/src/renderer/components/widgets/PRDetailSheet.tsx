@@ -1,5 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { coarseQueueStatus } from '@talyn/shared';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  coarseQueueStatus,
+  fixBlockedReason,
+  fixBlockedMessage,
+  TASK_STATUS_TERMINAL,
+} from '@talyn/shared';
 import {
   ExternalLink,
   RefreshCw,
@@ -22,6 +27,7 @@ import {
   AlertTriangle,
   ListChecks,
   GitBranch,
+  Bot,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
@@ -47,6 +53,8 @@ import { PRReviewPill } from './PRReviewPill';
 import { toast } from '../../stores/toast';
 import { trackEvent } from '../../lib/analytics';
 import { usePullRequestStore } from '../../stores/pullRequests';
+import { useWorkspaceStore } from '../../stores/workspace';
+import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { stackSelection } from '../panels/github/stacks';
 
 /**
@@ -117,6 +125,17 @@ export function PRDetailSheet({
   // the store (the sheet gets no stackMeta), by the same rule the backend uses.
   // Only decides whether to offer "Merge stack" — the server re-resolves the
   // chain on the call itself.
+  const [startingFix, setStartingFix] = useState(false);
+  const tasks = useWorkspaceStore((s) => s.tasks);
+  const openConnectAgent = useWorkspaceStore((s) => s.openConnectAgent);
+  // Same dispatch path the row list uses. Routed through the hook rather than
+  // re-implemented so the sheet cannot start a run the row would not, and so
+  // an unconnected user lands in ConnectAgentModal with this fix stashed.
+  const { createPostHogTask, providerReady } = useGitHubActions();
+  // Read inside the open effect without becoming a dependency of it: a
+  // provider connecting mid-read must not re-fire `pr_detail_opened`.
+  const providerReadyRef = useRef(providerReady);
+  providerReadyRef.current = providerReady;
   const openRows = usePullRequestStore((s) => s.rows);
   const { targets: stackTargets, isRoot: isStackRoot, base: stackBase } = useMemo(
     () =>
@@ -132,7 +151,31 @@ export function PRDetailSheet({
       setCachedBody(null);
       return;
     }
-    trackEvent('pr_detail_opened');
+    // What this sheet could offer at the instant it opened. This is the
+    // measurement that was missing: a `disabled` control emits nothing, so
+    // "people read PRs and never delegate" and "we refuse nearly every PR they
+    // read" were the same shape in the funnel. `seedRow` is the list's own row
+    // — absent when the sheet is opened from a surface that has none, and the
+    // properties are then OMITTED rather than guessed, because a wrong default
+    // here reads as fact.
+    const seedTaskStatus = seedRow?.taskId
+      ? useWorkspaceStore.getState().tasks.find((t) => t.id === seedRow.taskId)?.status
+      : undefined;
+    const openedBlocked = seedRow
+      ? fixBlockedReason(seedRow.summary, {
+          state: seedRow.state,
+          taskRunning: seedTaskStatus !== undefined && !TASK_STATUS_TERMINAL[seedTaskStatus],
+        })
+      : null;
+    trackEvent('pr_detail_opened', {
+      ...(seedRow
+        ? {
+            can_dispatch: openedBlocked === null,
+            ...(openedBlocked ? { dispatch_blocked_reason: openedBlocked } : {}),
+          }
+        : {}),
+      has_agent: providerReadyRef.current,
+    });
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -412,6 +455,51 @@ export function PRDetailSheet({
   // drop every write action.
   const isOwnPr = !!view && view.row.authored;
 
+  // Whether an agent can take this PR right now, and if not, why. The row list
+  // gets its task status as a prop; the sheet has to look the linked task up
+  // itself. `TASK_STATUS_TERMINAL` is the shared record every active/terminal
+  // list derives from, so a new status routes the compiler here.
+  const linkedTaskStatus = view?.row.taskId
+    ? tasks.find((t) => t.id === view.row.taskId)?.status
+    : undefined;
+  const fixBlocked = view
+    ? fixBlockedReason(view.row.summary, {
+        state: view.row.state,
+        taskRunning: linkedTaskStatus !== undefined && !TASK_STATUS_TERMINAL[linkedTaskStatus],
+      })
+    : null;
+
+  async function handleFix() {
+    if (!view) return;
+    // Refuses out loud. See the same branch in prTableShared: a control that
+    // says nothing when it cannot run teaches the user it is broken and tells
+    // us nothing about how often we said no.
+    if (fixBlocked) {
+      trackEvent('pr_fix_blocked', {
+        source: 'pr_detail',
+        reason: fixBlocked,
+        repo: `${view.row.owner}/${view.row.repo}`,
+        pr_number: view.row.number,
+        blocking_reason: view.row.summary.blockingReason,
+      });
+      toast.info('Nothing to hand to an agent', fixBlockedMessage(fixBlocked));
+      return;
+    }
+    setStartingFix(true);
+    try {
+      // Resolves no environment when nothing is connected, which opens
+      // ConnectAgentModal with this fix stashed — the click is not wasted.
+      await createPostHogTask(view.row);
+    } catch (err) {
+      toast.error(
+        `Couldn't start a run on ${view.row.owner}/${view.row.repo}#${view.row.number}`,
+        err instanceof Error ? err.message : undefined
+      );
+    } finally {
+      setStartingFix(false);
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -525,6 +613,27 @@ export function PRDetailSheet({
             {/* Right: write actions — only for PRs you own. */}
             {isOwnPr && (view.row.state === 'open' || canMerge) && (
               <div className="flex flex-wrap items-center justify-end gap-1">
+            {view.row.state === 'open' && (
+              <Button
+                variant={fixBlocked ? 'outline' : 'default'}
+                className="h-7 px-2 text-xs"
+                onClick={() => void handleFix()}
+                disabled={startingFix}
+                aria-disabled={Boolean(fixBlocked)}
+                title={
+                  fixBlocked
+                    ? fixBlockedMessage(fixBlocked)
+                    : 'Hand this PR to a cloud agent: resolve review comments, fix CI, resolve conflicts'
+                }
+              >
+                {startingFix ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Bot className="mr-1 h-3.5 w-3.5" />
+                )}
+                Fix with agent
+              </Button>
+            )}
             {view.row.state === 'open' && posthogConnected && (
               <Button
                 variant={view.row.autoKeepMergeable ? 'default' : 'outline'}
@@ -643,6 +752,37 @@ export function PRDetailSheet({
           </div>
         )}
       </header>
+
+      {/* The connect prompt, at the point of need. 29 of 46 active accounts
+          have no agent connected and therefore cannot delegate anything; the
+          one place they reliably are is here, reading a PR. Settings is where
+          connections happened before, and nobody arrives there with a task in
+          mind. Shown only on an open PR you own — the only case where an agent
+          has something to do. */}
+      {view && isOwnPr && !providerReady && view.row.state === 'open' && (
+        <div className="flex items-center justify-between gap-3 border-b bg-violet-500/5 px-4 py-2">
+          <p className="text-xs text-muted-foreground">
+            No agent connected yet. Talyn can take this PR to a mergeable state on your own
+            Claude or Codex subscription.
+          </p>
+          <Button
+            variant="outline"
+            className="h-7 shrink-0 px-2 text-xs"
+            onClick={() =>
+              // Stash the fix only when there IS one, so connecting runs the
+              // work they were looking at. On a clean PR there is nothing to
+              // stash and this is just the connect step.
+              openConnectAgent(
+                fixBlocked ? null : { kind: 'fix', row: view.row },
+                'pr_detail_banner'
+              )
+            }
+          >
+            <Bot className="mr-1 h-3.5 w-3.5" />
+            Connect an agent
+          </Button>
+        </div>
+      )}
 
       {view && (
         <DetailTabs

@@ -2,6 +2,72 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Naming the button, and counting the times we said no (2026-09-20)
+
+- Analytics question first: where does the time go? Over 30 days, 51.8 hours
+  across 46 people, and **My PRs takes 62%** of it — Reviews 16%, Tasks 11%,
+  everything else under 5%. Inside My PRs the split is 78% list, 22% the PR
+  detail sheet, which alone holds 9.2 hours across 16 people. My PRs is also
+  the default panel, so it gets launch time for free; it still leads on
+  deliberate navigation alone (16.7h, 19 people).
+
+- Dispatching is where the value is, and the gap is stark. People who have
+  ever started a task versus people who never have, over 90 days: 26.5 active
+  days against 2.0, 83 sessions against 3, 133 PR-details opened against 3.5.
+  Correlation, not cause — heavy users dispatch — but a 13x gap is worth
+  chasing. The runs themselves are fine: 4,749 completed against 428 failed.
+
+- **What was NOT blocking it**, each checked and ruled out. Billing: 9
+  `paywall_shown` in 90 days. Reliability: the 4,658 `task_dispatch_failed`
+  events were two past incidents (weeks of Jul 13 and Aug 3); the last 30 days
+  have six. What IS blocking it is earlier and duller — of 46 monthly actives,
+  **10 have ever connected an agent** and 29 have connected nothing at all, so
+  they cannot dispatch anything. The `ConnectAgentStep` (Sep 5) is already
+  moving that: 29% of the pre-Sep-5 onboarding cohort connected, against 50%
+  since. Connecting has not yet turned into dispatching — 5 of those connected
+  accounts have never started a run.
+
+- **The fix control was a 14-pixel unlabelled robot icon that was disabled most
+  of the time.** Its meaning lived only in a `title`, and `canFollowUp` gated
+  it on `prHasFixableIssues`, so the only PR you could delegate was one that
+  was already broken. The autocapture breakdown for My PRs says it plainly:
+  the top clicked elements are the sidebar links, "Add to merge queue", "Got
+  it", "Auto-keep mergeable". The fix icon does not appear at all.
+
+- **It has a word now**, in the row and — new — as a primary "Fix with agent"
+  button in the detail sheet, which had no dispatch affordance whatsoever
+  despite being the surface people read in. Same `createPostHogTask` path, so
+  an unconnected user still lands in `ConnectAgentModal` with the fix stashed.
+
+- **A refusal is an event, not an absence.** The row button is no longer
+  `disabled` when there is nothing to fix; it is `aria-disabled`, and the click
+  reports `pr_fix_blocked` and toasts the reason. This is the whole point: a
+  disabled button fires no click, so "nobody wants to delegate from here" and
+  "we refuse nearly every PR they try" were the *same shape* in the funnel —
+  which is to say invisible. `pr_detail_opened` now also carries
+  `can_dispatch`, `dispatch_blocked_reason` and `has_agent`, so the question
+  "of the PRs people actually read, how many would we even let them delegate?"
+  is answerable. It was not before, at any price.
+
+- `fixBlockedReason` / `fixBlockedMessage` live in `packages/shared` and are
+  the ONE definition behind both the control's state and the reported reason.
+  Spelling the condition out at each call site is how a funnel ends up counting
+  a refusal the UI never made. Absence of a seed row means the properties are
+  **omitted rather than guessed** — a wrong default reads as fact.
+
+- **The connect prompt moved to the point of need.** 11 of 13 provider
+  connections happened in Settings, which nobody reaches with a task in mind.
+  An unconnected author now gets a slim banner in the detail sheet, which
+  stashes the fix when there is one. `connect_agent_opened` /
+  `connect_agent_dispatched` (with a `ConnectAgentSource` on the store) make
+  the conversion measurable — the modal had no instrumentation at all, so
+  "asked and declined" and "never asked" were indistinguishable.
+
+- Still open, deliberately: the button is only offered on PRs that are already
+  broken. Turning the refusal into an empty-prompt agent menu is the next step,
+  and the `pr_fix_blocked` counts are what will say whether it is worth it.
+  Reviews still has no dispatch affordance at all.
+
 ## Remembering the window (2026-09-20)
 
 - An update installing itself is the restart nobody chooses, and the app came

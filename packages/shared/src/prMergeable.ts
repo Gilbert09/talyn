@@ -190,6 +190,47 @@ export function prHasFixableIssues(s: PRMergeableSummary): boolean {
 }
 
 /**
+ * Why this PR cannot be handed to an agent right now, or `null` when it can.
+ *
+ * ONE definition behind two things that must never drift: whether the fix
+ * control runs, and what the `pr_fix_blocked` event reports. Spelling the
+ * condition out separately at each call site is how a funnel ends up counting
+ * a refusal the UI did not actually make.
+ *
+ * Most-specific first. A closed PR is not "nothing to fix", and a PR with a
+ * run already on it is a wait rather than a refusal — telling a person the
+ * wrong one of those three sends them somewhere that cannot help.
+ */
+export type FixBlockedReason = 'pr_closed' | 'task_running' | 'no_fixable_issues';
+
+export function fixBlockedReason(
+  s: PRMergeableSummary,
+  opts: { state: string; taskRunning: boolean }
+): FixBlockedReason | null {
+  if (opts.state !== 'open') return 'pr_closed';
+  if (opts.taskRunning) return 'task_running';
+  if (!prHasFixableIssues(s)) return 'no_fixable_issues';
+  return null;
+}
+
+/**
+ * What to tell somebody who just clicked a fix control that cannot run.
+ *
+ * Lives next to the reason so a new member of the union is a compile error
+ * here rather than a blank explanation in the product.
+ */
+export function fixBlockedMessage(reason: FixBlockedReason): string {
+  switch (reason) {
+    case 'pr_closed':
+      return 'This PR is closed, so an agent has nothing to push to.';
+    case 'task_running':
+      return 'A run is already working this PR. Stop it before you start another.';
+    case 'no_fixable_issues':
+      return 'Nothing to fix: no merge conflicts, no failing checks, and no unresolved review comments.';
+  }
+}
+
+/**
  * A short, human one-liner for *why* a PR can't merge — for blocked-state
  * notifications and badge tooltips. Most-specific blocker first.
  *

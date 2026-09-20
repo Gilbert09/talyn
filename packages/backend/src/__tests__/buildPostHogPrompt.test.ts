@@ -4,6 +4,9 @@ import {
   buildMergeablePrompt,
   prNeedsFollowup,
   prHasFixableIssues,
+  fixBlockedReason,
+  fixBlockedMessage,
+  type FixBlockedReason,
   TALYN_COMMENT_TAGLINE,
   TALYN_NEEDS_HUMAN_SENTINEL,
   parseNeedsHumanSentinel,
@@ -497,5 +500,66 @@ describe('mergeableBlockerSignature', () => {
   it('treats an absent merge state as UNKNOWN, so the watcher can omit it', () => {
     expect(mergeableBlockerSignature(summary)).toBe(mergeableBlockerSignature(summary, ''));
     expect(mergeableBlockerSignature(summary)).toContain('UNKNOWN');
+  });
+});
+
+describe('fixBlockedReason — the one definition behind the fix control and its analytics', () => {
+  const clean: PRMergeableSummary = {
+    url: 'https://github.com/acme/app/pull/1',
+    headBranch: 'feat',
+    baseBranch: 'main',
+    mergeable: 'MERGEABLE',
+    reviewDecision: 'APPROVED',
+    blockingReason: 'mergeable',
+    checks: { total: 5, failed: 0 },
+  };
+  const conflicted: PRMergeableSummary = { ...clean, blockingReason: 'merge_conflicts' };
+
+  it('returns null exactly when the control may run', () => {
+    expect(fixBlockedReason(conflicted, { state: 'open', taskRunning: false })).toBeNull();
+  });
+
+  it.each([
+    ['clean open PR', clean, 'open', false, 'no_fixable_issues'],
+    ['fixable but a run is already on it', conflicted, 'open', true, 'task_running'],
+    ['closed', conflicted, 'closed', false, 'pr_closed'],
+    ['merged', conflicted, 'merged', false, 'pr_closed'],
+    ['clean AND closed', clean, 'closed', false, 'pr_closed'],
+  ] as const)('%s → %s', (_label, s, state, taskRunning, expected) => {
+    expect(fixBlockedReason(s, { state, taskRunning })).toBe(expected);
+  });
+
+  // Precedence is not cosmetic: each reason sends the reader somewhere
+  // different, and the most specific one is the only actionable one. A closed
+  // PR reported as "nothing to fix" invites them to go break it on purpose.
+  it('reports the most specific reason when several apply', () => {
+    expect(fixBlockedReason(clean, { state: 'closed', taskRunning: true })).toBe('pr_closed');
+    expect(fixBlockedReason(clean, { state: 'open', taskRunning: true })).toBe('task_running');
+  });
+
+  // The state of the control and the reason shipped to analytics come from one
+  // call, so "the button was grey" and "we recorded a refusal" cannot disagree.
+  it.each([
+    ['open + fixable', conflicted, 'open', false],
+    ['open + clean', clean, 'open', false],
+    ['open + running', conflicted, 'open', true],
+    ['closed', conflicted, 'closed', false],
+  ] as const)('%s: null ⇔ the legacy canFollowUp predicate', (_label, s, state, taskRunning) => {
+    const legacy = state === 'open' && prHasFixableIssues(s) && !taskRunning;
+    expect(fixBlockedReason(s, { state, taskRunning }) === null).toBe(legacy);
+  });
+});
+
+describe('fixBlockedMessage', () => {
+  const REASONS: FixBlockedReason[] = ['pr_closed', 'task_running', 'no_fixable_issues'];
+
+  it.each(REASONS)('%s has a sentence a person can act on', (reason) => {
+    const message = fixBlockedMessage(reason);
+    expect(message.length).toBeGreaterThan(20);
+    expect(message).toMatch(/[.]$/);
+  });
+
+  it('gives each reason its own wording', () => {
+    expect(new Set(REASONS.map(fixBlockedMessage)).size).toBe(REASONS.length);
   });
 });

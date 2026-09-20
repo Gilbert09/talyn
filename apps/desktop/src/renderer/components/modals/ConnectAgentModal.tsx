@@ -10,6 +10,7 @@ import {
 import { ProviderConnectCards } from '../panels/SettingsPanel';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { useWorkspaceStore } from '../../stores/workspace';
+import { trackEvent } from '../../lib/analytics';
 
 /**
  * "Connect an agent to run this." Task buttons render even with no cloud
@@ -25,22 +26,54 @@ export function ConnectAgentModal() {
   const open = useWorkspaceStore((s) => s.connectAgentOpen);
   const pending = useWorkspaceStore((s) => s.pendingCloudTask);
   const closeConnectAgent = useWorkspaceStore((s) => s.closeConnectAgent);
+  const source = useWorkspaceStore((s) => s.connectAgentSource);
   const { createPostHogTask, runSkillTask, providerReady } = useGitHubActions();
   // Guard against the async fire running twice while it's in flight.
   const firing = useRef(false);
+  // One impression per open, not per render: the effect below re-runs whenever
+  // the pending task or the provider state changes while the modal is up.
+  const announced = useRef(false);
+
+  // The top of the connect funnel. Without it "we asked and they refused" and
+  // "we never asked" are the same absence, and the only surface we can see
+  // today (Settings) is the one nobody arrives at with a task in mind.
+  useEffect(() => {
+    if (!open) {
+      announced.current = false;
+      return;
+    }
+    if (announced.current) return;
+    announced.current = true;
+    trackEvent('connect_agent_opened', {
+      source: source ?? 'unknown',
+      pending_kind: pending?.kind ?? 'none',
+      // Already connected when this opened — rare, and it means a dispatch
+      // resolved no env for some reason OTHER than "nothing is connected".
+      // Recorded rather than filtered, so it cannot quietly pad the funnel.
+      provider_ready: providerReady,
+    });
+  }, [open, source, pending, providerReady]);
 
   useEffect(() => {
     if (!open || !pending || !providerReady || firing.current) return;
     firing.current = true;
     void (async () => {
       try {
-        if (pending.kind === 'fix') {
-          await createPostHogTask(pending.row, pending.providerType, pending.model);
-        } else {
-          await runSkillTask(pending.row, pending.skill, {
-            providerType: pending.providerType,
-          model: pending.model,
-            localContent: pending.localContent,
+        const dispatched =
+          pending.kind === 'fix'
+            ? await createPostHogTask(pending.row, pending.providerType, pending.model)
+            : await runSkillTask(pending.row, pending.skill, {
+                providerType: pending.providerType,
+                model: pending.model,
+                localContent: pending.localContent,
+              });
+        // The point of stashing the task is that the click which hit this modal
+        // is the one that runs. Recording it is what turns "they connected"
+        // into "they connected AND the work they asked for actually started".
+        if (dispatched) {
+          trackEvent('connect_agent_dispatched', {
+            source: source ?? 'unknown',
+            pending_kind: pending.kind,
           });
         }
       } finally {
@@ -48,7 +81,7 @@ export function ConnectAgentModal() {
         closeConnectAgent();
       }
     })();
-  }, [open, pending, providerReady, createPostHogTask, runSkillTask, closeConnectAgent]);
+  }, [open, pending, providerReady, source, createPostHogTask, runSkillTask, closeConnectAgent]);
 
   // Reset the fire guard on close so a later open can dispatch again.
   useEffect(() => {

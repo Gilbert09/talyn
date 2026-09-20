@@ -75,7 +75,11 @@ describe('useGitHubActions — connect-agent gating', () => {
     const created = await result.current.createPostHogTask(row);
     expect(created).toBe(false);
     expect(createTask).not.toHaveBeenCalled();
-    expect(openConnectAgent).toHaveBeenCalledWith({ kind: 'fix', row, providerType: undefined });
+    // The second argument is the funnel's attribution: which surface asked.
+    expect(openConnectAgent).toHaveBeenCalledWith(
+      { kind: 'fix', row, providerType: undefined },
+      'task_button'
+    );
   });
 
   it('runSkillTask with no provider opens the connect modal and stashes the skill', async () => {
@@ -84,13 +88,16 @@ describe('useGitHubActions — connect-agent gating', () => {
     const created = await result.current.runSkillTask(row, skill, { localContent: 'body' });
     expect(created).toBe(false);
     expect(createTask).not.toHaveBeenCalled();
-    expect(openConnectAgent).toHaveBeenCalledWith({
-      kind: 'skill',
-      row,
-      skill,
-      localContent: 'body',
-      providerType: undefined,
-    });
+    expect(openConnectAgent).toHaveBeenCalledWith(
+      {
+        kind: 'skill',
+        row,
+        skill,
+        localContent: 'body',
+        providerType: undefined,
+      },
+      'task_button'
+    );
   });
 
   it('createPostHogTask with a connected provider dispatches the task instead of prompting', async () => {

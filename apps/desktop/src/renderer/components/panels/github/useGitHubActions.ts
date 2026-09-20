@@ -342,7 +342,7 @@ export function useGitHubActions() {
       if (!envId) {
         // No provider connected/resolvable. Prompt the user to connect one and
         // stash this fix so it auto-runs the moment they do.
-        openConnectAgent({ kind: 'fix', row, providerType, model });
+        openConnectAgent({ kind: 'fix', row, providerType, model }, 'task_button');
         return false;
       }
       // Build the prompt for the provider actually behind the resolved env — the
@@ -404,7 +404,7 @@ export function useGitHubActions() {
           localContent: opts.localContent,
           providerType: opts.providerType,
           model: opts.model,
-        });
+        }, 'task_button');
         return false;
       }
       const provider = (environments.find((e) => e.id === envId)?.type ??

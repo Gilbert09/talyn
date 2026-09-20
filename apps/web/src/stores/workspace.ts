@@ -34,6 +34,13 @@ import type {
  * `model` would re-run the task on the workspace default instead of on what was
  * actually picked.
  */
+/**
+ * The surfaces that can ask somebody to connect an agent. A closed union
+ * rather than a free string: these values are read as a breakdown in the
+ * connect funnel, and a typo there is a silently separate bucket.
+ */
+export type ConnectAgentSource = 'task_button' | 'pr_detail_banner' | 'unknown';
+
 export type PendingCloudTask =
   | { kind: 'fix'; row: PRRow; providerType?: string; model?: string }
   | {
@@ -251,6 +258,13 @@ interface WorkspaceState {
   // the intent to auto-run the moment a provider connects.
   connectAgentOpen: boolean;
   pendingCloudTask: PendingCloudTask | null;
+  /**
+   * WHERE the modal was opened from, for the connect funnel. The modal itself
+   * cannot know — it is mounted once in MainLayout and driven by this store —
+   * and "how many people who were asked went on to connect" is only an
+   * answerable question if the asking is attributed to a surface.
+   */
+  connectAgentSource: ConnectAgentSource | null;
   // "What's new" modal — the release highlights since the version this client
   // last showed. `whatsNewChecked` lives here rather than in the component
   // because MainLayout remounts on every navigation in the web fork, and a
@@ -282,7 +296,7 @@ interface WorkspaceState {
   setEnabledMcpServerCount: (count: number | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
-  openConnectAgent: (pending?: PendingCloudTask | null) => void;
+  openConnectAgent: (pending?: PendingCloudTask | null, source?: ConnectAgentSource) => void;
   /** Close the modal and drop any stashed task. */
   closeConnectAgent: () => void;
   /** Drop just the stashed task (after it has fired). */
@@ -354,6 +368,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   enabledMcpServerCount: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
+  connectAgentSource: null,
   whatsNewOpen: false,
   whatsNewEntries: [],
   whatsNewChecked: false,
@@ -399,9 +414,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setEnabledLoopCount: (enabledLoopCount) => set({ enabledLoopCount }),
   setEnabledMcpServerCount: (enabledMcpServerCount) => set({ enabledMcpServerCount }),
 
-  openConnectAgent: (pending = null) =>
-    set({ connectAgentOpen: true, pendingCloudTask: pending }),
-  closeConnectAgent: () => set({ connectAgentOpen: false, pendingCloudTask: null }),
+  openConnectAgent: (pending = null, source = 'unknown') =>
+    set({ connectAgentOpen: true, pendingCloudTask: pending, connectAgentSource: source }),
+  closeConnectAgent: () =>
+    set({ connectAgentOpen: false, pendingCloudTask: null, connectAgentSource: null }),
   clearPendingCloudTask: () => set({ pendingCloudTask: null }),
 
   openWhatsNew: (whatsNewEntries) => set({ whatsNewOpen: true, whatsNewEntries }),
