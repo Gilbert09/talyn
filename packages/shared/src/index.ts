@@ -22,6 +22,12 @@ export * from './promptTemplates.js';
 // shared so the desktop and web forks can't disagree about what a filter shows.
 export * from './prFilters.js';
 
+// Review priority — the ordering behind the Reviews tab's "Priority" sort.
+// Shared for the same reason as prFilters, and more so: two forks disagreeing
+// about a filter shows a different SET, which somebody notices; two forks
+// disagreeing about a ranking shows a different ORDER, which nobody does.
+export * from './prPriority.js';
+
 // Workflows — user-defined PR automation: the trigger taxonomy, the pure
 // matcher the engine and both editors share, and the validator the route 400s
 // with. Same argument as prFilters: two copies of the predicate would let one

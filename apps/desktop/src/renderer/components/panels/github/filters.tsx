@@ -1,4 +1,4 @@
-import { ArrowUpDown, FilterX } from 'lucide-react';
+import { ArrowUpDown, FilterX, Sparkles } from 'lucide-react';
 
 export type SortDir = 'asc' | 'desc';
 
@@ -63,6 +63,92 @@ export function SortToggle({ sortDir, onToggle }: { sortDir: SortDir; onToggle: 
       {sortDir === 'desc' ? 'Newest' : 'Oldest'}
     </button>
   );
+}
+
+/**
+ * How the Reviews page is ordered.
+ *
+ * A superset of {@link SortDir}'s two states rather than a replacement for it:
+ * `SortToggle` is also driven by My PRs, where `sortDir` additionally feeds
+ * `buildStackedRows`, and that page is not being reordered. Two controls, one
+ * shared comparator for the date modes.
+ */
+export type ReviewSortMode = 'newest' | 'oldest' | 'priority';
+
+/** The cycle order of {@link ReviewSortToggle}. */
+const REVIEW_SORT_CYCLE: ReviewSortMode[] = ['newest', 'oldest', 'priority'];
+
+const REVIEW_SORT_LABEL: Record<ReviewSortMode, string> = {
+  newest: 'Newest',
+  oldest: 'Oldest',
+  priority: 'Priority',
+};
+
+/**
+ * The Reviews page's sort control — newest / oldest / priority.
+ *
+ * Cycles rather than showing three segments. The filter bar is a row of compact
+ * `h-7` controls and a segmented control unbalances it; cycling also keeps the
+ * muscle memory of the two-state toggle this replaces, with the label always
+ * naming the mode that is active.
+ *
+ * `offerPriority` is the feature gate. When it is false the control has exactly
+ * two states and behaves identically to `SortToggle` — a user outside the
+ * audience sees no trace of the third.
+ */
+export function ReviewSortToggle({
+  mode,
+  onChange,
+  offerPriority,
+  modelInstalled = false,
+}: {
+  mode: ReviewSortMode;
+  onChange: (next: ReviewSortMode) => void;
+  offerPriority: boolean;
+  /** Whether a personalized model is serving. Changes the tooltip only. */
+  modelInstalled?: boolean;
+}) {
+  const cycle = offerPriority
+    ? REVIEW_SORT_CYCLE
+    : REVIEW_SORT_CYCLE.filter((m) => m !== 'priority');
+  // A stored 'priority' can outlive the flag being taken away, so fall back
+  // rather than rendering a mode the cycle no longer contains.
+  const current = cycle.includes(mode) ? mode : 'newest';
+  const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+
+  const title =
+    current === 'priority'
+      ? modelInstalled
+        ? `Sorted by what you're most likely to review next — learned from your own review history, plus each PR's current state. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
+        : `Sorted by each PR's current state and how long it has waited. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
+      : `Sorted by created date — ${
+          current === 'newest' ? 'newest first' : 'oldest first'
+        }. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()}.`;
+
+  return (
+    <button
+      type="button"
+      data-attr="pr-review-sort-toggle"
+      onClick={() => onChange(next)}
+      className="flex items-center gap-1 rounded-md border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+      title={title}
+    >
+      {current === 'priority' ? (
+        <Sparkles className="h-3 w-3" />
+      ) : (
+        <ArrowUpDown className="h-3 w-3" />
+      )}
+      {REVIEW_SORT_LABEL[current]}
+    </button>
+  );
+}
+
+/**
+ * Whether two PRs are ordered by {@link compareByCreated} under this mode.
+ * `priority` has its own comparator and never reaches here.
+ */
+export function sortDirForMode(mode: ReviewSortMode): SortDir {
+  return mode === 'oldest' ? 'asc' : 'desc';
 }
 
 /**

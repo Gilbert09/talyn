@@ -3,20 +3,46 @@ import { Eye } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
-import { prMatchesAnyFilter } from '@talyn/shared';
+import {
+  TASK_STATUS_TERMINAL,
+  buildPRPriorityMap,
+  comparePRByPriority,
+  prMatchesAnyFilter,
+  reviewPriorityOffered,
+} from '@talyn/shared';
 import { taskCloudProvider } from '../../../lib/providerMeta';
 import { GitHubPageShell } from './GitHubPageShell';
 import { PRTable, reviewRequestSearchText } from './prTableShared';
 import {
   ClearFiltersButton,
   RepoFilter,
-  SortToggle,
+  ReviewSortToggle,
   compareByCreated,
   prMatchesText,
-  type SortDir,
+  sortDirForMode,
+  type ReviewSortMode,
 } from './filters';
 import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
 import { useGitHubActions } from './useGitHubActions';
+
+/**
+ * Where the chosen sort lives.
+ *
+ * `localStorage`, not workspace settings: it is a personal view preference, and
+ * a round-trip per click to persist which way a list is sorted would be absurd.
+ * Same call `AutoKeepToggle` makes for its own toggle.
+ */
+const SORT_MODE_KEY = 'talyn-reviews-sort-mode';
+
+function loadSortMode(): ReviewSortMode {
+  try {
+    const raw = window.localStorage.getItem(SORT_MODE_KEY);
+    if (raw === 'newest' || raw === 'oldest' || raw === 'priority') return raw;
+  } catch {
+    // Private mode, or a renderer with no storage. Not worth a warning.
+  }
+  return 'newest';
+}
 
 /**
  * "Reviews" — every open PR awaiting your review (you're a requested reviewer,
@@ -35,9 +61,22 @@ export function ReviewsPanel() {
   const [repoFilter, setRepoFilter] = useState('all');
   const [requestedFilter, setRequestedFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  // Read once on mount rather than on every render: `localStorage` is
+  // synchronous and this component re-renders on every poll.
+  const [sortMode, setSortMode] = useState<ReviewSortMode>(loadSortMode);
+  const features = useWorkspaceStore((s) => s.features);
+  const offerPriority = reviewPriorityOffered(features);
 
   // Saved filters: the definitions are workspace-scoped, the selection is not.
+  const setSortModePersisted = (next: ReviewSortMode) => {
+    setSortMode(next);
+    try {
+      window.localStorage.setItem(SORT_MODE_KEY, next);
+    } catch {
+      // A preference that fails to persist is not worth failing the click over.
+    }
+  };
+
   const savedFilters = useSavedPRFilters();
   const [activeFilterIds, setActiveFilterIds] = useState<string[]>([]);
   const [filterModal, setFilterModal] = useState<
@@ -102,6 +141,35 @@ export function ReviewsPanel() {
   // what the modal previews a draft filter over.
   const cohort = useMemo(() => rows.filter((r) => r.reviewRequested), [rows]);
 
+  // A stored 'priority' can outlive the flag being taken away — see
+  // ReviewSortToggle, which falls back to the same 'newest' the sort does.
+  const priorityMode = sortMode === 'priority' && offerPriority;
+
+  /**
+   * Every row's priority verdict, scored ONCE per cohort change.
+   *
+   * Two things here are load-bearing and easy to lose in a refactor. `now` is
+   * pinned for the whole pass — `Array.prototype.sort` needs a consistent
+   * comparator, and a clock that advances mid-sort makes one non-transitive, at
+   * which point V8 returns a scrambled array with no error at all. And the map
+   * is built outside the comparator, so scoring is O(n) rather than O(n log n)
+   * and the order cannot shift between two renders of the same data.
+   *
+   * Recomputed on `cohort` identity, which changes on a poll (30-60s), never on
+   * a timer: the list must not reshuffle under the cursor.
+   */
+  const priorityById = useMemo(() => {
+    if (!priorityMode) return null;
+    const now = Date.now();
+    return buildPRPriorityMap(cohort, {
+      now,
+      isTaskActive: (taskId) => {
+        const status = taskStatusById.get(taskId);
+        return status ? TASK_STATUS_TERMINAL[status] === false : false;
+      },
+    });
+  }, [priorityMode, cohort, taskStatusById]);
+
   const filtered = useMemo(() => {
     let out = cohort;
     if (repoFilter !== 'all') out = out.filter((r) => r.repositoryId === repoFilter);
@@ -124,8 +192,21 @@ export function ReviewsPanel() {
       });
     }
     if (activeCriteria.length > 0) out = out.filter((r) => prMatchesAnyFilter(r, activeCriteria));
-    return out.slice().sort((a, b) => compareByCreated(a, b, sortDir));
-  }, [cohort, repoFilter, search, requestedFilter, sortDir, viewerLogin, activeCriteria]);
+    if (priorityById) {
+      return out.slice().sort((a, b) => comparePRByPriority(a, b, priorityById));
+    }
+    const dir = sortDirForMode(sortMode);
+    return out.slice().sort((a, b) => compareByCreated(a, b, dir));
+  }, [
+    cohort,
+    repoFilter,
+    search,
+    requestedFilter,
+    sortMode,
+    priorityById,
+    viewerLogin,
+    activeCriteria,
+  ]);
 
   const anyFilterActive =
     repoFilter !== 'all' ||
@@ -171,7 +252,11 @@ export function ReviewsPanel() {
                 ))}
               </select>
             )}
-            <SortToggle sortDir={sortDir} onToggle={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))} />
+            <ReviewSortToggle
+              mode={sortMode}
+              onChange={setSortModePersisted}
+              offerPriority={offerPriority}
+            />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
           </>
         }
@@ -194,6 +279,7 @@ export function ReviewsPanel() {
           <PRTable
             rows={filtered}
             variant="review"
+            priorityById={priorityById}
             viewerLogin={viewerLogin}
             selectedId={selectedId}
             onSelect={onSelect}

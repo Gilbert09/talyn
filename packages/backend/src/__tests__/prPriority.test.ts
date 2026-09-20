@@ -1,0 +1,513 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PR_PRIORITY_GATE_RANK,
+  PR_PRIORITY_REASON_LABEL,
+  agePoints,
+  buildPRPriorityMap,
+  comparePRByPriority,
+  describePRPriorityReason,
+  humaniseWait,
+  scorePRForReview,
+  type PRPriorityGate,
+  type PRPriorityReason,
+  type PRPriorityTarget,
+} from '@talyn/shared';
+
+/** A fixed clock — every assertion here must be reproducible at any wall time. */
+const NOW = Date.parse('2026-09-20T12:00:00.000Z');
+const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+
+type RowOpts = Partial<PRPriorityTarget['summary']> & {
+  id?: string;
+  taskId?: string | null;
+  mergeQueued?: boolean;
+  /** Hours since the review was requested. Defaults to "just now". */
+  waitedHours?: number;
+  firstSeenAt?: string | null;
+};
+
+function row(opts: RowOpts = {}): PRPriorityTarget {
+  const { id, taskId, mergeQueued, waitedHours, firstSeenAt, ...summary } = opts;
+  return {
+    id: id ?? 'pr-1',
+    taskId: taskId ?? null,
+    mergeQueued: mergeQueued ?? false,
+    createdAt: hoursAgo(waitedHours ?? 0),
+    reviewRequestedFirstSeenAt: firstSeenAt,
+    summary: {
+      author: 'sarah',
+      draft: false,
+      createdAt: hoursAgo(waitedHours ?? 0),
+      mergeable: 'MERGEABLE',
+      blockingReason: 'mergeable',
+      effectiveReviewDecision: 'REVIEW_REQUIRED',
+      checks: { total: 8, passed: 8, failed: 0, inProgress: 0, skipped: 0 },
+      ...summary,
+    },
+  };
+}
+
+const ctx = { now: NOW };
+const gateOf = (r: PRPriorityTarget) => scorePRForReview(r, ctx).gate;
+const reasonsOf = (r: PRPriorityTarget) =>
+  scorePRForReview(r, ctx).terms.map((t) => t.reason);
+
+describe('scorePRForReview — gates', () => {
+  it.each<[string, RowOpts, PRPriorityGate]>([
+    ['a plain green PR is the working set', {}, 'actionable'],
+    ['a draft is never ready', { draft: true }, 'not_ready'],
+    ['merge conflicts belong to the author', { mergeable: 'CONFLICTING' }, 'waiting_on_author'],
+    [
+      'required checks failing belong to the author',
+      { blockingReason: 'checks_failed', checks: { total: 8, passed: 6, failed: 2, inProgress: 0, skipped: 0 } },
+      'waiting_on_author',
+    ],
+    [
+      'changes already requested belong to the author',
+      { effectiveReviewDecision: 'CHANGES_REQUESTED' },
+      'waiting_on_author',
+    ],
+    ['a queued PR is blocking somebody', { mergeQueued: true }, 'blocking_others'],
+    [
+      'armed auto-merge makes your approval the merge',
+      { autoMergeBy: 'sarah' },
+      'blocking_others',
+    ],
+    [
+      'the bottom rung of a stack is blocking its rungs',
+      { stack: { size: 3, position: 1 } },
+      'blocking_others',
+    ],
+    [
+      'a MIDDLE rung is not — the one below it is what is blocking',
+      { stack: { size: 3, position: 2 } },
+      'actionable',
+    ],
+    [
+      'a one-PR stack blocks nothing',
+      { stack: { size: 1, position: 1 } },
+      'actionable',
+    ],
+  ])('%s', (_name, opts, expected) => {
+    expect(gateOf(row(opts))).toBe(expected);
+  });
+
+  it('suppresses a PR a cloud agent is still pushing commits to', () => {
+    const r = row({ taskId: 'task-1' });
+    const active = { now: NOW, isTaskActive: (id: string) => id === 'task-1' };
+    expect(scorePRForReview(r, active).gate).toBe('not_ready');
+    expect(scorePRForReview(r, active).terms.map((t) => t.reason)).toContain('agent_running');
+  });
+
+  it('does not suppress a PR whose task has finished', () => {
+    const r = row({ taskId: 'task-1' });
+    expect(scorePRForReview(r, { now: NOW, isTaskActive: () => false }).gate).toBe('actionable');
+  });
+
+  it('does not suppress on a task id it cannot resolve', () => {
+    // No `isTaskActive` at all — a task we cannot see is not evidence of one
+    // in flight, and guessing would bury a reviewable PR.
+    expect(gateOf(row({ taskId: 'task-1' }))).toBe('actionable');
+  });
+
+  it('not_ready outranks waiting_on_author for a conflicted draft', () => {
+    expect(gateOf(row({ draft: true, mergeable: 'CONFLICTING' }))).toBe('not_ready');
+  });
+
+  it('a conflicted PR never reaches blocking_others, however queued', () => {
+    expect(gateOf(row({ mergeQueued: true, mergeable: 'CONFLICTING' }))).toBe('waiting_on_author');
+  });
+
+  it('names exactly one reason for a multiply-blocked PR', () => {
+    const terms = scorePRForReview(
+      row({
+        mergeable: 'CONFLICTING',
+        blockingReason: 'checks_failed',
+        effectiveReviewDecision: 'CHANGES_REQUESTED',
+      }),
+      ctx,
+    ).terms.filter((t) => t.gateMarker);
+    expect(terms).toHaveLength(1);
+    expect(terms[0].reason).toBe('merge_conflicts');
+  });
+});
+
+describe('scorePRForReview — state adjustments', () => {
+  it('rewards a fully green PR', () => {
+    expect(reasonsOf(row())).toContain('checks_green');
+  });
+
+  it('does not call a PR green while checks are still running', () => {
+    const r = row({ checks: { total: 8, passed: 4, failed: 0, inProgress: 4, skipped: 0 } });
+    expect(reasonsOf(r)).toContain('checks_running');
+    expect(reasonsOf(r)).not.toContain('checks_green');
+  });
+
+  it('says nothing about checks when the PR has none', () => {
+    const r = row({ checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 } });
+    expect(reasonsOf(r)).not.toContain('checks_green');
+    expect(reasonsOf(r)).not.toContain('checks_running');
+  });
+
+  it('penalises an unresolved HUMAN thread more than a bot one', () => {
+    const human = scorePRForReview(row({ unresolvedHumanReviewThreads: 2 }), ctx).score;
+    const bot = scorePRForReview(row({ unresolvedBotReviewThreads: 2 }), ctx).score;
+    const clean = scorePRForReview(row(), ctx).score;
+    expect(human).toBeLessThan(bot);
+    expect(bot).toBeLessThan(clean);
+  });
+
+  it('treats an absent thread split as unknown, not as zero threads', () => {
+    // A row cached before the split shipped must score exactly like one with
+    // no threads — never be credited for cleanliness it has not demonstrated,
+    // and never be penalised either.
+    const unknown = scorePRForReview(row(), ctx);
+    expect(unknown.terms.map((t) => t.reason)).not.toContain('human_threads');
+    expect(unknown.terms.map((t) => t.reason)).not.toContain('bot_threads');
+  });
+
+  it('rewards a direct request over a team one', () => {
+    const direct = scorePRForReview(
+      row({ reviewRequestVia: { direct: true, teams: [] } }),
+      ctx,
+    ).score;
+    const team = scorePRForReview(
+      row({ reviewRequestVia: { direct: false, teams: ['posthog/core'] } }),
+      ctx,
+    ).score;
+    expect(direct).toBeGreaterThan(team);
+  });
+
+  it('rewards being the last approval needed', () => {
+    expect(reasonsOf(row({ effectiveReviewDecision: 'APPROVED' }))).toContain('last_approval');
+  });
+
+  it('prefers effectiveReviewDecision over the raw one', () => {
+    const r = row({ reviewDecision: 'REVIEW_REQUIRED', effectiveReviewDecision: 'APPROVED' });
+    expect(reasonsOf(r)).toContain('last_approval');
+  });
+
+  it('demotes a bot author', () => {
+    expect(reasonsOf(row({ author: 'dependabot[bot]' }))).toContain('bot_author');
+    expect(reasonsOf(row({ author: 'sarah' }))).not.toContain('bot_author');
+  });
+
+  it('scales the stack reward with how many PRs are blocked, then caps it', () => {
+    const two = scorePRForReview(row({ stack: { size: 3, position: 1 } }), ctx).score;
+    const five = scorePRForReview(row({ stack: { size: 6, position: 1 } }), ctx).score;
+    const twenty = scorePRForReview(row({ stack: { size: 21, position: 1 } }), ctx).score;
+    expect(five).toBeGreaterThan(two);
+    expect(twenty).toBe(five); // both past the cap
+  });
+});
+
+describe('agePoints', () => {
+  it.each([
+    [0, 0],
+    [3.9, 0],
+    [4, 4],
+    [11.9, 4],
+    [12, 10],
+    [24, 10],
+    [47.9, 10],
+    [48, 14],
+    [119.9, 14],
+    [120, 16],
+    [335.9, 16],
+  ])('%sh → %s points', (hours, expected) => {
+    expect(agePoints(hours)).toBe(expected);
+  });
+
+  it('DECAYS past two weeks rather than climbing forever', () => {
+    // Without this the list becomes a graveyard sorted by neglect, with the
+    // single most-abandoned request permanently on top.
+    expect(agePoints(336)).toBeLessThan(agePoints(335));
+    expect(agePoints(10_000)).toBe(agePoints(336));
+  });
+
+  it('never rewards a negative or non-finite age', () => {
+    expect(agePoints(-5)).toBe(0);
+    expect(agePoints(Number.NaN)).toBe(0);
+  });
+
+  it('a three-week-old request does not outrank a fresh, green, direct one', () => {
+    const ancient = scorePRForReview(row({ waitedHours: 24 * 21 }), ctx);
+    const fresh = scorePRForReview(
+      row({ waitedHours: 6, reviewRequestVia: { direct: true, teams: [] } }),
+      ctx,
+    );
+    expect(fresh.score).toBeGreaterThan(ancient.score);
+  });
+});
+
+describe('the age basis', () => {
+  it('prefers when the review was REQUESTED over when the PR was opened', () => {
+    // A three-week-old PR you were added to an hour ago has waited an hour.
+    const r = row({ waitedHours: 24 * 21, firstSeenAt: hoursAgo(1) });
+    expect(reasonsOf(r)).not.toContain('waited');
+  });
+
+  it('falls back to the open date when the request time is unknown', () => {
+    const r = row({ waitedHours: 30, firstSeenAt: null });
+    const waited = scorePRForReview(r, ctx).terms.find((t) => t.reason === 'waited');
+    expect(waited?.points).toBe(agePoints(30));
+  });
+
+  it('ignores an unparseable timestamp instead of scoring it as 1970', () => {
+    const r = row();
+    r.summary.createdAt = 'not a date';
+    r.createdAt = 'also not a date';
+    expect(reasonsOf(r)).not.toContain('waited');
+  });
+});
+
+describe('humaniseWait', () => {
+  it.each([
+    [0.25, '15m'],
+    [1, '1h'],
+    [30, '30h'],
+    [48, '2d'],
+    [24 * 9, '9d'],
+  ] as Array<[number, string]>)('%sh → %s', (hours, expected) => {
+    expect(humaniseWait(hours)).toBe(expected);
+  });
+});
+
+describe('the reason vocabulary', () => {
+  it('has a phrase for every reason', () => {
+    // A total Record makes a MISSING phrase a compile error; this catches the
+    // other half — a phrase that is present but empty.
+    for (const [reason, label] of Object.entries(PR_PRIORITY_REASON_LABEL)) {
+      expect(label.trim(), reason).not.toBe('');
+    }
+  });
+
+  it('can produce every reason from some real row', () => {
+    // The guard against a weight change silently orphaning a chip the UI still
+    // has a string for.
+    const fixtures: Array<[PRPriorityReason, PRPriorityTarget, typeof ctx]> = [
+      ['unblocks_stack', row({ stack: { size: 3, position: 1 } }), ctx],
+      ['in_merge_queue', row({ mergeQueued: true }), ctx],
+      ['auto_merge_armed', row({ autoMergeBy: 'sarah' }), ctx],
+      ['merge_conflicts', row({ mergeable: 'CONFLICTING' }), ctx],
+      ['checks_failed', row({ blockingReason: 'checks_failed' }), ctx],
+      ['changes_requested', row({ effectiveReviewDecision: 'CHANGES_REQUESTED' }), ctx],
+      ['draft', row({ draft: true }), ctx],
+      [
+        'agent_running',
+        row({ taskId: 't1' }),
+        { now: NOW, isTaskActive: () => true } as typeof ctx,
+      ],
+      ['checks_green', row(), ctx],
+      [
+        'checks_running',
+        row({ checks: { total: 4, passed: 1, failed: 0, inProgress: 3, skipped: 0 } }),
+        ctx,
+      ],
+      ['last_approval', row({ effectiveReviewDecision: 'APPROVED' }), ctx],
+      ['direct_request', row({ reviewRequestVia: { direct: true, teams: [] } }), ctx],
+      ['human_threads', row({ unresolvedHumanReviewThreads: 1 }), ctx],
+      ['bot_threads', row({ unresolvedBotReviewThreads: 1 }), ctx],
+      ['bot_author', row({ author: 'renovate[bot]' }), ctx],
+      ['waited', row({ waitedHours: 30 }), ctx],
+    ];
+
+    const covered = new Set<string>();
+    for (const [reason, r, c] of fixtures) {
+      const produced = scorePRForReview(r, c).terms.map((t) => t.reason);
+      expect(produced, `fixture for ${reason}`).toContain(reason);
+      covered.add(reason);
+    }
+    expect([...covered].sort()).toEqual(Object.keys(PR_PRIORITY_REASON_LABEL).sort());
+  });
+
+  it('folds a count or duration into the phrase', () => {
+    const stack = scorePRForReview(row({ stack: { size: 4, position: 1 } }), ctx);
+    const term = stack.terms.find((t) => t.reason === 'unblocks_stack')!;
+    expect(describePRPriorityReason(term)).toBe('Unblocks others 3');
+
+    const waited = scorePRForReview(row({ waitedHours: 72 }), ctx);
+    expect(describePRPriorityReason(waited.terms.find((t) => t.reason === 'waited')!)).toBe(
+      'Waited 3d',
+    );
+  });
+});
+
+describe('topReason — the chip', () => {
+  it('names the largest positive term', () => {
+    const v = scorePRForReview(
+      row({ waitedHours: 200, reviewRequestVia: { direct: true, teams: [] } }),
+      ctx,
+    );
+    expect(v.topReason?.reason).toBe('waited'); // 16 beats green's 8 and direct's 8
+  });
+
+  it('explains a suppressed PR rather than leaving the cell blank', () => {
+    // The failure PRioritizer's user study died of: an order nobody can argue
+    // with because nothing says why.
+    expect(scorePRForReview(row({ draft: true }), ctx).topReason?.reason).toBe('draft');
+    expect(scorePRForReview(row({ mergeable: 'CONFLICTING' }), ctx).topReason?.reason).toBe(
+      'merge_conflicts',
+    );
+  });
+
+  it('lets the gate marker win over a positive term in a demoted band', () => {
+    // A buried draft whose chip reads "All checks green" explains the opposite
+    // of what the ordering just did to it.
+    const v = scorePRForReview(row({ draft: true }), ctx);
+    expect(v.terms.some((t) => t.reason === 'checks_green')).toBe(true);
+    expect(v.topReason?.reason).toBe('draft');
+  });
+
+  it('also in a PROMOTED band — armed auto-merge is why that row is on top', () => {
+    // Not "All checks green", which is true of half the list and says nothing
+    // about why this row jumped it.
+    const v = scorePRForReview(row({ autoMergeBy: 'sarah', waitedHours: 200 }), ctx);
+    expect(v.topReason?.reason).toBe('auto_merge_armed');
+  });
+
+  it('lets a scoring term win where the gate has no marker to give', () => {
+    // The stack case: `unblocks_stack` scores rather than marking, because its
+    // members differ in HOW MUCH they block, and the count is the useful part.
+    const v = scorePRForReview(row({ stack: { size: 4, position: 1 } }), ctx);
+    expect(v.topReason?.reason).toBe('unblocks_stack');
+    expect(v.topReason?.detail).toBe('3');
+  });
+
+  it('falls back to a negative when a row has nothing good to say', () => {
+    const v = scorePRForReview(
+      row({
+        author: 'dependabot[bot]',
+        checks: { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 },
+      }),
+      ctx,
+    );
+    expect(v.topReason?.reason).toBe('bot_author');
+  });
+});
+
+describe('degenerate rows', () => {
+  it('scores a row cached before any of this shipped, without throwing', () => {
+    const bare: PRPriorityTarget = { id: 'old', summary: { title: 'x' } as never };
+    const v = scorePRForReview(bare, ctx);
+    // Neither promoted on evidence it does not have, nor buried for it.
+    expect(v.gate).toBe('actionable');
+    expect(v.score).toBe(0);
+    expect(v.topReason).toBeNull();
+  });
+
+  it('tolerates a completely absent summary', () => {
+    const bare = { id: 'old' } as unknown as PRPriorityTarget;
+    expect(() => scorePRForReview(bare, ctx)).not.toThrow();
+  });
+});
+
+describe('purity', () => {
+  it('gives an identical verdict for identical input', () => {
+    expect(scorePRForReview(row({ waitedHours: 30 }), ctx)).toEqual(
+      scorePRForReview(row({ waitedHours: 30 }), ctx),
+    );
+  });
+
+  it('does not read the wall clock — only ctx.now', () => {
+    const r = row({ waitedHours: 30 });
+    const a = scorePRForReview(r, { now: NOW });
+    // +100h pushes the same row from the 12-48h band into the 120h+ one. If
+    // the age term read Date.now() instead of ctx.now the two would agree.
+    const b = scorePRForReview(r, { now: NOW + 100 * 3_600_000 });
+    expect(b.score).toBeGreaterThan(a.score);
+  });
+});
+
+describe('comparePRByPriority', () => {
+  const sortWith = (rows: PRPriorityTarget[]) => {
+    const map = buildPRPriorityMap(rows, ctx);
+    return rows.slice().sort((a, b) => comparePRByPriority(a, b, map));
+  };
+
+  it('puts the gates in order, whatever the points say', () => {
+    const rows = [
+      row({ id: 'draft', draft: true, reviewRequestVia: { direct: true, teams: [] }, waitedHours: 400 }),
+      row({ id: 'conflicted', mergeable: 'CONFLICTING' }),
+      row({ id: 'plain' }),
+      row({ id: 'queued', mergeQueued: true }),
+    ];
+    expect(sortWith(rows).map((r) => r.id)).toEqual([
+      'queued',
+      'plain',
+      'conflicted',
+      'draft',
+    ]);
+  });
+
+  it('is a total order — sorting a shuffled list twice agrees', () => {
+    const rows = [
+      row({ id: 'a', waitedHours: 30 }),
+      row({ id: 'b', reviewRequestVia: { direct: true, teams: [] } }),
+      row({ id: 'c', draft: true }),
+      row({ id: 'd', mergeQueued: true }),
+      row({ id: 'e', unresolvedHumanReviewThreads: 1 }),
+      row({ id: 'f' }),
+    ];
+    const once = sortWith(rows).map((r) => r.id);
+    const twice = sortWith(rows.slice().reverse()).map((r) => r.id);
+    expect(twice).toEqual(once);
+  });
+
+  it('breaks a dead tie by id, so the list cannot jitter between polls', () => {
+    // Two identical PRs opened at the same instant. Without the id tiebreak
+    // they swap places on every poll, which reads as a bug rather than a tie.
+    const rows = [row({ id: 'zzz' }), row({ id: 'aaa' })];
+    expect(sortWith(rows).map((r) => r.id)).toEqual(['aaa', 'zzz']);
+    expect(sortWith(rows.slice().reverse()).map((r) => r.id)).toEqual(['aaa', 'zzz']);
+  });
+
+  it('prefers the older PR when scores tie', () => {
+    const rows = [
+      row({ id: 'new', waitedHours: 5 }),
+      row({ id: 'old', waitedHours: 11 }),
+    ];
+    // Both land in the same age band (4–12h), so the scores are equal and the
+    // tiebreak decides.
+    expect(sortWith(rows).map((r) => r.id)).toEqual(['old', 'new']);
+  });
+
+  it('is monotone — adding a positive signal never sends a PR down', () => {
+    const plain = row({ id: 'plain' });
+    const better = row({ id: 'better', reviewRequestVia: { direct: true, teams: [] } });
+    const map = buildPRPriorityMap([plain, better], ctx);
+    expect(comparePRByPriority(better, plain, map)).toBeLessThan(0);
+  });
+
+  it('sorts an unscored row last instead of throwing', () => {
+    const known = row({ id: 'known' });
+    const stranger = row({ id: 'stranger' });
+    const map = buildPRPriorityMap([known], ctx);
+    expect([stranger, known].sort((a, b) => comparePRByPriority(a, b, map)).map((r) => r.id)).toEqual(
+      ['known', 'stranger'],
+    );
+  });
+});
+
+describe('buildPRPriorityMap', () => {
+  it('scores every row exactly once', () => {
+    const rows = [row({ id: 'a' }), row({ id: 'b' }), row({ id: 'c' })];
+    const map = buildPRPriorityMap(rows, ctx);
+    expect(map.size).toBe(3);
+    expect([...map.keys()].sort()).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('gate ranks', () => {
+  it('orders the bands the way the comparator relies on', () => {
+    expect(PR_PRIORITY_GATE_RANK.blocking_others).toBeGreaterThan(
+      PR_PRIORITY_GATE_RANK.actionable,
+    );
+    expect(PR_PRIORITY_GATE_RANK.actionable).toBeGreaterThan(
+      PR_PRIORITY_GATE_RANK.waiting_on_author,
+    );
+    expect(PR_PRIORITY_GATE_RANK.waiting_on_author).toBeGreaterThan(
+      PR_PRIORITY_GATE_RANK.not_ready,
+    );
+  });
+});

@@ -703,6 +703,31 @@ export interface PRSummaryShape {
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;
+  /**
+   * The unresolved threads split by who OPENED them — a bot, or a person.
+   *
+   * `summaryToJsonb` has written both since the split shipped and
+   * `rowToPublicShape` passes `lastSummary` through raw, so these were already
+   * on the wire and merely invisible to TypeScript. Declared now because the
+   * two mean opposite things when deciding whether a PR is worth opening: an
+   * unresolved thread a HUMAN opened usually says the author is mid-revision
+   * and the ball is not with you, while a bot's nit says only that the diff is
+   * about to churn a little.
+   *
+   * Absent on rows cached before the split, and absent must read as UNKNOWN —
+   * never as zero of each, which would claim a PR is clean on no evidence.
+   */
+  unresolvedHumanReviewThreads?: number;
+  unresolvedBotReviewThreads?: number;
+  /**
+   * The login that armed GitHub's NATIVE auto-merge, or `null` when nobody
+   * has. Persisted since auto-merge shipped and, until now, read by nothing.
+   *
+   * It is the highest-precision "waiting on exactly you" signal GitHub hands
+   * out: the author has already declared the PR should land, so an approval is
+   * not a step toward merging, it IS the merge.
+   */
+  autoMergeBy?: string | null;
   /** Whether the viewer was asked to review directly, via a team, or both.
    *  `teams` lists the viewer's own requested teams (`org/team`). Drives the
    *  Review tab's "Requested" column. Absent on older cached rows. */

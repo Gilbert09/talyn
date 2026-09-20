@@ -41,7 +41,9 @@ import {
   fixBlockedReason,
   fixBlockedMessage,
   coarseQueueStatus,
+  describePRPriorityReason,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
+  type PRPriorityVerdict,
 } from '@talyn/shared';
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
@@ -118,6 +120,16 @@ interface PRTableProps {
   viewerLogin: string | null;
   /** Stacked-PR placement per row id (My PRs only) — drives indent + accent. */
   stackMeta?: Map<string, StackMeta>;
+  /**
+   * Why each row sits where it does, keyed by row id. Present ONLY on the
+   * Reviews page in Priority mode — `null` everywhere else, which is what
+   * hides the reason chip rather than a second flag.
+   *
+   * A ranked list with nothing saying why is the failure mode PRioritizer's
+   * user study died of, so the chip is not decoration: it is the reason the
+   * ordering can be trusted or argued with at all.
+   */
+  priorityById?: Map<string, PRPriorityVerdict> | null;
 }
 
 export function PRTable({
@@ -140,6 +152,7 @@ export function PRTable({
   variant,
   viewerLogin,
   stackMeta,
+  priorityById,
 }: PRTableProps) {
   // The queue tab splits its second column into Queue (position/state) + Status
   // (PR readiness pill); every other variant keeps a single second column.
@@ -192,6 +205,7 @@ export function PRTable({
                 : undefined
             }
             viewerLogin={viewerLogin}
+            priority={priorityById?.get(row.id) ?? null}
             isSelected={row.id === selectedId}
             onSelect={() => onSelect(row.id)}
             onOpenTask={onOpenTask}
@@ -233,6 +247,7 @@ function PRTableRow({
   stack,
   parentStatus,
   viewerLogin,
+  priority,
   isSelected,
   onSelect,
   onOpenTask,
@@ -258,6 +273,8 @@ function PRTableRow({
   /** Stacked-PR placement for this row, when it belongs to a stack. */
   stack?: StackMeta;
   viewerLogin: string | null;
+  /** Why this row ranked where it did — Reviews page, Priority mode only. */
+  priority?: PRPriorityVerdict | null;
   isSelected: boolean;
   onSelect: () => void;
   onOpenTask: (taskId: string) => void;
@@ -832,6 +849,28 @@ function PRTableRow({
       </td>
       {variant === 'review' ? (
         <td className="px-2 py-2 text-xs">
+          <div className="flex items-center gap-1.5">
+          {priority?.topReason && (
+            <span
+              className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
+                priority.topReason.points > 0
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                  : 'border-border bg-muted/50 text-muted-foreground'
+              }`}
+              // The full breakdown, because one chip cannot carry it and an
+              // order you cannot interrogate is one you stop trusting.
+              title={`Priority: ${priority.terms
+                .map(
+                  (t) =>
+                    `${describePRPriorityReason(t)}${
+                      t.points === 0 ? '' : ` (${t.points > 0 ? '+' : ''}${t.points})`
+                    }`
+                )
+                .join(', ')}`}
+            >
+              {describePRPriorityReason(priority.topReason)}
+            </span>
+          )}
           {requested ? (
             <span
               className="inline-flex items-center gap-1 text-muted-foreground"
@@ -854,6 +893,7 @@ function PRTableRow({
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
+          </div>
         </td>
       ) : variant === 'queue' ? (
         <>

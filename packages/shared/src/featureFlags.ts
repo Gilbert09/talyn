@@ -219,6 +219,41 @@ export const FEATURE_FLAGS = {
    * No flag can conjure a machine, and a boot-time provider registration
    * should not depend on a network call.
    */
+  /**
+   * Review priority — the ranked ordering of the Reviews tab, and the
+   * per-user model behind it.
+   *
+   * Fallback OFF, matching `fleet` rather than `workflows`, for a reason that
+   * is about cost rather than caution. The feature's second half is a backfill
+   * that spends ~10% of an hour's GitHub GraphQL point budget per viewer to
+   * read their review history, and that budget is shared per rate-limit
+   * ACCOUNT — an App installation pools it across every workspace on it. "We
+   * could not reach PostHog, so start reading everybody's history" would take
+   * points away from the poller and the merge queue, which are the things that
+   * have to keep working.
+   *
+   * Two surfaces, one flag, three independent gates:
+   *  - `GET /features` decides whether the Reviews sort control offers a third
+   *    state at all. Asked about the CALLER, because it is a drawing decision.
+   *  - The model endpoint answers `{ installed: false }` when refused, never a
+   *    throw: it is read while painting the Reviews page, and a 500 there would
+   *    blank the list rather than degrade its ordering.
+   *  - The backfill and trainer ask about the workspace OWNER, because a
+   *    scheduler has no caller. That is the gate that actually bounds the spend.
+   *
+   * Ordering itself is a pure client-side function over data already on the
+   * wire, so a workspace on the wrong side of this flag pays nothing — it
+   * simply keeps the newest/oldest toggle it has today.
+   */
+  reviewPriority: {
+    posthogKey: 'review-priority',
+    envOverride: 'REVIEW_PRIORITY_ENABLED',
+    fallback: false,
+    description: 'Review priority — ranked ordering of the Reviews tab',
+    availability: 'gated',
+    releaseScopes: ['reviews'],
+  },
+
   fleet: {
     posthogKey: 'talyn-fleet',
     envOverride: 'FLEET_ALLOWED',
@@ -351,6 +386,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'workflows',
   'loops',
   'mcpServers',
+  'reviewPriority',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

@@ -445,7 +445,12 @@ describe('featuresForUser', () => {
     // else's workspace. `mcpServers` IS here because this answer decides what
     // to DRAW, which is a question about the person at the screen — every route
     // gates again on the workspace owner.
-    expect(Object.keys(features).sort()).toEqual(['loops', 'mcpServers', 'workflows']);
+    expect(Object.keys(features).sort()).toEqual([
+      'loops',
+      'mcpServers',
+      'reviewPriority',
+      'workflows',
+    ]);
   });
 
   it('reflects the kill switch, so the UI stops drawing what the routes refuse', async () => {
@@ -454,6 +459,7 @@ describe('featuresForUser', () => {
       workflows: false,
       loops: false,
       mcpServers: false,
+      reviewPriority: false,
     });
   });
 
@@ -467,6 +473,22 @@ describe('featuresForUser', () => {
       workflows: true,
       loops: false,
       mcpServers: false,
+      reviewPriority: false,
     });
+  });
+
+  it('refuses review priority by default, because its backfill spends budget', async () => {
+    // The ordering itself is a pure client-side function and costs nothing.
+    // Its other half reads a viewer's whole review history out of GitHub, and
+    // the GraphQL point budget is shared per rate-limit ACCOUNT — so failing
+    // open here would take points from the poller and the merge queue, which
+    // are the things that have to keep working.
+    const features = await featuresForUser(SUBJECT);
+    expect(features.reviewPriority).toBe(false);
+  });
+
+  it('lets the env override turn review priority on for local development', async () => {
+    process.env.REVIEW_PRIORITY_ENABLED = '1';
+    expect((await featuresForUser(SUBJECT)).reviewPriority).toBe(true);
   });
 });
