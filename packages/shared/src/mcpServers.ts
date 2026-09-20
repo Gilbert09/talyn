@@ -115,6 +115,16 @@ export interface McpServerDefinition {
   updatedAt: string;
 }
 
+/** Count only tools present in the latest successful discovery. */
+export function mcpToolCountLabel(server: Pick<McpServerDefinition, 'tools' | 'lastProbe'>): string {
+  const probe = server.lastProbe;
+  if (!probe?.ok || !Array.isArray(probe.toolNames)) return 'Tools not loaded';
+  const available = new Set(probe.toolNames);
+  const selected = Array.isArray(server.tools) ? new Set(server.tools) : available;
+  const enabled = [...available].filter((name) => selected.has(name)).length;
+  return `${enabled}/${available.size} tools`;
+}
+
 /** The write shape. `secret` is write-only and appears in no response. */
 export interface McpServerInput {
   name: string;

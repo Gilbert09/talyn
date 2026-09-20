@@ -2,6 +2,15 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## MCP display updates (2026-09-20)
+
+- Show enabled tools against discovered tools, such as `5/13 tools`.
+- Remove the misleading `No key` badge from connected servers.
+- Keep only `Connected` badges on catalog tiles.
+- Show catalog logos on connected servers and recognized local servers.
+- Simplify the MCP header text.
+- Validate missing discovery, empty selections, duplicate names, and removed tools with 11 focused tests.
+
 ## Session 139 — the reconnect prompt nothing could ever show (2026-09-18)
 
 Asked a plain question after Session 138's fix: what happens when a Claude

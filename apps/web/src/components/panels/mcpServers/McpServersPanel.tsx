@@ -3,6 +3,7 @@ import { Check, Pencil, Plug, Plus, Trash2, X } from 'lucide-react';
 import {
   MCP_CATALOG,
   mcpServerFromCatalog,
+  mcpToolCountLabel,
   type McpCatalogEntry,
   type McpServerDefinition,
   type McpServerInput,
@@ -16,6 +17,7 @@ import { cn } from '../../../lib/utils';
 import { FeedbackButton } from '../workflows/FeedbackButton';
 import { useMcpServers } from './useMcpServers';
 import { McpServerEditorPage } from './McpServerEditorPage';
+import { McpServerLogo } from './McpServerLogo';
 import { LocalImport } from './LocalImport';
 
 /**
@@ -143,8 +145,7 @@ export function McpServersPanel() {
         <div className="flex-1">
           <h1 className="text-lg font-semibold">MCP servers</h1>
           <p className="text-sm text-muted-foreground">
-            Give your agents tools — Linear, Sentry, your own — with the key held here rather than
-            inside the sandbox. Every Talyn Fleet run picks up whatever is switched on.
+            Connect MCP servers to give your agents more tools.
           </p>
         </div>
         <FeedbackButton surface="mcp_servers" />
@@ -225,24 +226,12 @@ function McpServerRow({
         !server.enabled && 'opacity-60'
       )}
     >
+      <McpServerLogo url={server.url} catalogHandle={server.catalogHandle} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{server.displayName || server.name}</span>
           <code className="truncate text-xs text-muted-foreground">{server.name}</code>
-          {/* Absent is "all tools", which is a different statement from a list
-              that happens to be long — so it is labelled rather than counted. */}
-          {/* Absent is "all tools", which is a different statement from a
-              list that happens to be long — so it is labelled, not counted.
-              `Array.isArray` rather than `!== null` because the field is
-              optional as well as nullable, and both absences mean the same. */}
-          <Badge variant="secondary">
-            {Array.isArray(server.tools)
-              ? `${server.tools.length} tool${server.tools.length === 1 ? '' : 's'}`
-              : 'All tools'}
-          </Badge>
-          {!server.hasSecret && server.authKind !== 'none' && (
-            <Badge variant="outline">No key</Badge>
-          )}
+          <Badge variant="secondary">{mcpToolCountLabel(server)}</Badge>
         </div>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{server.url}</p>
         {probe && (
@@ -282,13 +271,7 @@ function McpServerRow({
   );
 }
 
-/**
- * The one-click catalog.
- *
- * OAuth-only vendors are listed and disabled rather than hidden: somebody
- * looking for Notion should find out that signing in is not wired up yet, not
- * conclude Talyn has never heard of it.
- */
+/** Select a server from the catalog. */
 function Catalog({
   connected,
   onPick,
@@ -307,9 +290,6 @@ function Catalog({
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {MCP_CATALOG.map((entry) => {
           const already = connected.has(entry.handle);
-          // Marked rather than refused: these connect fine, they just need a
-          // trip to the vendor's consent screen instead of a pasted key.
-          const signInOnly = entry.oauth === true && !entry.credentialLabel;
           return (
             <button
               key={entry.handle}
@@ -327,10 +307,6 @@ function Catalog({
                 </span>
                 <span className="min-w-0 truncate text-sm font-medium">{entry.title}</span>
                 {already && <Badge variant="secondary">Connected</Badge>}
-                {!already && signInOnly && <Badge variant="outline">Sign in</Badge>}
-                {!already && !signInOnly && entry.authKind === 'none' && (
-                  <Badge variant="outline">No key</Badge>
-                )}
               </div>
               <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{entry.summary}</p>
             </button>

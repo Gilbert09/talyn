@@ -4,6 +4,7 @@ import type { McpServerInput } from '@talyn/shared';
 import type { LocalMcpFinding } from '../../../../main/preload';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { McpServerLogo } from './McpServerLogo';
 import { cn } from '../../../lib/utils';
 
 /**
@@ -62,6 +63,7 @@ export function LocalImport({
       <div className="space-y-2">
         {importable.map((f) => (
           <div key={`${f.source}:${f.name}`} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+            <McpServerLogo url={f.url} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium">{f.name}</span>
@@ -97,16 +99,19 @@ export function LocalImport({
           return (
             <div
               key={`${f.source}:${f.name}`}
-              className={cn('rounded-lg border px-3 py-2 opacity-60')}
+              className={cn('flex items-center gap-3 rounded-lg border px-3 py-2 opacity-60')}
             >
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{f.name}</span>
-                <Badge variant="outline">{f.source}</Badge>
-                {already && <Badge variant="secondary">Connected</Badge>}
+              <McpServerLogo url={f.url} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium">{f.name}</span>
+                  <Badge variant="outline">{f.source}</Badge>
+                  {already && <Badge variant="secondary">Connected</Badge>}
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {already ? 'Already connected to this workspace.' : `Cannot be used here: ${f.reason}`}
+                </p>
               </div>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {already ? 'Already connected to this workspace.' : `Cannot be used here: ${f.reason}`}
-              </p>
             </div>
           );
         })}
