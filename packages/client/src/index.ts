@@ -753,6 +753,18 @@ export interface PRRow {
    * once they submit a review, so an approved PR leaves the "Review" list.
    */
   reviewRequested: boolean;
+  /**
+   * When this PR entered the viewer's review-requested cohort, or `null` on a
+   * row that predates the column.
+   *
+   * The honest basis for "how long have I been sitting on this". The Priority
+   * sort used `summary.createdAt` before this existed, and it lies in the
+   * direction that matters: a three-week-old PR you were added to yesterday
+   * read as three weeks of neglect and outranked the request that had actually
+   * been waiting. `null` falls back to the open date, which over-states the
+   * wait rather than under-stating it.
+   */
+  reviewRequestedFirstSeenAt?: string | null;
   /** True when the PR was opened by the user. Drives the "Mine" tab. */
   authored: boolean;
   /**

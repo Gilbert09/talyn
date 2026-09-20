@@ -14,7 +14,7 @@ import {
   type BatchPRByNumberResult,
   type PRSummary,
 } from './githubGraphql.js';
-import { upsertFromBatchResult } from './prCache.js';
+import { upsertFromBatchResult, reviewRequestedStamps } from './prCache.js';
 import { ttlFor, isCohortActive } from './prFocus.js';
 import {
   initMergeableSettler,
@@ -541,9 +541,16 @@ class PRMonitorService extends EventEmitter {
       if (authored === row.authored && reviewRequested === row.reviewRequested) {
         continue;
       }
+      // Shared with prCache's upsert, which is the OTHER writer of this flag
+      // and usually the one that observes the transition first — the poll
+      // upserts every fetched PR before it reconciles the flags. Two copies of
+      // the rule would let this path stamp a PR the upsert had already moved,
+      // which is a silent reset of the age signal rather than a visible bug.
+      const now = new Date();
+      const stamps = reviewRequestedStamps(row.reviewRequested, reviewRequested, now);
       await this.db
         .update(pullRequestsTable)
-        .set({ authored, reviewRequested, updatedAt: new Date() })
+        .set({ authored, reviewRequested, ...stamps, updatedAt: now })
         .where(eq(pullRequestsTable.id, row.id));
       // The flag UPDATE above doesn't touch `lastSummary`, so this reads the
       // current value. Fetched per changed row (usually 0/tick), not in bulk.
@@ -562,6 +569,11 @@ class PRMonitorService extends EventEmitter {
         state: row.state,
         lastSummary: (summaryRow?.lastSummary as Record<string, unknown> | null) ?? {},
         reviewRequested,
+        // Only on the transition that set it — an emit for an `authored` flip
+        // must not restate a timestamp it did not touch.
+        ...(stamps.reviewRequestedFirstSeenAt
+          ? { reviewRequestedFirstSeenAt: stamps.reviewRequestedFirstSeenAt.toISOString() }
+          : {}),
         authored,
       });
     }

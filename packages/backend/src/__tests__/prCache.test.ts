@@ -1058,6 +1058,48 @@ describe('prCache.getOrFetchPRSummary — TTL', () => {
     vi.restoreAllMocks();
   });
 
+  it('round-trips failingChecksDigest through the cached row', async () => {
+    // It was READ by `rowToSummary` and written by nothing, so every
+    // cached-row read handed the merge queue `undefined` — and that is the
+    // field `mergeableBlockerSignature` uses to tell "the same checks are
+    // still failing" from "different ones are now", i.e. a retry loop from
+    // actual progress. Live fetches carried it; the cache silently did not.
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary({ failingChecksDigest: 'digest-abc' }),
+    });
+    const result = await getOrFetchPRSummary({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 42,
+      ttlMs: DEFAULT_TTL_MS,
+    });
+    expect(result?.cacheMiss).toBe(false);
+    expect(result?.summary.failingChecksDigest).toBe('digest-abc');
+  });
+
+  it('leaves failingChecksDigest undefined rather than empty when it is absent', async () => {
+    // Absent must stay "we do not know". An empty string would claim "nothing
+    // is failing", which is a different and wrong answer.
+    await upsertFromBatchResult({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      summary: makeSummary(),
+    });
+    const result = await getOrFetchPRSummary({
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 42,
+      ttlMs: DEFAULT_TTL_MS,
+    });
+    expect(result?.summary.failingChecksDigest).toBeUndefined();
+  });
+
   it('returns the cached row without hitting GraphQL when last_polled_at is within the TTL', async () => {
     await upsertFromBatchResult({
       workspaceId: 'ws1',

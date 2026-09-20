@@ -586,6 +586,13 @@ export function emitPullRequestUpdated(
     // reviews it. Optional: emitters that don't change them omit them.
     reviewRequested?: boolean;
     authored?: boolean;
+    // When the PR entered the review-requested cohort. Emitted with the flag
+    // transition that set it, so the Reviews tab's age term is right the
+    // moment the row appears rather than at the next full refresh — which
+    // matters because a freshly-requested PR is exactly the case the term
+    // exists to get right. Optional and `??`-preserved on the client, like the
+    // flags above: every other emitter omits it.
+    reviewRequestedFirstSeenAt?: string | null;
     // Manual-watch flag. Optional for the SAME reason as the two above, but the
     // consequence is sharper: prCache's upsert and the monitor's flag reconcile
     // both emit this event and neither knows about `watching`, so a REQUIRED

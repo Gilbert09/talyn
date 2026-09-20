@@ -22,6 +22,8 @@ export interface PullRequestUpdatePayload {
    *  `{ checks }`); it's merged into the held summary, not replaced. */
   lastSummary: Partial<PRSummaryShape>;
   reviewRequested?: boolean;
+  /** Only on the emit that STAMPED it — a plain `authored` flip omits it. */
+  reviewRequestedFirstSeenAt?: string | null;
   authored?: boolean;
   watching?: boolean;
   autoKeepMergeable?: boolean;
@@ -115,6 +117,10 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
       // Relationship flags are only on the payload when the monitor re-bucketed
       // the row (e.g. it left Review after being reviewed); else keep ours.
       reviewRequested: p.reviewRequested ?? next[idx].reviewRequested,
+      // Same `??` rule and the same reason: only the transition emit carries
+      // this, so every other echo must leave the stamp we already hold alone.
+      reviewRequestedFirstSeenAt:
+        p.reviewRequestedFirstSeenAt ?? next[idx].reviewRequestedFirstSeenAt,
       authored: p.authored ?? next[idx].authored,
       // Same rule, and it matters more here: the poll's flag reconcile and every
       // prCache upsert emit this event WITHOUT `watching`, so a `||` (or a

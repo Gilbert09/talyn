@@ -671,6 +671,12 @@ async function upsertRow(
       autoMergeState = { attempts: 0, accounted: true };
     }
   }
+  // Hoisted out of the branch so the emit below can report exactly what was
+  // written. The client `??`-preserves it, so a restated value would be
+  // harmless — but an emit that omits a stamp it DID write leaves the Reviews
+  // tab dating a brand-new request from the PR's open date until the next full
+  // refresh, which is the one case the column exists to get right.
+  let stamps: ReturnType<typeof reviewRequestedStamps> = {};
   if (opts.existingId) {
     // Update path — leave taskId alone (set on first insert only).
     // Disk-IO guard: most polls yield byte-identical content. Compare a cheap
@@ -691,6 +697,9 @@ async function upsertRow(
         .select({
           digest: pullRequestsTable.lastSummaryDigest,
           bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
+          // One boolean, on a read this path already makes — so knowing whether
+          // the PR was already in the cohort costs nothing extra.
+          reviewRequested: pullRequestsTable.reviewRequested,
         })
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, opts.existingId))
@@ -698,6 +707,7 @@ async function upsertRow(
     )[0];
     const prevDigest = prev?.digest;
     const summaryChanged = prevDigest !== digest;
+    stamps = reviewRequestedStamps(prev?.reviewRequested, opts.reviewRequested, now);
     await db
       .update(pullRequestsTable)
       .set({
@@ -721,6 +731,7 @@ async function upsertRow(
         ...(opts.reviewRequested === undefined
           ? {}
           : { reviewRequested: opts.reviewRequested }),
+        ...stamps,
         ...(opts.authored === undefined ? {} : { authored: opts.authored }),
         // Written HERE, in the caller's transaction, rather than by the watch
         // route in a follow-up statement — that update used the monitor's pool
@@ -735,6 +746,12 @@ async function upsertRow(
       })
       .where(eq(pullRequestsTable.id, opts.existingId));
   } else {
+    // A row that is born in the cohort has waited since exactly now. An
+    // absent flag is "the caller does not know", not "no" — see the
+    // conditional spreads on the update path above.
+    if (opts.reviewRequested === true) {
+      stamps = { reviewRequestedFirstSeenAt: now, reviewRequestedClearedAt: null };
+    }
     await db.insert(pullRequestsTable).values({
       id,
       workspaceId: opts.workspaceId,
@@ -745,6 +762,7 @@ async function upsertRow(
       number: opts.summary.number,
       state: opts.summary.state,
       reviewRequested: opts.reviewRequested ?? false,
+      ...stamps,
       authored: opts.authored ?? false,
       watching: opts.explicitWatch === true,
       mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
@@ -774,6 +792,9 @@ async function upsertRow(
     state: opts.summary.state,
     lastSummary,
     ...(opts.reviewRequested === undefined ? {} : { reviewRequested: opts.reviewRequested }),
+    ...(stamps.reviewRequestedFirstSeenAt
+      ? { reviewRequestedFirstSeenAt: stamps.reviewRequestedFirstSeenAt.toISOString() }
+      : {}),
     ...(opts.authored === undefined ? {} : { authored: opts.authored }),
     // Surface the auto-armed state on first insert so the toggle reflects it
     // without waiting for a full fetch (matches the toggle route's emit shape).
@@ -845,6 +866,36 @@ function nextCursors(summary: PRSummary): CursorState {
  * arrays — those are throwaway delta-detection inputs and bloating
  * the row buys nothing.
  */
+/**
+ * The stamp patch for a `reviewRequested` write.
+ *
+ * Every writer of that flag must go through here, and there are two of them —
+ * `upsertRow` below and `prMonitor.reconcileRelationshipFlags`. That is not
+ * obvious from either, and it is the reason this is a function rather than two
+ * inline `if`s: the poll upserts each fetched PR BEFORE it reconciles the
+ * flags, so the upsert is usually the one that actually observes a PR entering
+ * the cohort. A stamp implemented only in the reconcile compiles, passes, and
+ * silently never fires on the common path.
+ *
+ * Stamps on the TRANSITION only. Writing `firstSeenAt` on every write would
+ * reset it on every poll, at which point "waited three days" is permanently zero for the
+ * whole cohort and the Reviews ordering quietly stops meaning anything.
+ */
+export function reviewRequestedStamps(
+  previous: boolean | undefined,
+  next: boolean | undefined,
+  now: Date,
+): { reviewRequestedFirstSeenAt?: Date; reviewRequestedClearedAt?: Date | null } {
+  if (next === undefined || previous === undefined || next === previous) return {};
+  if (next) {
+    // A re-request is a live question again: the old `clearedAt` describes a
+    // request that has been superseded, and leaving it attached would read as
+    // "already reviewed" on a review that is outstanding.
+    return { reviewRequestedFirstSeenAt: now, reviewRequestedClearedAt: null };
+  }
+  return { reviewRequestedClearedAt: now };
+}
+
 function summaryToJsonb(s: PRSummary): Record<string, unknown> {
   return {
     title: s.title,
@@ -867,6 +918,19 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     // tab before that tab's REST file list has landed.
     changedFiles: s.changedFiles,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
+    // Persisted because `rowToSummary` has always READ it and nothing ever
+    // wrote it — so on any cached-row read it was permanently `undefined`, and
+    // `mergeableBlockerSignature` has been comparing `which=?` against `which=?`
+    // for every PR whose signature came from the cache rather than a live
+    // fetch. That is the merge queue's "are the SAME checks still failing"
+    // guard, i.e. the thing that distinguishes progress from a retry loop.
+    //
+    // Note the one-off consequence of fixing it: a stored `seenSignatures`
+    // entry written before this line existed will not match the one written
+    // after, so each affected entry reads as new information once and re-arms
+    // a single time. That is the safe direction — it un-parks rather than
+    // parks — and it settles after one pass.
+    failingChecksDigest: s.failingChecksDigest,
     // Persisted because prNeedsFollowup reads it off the cached row on every
     // watcher tick, not just at fetch time.
     unresolvedHumanReviewThreads: s.unresolvedHumanReviewThreads,

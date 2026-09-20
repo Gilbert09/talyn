@@ -482,6 +482,30 @@ export const pullRequests = pgTable(
      */
     reviewRequested: boolean('review_requested').notNull().default(false),
     /**
+     * When this PR ENTERED the review-requested cohort, and when it left.
+     *
+     * The honest basis for "how long have I been sitting on this": a PR opened
+     * three weeks ago that a reviewer was added to yesterday has waited a day,
+     * and `created_at` says three weeks. Adding a reviewer to an old PR is
+     * routine, so that gap is the common case rather than an edge one.
+     *
+     * Written ONLY on the transition, in `reconcileRelationshipFlags` — a
+     * `true -> true` tick must leave `firstSeenAt` alone, or every PR looks
+     * brand new on every poll and the age signal collapses to zero for
+     * everybody.
+     *
+     * `clearedAt` is the outcome half and is deliberately kept even though the
+     * Reviews list never reads it: a cleared PR has left the list. It is the
+     * only record that the review happened at all, because most reviews are
+     * submitted on github.com and the app never sees them.
+     */
+    reviewRequestedFirstSeenAt: timestamp('review_requested_first_seen_at', {
+      withTimezone: true,
+    }),
+    reviewRequestedClearedAt: timestamp('review_requested_cleared_at', {
+      withTimezone: true,
+    }),
+    /**
      * True when the PR was opened by the connected user. Drives the "Mine"
      * tab independently of {@link reviewRequested} (a PR can be neither —
      * e.g. one the user already reviewed — and then belongs to neither tab).

@@ -135,6 +135,8 @@ export const LIST_COLUMNS = {
   number: pullRequestsTable.number,
   state: pullRequestsTable.state,
   reviewRequested: pullRequestsTable.reviewRequested,
+  reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
+  reviewRequestedClearedAt: pullRequestsTable.reviewRequestedClearedAt,
   authored: pullRequestsTable.authored,
   watching: pullRequestsTable.watching,
   mergedAt: pullRequestsTable.mergedAt,
@@ -167,6 +169,8 @@ export const DETAIL_COLUMNS = {
   number: pullRequestsTable.number,
   state: pullRequestsTable.state,
   reviewRequested: pullRequestsTable.reviewRequested,
+  reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
+  reviewRequestedClearedAt: pullRequestsTable.reviewRequestedClearedAt,
   authored: pullRequestsTable.authored,
   watching: pullRequestsTable.watching,
   mergedAt: pullRequestsTable.mergedAt,
@@ -1449,6 +1453,8 @@ interface PullRequestRow {
   number: number;
   state: string;
   reviewRequested: boolean;
+  reviewRequestedFirstSeenAt: Date | null;
+  reviewRequestedClearedAt: Date | null;
   authored: boolean;
   watching: boolean;
   mergedAt: Date | null;
@@ -1604,6 +1610,7 @@ type PublicShapeRow = Pick<
   | 'number'
   | 'state'
   | 'reviewRequested'
+  | 'reviewRequestedFirstSeenAt'
   | 'authored'
   | 'watching'
   | 'mergedAt'
@@ -1662,6 +1669,12 @@ function rowToPublicShape(row: PublicShapeRow) {
     number: row.number,
     state: row.state,
     reviewRequested: row.reviewRequested,
+    // Only the ENTRY instant goes on the wire. `clearedAt` describes a PR that
+    // has left the cohort and therefore left this list, so shipping it would
+    // be bytes per row per poll for a field nothing can render.
+    reviewRequestedFirstSeenAt: row.reviewRequestedFirstSeenAt
+      ? row.reviewRequestedFirstSeenAt.toISOString()
+      : null,
     authored: row.authored,
     watching: row.watching,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,
