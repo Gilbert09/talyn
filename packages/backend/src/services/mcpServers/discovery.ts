@@ -147,9 +147,15 @@ export async function resourceMetadataFromChallenge(
   for (const url of new Set(candidates)) {
     const doc = await getJson(url, signal);
     if (!doc) continue;
-    // Metadata must describe this resource, not an unrelated token audience.
-    if (!httpsUrl(doc.resource) || new URL(doc.resource as string).toString() !== base.toString())
-      continue;
+    const resourceUrl = httpsUrl(doc.resource);
+    if (!resourceUrl) continue;
+    const resource = new URL(resourceUrl);
+    // Some servers publish an origin-wide audience at their root metadata URL.
+    const originResource =
+      resource.origin === base.origin &&
+      resource.pathname === '/' && !resource.search && !resource.hash &&
+      url === `${base.origin}/.well-known/oauth-protected-resource`;
+    if (resource.toString() !== base.toString() && !originResource) continue;
     const servers = Array.isArray(doc.authorization_servers)
       ? doc.authorization_servers.filter(
           (s): s is string => typeof s === 'string' && httpsUrl(s) !== null
@@ -159,7 +165,7 @@ export async function resourceMetadataFromChallenge(
     const supported = Array.isArray(doc.scopes_supported)
       ? doc.scopes_supported.filter((s): s is string => typeof s === 'string').join(' ')
       : undefined;
-    return { authorizationServers: servers, resource: base.toString(), scope: scope ?? supported };
+    return { authorizationServers: servers, resource: doc.resource as string, scope: scope ?? supported };
   }
   throw new McpDiscoveryError('The server did not provide usable OAuth resource metadata.');
 }

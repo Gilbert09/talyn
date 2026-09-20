@@ -1048,3 +1048,22 @@ Everything in this doc that requires an account, a browser approval, or a creden
 - Install `claude` CLI binaries on remote VMs (we *can* automate this via the Phase 18.3 remote install flow once that ships, but not yet)
 
 Everything else — schema, migrations, deploy configs, Dockerfiles, CI YAML — Claude Code can scaffold. Just share the credentials above when each phase starts.
+
+### Slack MCP sign-in
+
+Slack requires a registered app. It does not support automatic client registration.
+Use an internal Slack app for one organization. Public distribution requires a Marketplace app.
+See [Slack's MCP requirements](https://docs.slack.dev/ai/slack-mcp-server/#authentication-and-token-handling).
+
+1. Register a Slack app for Talyn in [Slack app settings](https://api.slack.com/apps).
+2. Add the exact callback URL: `<WEB_APP_URL>/mcp/callback`.
+3. Configure user scopes for the tools you need. Talyn requests the scopes from Slack's resource metadata.
+   The app must support those scopes. Review [Slack's scope list](https://docs.slack.dev/ai/slack-mcp-server/#oauth-scopes-needed-on-user-token-for-different-tools).
+4. Enable PKCE and token rotation for the app. Slack's PKCE setting cannot be reversed without Slack support.
+5. Set `SLACK_MCP_CLIENT_ID` and `SLACK_MCP_CLIENT_SECRET` on the Talyn backend. Keep the secret out of frontend variables.
+6. Restart the backend. Select Slack in the MCP catalog, then select Connect account.
+
+Slack displays its workspace selection and consent page. Talyn does not select a workspace for the user.
+The backend encrypts the client secret with the stored grant. The browser receives only the authorization URL.
+Without these credentials, Talyn displays a deployment setup error instead of trying automatic registration.
+An administrator may need to approve the Slack app before users can connect.

@@ -262,7 +262,19 @@ export async function startMcpOAuth(
       meta = found.server;
       resource = found.resource.resource ?? server.url;
       scopes = found.resource.scope ? found.resource.scope.split(/\s+/).filter(Boolean) : [];
-      if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint)) {
+      if (new URL(server.url).origin === 'https://mcp.slack.com') {
+        if (meta.issuer !== 'https://mcp.slack.com' ||
+            meta.authorizationEndpoint !== 'https://slack.com/oauth/v2_user/authorize' ||
+            meta.tokenEndpoint !== 'https://slack.com/api/oauth.v2.user.access') {
+          throw new McpDiscoveryError('Slack returned unexpected sign-in endpoints.');
+        }
+        clientId = process.env.SLACK_MCP_CLIENT_ID?.trim();
+        clientSecret = process.env.SLACK_MCP_CLIENT_SECRET?.trim();
+        if (!clientId || !clientSecret) {
+          throw new McpOAuthUnavailableError('Slack sign-in is not configured for this Talyn deployment. An administrator must register a Slack app and configure its client credentials.');
+        }
+        clientSource = 'byo';
+      } else if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint)) {
         // The forward-compatible path: one hosted document, nothing registered.
         clientId = mcpClientMetadataUrl();
         clientSource = 'cimd';

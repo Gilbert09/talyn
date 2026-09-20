@@ -185,6 +185,33 @@ describe('MCP authentication detection', () => {
     expect((await discover(endpoint)).resource.scope).toBe('read');
   });
 
+  it.each(['', 'Bearer resource_metadata="https://mcp.slack.com/.well-known/oauth-protected-resource"'])(
+    'accepts an origin audience from root metadata with challenge %s', async (challenge) => {
+      stub({
+        'https://mcp.slack.com/.well-known/oauth-protected-resource': {
+          resource: 'https://mcp.slack.com', authorization_servers: ['https://mcp.slack.com'],
+        },
+        'https://mcp.slack.com/.well-known/oauth-authorization-server': {
+          ...metadata, issuer: 'https://mcp.slack.com',
+        },
+      }, 401, challenge);
+      expect((await discover('https://mcp.slack.com/mcp')).resource.resource).toBe('https://mcp.slack.com');
+    }
+  );
+
+  it.each([
+    ['https://other.example.com', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['https://mcp.example.com:8443', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['https://mcp.example.com/other', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['https://mcp.example.com/?tenant=other', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['https://mcp.example.com/#other', 'https://mcp.example.com/.well-known/oauth-protected-resource'],
+    ['https://mcp.example.com', 'https://other.example.com/metadata'],
+    ['https://mcp.example.com', 'https://mcp.example.com/metadata'],
+  ])('rejects unrelated audience %s from %s', async (audience, location) => {
+    stub({ [location]: { ...resource, resource: audience } }, 401, `Bearer resource_metadata="${location}"`);
+    await expect(discover(endpoint)).rejects.toThrow(/resource metadata/);
+  });
+
   it('rejects metadata for another resource', async () => {
     stub({
       'https://mcp.example.com/.well-known/oauth-protected-resource': {

@@ -513,6 +513,15 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     notes: 'Also accepts a personal API key, which works today without signing in.',
   },
   {
+    handle: 'slack',
+    logo: MCP_CATALOG_LOGOS['slack'],
+    title: 'Slack',
+    summary: 'Search messages, read channels and work with your Slack workspace.',
+    url: 'https://mcp.slack.com/mcp',
+    authKind: 'bearer',
+    oauth: true,
+  },
+  {
     handle: 'sentry',
     logo: MCP_CATALOG_LOGOS['sentry'],
     title: 'Sentry',

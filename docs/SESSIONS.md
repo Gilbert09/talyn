@@ -2,6 +2,17 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Slack MCP discovery and catalog (2026-09-20)
+
+- Accept an origin resource identifier from the same origin's root metadata document.
+- Keep rejecting unrelated hosts, ports, paths, queries, fragments, and metadata locations.
+- Preserve the advertised resource identifier in OAuth requests.
+- Add Slack to the catalog with a bundled logo.
+- Use backend Slack client credentials for its registered app flow. Verify Slack's endpoints before selecting the credentials.
+- Explain missing deployment credentials. Document registration, callback, scopes, PKCE, and rotation setup.
+- Verify live Slack discovery, 119 focused tests, package type checks, and lint checks.
+- Live OAuth remains unverified until a Slack app is registered and configured.
+
 ## Local MCP import modal (2026-09-20)
 
 - Open the local import modal on the first visit to MCP servers in each app profile.

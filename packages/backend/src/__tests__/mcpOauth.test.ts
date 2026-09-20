@@ -336,3 +336,52 @@ describe('optional MCP account details', () => {
     if (endpoint !== 'https://auth.example.com/userinfo') expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Slack registered client', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const slack = {
+    issuer: 'https://mcp.slack.com',
+    authorizationEndpoint: 'https://slack.com/oauth/v2_user/authorize',
+    tokenEndpoint: 'https://slack.com/api/oauth.v2.user.access',
+    clientIdMetadataDocumentSupported: false,
+  };
+  function mockSlack(overrides = {}) {
+    vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { resource: 'https://mcp.slack.com', authorizationServers: [slack.issuer], scope: 'search:read.public chat:write' },
+      server: { ...slack, ...overrides },
+    });
+  }
+  it('uses the registered client and keeps its secret out of the browser', async () => {
+    vi.stubEnv('SLACK_MCP_CLIENT_ID', 'talyn-client');
+    vi.stubEnv('SLACK_MCP_CLIENT_SECRET', 'talyn-secret');
+    mockSlack();
+    const flow = await startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date());
+    const url = new URL(flow.authorizeUrl);
+    expect(url.origin + url.pathname).toBe(slack.authorizationEndpoint);
+    expect(url.searchParams.get('client_id')).toBe('talyn-client');
+    expect(url.searchParams.get('resource')).toBe('https://mcp.slack.com');
+    expect(url.searchParams.get('scope')).toBe('search:read.public chat:write');
+    expect(url.searchParams.get('team')).toBeNull();
+    expect(flow.authorizeUrl).not.toContain('talyn-secret');
+    expect(JSON.stringify(flow.stored)).not.toContain('talyn-secret');
+    stubFetch({ [slack.tokenEndpoint]: { access_token: 'slack-access', refresh_token: 'slack-refresh', expires_in: 43200 } });
+    const stored = await completeMcpOAuth(flow.stored, url.searchParams.get('state')!, 'code', new Date());
+    expect(stored.status).toBe('connected');
+    const body = vi.mocked(fetch).mock.calls[0][1]?.body as URLSearchParams;
+    expect(body.get('client_secret')).toBe('talyn-secret');
+    expect(body.get('resource')).toBe('https://mcp.slack.com');
+    expect(body.get('code_verifier')).toBe(flow.stored.flow?.verifier);
+  });
+  it.each([['', ''], ['client', ''], ['', 'secret']])('explains missing deployment credentials', async (id, secret) => {
+    vi.stubEnv('SLACK_MCP_CLIENT_ID', id);
+    vi.stubEnv('SLACK_MCP_CLIENT_SECRET', secret);
+    mockSlack();
+    await expect(startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('Slack sign-in is not configured');
+  });
+  it.each(['issuer', 'authorizationEndpoint', 'tokenEndpoint'])('refuses an unexpected Slack %s', async (field) => {
+    vi.stubEnv('SLACK_MCP_CLIENT_ID', 'client');
+    vi.stubEnv('SLACK_MCP_CLIENT_SECRET', 'secret');
+    mockSlack({ [field]: 'https://other.example.com/oauth' });
+    await expect(startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('unexpected sign-in endpoints');
+  });
+});
