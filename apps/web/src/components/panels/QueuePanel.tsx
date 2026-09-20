@@ -17,6 +17,7 @@ import {
   GitPullRequest,
   Wand2,
   UserRoundCheck,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -772,6 +773,29 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           </div>
         </div>
       )}
+
+      {/* This run moved vendors because the one it started on had nothing
+          left. Deliberately NEUTRAL — not the red failure banner below and
+          not the amber needs-you one above. Nothing failed and nobody has to
+          act; the note exists so a run on a vendor the user did not pick is
+          explainable rather than surprising. Read off metadata, not `result`,
+          because the red banner keys on `result.success === false` and would
+          claim a re-queued task had failed. Kept for the life of the task, so
+          it still answers "why did this run on Codex?" a week later. */}
+      {(() => {
+        const note = (
+          task.metadata as { quotaFailover?: { note?: string } } | undefined
+        )?.quotaFailover?.note;
+        if (!note) return null;
+        return (
+          <div className="px-4 py-2.5 border-b bg-muted/50 text-xs">
+            <div className="flex items-start gap-2">
+              <ArrowRightLeft className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+              <p className="text-muted-foreground break-words">{note}</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Failed/cancelled result banner — loud, above the log, with the
           full reason + a Retry action. */}

@@ -2,6 +2,49 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Failing over a run whose subscription is spent (2026-09-20)
+
+- A fleet run died with Anthropic's `You're out of extra usage`, wrapped in the
+  fleet's `harness_no_output`. The sandbox booted, the agent's FIRST API call
+  was refused, and the task failed having done nothing — while a connected
+  Codex subscription and PostHog Code both sat idle.
+- Neither vendor tells a server how much is left, so the failure is the feed.
+  `selfHosted/exhaustedQuota.ts` reads the vendor's own sentence out of the
+  error, the same shape as `withdrawnModels.ts` next door.
+- **Exhausted is not rate-limited.** A rate limit clears by waiting; moving off
+  it means spending metered credits to avoid a short pause. The matcher is
+  pinned to sentences that mean "a human must top this up" and everything else
+  fails the ordinary way. The OpenAI half is the weaker one — the ChatGPT
+  sign-in path has not been observed failing this way, so a Codex exhaustion
+  worded differently is missed and fails as it does today. That is the right
+  way to be wrong: a missed failover costs one run, a false one moves work off
+  a working subscription.
+- The hop order is the product decision, and it is why this cannot defer to
+  `resolveCloudEnvChain`: that resolver thinks in PROVIDERS and the fleet is
+  one provider with two agents, so deferring to it steps over a paid-for Codex
+  subscription on the way to a bill. Fleet's other agent first, then the chain
+  to PostHog Code.
+- A fleet hop is a MODEL change, because the model is what carries the vendor.
+  The agent's shipped default rather than a like-for-like tier — there is no
+  honest mapping from a Claude tier to an OpenAI one. The workspace's stored
+  default is left alone: a spent quota is not a preference.
+- `runAttempt` is bumped or the fleet hands back the sandbox that just died
+  (its create is idempotent on the run id it derives from task id + attempt).
+- The note lives on `metadata.quotaFailover`, NOT on `tasks.result`. The task
+  detail paints any `result.success === false` as a red "Task failed" banner
+  whatever the status says, so a failure-shaped result on a re-queued task
+  would announce a failure that did not happen — the same mistake the amber
+  needs_human banner exists to avoid. Rendered as its own neutral row, kept for
+  the life of the task so it still answers "why did this run on Codex?" later.
+- Tom's call: the chain runs all the way to PostHog Code, for loops and
+  watchers too. This narrows the "a pinned provider is NEVER failed over" rule
+  in CLAUDE.md, which was written about access being REVOKED.
+- Known cost, accepted rather than papered over with an invented cooldown: while
+  a subscription is spent, every task still burns one sandbox boot discovering
+  it. The run dies on its first API call, so that boot is cheap — but a
+  frequently-firing loop pays it each time. A time-boxed memory would need a
+  reset instant neither vendor sends.
+
 ## PR Files tab and task queue polish (2026-09-20)
 
 - The Files tab drew the file name twice when a diff was open: once on the

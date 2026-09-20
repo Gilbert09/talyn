@@ -20,6 +20,8 @@ import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
+import { exhaustedAgentFrom } from './exhaustedQuota.js';
+import { failoverExhaustedRun } from '../cloudProviders/quotaFailover.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
 // each had a byte-identical copy of the predicate and the two constants behind
@@ -669,6 +671,35 @@ class SelfHostedPoller {
     // the same id, and moves the workspace's stored choice off it.
     const withdrawnModel = withdrawnModelFrom(failureDetail);
     if (withdrawnModel) await noteWithdrawnModel(workspaceId, withdrawnModel);
+
+    // The vendor saying this workspace's own subscription is spent. The run is
+    // over, but the WORK is not: a dead Claude quota says nothing about a
+    // connected Codex one, and nothing at all about PostHog Code. Moving it is
+    // a decision the backend can make, so it does — see quotaFailover.
+    //
+    // Only on a genuine failure, and only before the sentinel is read: an
+    // agent that stood down deliberately has an answer worth keeping, and
+    // re-running it somewhere else would throw that away and bill for the
+    // privilege. A rate limit is NOT this (exhaustedQuota.ts draws the line).
+    if (status === 'failed') {
+      const exhausted = exhaustedAgentFrom(failureDetail);
+      if (exhausted) {
+        // `null` is the THREW case, and the only one that falls through: a
+        // failover that breaks must not swallow the failure it was trying to
+        // rescue. Both real answers — moved on, or settled as a dead end —
+        // mean the task is fully accounted for and finalize writes nothing.
+        const handled = await failoverExhaustedRun({
+          taskId,
+          workspaceId,
+          exhausted,
+          detail: failureDetail || null,
+        }).catch((err) => {
+          console.error(`[selfhosted] quota failover failed for ${taskId.slice(0, 8)}:`, err);
+          return null;
+        });
+        if (handled !== null) return;
+      }
+    }
 
     // Did the agent hand back to a person? The fleet has no structured field
     // for it either, so the sentinel is read from the two places its closing
