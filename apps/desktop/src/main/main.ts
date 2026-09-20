@@ -23,6 +23,7 @@ import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
 import { signInToCodex } from './codexAuth';
 import { scanLocalMcpServers } from './localMcp';
+import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -272,10 +273,16 @@ const createWindow = async () => {
     );
   }
 
+  // Size and position from the last session. Read before the window exists,
+  // which is why this lives in the main process and not renderer storage —
+  // see windowState.ts. An update that installs itself is the restart nobody
+  // chose, and coming back as a default rectangle loses whatever the window
+  // was.
+  const savedWindowState = readWindowState();
+
   mainWindow = new BrowserWindow({
     show: false,
-    width: 1024,
-    height: 728,
+    ...restoredWindowOptions(savedWindowState),
     icon: getAssetPath('icon.png'),
     // Warm off-white, matching the default light theme's content surface —
     // avoids a stark white flash on launch.
@@ -301,6 +308,7 @@ const createWindow = async () => {
   });
 
   mainWindow.loadURL(resolveHtmlPath('index.html'));
+  trackWindowState(mainWindow);
 
   mainWindow.on('ready-to-show', () => {
     if (!mainWindow) {
@@ -309,6 +317,12 @@ const createWindow = async () => {
     if (process.env.START_MINIMIZED) {
       mainWindow.minimize();
     } else {
+      // Maximize BEFORE showing, so the window does not appear at its normal
+      // size and then jump. Full screen is not re-applied here — it is a
+      // constructor option (`fullscreen`), because asking for it after the
+      // window is visible plays macOS's whole transition animation on every
+      // launch.
+      if (savedWindowState.maximized) mainWindow.maximize();
       mainWindow.show();
     }
     // If a deep-link came in while the window was booting, deliver it now.

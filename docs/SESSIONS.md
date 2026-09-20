@@ -2,6 +2,40 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Remembering the window (2026-09-20)
+
+- An update installing itself is the restart nobody chooses, and the app came
+  back as a 1024x728 rectangle every time. `main/windowState.ts` persists
+  bounds + maximized + full screen to userData, alongside `update-channel.json`
+  and for the same reason: the MAIN process needs it at `new BrowserWindow(…)`,
+  before a renderer exists to ask.
+- Most of the work is the ways a REMEMBERED window is worse than a forgotten
+  one:
+  - **Off-screen.** A window last closed on an unplugged monitor restores to
+    coordinates no display covers, where it is invisible and unfocusable —
+    indistinguishable from the app failing to start. `isOnSomeDisplay` checks
+    INTERSECTION, not containment: a window deliberately hanging off an edge is
+    a placement, and forcing it fully on-screen would move a window the user
+    put where they wanted it. When it fails, the SIZE is kept and only the
+    position dropped — a smaller display is a reason to move the window, not to
+    forget how big the user likes it. Omitting x/y is what makes Electron
+    centre it.
+  - **Maximized.** `getNormalBounds`, never `getBounds` — the latter reports
+    the screen while maximized, so saving it would make un-maximizing a no-op
+    forever after.
+  - **Corrupt.** Every field is validated on read; a truncated file, a NaN
+    dimension or a string where a number belongs falls back to the defaults,
+    because the user cannot recover from a NaN-sized window without finding
+    the file themselves.
+- Full screen is a CONSTRUCTOR option, and maximize happens before `show()` —
+  applying either after the window is visible plays macOS's transition
+  animation, or shows the window at the wrong size and then jumps.
+- Writes are debounced (a drag emits continuously) plus an undebounced save on
+  `close`, which is the one that catches `quitAndInstall`.
+- Verified by driving the module inside a real Electron process, not only by
+  unit test: first launch, resize, restart, maximize (normal bounds kept),
+  close, and an off-screen restore.
+
 ## Remembering that a subscription is spent (2026-09-20)
 
 - The failover shipped earlier today moved one run and forgot. Every task after
