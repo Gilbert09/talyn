@@ -2,6 +2,114 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Ranking the Reviews tab, from your own history (2026-09-21)
+
+The Reviews tab had one ordering — created date, newest or oldest — and rows
+that render no state at all: no checks, no approval, no conflicts. Picking what
+to read next was guesswork. Shipped a third sort mode, **Priority**, behind the
+new `reviewPriority` PostHog flag (fallback OFF, audience: Tom only). Outside
+the audience the control is exactly the two-state toggle it has always been.
+
+**Competitive context, because it is unusually clear.** Almost nobody ranks.
+Graphite, Aviator, Mergify, Axolo and GitHub's own 2026 dashboard all ship
+sectioned lists plus reminders; where a within-section order is documented at
+all, it is age. CodeRabbit Triage (launched 2026-09-15) is the only shipped
+cross-repo ranker, and it renders `Untracked` with no priority on any repo it
+does not itself review.
+
+**The shape is a hard gate, then points within it** (`packages/shared/src/prPriority.ts`):
+`blocking_others` → `actionable` → `waiting_on_author` → `not_ready`. A purely
+additive score lets forty small nudges float a draft above a PR whose author is
+waiting on nothing but your approval. The last gate is the one nobody else can
+build: Talyn knows a cloud run is pushing commits to that PR right now, so
+whatever you read is about to change underneath you.
+
+Three product calls worth keeping:
+
+- **Unresolved BOT threads are a weak negative; HUMAN ones are a strong one.**
+  Tricorder's rule — a bot finding is not an attention event until a person
+  promotes it — where an unresolved human thread usually means the author is
+  mid-revision and the ball is not with you. The viewer's OWN threads are netted
+  out of the human count and rewarded instead, or a PR is penalised for exactly
+  the threads that make it theirs to come back to.
+- **The age ramp DECAYS past two weeks** rather than climbing forever, or the
+  list becomes a graveyard sorted by neglect with the most-abandoned request
+  permanently on top.
+- **The gate marker always wins the reason chip.** A buried draft whose chip
+  reads "All checks green" explains the opposite of what just happened to it.
+
+**The model is learned per person, from their own GitHub review history.** Two
+GraphQL searches give every PR they reviewed and every request they let go — so
+the training data exists on day one rather than six to twenty-four months of
+click telemetry away. GraphQL search, not REST, so it bills the point budget
+rather than the 30/min Search budget the poller lives inside; capped at 400 PRs
+per class (~510 points, ~10% of an hour), re-checked every page and abandoned if
+the budget enters reserve.
+
+**What is learned is forced by the data, not chosen.** GitHub does not retain
+historical PR state, and "now" for a merged PR is green, mergeable and approved
+BY DEFINITION — so training a state feature on it would teach the model that
+green checks cause reviews, from an artefact of merging. Only slow,
+historically-observable properties are learned: author affinity, reciprocity,
+path familiarity, repo, size. State stays deterministic.
+
+The label is **pairwise over co-pending choice sets**: at each instant a review
+was submitted, one pair against every PR open, requested and unanswered at that
+moment. It beats "responded within N hours" because we ship a sort and that
+label optimises a decision we never make; it beats latency regression because
+latency is weekends and on-call, and both members of a pair were pending at the
+same instant so that cancels (Chen, Rigby & Nagappan, FSE 2022). It also
+satisfies Gmail's opportunity-to-see rule structurally.
+
+**Effective n is EVENTS, not pairs.** Four pairs from one decision are one
+choice seen from four angles; counting them would inflate Riley's parameter
+budget fourfold. Five features, L2 pairwise logistic by hand-rolled IRLS
+(`ml-logistic-regression` has no regularization, and on near-separable data at
+this size an unregularized fit walks to infinity), 5-fold CV grouped by event.
+Two gates: nothing is fitted below 150 events, and a fit must beat the shipped
+prior by 3pp of held-out accuracy or it is refused. **Both refusals are stored
+with their numbers** — "we looked and it was not worth it" is the only way to
+find out later whether this was worth building.
+
+**The clamp is calibrated, not picked.** The model learns whether you RESPOND,
+not what you should have read, so unbounded it entrenches: the person you never
+get to sinks further, and the model reads its own effect back as confirmation.
+At ±12 it sits below the age ramp's maximum of 16, so a PR that has waited long
+enough outranks one the model likes as much as it possibly can. Age is the
+escape hatch; raising the cap past 16 silently removes it.
+
+**Three things the work turned up that were already wrong:**
+
+- `summaryToJsonb` never wrote `failingChecksDigest` although `rowToSummary` has
+  always read it — so on every cached-row read the merge queue's "are the SAME
+  checks still failing" guard was comparing undefined against undefined. Live
+  fetches carried it; the cache silently did not.
+- `PRSummaryShape` omitted the human/bot thread split and `autoMergeBy`, all of
+  which `rowToPublicShape` has always passed through raw. On the wire, invisible
+  to TypeScript. `autoMergeBy` was read by nothing at all, despite being the
+  highest-precision "waiting on exactly you" signal GitHub hands out.
+- A first draft of `topDirsOf` sliced two segments off the raw path, turning
+  `src/a.ts` into its own "directory". No two PRs would ever share a bucket and
+  path familiarity would have been permanently zero, silently.
+
+**The lesson that cost the most time, twice.** `prCache.upsertRow` is a second
+writer of `reviewRequested`, and the poll upserts every fetched PR BEFORE it
+reconciles the flags — so the upsert is usually the writer that observes a PR
+entering or leaving the cohort. Both the `review_requested_first_seen_at` stamp
+and the `pr_review_submitted` event were written in `reconcileRelationshipFlags`
+first, and both compiled, passed every other test, and fired almost never. The
+stamp is now one shared `reviewRequestedStamps` called by both writers.
+
+Migrations `0061` (the cohort timestamps) and `0062` (`review_history`,
+`review_rank_models`). Sweep at `services/reviewPriority/sweep.ts`, hourly,
+advisory-locked, gated on the workspace OWNER — which is the gate that actually
+bounds the spend, because a sweep has no caller.
+
+Open follow-ups: the Reviews row still renders no status pills (the `mine`
+variant has had `PRReviewPill` + `PRStatusPill` all along); no snooze/pin; and
+the flag is `availability: 'gated'`, so nothing about this is announced until it
+flips to `general`.
+
 ## Naming the button, and counting the times we said no (2026-09-20)
 
 - Analytics question first: where does the time go? Over 30 days, 51.8 hours
