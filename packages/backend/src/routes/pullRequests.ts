@@ -125,7 +125,7 @@ type PRFlagRow = Pick<typeof pullRequestsTable.$inferSelect, keyof typeof PR_FLA
  * every list fetch; the big `lastSummary` jsonb still ships (the pill needs it).
  * Typed as a `Pick` so tsc fails if a consumer later reads a dropped column.
  */
-const LIST_COLUMNS = {
+export const LIST_COLUMNS = {
   id: pullRequestsTable.id,
   workspaceId: pullRequestsTable.workspaceId,
   repositoryId: pullRequestsTable.repositoryId,
@@ -145,6 +145,44 @@ const LIST_COLUMNS = {
   mergeQueued: pullRequestsTable.mergeQueued,
   mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
   mergeMethod: pullRequestsTable.mergeMethod,
+  createdAt: pullRequestsTable.createdAt,
+  updatedAt: pullRequestsTable.updatedAt,
+} as const;
+
+/**
+ * Every column on `pull_requests` EXCEPT `body`, for the paths that want the
+ * whole row (see {@link PullRequestRow}). Spelled out rather than left as a
+ * bare `.select()` because the description is a TOASTed text column nothing
+ * here serializes — `rowToPublicShape` does not carry it, and the detail route
+ * gets the authoritative text from its own live fetch. `GET /:id/description`
+ * is the one read that wants it.
+ */
+export const DETAIL_COLUMNS = {
+  id: pullRequestsTable.id,
+  workspaceId: pullRequestsTable.workspaceId,
+  repositoryId: pullRequestsTable.repositoryId,
+  taskId: pullRequestsTable.taskId,
+  owner: pullRequestsTable.owner,
+  repo: pullRequestsTable.repo,
+  number: pullRequestsTable.number,
+  state: pullRequestsTable.state,
+  reviewRequested: pullRequestsTable.reviewRequested,
+  authored: pullRequestsTable.authored,
+  watching: pullRequestsTable.watching,
+  mergedAt: pullRequestsTable.mergedAt,
+  lastPolledAt: pullRequestsTable.lastPolledAt,
+  lastSummary: pullRequestsTable.lastSummary,
+  autoKeepMergeable: pullRequestsTable.autoKeepMergeable,
+  autoMergeState: pullRequestsTable.autoMergeState,
+  mergeQueued: pullRequestsTable.mergeQueued,
+  mergeQueuedAt: pullRequestsTable.mergeQueuedAt,
+  mergeQueueState: pullRequestsTable.mergeQueueState,
+  mergeMethod: pullRequestsTable.mergeMethod,
+  lastReviewId: pullRequestsTable.lastReviewId,
+  lastReviewCommentId: pullRequestsTable.lastReviewCommentId,
+  lastCommentId: pullRequestsTable.lastCommentId,
+  lastCheckDigest: pullRequestsTable.lastCheckDigest,
+  lastSummaryDigest: pullRequestsTable.lastSummaryDigest,
   createdAt: pullRequestsTable.createdAt,
   updatedAt: pullRequestsTable.updatedAt,
 } as const;
@@ -484,7 +522,7 @@ export function pullRequestRoutes(): Router {
   router.get('/:id', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(DETAIL_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -553,7 +591,7 @@ export function pullRequestRoutes(): Router {
         existingId: row.id,
       });
       const refreshed = await db
-        .select()
+        .select(DETAIL_COLUMNS)
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, result.rowId))
         .limit(1);
@@ -568,6 +606,41 @@ export function pullRequestRoutes(): Router {
         fresh,
       },
     });
+  });
+
+  // The cached PR description.
+  //
+  // Split out from `GET /:id` on purpose. That route blocks on a live GraphQL
+  // fetch — about a second on a busy repo — and the description was the only
+  // thing on the Overview tab that waited for it, because every other field
+  // comes off the list row the client already holds. This is a single row read
+  // of one column, so the panel paints its description while the live fetch is
+  // still in flight, and the fetch overwrites it with the authoritative text
+  // when it lands.
+  //
+  // Deliberately NOT folded into the list projection: a user opens one panel
+  // at a time, and shipping every tracked PR's description on every list load
+  // would roughly double that response for a body nobody asked to read.
+  //
+  // `null` when the row predates the column and no poll has refreshed it yet —
+  // the caller keeps its spinner and the live fetch answers, exactly as before.
+  router.get('/:id/description', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select({ workspaceId: pullRequestsTable.workspaceId, body: pullRequestsTable.body })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    return res.json({ success: true, data: { body: row.body } });
   });
 
   // File-by-file diff for a PR. Returns each changed file's status,
@@ -645,7 +718,7 @@ export function pullRequestRoutes(): Router {
   router.post('/:id/refresh', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(DETAIL_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -688,7 +761,7 @@ export function pullRequestRoutes(): Router {
     markRefreshed(row.workspaceId, result.rowId);
 
     const fresh = await db
-      .select()
+      .select(DETAIL_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, result.rowId))
       .limit(1);
@@ -706,7 +779,7 @@ export function pullRequestRoutes(): Router {
   router.post('/:id/fix', async (req, res) => {
     const db = getDbClient();
     const rows = await db
-      .select()
+      .select(DETAIL_COLUMNS)
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, req.params.id))
       .limit(1);
@@ -1443,7 +1516,7 @@ async function reconcileTerminalState(
     .set({ state: nextState, mergedAt, updatedAt: new Date(), ...queueReset })
     .where(eq(pullRequestsTable.id, row.id));
   const fresh = await db
-    .select()
+    .select(DETAIL_COLUMNS)
     .from(pullRequestsTable)
     .where(eq(pullRequestsTable.id, row.id))
     .limit(1);

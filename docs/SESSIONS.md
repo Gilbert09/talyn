@@ -2,6 +2,35 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Cached PR description (2026-09-20)
+
+- Opening the PR panel showed "Loading description..." for about a second. Every
+  other field painted at once, off the list row the client already holds. The
+  description came only from the live GraphQL fetch that `GET /pull-requests/:id`
+  blocks on.
+- GitHub already sends the body. `prFieldsSelection` asks for it on every poll,
+  every webhook refresh and every search-driven fetch, and `summaryToJsonb`
+  threw it away. Caching it costs no extra GitHub budget.
+- Store it in a column of its own (migration `0060`), not in `last_summary`. The
+  auto-keep watcher, the merge-queue broadcast and executor, and the monitor all
+  read that blob on every tick, and none of them want a description.
+- Write it only when the text differs. The check is an `IS DISTINCT FROM`
+  folded into the read that already fetches the summary digest, so the stored
+  text never ships back and a PR under CI does not re-TOAST its description on
+  each check transition. A NULL from a pre-migration row counts as a difference
+  and fills on the first poll.
+- `GET /pull-requests/:id/description` is a single row read and returns while
+  the live fetch is still in flight. The panel fires both on open and renders
+  whichever description lands first; the live one replaces the cache when it
+  arrives, including when it reports an empty description.
+- Keep the body out of every list read. One open panel must not cost every
+  tracked PR's description on every list load. The six whole-row reads in
+  `routes/pullRequests.ts` moved from a bare `.select()` to a `DETAIL_COLUMNS`
+  projection for the same reason -- they drop the body on the floor.
+- Tests: description persistence and the write guard in `prCache`, the route
+  including its refusal to call GitHub, and an egress assertion that neither
+  projection names the column.
+
 ## Slack workspace identity (2026-09-20)
 
 - Show the Slack account name and workspace in the connected account box.

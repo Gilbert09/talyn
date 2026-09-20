@@ -521,6 +521,20 @@ export const pullRequests = pgTable(
      */
     lastSummary: jsonb('last_summary').notNull().default({}),
     /**
+     * The PR description, cached verbatim off the same GraphQL fetch that
+     * fills {@link lastSummary}. Its own column rather than a key in that
+     * blob: the watcher, the merge-queue broadcast/executor and the monitor
+     * read `last_summary` on every tick and none of them want a description.
+     * NULL until the first post-migration poll, and only ever re-written when
+     * the text actually differs (see prCache's upsertRow).
+     *
+     * Read by the detail panel's description fetch, which is a pure row read
+     * and therefore returns while the live fetch is still in flight. Not in
+     * any list projection — one open panel must not cost every tracked PR's
+     * description on every list load.
+     */
+    body: text('body'),
+    /**
      * When true, a background watcher keeps this PR mergeable: it repeatedly
      * fires a cloud "fix every blocker" run whenever the PR has a blocker and
      * no run is in flight, indefinitely — including conflicts that surface days

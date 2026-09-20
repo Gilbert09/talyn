@@ -490,6 +490,100 @@ describe('prCache — DB integration', () => {
     });
   });
 
+  describe('description cache (pull_requests.body)', () => {
+    async function readFullRow(): Promise<typeof pullRequestsTable.$inferSelect> {
+      return (await db.select().from(pullRequestsTable))[0];
+    }
+
+    it.each([
+      ['a description', 'Fixes the thing.\n\n- one\n- two'],
+      ['an empty description', ''],
+    ])('stores %s on the insert path', async (_label, body) => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body }),
+      });
+      expect((await readFullRow()).body).toBe(body);
+    });
+
+    it('rewrites the body when the description is edited', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'First draft' }),
+      });
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        // GitHub bumps `updatedAt` on a body edit, so the summary digest moves
+        // with it — but the body guard is what decides this write.
+        summary: makeSummary({ body: 'Rewritten', updatedAt: '2026-01-02T00:00:00Z' }),
+      });
+      expect((await readFullRow()).body).toBe('Rewritten');
+    });
+
+    it('rewrites the body when a description is deleted outright', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'Was here' }),
+      });
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: '', updatedAt: '2026-01-02T00:00:00Z' }),
+      });
+      expect((await readFullRow()).body).toBe('');
+    });
+
+    it('does NOT rewrite the body when only the checks moved', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'Unchanged prose' }),
+      });
+      const before = await readFullRow();
+      // Poison the stored text. A check transition rewrites last_summary, and
+      // the body must NOT ride along with it — that is the whole point of the
+      // separate guard: a PR under CI moves its summary every few seconds
+      // while its description stands still for days.
+      await db
+        .update(pullRequestsTable)
+        .set({ body: 'SENTINEL' })
+        .where(eq(pullRequestsTable.id, before.id));
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'SENTINEL', checkDigest: 'sha1:a=success' }),
+      });
+      const after = await readFullRow();
+      expect(after.body).toBe('SENTINEL');
+      expect(after.lastSummaryDigest).not.toBe(before.lastSummaryDigest);
+    });
+
+    it('fills a NULL body left by a row cached before the column shipped', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'Some prose' }),
+      });
+      const before = await readFullRow();
+      await db
+        .update(pullRequestsTable)
+        .set({ body: null })
+        .where(eq(pullRequestsTable.id, before.id));
+      // Identical summary — the digest guard skips last_summary entirely, so
+      // only the `IS DISTINCT FROM` check can notice the NULL.
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ body: 'Some prose' }),
+      });
+      expect((await readFullRow()).body).toBe('Some prose');
+    });
+  });
+
   describe('auto-keep mergeable default', () => {
     async function setDefault(on: boolean): Promise<void> {
       await db

@@ -95,6 +95,15 @@ export function PRDetailSheet({
     fresh: (PRSummaryShape & PRFreshDetail) | null;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  /**
+   * The description as the backend last cached it on the row. Fetched in
+   * parallel with the detail below and used only until that lands: the detail
+   * blocks on a live GitHub fetch, and the description was the one thing on
+   * the Overview tab that waited a second for it — everything else paints off
+   * `seedRow`. Null means the row has no cached body yet, which reads as "keep
+   * waiting", never as "this PR has no description".
+   */
+  const [cachedBody, setCachedBody] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
@@ -120,12 +129,23 @@ export function PRDetailSheet({
   useEffect(() => {
     if (!pullRequestId) {
       setData(null);
+      setCachedBody(null);
       return;
     }
     trackEvent('pr_detail_opened');
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setCachedBody(null);
+    // Row read, no GitHub call — this is what fills the description while the
+    // detail fetch below is still talking to GraphQL. Best-effort: a failure
+    // just leaves the spinner the detail fetch was going to clear anyway.
+    api.pullRequests
+      .description(pullRequestId)
+      .then((res) => {
+        if (!cancelled) setCachedBody(res.body);
+      })
+      .catch(() => {});
     api.pullRequests
       .get(pullRequestId)
       .then((res) => {
@@ -624,7 +644,14 @@ export function PRDetailSheet({
         )}
       </header>
 
-      {view && <DetailTabs data={view} error={error} detailPending={detailPending} />}
+      {view && (
+        <DetailTabs
+          data={view}
+          error={error}
+          detailPending={detailPending}
+          cachedBody={cachedBody}
+        />
+      )}
     </div>
   );
 }
@@ -635,10 +662,12 @@ function DetailTabs({
   data,
   error,
   detailPending,
+  cachedBody,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
   error: string | null;
   detailPending: boolean;
+  cachedBody: string | null;
 }) {
   const [tab, setTab] = useState<TabKey>('overview');
 
@@ -697,7 +726,13 @@ function DetailTabs({
               Detail fetch unavailable (env offline?). Showing cached state only.
             </p>
           )}
-          {tab === 'overview' && <OverviewTab data={data} detailPending={detailPending} />}
+          {tab === 'overview' && (
+            <OverviewTab
+              data={data}
+              detailPending={detailPending}
+              cachedBody={cachedBody}
+            />
+          )}
           {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
           {tab === 'reviews' && <ReviewsTab data={data} />}
           {tab === 'files' && <FilesTab data={data} />}
@@ -745,11 +780,18 @@ function TabButton({
 function OverviewTab({
   data,
   detailPending,
+  cachedBody,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
   detailPending: boolean;
+  cachedBody: string | null;
 }) {
-  const body = data.fresh?.body ?? '';
+  // The live fetch wins the moment it lands — including when it says the PR
+  // has no description at all, which is why this is `??` on `data.fresh` and
+  // not on `data.fresh?.body`: an empty body from a resolved fetch is an
+  // answer, and falling back to the cache there would resurrect a description
+  // the author has just deleted.
+  const body = (data.fresh ? data.fresh.body : cachedBody) ?? '';
   return (
     <div className="space-y-4 text-sm">
       {body ? (

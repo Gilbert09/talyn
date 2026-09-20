@@ -578,6 +578,66 @@ describe('routes/pullRequests', () => {
 
   // -------- GET /:id/files --------
 
+  describe('GET /pull-requests/:id/description', () => {
+    it.each([
+      ['a description', 'Fixes the thing.\n\n- one\n- two'],
+      ['an empty description', ''],
+    ])('returns %s straight off the row', async (_label, cached) => {
+      const id = await insertPR(db);
+      await db
+        .update(pullRequestsTable)
+        .set({ body: cached })
+        .where(eq(pullRequestsTable.id, id));
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as { data: { body: string | null } };
+      expect(payload.data.body).toBe(cached);
+    });
+
+    it('never calls GitHub — that is the whole point of the split', async () => {
+      const id = await insertPR(db);
+      await db
+        .update(pullRequestsTable)
+        .set({ body: 'Cached prose' })
+        .where(eq(pullRequestsTable.id, id));
+      const spy = vi.spyOn(graphqlModule, 'batchPullRequests');
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(200);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('answers null for a row no poll has refreshed since the column shipped', async () => {
+      const id = await insertPR(db);
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      const payload = (await res.json()) as { data: { body: string | null } };
+      expect(payload.data.body).toBeNull();
+    });
+
+    it('returns 404 for a missing PR', async () => {
+      const res = await fetch(`${serverUrl}/pull-requests/missing/description`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('refuses a PR in a workspace the caller does not own', async () => {
+      const id = await insertPR(db, {
+        workspaceId: 'ws-other',
+        repositoryId: 'repo-other',
+      });
+      const res = await fetch(`${serverUrl}/pull-requests/${id}/description`, {
+        headers: authMine,
+      });
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('GET /pull-requests/:id/files', () => {
     it('returns the file list (with patches) from githubService', async () => {
       const id = await insertPR(db);

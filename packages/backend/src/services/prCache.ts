@@ -678,13 +678,25 @@ async function upsertRow(
     // TOASTed `last_summary` + its cursor columns when nothing changed — the
     // poll then bumps only the TTL timestamp, saving the WAL + TOAST churn.
     const digest = summaryDigest(lastSummary, cursors);
-    const prevDigest = (
+    // The description rides along on the same read, compared IN the database so
+    // the stored text never ships back. It has its own guard rather than
+    // sharing `summaryChanged`: a PR under CI rewrites its summary every few
+    // seconds while its description stands still for days, and re-TOASTing the
+    // body on every check transition is exactly the churn the digest exists to
+    // avoid. `IS DISTINCT FROM` so the NULL a pre-migration row still carries
+    // counts as a difference and fills on the first poll.
+    const body = summary.body ?? '';
+    const prev = (
       await db
-        .select({ digest: pullRequestsTable.lastSummaryDigest })
+        .select({
+          digest: pullRequestsTable.lastSummaryDigest,
+          bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
+        })
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, opts.existingId))
         .limit(1)
-    )[0]?.digest;
+    )[0];
+    const prevDigest = prev?.digest;
     const summaryChanged = prevDigest !== digest;
     await db
       .update(pullRequestsTable)
@@ -718,6 +730,7 @@ async function upsertRow(
         // alone (it never passes explicitWatch), and writing `false` here would
         // un-watch a PR one tick after the user watched it.
         ...(opts.explicitWatch === true ? { watching: true } : {}),
+        ...(prev?.bodyChanged ? { body } : {}),
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, opts.existingId));
@@ -737,6 +750,7 @@ async function upsertRow(
       mergedAt: opts.summary.mergedAt ? new Date(opts.summary.mergedAt) : null,
       lastPolledAt: now,
       lastSummary,
+      body: summary.body ?? '',
       lastReviewId: cursors.lastReviewId,
       lastReviewCommentId: cursors.lastReviewCommentId,
       lastCommentId: cursors.lastCommentId,

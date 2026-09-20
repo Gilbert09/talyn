@@ -1060,6 +1060,17 @@ export const pullRequests = {
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
   setView: (workspaceId: string, view: 'mine' | 'review' | 'all' | 'none') =>
     request<null>('POST', `/pull-requests/view`, { workspaceId, view }),
+  /**
+   * The CACHED description, straight off the row — no GitHub call, so it
+   * returns while `get()`'s live fetch is still in flight. Fire the two in
+   * parallel on open and render whichever description lands first; `get()`'s
+   * is the authoritative one and replaces this when it arrives.
+   *
+   * `body` is null on a row no poll has refreshed since the column shipped.
+   * Treat that as "not cached", never as "no description".
+   */
+  description: (id: string) =>
+    request<{ body: string | null }>('GET', `/pull-requests/${id}/description`),
   files: (id: string) =>
     request<PRFile[]>('GET', `/pull-requests/${id}/files`),
   reviews: (id: string) =>

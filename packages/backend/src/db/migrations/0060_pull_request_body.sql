@@ -1,0 +1,19 @@
+-- Cache the PR description on the row.
+--
+-- Opening the detail panel used to show "Loading description…" for about a
+-- second: the description is the one thing on the Overview tab that comes
+-- ONLY from the live GraphQL fetch `GET /pull-requests/:id` blocks on, while
+-- every other field paints instantly from the list row the client already
+-- holds. The body is already on the wire — `prFieldsSelection` asks for it on
+-- every poll and every webhook refresh — and was thrown away when the summary
+-- was written.
+--
+-- A COLUMN of its own rather than a key in `last_summary`, because that blob
+-- is read on every tick by the auto-keep watcher, the merge-queue broadcast
+-- and executor, and the monitor. None of them want a description, and the
+-- egress is per-PR-per-tick. Nothing that polls selects this column.
+--
+-- Written only when it actually changes (an `IS DISTINCT FROM` check folded
+-- into the digest pre-read), so a PR whose checks flip every few seconds does
+-- not re-TOAST its description each time.
+ALTER TABLE "pull_requests" ADD COLUMN IF NOT EXISTS "body" text;
