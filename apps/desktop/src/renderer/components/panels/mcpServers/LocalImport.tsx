@@ -1,65 +1,94 @@
 import { useEffect, useState } from 'react';
-import { Download, Laptop } from 'lucide-react';
+import { Download } from 'lucide-react';
 import type { McpServerInput } from '@talyn/shared';
 import type { LocalMcpFinding } from '../../../../main/preload';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
 import { McpServerLogo } from './McpServerLogo';
 import { cn } from '../../../lib/utils';
 
-/**
- * MCP servers already configured on this machine.
- *
- * Desktop only — reading `~/.claude.json` needs a filesystem, so `apps/web`
- * ships a component of the same name that renders nothing.
- *
- * Every finding is shown, including the ones that cannot be imported, with the
- * reason on the row. Dropping them silently would leave somebody hunting for a
- * server they can see in their own config and concluding the scan is broken —
- * and "an stdio server has nowhere in the sandbox to keep its key" is a fact
- * about the product worth learning once.
- *
- * Credentials do not come along, by design. The address is filled in; the key
- * is typed once, into the field that encrypts it.
- */
-export function LocalImport({
-  connectedUrls,
-  onImport,
-}: {
+const INTRO_SEEN_KEY = 'talyn:mcp-local-import-seen';
+let introSeen = false;
+
+interface LocalImportProps {
   connectedUrls: Set<string>;
   onImport: (input: McpServerInput) => void;
-}) {
+}
+
+export function LocalImport(props: LocalImportProps) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return !introSeen && localStorage.getItem(INTRO_SEEN_KEY) !== '1';
+    } catch {
+      return !introSeen;
+    }
+  });
+
+  useEffect(() => {
+    introSeen = true;
+    try {
+      localStorage.setItem(INTRO_SEEN_KEY, '1');
+    } catch {
+      // Keep the preference for this session if storage is unavailable.
+    }
+  }, []);
+
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)} data-attr="mcp-import">
+        <Download className="mr-1 h-4 w-4" />
+        Import servers
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mcp-import-title"
+          className="max-w-2xl"
+          onClose={() => setOpen(false)}
+          onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}
+        >
+          <DialogHeader>
+            <DialogTitle id="mcp-import-title">Import from this machine</DialogTitle>
+            <DialogDescription>
+              Choose a server from your Claude or Codex configuration. You may need to sign in or enter its key.
+            </DialogDescription>
+          </DialogHeader>
+          {open && <LocalImportList {...props} onImport={(input) => { setOpen(false); props.onImport(input); }} />}
+          <div className="mt-4 flex justify-end">
+            <Button autoFocus variant="outline" onClick={() => setOpen(false)}>Done</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function LocalImportList({ connectedUrls, onImport }: LocalImportProps) {
   const [findings, setFindings] = useState<LocalMcpFinding[] | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let live = true;
     window.electron.mcp
       .scanLocal()
       .then((rows) => live && setFindings(rows))
-      .catch(() => live && setFindings([]));
+      .catch(() => { if (live) setFailed(true); });
     return () => {
       live = false;
     };
   }, []);
 
-  // Nothing found is nothing to say. A section reading "no local servers" on
-  // every machine that has none is a section that trains people to skip it.
-  if (findings === null || findings.length === 0) return null;
+  if (failed) return <p role="alert" className="text-sm text-muted-foreground">Could not read local servers. Close this window and try again.</p>;
+  if (findings === null) return <p role="status" className="text-sm text-muted-foreground">Looking for local servers…</p>;
+  if (findings.length === 0) return <p className="text-sm text-muted-foreground">No servers found in your Claude or Codex configuration.</p>;
 
   const importable = findings.filter((f) => f.importable && !connectedUrls.has(f.url ?? ''));
   const rest = findings.filter((f) => !f.importable || connectedUrls.has(f.url ?? ''));
 
   return (
     <div>
-      <h2 className="mb-1 flex items-center gap-2 font-medium">
-        <Laptop className="h-4 w-4" />
-        Already on this machine
-      </h2>
-      <p className="mb-3 text-sm text-muted-foreground">
-        Found in your Claude and Codex configuration. Importing fills in the address — you will
-        need to paste the key again, because Talyn does not read it from those files.
-      </p>
-
       <div className="space-y-2">
         {importable.map((f) => (
           <div key={`${f.source}:${f.name}`} className="flex items-center gap-3 rounded-lg border px-3 py-2">

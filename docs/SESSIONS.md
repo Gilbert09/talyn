@@ -2,6 +2,14 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Local MCP import modal (2026-09-20)
+
+- Open the local import modal on the first visit to MCP servers in each app profile.
+- Keep an Import servers button in the desktop header for later use.
+- Scan only while the modal is open. Show loading, empty, and failure states.
+- Selecting Import opens connection setup and closes the modal.
+- Validate first opening, later visits, manual reopening, import, scan failure, and Escape dismissal.
+
 ## MCP connection details (2026-09-20)
 
 - Complete desktop OAuth without a separate browser login to Talyn.

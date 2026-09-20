@@ -149,6 +149,12 @@ export function McpServersPanel() {
           </p>
         </div>
         <FeedbackButton surface="mcp_servers" />
+        {servers !== null && (
+          <LocalImport
+            connectedUrls={new Set(servers.map((server) => server.url))}
+            onImport={(input) => openNew(input)}
+          />
+        )}
         <Button onClick={() => openNew()} data-attr="mcp-new">
           <Plus className="mr-1 h-4 w-4" />
           Add a server
@@ -185,13 +191,6 @@ export function McpServersPanel() {
                 ))}
               </div>
             )}
-
-            {/* Above the catalog on purpose: a server somebody already uses
-                is a better first suggestion than one we picked for them. */}
-            <LocalImport
-              connectedUrls={new Set(servers.map((s) => s.url))}
-              onImport={(input) => openNew(input)}
-            />
 
             <Catalog
               connected={connected as Set<string>}
