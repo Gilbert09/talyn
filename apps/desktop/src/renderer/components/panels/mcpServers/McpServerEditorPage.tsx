@@ -647,7 +647,7 @@ function SignIn({
   const [busy, setBusy] = useState(false);
   const [grant, setGrant] = useState(server?.oauth ?? null);
   const [serverId, setServerId] = useState(server?.id);
-  const [account, setAccount] = useState<{ name?: string; email?: string } | null>(null);
+  const [account, setAccount] = useState<{ name?: string; email?: string; workspace?: string } | null>(null);
   useEffect(() => {
     setAccount(null);
     if (grant?.status !== 'connected' || !serverId) return;
@@ -747,6 +747,7 @@ function SignIn({
               {account?.name || account?.email
                 ? `Signed in as ${[account.name, account.email].filter(Boolean).join(' · ')}`
                 : 'Signed in.'}
+              {account?.workspace && <span className="mt-0.5 block text-xs text-muted-foreground">Workspace: {account.workspace}</span>}
             </span>
             <Button variant="ghost" size="sm" onClick={() => void disconnect()} disabled={busy}>
               Disconnect

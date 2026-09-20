@@ -385,3 +385,24 @@ describe('Slack registered client', () => {
     await expect(startMcpOAuth({ id: 'slack-server', url: 'https://mcp.slack.com/mcp' }, null, new Date())).rejects.toThrow('unexpected sign-in endpoints');
   });
 });
+
+describe('Slack account identity', () => {
+  it.each([
+    [{ ok: true, user: 'tom', team: 'Example workspace', token: 'not returned' }, { name: 'tom', workspace: 'Example workspace' }],
+    [{ ok: true, team: 'Example workspace' }, { name: undefined, workspace: 'Example workspace' }],
+    [{ ok: false, error: 'invalid_auth' }, null],
+    [null, null],
+    [{ ok: true, user: 123, team: {} }, null],
+  ])('returns only available account fields from %j', async (profile, expected) => {
+    stubFetch({ 'https://slack.com/api/auth.test': profile });
+    const stored: StoredMcpOAuth = {
+      status: 'connected', issuer: 'https://mcp.slack.com',
+      tokenEndpoint: 'https://slack.com/api/oauth.v2.user.access',
+      accessTokenEnc: encryptString('slack-access'), expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    };
+    expect(await readMcpAccount('slack', { read: async () => stored, write: vi.fn() })).toEqual(expected);
+    expect(fetch).toHaveBeenCalledWith('https://slack.com/api/auth.test', expect.objectContaining({
+      method: 'POST', headers: expect.objectContaining({ authorization: 'Bearer slack-access' }),
+    }));
+  });
+});

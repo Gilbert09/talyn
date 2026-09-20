@@ -2,6 +2,13 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Slack workspace identity (2026-09-20)
+
+- Show the Slack account name and workspace in the connected account box.
+- Read identity through Slack auth.test with the existing grant. No additional scopes are needed.
+- Keep the generic signed-in label if Slack cannot provide identity details.
+- Validate successful, incomplete, and failed identity responses and the workspace display.
+
 ## Slack MCP discovery and catalog (2026-09-20)
 
 - Accept an origin resource identifier from the same origin's root metadata document.

@@ -308,7 +308,7 @@ describe('guided MCP setup', () => {
 
 it('shows the account and compact tool controls after connection', async () => {
   mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
-  mocks.account.mockResolvedValue({ name: 'Tom', email: 'tom@example.com' });
+  mocks.account.mockResolvedValue({ name: 'Tom', email: 'tom@example.com', workspace: 'Example workspace' });
   setup({ ...server, oauth: { status: 'connected' }, lastProbe: {
     ok: true, at: '', toolNames: ['search', 'read'], tools: [
       { name: 'search', description: '**Search documents.**' },
@@ -316,6 +316,7 @@ it('shows the account and compact tool controls after connection', async () => {
     ],
   } });
   await screen.findByText('Signed in as Tom · tom@example.com');
+  expect(screen.getByText('Workspace: Example workspace')).toBeTruthy();
   expect(screen.queryByText('Authentication')).toBeNull();
   expect(screen.queryByText('Connection settings')).toBeNull();
   expect(screen.queryByText(/Connected to the server/)).toBeNull();

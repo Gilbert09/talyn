@@ -1984,7 +1984,7 @@ export const mcpServers = {
       `/mcp-servers/count?workspaceId=${encodeURIComponent(workspaceId)}`
     ),
 
-  account: (id: string) => request<{ name?: string; email?: string } | null>('GET', `/mcp-servers/${id}/account`),
+  account: (id: string) => request<{ name?: string; email?: string; workspace?: string } | null>('GET', `/mcp-servers/${id}/account`),
 
   get: (id: string) => request<McpServerDefinition>('GET', `/mcp-servers/${id}`),
 

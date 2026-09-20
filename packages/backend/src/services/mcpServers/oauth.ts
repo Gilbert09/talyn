@@ -546,7 +546,7 @@ export async function resolveMcpAccessToken(
 }
 
 /** Read optional account details from the issuer's advertised profile endpoint. */
-export async function readMcpAccount(serverId: string, store: McpOAuthStore): Promise<{ name?: string; email?: string } | null> {
+export async function readMcpAccount(serverId: string, store: McpOAuthStore): Promise<{ name?: string; email?: string; workspace?: string } | null> {
   const stored = await store.read(serverId);
   if (stored?.status !== 'connected' || !stored.issuer) return null;
   const controller = new AbortController();
@@ -554,6 +554,21 @@ export async function readMcpAccount(serverId: string, store: McpOAuthStore): Pr
   try {
     const token = await resolveMcpAccessToken(serverId, store);
     if (!token) return null;
+    if (stored.issuer === 'https://mcp.slack.com' &&
+        stored.tokenEndpoint === 'https://slack.com/api/oauth.v2.user.access') {
+      const response = await mcpFetch('https://slack.com/api/auth.test', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(),
+      });
+      if (!response.ok) { await response.body?.cancel(); return null; }
+      const profile = JSON.parse(await readMcpBody(response, 32 * 1024));
+      if (!profile || profile.ok !== true) return null;
+      const name = typeof profile.user === 'string' ? profile.user.slice(0, 200) : undefined;
+      const workspace = typeof profile.team === 'string' ? profile.team.slice(0, 200) : undefined;
+      return name || workspace ? { name, workspace } : null;
+    }
     const metadata = await discoverAuthServer(stored.issuer, controller.signal);
     if (!metadata.userInfoEndpoint) return null;
     const response = await mcpFetch(metadata.userInfoEndpoint, {
