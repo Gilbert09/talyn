@@ -23,6 +23,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { useSkills } from '../../hooks/useSkills';
 import { toLocalSkillSummaries } from '../../lib/skills';
 import { Button } from '../ui/button';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Card } from '../ui/card';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -54,7 +55,8 @@ export function SkillsSettings() {
 
   const [draft, setDraft] = useState<SkillDraft | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SkillSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [importingPath, setImportingPath] = useState<string | null>(null);
 
   async function saveDraft() {
@@ -108,15 +110,22 @@ export function SkillsSettings() {
     }
   }
 
-  async function deleteSkill(skill: SkillSummary) {
-    if (!skill.id) return;
+  /** Perform the delete the dialog is asking about. */
+  async function deleteSkill() {
+    const skill = pendingDelete;
+    if (!skill?.id) return;
+    setDeleting(true);
     try {
       await api.skills.remove(skill.id);
       toast.success(`Deleted "${skill.name}"`);
-      setConfirmDeleteId(null);
+      // Closed only on success: a failure leaves the dialog up beside the
+      // error rather than dropping the user back with nothing explained.
+      setPendingDelete(null);
       await refresh();
     } catch (err) {
       toast.error('Could not delete skill', err instanceof Error ? err.message : undefined);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -205,26 +214,15 @@ export function SkillsSettings() {
                 >
                   <Pencil className="w-3.5 h-3.5" />
                 </Button>
-                {confirmDeleteId === skill.id ? (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => void deleteSkill(skill)}
-                  >
-                    Confirm
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
-                    title="Delete"
-                    onClick={() => setConfirmDeleteId(skill.id ?? null)}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
+                  title="Delete"
+                  onClick={() => setPendingDelete(skill)}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
               </div>
             ))}
           </div>
@@ -406,6 +404,20 @@ export function SkillsSettings() {
           </DialogContent>
         </Dialog>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this skill?"
+        description={
+          <>
+            <span className="font-medium text-foreground">{pendingDelete?.name}</span> is removed
+            from this workspace. Tasks that already ran with it are unaffected.
+          </>
+        }
+        busy={deleting}
+        onConfirm={() => void deleteSkill()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

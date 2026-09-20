@@ -8,6 +8,7 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
@@ -170,7 +171,8 @@ export function LoopsPanel() {
     mode: 'list',
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LoopWithStats | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   /**
    * The one loop event the server cannot see.
@@ -247,24 +249,31 @@ export function LoopsPanel() {
     );
   }
 
-  const doDelete = async (loop: LoopWithStats) => {
-    // Two clicks rather than a modal: deleting a loop also deletes its history
-    // (the runs cascade), but nothing it already did is undone.
-    if (confirmDelete !== loop.id) {
-      setConfirmDelete(loop.id);
-      window.setTimeout(() => setConfirmDelete((id) => (id === loop.id ? null : id)), 4000);
-      toast.info('Click delete again to confirm', 'This also removes its run history.');
-      return;
-    }
-    setConfirmDelete(null);
+  /**
+   * Perform the delete the dialog is asking about.
+   *
+   * The confirmation is a dialog rather than a second click on the same button.
+   * Click-to-arm put the question in a toast — the corner nobody is looking at
+   * — and made one gesture mean both "ask" and "do", so an impatient second
+   * click on a slow row deleted without anyone reading anything.
+   */
+  const doDelete = async () => {
+    const loop = pendingDelete;
+    if (!loop) return;
+    setDeleting(true);
     try {
       await remove(loop.id);
+      // Closed only on success, so a failure leaves the dialog open with the
+      // error beside it rather than dropping the user back with no explanation.
+      setPendingDelete(null);
       toast.success('Loop deleted');
-      // A deleted loop gives its free-plan slot back — re-read the count so
-      // "New loop" stops pre-empting on a limit the user is no longer at.
+      // A deleted row gives its free-plan slot back — re-read the count so
+      // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -329,7 +338,7 @@ export function LoopsPanel() {
                 expanded={expandedId === loop.id}
                 onToggleExpanded={() => setExpandedId((id) => (id === loop.id ? null : loop.id))}
                 onEdit={() => openEditor(loop)}
-                onDelete={() => void doDelete(loop)}
+                onDelete={() => setPendingDelete(loop)}
                 onRunNow={() => void doRunNow(loop)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(loop, enabled).catch((err: unknown) =>
@@ -344,6 +353,22 @@ export function LoopsPanel() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this loop?"
+        description={
+          <>
+            Deleting <span className="font-medium text-foreground">{pendingDelete?.name}</span> 
+            also removes its run history. Nothing it already did is undone.
+          </>
+        }
+        confirmLabel="Delete"
+        busy={deleting}
+        onConfirm={() => void doDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
+
     </div>
   );
 }

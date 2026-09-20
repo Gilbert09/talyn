@@ -8,6 +8,7 @@ import {
 } from '@talyn/shared';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
+import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit, useBillingStore } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
@@ -163,7 +164,8 @@ export function WorkflowsPanel() {
     { mode: 'list' }
   );
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<WorkflowWithStats | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   /**
    * The one workflow event the server cannot see.
@@ -243,25 +245,31 @@ export function WorkflowsPanel() {
     );
   }
 
-  const doDelete = async (workflow: WorkflowWithStats) => {
-    // Two clicks rather than a modal: deleting a workflow also deletes its
-    // history (the runs cascade), but nothing it already did is undone, so this
-    // is not a destructive action that warrants a whole dialog.
-    if (confirmDelete !== workflow.id) {
-      setConfirmDelete(workflow.id);
-      window.setTimeout(() => setConfirmDelete((id) => (id === workflow.id ? null : id)), 4000);
-      toast.info('Click delete again to confirm', 'This also removes its run history.');
-      return;
-    }
-    setConfirmDelete(null);
+  /**
+   * Perform the delete the dialog is asking about.
+   *
+   * The confirmation is a dialog rather than a second click on the same button.
+   * Click-to-arm put the question in a toast — the corner nobody is looking at
+   * — and made one gesture mean both "ask" and "do", so an impatient second
+   * click on a slow row deleted without anyone reading anything.
+   */
+  const doDelete = async () => {
+    const workflow = pendingDelete;
+    if (!workflow) return;
+    setDeleting(true);
     try {
       await remove(workflow.id);
+      // Closed only on success, so a failure leaves the dialog open with the
+      // error beside it rather than dropping the user back with no explanation.
+      setPendingDelete(null);
       toast.success('Workflow deleted');
-      // A deleted workflow gives its free-plan slot back — re-read the count so
-      // "New workflow" stops pre-empting on a limit the user is no longer at.
+      // A deleted row gives its free-plan slot back — re-read the count so
+      // the create button stops pre-empting on a limit the user is no longer at.
       void useBillingStore.getState().refresh();
     } catch (err) {
       toast.error('Could not delete', err instanceof Error ? err.message : undefined);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -315,7 +323,7 @@ export function WorkflowsPanel() {
                   setExpandedId((id) => (id === workflow.id ? null : workflow.id))
                 }
                 onEdit={() => openEditor(workflow)}
-                onDelete={() => void doDelete(workflow)}
+                onDelete={() => setPendingDelete(workflow)}
                 onSetEnabled={(enabled) => {
                   void setEnabled(workflow, enabled).catch((err: unknown) =>
                     toast.error(
@@ -329,6 +337,22 @@ export function WorkflowsPanel() {
           </div>
         )}
       </div>
+
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this workflow?"
+        description={
+          <>
+            Deleting <span className="font-medium text-foreground">{pendingDelete?.name}</span> 
+            also removes its run history. Nothing it already did is undone.
+          </>
+        }
+        confirmLabel="Delete"
+        busy={deleting}
+        onConfirm={() => void doDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
 
     </div>
   );

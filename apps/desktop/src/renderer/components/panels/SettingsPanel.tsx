@@ -48,6 +48,7 @@ import { cn } from '../../lib/utils';
 import { CLAUDE_LOGO, CODEX_LOGO } from '../../assets/providers/logos';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { Button } from '../ui/button';
+import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Input } from '../ui/input';
 import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
@@ -217,9 +218,12 @@ function WorkspaceSettings() {
       const next = workspaces.find((w) => w.id !== currentWorkspaceId);
       setCurrentWorkspace(next?.id ?? null);
       await refreshWorkspaces();
+      // Closed only once the delete has actually happened. It used to close in
+      // `finally`, so a failed delete dropped the dialog and left the workspace
+      // there with nothing said about why.
+      setConfirmDelete(false);
     } finally {
       setDeleting(false);
-      setConfirmDelete(false);
     }
   }
 
@@ -636,30 +640,6 @@ function WorkspaceSettings() {
               Permanently removes this workspace and its watched repos, tasks, and
               integration credentials. This cannot be undone.
             </p>
-            {confirmDelete ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleDelete}
-                  disabled={deleting}
-                >
-                  {deleting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    `Delete "${currentWorkspace.name}"`
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConfirmDelete(false)}
-                  disabled={deleting}
-                >
-                  Cancel
-                </Button>
-              </div>
-            ) : (
               <Button
                 variant="outline"
                 size="sm"
@@ -675,7 +655,21 @@ function WorkspaceSettings() {
                 <Trash2 className="w-4 h-4 mr-1" />
                 Delete workspace
               </Button>
-            )}
+
+            <ConfirmDialog
+              open={confirmDelete}
+              title={`Delete "${currentWorkspace.name}"?`}
+              description={
+                <>
+                  This permanently removes the workspace and its watched repos, tasks and
+                  integration credentials. It cannot be undone.
+                </>
+              }
+              confirmLabel="Delete workspace"
+              busy={deleting}
+              onConfirm={() => void handleDelete()}
+              onCancel={() => setConfirmDelete(false)}
+            />
           </Card>
         </>
       ) : (
