@@ -165,18 +165,27 @@ export const FEATURE_FLAGS = {
    * MCP servers — the servers a workspace connects and the fleet wires
    * into every run.
    *
-   * Fallback OFF and `availability: 'gated'`, matching `fleet` rather than
-   * `workflows`, and for two reasons that both point the same way. It is
+   * Fallback OFF, matching `fleet` rather than `workflows`, and for two
+   * reasons that both point the same way. It is
    * fleet-only — PostHog Code has no equivalent — so a workspace that gets it
    * without the fleet gets a page that cannot do anything. And it is the
    * surface where somebody pastes a Stripe key: failing open during a PostHog
    * outage would offer credential storage to accounts nobody decided to offer
    * it to.
    *
-   * `availability: 'gated'` also withholds every release note tagged `mcp`
-   * from everybody, including the accounts the PostHog audience has switched
-   * it on for, until we flip it to 'general'. That is what stops Loops's
-   * mistake repeating — announced to every user who could not open it.
+   * RELEASED 2026-09-20: `availability` is now 'general', and the PostHog
+   * audience went from one email to everybody. The withheld backlog of `mcp`
+   * highlights replays to everyone who missed it — Session 124's mechanism
+   * doing its job, rather than somebody remembering which releases to
+   * re-announce.
+   *
+   * `fallback` deliberately STAYS false. It answers a different question from
+   * `availability`: not "who has this feature" but "what do we say when
+   * PostHog is down", and the answer there is still no. This is the surface
+   * where somebody pastes a Stripe key, and an outage must not open credential
+   * storage to accounts nobody decided to offer it to. It is also still
+   * fleet-only, so a workspace without the fleet would get a page that cannot
+   * do anything.
    */
   mcpServers: {
     posthogKey: 'mcp-servers',
@@ -192,7 +201,7 @@ export const FEATURE_FLAGS = {
     // have reached for the switch to go anyway.
     fallback: false,
     description: 'MCP servers — connect MCP servers to Talyn Fleet runs',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['mcp'],
   },
 
