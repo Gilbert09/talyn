@@ -1,4 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mocked at the module boundary rather than spied on the namespace: prMonitor
+// imports `captureWorkspaceEvent` as a direct binding, which `vi.spyOn` cannot
+// rebind under ESM.
+vi.mock('../services/analytics.js', () => ({
+  captureWorkspaceEvent: vi.fn(),
+  captureServerEvent: vi.fn(),
+  captureSignup: vi.fn(),
+  isServerAnalyticsConfigured: () => false,
+}));
 import { prMonitorService } from '../services/prMonitor.js';
 import { githubService } from '../services/github.js';
 import * as graphqlModule from '../services/githubGraphql.js';
@@ -6,6 +16,7 @@ import * as websocketModule from '../services/websocket.js';
 import { _resetPrFocus } from '../services/prFocus.js';
 import type { PRSummary } from '../services/githubGraphql.js';
 import { reviewRequestedStamps } from '../services/prCache.js';
+import { captureWorkspaceEvent } from '../services/analytics.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -103,6 +114,7 @@ describe('review_requested_first_seen_at', () => {
     });
     prMonitorService.invalidateUserLogin('ws1');
     _resetPrFocus();
+    vi.mocked(captureWorkspaceEvent).mockClear();
     vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
       { number: 9, pr: fakeSummary({ number: 9 }) },
     ]);
@@ -231,6 +243,52 @@ describe('review_requested_first_seen_at', () => {
       .map((c) => c[1])
       .find((p) => p.number === 9 && p.reviewRequested === true);
     expect(call?.reviewRequestedFirstSeenAt).toEqual(expect.any(String));
+  });
+
+  it('reports how long a review was owed when the PR leaves the cohort', async () => {
+    // Nothing else in the app sees a review happen: almost all of them are
+    // submitted on github.com. This transition is the only sighting, and
+    // without it "did the ordering help" has no answer at all.
+    await seedRow({
+      reviewRequested: true,
+      reviewRequestedFirstSeenAt: new Date(Date.now() - 30 * 3_600_000),
+    });
+    mockSearch([], [9], [9]);
+
+    await prMonitorService.forcePoll();
+
+    const call = vi
+      .mocked(captureWorkspaceEvent)
+      .mock.calls.find((c) => c[1] === 'pr_review_submitted');
+    expect(call?.[2]).toMatchObject({ repo: 'acme/widgets', pr_number: 9 });
+    expect(call?.[2]?.hours_in_cohort as number).toBeCloseTo(30, 0);
+  });
+
+  it('says nothing when the PR was never recorded as entering the cohort', async () => {
+    // No entry stamp means no elapsed time to report, and inventing one from
+    // the PR's open date would claim a wait that never happened.
+    await seedRow({ reviewRequested: true, reviewRequestedFirstSeenAt: null });
+    mockSearch([], [9], [9]);
+
+    await prMonitorService.forcePoll();
+
+    expect(
+      vi.mocked(captureWorkspaceEvent).mock.calls.find((c) => c[1] === 'pr_review_submitted'),
+    ).toBeUndefined();
+  });
+
+  it('says nothing when the PR merely stays in the cohort', async () => {
+    await seedRow({
+      reviewRequested: true,
+      reviewRequestedFirstSeenAt: new Date(Date.now() - 5 * 3_600_000),
+    });
+    mockSearch([], [9]);
+
+    await prMonitorService.forcePoll();
+
+    expect(
+      vi.mocked(captureWorkspaceEvent).mock.calls.find((c) => c[1] === 'pr_review_submitted'),
+    ).toBeUndefined();
   });
 
   it('omits the stamp from an emit that did not touch it', async () => {

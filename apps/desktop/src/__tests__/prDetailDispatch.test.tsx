@@ -136,15 +136,28 @@ afterEach(() => {
 describe('pr_detail_opened — what the sheet could have offered', () => {
   it('reports a fixable PR as dispatchable, with no blocked reason', () => {
     open(row({ fixable: true }));
-    expect(opened()).toEqual({ can_dispatch: true, has_agent: true });
+    expect(opened()).toMatchObject({ can_dispatch: true, has_agent: true });
+    expect(opened()).not.toHaveProperty('dispatch_blocked_reason');
   });
 
   it('names why a clean PR cannot be delegated', () => {
     open(row({ fixable: false }));
-    expect(opened()).toEqual({
+    expect(opened()).toMatchObject({
       can_dispatch: false,
       dispatch_blocked_reason: 'no_fixable_issues',
       has_agent: true,
+    });
+  });
+
+  it('says WHICH pull request was opened', () => {
+    // It carried no identity at all until now, so "which PR did they open"
+    // — and therefore every question about whether a list is ordered well —
+    // was unanswerable from the events.
+    open(row({ fixable: true }));
+    expect(opened()).toMatchObject({
+      repo: 'acme/app',
+      pr_number: 7,
+      blocking_reason: 'checks_failed',
     });
   });
 

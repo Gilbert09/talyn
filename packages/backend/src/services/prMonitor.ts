@@ -15,6 +15,7 @@ import {
   type PRSummary,
 } from './githubGraphql.js';
 import { upsertFromBatchResult, reviewRequestedStamps } from './prCache.js';
+import { captureWorkspaceEvent } from './analytics.js';
 import { ttlFor, isCohortActive } from './prFocus.js';
 import {
   initMergeableSettler,
@@ -524,6 +525,10 @@ class PRMonitorService extends EventEmitter {
         repo: pullRequestsTable.repo,
         state: pullRequestsTable.state,
         reviewRequested: pullRequestsTable.reviewRequested,
+        // One timestamp column, so the exit event can say how long the review
+        // was owed. Deliberately NOT `lastSummary`, which this projection still
+        // excludes — see the note above.
+        reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
         authored: pullRequestsTable.authored,
       })
       .from(pullRequestsTable)
@@ -548,6 +553,25 @@ class PRMonitorService extends EventEmitter {
       // which is a silent reset of the age signal rather than a visible bug.
       const now = new Date();
       const stamps = reviewRequestedStamps(row.reviewRequested, reviewRequested, now);
+
+      // The OUTCOME event, on the reconcile path.
+      //
+      // The upsert in prCache emits the same event and usually gets there
+      // first, because the poll upserts every FETCHED PR before reconciling.
+      // This covers the ones it did not fetch — a PR that fell out of the
+      // searches, or whose TTL had not expired. The two cannot double-fire:
+      // this loop re-reads the rows after those upserts, so a PR the upsert
+      // already moved shows no change here.
+      if (stamps.reviewRequestedClearedAt && row.reviewRequestedFirstSeenAt) {
+        captureWorkspaceEvent(workspaceId, 'pr_review_submitted', {
+          repo: `${row.owner}/${row.repo}`,
+          pr_number: row.number,
+          hours_in_cohort: Math.round(
+            (now.getTime() - row.reviewRequestedFirstSeenAt.getTime()) / 3_600_000,
+          ),
+        });
+      }
+
       await this.db
         .update(pullRequestsTable)
         .set({ authored, reviewRequested, ...stamps, updatedAt: now })

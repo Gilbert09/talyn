@@ -190,7 +190,7 @@ export function PRTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
+        {rows.map((row, index) => (
           <PRTableRow
             key={row.id}
             row={row}
@@ -207,7 +207,26 @@ export function PRTable({
             viewerLogin={viewerLogin}
             priority={priorityById?.get(row.id) ?? null}
             isSelected={row.id === selectedId}
-            onSelect={() => onSelect(row.id)}
+            onSelect={() => {
+              // Rank is captured HERE, from the array the user is actually
+              // looking at — it cannot be reconstructed afterwards, because by
+              // the time anyone asks, the list has been re-sorted by a poll.
+              // Only in Priority mode: `priorityById` is absent otherwise, and
+              // an event about a ranking that was not in use answers nothing.
+              const verdict = priorityById?.get(row.id);
+              if (verdict) {
+                trackEvent('pr_review_row_opened', {
+                  repo: `${row.owner}/${row.repo}`,
+                  pr_number: row.number,
+                  rank: index + 1,
+                  cohort_size: rows.length,
+                  gate: verdict.gate,
+                  score: verdict.score,
+                  top_reason: verdict.topReason?.reason,
+                });
+              }
+              onSelect(row.id);
+            }}
             onOpenTask={onOpenTask}
             onStopTask={onStopTask}
             onMerge={onMerge}

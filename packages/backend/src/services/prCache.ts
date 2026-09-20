@@ -9,6 +9,7 @@ import {
 } from '../db/schema.js';
 import { readWorkspaceSettings } from './workspaceSettings.js';
 import { emitPullRequestUpdated } from './websocket.js';
+import { captureWorkspaceEvent } from './analytics.js';
 import { domainEvents } from './events.js';
 import {
   batchPullRequests,
@@ -697,9 +698,11 @@ async function upsertRow(
         .select({
           digest: pullRequestsTable.lastSummaryDigest,
           bodyChanged: sql<boolean>`${pullRequestsTable.body} IS DISTINCT FROM ${body}`,
-          // One boolean, on a read this path already makes — so knowing whether
-          // the PR was already in the cohort costs nothing extra.
+          // One boolean and one timestamp, on a read this path already makes —
+          // so knowing whether the PR was in the cohort, and since when, costs
+          // nothing extra.
           reviewRequested: pullRequestsTable.reviewRequested,
+          reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
         })
         .from(pullRequestsTable)
         .where(eq(pullRequestsTable.id, opts.existingId))
@@ -708,6 +711,27 @@ async function upsertRow(
     const prevDigest = prev?.digest;
     const summaryChanged = prevDigest !== digest;
     stamps = reviewRequestedStamps(prev?.reviewRequested, opts.reviewRequested, now);
+
+    // The OUTCOME event, emitted where the transition is actually OBSERVED.
+    //
+    // The intuitive home is the monitor's flag reconcile, and that is wrong for
+    // the same reason the stamp itself was: the poll upserts every fetched PR
+    // BEFORE reconciling, so this is the writer that usually sees a PR leave
+    // the cohort. An event emitted only from the reconcile compiles, passes,
+    // and fires almost never.
+    //
+    // It matters because nothing else in the app sees a review happen at all —
+    // almost every one is submitted on github.com — so this is the only
+    // evidence that an ordering did or did not help.
+    if (stamps.reviewRequestedClearedAt && prev?.reviewRequestedFirstSeenAt) {
+      captureWorkspaceEvent(opts.workspaceId, 'pr_review_submitted', {
+        repo: `${opts.summary.owner}/${opts.summary.repo}`,
+        pr_number: opts.summary.number,
+        hours_in_cohort: Math.round(
+          (now.getTime() - prev.reviewRequestedFirstSeenAt.getTime()) / 3_600_000,
+        ),
+      });
+    }
     await db
       .update(pullRequestsTable)
       .set({

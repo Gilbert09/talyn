@@ -170,6 +170,18 @@ export function PRDetailSheet({
     trackEvent('pr_detail_opened', {
       ...(seedRow
         ? {
+            // PR IDENTITY. This event has fired since the detail sheet shipped
+            // and carried none of it — so it was impossible to tell WHICH PR a
+            // person opened, which makes every question about whether a list is
+            // ordered well unanswerable. Repo and number are the minimum.
+            repo: `${seedRow.owner}/${seedRow.repo}`,
+            pr_number: seedRow.number,
+            age_hours: seedRow.summary.createdAt
+              ? Math.round(
+                  (Date.now() - new Date(seedRow.summary.createdAt).getTime()) / 3_600_000
+                )
+              : undefined,
+            blocking_reason: seedRow.summary.blockingReason,
             can_dispatch: openedBlocked === null,
             ...(openedBlocked ? { dispatch_blocked_reason: openedBlocked } : {}),
           }

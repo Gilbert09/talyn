@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { api, type ReviewRankPayload } from '../../../lib/api';
+import { trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
@@ -103,6 +104,10 @@ export function ReviewsPanel() {
 
   // Saved filters: the definitions are workspace-scoped, the selection is not.
   const setSortModePersisted = (next: ReviewSortMode) => {
+    // The one question that decides whether any of this was worth building: is
+    // Priority chosen more than once? A ranking people switch away from is a
+    // ranking that is wrong, and nothing else in the product would say so.
+    trackEvent('pr_review_sort_mode_changed', { from: sortMode, to: next });
     setSortMode(next);
     try {
       window.localStorage.setItem(SORT_MODE_KEY, next);
@@ -204,6 +209,32 @@ export function ReviewsPanel() {
       },
     });
   }, [priorityMode, cohort, taskStatusById, rankProfile]);
+
+  /**
+   * The shape of the ranked list, once per switch into Priority mode.
+   *
+   * Not per render and not per poll: this answers "what does this person's
+   * queue look like", which changes on the hour, and firing it on every tick
+   * would drown the events that matter in noise about the same forty PRs.
+   */
+  const reportedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!priorityById) {
+      reportedFor.current = null;
+      return;
+    }
+    const key = `${workspaceId}:${cohort.length}`;
+    if (reportedFor.current === key) return;
+    reportedFor.current = key;
+    const gates = { blocking_others: 0, actionable: 0, waiting_on_author: 0, not_ready: 0 };
+    for (const verdict of priorityById.values()) gates[verdict.gate]++;
+    trackEvent('pr_review_list_ranked', {
+      cohort_size: cohort.length,
+      model_installed: rankProfile?.model?.installed === true,
+      model_events: rankProfile?.nEvents ?? 0,
+      ...gates,
+    });
+  }, [priorityById, cohort.length, workspaceId, rankProfile]);
 
   const filtered = useMemo(() => {
     let out = cohort;
