@@ -3945,3 +3945,12 @@ Deferred for 20.6: FastOwl MCP server. Deferred for 20.7: GitHub/Linear sources,
 ### Local MCP callback tunnel hosts (2026-09-20)
 
 The web development server accepts specific extra hosts from `TALYN_DEV_ALLOWED_HOSTS` in its local environment. Set a comma-separated list in `apps/web/.env.local` for HTTPS tunnel testing. Vite keeps its default host checks. Verified the local and public MCP callback pages return HTTP 200. Web type checking and config lint passed.
+
+
+### 2026-09-20 — Slack internal app setup
+
+New Slack connections now default to a user token from an internal Slack app.
+Both editors include a manifest with user scopes and PKCE, plus steps to enable MCP and install the app.
+Existing OAuth connections retain their flow. Pasted tokens use existing encrypted credential storage.
+Users must replace expired or revoked tokens manually. The manifest requests access for all supported Slack tools.
+Slack administrators can still require approval for internal apps.

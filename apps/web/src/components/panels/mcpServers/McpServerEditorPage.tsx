@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Loader2, X } from 'lucide-react';
 import {
   MCP_AUTH_KINDS,
+  SLACK_INTERNAL_APP_MANIFEST,
   emptyMcpServerInput,
   mcpCatalogEntry,
   mcpServerInputProblem,
@@ -99,6 +100,12 @@ export function McpServerEditorPage({
       mcpServerInputProblem({ name: 'discovery', url: input.url, authKind: 'none', enabled: true })
     )
       return;
+    if (new URL(input.url).origin === 'https://mcp.slack.com' && !(editingRef.current?.url === input.url && editingRef.current.oauth)) {
+      setDiscovery({ methods: ['bearer'], source: 'catalog', credentialLabel: 'Slack User OAuth Token (xoxp-)' });
+      setMethod('bearer');
+      setInput((prev) => ({ ...prev, authKind: 'bearer', inject: undefined }));
+      return;
+    }
     setChecking(true);
     const timer = setTimeout(() => {
       api.mcpServers
@@ -350,9 +357,26 @@ export function McpServerEditorPage({
             </Section>
           )}
 
+          {validAddress && new URL(input.url).origin === 'https://mcp.slack.com' && !connected && method === 'bearer' && (
+            <Section title="Connect your own Slack app" description="Create an internal app in the Slack workspace you want to connect.">
+              <ol className="list-decimal space-y-2 pl-5 text-sm">
+                <li><button type="button" className="underline" onClick={() => void openExternal('https://api.slack.com/apps')}>Open Slack apps</button> and select Create New App → From a manifest.</li>
+                <li>Select your workspace. Copy the manifest below into Slack, then create the app.</li>
+                <li>Open Agents &amp; AI Apps. Enable Model Context Protocol. PKCE is already enabled in the manifest.</li>
+                <li>Under OAuth &amp; Permissions, install the app to your workspace. Your administrator may need to approve it.</li>
+                <li>Copy the User OAuth Token (xoxp-) and paste it below. Keep public distribution off.</li>
+              </ol>
+              <details className="mt-3 text-sm">
+                <summary className="cursor-pointer">App manifest</summary>
+                <pre className="mt-2 max-h-64 overflow-auto rounded border p-3 text-xs select-text">{JSON.stringify(SLACK_INTERNAL_APP_MANIFEST, null, 2)}</pre>
+              </details>
+              <p className="mt-3 text-xs text-muted-foreground">The manifest requests access for all Slack tools. Review these permissions before installation. Each user must supply their own user token. If it expires or is revoked, replace it here.</p>
+            </Section>
+          )}
+
           {validAddress && (
             <>
-              {!connected && <Section
+              {!connected && !(new URL(input.url).origin === 'https://mcp.slack.com' && method === 'bearer' && !manual) && <Section
                 title="Authentication"
                 description="Talyn checks the server address to find its authentication options."
               >

@@ -71,6 +71,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('MCP authentication setup', () => {
+  it('uses an internal user token for a new Slack connection', async () => {
+    setup(null, mcpServerFromCatalog(mcpCatalogEntry('slack')!));
+    expect(await screen.findByText('Connect your own Slack app')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Paste the key')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull();
+    expect(mocks.discoverAuth).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByPlaceholderText('Paste the key'), { target: { value: 'xoxp-test-token' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      url: 'https://mcp.slack.com/mcp', authKind: 'bearer', secret: 'xoxp-test-token',
+    })));
+  });
+
   it.each(['oauth', 'none', 'bearer'] as const)(
     'shows only the detected %s method',
     async (method) => {

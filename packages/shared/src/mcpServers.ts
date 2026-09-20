@@ -520,6 +520,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     url: 'https://mcp.slack.com/mcp',
     authKind: 'bearer',
     oauth: true,
+    credentialLabel: 'Slack User OAuth Token (xoxp-)',
   },
   {
     handle: 'sentry',
@@ -661,3 +662,47 @@ export function mcpServerFromAddress(address: string, existingNames: readonly st
   }
   return { ...input, name };
 }
+
+export const SLACK_INTERNAL_APP_MANIFEST = {
+  "display_information": {
+    "name": "Talyn Internal",
+    "description": "Connect your Slack workspace to Talyn agents."
+  },
+  "oauth_config": {
+    "pkce_enabled": true,
+    "scopes": {
+      "user": [
+        "canvases:read",
+        "canvases:write",
+        "channels:history",
+        "channels:read",
+        "channels:write",
+        "chat:write",
+        "emoji:read",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "groups:write",
+        "im:history",
+        "im:read",
+        "im:write",
+        "lists:read",
+        "lists:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "reactions:read",
+        "reactions:write",
+        "search:read.files",
+        "search:read.im",
+        "search:read.mpim",
+        "search:read.private",
+        "search:read.public",
+        "search:read.users",
+        "users:read",
+        "users:read.email"
+      ]
+    }
+  }
+};
