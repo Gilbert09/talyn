@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => ({
   signInStatus: vi.fn(),
   disconnect: vi.fn(),
   openExternal: vi.fn(),
+  openSignIn: vi.fn(),
+  closeSignIn: vi.fn(),
 }));
 vi.mock('../../../lib/api', () => ({ api: { mcpServers: mocks } }));
-vi.mock('../../../lib/openExternal', () => ({ openExternal: mocks.openExternal }));
+vi.mock('../../../lib/openExternal', () => ({ openExternal: mocks.openExternal, prepareSignInWindow: () => ({ open: mocks.openSignIn, close: mocks.closeSignIn }) }));
 vi.mock('../../../stores/workspace', () => ({
   useWorkspaceStore: (selector: (state: { currentWorkspaceId: string }) => unknown) =>
     selector({ currentWorkspaceId: 'ws-1' }),
@@ -60,6 +62,7 @@ function setup(
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.openSignIn.mockResolvedValue(true);
   onSave.mockResolvedValue(server);
   onTest.mockResolvedValue({ ok: true, at: '', toolNames: ['read_documents'] });
 });
@@ -154,7 +157,8 @@ describe('MCP authentication setup', () => {
     expect(screen.queryByRole('button', { name: 'Connect account' })).toBeNull();
   });
 
-  it('saves a new server before OAuth and opens the browser from a direct click', async () => {
+  it.each([true, false])('opens sign-in automatically with a fallback when needed: %s', async (opened) => {
+    mocks.openSignIn.mockResolvedValue(opened);
     mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
     mocks.startSignIn.mockResolvedValue({
       authorizeUrl: 'https://auth.example.com/authorize',
@@ -164,12 +168,15 @@ describe('MCP authentication setup', () => {
     mocks.signInStatus.mockResolvedValue({ status: 'connected', pending: false });
     setup();
     fireEvent.click(await screen.findByRole('button', { name: 'Connect account' }));
-    const continueButton = await screen.findByRole('button', { name: 'Continue in browser' });
+    await waitFor(() => expect(mocks.openSignIn).toHaveBeenCalledWith('https://auth.example.com/authorize'));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ authKind: 'bearer' }));
     expect(mocks.startSignIn).toHaveBeenCalledWith('srv-1');
-    expect(mocks.openExternal).not.toHaveBeenCalled();
-    fireEvent.click(continueButton);
-    expect(mocks.openExternal).toHaveBeenCalledWith('https://auth.example.com/authorize');
+    if (opened) {
+      expect(screen.queryByRole('button', { name: 'Continue in browser' })).toBeNull();
+    } else {
+      fireEvent.click(await screen.findByRole('button', { name: 'Continue in browser' }));
+      expect(mocks.openExternal).toHaveBeenCalledWith('https://auth.example.com/authorize');
+    }
     await screen.findByText('Signed in.', {}, { timeout: 3000 });
     expect(screen.queryByRole('button', { name: 'Continue in browser' })).toBeNull();
   });

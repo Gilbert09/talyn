@@ -2,6 +2,13 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## MCP browser launch (2026-09-20)
+
+- Open the OAuth page automatically after the user selects Connect account.
+- Reserve a browser tab during the click to avoid popup blocking in the web app.
+- Keep a manual link if the automatic browser launch fails.
+- Validate automatic launch, fallback, and connection completion with the focused editor tests.
+
 ## MCP display updates (2026-09-20)
 
 - Show enabled tools against discovered tools, such as `5/13 tools`.

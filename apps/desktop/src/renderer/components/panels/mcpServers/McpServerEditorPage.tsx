@@ -17,7 +17,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
-import { openExternal } from '../../../lib/openExternal';
+import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
 
 /**
@@ -659,6 +659,8 @@ function SignIn({
   );
 
   const start = async () => {
+    const browser = prepareSignInWindow();
+    let opened = false;
     const current = ++attempt.current;
     setBusy(true);
     setError(null);
@@ -668,8 +670,13 @@ function SignIn({
       if (current !== attempt.current) return;
       const flow = await api.mcpServers.startSignIn(saved.id);
       if (current !== attempt.current) return;
-      // A direct click on this link keeps browser popup rules satisfied.
-      setAuthorizeUrl(flow.authorizeUrl);
+      try {
+        opened = await browser.open(flow.authorizeUrl);
+      } catch {
+        // Keep a manual link if the browser could not open.
+      }
+      if (current !== attempt.current) return;
+      if (!opened) setAuthorizeUrl(flow.authorizeUrl);
       const until = Math.min(Date.parse(flow.expiresAt), Date.now() + 10 * 60 * 1000);
       while (Date.now() < until && current === attempt.current) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -691,6 +698,7 @@ function SignIn({
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
+      if (!opened) browser.close();
       if (current === attempt.current) {
         setBusy(false);
         setAuthorizeUrl(null);

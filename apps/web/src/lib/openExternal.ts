@@ -25,3 +25,17 @@ export function isOpenInBrowserClick(
 ): boolean {
   return e.metaKey || e.ctrlKey || e.button === 1;
 }
+
+/** Reserve the sign-in tab while the click still permits popups. */
+export function prepareSignInWindow() {
+  const popup = window.open('about:blank', '_blank');
+  if (popup) popup.opener = null;
+  return {
+    open: async (url: string): Promise<boolean> => {
+      if (!popup || popup.closed) return false;
+      popup.location.replace(url);
+      return true;
+    },
+    close: () => popup?.close(),
+  };
+}

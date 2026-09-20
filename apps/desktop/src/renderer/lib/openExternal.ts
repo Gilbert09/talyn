@@ -21,3 +21,14 @@ export function isOpenInBrowserClick(
 ): boolean {
   return e.metaKey || e.ctrlKey || e.button === 1;
 }
+
+/** The desktop opens the system browser after it receives the sign-in URL. */
+export function prepareSignInWindow() {
+  return {
+    open: async (url: string): Promise<boolean> => {
+      await openExternal(url);
+      return true;
+    },
+    close: () => undefined,
+  };
+}
