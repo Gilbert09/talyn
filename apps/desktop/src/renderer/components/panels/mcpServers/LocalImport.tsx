@@ -17,6 +17,26 @@ interface LocalImportProps {
 }
 
 export function LocalImport(props: LocalImportProps) {
+  const [scanVersion, setScanVersion] = useState(0);
+  const [findings, setFindings] = useState<LocalMcpFinding[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setFailed(false);
+    window.electron.mcp
+      .scanLocal()
+      .then((rows) => live && setFindings(rows))
+      .catch(() => { if (live) setFailed(true); });
+    return () => {
+      live = false;
+    };
+  }, [scanVersion]);
+
+  const availableCount = findings?.filter(
+    (finding) => finding.importable && !props.connectedUrls.has(finding.url ?? '')
+  ).length;
+
   const [open, setOpen] = useState(() => {
     try {
       return !introSeen && localStorage.getItem(INTRO_SEEN_KEY) !== '1';
@@ -36,9 +56,15 @@ export function LocalImport(props: LocalImportProps) {
 
   return (
     <>
-      <Button variant="outline" onClick={() => setOpen(true)} data-attr="mcp-import">
+      <Button variant="outline" onClick={() => {
+        setOpen(true);
+        setScanVersion((version) => version + 1);
+      }} data-attr="mcp-import">
         <Download className="mr-1 h-4 w-4" />
         Import servers
+        {!failed && availableCount !== undefined && (
+          <Badge variant="secondary" className="ml-2">{availableCount}</Badge>
+        )}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
@@ -55,7 +81,7 @@ export function LocalImport(props: LocalImportProps) {
               Choose a server from your Claude or Codex configuration. You may need to sign in or enter its key.
             </DialogDescription>
           </DialogHeader>
-          {open && <LocalImportList {...props} onImport={(input) => { setOpen(false); props.onImport(input); }} />}
+          {open && <LocalImportList {...props} findings={findings} failed={failed} onImport={(input) => { setOpen(false); props.onImport(input); }} />}
           <div className="mt-4 flex justify-end">
             <Button autoFocus variant="outline" onClick={() => setOpen(false)}>Done</Button>
           </div>
@@ -65,20 +91,10 @@ export function LocalImport(props: LocalImportProps) {
   );
 }
 
-function LocalImportList({ connectedUrls, onImport }: LocalImportProps) {
-  const [findings, setFindings] = useState<LocalMcpFinding[] | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    window.electron.mcp
-      .scanLocal()
-      .then((rows) => live && setFindings(rows))
-      .catch(() => { if (live) setFailed(true); });
-    return () => {
-      live = false;
-    };
-  }, []);
+function LocalImportList({ connectedUrls, onImport, findings, failed }: LocalImportProps & {
+  findings: LocalMcpFinding[] | null;
+  failed: boolean;
+}) {
 
   if (failed) return <p role="alert" className="text-sm text-muted-foreground">Could not read local servers. Close this window and try again.</p>;
   if (findings === null) return <p role="status" className="text-sm text-muted-foreground">Looking for local servers…</p>;
