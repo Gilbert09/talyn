@@ -55,7 +55,14 @@ export default defineConfig(({ mode, command }) => {
       // Emitted for PostHog symbolication but never served — see deploy-web.yml.
       sourcemap: 'hidden',
     },
-    server: { port: 5173, strictPort: true },
+    server: {
+      port: 5173,
+      strictPort: true,
+      allowedHosts: (env.TALYN_DEV_ALLOWED_HOSTS ?? '')
+        .split(',')
+        .map((host) => host.trim())
+        .filter(Boolean),
+    },
     preview: { port: 5173 },
   };
 });

@@ -3941,3 +3941,7 @@ Deferred for 20.6: FastOwl MCP server. Deferred for 20.7: GitHub/Linear sources,
 - Reviewed PostHog's Coder devbox implementation for reference
 - Established architecture decisions
 - Created initial TODO list
+
+### Local MCP callback tunnel hosts (2026-09-20)
+
+The web development server accepts specific extra hosts from `TALYN_DEV_ALLOWED_HOSTS` in its local environment. Set a comma-separated list in `apps/web/.env.local` for HTTPS tunnel testing. Vite keeps its default host checks. Verified the local and public MCP callback pages return HTTP 200. Web type checking and config lint passed.
