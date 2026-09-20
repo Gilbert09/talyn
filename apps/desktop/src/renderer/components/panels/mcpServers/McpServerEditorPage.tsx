@@ -21,6 +21,25 @@ import { api } from '../../../lib/api';
 import { Markdown } from '../../../lib/markdown';
 import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { trackEvent } from '../../../lib/analytics';
+
+
+/**
+ * The HOSTNAME of a server URL, for analytics. Never the whole URL.
+ *
+ * Mirrors `serverShape` in `routes/mcpServers.ts`, deliberately: a path can
+ * name an internal service ("/teams/acme/billing-mcp") and a query string is
+ * refused at validation but would be a credential if it ever arrived. The host
+ * answers every question we actually ask — which vendors people connect, and
+ * which ones fail — and carries none of that.
+ */
+function analyticsHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return 'invalid';
+  }
+}
 
 /**
  * The tool-server editor.
@@ -112,6 +131,19 @@ export function McpServerEditorPage({
         .discoverAuth(workspaceId, input.url)
         .then((result) => {
           if (cancelled) return;
+          // How often auto-discovery actually works. The backend serves the
+          // route but cannot see what the USER ended up with — the Slack
+          // shortcut above never calls it, and a thrown request lands in the
+          // catch below as "use manual setup", which is a discovery failure
+          // from the person's point of view and a 200 from the server's.
+          trackEvent('mcp_auth_discovery_completed', {
+            mcp_server_host: analyticsHost(input.url),
+            mcp_from_catalog: Boolean(input.catalogHandle),
+            discovered: result.methods.length > 0,
+            method_count: result.methods.length,
+            methods: result.methods,
+            source: result.source,
+          });
           setDiscovery(result);
           const existing = editingRef.current;
           const keep = existing?.url === input.url && (existing.hasSecret || existing.oauth);
@@ -127,12 +159,20 @@ export function McpServerEditorPage({
           }
         })
         .catch(() => {
-          if (!cancelled)
-            setDiscovery({
-              methods: [],
-              source: 'unknown',
-              detail: 'Authentication could not be checked. Use manual setup.',
-            });
+          if (cancelled) return;
+          trackEvent('mcp_auth_discovery_completed', {
+            mcp_server_host: analyticsHost(input.url),
+            mcp_from_catalog: Boolean(input.catalogHandle),
+            discovered: false,
+            method_count: 0,
+            methods: [],
+            source: 'error',
+          });
+          setDiscovery({
+            methods: [],
+            source: 'unknown',
+            detail: 'Authentication could not be checked. Use manual setup.',
+          });
         })
         .finally(() => {
           if (!cancelled) setChecking(false);
@@ -153,6 +193,14 @@ export function McpServerEditorPage({
   const availableMethods = Array.from(new Set([method, ...(discovery?.methods ?? [])]));
   const authReady = manual || (!checking && discovery !== null);
   const chooseMethod = (next: McpAuthMethod) => {
+    // `was_offered` is the interesting half: a method the user picked that
+    // discovery did NOT offer means discovery got it wrong, which is invisible
+    // in the saved server — it records what they chose, not what we suggested.
+    trackEvent('mcp_auth_method_chosen', {
+      mcp_server_host: analyticsHost(input.url),
+      method: next,
+      was_offered: (discovery?.methods ?? []).includes(next),
+    });
     setProbe(null);
     setMethod(next);
     setOauthConnected(false);
@@ -550,7 +598,23 @@ export function McpServerEditorPage({
                 metadata={probe?.tools}
                 allowed={allowed ?? null}
                 probed={probe !== null}
-                onChange={(tools) => edit({ tools })}
+                onChange={(tools) => {
+                  // The TRI-STATE, as chosen, which the saved row flattens.
+                  // `serverShape` records `tools_restricted` at save time, so
+                  // "null" and "every box ticked" arrive as different values
+                  // with nothing saying the user considered the difference —
+                  // and it is the difference that decides whether a tool the
+                  // vendor adds next month runs. This is also the only signal
+                  // for somebody who opens the picker and changes their mind
+                  // before saving.
+                  trackEvent('mcp_tool_scope_changed', {
+                    mcp_server_host: analyticsHost(input.url),
+                    scope: tools === null ? 'all' : tools.length === 0 ? 'none' : 'subset',
+                    allowed_count: tools === null ? null : tools.length,
+                    offered_count: offered.length,
+                  });
+                  edit({ tools });
+                }}
               />
             </Section>
           )}
@@ -698,11 +762,31 @@ function SignIn({
     const browser = prepareSignInWindow();
     let opened = false;
     const current = ++attempt.current;
+    // How the sign-in ENDED, which the backend cannot answer. It records
+    // `mcp_server_connect_started` and `mcp_server_connected_oauth`, so it can
+    // compute a completion rate and nothing about the gap: a user who closed
+    // the vendor's page, one whose grant errored, and one who left it open past
+    // the ten-minute poll all look identical server-side — they are simply a
+    // start with no finish. They need different fixes.
+    const startedAt = Date.now();
+    let outcome: 'connected' | 'timeout' | 'error' | 'superseded' = 'error';
+    // Read after `prepare()` where possible: on a FIRST connection there is no
+    // saved server yet, so `server` is null until the save inside the try.
+    let hostUrl = server?.url ?? '';
+    const settle = () => {
+      trackEvent('mcp_oauth_finished', {
+        mcp_server_host: analyticsHost(hostUrl),
+        outcome,
+        opened_browser: opened,
+        duration_ms: Date.now() - startedAt,
+      });
+    };
     setBusy(true);
     setError(null);
     setAuthorizeUrl(null);
     try {
       const saved = await prepare();
+      hostUrl = saved.url;
       setServerId(saved.id);
       if (current !== attempt.current) return;
       const flow = await api.mcpServers.startSignIn(saved.id);
@@ -721,6 +805,7 @@ function SignIn({
         const status = await api.mcpServers.signInStatus(saved.id, flow.flowId);
         if (current !== attempt.current) return;
         if (status.status === 'connected' && !status.pending) {
+          outcome = 'connected';
           setGrant({ status: 'connected' });
           onStatusChange(true);
           setAuthorizeUrl(null);
@@ -730,12 +815,20 @@ function SignIn({
           throw new Error(status.detail ?? 'Sign-in did not finish. Try again.');
         }
       }
-      if (current === attempt.current) setError('Sign-in took too long. Try again.');
+      if (current === attempt.current) {
+        outcome = 'timeout';
+        setError('Sign-in took too long. Try again.');
+      }
     } catch (err) {
       if (current === attempt.current)
         setError(err instanceof Error ? err.message : 'Could not start sign-in.');
     } finally {
       if (!opened) browser.close();
+      // A superseded attempt — the user pressed sign-in again, or left the
+      // page — is reported as such rather than as an error. Counting it as a
+      // failure would make retrying look like the thing that fails.
+      if (current !== attempt.current) outcome = 'superseded';
+      settle();
       if (current === attempt.current) {
         setBusy(false);
         setAuthorizeUrl(null);

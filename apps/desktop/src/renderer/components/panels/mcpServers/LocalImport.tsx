@@ -7,6 +7,7 @@ import { Button } from '../../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../ui/dialog';
 import { McpServerLogo } from './McpServerLogo';
 import { cn } from '../../../lib/utils';
+import { trackEvent } from '../../../lib/analytics';
 
 const INTRO_SEEN_KEY = 'talyn:mcp-local-import-seen';
 let introSeen = false;
@@ -57,6 +58,15 @@ export function LocalImport(props: LocalImportProps) {
   return (
     <>
       <Button variant="outline" onClick={() => {
+        // How many the scan FOUND when they opened it, which is the number
+        // that decides whether importing is worth offering at all. A machine
+        // with nothing to import and one the scan failed on both show an
+        // empty dialog; `failed` is what tells them apart.
+        trackEvent('mcp_local_import_opened', {
+          available_count: availableCount ?? null,
+          found_count: findings?.length ?? null,
+          scan_failed: failed,
+        });
         setOpen(true);
         setScanVersion((version) => version + 1);
       }} data-attr="mcp-import">
@@ -81,7 +91,23 @@ export function LocalImport(props: LocalImportProps) {
               Choose a server from your Claude or Codex configuration. You may need to sign in or enter its key.
             </DialogDescription>
           </DialogHeader>
-          {open && <LocalImportList {...props} findings={findings} failed={failed} onImport={(input) => { setOpen(false); props.onImport(input); }} />}
+          {open && <LocalImportList {...props} findings={findings} failed={failed} onImport={(input) => {
+            // The conversion half. Opened-without-importing is the signal that
+            // the list is there and not usable — nothing else distinguishes it
+            // from never having looked.
+            trackEvent('mcp_local_import_applied', {
+              mcp_server_host: (() => {
+                try {
+                  return new URL(input.url).hostname;
+                } catch {
+                  return 'invalid';
+                }
+              })(),
+              has_local_credential: input.authKind !== 'none',
+            });
+            setOpen(false);
+            props.onImport(input);
+          }} />}
           <div className="mt-4 flex justify-end">
             <Button autoFocus variant="outline" onClick={() => setOpen(false)}>Done</Button>
           </div>

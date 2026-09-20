@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { PANEL_PATHS } from '../lib/routes';
 import { StartingSpinner } from '../components/StartingSpinner';
+import { trackEvent } from '../lib/analytics';
 
 /**
  * Where an MCP server's sign-in comes back to.
@@ -37,22 +38,38 @@ export function McpCallback() {
     // or the client is not approved. Its own words are the useful part.
     const denied = params.get('error_description') ?? params.get('error');
 
+    // WHY a sign-in ended the way it did, separated at the only place that can
+    // tell them apart. `denied` is the vendor refusing or the user pressing
+    // Cancel; `malformed` is a redirect that arrived with nothing to finish,
+    // which is a bug on our side or theirs rather than a user decision; and an
+    // exchange failure is a third thing again. All three are "no connection"
+    // to the backend, and each needs a different fix.
+    //
+    // No `code`, no `state`, no error text: the code is single-use and PKCE
+    // binds it to a verifier that never left the server, but it is still a
+    // credential-shaped string and has no business in an analytics payload.
     if (denied) {
+      trackEvent('mcp_oauth_callback', { outcome: 'denied' });
       if (state) void api.mcpServers.complete(state, '', denied).catch(() => undefined);
       setError(denied);
       return;
     }
     if (!code || !state) {
+      trackEvent('mcp_oauth_callback', { outcome: 'malformed' });
       setError('That sign-in did not come back with anything to finish.');
       return;
     }
 
     api.mcpServers
       .complete(state, code)
-      .then(() => setComplete(true))
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : 'Could not finish that sign-in.')
-      );
+      .then(() => {
+        trackEvent('mcp_oauth_callback', { outcome: 'connected' });
+        setComplete(true);
+      })
+      .catch((err: unknown) => {
+        trackEvent('mcp_oauth_callback', { outcome: 'exchange_failed' });
+        setError(err instanceof Error ? err.message : 'Could not finish that sign-in.');
+      });
   }, [params, navigate]);
 
   if (error) {
