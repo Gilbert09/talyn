@@ -28,6 +28,13 @@ export * from './prFilters.js';
 // disagreeing about a ranking shows a different ORDER, which nobody does.
 export * from './prPriority.js';
 
+// The per-user ranking model behind the Priority sort's relevance term — the
+// features, the pairwise fit and the blend. Separate from prPriority.ts because
+// the split is real: this file is what is LEARNED from a viewer's own history,
+// that one is the deterministic rules over live state, and the two can never
+// swap members. See the header of either.
+export * from './reviewRank.js';
+
 // Workflows — user-defined PR automation: the trigger taxonomy, the pure
 // matcher the engine and both editors share, and the validator the route 400s
 // with. Same argument as prFilters: two copies of the predicate would let one

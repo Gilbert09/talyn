@@ -8,6 +8,9 @@ import {
   integrations as integrationsTable,
 } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { isFeatureEnabled } from '../services/featureFlags.js';
+import { githubService } from '../services/github.js';
+import { readReviewRankPayload } from '../services/reviewPriority/trainer.js';
 import { assertCanEnableAutoKeepDefault } from '../services/billing/entitlements.js';
 import { ensureDefaultWorkspace } from '../services/workspaceBootstrap.js';
 import {
@@ -179,6 +182,47 @@ export function workspaceRoutes(): Router {
       success: true,
       data: rowToWorkspace(rows[0], relations),
     } as ApiResponse<Workspace>);
+  });
+
+  /**
+   * The per-viewer ranking model behind the Reviews tab's Priority sort.
+   *
+   * Read on workspace load and held in the PR store, because scoring is
+   * CLIENT-SIDE: the ordering re-runs on every keystroke in the filter box and
+   * on every poll, and a round-trip per sort is not viable. The payload is the
+   * aggregates plus five weights — tens of KB at most.
+   *
+   * Never throws for a refused or absent model, and that is deliberate rather
+   * than lax. It is fetched while painting the Reviews page, so a 500 here
+   * would blank the list rather than degrade its ordering — and the ordering
+   * works perfectly well without a model, which is the entire point of the
+   * shipped prior. "No model yet" is a normal state.
+   */
+  router.get('/:id/review-rank-model', async (req, res) => {
+    const user = assertUser(req);
+    const db = getDbClient();
+    const [workspace] = await db
+      .select({ id: workspacesTable.id })
+      .from(workspacesTable)
+      .where(and(eq(workspacesTable.id, req.params.id), eq(workspacesTable.ownerId, user.id)))
+      .limit(1);
+    if (!workspace) {
+      return res.status(404).json({ success: false, error: 'Workspace not found' });
+    }
+
+    // Gated on the CALLER, matching `GET /features`: this decides what one
+    // person's screen draws. The backfill and the trainer gate on the workspace
+    // OWNER instead, because a sweep has no caller — and that is the gate that
+    // bounds the GraphQL spend.
+    if (!(await isFeatureEnabled('reviewPriority', { distinctId: user.id, email: user.email }))) {
+      return res.json({ success: true, data: null });
+    }
+
+    const viewerLogin = await githubService.getViewerLogin(req.params.id).catch(() => null);
+    if (!viewerLogin) return res.json({ success: true, data: null });
+
+    const payload = await readReviewRankPayload(req.params.id, viewerLogin);
+    res.json({ success: true, data: payload });
   });
 
   router.post('/', async (req, res) => {

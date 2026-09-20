@@ -34,10 +34,19 @@
 // mergeable and approved by definition, so training on it would teach "green
 // checks cause reviews" from an artefact of merging. See `reviewRank.ts`.
 
-// No imports, deliberately. `index.ts` re-exports this module, so importing
-// TASK_STATUS_TERMINAL back out of it would make a cycle for one lookup — and
-// the caller has to supply `isTaskActive` anyway, because only the panel holds
-// the tasks store. See PRPriorityContext.
+// Imports only from `reviewRank.ts`, never from `index.ts` — that barrel
+// re-exports this module, so reaching back through it would make a cycle. The
+// caller supplies `isTaskActive` for the same reason: only the panel holds the
+// tasks store. See PRPriorityContext.
+import {
+  applyReviewRank,
+  effectiveReviewRankWeights,
+  reviewRankContributions,
+  reviewRankFeatures,
+  standardize,
+  type ReviewRankFeature,
+  type ReviewRankProfile,
+} from './reviewRank.js';
 
 /**
  * The hard partition. Higher sorts first, and no point total crosses it.
@@ -94,7 +103,15 @@ export type PRPriorityReason =
   | 'size'
   | 're_review'
   | 'your_threads'
-  | 'waited';
+  | 'waited'
+  // The learned term. One reason per feature, so the chip can name WHICH part
+  // of a personal model moved the row — "ranked high" with no why is the
+  // failure PRioritizer's user study died of.
+  | 'known_author'
+  | 'reviews_you'
+  | 'known_files'
+  | 'your_repo'
+  | 'quick_for_you';
 
 /**
  * The chip phrase for each reason. Present tense, no trailing punctuation,
@@ -123,6 +140,11 @@ export const PR_PRIORITY_REASON_LABEL: Record<PRPriorityReason, string> = {
   re_review: 'Re-review',
   your_threads: 'Your comments open',
   waited: 'Waited',
+  known_author: 'You review them often',
+  reviews_you: 'They review your PRs',
+  known_files: 'You know these files',
+  your_repo: 'Your repo',
+  quick_for_you: 'Quick for you',
 };
 
 /** One contribution to a PR's placement, with what to call it. */
@@ -186,6 +208,8 @@ export interface PRPriorityVerdict {
  */
 export interface PRPriorityTarget {
   id: string;
+  owner?: string;
+  repo?: string;
   taskId?: string | null;
   mergeQueued?: boolean;
   createdAt?: string;
@@ -210,6 +234,8 @@ export interface PRPriorityTarget {
     viewerLatestReview?: { state: string; submittedAt: string | null } | null;
     reviewRequestVia?: { direct: boolean; teams: string[] } | null;
     autoMergeBy?: string | null;
+    /** Top-level directories the PR touches, for path familiarity. */
+    topDirs?: string[];
     stack?: { size: number; position: number } | null;
   };
   /**
@@ -240,6 +266,15 @@ export interface PRPriorityContext {
    * unknown id, because a task we cannot see is not evidence of one in flight.
    */
   isTaskActive?: (taskId: string) => boolean;
+  /**
+   * The viewer's learned ranking profile, or null.
+   *
+   * Null is a first-class state, not a degraded one: a cold user is ranked by
+   * the deterministic terms alone, which is a complete and useful ordering. The
+   * model reorders WITHIN a gate; it can never promote a draft or bury a PR
+   * that is blocking someone.
+   */
+  profile?: ReviewRankProfile | null;
 }
 
 /** Points, in one place, so the weights can be read without reading the logic. */
@@ -258,7 +293,36 @@ export const PR_PRIORITY_WEIGHTS = {
   reReview: 6,
   /** Threads YOU opened that are still unresolved — you asked, they answered. */
   yourThreads: 5,
+  /**
+   * How far the LEARNED term can move a PR, in points.
+   *
+   * The clamp is the safety property, and the NUMBER is chosen against the age
+   * ramp rather than picked for feel. The model learns whether you RESPOND, not
+   * what you should have read, so left unbounded it entrenches: the person
+   * whose PRs you have never got to sinks further, so you never get to them,
+   * which confirms the model. Age is the escape hatch — it is deterministic and
+   * rises with nothing but time.
+   *
+   * For that escape hatch to actually work the cap must sit BELOW the age
+   * ramp's maximum ({@link agePoints} tops out at 16). At 12 a PR that has
+   * waited its full ramp outranks one the model likes as much as it possibly
+   * can, so nothing can be buried indefinitely by affinity alone. Raising this
+   * above 16 would quietly remove the only thing stopping that.
+   *
+   * It is also well under any single gate, so the model reorders within a
+   * readiness band and can never promote a draft or bury a PR blocking others.
+   */
+  learnedCap: 12,
 } as const;
+
+/** Which reason names each learned feature's contribution. */
+const LEARNED_REASON: Record<ReviewRankFeature, PRPriorityReason> = {
+  authorAffinity: 'known_author',
+  reciprocity: 'reviews_you',
+  pathFamiliarity: 'known_files',
+  repoAffinity: 'your_repo',
+  logSize: 'quick_for_you',
+};
 
 /**
  * Points for a diff of `lines` changed.
@@ -496,6 +560,62 @@ export function scorePRForReview(
 
   // Gate markers score 0, so they sort to the end here and contribute nothing
   // to the total — both of which are what we want.
+  // ---- the learned term -----------------------------------------------
+  // Everything above is a rule over LIVE state. This is the only part fitted
+  // from the viewer's own history, and it is deliberately the smaller half —
+  // see PR_PRIORITY_WEIGHTS.learnedCap.
+  if (ctx.profile) {
+    const weights = effectiveReviewRankWeights(ctx.profile.model);
+    const stats = ctx.profile.featureStats;
+    const raw = reviewRankFeatures(
+      {
+        author: s.author,
+        repoFullName: row.owner && row.repo ? `${row.owner}/${row.repo}` : undefined,
+        dirs: s.topDirs,
+        additions: s.additions,
+        deletions: s.deletions,
+      },
+      ctx.profile,
+    );
+    // Without stored stats the features are on raw scales the weights were
+    // never fitted against, so scoring them would be arithmetic on mismatched
+    // units. Skipping is the honest answer — the deterministic terms still rank.
+    if (stats && stats.sd.length === raw.length) {
+      const std = standardize(raw, stats);
+      const total = applyReviewRank(std, weights);
+      // A logistic-shaped squash, so an unusual PR cannot run away with the
+      // list: ±18 is approached, never exceeded, and the clamp is a property of
+      // the curve rather than a truncation that flattens everything past it.
+      const scaled =
+        PR_PRIORITY_WEIGHTS.learnedCap * (2 / (1 + Math.exp(-total)) - 1);
+      const contributions = reviewRankContributions(std, weights);
+      const share = total === 0 ? 0 : scaled / total;
+
+      // Apportion the total across the features as INTEGERS that sum to it
+      // exactly (largest remainder). Rounding each independently is the obvious
+      // approach and it breaks the cap: five roundings of up to a half each can
+      // overshoot by two and a half points, which is enough to let the model
+      // outweigh a whole deterministic term.
+      const exact = contributions.map((c) => c.value * share);
+      const target = Math.round(scaled);
+      const floors = exact.map((v) => Math.trunc(v));
+      let remainder = target - floors.reduce((a, b) => a + b, 0);
+      const order = exact
+        .map((v, i) => ({ i, frac: Math.abs(v - floors[i]) }))
+        .sort((a, b) => b.frac - a.frac);
+      const points = [...floors];
+      for (const { i } of order) {
+        if (remainder === 0) break;
+        const step = remainder > 0 ? 1 : -1;
+        points[i] += step;
+        remainder -= step;
+      }
+      contributions.forEach((c, i) => {
+        if (points[i] !== 0) push(LEARNED_REASON[c.feature], points[i]);
+      });
+    }
+  }
+
   terms.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
 
   const score = terms.reduce((sum, t) => sum + t.points, 0);

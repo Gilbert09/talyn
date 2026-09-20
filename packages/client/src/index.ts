@@ -290,6 +290,36 @@ async function rawRequest(
   return response;
 }
 
+/**
+ * The per-viewer ranking model + aggregates, as `GET
+ * /workspaces/:id/review-rank-model` answers it.
+ *
+ * Structurally `ReviewRankProfile` from `@talyn/shared` plus two counts for the
+ * settings copy. Declared here rather than imported so the wire contract stays
+ * readable in one file, which is the rule for every other type in this module.
+ */
+export interface ReviewRankPayload {
+  authorAffinity: Record<string, { gave: number; got: number }>;
+  dirAffinity: Record<string, number>;
+  repoAffinity: Record<string, number>;
+  /**
+   * Per-feature mean and sd. On the PROFILE, not inside the model: they
+   * describe the viewer's population of PRs rather than any particular fit, and
+   * the shipped prior needs them on a viewer who has no model yet.
+   */
+  featureStats: { mean: number[]; sd: number[] } | null;
+  model: {
+    installed: boolean;
+    nEvents: number;
+    weights: number[];
+    cvAccuracy: number;
+    baselineAccuracy: number;
+  } | null;
+  nEvents: number;
+  /** How many more reviews before a personal model is even attempted. */
+  eventsUntilPersonalized: number;
+}
+
 // Workspaces
 export const workspaces = {
   list: () => request<Workspace[]>('GET', '/workspaces'),
@@ -299,6 +329,16 @@ export const workspaces = {
   update: (id: string, data: Partial<Workspace>) =>
     request<Workspace>('PATCH', `/workspaces/${id}`, data),
   delete: (id: string) => request<void>('DELETE', `/workspaces/${id}`),
+  /**
+   * The viewer's ranking model for the Reviews tab's Priority sort.
+   *
+   * `null` when the feature is off for this caller, GitHub is not connected, or
+   * nothing has been fitted yet — all three are normal, and the ordering works
+   * without it. The prior is what ranks a cold user, so a null here degrades
+   * the sort rather than breaking it.
+   */
+  reviewRankModel: (id: string) =>
+    request<ReviewRankPayload | null>('GET', `/workspaces/${id}/review-rank-model`),
 };
 
 // Environments — cloud-provider markers are auto-provisioned by the backend
@@ -727,6 +767,14 @@ export interface PRSummaryShape {
    * from data the poll already fetched and used to throw away.
    */
   unresolvedThreadsOpenedByViewer?: number;
+  /**
+   * Top-level directories the PR touches, from a 20-file sample.
+   *
+   * A handful of short strings rather than the file list: the ranking only asks
+   * "do you know this part of the codebase", which two path segments answer,
+   * and shipping every path on every poll would be real egress for that.
+   */
+  topDirs?: string[];
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;

@@ -104,6 +104,14 @@ export interface PRSummary {
   viewerLatestReview?: { state: string; submittedAt: string | null } | null;
   /** How many of the unresolved threads the VIEWER opened. */
   unresolvedThreadsOpenedByViewer?: number;
+  /**
+   * The top-level directories the PR touches, derived from a 20-file sample.
+   *
+   * A handful of short strings rather than the file list itself: the ranking
+   * only asks "do you know this part of the codebase", and shipping every path
+   * on every poll would be real egress for a question two path segments answer.
+   */
+  topDirs?: string[];
   url: string;
   author: string;
   /**
@@ -1090,6 +1098,12 @@ function prFieldsSelection(numberExpr: string | null): string {
   # bigger than a 900-line rewrite of one.
   additions
   deletions
+  # Sampled, not exhaustive: 20 nodes per PR is a rounding error against the 100
+  # check contexts below, and all we derive is which top-level directories the
+  # PR touches. A PR spanning more than 20 files is under-described here, and
+  # that is the right trade — the alternative is paying for every path on every
+  # poll to sharpen one feature.
+  files(first: 20) { nodes { path } }
   url
   isDraft
   state
@@ -1263,6 +1277,7 @@ interface RawPullRequest {
   changedFiles?: number;
   additions?: number;
   deletions?: number;
+  files?: { nodes: Array<{ path: string }> } | null;
   url: string;
   isDraft: boolean;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -1537,6 +1552,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     // float it to the top.
     additions: raw.additions,
     deletions: raw.deletions,
+    topDirs: raw.files ? topDirsOf((raw.files.nodes ?? []).map((f) => f.path)) : undefined,
     viewerLatestReview: raw.viewerLatestReview ?? null,
     unresolvedThreadsOpenedByViewer,
     url: raw.url,
@@ -1593,6 +1609,31 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
         url: c.url,
       })),
   };
+}
+
+/**
+ * The top-level directories a set of paths touches.
+ *
+ * Two segments, not one: `packages/backend` and `packages/shared` are different
+ * places to a reviewer, and collapsing them to `packages` would make every PR in
+ * a monorepo look identical on the familiarity feature — which describes most of
+ * the repositories this runs against.
+ */
+export function topDirsOf(paths: string[], limit = 8): string[] {
+  const seen: string[] = [];
+  for (const path of paths) {
+    // Drop the FILENAME first. Slicing two segments off the raw path turns
+    // `src/a.ts` into `src/a.ts` — a file, not a directory — and then no two
+    // PRs share a bucket unless they touch the identical file, which would make
+    // the familiarity feature permanently zero and very quietly so.
+    const dirs = path.split('/').slice(0, -1);
+    // A root-level file is its own bucket rather than being dropped: a change to
+    // `package.json` or `Dockerfile` is a real and recognisable kind of PR.
+    const dir = dirs.length === 0 ? '/' : dirs.slice(0, 2).join('/');
+    if (!seen.includes(dir)) seen.push(dir);
+    if (seen.length >= limit) break;
+  }
+  return seen;
 }
 
 /**

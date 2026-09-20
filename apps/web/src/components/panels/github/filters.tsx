@@ -101,12 +101,18 @@ export function ReviewSortToggle({
   onChange,
   offerPriority,
   modelInstalled = false,
+  eventsUntilPersonalized,
+  nEvents,
 }: {
   mode: ReviewSortMode;
   onChange: (next: ReviewSortMode) => void;
   offerPriority: boolean;
   /** Whether a personalized model is serving. Changes the tooltip only. */
   modelInstalled?: boolean;
+  /** How many more reviews before a personal model is attempted. */
+  eventsUntilPersonalized?: number;
+  /** Reviews behind the current model, for the same sentence. */
+  nEvents?: number;
 }) {
   const cycle = offerPriority
     ? REVIEW_SORT_CYCLE
@@ -119,8 +125,17 @@ export function ReviewSortToggle({
   const title =
     current === 'priority'
       ? modelInstalled
-        ? `Sorted by what you're most likely to review next — learned from your own review history, plus each PR's current state. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
-        : `Sorted by each PR's current state and how long it has waited. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
+        ? `Sorted by what you're most likely to review next — learned from your own review history${
+            nEvents ? ` (${nEvents} reviews)` : ''
+          }, plus each PR's current state. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
+        : // Says WHY it is not personalized, and what would change that. A
+          // feature that quietly does less than its name promises is worse than
+          // one that explains itself.
+          `Sorted by each PR's current state, its size, and how long it has waited.${
+            eventsUntilPersonalized
+              ? ` Personalized ordering turns on after about ${eventsUntilPersonalized} more reviews.`
+              : ''
+          } Click for ${REVIEW_SORT_LABEL[next].toLowerCase()} first.`
       : `Sorted by created date — ${
           current === 'newest' ? 'newest first' : 'oldest first'
         }. Click for ${REVIEW_SORT_LABEL[next].toLowerCase()}.`;

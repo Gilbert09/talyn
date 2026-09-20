@@ -34,6 +34,7 @@ import {
   bigint,
   bigserial,
   doublePrecision,
+  real,
   uniqueIndex,
   index,
   primaryKey,
@@ -1282,5 +1283,100 @@ export const loopRuns = pgTable(
     slotIdx: uniqueIndex('idx_loop_runs_slot').on(t.loopId, t.scheduledFor),
     historyIdx: index('idx_loop_runs_history').on(t.loopId, t.createdAt),
     // idx_loop_runs_active and idx_loop_runs_task are partial; see 0054_loops.sql.
+  })
+);
+
+/**
+ * A viewer's own review history — the training data for the Reviews tab's
+ * Priority ordering.
+ *
+ * Per VIEWER, not per workspace: two people in one workspace have entirely
+ * different reviewing habits, and averaging them produces a model that
+ * describes neither.
+ *
+ * Note what is deliberately absent: any record of a PR's STATE at review time.
+ * GitHub does not retain it, and "now" for a merged PR is green, mergeable and
+ * approved by definition — so such a column would hold an artefact of merging
+ * and the model would learn that green checks cause reviews. State stays in the
+ * deterministic rules (`packages/shared/src/prPriority.ts`).
+ */
+export const reviewHistory = pgTable(
+  'review_history',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    viewerLogin: text('viewer_login').notNull(),
+    repoFullName: text('repo_full_name').notNull(),
+    prNumber: integer('pr_number').notNull(),
+    authorLogin: text('author_login').notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true }),
+    /**
+     * When the viewer reviewed it. NULL alongside a past `closedAt` is the
+     * NEGATIVE class: a request that stood until the PR closed and was never
+     * serviced.
+     */
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    /**
+     * Whether the request named the viewer directly or reached them via a team.
+     *
+     * Stored but NOT a learned feature. GitHub clears an individual request the
+     * moment you review, so the negative class skews heavily toward team
+     * requests — a learned weight here would fit an artefact of how the labels
+     * are collected rather than anything about the viewer. It is a
+     * deterministic rule in the scorer instead.
+     */
+    direct: boolean('direct').notNull().default(false),
+    additions: integer('additions'),
+    deletions: integer('deletions'),
+    /** Top-level directories the PR touched, for the path-familiarity feature. */
+    dirs: text('dirs').array().notNull().default(sql`'{}'`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspaceId, t.viewerLogin, t.repoFullName, t.prNumber] }),
+    viewerIdx: index('idx_review_history_viewer').on(t.workspaceId, t.viewerLogin, t.reviewedAt),
+  })
+);
+
+/**
+ * One fitted (or refused) ranking model per viewer, plus the aggregates its
+ * features are computed from.
+ *
+ * `profile` ships to the client whole, because scoring is client-side: the
+ * ordering re-runs on every keystroke in the filter box and cannot be a
+ * round-trip.
+ *
+ * `cvAccuracy` / `baselineAccuracy` / `refusedBecause` are written even when
+ * the fit is REFUSED. "We looked and it was not worth it" is a fact with
+ * evidence attached, and it is the only way to find out later whether this was
+ * worth building.
+ */
+export const reviewRankModels = pgTable(
+  'review_rank_models',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    viewerLogin: text('viewer_login').notNull(),
+    version: integer('version').notNull().default(1),
+    /** The weights in `REVIEW_RANK_FEATURES` order — the order IS the format. */
+    weights: jsonb('weights').notNull().default(sql`'[]'::jsonb`),
+    /** Per-feature mean and sd, so the client standardises exactly as the fit did. */
+    featureStats: jsonb('feature_stats').notNull().default(sql`'{}'::jsonb`),
+    profile: jsonb('profile').notNull().default(sql`'{}'::jsonb`),
+    nEvents: integer('n_events').notNull().default(0),
+    cvAccuracy: real('cv_accuracy'),
+    baselineAccuracy: real('baseline_accuracy'),
+    installed: boolean('installed').notNull().default(false),
+    /** `ReviewRankFitResult['refusedBecause']` — why a refusal was a refusal. */
+    refusedBecause: text('refused_because'),
+    trainedAt: timestamp('trained_at', { withTimezone: true }).notNull().defaultNow(),
+    /** When the one-time history backfill completed, so it is not re-run. */
+    backfilledAt: timestamp('backfilled_at', { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspaceId, t.viewerLogin] }),
   })
 );

@@ -32,6 +32,7 @@ import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
+import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
 import {
   featureFlagsEvaluateLocally,
   isFeatureFlagServiceConfigured,
@@ -164,6 +165,12 @@ async function main() {
     // firing, and a sweep that finds nothing due costs one indexed lookup.
     initLoopScheduler();
   }
+
+  // The Reviews tab's ranking model. Armed unconditionally, because every gate
+  // that matters is inside: the sweep asks the PostHog flag per workspace
+  // OWNER before it spends a single GraphQL point, and a pass that finds
+  // nobody in the audience costs one `SELECT id FROM workspaces` an hour.
+  initReviewPrioritySweep();
 
   // One-time sweep: re-encrypt any legacy plaintext credentials before the
   // services read them (the plaintext read fallbacks are gone). Per-row

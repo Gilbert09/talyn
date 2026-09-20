@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   PR_PRIORITY_GATE_RANK,
+  PR_PRIORITY_WEIGHTS,
+  REVIEW_RANK_FEATURES,
   PR_PRIORITY_REASON_LABEL,
   agePoints,
   sizePoints,
@@ -12,6 +14,7 @@ import {
   type PRPriorityGate,
   type PRPriorityReason,
   type PRPriorityTarget,
+  type ReviewRankProfile,
 } from '@talyn/shared';
 
 /** A fixed clock — every assertion here must be reproducible at any wall time. */
@@ -31,6 +34,8 @@ function row(opts: RowOpts = {}): PRPriorityTarget {
   const { id, taskId, mergeQueued, waitedHours, firstSeenAt, ...summary } = opts;
   return {
     id: id ?? 'pr-1',
+    owner: 'acme',
+    repo: 'widgets',
     taskId: taskId ?? null,
     mergeQueued: mergeQueued ?? false,
     createdAt: hoursAgo(waitedHours ?? 0),
@@ -49,6 +54,29 @@ function row(opts: RowOpts = {}): PRPriorityTarget {
 }
 
 const ctx = { now: NOW };
+
+/**
+ * A fitted profile whose weights isolate ONE feature, so a fixture can prove
+ * that feature reaches the chip. `sd: 1` / `mean: 0` makes standardisation the
+ * identity, which keeps the arithmetic in these tests readable.
+ */
+function learned(feature: (typeof REVIEW_RANK_FEATURES)[number], over: Partial<ReviewRankProfile> = {}): ReviewRankProfile {
+  const weights = REVIEW_RANK_FEATURES.map((f) => (f === feature ? 3 : 0));
+  return {
+    authorAffinity: {},
+    dirAffinity: {},
+    repoAffinity: {},
+    ...over,
+    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    model: {
+      installed: true,
+      nEvents: 10_000,
+      weights,
+      cvAccuracy: 0.8,
+      baselineAccuracy: 0.5,
+    },
+  };
+}
 const gateOf = (r: PRPriorityTarget) => scorePRForReview(r, ctx).gate;
 const reasonsOf = (r: PRPriorityTarget) =>
   scorePRForReview(r, ctx).terms.map((t) => t.reason);
@@ -322,6 +350,49 @@ describe('the reason vocabulary', () => {
         ctx,
       ],
       ['waited', row({ waitedHours: 30 }), ctx],
+      [
+        'known_author',
+        row({ author: 'sarah' }),
+        {
+          now: NOW,
+          profile: learned('authorAffinity', {
+            authorAffinity: { sarah: { gave: 30, got: 0 } },
+          }),
+        } as typeof ctx,
+      ],
+      [
+        'reviews_you',
+        row({ author: 'sarah' }),
+        {
+          now: NOW,
+          profile: learned('reciprocity', {
+            authorAffinity: { sarah: { gave: 0, got: 30 } },
+          }),
+        } as typeof ctx,
+      ],
+      [
+        'known_files',
+        row({ topDirs: ['packages/backend'] }),
+        {
+          now: NOW,
+          profile: learned('pathFamiliarity', {
+            dirAffinity: { 'packages/backend': 10 },
+          }),
+        } as typeof ctx,
+      ],
+      [
+        'your_repo',
+        row(),
+        {
+          now: NOW,
+          profile: learned('repoAffinity', { repoAffinity: { 'acme/widgets': 0.9 } }),
+        } as typeof ctx,
+      ],
+      [
+        'quick_for_you',
+        row({ additions: 500, deletions: 200 }),
+        { now: NOW, profile: learned('logSize') } as typeof ctx,
+      ],
     ];
 
     const covered = new Set<string>();
@@ -629,5 +700,153 @@ describe('whose threads are open', () => {
       ctx,
     );
     expect(odd.terms.map((t) => t.reason)).not.toContain('human_threads');
+  });
+});
+
+describe('the learned term — its limits are the safety property', () => {
+  /** A profile that loves this author as much as it possibly can. */
+  const adoring = (author: string): ReviewRankProfile => ({
+    authorAffinity: { [author]: { gave: 10_000, got: 10_000 } },
+    dirAffinity: {},
+    repoAffinity: { 'acme/widgets': 1 },
+    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    model: {
+      installed: true,
+      nEvents: 10_000,
+      // Absurd weights on every feature — far beyond anything a fit would
+      // produce. The clamp has to hold against a model that has gone wrong,
+      // not merely against a reasonable one.
+      weights: [50, 50, 50, 50, 50],
+      cvAccuracy: 0.9,
+      baselineAccuracy: 0.5,
+    },
+  });
+
+  it('never moves a PR by more than the cap, however extreme the model', () => {
+    const plain = scorePRForReview(row({ author: 'sarah' }), ctx).score;
+    const loved = scorePRForReview(row({ author: 'sarah' }), {
+      now: NOW,
+      profile: adoring('sarah'),
+    }).score;
+    expect(Math.abs(loved - plain)).toBeLessThanOrEqual(PR_PRIORITY_WEIGHTS.learnedCap);
+  });
+
+  it('cannot promote a PR out of its gate', () => {
+    // The model learns whether you RESPOND, not what you should have read. Left
+    // unbounded it entrenches — the person you never get to sinks further. The
+    // gate is what makes that bounded rather than self-reinforcing.
+    const beloved = scorePRForReview(row({ author: 'sarah', draft: true }), {
+      now: NOW,
+      profile: adoring('sarah'),
+    });
+    expect(beloved.gate).toBe('not_ready');
+  });
+
+  it('cannot bury a PR that is blocking others', () => {
+    const hated: ReviewRankProfile = {
+      ...adoring('nobody'),
+      authorAffinity: {},
+      repoAffinity: {},
+    };
+    const v = scorePRForReview(row({ author: 'stranger', mergeQueued: true }), {
+      now: NOW,
+      profile: hated,
+    });
+    expect(v.gate).toBe('blocking_others');
+  });
+
+  it('does nothing at all without a profile', () => {
+    const withProfile = scorePRForReview(row(), { now: NOW, profile: null });
+    const without = scorePRForReview(row(), ctx);
+    expect(withProfile).toEqual(without);
+  });
+
+  it('refuses to score without stored feature stats, rather than guessing', () => {
+    // Weights fitted on standardised features are meaningless applied to raw
+    // ones — it is arithmetic on mismatched units. The deterministic terms
+    // still rank the list, so skipping is the honest answer.
+    const noStats: ReviewRankProfile = {
+      authorAffinity: { sarah: { gave: 100, got: 100 } },
+      dirAffinity: {},
+      repoAffinity: {},
+      featureStats: null,
+      model: {
+        installed: true,
+        nEvents: 500,
+        weights: [5, 5, 5, 5, 5],
+        cvAccuracy: 0.8,
+        baselineAccuracy: 0.5,
+      },
+    };
+    const v = scorePRForReview(row({ author: 'sarah' }), { now: NOW, profile: noStats });
+    expect(v.terms.map((t) => t.reason)).not.toContain('known_author');
+  });
+
+  it('falls back to the PRIOR when the model was refused', () => {
+    // A refusal is not an absence: the aggregates are still there, so the
+    // shipped prior still ranks on them. What it stops is the fitted weights.
+    const refused: ReviewRankProfile = {
+      authorAffinity: { sarah: { gave: 200, got: 0 } },
+      dirAffinity: {},
+      repoAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      model: {
+        installed: false,
+        nEvents: 12,
+        weights: [0, 0, 0, 0, 0],
+        cvAccuracy: 0,
+        baselineAccuracy: 0.5,
+      },
+    };
+    const v = scorePRForReview(row({ author: 'sarah' }), { now: NOW, profile: refused });
+    // The prior weights authorAffinity positively, so a well-known author still
+    // ranks up even though the personal fit was thrown away.
+    expect(v.terms.map((t) => t.reason)).toContain('known_author');
+  });
+
+  it('ranks a teammate above a stranger, all else equal', () => {
+    // The thing the whole feature is for.
+    const p: ReviewRankProfile = {
+      authorAffinity: { sarah: { gave: 60, got: 40 }, stranger: { gave: 0, got: 1 } },
+      dirAffinity: {},
+      repoAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      model: null,
+    };
+    const c = { now: NOW, profile: p };
+    const teammate = scorePRForReview(row({ id: 'a', author: 'sarah' }), c);
+    const stranger = scorePRForReview(row({ id: 'b', author: 'stranger' }), c);
+    expect(teammate.score).toBeGreaterThan(stranger.score);
+  });
+
+  it('still lets age overtake affinity eventually', () => {
+    // The anti-entrenchment guard: a stranger's PR left long enough must climb
+    // past a teammate's fresh one, or the model quietly decides you never read
+    // certain people again.
+    const p: ReviewRankProfile = {
+      authorAffinity: { sarah: { gave: 200, got: 200 } },
+      dirAffinity: {},
+      repoAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      model: null,
+    };
+    const c = { now: NOW, profile: p };
+    const freshTeammate = scorePRForReview(row({ id: 'a', author: 'sarah', waitedHours: 1 }), c);
+    const oldStranger = scorePRForReview(
+      row({ id: 'b', author: 'stranger', waitedHours: 100 }),
+      c,
+    );
+    expect(oldStranger.score).toBeGreaterThan(freshTeammate.score);
+  });
+});
+
+describe('the learned cap is calibrated against the age ramp', () => {
+  it('sits below the age ramp maximum, which is what stops entrenchment', () => {
+    // If the model could outweigh any amount of waiting, a person whose PRs the
+    // viewer never gets to would sink further and further — and the model would
+    // read its own effect back as confirmation. Age is the only term that rises
+    // with nothing but time, so it has to be able to win.
+    const maxAge = Math.max(...[0, 4, 12, 24, 48, 120, 200, 335].map(agePoints));
+    expect(PR_PRIORITY_WEIGHTS.learnedCap).toBeLessThan(maxAge);
   });
 });

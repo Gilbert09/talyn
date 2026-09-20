@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye } from 'lucide-react';
+import { api, type ReviewRankPayload } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
@@ -66,6 +67,39 @@ export function ReviewsPanel() {
   const [sortMode, setSortMode] = useState<ReviewSortMode>(loadSortMode);
   const features = useWorkspaceStore((s) => s.features);
   const offerPriority = reviewPriorityOffered(features);
+  const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+
+  /**
+   * The viewer's learned ranking profile.
+   *
+   * Fetched ONCE per workspace, not per sort: the aggregates move when the
+   * hourly trainer runs, which is far slower than this component re-renders.
+   * Null covers every normal reason there is nothing to apply — the flag is
+   * off, GitHub is not connected, no fit has happened yet — and the ordering
+   * works without it, so a failure here degrades the sort rather than the page.
+   */
+  const [rankProfile, setRankProfile] = useState<ReviewRankPayload | null>(null);
+  const fetchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!offerPriority || !workspaceId) return;
+    if (fetchedFor.current === workspaceId) return;
+    fetchedFor.current = workspaceId;
+    let cancelled = false;
+    api.workspaces
+      .reviewRankModel(workspaceId)
+      .then((payload) => {
+        if (!cancelled) setRankProfile(payload);
+      })
+      .catch(() => {
+        // Deliberately silent. The prior ranks the list perfectly well, and a
+        // toast about a ranking refinement failing to load is noise about
+        // something the user never asked for.
+        if (!cancelled) setRankProfile(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offerPriority, workspaceId]);
 
   // Saved filters: the definitions are workspace-scoped, the selection is not.
   const setSortModePersisted = (next: ReviewSortMode) => {
@@ -163,12 +197,13 @@ export function ReviewsPanel() {
     const now = Date.now();
     return buildPRPriorityMap(cohort, {
       now,
+      profile: rankProfile,
       isTaskActive: (taskId) => {
         const status = taskStatusById.get(taskId);
         return status ? TASK_STATUS_TERMINAL[status] === false : false;
       },
     });
-  }, [priorityMode, cohort, taskStatusById]);
+  }, [priorityMode, cohort, taskStatusById, rankProfile]);
 
   const filtered = useMemo(() => {
     let out = cohort;
@@ -256,6 +291,9 @@ export function ReviewsPanel() {
               mode={sortMode}
               onChange={setSortModePersisted}
               offerPriority={offerPriority}
+              modelInstalled={rankProfile?.model?.installed === true}
+              eventsUntilPersonalized={rankProfile?.eventsUntilPersonalized}
+              nEvents={rankProfile?.nEvents}
             />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
           </>
