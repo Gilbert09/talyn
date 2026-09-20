@@ -670,6 +670,13 @@ function DetailTabs({
   cachedBody: string | null;
 }) {
   const [tab, setTab] = useState<TabKey>('overview');
+  // Started on open, not on first click — see usePRFiles.
+  const filesState = usePRFiles(data.row.id);
+  // The loaded list is authoritative; the cached count is what the tab wears
+  // until it lands. `??`, never `||`: a PR really can change zero files (an
+  // empty commit, a branch retargeted onto its own head), and `||` would swap
+  // that honest 0 for a stale cached number.
+  const changedFiles = filesState.files?.length ?? data.row.summary.changedFiles;
 
   return (
     <>
@@ -709,6 +716,10 @@ function DetailTabs({
           active={tab === 'files'}
           onClick={() => setTab('files')}
           icon={<FileText className="h-3.5 w-3.5" />}
+          // Undefined (not 0) on a row cached before `changedFiles` shipped and
+          // whose file list has not landed yet — the tab then wears no badge
+          // rather than claiming nothing changed.
+          badge={changedFiles === undefined ? undefined : String(changedFiles)}
         >
           Files
         </TabButton>
@@ -735,7 +746,7 @@ function DetailTabs({
           )}
           {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
           {tab === 'reviews' && <ReviewsTab data={data} />}
-          {tab === 'files' && <FilesTab data={data} />}
+          {tab === 'files' && <FilesTab data={data} filesState={filesState} />}
         </div>
       </ScrollArea>
     </>
@@ -1681,28 +1692,50 @@ function fmtTime(iso: string | null): string {
   });
 }
 
-function FilesTab({
-  data,
-}: {
-  data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
-}) {
+/**
+ * The PR's changed files, fetched when the PANEL opens rather than when the
+ * Files tab is first clicked.
+ *
+ * Two reasons it is lifted this high. The tab is usually ready by the time you
+ * reach it, so the diff is there instead of a spinner; and the count it loads
+ * is what numbers the tab, which cannot be done from inside a component that
+ * only mounts once the tab is already open.
+ *
+ * The expansion set lives here too, so collapsing a lockfile survives a trip
+ * to the Checks tab and back.
+ *
+ * It costs one GitHub REST call per panel open even when the tab is never
+ * visited — a different budget from the GraphQL points the poll loops spend,
+ * and one call against it.
+ */
+function usePRFiles(pullRequestId: string): {
+  files: PRFile[] | null;
+  loading: boolean;
+  error: string | null;
+  expanded: Set<string>;
+  toggle: (filename: string) => void;
+} {
   const [files, setFiles] = useState<PRFile[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Every changed file starts open. A PR's diff is the thing the tab exists to
+  // show, and a list of collapsed rows makes you click once per file to read
+  // what GitHub would have shown you at once. The rows stay individually
+  // collapsible for the case this is meant to serve — folding away a
+  // lockfile or a snapshot you do not want to scroll past.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setFiles(null);
     api.pullRequests
-      .files(data.row.id)
+      .files(pullRequestId)
       .then((res) => {
         if (cancelled) return;
         setFiles(res);
-        // Auto-expand the first file so the tab isn't a wall of
-        // collapsed rows on open.
-        if (res.length > 0) setExpanded(res[0].filename);
+        setExpanded(new Set(res.map((f) => f.filename)));
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -1713,7 +1746,26 @@ function FilesTab({
     return () => {
       cancelled = true;
     };
-  }, [data.row.id]);
+  }, [pullRequestId]);
+
+  const toggle = (filename: string) =>
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(filename)) next.add(filename);
+      return next;
+    });
+
+  return { files, loading, error, expanded, toggle };
+}
+
+function FilesTab({
+  data,
+  filesState,
+}: {
+  data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
+  filesState: ReturnType<typeof usePRFiles>;
+}) {
+  const { files, loading, error, expanded, toggle } = filesState;
 
   if (loading) {
     return (
@@ -1757,10 +1809,8 @@ function FilesTab({
           <PRFileRow
             key={f.filename}
             file={f}
-            open={expanded === f.filename}
-            onToggle={() =>
-              setExpanded((cur) => (cur === f.filename ? null : f.filename))
-            }
+            open={expanded.has(f.filename)}
+            onToggle={() => toggle(f.filename)}
           />
         ))}
       </ul>
@@ -1805,8 +1855,20 @@ function PRFileRow({
           <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
         )}
         <StatusIcon className={cn('h-3.5 w-3.5 shrink-0', statusColor)} />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={file.filename}>
-          {file.filename}
+        {/*
+          * Truncate from the LEFT: a deep path's last segment is the filename,
+          * which is the part you are looking for, and clipping the tail leaves
+          * every file in a directory looking identical. `direction: rtl` puts
+          * the overflow edge (and so the ellipsis) at the start; the <bdi>
+          * isolates the path so its own characters still read left-to-right.
+          * The full path is on the title attribute either way.
+          */}
+        <span
+          dir="rtl"
+          className="min-w-0 flex-1 truncate text-left font-mono text-xs"
+          title={file.filename}
+        >
+          <bdi>{file.filename}</bdi>
         </span>
         <span className="ml-2 shrink-0 text-[11px] tabular-nums">
           {file.additions > 0 && (
@@ -1823,7 +1885,11 @@ function PRFileRow({
           {file.patch ? (
             <PatchDiff
               patch={toUnifiedDiff(file)}
-              options={{ diffStyle: 'unified' }}
+              // `disableFileHeader` because the row this diff hangs under is
+              // already the file header — name, status icon and +/- counts.
+              // Rendering the library's too repeated all three, with its own
+              // truncation and its own +/- order.
+              options={{ diffStyle: 'unified', disableFileHeader: true }}
             />
           ) : (
             <p className="px-3 py-4 text-xs text-muted-foreground">

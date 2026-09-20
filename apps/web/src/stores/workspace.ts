@@ -165,6 +165,14 @@ interface WorkspaceState {
   tasks: Task[];
   // Whether more finished-history tasks exist server-side beyond what's loaded.
   tasksHasMore: boolean;
+  /**
+   * How many finished-history tasks exist server-side IN TOTAL — the
+   * denominator behind the queue's "COMPLETED n/total". Counted by the server,
+   * so it does not grow as infinite scroll pulls pages in; `null` until the
+   * first count lands, and the header then shows the loaded number alone
+   * rather than inventing a total.
+   */
+  tasksHistoryTotal: number | null;
   // A "load older history" page fetch is in flight (guards the infinite scroll).
   tasksLoadingMore: boolean;
 
@@ -306,6 +314,7 @@ interface WorkspaceState {
   // the infinite-scroll "load more".
   appendOlderTasks: (tasks: Task[]) => void;
   setTasksHasMore: (hasMore: boolean) => void;
+  setTasksHistoryTotal: (total: number | null) => void;
   setTasksLoadingMore: (loading: boolean) => void;
 
   setRepositories: (repos: WatchedRepo[]) => void;
@@ -323,6 +332,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   environments: [],
   tasks: [],
   tasksHasMore: false,
+  tasksHistoryTotal: null,
   tasksLoadingMore: false,
   repositories: [],
   sidebarCollapsed: false,
@@ -515,6 +525,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     }),
 
   setTasksHasMore: (hasMore) => set({ tasksHasMore: hasMore }),
+  setTasksHistoryTotal: (total) => set({ tasksHistoryTotal: total }),
   setTasksLoadingMore: (loading) => set({ tasksLoadingMore: loading }),
 
   setRepositories: (repos) => set({ repositories: repos }),

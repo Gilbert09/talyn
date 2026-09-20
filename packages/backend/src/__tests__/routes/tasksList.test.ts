@@ -184,4 +184,55 @@ describe('GET /tasks — status filter + cursor pagination', () => {
     const page = await list(`workspaceId=ws1&${HISTORY}&limit=99999`);
     expect(page).toHaveLength(5);
   });
+
+  /**
+   * The denominator behind the queue's "COMPLETED n/total". Its whole job is
+   * to be the number a PAGE is not: unaffected by limit, by the cursor, and
+   * by how far the user has scrolled.
+   */
+  describe('GET /tasks/count', () => {
+    const count = async (qs: string): Promise<number> => {
+      const res = await fetch(`${url}/tasks/count?${qs}`, { headers });
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { data: { total: number } }).data.total;
+    };
+
+    it.each([
+      ['the finished history', HISTORY, 5],
+      ['the active statuses', 'status=pending,queued,in_progress', 2],
+      ['a single status', 'status=completed', 3],
+      ['every status when none is named', '', 7],
+    ])('counts %s', async (_label, statusQs, expected) => {
+      expect(await count(`workspaceId=ws1${statusQs ? `&${statusQs}` : ''}`)).toBe(expected);
+    });
+
+    it('ignores limit and before — it is a total, not a page', async () => {
+      const total = await count(
+        `workspaceId=ws1&${HISTORY}&limit=2&before=${encodeURIComponent(day(2).toISOString())}`,
+      );
+      expect(total).toBe(5);
+    });
+
+    it('is not shadowed by GET /:id — "count" is a route, not a task id', async () => {
+      // Express matches in declaration order, so this only holds while
+      // /count is declared above /:id. A 404 here means it regressed.
+      const res = await fetch(`${url}/tasks/count?workspaceId=ws1`, { headers });
+      expect(res.status).toBe(200);
+      expect((await res.json()) as { data: { total: number } }).toHaveProperty('data.total');
+    });
+
+    it('filters by type alongside status', async () => {
+      expect(await count('workspaceId=ws1&type=code_writing')).toBe(7);
+      expect(await count('workspaceId=ws1&type=pr_review')).toBe(0);
+    });
+
+    it('refuses a workspace the caller does not own', async () => {
+      await seedUser(db, { id: 'user-other' });
+      await db
+        .insert(workspacesTable)
+        .values({ id: 'ws-other', ownerId: 'user-other', name: 'theirs', settings: {} });
+      const res = await fetch(`${url}/tasks/count?workspaceId=ws-other`, { headers });
+      expect(res.status).toBeGreaterThanOrEqual(400);
+    });
+  });
 });

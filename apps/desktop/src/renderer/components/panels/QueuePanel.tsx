@@ -109,6 +109,9 @@ function formatRelativeTime(iso: string): string {
 export function QueuePanel() {
   const { tasks, selectedTaskId, selectTask } = useWorkspaceStore();
   const tasksHasMore = useWorkspaceStore((s) => s.tasksHasMore);
+  // Server-counted, so it does not creep upward as infinite scroll pulls
+  // pages in. Null until the first count lands.
+  const tasksHistoryTotal = useWorkspaceStore((s) => s.tasksHistoryTotal);
   const tasksLoadingMore = useWorkspaceStore((s) => s.tasksLoadingMore);
 
   const queuedTasks = tasks.filter((t) =>
@@ -209,8 +212,16 @@ export function QueuePanel() {
                 <div>
                   <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
                     <span>COMPLETED</span>
+                    {/* `n/total`, because the bare number was the count of
+                        rows LOADED — it grew every time the infinite scroll
+                        pulled another page, which reads as "more tasks
+                        finished" rather than "you scrolled". The total comes
+                        from the server, and until it does the loaded count
+                        stands alone rather than being passed off as a total. */}
                     <span className="tabular-nums text-muted-foreground/70">
-                      {completedTasks.length}
+                      {tasksHistoryTotal === null
+                        ? completedTasks.length
+                        : `${completedTasks.length}/${tasksHistoryTotal}`}
                     </span>
                   </h3>
                   <div className="space-y-1">
@@ -689,10 +700,19 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         })()}
       </div>
 
-      {/* Prompt — always shown when present, above the log. Description
-          dropped when it just duplicates the prompt (common case). */}
-      {(task.prompt ||
-        (task.description && task.description.trim() !== (task.prompt ?? '').trim())) && (
+      {/* Prompt — shown only while the run is still going, above the log.
+          Once it is over the prompt is the least interesting thing on the
+          screen: what you came back for is what the run DID, and on a long
+          prompt the transcript and the failure banner start below the fold.
+          It is still what you read while a task is pending or in flight,
+          because then there is nothing else to read. TERMINAL_TASK_STATUSES,
+          not `=== 'completed'`: a failed or stood-down run is equally over,
+          and deriving it is what makes a new status land in the right half.
+          Description dropped when it just duplicates the prompt (common
+          case). */}
+      {!TERMINAL_TASK_STATUSES.includes(task.status) &&
+        (task.prompt ||
+          (task.description && task.description.trim() !== (task.prompt ?? '').trim())) && (
         <div className="px-4 pt-3 pb-2 border-b">
           {task.prompt ? (
             <pre className="text-sm bg-secondary p-3 rounded-lg whitespace-pre-wrap break-words max-h-32 overflow-auto">

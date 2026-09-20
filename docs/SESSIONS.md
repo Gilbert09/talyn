@@ -2,6 +2,37 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## PR Files tab and task queue polish (2026-09-20)
+
+- The Files tab drew the file name twice when a diff was open: once on the
+  accordion row and again in the library's own header, each with its own
+  truncation. `disableFileHeader` on the PatchDiff options drops the inner one;
+  the row above it is already the file header.
+- Truncate the accordion path from the LEFT. A deep path's last segment is the
+  filename, and clipping the tail leaves every file in a directory looking the
+  same. `direction: rtl` puts the ellipsis at the start and a `<bdi>` keeps the
+  path itself reading left to right.
+- Expand every file by default. The rows stay individually collapsible for
+  folding away a lockfile.
+- Fetch the file list when the PANEL opens, not when the tab is first clicked
+  (`usePRFiles`, lifted into `DetailTabs`). The expansion set moved with it, so
+  a collapse survives a trip to another tab. It costs one GitHub REST call per
+  panel open even when the tab is never visited.
+- Badge the Files tab with the count. `changedFiles` is one integer, so unlike
+  the description it rides in `last_summary` and the badge is there on open;
+  the loaded list supersedes it. Absent stays absent — a row cached before the
+  field must wear no badge rather than a confident zero.
+- Hide the prompt on a task whose run is over. What you come back for is what
+  the run did, and on a long prompt the transcript and the failure banner
+  started below the fold. Gated on `TERMINAL_TASK_STATUSES`, so a failed or
+  stood-down run counts as over, not only a `completed` one.
+- The queue's COMPLETED header counted rows LOADED, so it grew as the infinite
+  scroll paged — a scroll position that read as a total. `GET /tasks/count`
+  takes the list's own filters and neither `before` nor `limit`, and the header
+  now reads `n/total`. Re-counted on load, on reconnect, on each page, and when
+  a run crosses into a terminal status; until the first count lands the loaded
+  number stands alone rather than being passed off as a total.
+
 ## Cached PR description (2026-09-20)
 
 - Opening the PR panel showed "Loading description..." for about a second. Every

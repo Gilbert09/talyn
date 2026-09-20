@@ -31,6 +31,7 @@ function makeSummary(over: Partial<PRSummary> = {}): PRSummary {
     number: 42,
     title: 'Add feature',
     body: '',
+    changedFiles: 3,
     url: 'https://github.com/acme/widgets/pull/42',
     author: 'me',
     draft: false,
@@ -487,6 +488,36 @@ describe('prCache — DB integration', () => {
       const after = await readFullRow();
       expect(after.lastSummaryDigest).not.toBe(before.lastSummaryDigest);
       expect(after.lastCheckDigest).toBe('sha1:a=success');
+    });
+  });
+
+  describe('changed-file count', () => {
+    async function readSummary(): Promise<Record<string, unknown>> {
+      const row = (await db.select().from(pullRequestsTable))[0];
+      return row.lastSummary as Record<string, unknown>;
+    }
+
+    it.each([
+      ['a multi-file PR', 12],
+      ['a PR that changes nothing', 0],
+    ])('persists the count for %s', async (_label, changedFiles) => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ changedFiles }),
+      });
+      expect((await readSummary()).changedFiles).toBe(changedFiles);
+    });
+
+    it('leaves the key ABSENT when the fetch did not carry one', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({ changedFiles: undefined }),
+      });
+      // Absent, never 0 — the UI reads absence as "no count yet" and would
+      // otherwise badge a forty-file PR with a confident zero.
+      expect((await readSummary()).changedFiles).toBeUndefined();
     });
   });
 

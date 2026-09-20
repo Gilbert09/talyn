@@ -862,6 +862,10 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     effectiveReviewDecision: s.effectiveReviewDecision,
     blockingReason: s.blockingReason,
     checks: s.checks,
+    // One integer, so it rides in the summary rather than in a column of its
+    // own the way `body` had to. It is what numbers the detail panel's Files
+    // tab before that tab's REST file list has landed.
+    changedFiles: s.changedFiles,
     unresolvedReviewThreads: s.unresolvedReviewThreads,
     // Persisted because prNeedsFollowup reads it off the cached row on every
     // watcher tick, not just at fetch time.
@@ -891,7 +895,13 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     repo,
     number: row.number,
     title: (meta.title as string) ?? '',
-    body: '', // not cached; detail panel fetches on open
+    // Cached on its own `body` column, which this projection deliberately
+    // does not read — see PR_CACHE_COLUMNS. The detail panel asks for it
+    // directly via GET /pull-requests/:id/description.
+    body: '',
+    // Passed through undefined-and-all: the row may predate the field, and
+    // that is "we don't know", not "no files changed".
+    changedFiles: meta.changedFiles,
     url: (meta.url as string) ?? '',
     author: (meta.author as string) ?? '',
     draft: Boolean(meta.draft),

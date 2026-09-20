@@ -345,6 +345,20 @@ export const tasks = {
     const queryStr = query.toString();
     return request<Task[]>('GET', `/tasks${queryStr ? `?${queryStr}` : ''}`);
   },
+  /**
+   * How many tasks match a filter, ignoring pagination. Takes the same
+   * `workspaceId` / `status` / `type` as {@link list} and deliberately no
+   * cursor: this is the DENOMINATOR for a paginated list, so a header can say
+   * "63 of 210" instead of counting however many pages have been scrolled in.
+   */
+  count: (params?: { workspaceId?: string; status?: string; type?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.workspaceId) query.set('workspaceId', params.workspaceId);
+    if (params?.status) query.set('status', params.status);
+    if (params?.type) query.set('type', params.type);
+    const queryStr = query.toString();
+    return request<{ total: number }>('GET', `/tasks/count${queryStr ? `?${queryStr}` : ''}`);
+  },
   get: (id: string) => request<Task>('GET', `/tasks/${id}`),
   create: (data: CreateTaskRequest) => request<Task>('POST', '/tasks', data),
   update: (id: string, data: Partial<Task>) =>
@@ -681,6 +695,11 @@ export interface PRSummaryShape {
   effectiveReviewDecision?: PRReviewDecision;
   blockingReason: PRBlockingReason;
   checks: PRChecks;
+  /** How many files the PR touches — numbers the detail panel's Files tab
+   *  before its (separate, REST) file list has loaded. Absent on rows cached
+   *  before this field shipped, which must read as "no count yet" and never
+   *  as zero files changed. */
+  changedFiles?: number;
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;

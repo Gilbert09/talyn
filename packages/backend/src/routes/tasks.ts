@@ -134,6 +134,55 @@ export function taskRoutes(): Router {
     } as ApiResponse<Task[]>);
   });
 
+  /**
+   * How many tasks match a filter — the SAME `workspaceId` / `status` / `type`
+   * filters the list takes, deliberately WITHOUT `before` or `limit`.
+   *
+   * The task queue's "COMPLETED" header used to show how many finished tasks
+   * were LOADED, which grew every time infinite scroll pulled another page: a
+   * number that looked like a total and was really a scroll position. This is
+   * the denominator that makes it `n/total`.
+   *
+   * Declared above `GET /:id` because Express matches in order and `/count`
+   * would otherwise be read as a task id.
+   *
+   * COUNT(*) over an owner's rows, no projection — none of the blobs are read,
+   * so this costs one integer on the wire however large the history is.
+   */
+  router.get('/count', async (req, res) => {
+    const user = assertUser(req);
+    const db = getDbClient();
+    const { workspaceId, status, type } = req.query;
+
+    if (workspaceId) {
+      try {
+        await requireWorkspaceAccess(req, workspaceId as string);
+      } catch (err) {
+        return handleAccessError(err, res);
+      }
+    }
+
+    const conditions: SQL[] = [eq(workspacesTable.ownerId, user.id)];
+    if (workspaceId) conditions.push(eq(tasksTable.workspaceId, workspaceId as string));
+    if (status) {
+      const statuses = String(status)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (statuses.length === 1) conditions.push(eq(tasksTable.status, statuses[0]));
+      else if (statuses.length > 1) conditions.push(inArray(tasksTable.status, statuses));
+    }
+    if (type) conditions.push(eq(tasksTable.type, type as string));
+
+    const [row] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(tasksTable)
+      .innerJoin(workspacesTable, eq(tasksTable.workspaceId, workspacesTable.id))
+      .where(and(...conditions));
+
+    res.json({ success: true, data: { total: row?.total ?? 0 } });
+  });
+
   // Get single task (includes the transcript).
   router.get('/:id', async (req, res) => {
     try {

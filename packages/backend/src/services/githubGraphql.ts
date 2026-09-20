@@ -71,6 +71,18 @@ export interface PRSummary {
   nodeId?: string;
   title: string;
   body: string;
+  /**
+   * How many files the PR touches. Persisted (unlike `body`, it is one
+   * integer) so the detail panel's Files tab shows a count the moment it
+   * opens — its file list is a separate REST fetch, and a tab that numbers
+   * itself only after that lands is a tab that moves under the cursor.
+   *
+   * Optional because a summary READ BACK from a row cached before the field
+   * shipped genuinely does not know. Absence must reach the UI as absence: a
+   * `?? 0` anywhere on this path would draw a confident "0" on a PR that
+   * changes forty files.
+   */
+  changedFiles?: number;
   url: string;
   author: string;
   /**
@@ -1050,6 +1062,7 @@ function prFieldsSelection(numberExpr: string | null): string {
   id
   title
   body
+  changedFiles
   url
   isDraft
   state
@@ -1205,6 +1218,9 @@ interface RawPullRequest {
   id?: string;
   title: string;
   body: string | null;
+  /** How many files the PR touches. One integer, so the detail panel's Files
+   *  tab can carry a count before its (REST) file list has loaded. */
+  changedFiles?: number;
   url: string;
   isDraft: boolean;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -1457,6 +1473,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     nodeId: raw.id,
     title: raw.title,
     body: raw.body ?? '',
+    changedFiles: raw.changedFiles ?? 0,
     url: raw.url,
     author: raw.author?.login ?? '',
     labels: (raw.labels?.nodes ?? []).map((l) => l.name),

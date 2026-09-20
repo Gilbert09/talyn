@@ -118,16 +118,52 @@ const HISTORY_STATUS_SET = new Set<string>(HISTORY_TASK_STATUSES);
  */
 async function fetchInitialTasks(
   workspaceId: string,
-): Promise<{ tasks: Task[]; hasMore: boolean }> {
-  const [active, history] = await Promise.all([
+): Promise<{ tasks: Task[]; hasMore: boolean; historyTotal: number | null }> {
+  const [active, history, total] = await Promise.all([
     api.tasks.list({ workspaceId, status: ACTIVE_STATUS_PARAM }),
     api.tasks.list({
       workspaceId,
       status: HISTORY_STATUS_PARAM,
       limit: TASK_HISTORY_PAGE_SIZE,
     }),
+    // The denominator for the queue's "COMPLETED n/total". A failure here must
+    // not fail the task load — the header falls back to the loaded count.
+    api.tasks
+      .count({ workspaceId, status: HISTORY_STATUS_PARAM })
+      .then((r) => r.total)
+      .catch(() => null),
   ]);
-  return { tasks: [...active, ...history], hasMore: history.length === TASK_HISTORY_PAGE_SIZE };
+  return {
+    tasks: [...active, ...history],
+    hasMore: history.length === TASK_HISTORY_PAGE_SIZE,
+    historyTotal: total,
+  };
+}
+
+/**
+ * Re-count the finished history. The total drifts during a session — a run
+ * finishes, a task is deleted — and this is what pulls it straight again.
+ *
+ * Cheap enough to call on those events: it is a COUNT over one owner's rows
+ * and answers a single integer. Best-effort; a failure leaves the last known
+ * total in place rather than blanking a number the user is looking at.
+ */
+export async function refreshTaskHistoryTotal(): Promise<void> {
+  const store = useWorkspaceStore.getState();
+  const workspaceId = store.currentWorkspaceId;
+  if (!workspaceId) return;
+  try {
+    const { total } = await api.tasks.count({
+      workspaceId,
+      status: HISTORY_STATUS_PARAM,
+    });
+    // Guard against the user having switched workspace mid-flight.
+    if (useWorkspaceStore.getState().currentWorkspaceId === workspaceId) {
+      useWorkspaceStore.getState().setTasksHistoryTotal(total);
+    }
+  } catch {
+    // Keep the previous total.
+  }
 }
 
 /**
@@ -145,11 +181,12 @@ async function reconcileTasksFromServer(): Promise<void> {
   const workspaceId = store.currentWorkspaceId;
   if (!workspaceId) return;
   try {
-    const { tasks, hasMore } = await fetchInitialTasks(workspaceId);
+    const { tasks, hasMore, historyTotal } = await fetchInitialTasks(workspaceId);
     store.reconcileTasks(tasks, workspaceId);
     // Only relax hasMore→false; if the user had already paged past the first
     // page, keep their "more available" state rather than resetting it.
     if (!hasMore) store.setTasksHasMore(false);
+    if (historyTotal !== null) store.setTasksHistoryTotal(historyTotal);
   } catch (err) {
     console.error('Failed to reconcile tasks after reconnect:', err);
   }
@@ -182,6 +219,9 @@ export async function loadMoreTasks(): Promise<void> {
     });
     useWorkspaceStore.getState().appendOlderTasks(older);
     useWorkspaceStore.getState().setTasksHasMore(older.length === TASK_HISTORY_PAGE_SIZE);
+    // Re-count while the user is looking at the number — paging is exactly
+    // when a stale total is most visible.
+    void refreshTaskHistoryTotal();
   } catch (err) {
     console.error('Failed to load more tasks:', err);
   } finally {
@@ -269,6 +309,7 @@ export function useApiConnection() {
     unsubscribers.push(
       wsClient.on<{ taskId: string }>('task:deleted', (payload) => {
         useWorkspaceStore.getState().removeTask(payload.taskId);
+        void refreshTaskHistoryTotal();
       })
     );
 
@@ -292,6 +333,12 @@ export function useApiConnection() {
           status: payload.status,
           result: payload.result,
         });
+        // A run that just ended grew the history by one. Only on the crossing
+        // into a terminal status, so an in_progress heartbeat does not put a
+        // count request behind every transcript update.
+        if (HISTORY_STATUS_SET.has(payload.status)) {
+          void refreshTaskHistoryTotal();
+        }
       })
     );
 
@@ -383,6 +430,7 @@ export function useInitialDataLoad() {
     setEnvironments,
     setTasks,
     setTasksHasMore,
+    setTasksHistoryTotal,
     setRepositories,
     setOnboardingComplete,
   } = useWorkspaceStore();
@@ -467,6 +515,7 @@ export function useInitialDataLoad() {
 
         setTasks(taskPage.tasks);
         setTasksHasMore(taskPage.hasMore);
+        setTasksHistoryTotal(taskPage.historyTotal);
         setRepositories(repositories);
 
         // Warm the skills cache (local + per-repo discovery) so the per-PR
@@ -488,6 +537,7 @@ export function useInitialDataLoad() {
     setEnvironments,
     setTasks,
     setTasksHasMore,
+    setTasksHistoryTotal,
     setRepositories,
     setOnboardingComplete,
   ]);
