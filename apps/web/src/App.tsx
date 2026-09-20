@@ -36,18 +36,25 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginScreen />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/*" element={<RequireAuth />} />
-        </Routes>
-        {/* Outside <Routes> so a toast survives navigation. */}
-        <Toaster />
-        {/* Inside AuthProvider — it identifies off the session. */}
-        <Analytics />
-      </AuthProvider>
+      <Routes>
+        <Route path="/mcp/callback" element={<McpCallback />} />
+        <Route path="/*" element={<SessionRoutes />} />
+      </Routes>
     </BrowserRouter>
+  );
+}
+
+function SessionRoutes() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<LoginScreen />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/*" element={<RequireAuth />} />
+      </Routes>
+      <Toaster />
+      <Analytics />
+    </AuthProvider>
   );
 }
 
@@ -74,11 +81,6 @@ function AuthedApp() {
   return (
     <Routes>
       <Route index element={<Navigate to={PANEL_PATHS.my_prs} replace />} />
-      {/* The redirect URI an MCP server's authorization server was given.
-          Inside RequireAuth because finishing the exchange is an authenticated
-          call — and because an unauthenticated visitor could not have started
-          the flow it is trying to finish. */}
-      <Route path="mcp/callback" element={<McpCallback />} />
       {Object.values(PANEL_PATHS).map((path) => (
         <Route key={path} path={path.slice(1)} element={<MainLayout />} />
       ))}

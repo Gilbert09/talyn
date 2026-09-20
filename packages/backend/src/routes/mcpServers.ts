@@ -1,3 +1,5 @@
+import { getDbClient } from '../db/client.js';
+import { withBlockingAdvisoryLock } from '../services/advisoryLock.js';
 import { discoverMcpAuth } from '../services/mcpServers/authDiscovery.js';
 import { Router, type Request, type Response } from 'express';
 import { validateMcpServer, type ApiResponse, type McpServerDefinition } from '@talyn/shared';
@@ -11,6 +13,7 @@ import {
 import { probeMcpServer } from '../services/mcpServers/probe.js';
 import {
   McpOAuthUnavailableError,
+  readMcpAccount,
   completeMcpOAuth,
   serverIdFromState,
   startMcpOAuth,
@@ -138,6 +141,13 @@ export function mcpServerRoutes(): Router {
       return res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'Invalid server address.' });
     }
     const data = await discoverMcpAuth(url);
+    res.json({ success: true, data });
+  });
+
+  router.get('/:id/account', async (req: Request, res: Response) => {
+    const server = await loadAndGate(req, res);
+    if (!server) return;
+    const data = await readMcpAccount(server.id, mcpOAuthStore);
     res.json({ success: true, data });
   });
 
@@ -312,68 +322,6 @@ export function mcpServerRoutes(): Router {
   });
 
   /**
-   * Finish a sign-in, from the callback page.
-   *
-   * The page the vendor's browser lands on is on the WEB APP — it is the
-   * redirect URI the authorization server was told — and it has nothing but
-   * `code` and `state`. The state names the server; the stored flow's hash is
-   * what authorises the exchange.
-   *
-   * Authenticated and workspace-gated like every other route here. The code
-   * passing through the user's browser is harmless on its own: PKCE binds it to
-   * a verifier that never leaves this process.
-   */
-  router.post('/complete', async (req: Request, res: Response) => {
-    const state = String(req.body?.state ?? '');
-    const code = String(req.body?.code ?? '');
-    const denied = typeof req.body?.error === 'string' ? req.body.error.slice(0, 500) : '';
-    if (!state || (!code && !denied)) {
-      return res.status(400).json({ success: false, error: 'State and a code or error are required.' });
-    }
-    const serverId = serverIdFromState(state);
-    if (!serverId) {
-      return res.status(400).json({ success: false, error: 'that sign-in did not come from here' });
-    }
-    const server = await getMcpServer(serverId);
-    if (!server) {
-      return res.status(404).json({ success: false, error: 'no such MCP server' });
-    }
-    if (!(await gate(req, res, server.workspaceId))) return;
-
-    const stored = await mcpOAuthStore.read(server.id);
-    if (!stored) {
-      return res.status(409).json({ success: false, error: 'there is no sign-in waiting to be finished' });
-    }
-    try {
-      validateMcpOAuthState(stored, state, new Date());
-    } catch (err) {
-      return res.status(409).json({ success: false, error: err instanceof Error ? err.message : 'Invalid OAuth state.' });
-    }
-    if (denied) {
-      await mcpOAuthStore.write(server.id, { ...stored, status: stored.status === 'connected' ? 'connected' : 'pending', detail: denied, flow: undefined });
-      return res.json({ success: true, data: await getMcpServer(server.id) });
-    }
-    try {
-      const next = await completeMcpOAuth(stored, state, code, new Date());
-      await mcpOAuthStore.write(server.id, next);
-      captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
-      const updated = await getMcpServer(server.id);
-      res.json({ success: true, data: updated } as ApiResponse<typeof updated>);
-    } catch (err) {
-      // The vendor's own words where there are any. A refusal here is a fact
-      // about the grant, not a server fault, so it is a 409 and not a 500.
-      const message = err instanceof Error ? err.message : 'could not finish sign-in';
-      await mcpOAuthStore.write(server.id, {
-        ...stored,
-        status: stored.status === 'connected' ? 'connected' : 'pending',
-        detail: message,
-        flow: undefined,
-      });
-      res.status(409).json({ success: false, error: message });
-    }
-  });
-
-  /**
    * Hand back the grant, without forgetting who this server is.
    *
    * The endpoints and the client id are KEPT: they do not move, and keeping
@@ -398,6 +346,65 @@ export function mcpServerRoutes(): Router {
     captureWorkspaceEvent(server.workspaceId, 'mcp_server_disconnected_oauth', serverShape(server));
     const updated = await getMcpServer(server.id);
     res.json({ success: true, data: updated } as ApiResponse<typeof updated>);
+  });
+
+  return router;
+}
+
+/** The state authorizes only the pending flow. This route returns no server data. */
+export function mcpOAuthCallbackRoutes(): Router {
+  const router = Router();
+  router.post('/complete', async (req: Request, res: Response) => {
+    const state = String(req.body?.state ?? '');
+    const code = String(req.body?.code ?? '');
+    const denied = typeof req.body?.error === 'string' ? req.body.error.slice(0, 500) : '';
+    if (!state || (!code && !denied)) {
+      return res.status(400).json({ success: false, error: 'State and a code or error are required.' });
+    }
+    const serverId = serverIdFromState(state);
+    if (!serverId) {
+      return res.status(400).json({ success: false, error: 'that sign-in did not come from here' });
+    }
+    return withBlockingAdvisoryLock(getDbClient(), `mcpOAuth:${serverId}`, async () => {
+      const server = await getMcpServer(serverId);
+      if (!server) {
+        return res.status(404).json({ success: false, error: 'no such MCP server' });
+      }
+
+      const stored = await mcpOAuthStore.read(server.id);
+      if (!stored) {
+        return res.status(409).json({ success: false, error: 'there is no sign-in waiting to be finished' });
+      }
+      try {
+        validateMcpOAuthState(stored, state, new Date());
+      } catch (err) {
+        return res.status(409).json({ success: false, error: err instanceof Error ? err.message : 'Invalid OAuth state.' });
+      }
+      if (!(await workspaceMayUseMcpServers(server.workspaceId))) {
+        return res.status(403).json({ success: false, error: 'MCP servers are not available.' });
+      }
+      if (denied) {
+        await mcpOAuthStore.write(server.id, { ...stored, status: stored.status === 'connected' ? 'connected' : 'pending', detail: denied, flow: undefined });
+        return res.json({ success: true, data: null });
+      }
+      try {
+        const next = await completeMcpOAuth(stored, state, code, new Date());
+        await mcpOAuthStore.write(server.id, next);
+        captureWorkspaceEvent(server.workspaceId, 'mcp_server_connected_oauth', serverShape(server));
+        res.json({ success: true, data: null });
+      } catch (err) {
+        // The vendor's own words where there are any. A refusal here is a fact
+        // about the grant, not a server fault, so it is a 409 and not a 500.
+        const message = err instanceof Error ? err.message : 'could not finish sign-in';
+        await mcpOAuthStore.write(server.id, {
+          ...stored,
+          status: stored.status === 'connected' ? 'connected' : 'pending',
+          detail: message,
+          flow: undefined,
+        });
+        res.status(409).json({ success: false, error: message });
+      }
+    });
   });
 
   return router;

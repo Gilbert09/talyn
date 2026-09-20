@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mcpServerRoutes } from '../../routes/mcpServers.js';
+import { mcpServerRoutes, mcpOAuthCallbackRoutes } from '../../routes/mcpServers.js';
 
 const mocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -35,6 +35,12 @@ vi.mock('../../services/mcpServers/oauth.js', () => ({
   completeMcpOAuth: mocks.complete,
 }));
 
+vi.mock('../../db/client.js', () => ({ getDbClient: () => ({}) }));
+vi.mock('../../services/advisoryLock.js', () => ({
+  withBlockingAdvisoryLock: async (_db: unknown, _key: string, fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('../../services/analytics.js', () => ({ captureWorkspaceEvent: vi.fn() }));
+
 let server: Server;
 let base: string;
 beforeEach(async () => {
@@ -44,6 +50,7 @@ beforeEach(async () => {
   mocks.discover.mockResolvedValue({ methods: ['oauth'], source: 'server' });
   const app = express();
   app.use(express.json());
+  app.use('/mcp-servers', mcpOAuthCallbackRoutes());
   app.use('/mcp-servers', mcpServerRoutes());
   server = createServer(app);
   await new Promise<void>((resolve, reject) => {
@@ -101,6 +108,20 @@ describe('OAuth callback failures', () => {
       authKind: 'bearer',
     });
     mocks.read.mockResolvedValue({ status: 'pending', flow: { id: 'flow-1' } });
+  });
+  it('finishes without a browser session and returns no server details', async () => {
+    mocks.complete.mockResolvedValue({ status: 'connected', lastCompletedFlowId: 'flow-1' });
+    const response = await post('complete', { state: 'srv-1.state', code: 'valid-code' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, data: null });
+    expect(mocks.access).not.toHaveBeenCalled();
+    expect(mocks.write).toHaveBeenCalledWith('srv-1', { status: 'connected', lastCompletedFlowId: 'flow-1' });
+  });
+  it('refuses a callback when the workspace flag is disabled', async () => {
+    mocks.allowed.mockResolvedValue(false);
+    expect((await post('complete', { state: 'srv-1.state', code: 'valid-code' })).status).toBe(403);
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled();
   });
   it('records a denied callback so polling can stop', async () => {
     const response = await post('complete', { state: 'srv-1.state', error: 'access_denied' });

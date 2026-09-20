@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   completeMcpOAuth,
+  readMcpAccount,
   grantStatus,
   serverIdFromState,
   startMcpOAuth,
   type StoredMcpOAuth,
 } from '../services/mcpServers/oauth.js';
 import { discoverAuthServer, McpDiscoveryError } from '../services/mcpServers/discovery.js';
+import * as discovery from '../services/mcpServers/discovery.js';
+import { resetWebAppUrlCacheForTests } from '../services/webApp.js';
 import { encryptString } from '../services/tokenCrypto.js';
 
 /**
@@ -18,14 +21,20 @@ import { encryptString } from '../services/tokenCrypto.js';
  * cost of getting one wrong is a token issued to the wrong party.
  */
 
+const originalWebAppUrl = process.env.WEB_APP_URL;
+
 const KEY = Buffer.alloc(32, 9).toString('base64');
 
 beforeEach(() => {
+  resetWebAppUrlCacheForTests();
   process.env.TALYN_TOKEN_KEY = KEY;
   process.env.WEB_APP_URL = 'https://app.talyn.dev';
 });
 
 afterEach(() => {
+  if (originalWebAppUrl === undefined) delete process.env.WEB_APP_URL;
+  else process.env.WEB_APP_URL = originalWebAppUrl;
+  resetWebAppUrlCacheForTests();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -116,6 +125,53 @@ describe('starting a sign-in', () => {
     resource: 'https://mcp.example.com/mcp',
     scopes: ['read'],
   };
+
+  it.each([
+    ['http://localhost:5173', true, true, 'dcr'],
+    ['https://localhost:5173', true, true, 'dcr'],
+    ['http://localhost:5173', false, true, 'dcr'],
+    ['https://app.talyn.dev', true, true, 'cimd'],
+    ['https://app.talyn.dev', true, false, 'cimd'],
+    ['https://app.talyn.dev', false, true, 'dcr'],
+  ] as const)('selects registration for %s (metadata %s, registration %s)', async (origin, cimd, dcr, source) => {
+    process.env.WEB_APP_URL = origin;
+    vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'] },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        clientIdMetadataDocumentSupported: cimd,
+        ...(dcr ? { registrationEndpoint: 'https://auth.example.com/register' } : {}),
+      },
+    });
+    stubFetch({ 'https://auth.example.com/register': { client_id: 'local-client' } });
+    const started = await startMcpOAuth({ id: 'srv-1', url: 'https://mcp.example.com/mcp' }, null, new Date());
+    expect(started.stored.clientSource).toBe(source);
+    expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(`${origin}/mcp/callback`);
+    if (source === 'dcr') {
+      expect(fetch).toHaveBeenCalledWith('https://auth.example.com/register', expect.objectContaining({
+        body: expect.stringContaining(`${origin}/mcp/callback`),
+      }));
+    } else {
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('explains why a metadata-only server cannot use localhost', async () => {
+    process.env.WEB_APP_URL = 'http://localhost:5173';
+    vi.spyOn(discovery, 'discover').mockResolvedValue({
+      resource: { authorizationServers: ['https://auth.example.com'] },
+      server: {
+        issuer: 'https://auth.example.com',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        clientIdMetadataDocumentSupported: true,
+      },
+    });
+    await expect(startMcpOAuth({ id: 'srv-1', url: 'https://mcp.example.com/mcp' }, null, new Date()))
+      .rejects.toThrow('public HTTPS client identity document');
+  });
 
   it('builds an authorize URL with PKCE, state and the RFC 8707 resource', async () => {
     const started = await startMcpOAuth(
@@ -253,5 +309,30 @@ describe('grantStatus', () => {
     for (const secret of ['at-secret', 'rt-secret', 'cs-secret', 'v-secret', 'accessToken', 'verifier']) {
       expect(json).not.toContain(secret);
     }
+  });
+});
+
+
+describe('optional MCP account details', () => {
+  it.each([
+    ['https://auth.example.com/userinfo', { name: 'Tom', email: 'tom@example.com', access_token: 'hidden' }, { name: 'Tom', email: 'tom@example.com' }],
+    ['https://other.example.com/userinfo', { name: 'Tom' }, null],
+    [undefined, { name: 'Tom' }, null],
+    ['https://auth.example.com/userinfo', { sub: '123' }, null],
+  ])('reads only supported profile fields from %s', async (endpoint, profile, expected) => {
+    stubFetch({
+      'https://auth.example.com/.well-known/oauth-authorization-server': {
+        issuer: 'https://auth.example.com', authorization_endpoint: 'https://auth.example.com/authorize',
+        token_endpoint: 'https://auth.example.com/token', code_challenge_methods_supported: ['S256'],
+        userinfo_endpoint: endpoint,
+      },
+      'https://auth.example.com/userinfo': profile,
+    });
+    const stored: StoredMcpOAuth = {
+      status: 'connected', issuer: 'https://auth.example.com', accessTokenEnc: encryptString('access'),
+      expiresAt: new Date(Date.now() + 3600000).toISOString(),
+    };
+    expect(await readMcpAccount('srv-1', { read: async () => stored, write: vi.fn() })).toEqual(expected);
+    if (endpoint !== 'https://auth.example.com/userinfo') expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -76,17 +76,16 @@ export interface McpOAuthGrant {
   checkedAt?: string;
 }
 
-/** What an `initialize` + `tools/list` probe found. Never a credential —
- *  several vendors put the submitted key in an error envelope, so only the
- *  server's own name, its protocol version and a refusal's text are kept. */
+/** Connection status and tool metadata returned by the server. */
 export interface McpProbeResult {
   ok: boolean;
   at: string;
   status?: number;
   serverName?: string;
   protocolVersion?: string;
-  /** Names only. Descriptions are the agent's business, not the picker's. */
+  /** Tool metadata from the server. */
   toolNames?: string[];
+  tools?: { name: string; title?: string; description?: string }[];
   detail?: string;
 }
 

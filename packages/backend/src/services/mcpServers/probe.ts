@@ -13,7 +13,7 @@ import type { McpInjection, McpProbeResult, McpServerDefinition } from '@talyn/s
  *
  * This is the one place in Talyn that touches a vendor with a workspace's
  * credential in hand. Nothing from the response is kept except the server's own
- * name, its protocol version, the tool names and a refusal's text: several
+ * name, its protocol version, tool metadata and a refusal's text: several
  * vendors put the submitted credential straight back in an error envelope.
  */
 
@@ -211,17 +211,34 @@ export async function probeMcpServer(input: ProbeInput): Promise<McpProbeResult>
     // and several servers reject tools/list without it.
     await notifyInitialized(input, init.sessionId, controller.signal);
 
-    const tools = await rpc(input, 'tools/list', {}, 2, init.sessionId, controller.signal);
-    if (tools.result && Array.isArray(tools.result.tools)) {
-      out.toolNames = (tools.result.tools as { name?: unknown }[])
-        .map((t) => (typeof t.name === 'string' ? t.name : ''))
-        .filter((n) => n !== '')
-        .sort();
-    } else if (tools.error) {
-      // The session opened and the listing did not. Worth saying, and NOT worth
-      // reporting as a failed connection: the credential is fine.
-      out.detail = `connected, but the tool list could not be read: ${tools.error}`;
+    const collected = new Map<string, { name: string; title?: string; description?: string }>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const response = await rpc(input, 'tools/list', cursor ? { cursor } : {}, page + 2, init.sessionId, controller.signal);
+      if (!Array.isArray(response.result?.tools)) {
+        out.detail = 'Connected, but the tool list could not be read.';
+        return out;
+      }
+      for (const value of response.result.tools) {
+        if (!value || typeof value !== 'object' || typeof value.name !== 'string' || !value.name) continue;
+        collected.set(value.name, {
+          name: value.name,
+          ...(typeof value.title === 'string' ? { title: value.title.slice(0, 200) } : {}),
+          ...(typeof value.description === 'string' ? { description: value.description.slice(0, 8000) } : {}),
+        });
+      }
+      const next = response.result.nextCursor;
+      if (typeof next !== 'string' || !next) {
+        out.tools = [...collected.values()].sort((a, b) => a.name.localeCompare(b.name));
+        out.toolNames = out.tools.map((tool) => tool.name);
+        return out;
+      }
+      if (cursors.has(next) || collected.size > 10000) break;
+      cursors.add(next);
+      cursor = next;
     }
+    out.detail = 'Connected, but the tool list is too large or repeats pages.';
     return out;
   } catch (err) {
     const aborted = controller.signal.aborted;

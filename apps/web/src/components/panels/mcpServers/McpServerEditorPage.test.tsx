@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   startSignIn: vi.fn(),
   signInStatus: vi.fn(),
   disconnect: vi.fn(),
+  account: vi.fn(),
   openExternal: vi.fn(),
   openSignIn: vi.fn(),
   closeSignIn: vi.fn(),
@@ -63,6 +64,7 @@ function setup(
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.openSignIn.mockResolvedValue(true);
+  mocks.account.mockResolvedValue(null);
   onSave.mockResolvedValue(server);
   onTest.mockResolvedValue({ ok: true, at: '', toolNames: ['read_documents'] });
 });
@@ -278,7 +280,7 @@ describe('guided MCP setup', () => {
     mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
     setup({ ...server, oauth: { status: 'connected' } });
     await waitFor(() => expect(onTest).toHaveBeenCalledTimes(1));
-    await screen.findByText('Connected to the server, which offers 1 tool.');
+    await screen.findByRole('switch', { name: 'Enable read_documents' });
     expect(screen.getByText('Tools')).toBeTruthy();
   });
 
@@ -301,4 +303,29 @@ describe('guided MCP setup', () => {
     await act(async () => finish({ ok: true, at: '', toolNames: ['old_tool'] }));
     expect(screen.queryByText('Tools')).toBeNull();
   });
+});
+
+
+it('shows the account and compact tool controls after connection', async () => {
+  mocks.discoverAuth.mockResolvedValue({ methods: ['oauth'], source: 'server' });
+  mocks.account.mockResolvedValue({ name: 'Tom', email: 'tom@example.com' });
+  setup({ ...server, oauth: { status: 'connected' }, lastProbe: {
+    ok: true, at: '', toolNames: ['search', 'read'], tools: [
+      { name: 'search', description: '**Search documents.**' },
+      { name: 'read', description: 'Read documents.' },
+    ],
+  } });
+  await screen.findByText('Signed in as Tom · tom@example.com');
+  expect(screen.queryByText('Authentication')).toBeNull();
+  expect(screen.queryByText('Connection settings')).toBeNull();
+  expect(screen.queryByText(/Connected to the server/)).toBeNull();
+  const toggle = screen.getByRole('switch', { name: 'Enable search' });
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  expect(screen.getAllByText('Search documents.').every((element) => element.tagName === 'STRONG')).toBe(true);
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByRole('switch', { name: 'Enable read' }).getAttribute('aria-checked')).toBe('true');
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ tools: ['read'] })));
 });

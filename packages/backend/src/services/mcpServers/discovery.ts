@@ -30,6 +30,7 @@ export interface AuthServerMetadata {
   authorizationEndpoint: string;
   tokenEndpoint: string;
   registrationEndpoint?: string;
+  userInfoEndpoint?: string;
   scopesSupported?: string[];
   /** Whether the AS will take an HTTPS client-id metadata document (CIMD). */
   clientIdMetadataDocumentSupported: boolean;
@@ -216,6 +217,9 @@ export async function discoverAuthServer(
       issuer: typeof doc.issuer === 'string' ? doc.issuer : issuer,
       authorizationEndpoint,
       tokenEndpoint,
+      ...(httpsUrl(doc.userinfo_endpoint) && new URL(doc.userinfo_endpoint as string).origin === new URL(issuer).origin
+        ? { userInfoEndpoint: doc.userinfo_endpoint as string }
+        : {}),
       ...(httpsUrl(doc.registration_endpoint)
         ? { registrationEndpoint: httpsUrl(doc.registration_endpoint) as string }
         : {}),

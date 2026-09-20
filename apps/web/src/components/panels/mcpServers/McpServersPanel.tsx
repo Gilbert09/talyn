@@ -243,7 +243,7 @@ function McpServerRow({
           >
             {probe.ok ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
             {probe.ok
-              ? `Answered as ${probe.serverName ?? 'the server'}`
+              ? 'Connected'
               : (probe.detail ?? 'Could not connect')}
           </p>
         )}

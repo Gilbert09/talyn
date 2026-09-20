@@ -14,7 +14,7 @@ import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { loopRoutes } from './loops.js';
-import { mcpServerRoutes } from './mcpServers.js';
+import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
 import { mcpTokenRoutes } from './mcpTokens.js';
@@ -105,6 +105,10 @@ export function setupRoutes(app: Express): void {
     asyncHandler(requireMcpToken),
     mount(mcpRoutes())
   );
+
+  // The browser can finish a desktop flow without a separate Talyn session.
+  app.use(`${api}/mcp-servers/complete`, rateLimit({ windowMs: 60_000, max: 60 }));
+  app.use(`${api}/mcp-servers`, mount(mcpOAuthCallbackRoutes()));
 
   // Everything below is authenticated. The middleware populates req.user
   // and refuses requests without a valid Supabase JWT.

@@ -2,6 +2,18 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## MCP connection details (2026-09-20)
+
+- Complete desktop OAuth without a separate browser login to Talyn.
+- Validate callback state and PKCE before exchange. Serialize callbacks and return no account data.
+- Use dynamic client registration for local development when the provider supports it.
+- Show optional account names and email addresses from the issuer's advertised profile endpoint.
+- Hide setup controls and the duplicate success banner after sign-in.
+- Show compact tool rows with switches, Markdown descriptions, and expandable details.
+- Read all tool pages. Reject incomplete lists when cursors repeat or limits are reached.
+- Replace “Answered as” with “Connected” on server cards.
+- Validate callback security, account metadata, pagination, Markdown, and tool selection with focused tests.
+
 ## MCP browser launch (2026-09-20)
 
 - Open the OAuth page automatically after the user selects Connect account.

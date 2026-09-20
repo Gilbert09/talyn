@@ -17,6 +17,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
+import { Markdown } from '../../../lib/markdown';
 import { openExternal, prepareSignInWindow } from '../../../lib/openExternal';
 import { useWorkspaceStore } from '../../../stores/workspace';
 
@@ -310,9 +311,9 @@ export function McpServerEditorPage({
             </p>
           )}
 
-          {probe && <ProbeBanner probe={probe} />}
+          {probe && (!probe.ok || probe.detail || !oauthConnected) && <ProbeBanner probe={probe} />}
 
-          {!catalog && (
+          {!catalog && !connected && (
             <Section
               title="MCP server address"
               description="Paste the address. Talyn fills in the connection settings."
@@ -349,23 +350,9 @@ export function McpServerEditorPage({
             </Section>
           )}
 
-          {connected && (
-            <details className="rounded-lg border p-4">
-              <summary className="cursor-pointer text-sm">Connection settings</summary>
-              <div className="mt-3 space-y-2">
-                <TextField
-                  value={input.name}
-                  onChange={(name) => edit({ name })}
-                  placeholder="Server name"
-                />
-                <p className="break-all text-xs text-muted-foreground">{input.url}</p>
-              </div>
-            </details>
-          )}
-
           {validAddress && (
             <>
-              <Section
+              {!connected && <Section
                 title="Authentication"
                 description="Talyn checks the server address to find its authentication options."
               >
@@ -405,9 +392,9 @@ export function McpServerEditorPage({
                 >
                   {manual ? 'Detect authentication' : 'Set up manually'}
                 </button>
-              </Section>
+              </Section>}
 
-              {authReady && method === 'oauth' && (
+              {(authReady || oauthConnected) && method === 'oauth' && (
                 <SignIn
                   server={editing?.url === input.url && input.secret === undefined ? editing : null}
                   onStatusChange={(isConnected) => {
@@ -448,7 +435,7 @@ export function McpServerEditorPage({
                 />
               )}
 
-              {authReady && (method !== 'oauth' || manualFields) && (
+              {!connected && authReady && (method !== 'oauth' || manualFields) && (
                 <Section
                   title="Credential"
                   description={
@@ -522,7 +509,7 @@ export function McpServerEditorPage({
           {connected && (
             <Section
               title="Tools"
-              description="Every tool costs space in the agent's prompt on every request. Pick the ones you want, or leave it on all."
+              description="Choose which tools your agents can use."
               action={
                 <Button
                   variant="ghost"
@@ -536,6 +523,7 @@ export function McpServerEditorPage({
             >
               <ToolPicker
                 offered={offered}
+                metadata={probe?.tools}
                 allowed={allowed ?? null}
                 probed={probe !== null}
                 onChange={(tools) => edit({ tools })}
@@ -559,11 +547,13 @@ export function McpServerEditorPage({
  */
 function ToolPicker({
   offered,
+  metadata,
   allowed,
   probed,
   onChange,
 }: {
   offered: string[];
+  metadata?: McpProbeResult['tools'];
   allowed: string[] | null;
   probed: boolean;
   onChange: (next: string[] | null) => void;
@@ -602,28 +592,39 @@ function ToolPicker({
         </span>
       </label>
 
-      {allowed !== null && (
-        <div className="grid gap-1 sm:grid-cols-2">
-          {names.map((name) => {
-            const on = allowed.includes(name);
-            return (
-              <label key={name} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={() =>
-                    onChange(on ? allowed.filter((t) => t !== name) : [...allowed, name])
-                  }
-                />
-                <code className="truncate text-xs">{name}</code>
-                {!offered.includes(name) && (
-                  <span className="text-xs text-muted-foreground">(not offered now)</span>
-                )}
-              </label>
-            );
-          })}
-        </div>
-      )}
+      <div className="divide-y divide-border rounded-lg border border-border">
+        {names.map((name) => {
+          const selected = allowed ?? offered;
+          const on = selected.includes(name);
+          const tool = metadata?.find((item) => item.name === name);
+          return (
+            <div key={name} className="flex items-start gap-3 px-3 py-2.5">
+              <details className="min-w-0 flex-1">
+                <summary className="cursor-pointer text-sm font-medium">
+                  {tool?.title || name}
+                  <div className="mt-0.5 line-clamp-1 text-xs font-normal text-muted-foreground pointer-events-none">
+                    <Markdown text={tool?.description || (offered.includes(name) ? 'No description provided.' : 'Not offered by the server now.')} variant="surface" />
+                  </div>
+                </summary>
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {tool?.title && <code>{name}</code>}
+                  <Markdown text={tool?.description || 'No description provided.'} variant="surface" />
+                </div>
+              </details>
+              <button
+                type="button"
+                role="switch"
+                aria-label={`Enable ${name}`}
+                aria-checked={on}
+                onClick={() => onChange(on ? selected.filter((item) => item !== name) : [...selected, name])}
+                className={`mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring ${on ? 'bg-primary' : 'bg-muted'}`}
+              >
+                <span className={`h-4 w-4 rounded-full bg-background shadow transition-transform ${on ? 'translate-x-4' : 'translate-x-0'}`} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
 
       {allowed !== null && allowed.length === 0 && (
         <p className="text-xs text-amber-600">
@@ -645,6 +646,17 @@ function SignIn({
 }) {
   const [busy, setBusy] = useState(false);
   const [grant, setGrant] = useState(server?.oauth ?? null);
+  const [serverId, setServerId] = useState(server?.id);
+  const [account, setAccount] = useState<{ name?: string; email?: string } | null>(null);
+  useEffect(() => {
+    setAccount(null);
+    if (grant?.status !== 'connected' || !serverId) return;
+    let cancelled = false;
+    void api.mcpServers.account(serverId).then((value) => {
+      if (!cancelled) setAccount(value);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [grant?.status, serverId]);
   const [error, setError] = useState<string | null>(null);
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const attempt = useRef(0);
@@ -667,6 +679,7 @@ function SignIn({
     setAuthorizeUrl(null);
     try {
       const saved = await prepare();
+      setServerId(saved.id);
       if (current !== attempt.current) return;
       const flow = await api.mcpServers.startSignIn(saved.id);
       if (current !== attempt.current) return;
@@ -723,14 +736,18 @@ function SignIn({
 
   return (
     <Section
-      title="Sign in"
-      description="Connect your account in your browser. Talyn stores and refreshes the token securely."
+      title={grant?.status === 'connected' ? 'Connected account' : 'Sign in'}
+      description={grant?.status === 'connected' ? undefined : 'Connect your account in your browser.'}
     >
       <div className="space-y-2">
         {grant?.status === 'connected' ? (
           <div className="flex items-center gap-2">
             <Check className="h-4 w-4 text-emerald-600" />
-            <span className="text-sm">Signed in.</span>
+            <span className="text-sm">
+              {account?.name || account?.email
+                ? `Signed in as ${[account.name, account.email].filter(Boolean).join(' · ')}`
+                : 'Signed in.'}
+            </span>
             <Button variant="ghost" size="sm" onClick={() => void disconnect()} disabled={busy}>
               Disconnect
             </Button>

@@ -1,11 +1,11 @@
-import { mcpFetch } from './http.js';
+import { mcpFetch, readMcpBody } from './http.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { McpOAuthGrant, McpServerDefinition } from '@talyn/shared';
 import { encryptString, decryptString, type EncryptedEnvelope } from '../tokenCrypto.js';
 import { withBlockingAdvisoryLock } from '../advisoryLock.js';
 import { getDbClient } from '../../db/client.js';
 import { webAppUrl } from '../webApp.js';
-import { discover, McpDiscoveryError, type AuthServerMetadata } from './discovery.js';
+import { discover, discoverAuthServer, McpDiscoveryError, type AuthServerMetadata } from './discovery.js';
 
 /**
  * Signing in to an MCP server on a workspace's behalf.
@@ -82,6 +82,12 @@ export function mcpClientMetadataUrl(): string {
     throw new McpOAuthUnavailableError(
       'this deployment has no web address configured (WEB_APP_URL), so it cannot host its ' +
         'client identity document.'
+    );
+  }
+  if (new URL(url).protocol !== 'https:' || new URL(url).hostname === 'localhost') {
+    throw new McpOAuthUnavailableError(
+      'This server needs a public HTTPS client identity document. ' +
+        'Configure WEB_APP_URL with a public HTTPS address, or use a server that supports dynamic registration.'
     );
   }
   return url;
@@ -232,6 +238,8 @@ export async function startMcpOAuth(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EXCHANGE_TIMEOUT_MS);
   try {
+    const redirectUri = mcpRedirectUri();
+    const localCallback = new URL(redirectUri).hostname === 'localhost';
     let meta: AuthServerMetadata;
     let resource = existing?.resource ?? server.url;
     let scopes = existing?.scopes ?? [];
@@ -254,7 +262,7 @@ export async function startMcpOAuth(
       meta = found.server;
       resource = found.resource.resource ?? server.url;
       scopes = found.resource.scope ? found.resource.scope.split(/\s+/).filter(Boolean) : [];
-      if (meta.clientIdMetadataDocumentSupported) {
+      if (meta.clientIdMetadataDocumentSupported && !(localCallback && meta.registrationEndpoint)) {
         // The forward-compatible path: one hosted document, nothing registered.
         clientId = mcpClientMetadataUrl();
         clientSource = 'cimd';
@@ -280,7 +288,7 @@ export async function startMcpOAuth(
     const authorize = new URL(meta.authorizationEndpoint);
     authorize.searchParams.set('response_type', 'code');
     authorize.searchParams.set('client_id', clientId as string);
-    authorize.searchParams.set('redirect_uri', mcpRedirectUri());
+    authorize.searchParams.set('redirect_uri', redirectUri);
     authorize.searchParams.set('code_challenge', base64url(sha256(verifier)));
     authorize.searchParams.set('code_challenge_method', 'S256');
     authorize.searchParams.set('state', state);
@@ -523,4 +531,32 @@ export async function resolveMcpAccessToken(
       clearTimeout(timer);
     }
   });
+}
+
+/** Read optional account details from the issuer's advertised profile endpoint. */
+export async function readMcpAccount(serverId: string, store: McpOAuthStore): Promise<{ name?: string; email?: string } | null> {
+  const stored = await store.read(serverId);
+  if (stored?.status !== 'connected' || !stored.issuer) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const token = await resolveMcpAccessToken(serverId, store);
+    if (!token) return null;
+    const metadata = await discoverAuthServer(stored.issuer, controller.signal);
+    if (!metadata.userInfoEndpoint) return null;
+    const response = await mcpFetch(metadata.userInfoEndpoint, {
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    });
+    if (!response.ok) { await response.body?.cancel(); return null; }
+    const profile = JSON.parse(await readMcpBody(response, 32 * 1024));
+    if (!profile || typeof profile !== 'object') return null;
+    const name = typeof profile.name === 'string' ? profile.name.slice(0, 200) : undefined;
+    const email = typeof profile.email === 'string' ? profile.email.slice(0, 254) : undefined;
+    return name || email ? { name, email } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

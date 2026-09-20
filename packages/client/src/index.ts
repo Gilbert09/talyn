@@ -1984,6 +1984,8 @@ export const mcpServers = {
       `/mcp-servers/count?workspaceId=${encodeURIComponent(workspaceId)}`
     ),
 
+  account: (id: string) => request<{ name?: string; email?: string } | null>('GET', `/mcp-servers/${id}/account`),
+
   get: (id: string) => request<McpServerDefinition>('GET', `/mcp-servers/${id}`),
 
   create: (workspaceId: string, input: McpServerInput) =>
@@ -2041,7 +2043,7 @@ export const mcpServers = {
    * values — the state is what names the server.
    */
   complete: (state: string, code: string, error?: string) =>
-    request<McpServerDefinition>('POST', '/mcp-servers/complete', { state, code, error }),
+    request<null>('POST', '/mcp-servers/complete', { state, code, error }),
 
   /** Hand back the grant, keeping the endpoints so a reconnect is cheap. */
   disconnect: (id: string) =>

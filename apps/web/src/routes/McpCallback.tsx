@@ -20,6 +20,7 @@ import { StartingSpinner } from '../components/StartingSpinner';
 export function McpCallback() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const [complete, setComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Strict mode mounts an effect twice in development, and an authorization
   // code is single-use: the second exchange would fail and overwrite a
@@ -48,7 +49,7 @@ export function McpCallback() {
 
     api.mcpServers
       .complete(state, code)
-      .then(() => navigate(PANEL_PATHS.mcp_servers, { replace: true }))
+      .then(() => setComplete(true))
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : 'Could not finish that sign-in.')
       );
@@ -66,6 +67,17 @@ export function McpCallback() {
           >
             Back to MCP servers
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (complete) {
+    return (
+      <div className="flex h-screen items-center justify-center p-6">
+        <div className="max-w-md text-center">
+          <h1 className="font-medium">MCP server connected</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Return to Talyn. You can close this tab.</p>
         </div>
       </div>
     );
