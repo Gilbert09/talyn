@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { CloudProviderType, FleetAgent } from '@talyn/shared';
 import { failoverExhaustedRun } from '../services/cloudProviders/quotaFailover.js';
+import {
+  clearExhaustedAgent,
+  heldBackAgents,
+} from '../services/selfHosted/exhaustedQuota.js';
 import { registerCloudProvider, getCloudProvider } from '../services/cloudProviders/registry.js';
 import { resetFeatureFlagsForTests } from '../services/featureFlags.js';
 import { taskQueueService } from '../services/taskQueue.js';
@@ -284,6 +288,93 @@ describe('quota failover', () => {
     const settings = (rows[0]?.settings ?? {}) as Record<string, unknown>;
     expect(settings.fleetModel).toBeUndefined();
     expect(settings.fleetModels).toBeUndefined();
+  });
+
+  /**
+   * The hold is what makes this worth having. Without it every task pays the
+   * same discovery cost — boot a microVM, make one API call, be refused — and
+   * a loop firing hourly pays it all day.
+   */
+  describe('the hold it leaves behind', () => {
+    it('records the exhausted agent durably, on the integration row', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await run('claude');
+      expect(await heldBackAgents('ws1')).toHaveProperty('claude');
+    });
+
+    it('keeps the vendor sentence on the record, for the card and for debugging', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await run('claude');
+      const held = await heldBackAgents('ws1');
+      expect(held.claude?.detail).toContain('out of extra usage');
+      // Anthropic named no reset in this one, so none is stored — the probe
+      // window answers instead. Inventing a resetsAt here is the mistake the
+      // parser exists to avoid.
+      expect(held.claude?.resetsAt).toBeUndefined();
+    });
+
+    it('stores the vendor\'s reset when it named one', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await failoverExhaustedRun({
+        taskId: 't1',
+        workspaceId: 'ws1',
+        exhausted: 'claude',
+        detail: 'insufficient_quota {"resetsAt":"2099-01-01T00:00:00.000Z"}',
+      });
+      expect((await heldBackAgents('ws1')).claude?.resetsAt).toBe('2099-01-01T00:00:00.000Z');
+    });
+
+    it('skips an agent another task already found spent, rather than buying one more refusal', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      // An earlier task discovered Codex was spent.
+      await failoverExhaustedRun({
+        taskId: 't1',
+        workspaceId: 'ws1',
+        exhausted: 'codex',
+        detail: 'insufficient_quota',
+      });
+      // This one runs out of Claude. Codex is connected and untried ON THIS
+      // RUN, but it is held back for the workspace — so the hop is PostHog
+      // Code, not a second refusal.
+      await db
+        .update(tasksTable)
+        .set({ metadata: { model: 'claude-sonnet-5', runAttempt: 1 } })
+        .where(eq(tasksTable.id, 't1'));
+      expect(await run('claude')).toBe(true);
+      expect((await task()).assignedEnvironmentId).toBe('ph1');
+    });
+
+    it('is cleared on demand, and clearing an agent that was never held is a no-op', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await run('claude');
+      await clearExhaustedAgent('ws1', 'claude');
+      expect(await heldBackAgents('ws1')).toEqual({});
+      // Idempotent — the success path calls this on every completed run.
+      await clearExhaustedAgent('ws1', 'claude');
+      expect(await heldBackAgents('ws1')).toEqual({});
+    });
+
+    it('clears only the named agent, leaving the other hold standing', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await run('claude');
+      await failoverExhaustedRun({
+        taskId: 't1',
+        workspaceId: 'ws1',
+        exhausted: 'codex',
+        detail: 'insufficient_quota',
+      });
+      await clearExhaustedAgent('ws1', 'claude');
+      const held = await heldBackAgents('ws1');
+      expect(held.claude).toBeUndefined();
+      expect(held.codex).toBeDefined();
+    });
+
+    it('stops reporting a hold once its probe window has elapsed', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await run('claude');
+      const later = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      expect(await heldBackAgents('ws1', later)).toEqual({});
+    });
   });
 
   it('is a no-op for a task that no longer exists', async () => {

@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { AgentEvent, CloudTaskMetadata, TaskResult, TaskStatus } from '@talyn/shared';
 import {
+  fleetAgentForModel,
   parseNeedsHumanSentinel,
   readCloudTaskMeta,
   readCloudTaskProvider,
@@ -20,7 +21,7 @@ import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
-import { exhaustedAgentFrom } from './exhaustedQuota.js';
+import { clearExhaustedAgent, exhaustedAgentFrom } from './exhaustedQuota.js';
 import { failoverExhaustedRun } from '../cloudProviders/quotaFailover.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
@@ -795,6 +796,21 @@ class SelfHostedPoller {
       if (!row) return;
       const meta = (row.metadata ?? {}) as Record<string, unknown>;
       const cloud = meta.cloudTask as CloudTaskMetadata | undefined;
+      // A run that FINISHED proves its vendor is answering again, so any hold
+      // recorded against that agent is stale. Without this the hold outlives
+      // its truth: the probe run that proved the quota was back would leave
+      // the agent sitting out until the window elapsed anyway — the failure
+      // mode of every cache that only ever learns bad news.
+      //
+      // Done HERE rather than in `finalize` because this function already has
+      // the row's metadata, and the model on it is what names the agent that
+      // actually ran. `completed` only: plenty of failures never reach the
+      // model at all, and clearing on those would undo a hold another task had
+      // just paid a microVM to discover.
+      if (status === 'completed') {
+        const ranModel = (cloud?.extra as { model?: string } | undefined)?.model;
+        if (ranModel) void clearExhaustedAgent(workspaceId, fleetAgentForModel(ranModel));
+      }
       captureWorkspaceEvent(
         workspaceId,
         // Three-way, not two. Folding a refusal into `task_failed` is what

@@ -14,6 +14,8 @@ import {
   agentLabel,
   exhaustedDeadEndSummary,
   failoverSummary,
+  heldBackAgents,
+  noteExhaustedAgent,
 } from '../selfHosted/exhaustedQuota.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { taskQueueService } from '../taskQueue.js';
@@ -109,6 +111,11 @@ export async function failoverExhaustedRun(opts: {
     .limit(1);
   const row = rows[0];
   if (!row) return false;
+
+  // Remember it BEFORE choosing where to go. This is what stops the next task
+  // paying the same discovery cost — dispatch reads the hold and skips the
+  // spent agent without booting a microVM to be refused again.
+  await noteExhaustedAgent(workspaceId, exhausted, detail);
 
   const state = readState(row.metadata);
   const tried = new Set<Hop>(state.tried ?? []);
@@ -216,9 +223,14 @@ async function nextHop(workspaceId: string, tried: Set<Hop>): Promise<NextHop | 
     connectedAgents: [] as FleetAgent[],
     reauthAgents: [] as FleetAgent[],
   }));
+  // Held back for the WORKSPACE, not just tried on this run: another task may
+  // have discovered this agent was spent minutes ago, and moving onto it now
+  // would buy one more refusal.
+  const held = await heldBackAgents(workspaceId).catch(() => ({}) as Record<string, unknown>);
   for (const agent of connectedAgents) {
     if (tried.has(FLEET_HOP(agent))) continue;
     if (reauthAgents.includes(agent)) continue;
+    if (held[agent]) continue;
     return { kind: 'fleet', agent };
   }
 

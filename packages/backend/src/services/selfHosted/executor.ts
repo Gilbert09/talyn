@@ -8,6 +8,8 @@ import {
   type Task,
   resolveFleetModel,
   fleetModelForAgent,
+  fleetAgentForModel,
+  defaultFleetModelForAgent,
   type FleetAgent,
   type WorkspaceSettings,
 } from '@talyn/shared';
@@ -37,6 +39,12 @@ import {
 } from '../mcpServers/store.js';
 import { cloudStatusForSandbox } from './poller.js';
 import { getSelfHostedCredentials, resolveFleetTarget } from './credentials.js';
+import {
+  agentLabel,
+  failoverSummary,
+  heldBackAgents,
+  heldBackReason,
+} from './exhaustedQuota.js';
 
 // Re-exported, not redeclared. A second definition of this contract is how the
 // two drift: the shared one grew a `capacity` discriminator and this copy
@@ -242,9 +250,53 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
     // The settings migration on the failure path covers the workspace's stored
     // choice; this covers the two places it can be pinned that the migration
     // cannot reach — the task's own metadata and the environment's config.
-    const model = isWithdrawnModel(resolvedModel)
+    const catalogued = isWithdrawnModel(resolvedModel)
       ? replacementFor(resolvedModel)
       : resolvedModel;
+
+    // An agent whose subscription a vendor has already told us is spent
+    // (exhaustedQuota.ts). Without this check every task re-discovers the same
+    // exhaustion the expensive way: boot a microVM, make one API call, be
+    // refused, fail over. The hold is DURABLE, so it survives the deploy that
+    // an in-memory one would not.
+    //
+    // Two outcomes, and the second is the reason this sits at dispatch rather
+    // than in the run's failure path. If the OTHER fleet agent is connected
+    // and not itself held, swap onto it — the model is what carries the
+    // vendor, so a swap is a model change. If it is not, refuse as CAPACITY,
+    // which is how the task queue is already told "nothing is wrong with this
+    // task, try the next provider": PostHog Code picks it up without a sandbox
+    // ever being booted.
+    const held: Awaited<ReturnType<typeof heldBackAgents>> = await heldBackAgents(
+      task.workspaceId,
+    ).catch(() => ({}));
+    const wanted = fleetAgentForModel(catalogued);
+    let quotaSwap: { from: FleetAgent; to: FleetAgent } | null = null;
+    let model = catalogued;
+    if (held[wanted]) {
+      const other: FleetAgent = wanted === 'claude' ? 'codex' : 'claude';
+      // The RESOLVED credential, not merely "is one configured". `creds` has
+      // already refreshed what it could, so this asks the question that
+      // matters — can we actually run on the other agent right now — and a
+      // token whose refresh failed falls through to the capacity refusal
+      // instead of being swapped onto and then refused for a missing key,
+      // which is a hard failure the chain does not route around.
+      const otherToken = other === 'codex' ? creds.openaiKey : creds.claudeToken;
+      const otherUsable = !held[other] && Boolean(otherToken);
+      if (!otherUsable) {
+        return {
+          ok: false,
+          capacity: true,
+          error: heldBackReason(wanted, held[wanted]!),
+        };
+      }
+      model = defaultFleetModelForAgent(other);
+      quotaSwap = { from: wanted, to: other };
+      console.warn(
+        `[selfhosted] task ${task.id.slice(0, 8)}: ${wanted} usage is held back — ` +
+          `dispatching at ${other} instead`,
+      );
+    }
 
     // The model decides the provider, and the provider decides what the microVM
     // can reach: the host builds the sandbox's egress route table from it, so a
@@ -369,7 +421,24 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
         ...(fleetHost ? { host: fleetHost } : {}),
       },
     };
-    await patchTaskMetadata(task.id, (existing) => ({ ...existing, cloudTask }));
+    await patchTaskMetadata(task.id, (existing) => ({
+      ...existing,
+      cloudTask,
+      // The task carries its own explanation when a held-back quota moved it
+      // onto the other agent — the same note the run-time failover writes, so
+      // one place in the UI covers both routes to a swapped vendor.
+      ...(quotaSwap
+        ? {
+            quotaFailover: {
+              ...((existing.quotaFailover as Record<string, unknown> | undefined) ?? {}),
+              exhausted: quotaSwap.from,
+              movedTo: `${agentLabel(quotaSwap.to)} on Talyn Fleet`,
+              note: failoverSummary(quotaSwap.from, `${agentLabel(quotaSwap.to)} on Talyn Fleet`),
+              at: new Date().toISOString(),
+            },
+          }
+        : {}),
+    }));
     emitTaskUpdate(task.workspaceId, task.id, {
       metadata: { cloudTask: { provider: cloudTask.provider, extra: { model } } },
     });

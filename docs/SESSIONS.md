@@ -2,6 +2,46 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Remembering that a subscription is spent (2026-09-20)
+
+- The failover shipped earlier today moved one run and forgot. Every task after
+  it paid the same discovery cost — boot a microVM, make one API call, be
+  refused — and a loop firing hourly paid it all day. Tom: the failover should
+  keep applying until the quota resets.
+- The hold is a record on the fleet integration row (`quotaExhausted`), not a
+  process-local map. In memory it would die at the next deploy, which for this
+  repo is every push to main.
+- **The reset is READ, never invented.** `resetInstantFrom` parses an instant
+  out of the vendor's own error — an ISO or epoch `resetsAt`, Anthropic's
+  `unified-reset`, a `retry-after` — and answers null when there is none. A
+  guessed reset is stored, believed, and silently keeps work off a subscription
+  that came back hours ago.
+- When the vendor named none, the hold falls back to a five-hour **re-probe**,
+  which is the vendors' own published consumer-subscription window rather than
+  a number picked for feel. It is a probe and not a claim: when it elapses the
+  next ordinary dispatch tries that agent again, and a still-spent quota
+  re-arms the hold for one microVM boot. A fall-back is needed at all because
+  the case that started this — "out of extra usage" — is a spent CREDIT
+  BALANCE that does not reset on a schedule; it returns when somebody buys
+  more, which nothing announces.
+- Enforced at **dispatch**, which is the point of it. A held agent either swaps
+  onto the other connected one (a model change — the model carries the vendor)
+  or refuses as `capacity`, the discriminator the task queue already routes to
+  the next provider on. Either way no sandbox is booted. The swap checks the
+  RESOLVED credential rather than "is one configured", so a token whose refresh
+  failed falls through to the capacity refusal instead of being swapped onto
+  and then refused for a missing key — a hard failure the chain does not route
+  around.
+- Cleared on proof, not just on time: a COMPLETED run clears its agent's hold
+  (done in `captureOutcome`, which already holds the metadata naming the model
+  that ran), and a fresh Claude sign-in clears it too — a reconnect is the one
+  moment a top-up is inferable. Without the success path the hold outlives its
+  truth, which is the failure mode of every cache that only ever learns bad
+  news.
+- `nextHop` consults the workspace hold as well as the hops tried on this run:
+  another task may have found that agent spent minutes ago, and moving onto it
+  now would buy one more refusal.
+
 ## Failing over a run whose subscription is spent (2026-09-20)
 
 - A fleet run died with Anthropic's `You're out of extra usage`, wrapped in the

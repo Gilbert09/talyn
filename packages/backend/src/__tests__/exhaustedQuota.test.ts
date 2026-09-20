@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { exhaustedAgentFrom } from '../services/selfHosted/exhaustedQuota.js';
+import {
+  exhaustedAgentFrom,
+  isHeldBack,
+  probeAfter,
+  resetInstantFrom,
+} from '../services/selfHosted/exhaustedQuota.js';
 
 /**
  * The line between "this subscription is spent" and "wait a moment".
@@ -58,5 +63,76 @@ describe('exhaustedAgentFrom', () => {
     expect(
       exhaustedAgentFrom('I checked whether the account had run out of usage; it had not.'),
     ).toBeNull();
+  });
+});
+
+/**
+ * When the quota comes back.
+ *
+ * The rule that matters: a reset is READ, never invented. A guessed one is
+ * stored, believed, and silently keeps work off a subscription that returned
+ * hours ago — so an unparseable failure must answer null and let the caller
+ * fall back to a probe it knows is a probe.
+ */
+describe('resetInstantFrom', () => {
+  const NOW = new Date('2026-09-20T12:00:00.000Z');
+
+  it.each([
+    ['an ISO resetsAt', '{"resetsAt":"2026-09-20T17:30:00.000Z"}', '2026-09-20T17:30:00.000Z'],
+    ['a snake_case resets_at', '{"resets_at":"2026-09-20T17:30:00.000Z"}', '2026-09-20T17:30:00.000Z'],
+    ['epoch seconds', '{"resetsAt":1789574400}', new Date(1789574400000).toISOString()],
+    [
+      "Anthropic's unified-reset header",
+      'anthropic-ratelimit-unified-reset: 1789574400',
+      new Date(1789574400000).toISOString(),
+    ],
+  ])('reads %s', (_label, detail, expected) => {
+    expect(resetInstantFrom(detail, NOW)).toBe(expected);
+  });
+
+  it.each([
+    ['seconds', 'retry-after: 900', 900_000],
+    ['minutes', 'try again in 30 minutes', 30 * 60_000],
+    ['hours', 'try again in 5 hours', 5 * 3_600_000],
+  ])('turns a relative hint in %s into an instant', (_label, detail, ms) => {
+    expect(resetInstantFrom(detail, NOW)).toBe(new Date(NOW.getTime() + ms).toISOString());
+  });
+
+  it.each([
+    ['the sentence that started this', "You're out of extra usage. Add more at claude.ai"],
+    ['a bare quota refusal', 'insufficient_quota'],
+    ['an unparseable date', '{"resetsAt":"not-a-date-at-all"}'],
+    ['nothing at all', ''],
+    ['null', null],
+  ])('answers null rather than invent one for %s', (_label, detail) => {
+    expect(resetInstantFrom(detail, NOW)).toBeNull();
+  });
+});
+
+describe('holding a spent agent back', () => {
+  const AT = '2026-09-20T12:00:00.000Z';
+
+  it('honours the vendor\'s reset when it named one', () => {
+    const record = { at: AT, resetsAt: '2026-09-20T13:00:00.000Z' };
+    expect(isHeldBack(record, new Date('2026-09-20T12:59:00.000Z'))).toBe(true);
+    expect(isHeldBack(record, new Date('2026-09-20T13:00:01.000Z'))).toBe(false);
+  });
+
+  it('falls back to a re-probe window when the vendor named none', () => {
+    const record = { at: AT };
+    // Five hours — both vendors' published consumer-subscription window, and a
+    // RE-PROBE rather than a claim about the reset: when it elapses the next
+    // task simply tries again, and a still-spent quota re-arms the hold.
+    expect(probeAfter(record)).toBe(new Date(AT).getTime() + 5 * 60 * 60 * 1000);
+    expect(isHeldBack(record, new Date('2026-09-20T16:59:00.000Z'))).toBe(true);
+    expect(isHeldBack(record, new Date('2026-09-20T17:00:01.000Z'))).toBe(false);
+  });
+
+  it('holds nothing back when there is no record', () => {
+    expect(isHeldBack(undefined)).toBe(false);
+  });
+
+  it('does not hold on a corrupt timestamp — an unreadable record must not be a permanent ban', () => {
+    expect(isHeldBack({ at: 'nonsense' }, new Date(AT))).toBe(false);
   });
 });

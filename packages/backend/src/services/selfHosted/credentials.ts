@@ -1,5 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
+import type { FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { integrations as integrationsTable } from '../../db/schema.js';
 import {
@@ -42,6 +43,19 @@ export interface CodexOAuthCredential {
    * user has to reconnect. Same shape as PostHog Code's `oauth.reauthRequiredAt`.
    */
   reauthRequiredAt?: string;
+}
+
+/**
+ * One agent's spent-quota record. `resetsAt` is present only when the vendor
+ * actually named an instant — see `exhaustedQuota.ts`, which never invents one.
+ */
+export interface ExhaustedQuotaRecord {
+  /** ISO instant the exhaustion was observed. */
+  at: string;
+  /** ISO instant the vendor said the quota returns, when it said so. */
+  resetsAt?: string;
+  /** The vendor's own sentence, for the settings card and for debugging. */
+  detail?: string;
 }
 
 interface SelfHostedIntegrationConfig {
@@ -92,6 +106,18 @@ interface SelfHostedIntegrationConfig {
    * that is the one the user pays a subscription for.
    */
   openaiKeyEnc?: EncryptedEnvelope;
+
+  /**
+   * Agents whose subscription a vendor has told us is spent, and when (if the
+   * vendor said) it comes back. Written by `exhaustedQuota.noteExhausted` on
+   * the failure that discovered it; read by the fleet's dispatch, which skips
+   * a spent agent instead of booting a microVM to be refused again.
+   *
+   * On the integration row rather than in memory because the alternative dies
+   * at the next deploy — which for this repo is every push to main — and a
+   * loop firing hourly would then re-discover the same exhaustion all day.
+   */
+  quotaExhausted?: Partial<Record<FleetAgent, ExhaustedQuotaRecord>>;
 
   // Legacy, read nowhere. Both were fields on the settings card and neither was
   // ever the workspace's to give: `fleetTokenEnc` authenticated the BACKEND to a

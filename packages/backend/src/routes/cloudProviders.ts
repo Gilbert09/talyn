@@ -39,6 +39,7 @@ import {
 } from '../services/cloudProviders/environment.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
 import { fleetAgentStatus } from '../services/selfHosted/credentials.js';
+import { clearExhaustedAgent } from '../services/selfHosted/exhaustedQuota.js';
 
 interface CloudProviderInfo {
   type: CloudProviderType;
@@ -250,6 +251,11 @@ export function cloudProviderRoutes(): Router {
         claudeOAuth: credential,
         claudePendingAuth: undefined,
       });
+      // A fresh sign-in is the one moment we can infer a topped-up quota. The
+      // vendor never tells us somebody bought more usage, and the hold would
+      // otherwise keep work off the agent they just came back to reconnect.
+      // Cheap to be wrong: if it is still spent, the next run re-arms the hold.
+      await clearExhaustedAgent(workspaceId, 'claude');
       await ensureCloudEnvironment(assertUser(req).id, 'selfhosted');
       notifyProviderConnected({
         workspaceId,
