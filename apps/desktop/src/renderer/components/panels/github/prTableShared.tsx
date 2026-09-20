@@ -635,7 +635,13 @@ function PRTableRow({
                   Watched
                 </span>
               )}
-              {row.reviewRequested && (
+              {/* Suppressed on the Reviews tab, where being a requested
+                  reviewer is the ENTRY CONDITION: the badge would sit on every
+                  row and separate nothing, which is noise with the colour of
+                  information. It stays on every other surface, where "you are
+                  also a reviewer here" is a fact about this row and not about
+                  the list it is in. */}
+              {row.reviewRequested && variant !== 'review' && (
                 <span
                   className="rounded bg-purple-200 px-1 py-0.5 text-[10px] uppercase text-purple-800 dark:bg-purple-900 dark:text-purple-200"
                   title="You're a requested reviewer on this PR"

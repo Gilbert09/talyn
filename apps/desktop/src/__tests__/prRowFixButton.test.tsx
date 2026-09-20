@@ -155,3 +155,59 @@ describe('PR row fix button — dispatching', () => {
     expect(toast.info).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The purple REVIEW badge. On the Reviews tab being a requested reviewer is
+ * the entry condition, so it rendered on every row and separated nothing —
+ * noise wearing the colour of information. It is still a fact worth stating
+ * on any other list, where the row might not be there for that reason.
+ */
+describe('the REVIEW badge', () => {
+  function renderVariant(variant: 'mine' | 'review') {
+    const r = row(true);
+    render(
+      <PRTable
+        rows={[{ ...r, reviewRequested: true }]}
+        variant={variant}
+        viewerLogin="octocat"
+        selectedId={null}
+        onSelect={jest.fn()}
+        onOpenTask={jest.fn()}
+        onStopTask={jest.fn()}
+        onMerge={jest.fn()}
+        onSetMergeQueue={jest.fn()}
+        onCreatePostHogTask={jest.fn(async () => true)}
+        taskStatusById={new Map()}
+      />
+    );
+  }
+
+  it('is hidden on the Reviews tab, where every row would carry it', () => {
+    renderVariant('review');
+    expect(screen.queryByText('Review')).toBeNull();
+  });
+
+  it('still shows on My PRs, where it says something about the row', () => {
+    renderVariant('mine');
+    expect(screen.getByText('Review')).toBeTruthy();
+  });
+
+  it('is absent when the viewer was never asked to review', () => {
+    render(
+      <PRTable
+        rows={[row(true)]}
+        variant="mine"
+        viewerLogin="octocat"
+        selectedId={null}
+        onSelect={jest.fn()}
+        onOpenTask={jest.fn()}
+        onStopTask={jest.fn()}
+        onMerge={jest.fn()}
+        onSetMergeQueue={jest.fn()}
+        onCreatePostHogTask={jest.fn(async () => true)}
+        taskStatusById={new Map()}
+      />
+    );
+    expect(screen.queryByText('Review')).toBeNull();
+  });
+});
