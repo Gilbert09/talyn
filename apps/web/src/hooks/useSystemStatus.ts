@@ -247,13 +247,25 @@ export function useSystemStatus(): void {
 
   // Re-counted on focus as well. The in-app edits already push to the store, so
   // this is purely for a change made somewhere else — another device, or the
-  // web app alongside the desktop one. One indexed `count(*)`, so it is cheap
-  // enough to make the badge self-healing rather than stale until restart.
+  // web app alongside the desktop one. One indexed `count(*)` each, and the two
+  // gated ones return without a request for a workspace that has neither
+  // feature, so this is cheap enough to make the badges self-healing rather
+  // than stale until restart.
+  //
+  // All three, not just workflows. Loops and MCP servers were given the boot
+  // seed and neither half of what keeps it true, which is why a second loop
+  // left the badge reading 1.
+  const refreshBadgeCounts = useCallback(() => {
+    refreshWorkflowCount();
+    refreshLoopCount();
+    refreshMcpServerCount();
+  }, [refreshWorkflowCount, refreshLoopCount, refreshMcpServerCount]);
+
   useEffect(() => {
-    const onFocus = () => refreshWorkflowCount();
+    const onFocus = () => refreshBadgeCounts();
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [refreshWorkflowCount]);
+  }, [refreshBadgeCounts]);
 
-  useOnReconnect(refreshWorkflowCount);
+  useOnReconnect(refreshBadgeCounts);
 }

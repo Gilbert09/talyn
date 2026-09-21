@@ -43,6 +43,7 @@ export function useLoops(): UseLoops {
   const [loops, setLoops] = useState<LoopWithStats[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveRuns, setLiveRuns] = useState<Record<string, LoopRun[]>>({});
+  const setEnabledLoopCount = useWorkspaceStore((s) => s.setEnabledLoopCount);
 
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
@@ -72,6 +73,21 @@ export function useLoops(): UseLoops {
     setLiveRuns({});
     load();
   }, [load]);
+
+  // The sidebar badge, written through from the list this panel already holds.
+  // `useSystemStatus` seeds it once per workspace with an indexed count(*),
+  // which is right for a cold boot and stale from the first edit afterwards:
+  // nothing re-seeded it, so creating a second loop left the badge reading 1
+  // until a restart. While this screen is open its list is the fresher truth,
+  // including the optimistic `setEnabled` toggle, so the badge moves with the
+  // switch instead of waiting on a round trip.
+  //
+  // `null` is still loading, never "none": writing 0 there would blank a badge
+  // that is about to come back.
+  useEffect(() => {
+    if (!loops) return;
+    setEnabledLoopCount(loops.filter((l) => l.enabled).length);
+  }, [loops, setEnabledLoopCount]);
 
   /**
    * The agent menu, derived from the same function the per-PR task menu uses.

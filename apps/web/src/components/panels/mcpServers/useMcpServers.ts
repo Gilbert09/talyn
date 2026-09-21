@@ -41,6 +41,7 @@ export function useMcpServers(): UseMcpServers {
   const [servers, setServers] = useState<McpServerDefinition[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const setEnabledMcpServerCount = useWorkspaceStore((s) => s.setEnabledMcpServerCount);
 
   // Guards a response from a workspace the user has already switched away from.
   const workspaceRef = useRef(workspaceId);
@@ -69,6 +70,18 @@ export function useMcpServers(): UseMcpServers {
     setServers(null);
     load();
   }, [load]);
+
+  // The sidebar badge, written through from this list — the same fix as Loops
+  // and for the same reason. `useSystemStatus` seeds the count once per
+  // workspace and nothing re-seeds it, so connecting or disabling a server
+  // left the badge on whatever it read at boot.
+  //
+  // `null` is still loading, never "none": writing 0 there would blank a badge
+  // that is about to come back.
+  useEffect(() => {
+    if (!servers) return;
+    setEnabledMcpServerCount(servers.filter((s) => s.enabled).length);
+  }, [servers, setEnabledMcpServerCount]);
 
   useOnReconnect(load);
 
