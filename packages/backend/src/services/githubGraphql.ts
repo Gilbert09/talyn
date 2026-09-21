@@ -1,4 +1,8 @@
-import type { PRStackInfo } from '@talyn/shared';
+import {
+  externalQueueStatusFromLabels,
+  type PRBlockingReason,
+  type PRStackInfo,
+} from '@talyn/shared';
 import { githubService } from './github.js';
 
 /**
@@ -42,17 +46,16 @@ export type CheckState =
 
 export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
 
-export type BlockingReason =
-  | 'mergeable'
-  | 'merge_conflicts'
-  | 'changes_requested'
-  | 'checks_failed'
-  // Mergeable, but one or more *non-required* checks are failing. GitHub
-  // doesn't block the merge on these, so we surface them as a distinct,
-  // de-emphasised state rather than the hard red 'checks_failed'.
-  | 'checks_failed_optional'
-  | 'blocked'
-  | 'unknown';
+/**
+ * Re-exported, not redeclared.
+ *
+ * This was a byte-identical copy of `PRBlockingReason`, and a copy of a union
+ * is a copy that can fall behind: adding a member here and not there compiles
+ * clean on both sides and only shows up as a verdict the front end has no case
+ * for. The alias makes the shared type the one definition and keeps every
+ * existing `BlockingReason` reference working.
+ */
+export type BlockingReason = PRBlockingReason;
 
 export interface CheckBreakdown {
   total: number;
@@ -707,6 +710,13 @@ export function computeBlockingReason(input: {
   mergeStateStatus: string;
   reviewDecision: ReviewDecision;
   checks: CheckBreakdown;
+  /**
+   * The PR's labels, read ONLY to spot an external merge queue (trunk.io
+   * publishes its state as labels). Absent is treated as "no queue", which is
+   * the safe direction: it can make a BEHIND head read as blocked on a repo
+   * where a queue would have handled it, never the reverse.
+   */
+  labels?: string[];
   /** Count of *failing* checks GitHub marks required for this PR. Only
    *  consulted when {@link requiredDataAvailable} is true. */
   requiredFailing?: number;
@@ -747,6 +757,18 @@ export function computeBlockingReason(input: {
     // (e.g. required reviews missing). The mergeStateStatus surfaces
     // that.
     if (upper === 'BLOCKED') return 'blocked';
+    // Out of date with the base, on a repo that refuses the merge until it is
+    // not. This used to fall through to `mergeable`, so Talyn showed a green
+    // "Ready" and a Merge button GitHub would refuse — reported on
+    // posthog-cloud-infra, 2026-09-21.
+    //
+    // Gated on there being no external merge queue, which is the same rule
+    // `mergeQueue/decide.ts` arrived at the expensive way. Such a queue exists
+    // precisely to REMOVE the up-to-date requirement: it tests each PR against
+    // the current base itself, so on a busy repo "behind master" is the steady
+    // state of every open PR and not work anybody should be told about. Acting
+    // on it there was the 2026-08-18 runaway.
+    if (upper === 'BEHIND' && !externalQueueStatusFromLabels(input.labels)) return 'behind';
     // Mergeable, but non-required checks are failing (we only reach here
     // with failures when the state is UNSTABLE) — de-emphasised, not red.
     if (input.checks.failed > 0) return 'checks_failed_optional';
@@ -1495,6 +1517,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     checks,
     requiredFailing,
     requiredDataAvailable,
+    labels: (raw.labels?.nodes ?? []).map((l) => l.name),
   });
   // Split by who OPENED the thread. The distinction is load-bearing, not
   // decorative: a bot's nit is work an agent should pick up unattended, while a

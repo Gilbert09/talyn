@@ -1529,7 +1529,13 @@ export function isNeedsAttention(r: PRRow): boolean {
   return (
     r.summary.blockingReason === 'changes_requested' ||
     r.summary.blockingReason === 'checks_failed' ||
-    r.summary.blockingReason === 'merge_conflicts'
+    r.summary.blockingReason === 'merge_conflicts' ||
+    // A behind head is the author's to move, and it has to land in SOME
+    // bucket: it is no longer "ready to merge" (GitHub would refuse the
+    // click), so without this it would leave both lists and the PR would
+    // quietly vanish — the same disappearance `mergeableSettle.ts` was
+    // written to stop happening to `unknown`.
+    r.summary.blockingReason === 'behind'
   );
 }
 

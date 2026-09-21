@@ -20,6 +20,43 @@ if (!globalThis.crypto?.randomUUID) {
   Object.defineProperty(globalThis.crypto, 'randomUUID', { value: uuid });
 }
 
+/**
+ * `localStorage`, which jsdom does provide — but Node 22 ships its own global
+ * `localStorage` that shadows it and throws on every method unless the runtime
+ * was started with a valid `--localstorage-file`. Anything importing
+ * `stores/workspace` reads it at module scope (theme, workspace preference),
+ * so without this the import itself throws and the suite reports zero tests
+ * rather than a failure you can read.
+ *
+ * Probed rather than feature-detected: the broken one IS present, so
+ * `if (!localStorage)` would not catch it.
+ */
+function localStorageWorks(): boolean {
+  try {
+    globalThis.localStorage.getItem('probe');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (!localStorageWorks()) {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+      key: (i: number) => [...store.keys()][i] ?? null,
+      get length() {
+        return store.size;
+      },
+    },
+  });
+}
+
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({
     matches: false,

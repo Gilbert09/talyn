@@ -3,7 +3,10 @@ import {
   getConfig,
   getWebSocketUrl,
 } from './config.js';
-import type { PRPriorityVerdict } from '@talyn/shared';
+import type {
+  PRBlockingReason as SharedPRBlockingReason,
+  PRPriorityVerdict,
+} from '@talyn/shared';
 import type {
   Features,
   LoopInput,
@@ -648,16 +651,16 @@ export interface WatchedRepo {
 }
 
 // PullRequests — read-only client for the Phase 1-3 backend surface.
-export type PRBlockingReason =
-  | 'mergeable'
-  | 'merge_conflicts'
-  | 'changes_requested'
-  | 'checks_failed'
-  // Mergeable, but non-required checks are failing — de-emphasised (amber)
-  // rather than the hard red 'checks_failed'.
-  | 'checks_failed_optional'
-  | 'blocked'
-  | 'unknown';
+/**
+ * Re-exported from `@talyn/shared`, not redeclared.
+ *
+ * This was the THIRD hand-written copy of the same union — shared, the
+ * backend's `githubGraphql.ts`, and here — and three copies is how a verdict
+ * gets added to the one the backend emits and to none of the ones the front
+ * ends match on. Nothing fails to compile in that state; the pill just falls
+ * to its `default` case and renders a shrug.
+ */
+export type PRBlockingReason = SharedPRBlockingReason;
 
 export type PRMergeable = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
 export type PRReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;

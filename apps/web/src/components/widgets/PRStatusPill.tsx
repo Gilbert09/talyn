@@ -9,6 +9,7 @@ import {
   HelpCircle,
   ShieldAlert,
   Clock,
+  ArrowDownToLine,
 } from 'lucide-react';
 import {
   externalQueueProviderLabel,
@@ -436,6 +437,11 @@ function pickVariant(
         return { icon: ShieldAlert, label: 'Protected', tone: 'amber' };
       }
       return { icon: Eye, label: 'Review', tone: 'amber' };
+    case 'behind':
+      // Still amber rather than red: nothing is broken, the head just has to
+      // catch up, and GitHub's own "Update branch" button (which the merge
+      // queue presses for a queued PR) is the whole fix.
+      return { icon: ArrowDownToLine, label: 'Behind', tone: 'amber' };
     case 'unknown':
     default:
       return { icon: HelpCircle, label: '—', tone: 'grey' };
@@ -472,6 +478,8 @@ function humanReason(b: PRBlockingReason): string {
       return 'Mergeable — only non-required checks failing';
     case 'blocked':
       return 'Waiting on required review';
+    case 'behind':
+      return 'Behind the base branch — this repo requires it to be up to date before merging';
     case 'unknown':
     default:
       return 'Status pending';

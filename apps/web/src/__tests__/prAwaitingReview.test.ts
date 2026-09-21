@@ -1,9 +1,10 @@
-import type { PRRow, PRReviewDecision, PRBlockingReason } from '../renderer/lib/api';
+import { describe, it, expect } from 'vitest';
+import type { PRRow, PRReviewDecision, PRBlockingReason } from '../lib/api';
 import {
   isAwaitingReview,
   isNeedsAttention,
   isReadyToMerge,
-} from '../renderer/components/panels/github/prTableShared';
+} from '../components/panels/github/prTableShared';
 
 function makeRow(summary: Partial<PRRow['summary']>): PRRow {
   return {

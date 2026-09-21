@@ -20,6 +20,18 @@ export type PRBlockingReason =
   | 'checks_failed'
   | 'checks_failed_optional'
   | 'blocked'
+  /**
+   * The head is out of date with the base, on a repo that requires it not to
+   * be — GitHub's `mergeStateStatus: BEHIND`. The merge button is refused
+   * until the branch is updated, so reporting this as `mergeable` told the
+   * user the opposite of the truth (reported on posthog-cloud-infra,
+   * 2026-09-21).
+   *
+   * NOT emitted when an external merge queue owns the base branch. There,
+   * being behind master is the steady state of every open PR rather than work
+   * to be done — see the gate rule in `computeBlockingReason`.
+   */
+  | 'behind'
   | 'unknown';
 
 export type PRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
@@ -251,6 +263,13 @@ export function mergeBlockerReason(s: PRMergeableSummary): string {
   }
   if (s.blockingReason === 'checks_failed') {
     return 'failing CI checks';
+  }
+  // The one blocker whose fix is a free REST call rather than a cloud run —
+  // GitHub's own "Update branch" button, which the merge queue already presses
+  // (mergeQueue/decide.ts). Worth naming precisely so a person reading a
+  // notification knows it is a click and not a rebase they have to sit down for.
+  if (s.blockingReason === 'behind') {
+    return 'the branch is behind the base and this repo requires it to be up to date';
   }
   return 'needs attention';
 }

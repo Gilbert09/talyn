@@ -2,22 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { PRRow } from '../lib/api';
 import type { SkillSummary } from '@talyn/shared';
 
-// The store reads localStorage at module scope (theme, workspace preference).
-// Under Node 22 the runtime's own `localStorage` shadows jsdom's and throws on
-// every method, so stub it BEFORE the store module is evaluated — hence the
-// dynamic import below rather than a static one.
-Object.defineProperty(globalThis, 'localStorage', {
-  configurable: true,
-  value: {
-    getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
-    clear: () => {},
-    key: () => null,
-    length: 0,
-  },
-});
-const { useWorkspaceStore } = await import('../stores/workspace');
+import { useWorkspaceStore } from '../stores/workspace';
 
 const row = { id: 'pr1', owner: 'acme', repo: 'w', number: 7 } as unknown as PRRow;
 const skill: SkillSummary = { key: 'platform:1', source: 'platform', name: 'pr-review', description: '', id: '1' };

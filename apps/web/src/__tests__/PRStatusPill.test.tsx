@@ -1,7 +1,7 @@
-import '@testing-library/jest-dom';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { PRStatusPill } from '../renderer/components/widgets/PRStatusPill';
-import type { PRChecks } from '../renderer/lib/api';
+import { PRStatusPill } from '../components/widgets/PRStatusPill';
+import type { PRChecks } from '../lib/api';
 
 const checks = (over: Partial<PRChecks> = {}): PRChecks => ({
   total: 0,
@@ -22,7 +22,7 @@ describe('PRStatusPill', () => {
         checks={checks({ total: 167, passed: 165, failed: 2 })}
       />
     );
-    expect(screen.getByText('2/167 failing')).toBeInTheDocument();
+    expect(screen.getByText('2/167 failing')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('red-500');
   });
 
@@ -37,8 +37,8 @@ describe('PRStatusPill', () => {
         checks={checks({ total: 167, passed: 167, failed: 0 })}
       />
     );
-    expect(screen.queryByText('0/167 failing')).not.toBeInTheDocument();
-    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByText('0/167 failing')).toBeNull();
+    expect(screen.getByText('Ready')).toBeTruthy();
     const cls = screen.getByRole('button').className;
     expect(cls).toContain('emerald-500');
     expect(cls).not.toContain('red-500');
@@ -54,14 +54,14 @@ describe('PRStatusPill', () => {
         checks={checks({ total: 131, passed: 40, inProgress: 91 })}
       />
     );
-    expect(screen.getByText('91/131 running')).toBeInTheDocument();
-    expect(screen.queryByText('Review')).not.toBeInTheDocument();
+    expect(screen.getByText('91/131 running')).toBeTruthy();
+    expect(screen.queryByText('Review')).toBeNull();
     expect(screen.getByRole('button').className).toContain('blue-500');
   });
 
   it('still shows "Review" when blocked and no checks are running', () => {
     render(<PRStatusPill blockingReason="blocked" checks={checks({ total: 5, passed: 5 })} />);
-    expect(screen.getByText('Review')).toBeInTheDocument();
+    expect(screen.getByText('Review')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('amber-500');
   });
 
@@ -77,8 +77,8 @@ describe('PRStatusPill', () => {
         mergeStateStatus="BLOCKED"
       />
     );
-    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
-    expect(screen.getByText('26/167 failing')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).toBeNull();
+    expect(screen.getByText('26/167 failing')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('red-500');
   });
 
@@ -90,8 +90,8 @@ describe('PRStatusPill', () => {
         mergeStateStatus="UNSTABLE"
       />
     );
-    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
-    expect(screen.getByText('26 non-required')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).toBeNull();
+    expect(screen.getByText('26 non-required')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('emerald-500');
   });
 
@@ -102,7 +102,7 @@ describe('PRStatusPill', () => {
         checks={checks({ total: 10, passed: 7, failed: 0, inProgress: 3 })}
       />
     );
-    expect(screen.getByText('3/10 running')).toBeInTheDocument();
+    expect(screen.getByText('3/10 running')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('blue-500');
   });
 
@@ -118,8 +118,8 @@ describe('PRStatusPill', () => {
           externalQueueState="not_ready"
         />
       );
-      expect(screen.getByText('33/201 running')).toBeInTheDocument();
-      expect(screen.queryByText('Queue: not ready')).not.toBeInTheDocument();
+      expect(screen.getByText('33/201 running')).toBeTruthy();
+      expect(screen.queryByText('Queue: not ready')).toBeNull();
     });
 
     it('keeps the failing pill — that IS the branch protection trunk waits on', () => {
@@ -131,8 +131,8 @@ describe('PRStatusPill', () => {
           externalQueueState="not_ready"
         />
       );
-      expect(screen.getByText('6/201 failing')).toBeInTheDocument();
-      expect(screen.queryByText('Queue: not ready')).not.toBeInTheDocument();
+      expect(screen.getByText('6/201 failing')).toBeTruthy();
+      expect(screen.queryByText('Queue: not ready')).toBeNull();
     });
 
     it('still shows the queue when the PR itself has nothing left to report', () => {
@@ -144,8 +144,8 @@ describe('PRStatusPill', () => {
           externalQueueState="not_ready"
         />
       );
-      expect(screen.getByText('Queue: not ready')).toBeInTheDocument();
-      expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+      expect(screen.getByText('Queue: not ready')).toBeTruthy();
+      expect(screen.queryByText('Ready')).toBeNull();
     });
 
     it('never defers for a state the queue owns (testing)', () => {
@@ -157,7 +157,7 @@ describe('PRStatusPill', () => {
           externalQueueState="testing"
         />
       );
-      expect(screen.getByText('Queue: testing')).toBeInTheDocument();
+      expect(screen.getByText('Queue: testing')).toBeTruthy();
     });
   });
 
@@ -172,7 +172,7 @@ describe('PRStatusPill', () => {
         externalQueueState="pending_failure"
       />
     );
-    expect(screen.getByText('Queue: pending failure')).toBeInTheDocument();
+    expect(screen.getByText('Queue: pending failure')).toBeTruthy();
     expect(screen.getByRole('button').className).toContain('amber-500');
   });
 });
@@ -188,7 +188,7 @@ describe('PRStatusPill', () => {
 describe('PRStatusPill — a behind head', () => {
   it('says Behind, in amber, rather than a green Ready', () => {
     render(<PRStatusPill blockingReason="behind" checks={checks({ total: 3, passed: 3 })} />);
-    expect(screen.getByText('Behind')).toBeInTheDocument();
+    expect(screen.getByText('Behind')).toBeTruthy();
     const cls = screen.getByRole('button').className;
     expect(cls).toContain('amber-500');
     expect(cls).not.toContain('emerald-500');
@@ -212,11 +212,11 @@ describe('PRStatusPill — a behind head', () => {
         externalQueueState="testing"
       />
     );
-    expect(screen.queryByText('Behind')).not.toBeInTheDocument();
+    expect(screen.queryByText('Behind')).toBeNull();
   });
 
   it.each([['merged'], ['closed']] as const)('never outranks a %s PR', (state) => {
     render(<PRStatusPill blockingReason="behind" checks={checks()} state={state} />);
-    expect(screen.queryByText('Behind')).not.toBeInTheDocument();
+    expect(screen.queryByText('Behind')).toBeNull();
   });
 });

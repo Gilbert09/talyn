@@ -93,6 +93,70 @@ describe('normalizeCheckState', () => {
 describe('computeBlockingReason', () => {
   const baseChecks = { total: 0, passed: 0, failed: 0, inProgress: 0, skipped: 0 };
 
+  /**
+   * A head that is out of date on a repo which refuses the merge until it is
+   * not — GitHub's `mergeStateStatus: BEHIND`.
+   *
+   * This used to fall through to `mergeable`, so Talyn showed a green "Ready"
+   * and a Merge button GitHub would refuse. Reported from posthog-cloud-infra
+   * on 2026-09-21; 18 open PRs in that repo were reading `mergeable` at the
+   * time.
+   */
+  describe('BEHIND', () => {
+    const behind = {
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+      reviewDecision: 'APPROVED',
+      checks: { total: 3, passed: 3, failed: 0, inProgress: 0, skipped: 0 },
+    } as const;
+
+    it('is its own verdict, not "ready to merge"', () => {
+      expect(computeBlockingReason({ ...behind })).toBe('behind');
+    });
+
+    it.each([[undefined], [[] as string[]], [['bug', 'p1']]])(
+      'still blocks when the labels say nothing about a queue (%s)',
+      (labels) => {
+        expect(computeBlockingReason({ ...behind, labels })).toBe('behind');
+      }
+    );
+
+    // The gate `mergeQueue/decide.ts` arrived at the expensive way: such a
+    // queue exists to REMOVE the up-to-date requirement, testing each PR
+    // against the current base itself. Acting on BEHIND there was the
+    // 2026-08-18 runaway, where every base advance bought another paid run.
+    it.each([
+      ['trunk-queued', 'trunk-queued'],
+      ['trunk-testing', 'trunk-testing'],
+    ])('defers to an external merge queue when its label is present (%s)', (_l, label) => {
+      expect(computeBlockingReason({ ...behind, labels: [label] })).toBe('mergeable');
+    });
+
+    // Order matters: both are true of the same PR, and the review is the one a
+    // person has to go and get. Updating a branch nobody has approved is work
+    // that buys nothing.
+    it('lets a missing required review win, since that is the more actionable gate', () => {
+      expect(
+        computeBlockingReason({ ...behind, reviewDecision: 'REVIEW_REQUIRED' })
+      ).toBe('blocked');
+    });
+
+    it('lets a failing required check win', () => {
+      expect(
+        computeBlockingReason({
+          ...behind,
+          checks: { total: 3, passed: 2, failed: 1, inProgress: 0, skipped: 0 },
+          requiredFailing: 1,
+          requiredDataAvailable: true,
+        })
+      ).toBe('checks_failed');
+    });
+
+    it('does not fire on a head that is merely CLEAN', () => {
+      expect(computeBlockingReason({ ...behind, mergeStateStatus: 'CLEAN' })).toBe('mergeable');
+    });
+  });
+
   it('returns merge_conflicts when CONFLICTING (even if reviews + checks are clean)', () => {
     expect(
       computeBlockingReason({
