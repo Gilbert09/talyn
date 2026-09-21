@@ -1,7 +1,7 @@
 ---
 title: "Talyn vs GitHub's merge queue"
 description: "An honest comparison. GitHub's merge queue is very good and most people searching for an alternative are not eligible for it — here is how the two actually differ, and when you should use theirs instead."
-navLabel: "vs GitHub merge queue"
+navLabel: "Talyn vs GitHub merge queue"
 updated: "2026-09-21"
 related: ["keep-pr-up-to-date", "claude-code-pull-requests"]
 ---
