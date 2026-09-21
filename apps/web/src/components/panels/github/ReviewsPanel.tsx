@@ -31,6 +31,7 @@ import {
 } from './filters';
 import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
 import { useGitHubActions } from './useGitHubActions';
+import { exportReviewRankingData, useReviewRankingCapture } from './useReviewRankingCapture';
 
 /**
  * Where the chosen sort lives.
@@ -85,6 +86,7 @@ export function ReviewsPanel() {
    * works without it, so a failure here degrades the sort rather than the page.
    */
   const [rankProfile, setRankProfile] = useState<ReviewRankPayload | null>(null);
+  const profileWorkspaceId = useRef<string | null>(null);
   const fetchedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!offerPriority || !workspaceId) return;
@@ -94,7 +96,10 @@ export function ReviewsPanel() {
     api.workspaces
       .reviewRankModel(workspaceId)
       .then((payload) => {
-        if (!cancelled) setRankProfile(payload);
+        if (!cancelled) {
+          profileWorkspaceId.current = workspaceId;
+          setRankProfile(payload);
+        }
       })
       .catch(() => {
         // Deliberately silent. The prior ranks the list perfectly well, and a
@@ -315,6 +320,22 @@ export function ReviewsPanel() {
     setActiveFilterIds([]);
   };
 
+  const rankingCaptureContext = useMemo(() => ({
+    workspaceId: workspaceId ?? '',
+    viewerLogin: viewerLogin ?? '',
+    sortMode: priorityMode ? 'priority' as const : sortMode === 'oldest' ? 'oldest' as const : 'newest' as const,
+    filterKey: JSON.stringify([repoFilter, requestedFilter, search, activeFilterIds]),
+    filtered: anyFilterActive,
+    profile: profileWorkspaceId.current === workspaceId ? rankProfile : null,
+    priorityById,
+  }), [workspaceId, viewerLogin, priorityMode, sortMode, repoFilter, requestedFilter,
+    search, activeFilterIds, anyFilterActive, rankProfile, priorityById]);
+  const recordReviewOpen = useReviewRankingCapture(
+    filtered,
+    rankingCaptureContext,
+    offerPriority && !!workspaceId && !!viewerLogin,
+  );
+
   return (
     <>
       <GitHubPageShell
@@ -355,6 +376,16 @@ export function ReviewsPanel() {
               nEvents={rankProfile?.nEvents}
             />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
+            {offerPriority && workspaceId && (
+              <button
+                type="button"
+                className="h-7 rounded-md border px-2 text-xs text-muted-foreground hover:bg-muted/40"
+                title="Download the last seven days of ranking data stored on this device"
+                onClick={() => exportReviewRankingData(workspaceId)}
+              >
+                Export ranking data
+              </button>
+            )}
           </>
         }
         filtersSecondary={
@@ -379,7 +410,10 @@ export function ReviewsPanel() {
             priorityById={priorityById}
             viewerLogin={viewerLogin}
             selectedId={selectedId}
-            onSelect={onSelect}
+            onSelect={(id) => {
+              recordReviewOpen(id);
+              onSelect(id);
+            }}
             onOpenTask={actions.openTask}
             onStopTask={actions.stopTask}
             onMerge={actions.mergeRow}

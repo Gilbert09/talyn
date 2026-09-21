@@ -1,198 +1,236 @@
-# Review ranking — what the data says
+# Review ranking: experiments and release gates
 
-An offline experiment on the Reviews tab's ordering, run 2026-09-21. It answers
-one question with numbers: **is the ranking model any good, and would different
-features or a different model class be better?**
+Updated: 2026-09-21.
 
-The short version: **the shipped model is worth about +23 points of top-3 once
-it is fitted, and the features it uses are mostly the wrong ones.** But a
-trivial "most recently requested first" sort scores within 1.5 points of the
-best model found, and recency is provably near its own ceiling — so the honest
-conclusion is that the ranking is not earning most of its complexity.
+**The first pooled-model comparison is complete. No new model qualifies for production.**
+CatBoost won validation, then tied request recency on the later replay.
+The corrected dataset is much narrower than the original dataset.
+Its higher scores do not show a product improvement.
 
----
+The maintained lab lives in [`scripts/review-ranking`](../scripts/review-ranking/README.md).
+The [saved report](../scripts/review-ranking/results/2026-09-21.json) records cutoffs, versions, data hashes, and all results.
+The private GitHub cache stays outside version control.
 
-## Why this was run
+## Objective
 
-The production install gate compares a fit against our own hand-set prior, on
-our own data, with no external reference. "It beat the prior" can equally mean
-the prior is bad. Nothing had ever measured how often the ordering matches what
-a person actually reviews next, and the feature set came from the literature
-rather than from evidence about this repository.
+`Hit@3` asks whether the next reviewed PR appears among the first three candidates.
+Each decision has one observed choice. This differs from getting all three suggestions reviewed.
+It also differs from causing more reviews or improving review quality.
 
-## Method
+Use equal weight per reviewer for the main offline comparison.
+Report equal-event results, Hit@1, MRR, and NDCG@3 alongside it.
+Select configurations on queues with more than three candidates.
+Smaller queues cannot distinguish top-three performance.
+Also report the complete cohort, queue sizes, and excluded events.
 
-**Subjects** — 7 heavy reviewers on `PostHog/posthog`, auto-selected by volume
-but deliberately spread across areas (one each from data-warehouse, surveys,
-insights, ux, flags, ci, oauth) so scope and team effects would be visible
-rather than averaged away. 300–900 review events each over six months. Bot
-reviewers were excluded on GitHub's own `__typename`; without that filter the
-"top reviewers" list is seven robots (`coderabbitai`, `greptile-apps`,
-`stamphog`, `posthog`, `graphite-app`, …), which review far more than any human.
+For a later product experiment, measure useful completed reviews per active session.
+Include sessions without reviews. Also measure selection time and reviews within 24 hours of a recommendation.
+Keep urgent work, long waits, and review quality as separate constraints.
+Historical choice prediction alone cannot justify changing those constraints.
 
-**Windows** — train `T-6mo → T-2mo`, select the configuration on
-`T-2mo → T-1mo`, and touch the final month exactly once. Split strictly by
-time: a random split over a time series leaks the future into the past, and the
-whole question is whether last month is predictable from the months before it.
+## Corrections to the original experiment
 
-**Label** — at each instant a subject submitted a review, the *choice set* is
-every other PR open, requested of them, and still unreviewed. Rank the set; ask
-where the PR they actually picked landed.
+The original spike reported these figures:
 
-**Metrics** — top-1, top-3, MRR, against four baselines. The baselines are the
-point: a model that beats random and loses to newest-first has told us something
-important.
+| Method | Historical Hit@3 |
+| --- | ---: |
+| Best logistic configuration | 53.4% |
+| Most recently requested first | 51.9% |
+| Fitted production feature set | 30.8% |
+| Production prior | 24.1% |
 
-## The harness was verified before any number was believed
+These figures describe the old reconstruction. They are not validated production results.
+The fitted component did not include the complete production gates, adjustments, or score cap.
+The best model exceeded the fitted feature set by 22.6 points, and the prior by 29.3 points.
 
-It had already produced two confident, plausible, wrong answers.
+The old “perfect recency oracle” was another request-recency sort.
+Its 50.4% used equal event weights. The 51.9% baseline used equal reviewer weights.
+**Neither figure establishes a ceiling.**
 
-1. **Solver check** — the lab's dimension-generic IRLS is bit-identical to
-   production's `fitReviewRank` at width 6.
-2. **Leakage check** — the training window genuinely restricts what the profile
-   sees (710 events vs 896 unwindowed).
-3. **Null check** — with labels shuffled both models collapse (54%→28%,
-   50%→15%). A harness that scores well on noise is measuring itself.
+The audit also found these problems:
 
-**Two bugs it caught, both silent:**
+- Twenty-six of 581 scored events stored a request after the first review.
+- Selected PRs bypassed the eligibility test applied to alternatives.
+- Features included later review counts, later requests, and mutable PR content.
+- Training profiles included outcomes from later in the training window.
+- Training truncated queues to ten candidates, while evaluation used full queues.
+- Team requests lacked historical membership checks.
+- Connections stopped at twenty items without completeness guarantees.
+- Ties could favour the selected PR through input order.
+- Reruns moved the time windows because scripts used the current clock.
 
-- A one-feature "age only" floor scored **100%**. Cause: `computeFeatureStats`
-  and `fitReviewRank` hardcode `dim = REVIEW_RANK_DIM` (6). Correct in
-  production, where the feature list is fixed — but it meant every feature past
-  the sixth was zeroed, so feature sets of 7, 8 and 9 features printed numbers
-  *identical* to the 6-feature set. That reads as "the new features add
-  nothing", which is publishable and completely wrong.
-- The evaluation truncated the choice set to 10 candidates when the real queue
-  averages **24**. See the correction below.
+Reviewing another PR is not proof that a pending PR was seen or rejected.
+The maintained feature therefore counts intervening reviews, without calling them explicit skips.
+An age preference can serve a waiting-time policy even when it predicts habits poorly.
+This experiment does not establish that the production age ramp has the wrong sign.
 
-## Results
+## Maintained benchmark
 
-Held-out test month, configuration fixed in advance on the validation month,
-scored against the **full** choice set.
+The new loader uses observed direct requests from cached GitHub timeline responses.
+It reconstructs request rounds and features strictly before each review timestamp.
+It applies the same eligibility rules to the selected PR and every alternative.
+It excludes uncertain team membership and possibly truncated connections.
+It does not substitute PR creation time for missing request times.
 
-| model | top-1 | top-3 | MRR |
-|---|---|---|---|
-| best learned (logistic, 23 features, 30d decay) | 29.3% | **53.4%** | 0.447 |
-| **newest-first** | 31.9% | **51.9%** | 0.467 |
-| shipped model, fitted | 14.2% | 30.8% | 0.278 |
-| shipped prior (what a cold user gets) | 7.5% | 24.1% | 0.207 |
-| random | 5.3% | 18.8% | 0.190 |
-| oldest-first | 1.1% | 3.9% | 0.095 |
+All eligible candidates enter training and evaluation.
+Features use earlier activity, request recency, author relationships, and review rounds.
+Current titles, file paths, diff sizes, and live checks are excluded from historical features.
+Ties receive their exact expected score, independent of label position.
+The random baseline uses the mean of `min(3 / queue_size, 1)`.
 
-### The correction that matters most
+The frozen endpoint is `2026-09-21T11:14:46.916Z`.
+Training covers the preceding 180 to 60 days.
+Validation covers the following 30 days. Replay covers the final 30 days.
+This final month was already inspected during research, so it is development evidence.
+It is not an untouched test period.
 
-An earlier run scored the best model at **65.5%** against a choice set truncated
-to the 10 most-recently-requested candidates. On the real 24-candidate queue it
-is **53.4%**. Newest-first is unaffected by that truncation (if the pick is in
-the top 3 overall it is also in the top 3 of the top 10), so the apparent
-"+13.6 over newest-first" was almost entirely an artifact of measuring an easier
-task than a reviewer actually faces.
+The loader sees 7,919 legacy rows and excludes 319 potentially truncated histories.
+It records 6,034 rows without a confirmed direct request.
+There are 739 reconstructed choices across the full cache.
+The configured windows contain 442 training, 90 validation, and 141 replay choices.
+Only 59 validation choices and 107 replay choices have more than three candidates.
+A few reviewers supply most of the informative decisions.
 
-Three independent signs confirm the full-set number is the honest one: random
-fell from 31% to 19% (≈3/24), oldest-first collapsed to 3.9%, and newest-first
-did not move at all — exactly what a larger candidate pool predicts.
+Nine configurations compare four model families:
 
-### Recency is saturated
+1. Pooled conditional logistic regression with full-choice softmax loss.
+2. The same model with strongly regularized personal coefficients.
+3. LightGBM LambdaMART with shallow trees and a training cutoff of six.
+4. CatBoost YetiRank with NDCG@3 as its training objective.
 
-A perfect recency oracle reaches **50.4%** top-3. Newest-first achieves 51.9%.
-There is essentially nothing left to extract from "when was it requested" — and
-that is why a single model fighting recency head-on gains only 1.5 points.
+Each family selects its configuration on validation Hit@3.
+The overall candidate is also selected before replay scoring.
+The report includes validation feature ablations and validation with each reviewer excluded from training.
+These ablations are diagnostic. They do not select another replay winner.
 
-## What the features are worth
+## First results
 
-Mean |standardised weight| across subjects, best configuration:
+The table uses equal reviewer weights and queues with more than three candidates.
+All rows use the same 107 replay decisions.
 
-```
-authorAffinity     0.699  ██████████████████████████████████
-passOvers          0.506  █████████████████████████
-reciprocity        0.503  ████████████████████████
-scopeAffinity      0.459  ██████████████████████
-isBotAuthor        0.330  ████████████████
-ageQuantile        0.257  █████████████
-sameAuthorAsLast   0.245  ████████████
-…
-teamAffinity       0.132  ██████
-pathFamiliarity    0.123  ██████
-queueDepth         0.000
-inSession          0.000
-```
+| Method | Hit@3 |
+| --- | ---: |
+| Newest request first | **85.53%** |
+| Newest PR creation first | 68.46% |
+| Uniform random expectation | 60.18% |
+| Oldest request first | 46.11% |
+| Pooled logistic regression | 87.91% |
+| Logistic regression with personal coefficients | 60.75% |
+| LightGBM LambdaMART | 77.52% |
+| **Validation-selected CatBoost** | **85.53%** |
 
-**Pass-over count is the best new idea** — how many times the subject reviewed
-*something else* while this PR sat there. Each one is an explicit decision to
-skip it. It also explains why oldest-first scores *below random*: age does not
-mean "most owed", it means "already declined, N times".
+CatBoost used depth three and 150 trees.
+Its paired difference from request recency is zero points.
+The descriptive 95% interval spans approximately −0.44 to +0.69 percentage points.
+The calculation resamples reviewers, then week blocks within each reviewer.
+Repeated PRs can still create dependence across blocks. The small reviewer cohort limits interpretation.
 
-**Scope affinity** (the conventional-commit `fix(hogql):` prefix) ranks 4th,
-above both the directory and team features that were meant to capture the same
-idea.
+Pooled logistic regression is 2.38 points ahead on this replay.
+Selecting it after seeing that result would require another future evaluation.
+The report therefore sets `promotion.allowed` to `false`.
 
-**Three shipped features are near dead weight**: `pathFamiliarity` (0.123),
-`teamAffinity` (0.132), and `repoAffinity`, which was dropped entirely — every
-subject works in one repository, so it is effectively constant.
+All-queue results appear in the report. They must not replace the selected metric after inspection.
+Small queues and different reviewer weights can change which method appears best.
+The high random score shows how different this cohort is from the original benchmark.
 
-**Two features measure exactly nothing**, and the reason generalises: a feature
-that is **constant within a choice set cannot rank anything**. `queueDepth` and
-`inSession` are properties of the moment, identical for every candidate, so they
-cancel. They are only useful crossed with a per-candidate feature.
+Request removals, reopen events, and historical alternatives remain incomplete.
+Review submission time also follows the actual choice, sometimes by hours.
+A stricter reconstruction reduces some errors; it does not recover missing history.
 
-## What this means for the product
+## Prospective collection
 
-1. **Adopt pass-over count and scope affinity.** They are the two strongest
-   additions and both are computable from data already fetched.
-2. **Drop `repoAffinity`, and review `pathFamiliarity` and `teamAffinity`.**
-   They cost parameter budget and contribute little.
-3. **Reconsider the age ramp entirely.** It was built to favour *older* PRs.
-   Oldest-first scores 3.9% — worse than random by a factor of five. The sign is
-   wrong.
-4. **Do not expect a large win over a good recency sort.** The defensible claim
-   is "+23 points over what ships today", not "better than sorting by newest".
+Web and desktop record local snapshots while the Reviews panel is visible.
+Collection uses the existing `reviewPriority` audience, which currently contains Tom only.
+It covers creation-newest, creation-oldest, and Priority sorts within that audience.
 
-## Things shipped the same week that the data does not support
+Each snapshot contains the full displayed queue, including rows outside the viewport.
+It records candidate IDs, order, numeric features, readiness state, head revision, and observation times.
+Separate events record visible rows and in-app opens.
+A queue entry does not imply exposure. An open does not imply a submitted review.
 
-Stated plainly because they were added on intuition and the experiment is the
-first evidence either way:
+Chunks contain at most 25 candidates. Each chunk carries the total count and a snapshot ID.
+The importer rejects incomplete chunks, conflicting headers, duplicate PRs, and invalid ranks.
+It checks exposure timestamps and candidate membership separately.
 
-- **The absence correction** (excluding requests that arrived while somebody was
-  away) is worth **−0.0 points**. Within noise.
-- **The recency half-life** barely matters: 42.6%–44.0% across 7 days to never.
-  The 90-day default is as good as anything, which also means the careful
-  argument for 90 days specifically was not load-bearing.
-- **`teamAffinity`**, added the same morning, ranks 16th of 23.
+The client records its available model parameters and numeric feature values.
+The backend can use a different cached profile, so this is labelled `client_profile`.
+The observed scores and order remain available, but exact backend replay still needs a model version.
+`request_first_seen_at` is an observation time, not an authoritative GitHub request timestamp.
 
-## Open questions
+New records stay in local storage on the device.
+The **Export ranking data** button downloads them as JSON.
+No new snapshot event is sent to PostHog or another service.
+Raw titles, descriptions, code, author names, paths, and search text are omitted.
+Exports still contain reviewer login, repository names, and PR identifiers. Keep them private.
 
-- **A two-stage cascade** is the most promising untried idea, and follows
-  directly from recency being saturated: stage 1 selects the fresh cohort,
-  stage 2 re-ranks *within* it on affinity. A single model must fight recency;
-  a cascade lets recency win where it should and affinity decide the rest.
-- **Pooling across users.** 300–900 events each is thin. One model over all
-  subjects with per-subject deviations (Gmail Priority Inbox's architecture)
-  is the standard fix, and is unavailable today only because Talyn workspaces
-  are effectively single-user.
-- **This measures habit, not quality.** A model that perfectly predicted what
-  somebody reviews next would score 100% and add nothing over the status quo.
-  Some of the 53.4% is re-describing GitHub's own newest-first page ordering.
-- **No live state** — checks, conflicts, approvals — appears anywhere here,
-  because GitHub does not retain it historically. Production's deterministic
-  half is therefore untested by this experiment.
-- **One subject regressed** (−7.4 points). The gain is not uniform.
+Storage is capped at one million characters per workspace.
+Reads exclude records older than seven days. Writes remove them and evict whole snapshot groups when needed.
+Old bytes can remain until the next write. Clearing site storage removes the log.
+Export regularly during the pilot; this bounded local log is not a durable event archive.
 
-## Re-running it
+Current limits include external-link opens and authoritative review outcomes.
+The importer reports `review_labels: 0` because neither snapshots nor clicks supply review truth.
 
-The harness lives in `scripts/spikes/review-rank-lab/`, which is gitignored
-(`.gitignore:58`) because the cache holds colleagues' review history. It is a
-throwaway spike; this document is the durable artifact.
+## Next experiment protocol
 
-```
-npx tsx scripts/spikes/review-rank-lab/run.ts --fetch     # ~350 GraphQL points
-npx tsx scripts/spikes/review-rank-lab/verify.ts          # check before believing
-npx tsx scripts/spikes/review-rank-lab/confirm.ts         # the honest number
-```
+The following steps retain the agreed order. Unchecked work is not implemented yet.
 
-It authenticates through `gh`, so it spends the running user's own rate budget
-rather than the app's, and every raw response is cached — the entire feature and
-model sweep after the first pull costs **zero** API calls. The full pull cost
-345 points against a planned estimate of 3,300: GitHub prices a search by the
-connection's `first:`, not by the depth of the sub-selection, so the
-`files`/`reviews`/`timeline` selections are free. The production backfill's
-header carries the wrong estimate.
+- [x] Freeze the historical benchmark, audit eligibility, and test temporal features and ties.
+- [x] Compare pooled logistic, personal logistic, LambdaMART, and CatBoost.
+- [x] Test available activity features through separate validation ablations.
+- [x] Add local snapshots, exposure observations, exports, and a completeness checker.
+- [ ] Join snapshots to complete review outcome history for the observed reviewer and repository scope.
+- [ ] Record authoritative request rounds, backend model versions, and historical content revisions.
+- [ ] Evaluate the complete production ordering, including readiness gates and score limits.
+- [ ] Add revision-specific code representations and recent-work features.
+- [ ] Compare a small neural model over the queue and an offline LLM teacher.
+- [ ] Run the selected model without changing displayed order, then run a controlled product experiment.
+
+Before joining outcomes, freeze the repository scope, observation window, and label rules.
+Fetch or record all submitted reviews in that scope, with pagination and completeness checks.
+Fetching outcomes only for suggested candidates cannot establish the next review.
+Deduplicate by GitHub review ID. Keep request rounds separate.
+Use only snapshots recorded strictly before the review, within a fixed 24-hour attribution window.
+For each decision, use the latest eligible snapshot; do not duplicate one review across earlier snapshots.
+Keep reviews outside the observed candidate set as coverage failures, not forced positives.
+For session conversion, wait until the 24-hour outcome window closes before assigning a negative label.
+Record review starts when available, since submission timestamps can misstate the decision context.
+
+Use additional forward time windows for model development.
+Then freeze the model, features, candidate policy, baselines, and an untouched future evaluation period.
+Estimate sample needs from pilot variance and clustering before setting that period's length.
+Report direct and team requests, long queues, returning rounds, and reviewers absent from training separately.
+Do not pool raw private history across tenants without an agreed data policy.
+
+The planning target remains **five absolute Hit@3 points above the strongest valid baseline**.
+This is a release target, not a forecast.
+Require a positive paired confidence bound and acceptable results across reviewers.
+Also require evidence of useful product outcomes before changing the default order.
+Keep the existing fallback for groups with insufficient evidence.
+
+## Larger model direction
+
+Build a model that represents the reviewer, recent work, code changes, and the whole queue.
+Cache code representations by revision. Fit personal adjustments only where earlier data supports them.
+Use a small model over candidate representations before increasing model size.
+
+An LLM can extract structured features or supply teacher rankings for comparison.
+Human review outcomes remain the evaluation labels.
+Randomize candidate input order and test stability before distilling teacher predictions.
+Measure API cost and latency before commissioning a larger teacher dataset.
+
+Score the full eligible queue while it remains small enough.
+A filter that keeps only recent requests imposes a coverage limit before ranking begins.
+If retrieval becomes necessary, combine recency, relationships, active conversations, and dependencies.
+
+Relevant primary sources:
+
+- [Gmail Priority Inbox](https://research.google/pubs/the-learning-behind-gmail-priority-inbox/): shared and personal scores, with stored decision features.
+- [LightGBM parameters](https://lightgbm.readthedocs.io/en/stable/Parameters.html#lambdarank_truncation_level): ranking objectives and training cutoff.
+- [CatBoost ranking objectives](https://catboost.ai/docs/en/concepts/loss-functions-ranking): top-position ranking modes.
+- [SASRec](https://arxiv.org/abs/1808.09781) and [SetRank](https://arxiv.org/abs/1912.05891): recent actions and candidate-set context.
+- [CodeReviewer](https://arxiv.org/abs/2203.09095): representations trained on code changes and review tasks.
+- [RankZephyr](https://arxiv.org/abs/2312.02724): an LLM ranking precedent, without evidence of transfer to personal PR choices.
+- [Unbiased learning to rank](https://arxiv.org/abs/1608.04468): why displayed position and exposure affect observed feedback.
+
+These sources motivate experiments. They do not establish an improvement for Talyn.

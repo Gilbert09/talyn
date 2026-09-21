@@ -2,6 +2,27 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: corrected benchmark and local observations (2026-09-21)
+
+Added a maintained Python lab under `scripts/review-ranking`, with locked dependencies and focused CI.
+The benchmark reconstructs direct-request rounds and earlier features from the local cache.
+It uses complete candidate groups, label-independent ties, fixed time windows, and explicit uncertainty limits.
+Nine configurations compare pooled logistic, personal logistic, LambdaMART, and CatBoost models.
+
+CatBoost won validation and tied request recency on 107 replay decisions with more than three candidates.
+Both scored 85.53% with equal reviewer weights. Pooled logistic scored 87.91% as an exploratory comparison.
+The narrower cohort makes these scores incomparable with the original 53.4%.
+No model was promoted. Missing historical alternatives and request events still prevent a production claim.
+
+Web and desktop now keep bounded local queue snapshots for the existing review-priority audience.
+Separate events record visible rows and in-app opens. The export button downloads JSON.
+A checker rejects incomplete or conflicting chunks. Clicks never become submitted-review labels.
+The new records have no external analytics path.
+
+Updated `REVIEW_RANKING.md` with results, corrected earlier claims, and explicit gates for future work.
+The next gate requires complete review outcomes and a fresh evaluation period.
+Neural models, code features, teacher rankings, and production promotion remain later experiments.
+
 ## Two fixes to the todiex feed: which fleet agent, and one sale one card (2026-09-21)
 
 Both from reading the feed rather than the code.

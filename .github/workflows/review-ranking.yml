@@ -1,0 +1,30 @@
+name: Review ranking lab
+
+on:
+  push:
+    paths: ['scripts/review-ranking/**', '.github/workflows/review-ranking.yml']
+  pull_request:
+    paths: ['scripts/review-ranking/**', '.github/workflows/review-ranking.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scripts/review-ranking
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.2.37'
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check .
+      - run: uv run --frozen ruff format --check .
+      - run: uv run --frozen pytest -q

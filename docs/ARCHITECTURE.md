@@ -61,6 +61,13 @@ Lifecycle: `queued` → `in_progress` → `completed` / `failed` / `cancelled`. 
 ### GitHub / PR core
 The heart of the app: webhook-first PR monitoring (with polling reconciliation as the safety net), a per-workspace PR cache, the prioritized GitHub panel (Needs attention / Mine / Review, stacked PRs), the merge queue (auto-fix runs for conflicts/failed checks, bounded check re-runs and branch updates where GitHub allows, and stacked PRs, which take one of two routes: a GitHub NATIVE stack whose landing branch is behind a merge queue that batches stacks is handed over as one submission at its top rung — the provider tests and lands every rung in a single CI round, with the rungs beneath it held hands-off (`external_covered_by`) because a push to any member ejects the whole batch — while everything else drains bottom-up, each child parked in `awaiting_stack` until the PR its base belongs to lands, then retargeted onto the real base), and the auto-keep-mergeable watcher.
 
+Review-ranking research runs offline in `scripts/review-ranking`; Python models are not production dependencies.
+The existing scorer remains the serving boundary until a future model passes the release gates.
+Web and desktop keep bounded local snapshots for the `reviewPriority` audience, with a manual JSON export.
+Queue membership, viewport exposure, and opens remain separate observations.
+Submitted-review labels require a complete outcome journal. See [`REVIEW_RANKING.md`](./REVIEW_RANKING.md).
+
+
 ## Key Decisions
 
 ### 0. Cloud-only pivot — 2026-06

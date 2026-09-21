@@ -601,6 +601,7 @@ function PRTableRow({
   }
   return (
     <tr
+      data-review-ranking-id={variant === 'review' ? row.id : undefined}
       className={cn(
         'group cursor-pointer border-b transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         isSelected && 'bg-muted/40'

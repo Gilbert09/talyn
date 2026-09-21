@@ -34,6 +34,8 @@ export * from './prPriority.js';
 // that one is the deterministic rules over live state, and the two can never
 // swap members. See the header of either.
 export * from './reviewRank.js';
+export * from './reviewRankingSnapshot.js';
+export * from './reviewRankingLocalLog.js';
 
 // Workflows — user-defined PR automation: the trigger taxonomy, the pure
 // matcher the engine and both editors share, and the validator the route 400s
