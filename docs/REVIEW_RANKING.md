@@ -240,6 +240,37 @@ Prioritize actual queues, readiness, authoritative request rounds, content revis
 Freeze the fallback policy for a future comparison against the complete production order.
 Production ranking remains unchanged. Historical results cannot establish that changing the order causes more reviews.
 
+## Production capture audit (2026-09-21)
+
+A capture check on desktop 0.2.101 found 79 candidates in the focus reviewer's queue.
+Seventy-seven had team requests. Two had direct requests.
+The historical benchmark covered direct requests only. It therefore does not represent this live queue.
+Three complete test snapshots contained 237 candidate rows and 36 viewport observations.
+These were agent-operated checks. Their snapshot IDs are excluded from human outcome attribution.
+
+The audit also found a scoring provenance gap.
+Old snapshots recorded the client profile, while displayed scores could use a different cached server profile.
+New verdicts carry the exact numeric inputs, feature statistics, effective weights, state, and scoring time.
+Server traces include a profile hash. Local fallback traces identify their client source.
+The trace omits author names, paths, team names, and PR text.
+Unknown numeric features survive JSON as explicit null values and retain their original scoring behavior.
+
+The parity command runs these inputs through the actual compiled production scorer.
+It checks scores, readiness gates, and displayed Priority order, including creation-time and identity ties.
+It records the scorer version and a digest of the compiled implementation.
+Other display modes check scores only. Missing or unsupported traces fail the check.
+This verifies replay; it cannot prove candidate completeness or ranking quality.
+
+New snapshot headers record the full workspace repository scope.
+Outcome attribution excludes snapshots with unknown or different scope.
+Explicit exclusions, including agent checks, censor attribution instead of falling back to an older snapshot.
+Existing exports remain readable, but missing provenance cannot qualify them for the new checks.
+
+The local log still has a seven-day and one-million-character limit per workspace.
+Durable collection remains necessary for a longer prospective study.
+Fresh human outcomes, authoritative request rounds, shadow evaluation, and controlled product evidence remain open release gates.
+Production ranking behavior remains unchanged.
+
 ## Next experiment protocol
 
 The following steps retain the agreed order. Unchecked work is not implemented yet.
@@ -252,8 +283,10 @@ The following steps retain the agreed order. Unchecked work is not implemented y
 - [x] Collect repository histories, reconstruct earlier titles, and compare twelve models across successive periods.
 - [x] Check label-volume curves, submission-time sensitivity, and an exploratory fallback based on earlier personal results.
 - [ ] Collect fresh exports and complete outcome journals for the pilot.
-- [ ] Record authoritative request rounds, backend model versions, and historical content revisions.
-- [ ] Evaluate the complete production ordering, including readiness gates and score limits.
+- [x] Record exact scoring inputs, server profile versions, and the workspace repository scope.
+- [x] Add replay checks against the actual production scorer and Priority comparator.
+- [ ] Record authoritative request rounds and historical content revisions.
+- [ ] Evaluate ranking gains on fresh queues under the complete production ordering.
 - [x] Add observed content vectors, recent review features, a shared neural model, and guarded personal adjustments.
 - [ ] Measure these features on prospective data, then compare code-specialized encoders and attention models.
 - [ ] Compare an offline LLM teacher against human outcomes.

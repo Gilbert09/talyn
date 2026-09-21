@@ -2,6 +2,25 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: production provenance and capture audit (2026-09-21)
+
+A live desktop check found 77 team requests and two direct requests in a queue of 79 candidates.
+The direct-request historical benchmark does not represent that queue.
+Three complete capture checks remain private, with their snapshot IDs excluded from human attribution.
+
+Production verdicts now carry exact numeric inputs, effective weights, statistics, state, and scoring time.
+Server traces include a profile hash. Client fallback traces identify their source.
+Snapshots use those actual inputs instead of substituting the current client profile.
+The offline checker replays the compiled serving scorer and checks scores, gates, and Priority order.
+It records a runtime digest. Tests cover missing size, gates, ties, mutated inputs, and invalid provenance.
+
+Snapshot headers now record repository scope. The outcome join excludes unknown or different scope.
+Explicit exclusions censor attribution, so agent checks cannot transfer labels to older human snapshots.
+Local storage remains bounded. Durable collection, authoritative request rounds, and fresh outcomes remain necessary.
+This change does not alter ranking behavior or promote a model.
+Validation passed 243 focused tests, package type checks, ESLint, Ruff, and formatting checks.
+The command correctly refused all three old live snapshots because they lacked scoring traces.
+
 ## Review ranking: larger history replay and personal fallback (2026-09-21)
 
 Added a repository-wide collector with complete review and filtered timeline pagination.

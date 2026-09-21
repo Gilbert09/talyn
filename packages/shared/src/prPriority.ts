@@ -39,6 +39,7 @@
 // caller supplies `isTaskActive` for the same reason: only the panel holds the
 // tasks store. See PRPriorityContext.
 import {
+  REVIEW_RANK_DIM,
   applyReviewRank,
   effectiveReviewRankWeights,
   reviewRankContributions,
@@ -46,7 +47,27 @@ import {
   standardize,
   type ReviewRankFeature,
   type ReviewRankProfile,
+  type ReviewRankFeatureStats,
 } from './reviewRank.js';
+
+export const PR_PRIORITY_SCORER_VERSION = 'priority-1';
+
+export interface PRPriorityRankInputs {
+  features: number[];
+  weights: number[];
+  stats: ReviewRankFeatureStats | null;
+}
+
+export interface PRPriorityTrace {
+  schemaVersion: 1;
+  scorerVersion: string;
+  source: 'server' | 'client';
+  modelVersion: string | null;
+  scoredAt: number;
+  target: PRPriorityTarget;
+  taskActive: boolean;
+  rankInputs: (Omit<PRPriorityRankInputs, 'features'> & { features: (number | null)[] }) | null;
+}
 
 /**
  * The hard partition. Higher sorts first, and no point total crosses it.
@@ -174,6 +195,7 @@ export interface PRPriorityTerm {
 
 /** What {@link scorePRForReview} decides about one row. */
 export interface PRPriorityVerdict {
+  trace?: PRPriorityTrace;
   gate: PRPriorityGate;
   /**
    * The within-gate total. Compared ONLY against rows in the same gate — a
@@ -279,6 +301,95 @@ export interface PRPriorityContext {
    * that is blocking someone.
    */
   profile?: ReviewRankProfile | null;
+  /** Exact numeric inputs for replay. Null explicitly disables the learned term. */
+  rankInputs?: PRPriorityRankInputs | null;
+  captureTrace?: { source: 'server' | 'client'; modelVersion?: string };
+}
+
+function rankingInputs(row: PRPriorityTarget, ctx: PRPriorityContext): PRPriorityRankInputs | null {
+  if (ctx.rankInputs !== undefined) return ctx.rankInputs;
+  if (!ctx.profile) return null;
+  const s = row.summary ?? {};
+  return {
+    features: reviewRankFeatures({
+      author: s.author,
+      repoFullName: row.owner && row.repo ? `${row.owner}/${row.repo}` : undefined,
+      dirs: s.topDirs,
+      teams: s.reviewRequestVia?.teams,
+      additions: s.additions,
+      deletions: s.deletions,
+    }, ctx.profile),
+    weights: effectiveReviewRankWeights(ctx.profile.model),
+    stats: ctx.profile.featureStats ?? null,
+  };
+}
+
+function scoringTrace(
+  row: PRPriorityTarget,
+  ctx: PRPriorityContext,
+  taskActive: boolean,
+  rankInputs: PRPriorityRankInputs | null,
+): PRPriorityTrace {
+  const s = row.summary ?? {};
+  // Copy only inputs the scorer reads. Names, paths, and PR text stay out of the trace.
+  const target: PRPriorityTarget = {
+    id: row.id,
+    taskId: taskActive ? 'active' : null,
+    mergeQueued: row.mergeQueued,
+    createdAt: row.createdAt,
+    reviewRequestedFirstSeenAt: row.reviewRequestedFirstSeenAt,
+    summary: {
+      draft: s.draft,
+      createdAt: s.createdAt,
+      mergeable: s.mergeable,
+      blockingReason: s.blockingReason,
+      reviewDecision: s.reviewDecision,
+      effectiveReviewDecision: s.effectiveReviewDecision,
+      checks: s.checks,
+      unresolvedHumanReviewThreads: s.unresolvedHumanReviewThreads,
+      unresolvedBotReviewThreads: s.unresolvedBotReviewThreads,
+      unresolvedThreadsOpenedByViewer: s.unresolvedThreadsOpenedByViewer,
+      additions: s.additions,
+      deletions: s.deletions,
+      viewerLatestReview: s.viewerLatestReview,
+      reviewRequestVia: s.reviewRequestVia ? { direct: s.reviewRequestVia.direct, teams: [] } : null,
+      autoMergeBy: s.autoMergeBy ? 'armed' : null,
+      prAuthorIsBot: s.prAuthorIsBot ?? /\[bot\]$/i.test(s.author ?? ''),
+      stack: s.stack,
+    },
+  };
+  return JSON.parse(JSON.stringify({
+    schemaVersion: 1,
+    scorerVersion: PR_PRIORITY_SCORER_VERSION,
+    source: ctx.captureTrace!.source,
+    modelVersion: ctx.captureTrace!.modelVersion ?? null,
+    scoredAt: ctx.now,
+    target,
+    taskActive,
+    rankInputs,
+  })) as PRPriorityTrace;
+}
+
+export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict {
+  if (trace.schemaVersion !== 1 || trace.scorerVersion !== PR_PRIORITY_SCORER_VERSION ||
+      !Number.isFinite(trace.scoredAt)) {
+    throw new Error('Unsupported scoring trace');
+  }
+  const inputs = trace.rankInputs;
+  if (inputs && (inputs.features.length !== REVIEW_RANK_DIM || inputs.weights.length !== REVIEW_RANK_DIM ||
+      inputs.features.some((value) => value !== null && !Number.isFinite(value)) ||
+      inputs.weights.some((value) => !Number.isFinite(value)) ||
+      (inputs.stats && (inputs.stats.mean.length !== REVIEW_RANK_DIM || inputs.stats.sd.length !== REVIEW_RANK_DIM ||
+        [...inputs.stats.mean, ...inputs.stats.sd].some((value) => !Number.isFinite(value)) ||
+        inputs.stats.sd.some((value) => value < 0))))) {
+    throw new Error('Invalid scoring inputs');
+  }
+  return scorePRForReview(trace.target, {
+    now: trace.scoredAt,
+    isTaskActive: () => trace.taskActive,
+    // JSON stores unknown features as null. Standardization maps NaN to the mean.
+    rankInputs: inputs ? { ...inputs, features: inputs.features.map((value) => value ?? NaN) } : null,
+  });
 }
 
 /** Points, in one place, so the weights can be read without reading the logic. */
@@ -594,20 +705,9 @@ export function scorePRForReview(
   // Everything above is a rule over LIVE state. This is the only part fitted
   // from the viewer's own history, and it is deliberately the smaller half —
   // see PR_PRIORITY_WEIGHTS.learnedCap.
-  if (ctx.profile) {
-    const weights = effectiveReviewRankWeights(ctx.profile.model);
-    const stats = ctx.profile.featureStats;
-    const raw = reviewRankFeatures(
-      {
-        author: s.author,
-        repoFullName: row.owner && row.repo ? `${row.owner}/${row.repo}` : undefined,
-        dirs: s.topDirs,
-        teams: s.reviewRequestVia?.teams,
-        additions: s.additions,
-        deletions: s.deletions,
-      },
-      ctx.profile,
-    );
+  const inputs = rankingInputs(row, ctx);
+  if (inputs) {
+    const { weights, stats, features: raw } = inputs;
     // Without stored stats the features are on raw scales the weights were
     // never fitted against, so scoring them would be arithmetic on mismatched
     // units. Skipping is the honest answer — the deterministic terms still rank.
@@ -690,7 +790,9 @@ export function scorePRForReview(
   // there by construction rather than by a branch.
   const topReason = marker ?? positive ?? negative;
 
-  return { gate, score, terms, topReason };
+  const verdict: PRPriorityVerdict = { gate, score, terms, topReason };
+  if (ctx.captureTrace) verdict.trace = scoringTrace(row, ctx, agentRunning, inputs);
+  return verdict;
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   readReviewRankingLog,
   REVIEW_RANKING_LOG_MAX_CHARS,
   ReviewRankingRecorder,
+  scorePRForReview,
   type ReviewRankingContext,
   type ReviewRankingRow,
 } from '@talyn/shared';
@@ -75,6 +76,42 @@ describe('prospective review snapshots', () => {
     expect(capture.mock.calls[2]).toEqual(['pr_review_candidate_opened', expect.objectContaining({
       snapshot_id: 'snapshot', pr_id: 'pr-1', rank: 2,
     })]);
+  });
+
+  it('records the actual server inputs when the client profile disagrees', () => {
+    const capture = vi.fn();
+    const recorder = new ReviewRankingRecorder(capture, () => 'snapshot');
+    const queue = rows(1);
+    queue[0].priority = scorePRForReview(queue[0], {
+      now, captureTrace: { source: 'server', modelVersion: 'a'.repeat(64) },
+    });
+    recorder.record(queue, {
+      ...context,
+      repositoryScope: ['Org/Repo', 'org/repo', 'org/empty'],
+      profile: {
+        authorAffinity: { 'private-author': { gave: 100, got: 10 } },
+        dirAffinity: {}, repoAffinity: {}, teamAffinity: {}, featureStats: null, model: null,
+      },
+    }, now);
+    expect(capture.mock.calls[0][1]).toMatchObject({
+      model_source: 'scoring_trace', repository_scope: ['org/empty', 'org/repo'],
+      candidates: [{ affinity_features: null, affinity_features_source: 'server',
+        priority_trace: { source: 'server', rankInputs: null, scoredAt: now } }],
+    });
+  });
+
+  it('refreshes on scope changes but not an unchanged score clock', () => {
+    const capture = vi.fn();
+    const recorder = new ReviewRankingRecorder(capture, () => 'snapshot');
+    const queue = rows(1);
+    queue[0].priority = scorePRForReview(queue[0], { now, captureTrace: { source: 'client' } });
+    recorder.record(queue, { ...context, repositoryScope: ['org/repo'] }, now);
+    queue[0].priority.trace!.scoredAt += 1;
+    recorder.record(queue, { ...context, repositoryScope: ['org/repo'] }, now + 1);
+    expect(capture).toHaveBeenCalledTimes(1);
+    recorder.record(queue, { ...context, repositoryScope: ['org/repo', 'org/other'] }, now + 2);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture.mock.calls[1][1].candidates[0].priority_trace.scoredAt).toBe(now + 1);
   });
 });
 

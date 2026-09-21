@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { replayPRPriorityTrace } from '@talyn/shared';
 import {
   _resetReviewPriorityCache,
   invalidateReviewRankProfile,
@@ -182,6 +183,7 @@ describe('scoreReviewRows', () => {
       workspaceId: 'ws1',
       viewerLogin: 'me',
       profile: { authorAffinity: {}, teamAffinity: {}, dirAffinity: {}, repoAffinity: {} },
+      featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
     });
     await scoreReviewRows(db, 'ws1', 'me', [row({ id: 'a' })]);
     const spy = vi.spyOn(db, 'select');
@@ -195,6 +197,7 @@ describe('scoreReviewRows', () => {
       workspaceId: 'ws1',
       viewerLogin: 'me',
       profile: { authorAffinity: {}, teamAffinity: {}, dirAffinity: {}, repoAffinity: {} },
+      featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
     });
     await scoreReviewRows(db, 'ws1', 'me', [row({ id: 'a' })]);
     invalidateReviewRankProfile('ws1', 'me');
@@ -214,6 +217,18 @@ describe('scoreReviewRows', () => {
     const waits = [...out.values()].map(
       (v) => v.terms.find((t) => t.reason === 'waited')?.points,
     );
+    expect(out.size).toBe(3);
     expect(new Set(waits).size).toBe(1);
+    const versions = new Set<string>();
+    const clocks = new Set<number>();
+    for (const { trace, ...verdict } of out.values()) {
+      expect(trace?.source).toBe('server');
+      expect(trace?.modelVersion).toMatch(/^[a-f0-9]{64}$/);
+      versions.add(trace!.modelVersion!);
+      clocks.add(trace!.scoredAt);
+      expect(replayPRPriorityTrace(trace!)).toEqual(verdict);
+    }
+    expect(versions.size).toBe(1);
+    expect(clocks.size).toBe(1);
   });
 });

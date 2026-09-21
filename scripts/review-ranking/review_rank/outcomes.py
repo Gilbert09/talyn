@@ -240,7 +240,12 @@ def validate_journal(protocol: Protocol, journal: dict) -> list[dict]:
     return sorted(unique.values(), key=lambda row: (row["at"], row["id"]))
 
 
-def join(protocol: Protocol, snapshots: list[Snapshot], journal: dict) -> dict:
+def join(
+    protocol: Protocol,
+    snapshots: list[Snapshot],
+    journal: dict,
+    excluded_snapshot_ids: frozenset[str] = frozenset(),
+) -> dict:
     reviews = validate_journal(protocol, journal)
     audit = Counter(submitted_reviews=len(reviews))
     unique = {}
@@ -281,8 +286,20 @@ def join(protocol: Protocol, snapshots: list[Snapshot], journal: dict) -> dict:
         outcomes = assigned[snapshot.snapshot_id]
         candidates = list(snapshot.candidates)
         keys = [(row["repo"].lower(), row["pr_number"]) for row in candidates]
+        scope = snapshot.header.get("repository_scope")
+        scope_matches = (
+            isinstance(scope, list)
+            and all(isinstance(repo, str) for repo in scope)
+            and tuple(sorted(repo.lower() for repo in scope)) == protocol.repos
+        )
+        if not scope_matches:
+            audit["snapshots_with_unknown_or_mismatched_scope"] += 1
+        if snapshot.snapshot_id in excluded_snapshot_ids:
+            audit["explicitly_excluded_snapshots"] += 1
         eligible = (
             not snapshot.filtered
+            and scope_matches
+            and snapshot.snapshot_id not in excluded_snapshot_ids
             and all(repo in protocol.repos for repo, _ in keys)
             and len(set(keys)) == len(keys)
             and times[snapshot.at] == 1
@@ -331,6 +348,7 @@ def join(protocol: Protocol, snapshots: list[Snapshot], journal: dict) -> dict:
         "choices": choices,
         "sessions": sessions,
         "journal_sha256": digest(journal),
+        "excluded_snapshot_ids": sorted(excluded_snapshot_ids),
         "promotion_allowed": False,
     }
 
@@ -343,6 +361,7 @@ def main() -> None:
     joiner = sub.add_parser("join")
     joiner.add_argument("--journal", type=Path, required=True)
     joiner.add_argument("--exports", type=Path, nargs="+", required=True)
+    joiner.add_argument("--exclude-snapshots", type=Path)
     for command in [collector, joiner]:
         command.add_argument("--protocol", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
@@ -358,7 +377,18 @@ def main() -> None:
             import_audit.update(counts)
         if import_audit["rejected_snapshots"] or import_audit["invalid_events"]:
             raise ValueError("Repair incomplete exports before joining outcomes")
-        result = join(protocol, snapshots, json.loads(args.journal.read_text()))
+        exclusions = (
+            json.loads(args.exclude_snapshots.read_text()) if args.exclude_snapshots else {}
+        )
+        excluded_ids = exclusions.get("excluded_snapshot_ids", [])
+        if not isinstance(excluded_ids, list) or any(
+            not isinstance(value, str) or not value for value in excluded_ids
+        ):
+            raise ValueError("List snapshot IDs for explicit exclusions")
+        result = join(
+            protocol, snapshots, json.loads(args.journal.read_text()), frozenset(excluded_ids)
+        )
+        result["exclusions_sha256"] = digest(exclusions)
         result["import_audit"] = dict(import_audit)
         result["export_sha256"] = [
             hashlib.sha256(path.read_bytes()).hexdigest() for path in args.exports

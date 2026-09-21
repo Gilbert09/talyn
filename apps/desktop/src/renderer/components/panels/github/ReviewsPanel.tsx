@@ -233,6 +233,7 @@ export function ReviewsPanel() {
       const local = buildPRPriorityMap(unscored, {
         now,
         profile: rankProfile,
+        captureTrace: { source: 'client' },
         isTaskActive: (taskId) => {
           const status = taskStatusById.get(taskId);
           return status ? TASK_STATUS_TERMINAL[status] === false : false;
@@ -328,8 +329,9 @@ export function ReviewsPanel() {
     filtered: anyFilterActive,
     profile: profileWorkspaceId.current === workspaceId ? rankProfile : null,
     priorityById,
+    repositoryScope: repositories.filter((repo) => repo.workspaceId === workspaceId).map((repo) => repo.fullName),
   }), [workspaceId, viewerLogin, priorityMode, sortMode, repoFilter, requestedFilter,
-    search, activeFilterIds, anyFilterActive, rankProfile, priorityById]);
+    search, activeFilterIds, anyFilterActive, rankProfile, priorityById, repositories]);
   const recordReviewOpen = useReviewRankingCapture(
     filtered,
     rankingCaptureContext,

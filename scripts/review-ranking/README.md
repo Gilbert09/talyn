@@ -116,6 +116,30 @@ The fallback requires 20 informative earlier choices and a positive personal Hit
 It uses the selected baseline elsewhere. These requirements are heuristic and need a separate future trial.
 The earlier selection window supplies all routing decisions. Evaluation labels cannot select a reviewer's policy.
 
+## Production score replay
+
+Build the shared package from the repository root before running the check:
+
+```sh
+npm run build --workspace=@talyn/shared
+cd scripts/review-ranking
+uv run --frozen python -m review_rank.parity \
+  --export artifacts/queue.json --output artifacts/production-parity.json
+```
+
+New snapshots carry exact server or client scoring traces.
+The command invokes the compiled serving scorer and checks the recorded score and gate for every candidate.
+Priority snapshots also check the complete displayed order, including ties.
+Other sort modes check scores only. Unsupported versions and missing traces fail explicitly.
+The output records the scorer version and a digest of its compiled code.
+Passing replay does not authorize promotion or establish candidate completeness.
+
+New snapshots also record the workspace's repository scope.
+The outcome join excludes snapshots whose scope does not match the frozen protocol, including older snapshots without scope.
+Pass `--exclude-snapshots artifacts/exclusions.json` to `review_rank.outcomes join` to exclude agent-operated checks.
+That private file must contain an `excluded_snapshot_ids` list.
+An excluded snapshot still censors earlier observations. Its review cannot become an older snapshot's positive label.
+
 ## Historical comparison
 
 The existing spike cache supplies raw timeline responses and its dataset manifest.

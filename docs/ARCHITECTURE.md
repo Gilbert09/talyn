@@ -65,6 +65,9 @@ Review-ranking research runs offline in `scripts/review-ranking`; Python models 
 The existing scorer remains the serving boundary until a future model passes the release gates.
 Web and desktop keep bounded local snapshots for the `reviewPriority` audience, with a manual JSON export.
 Queue membership, viewport exposure, and opens remain separate observations.
+Scoring traces retain exact serving inputs and a server profile hash, without raw PR text or affinity identities.
+The offline parity command uses the compiled production scorer and comparator, with a version check and runtime digest.
+Snapshot headers declare repository scope. Unknown scope and explicit agent checks cannot produce human review labels.
 The lab collects scoped submitted-review journals through read-only GitHub requests, then joins earlier local snapshots.
 Observed content is encoded locally with fixed weights. Later content cannot supply earlier features.
 The shared queue model has optional personal adjustments, enabled only by a separate validation window.

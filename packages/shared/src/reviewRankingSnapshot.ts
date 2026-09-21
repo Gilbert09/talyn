@@ -20,6 +20,7 @@ export interface ReviewRankingContext {
   filtered: boolean;
   profile: ReviewRankProfile | null;
   priorityById?: Map<string, PRPriorityVerdict> | null;
+  repositoryScope?: string[];
 }
 
 export function reviewRankingCandidate(
@@ -28,7 +29,10 @@ export function reviewRankingCandidate(
   context: ReviewRankingContext,
 ) {
   const s = row.summary;
-  const features = context.profile
+  const verdict = context.priorityById?.get(row.id) ?? row.priority;
+  const features = verdict?.trace
+    ? verdict.trace.rankInputs?.features ?? null
+    : context.profile
     ? reviewRankFeatures({
         author: s.author,
         repoFullName: `${row.owner}/${row.repo}`,
@@ -38,7 +42,6 @@ export function reviewRankingCandidate(
         deletions: s.deletions,
       }, context.profile).map((value) => Number.isFinite(value) ? value : null)
     : null;
-  const verdict = context.priorityById?.get(row.id) ?? row.priority;
   return {
     pr_id: row.id,
     repo: `${row.owner}/${row.repo}`,
@@ -49,6 +52,7 @@ export function reviewRankingCandidate(
     request_first_seen_at: row.reviewRequestedFirstSeenAt ?? null,
     summary_updated_at: s.updatedAt ?? null,
     affinity_features: features,
+    affinity_features_source: verdict?.trace?.source ?? 'client_profile',
     direct_request: s.reviewRequestVia?.direct ?? null,
     requested_team_count: s.reviewRequestVia?.teams.length ?? null,
     bot_author: s.prAuthorIsBot ?? null,
@@ -64,6 +68,7 @@ export function reviewRankingCandidate(
     viewer_threads: s.unresolvedThreadsOpenedByViewer ?? null,
     gate: verdict?.gate ?? null,
     score: verdict?.score ?? null,
+    priority_trace: verdict?.trace ?? null,
   };
 }
 
@@ -88,6 +93,9 @@ export class ReviewRankingRecorder {
       throw new Error('The queue belongs to another workspace');
     }
     const candidates = rows.map((row, index) => reviewRankingCandidate(row, index + 1, context));
+    const scope = context.repositoryScope
+      ? [...new Set(context.repositoryScope.map((repo) => repo.toLowerCase()))].sort()
+      : null;
     const model = context.profile?.model;
     const clientModel = model ? {
       installed: model.installed,
@@ -97,7 +105,12 @@ export class ReviewRankingRecorder {
     } : null;
     const fingerprint = JSON.stringify([
       context.workspaceId, context.viewerLogin, context.sortMode, context.filterKey,
-      candidates, clientModel,
+      candidates.map((candidate) => ({
+        ...candidate,
+        priority_trace: candidate.priority_trace
+          ? { ...candidate.priority_trace, scoredAt: 0 }
+          : null,
+      })), clientModel, scope,
     ]);
     if (fingerprint === this.fingerprint && now - this.recordedAt < 300_000 && this.snapshotId) {
       return this.snapshotId;
@@ -118,13 +131,14 @@ export class ReviewRankingRecorder {
         recorded_at: new Date(now).toISOString(),
         sort_mode: context.sortMode,
         filtered: context.filtered,
+        repository_scope: scope,
         candidate_count: candidates.length,
         chunk_index: chunk,
         chunk_count: chunkCount,
         affinity_feature_names: [...REVIEW_RANK_FEATURES],
         client_model: clientModel,
-        // The client profile can differ from the backend's cached scoring profile.
-        model_source: 'client_profile',
+        model_source: candidates.length > 0 && candidates.every((candidate) => candidate.priority_trace)
+          ? 'scoring_trace' : 'client_profile',
         candidates: candidates.slice(
           chunk * REVIEW_RANKING_CHUNK_SIZE,
           (chunk + 1) * REVIEW_RANKING_CHUNK_SIZE,

@@ -35,7 +35,7 @@ def snapshot(at=START + 10, name="snapshot", filtered=False):
         ),
         frozenset(),
         frozenset(),
-        {},
+        {"repository_scope": ["org/repo"]},
     )
 
 
@@ -133,6 +133,24 @@ def test_fresh_snapshot_required_for_each_next_review():
     data = join(protocol(), [snapshot()], journal([review(), review(START + 30, 2, "other")]))
     assert len(data["choices"]) == 1
     assert data["audit"]["later_reviews_without_fresh_snapshot"] == 1
+
+
+@pytest.mark.parametrize("scope", [None, [], ["org/other"], ["org/repo", "org/other"], [3]])
+def test_unknown_or_different_queue_scope_cannot_make_labels(scope):
+    row = replace(snapshot(), header={"repository_scope": scope})
+    data = join(protocol(), [row], journal([review()]))
+    assert data["choices"] == []
+    assert data["audit"]["snapshots_with_unknown_or_mismatched_scope"] == 1
+    assert data["sessions"][0]["status"] == "excluded_snapshot"
+
+
+def test_agent_snapshots_censor_attribution_instead_of_falling_back():
+    rows = [snapshot(START + 1, "human"), snapshot()]
+    data = join(protocol(), rows, journal([review()]), frozenset({"snapshot"}))
+    assert data["choices"] == []
+    assert data["audit"]["explicitly_excluded_snapshots"] == 1
+    assert data["audit"]["reviews_on_excluded_snapshots"] == 1
+    assert data["sessions"][0]["status"] == "censored"
 
 
 def test_no_review_only_after_full_window_and_no_superseding_snapshot():

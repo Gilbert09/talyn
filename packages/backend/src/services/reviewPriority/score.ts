@@ -31,6 +31,7 @@
 // wanted. Re-ranking a triage queue under somebody's cursor is the hazard
 // `buildPRPriorityMap`'s pinned `now` exists to avoid.
 
+import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   TASK_STATUS_TERMINAL,
@@ -173,6 +174,7 @@ export async function scoreReviewRows(
 
   try {
     const profile = viewerLogin ? await readProfile(db, workspaceId, viewerLogin) : null;
+    const modelVersion = createHash('sha256').update(JSON.stringify(profile)).digest('hex');
 
     // One query for the linked tasks, not one per row. Only the ids actually
     // present — a workspace with hundreds of finished tasks must not pay for
@@ -196,6 +198,7 @@ export async function scoreReviewRows(
         scorePRForReview(toTarget(row), {
           now,
           profile,
+          captureTrace: { source: 'server', modelVersion },
           isTaskActive: (taskId) => {
             const status = statusById.get(taskId);
             return status ? TASK_STATUS_TERMINAL[status] === false : false;
