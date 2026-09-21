@@ -20,6 +20,32 @@ const rows = (count: number): ReviewRankingRow[] => Array.from({ length: count }
 }));
 
 describe('prospective review snapshots', () => {
+  it.each([
+    [undefined, null],
+    [{ direct: true, teams: [] }, []],
+    [{ direct: false, teams: ['Org/Z', 'org/a', 'org/z'] }, ['org/a', 'org/z']],
+  ])('records observed teams without inferring missing membership', (via, expected) => {
+    const capture = vi.fn();
+    const queue = rows(1);
+    queue[0].summary.reviewRequestVia = via;
+    new ReviewRankingRecorder(capture, () => 'snapshot').record(queue, context, now);
+    expect(capture.mock.calls[0][1].candidates[0]).toMatchObject({
+      requested_teams: expected, requested_team_count: expected?.length ?? null,
+    });
+  });
+
+  it('refreshes when matched teams change with the same count', () => {
+    const capture = vi.fn();
+    const queue = rows(1);
+    queue[0].summary.reviewRequestVia = { direct: false, teams: ['org/one'] };
+    const recorder = new ReviewRankingRecorder(capture, () => 'snapshot');
+    recorder.record(queue, context, now);
+    queue[0].summary.reviewRequestVia.teams = ['org/two'];
+    recorder.record(queue, context, now + 1);
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture.mock.calls[0][1].candidates[0].requested_teams).toEqual(['org/one']);
+  });
+
   it('rejects stale rows during a workspace switch', () => {
     const capture = vi.fn();
     const recorder = new ReviewRankingRecorder(capture, () => 'snapshot');

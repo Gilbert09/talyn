@@ -106,6 +106,39 @@ def test_workspaces_do_not_share_chunk_identity(tmp_path):
     assert len(snapshots) == 2
 
 
+@pytest.mark.parametrize("teams", [None, [], ["org/team"], ["org/a", "org/b"]])
+def test_observed_team_provenance(tmp_path, teams):
+    entries = events(1)
+    entries[0]["properties"]["candidates"][0].update(
+        requested_teams=teams, requested_team_count=len(teams) if teams is not None else None
+    )
+    snapshots, audit = read(tmp_path, entries)
+    assert len(snapshots) == 1
+    assert audit["candidates_with_observed_teams"] == int(teams is not None)
+
+
+@pytest.mark.parametrize(
+    "teams,count",
+    [
+        (["org/team"], 0),
+        (["org/team"], True),
+        (["org/team", "org/team"], 2),
+        (["Org/Team"], 1),
+        ([3], 1),
+        ("org/team", 1),
+        (["team"], 1),
+    ],
+)
+def test_rejects_invalid_observed_teams(tmp_path, teams, count):
+    entries = events(1)
+    entries[0]["properties"]["candidates"][0].update(
+        requested_teams=teams, requested_team_count=count
+    )
+    snapshots, audit = read(tmp_path, entries)
+    assert not snapshots
+    assert audit["rejected_snapshots"] == 1
+
+
 def test_archive_loss_counts_remain_visible_in_import_audit(tmp_path):
     path = tmp_path / "export.json"
     path.write_text(

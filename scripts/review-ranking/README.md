@@ -185,6 +185,9 @@ The client logs changed queues and refreshes stable queues every five visible mi
 The IndexedDB archive retains up to 30 days and 50 million serialized characters per workspace.
 The original seven-day localStorage log remains a fallback. Exports merge both sources.
 Archive availability and loss counters remain visible in the import audit.
+New candidates record `requested_teams` from the displayed summary, with normalized team names and a matching count.
+An empty list means no matched team. Missing or null data remains unknown.
+Exports contain these names and must remain private. They do not establish an exact request round.
 The archive can still lose history through retention limits, browser quotas, or device failures. Export regularly.
 
 The checker alone reports zero review labels. The following pipeline adds submitted-review outcomes.
@@ -220,9 +223,12 @@ uv run --frozen python -m review_rank.outcomes join \
   --output artifacts/joined.json
 ```
 
-The collector enumerates all PRs created before the end date, then paginates every review list.
+The collector enumerates all PRs created before the end date, then paginates each scoped review list.
 It includes submitted reviews on PRs absent from the queue. Dismissed reviews still count as submitted reviews.
-It fetches creation times through GraphQL and checks each review's identity against the REST record.
+The default GraphQL collector batches 50 PRs and filters each review connection by the protocol reviewer.
+It checks review identities, parent PRs, counts, pagination cursors, and both timestamps.
+Use `--transport rest` for an independent comparison through the original collector.
+That path reads every PR's reviews, then binds GraphQL creation times to REST review identities.
 Visible pending reviews and reviews submitted after the window remain censoring evidence.
 This can require many requests on large repositories. A budget limit or API error stops the collection.
 It writes no journal on failure. Increase the explicit budget and retry when appropriate.

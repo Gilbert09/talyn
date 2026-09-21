@@ -161,7 +161,7 @@ New records stay in local storage on the device.
 The **Export ranking data** button downloads them as JSON.
 No new snapshot event is sent to PostHog or another service.
 Raw titles, descriptions, code, author names, paths, and search text are omitted.
-Exports still contain reviewer login, repository names, and PR identifiers. Keep them private.
+Exports contain reviewer login, repository names, PR identifiers, and matched team names. Keep them private.
 
 An IndexedDB archive retains up to 30 days and 50 million serialized characters per workspace.
 Transactions keep each snapshot and its size metadata together. Concurrent tabs cannot overwrite each other's events.
@@ -295,6 +295,34 @@ In the collected history, 6,082 of 146,508 valid submitted reviews had a delay l
 For the focus reviewer, 38 of 3,440 exceeded one minute, and one exceeded an hour.
 This is a real validation gap, but the observed delays do not explain the main queue mismatch.
 Twenty records from a fresh API request matched the stored review identities and both timestamps exactly.
+
+## Observed requests and complete collection (2026-09-22)
+
+A separate audit read complete request histories for the 79 observed PRs.
+Replayed requests matched the current GitHub request set on 72 PRs. Seven retained extra team requests.
+None missed a current request. This checks all recipients, including teams outside the focus reviewer's membership.
+All 79 current PRs had a matching direct or team request for the focus reviewer.
+
+GitHub can replace team requests with individual assignments, or remove a team after an assigned member submits a review.
+See [GitHub's review assignment rules](https://docs.github.com/en/organizations/organizing-members-into-teams/managing-code-review-settings-for-your-team).
+These rules could explain the discrepancies. The audit has not established their cause for each PR.
+Request events alone therefore cannot establish historical team eligibility.
+Current team membership must not supply membership for earlier dates.
+
+New snapshots retain the matched team names from the displayed summary.
+An empty list means known absence; null or a missing field means unknown.
+A team change creates a new snapshot even when the count stays constant.
+The importer validates names and counts. The scoring trace still omits team names.
+These observations describe the app's stored state. They do not establish exact request times or continuous request rounds.
+
+Outcome collection now batches 50 PRs per GraphQL request, with a reviewer filter on each review connection.
+It still scans every scoped PR created before the cutoff, including PRs absent from observed queues.
+It paginates reviews, checks counts and identities, and refuses incomplete connections.
+Creation and submission times arrive with each review. The REST collector remains available for an independent comparison.
+Both collectors retain unfinished outcomes and refuse to write a complete journal after an API failure.
+GitHub still supplies no transactional snapshot. Deleted records and access restrictions remain limits.
+An independent live comparison covered 339 PRs. Both collectors returned the same eight reviews and timestamps.
+GraphQL used seven requests; REST used 344. This was a collector check, not a fresh human evaluation cohort.
 
 ## Next experiment protocol
 

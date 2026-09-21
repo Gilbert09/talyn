@@ -29,6 +29,9 @@ export function reviewRankingCandidate(
   context: ReviewRankingContext,
 ) {
   const s = row.summary;
+  const teams = s.reviewRequestVia
+    ? [...new Set(s.reviewRequestVia.teams.map((team) => team.toLowerCase()))].sort()
+    : null;
   const verdict = context.priorityById?.get(row.id) ?? row.priority;
   const features = verdict?.trace
     ? verdict.trace.rankInputs?.features ?? null
@@ -54,7 +57,8 @@ export function reviewRankingCandidate(
     affinity_features: features,
     affinity_features_source: verdict?.trace?.source ?? 'client_profile',
     direct_request: s.reviewRequestVia?.direct ?? null,
-    requested_team_count: s.reviewRequestVia?.teams.length ?? null,
+    requested_team_count: teams?.length ?? null,
+    requested_teams: teams,
     bot_author: s.prAuthorIsBot ?? null,
     draft: s.draft ?? null,
     additions: s.additions ?? null,

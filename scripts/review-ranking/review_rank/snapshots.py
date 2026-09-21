@@ -113,6 +113,20 @@ def load_snapshots(path: Path) -> tuple[list[Snapshot], dict]:
                     or not re.fullmatch(r"[\w.-]+/[\w.-]+", candidate["repo"])
                 ):
                     raise ValueError("Missing GitHub identity")
+                teams = candidate.get("requested_teams")
+                if teams is not None and (
+                    not isinstance(teams, list)
+                    or any(
+                        not isinstance(team, str)
+                        or not re.fullmatch(r"[\w.-]+/[\w.-]+", team)
+                        or team != team.lower()
+                        for team in teams
+                    )
+                    or len(set(teams)) != len(teams)
+                    or type(candidate.get("requested_team_count")) is not int
+                    or candidate.get("requested_team_count") != len(teams)
+                ):
+                    raise ValueError("Invalid observed team requests")
                 ids.add(candidate["pr_id"])
             visible, opened = set(), set()
             for observation in observations[(workspace, snapshot_id)]:
@@ -148,6 +162,11 @@ def load_snapshots(path: Path) -> tuple[list[Snapshot], dict]:
     audit["orphan_observation_groups"] = sum(key not in chunks for key in observations)
     audit["complete_snapshots"] = len(snapshots)
     audit["candidate_rows"] = sum(len(snapshot.candidates) for snapshot in snapshots)
+    audit["candidates_with_observed_teams"] = sum(
+        candidate.get("requested_teams") is not None
+        for snapshot in snapshots
+        for candidate in snapshot.candidates
+    )
     audit["visible_rows"] = sum(len(snapshot.visible) for snapshot in snapshots)
     audit["opened_rows"] = sum(len(snapshot.opened) for snapshot in snapshots)
     audit["filtered_snapshots"] = sum(snapshot.filtered for snapshot in snapshots)

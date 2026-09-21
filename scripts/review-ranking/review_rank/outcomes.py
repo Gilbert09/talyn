@@ -145,10 +145,10 @@ class GitHub:
             timeout=90,
         )
         if result.returncode:
-            raise RuntimeError("GitHub review timing read failed")
+            raise RuntimeError("GitHub GraphQL read failed")
         response = json.loads(result.stdout)
         if response.get("errors") or not response.get("data"):
-            raise ValueError("GitHub returned incomplete review timing")
+            raise ValueError("GitHub returned incomplete GraphQL data")
         return response["data"]
 
 
@@ -251,6 +251,12 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
             }
         )
     enrich_review_timing(api, reviews)
+    return outcome_journal(protocol, reviews, evidence, now, api.requests, "rest")
+
+
+def outcome_journal(
+    protocol: Protocol, reviews: dict, evidence: list, now: float, requests: int, transport: str
+) -> dict:
     completed = [
         row for row in reviews.values() if row["at"] is not None and row["at"] < protocol.end
     ]
@@ -262,21 +268,187 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
     return {
         "schema_version": 1,
         "review_timing": "github_created_at",
+        "transport": transport,
         "protocol": asdict(protocol),
         "protocol_sha256": digest(asdict(protocol)),
         "collection_started_at": now,
         "complete": True,
         "evidence": evidence,
-        "requests": api.requests,
+        "requests": requests,
         "reviews": sorted(completed, key=lambda row: (row["at"], row["id"])),
         "censored_reviews": sorted(censored, key=lambda row: (row["created_at"], row["id"])),
         "limits": [
             "Deleted or inaccessible GitHub records cannot be recovered.",
             "Review creation time is a proxy, not an observed human decision time.",
             "Pending reviews are limited to what the authenticated account can read.",
-            "The REST API does not supply a transactional snapshot.",
+            "The GitHub API does not supply a transactional snapshot.",
         ],
     }
+
+
+REVIEW_PAGE = """totalCount pageInfo { hasNextPage endCursor }
+nodes { id createdAt submittedAt state author { login } commit { oid }
+  pullRequest { number repository { nameWithOwner } } }"""
+PULL_QUERY = f"""query($owner:String!, $name:String!, $reviewer:String!, $cursor:String) {{
+  repository(owner:$owner,name:$name) {{ nameWithOwner
+    pullRequests(first:50,after:$cursor,orderBy:{{field:CREATED_AT,direction:ASC}}) {{
+      totalCount pageInfo {{ hasNextPage endCursor }}
+      nodes {{ id number createdAt
+        reviews(first:100,author:$reviewer) {{ {REVIEW_PAGE} }} }}
+    }}
+  }}
+}}"""
+REVIEW_QUERY = f"""query($id:ID!, $reviewer:String!, $cursor:String!) {{
+  node(id:$id) {{ ... on PullRequest {{ id number repository {{ nameWithOwner }}
+    reviews(first:100,after:$cursor,author:$reviewer) {{ {REVIEW_PAGE} }}
+  }} }}
+}}"""
+
+
+def connection_page(connection: dict, seen_cursors: set) -> tuple[list, int, str | None]:
+    rows, count, page = connection["nodes"], connection["totalCount"], connection["pageInfo"]
+    if (
+        not isinstance(rows, list)
+        or any(not isinstance(row, dict) for row in rows)
+        or type(count) is not int
+        or count < len(rows)
+        or type(page["hasNextPage"]) is not bool
+    ):
+        raise ValueError("Invalid GraphQL connection")
+    cursor = page["endCursor"] if page["hasNextPage"] else None
+    if page["hasNextPage"] and (
+        not rows or not isinstance(cursor, str) or not cursor or cursor in seen_cursors
+    ):
+        raise ValueError("GraphQL pagination did not advance")
+    if cursor:
+        seen_cursors.add(cursor)
+    return rows, count, cursor
+
+
+def collect_graphql(protocol: Protocol, api: GitHub, now: float) -> dict:
+    """Read every scoped PR, with reviews filtered only by the protocol reviewer."""
+    if now < protocol.end:
+        raise ValueError("The outcome window is still open")
+    reviews, evidence = {}, []
+    all_review_ids = set()
+    for repo in protocol.repos:
+        owner, name = repo.split("/")
+        cursor, seen_cursors, seen_ids, seen_numbers = None, set(), set(), set()
+        previous_created, pages = float("-inf"), 0
+        while True:
+            response = api.query(
+                PULL_QUERY,
+                {"owner": owner, "name": name, "reviewer": protocol.reviewer, "cursor": cursor},
+            )["repository"]
+            if not response or response["nameWithOwner"].lower() != repo:
+                raise ValueError("GitHub repository identity does not match the protocol")
+            pulls, count, cursor = connection_page(response["pullRequests"], seen_cursors)
+            pages += 1
+            reached_end = False
+            for pull in pulls:
+                created = required_time(pull["createdAt"])
+                if created < previous_created:
+                    raise ValueError("GitHub PR order changed during collection")
+                previous_created = created
+                if created >= protocol.end:
+                    reached_end = True
+                    break
+                number = pull["number"]
+                if (
+                    not isinstance(pull["id"], str)
+                    or not pull["id"]
+                    or type(number) is not int
+                    or number < 1
+                    or pull["id"] in seen_ids
+                    or number in seen_numbers
+                ):
+                    raise ValueError("Duplicate or invalid PR identity")
+                seen_ids.add(pull["id"])
+                seen_numbers.add(number)
+                review_connection, review_cursors = pull["reviews"], set()
+                review_count, expected = 0, None
+                while True:
+                    rows, total, review_cursor = connection_page(review_connection, review_cursors)
+                    if expected is not None and total != expected:
+                        raise ValueError("Review count changed during pagination")
+                    expected = total
+                    for row in rows:
+                        identity = row["id"]
+                        at, created_at = (
+                            timestamp(row["submittedAt"]),
+                            required_time(row["createdAt"]),
+                        )
+                        parent = row["pullRequest"]
+                        if (
+                            not isinstance(identity, str)
+                            or not identity
+                            or identity in all_review_ids
+                            or (row.get("author") or {}).get("login", "").lower()
+                            != protocol.reviewer
+                            or parent["number"] != number
+                            or parent["repository"]["nameWithOwner"].lower() != repo
+                            or (at is not None and created_at > at)
+                            or (row["submittedAt"] is not None and at is None)
+                            or row["state"]
+                            not in {
+                                "PENDING",
+                                "APPROVED",
+                                "CHANGES_REQUESTED",
+                                "COMMENTED",
+                                "DISMISSED",
+                            }
+                            or (at is None) != (row["state"] == "PENDING")
+                        ):
+                            raise ValueError("Invalid or duplicate scoped review")
+                        all_review_ids.add(identity)
+                        review_count += 1
+                        if at is not None and at < protocol.start:
+                            continue
+                        reviews[identity] = {
+                            "id": identity,
+                            "repo": repo,
+                            "number": number,
+                            "reviewer": protocol.reviewer,
+                            "at": at,
+                            "created_at": created_at,
+                            "commit": (row.get("commit") or {}).get("oid"),
+                            "state": row["state"],
+                        }
+                    if review_count > total or (review_cursor is None and review_count != total):
+                        raise ValueError("Incomplete review connection")
+                    if review_cursor is None:
+                        break
+                    more = api.query(
+                        REVIEW_QUERY,
+                        {
+                            "id": pull["id"],
+                            "reviewer": protocol.reviewer,
+                            "cursor": review_cursor,
+                        },
+                    )["node"]
+                    if (
+                        not more
+                        or more["id"] != pull["id"]
+                        or more["number"] != number
+                        or more["repository"]["nameWithOwner"].lower() != repo
+                    ):
+                        raise ValueError("Review pagination changed PR identity")
+                    review_connection = more["reviews"]
+            if reached_end:
+                break
+            if len(seen_ids) > count or (cursor is None and len(seen_ids) != count):
+                raise ValueError("Incomplete PR connection")
+            if cursor is None:
+                break
+        evidence.append(
+            {
+                "repo": repo,
+                "pull_pages": pages,
+                "pulls_scanned": len(seen_ids),
+                "enumeration_complete": True,
+            }
+        )
+    return outcome_journal(protocol, reviews, evidence, now, api.requests, "graphql")
 
 
 def validate_journal(protocol: Protocol, journal: dict) -> list[dict]:
@@ -489,6 +661,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     collector = sub.add_parser("collect")
     collector.add_argument("--max-requests", type=int, default=2000)
+    collector.add_argument("--transport", choices=["graphql", "rest"], default="graphql")
     joiner = sub.add_parser("join")
     joiner.add_argument("--journal", type=Path, required=True)
     joiner.add_argument("--exports", type=Path, nargs="+", required=True)
@@ -499,7 +672,8 @@ def main() -> None:
     args = parser.parse_args()
     protocol = Protocol.parse(json.loads(args.protocol.read_text()))
     if args.command == "collect":
-        result = collect(protocol, GitHub(args.max_requests), datetime.now(UTC).timestamp())
+        collector_fn = collect_graphql if args.transport == "graphql" else collect
+        result = collector_fn(protocol, GitHub(args.max_requests), datetime.now(UTC).timestamp())
     else:
         snapshots, import_audit = [], Counter()
         for path in args.exports:

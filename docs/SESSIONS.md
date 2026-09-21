@@ -2,6 +2,27 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: observed teams and batched outcome collection (2026-09-22)
+
+An audit of 79 current PRs reproduced the full request set on 72.
+The other seven retained extra team requests. All current requests appeared in the replay.
+GitHub's team assignment rules can remove teams, but the cause of each discrepancy remains unverified.
+Request events alone cannot establish historical team eligibility.
+
+New local snapshots retain matched team names from the displayed summary.
+Changes refresh the snapshot even when the team count stays constant. Unknown membership stays unknown.
+Imports validate names and counts. These observations do not establish exact request times or continuous request rounds.
+
+The default outcome collector now batches 50 PRs through GraphQL and paginates each review connection.
+It checks counts, identities, cursor progress, creation times, and submission times.
+It still scans every PR in the protocol scope, including PRs absent from the observed queue.
+The REST collector remains available for independent comparison.
+Both paths matched all eight reviews across 339 PRs, using seven and 344 requests respectively.
+Private source journals remain local. This check supplies no fresh human evaluation labels.
+
+Validation passed 156 focused tests, the shared build, backend type checking, ESLint, Ruff, and formatting checks.
+Production ranking remains unchanged. Fresh human outcomes and a frozen future evaluation remain required.
+
 ## Review ranking: decision timing and censored outcomes (2026-09-21)
 
 The outcome collector now joins GraphQL creation times to REST review identities.
