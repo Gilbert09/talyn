@@ -72,6 +72,8 @@ Scoring traces retain exact serving inputs and a server profile hash, without ra
 The offline parity command uses the compiled production scorer and comparator, with a version check and runtime digest.
 Snapshot headers declare repository scope. Unknown scope and explicit agent checks cannot produce human review labels.
 The lab collects scoped submitted-review journals through read-only GitHub requests, then joins earlier local snapshots.
+The primary label requires a snapshot before GitHub review creation. Submission time remains a separate sensitivity policy.
+Visible pending and late reviews can censor choices. Submitted-review conversion is measured separately from the ranking decision.
 Observed content is encoded locally with fixed weights. Later content cannot supply earlier features.
 The shared queue model has optional personal adjustments, enabled only by a separate validation window.
 Four forward windows separate training, model selection, personal validation, and development evaluation.

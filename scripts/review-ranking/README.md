@@ -203,7 +203,8 @@ The example dates are placeholders. Replace them before collection, then keep th
   "repos": ["owner/repository"],
   "start": "2026-10-01T00:00:00Z",
   "end": "2026-12-01T00:00:00Z",
-  "horizon_seconds": 86400
+  "horizon_seconds": 86400,
+  "decision_time": "created"
 }
 ```
 
@@ -221,20 +222,28 @@ uv run --frozen python -m review_rank.outcomes join \
 
 The collector enumerates all PRs created before the end date, then paginates every review list.
 It includes submitted reviews on PRs absent from the queue. Dismissed reviews still count as submitted reviews.
+It fetches creation times through GraphQL and checks each review's identity against the REST record.
+Visible pending reviews and reviews submitted after the window remain censoring evidence.
 This can require many requests on large repositories. A budget limit or API error stops the collection.
 It writes no journal on failure. Increase the explicit budget and retry when appropriate.
 It does not use GitHub search, which would impose a result limit.
 Creation order prevents new review activity from moving PRs between pages.
 Deleted records and API access gaps remain limits. GitHub does not provide a transactional snapshot.
 
-The join uses the latest snapshot strictly before each review, within 24 hours.
+The primary join uses the latest snapshot strictly before review creation, within 24 hours.
+Creation time is a proxy for the decision. It does not record when the human opened the PR.
+Set `decision_time` to `submitted` in a separate frozen protocol for a timing sensitivity comparison.
+The journal must match that protocol. Older journals without creation times must be collected again.
 Each snapshot labels its next review only. Later reviews need a fresh snapshot.
+An unfinished first review prevents a later completion from becoming that snapshot's ranking label.
 Duplicate review IDs are removed. Conflicting records stop the join.
 Filtered queues, ambiguous timestamps, missing candidates, and expired windows remain visible in the audit.
 They never become forced positive examples. Unknown request rounds remain unknown.
-A negative session needs a closed 24-hour window and no newer snapshot.
+Submitted-review conversion is separate from the ranking label.
+A review already started can still complete after a snapshot, without supplying a new ranking choice.
+A negative conversion needs a closed 24-hour window and no newer snapshot.
 Other unfinished sessions remain censored. Clicks do not supply review labels.
-The protocol declares the repository scope because version 1 exports do not store that scope independently.
+Snapshot repository scope must match the protocol. Older exports without scope cannot supply labels.
 
 ## Observe content and encode it locally
 

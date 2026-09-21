@@ -51,7 +51,9 @@ def test_newer_content_and_labels_cannot_change_earlier_features():
     source = data()
     earlier, _ = build_observed([source], embeddings())
     later = copy.deepcopy(source["choices"][0])
-    later.update(at=START + 30, review_at=START + 40, review_id="later", chosen=1)
+    later.update(
+        at=START + 30, decision_at=START + 40, review_at=START + 40, review_id="later", chosen=1
+    )
     source["choices"].append(later)
     vectors = embeddings()
     vectors["records"].append(
@@ -66,10 +68,18 @@ def test_review_after_current_snapshot_is_not_recent_activity():
     source = data()
     source["choices"][0]["review_at"] = START + 100
     later = copy.deepcopy(source["choices"][0])
-    later.update(at=START + 30, review_at=START + 40, review_id="other")
+    later.update(at=START + 30, decision_at=START + 40, review_at=START + 40, review_id="other")
     source["choices"].append(later)
     rows, _ = build_observed([source], embeddings())
     assert rows[1].choice.x[0, FEATURES.index("log_reviews_30d")] == 0
+
+
+@pytest.mark.parametrize("decision", [None, START + 9, START + 10, START + 21, float("nan")])
+def test_model_input_refuses_a_queue_at_or_after_the_review_decision(decision):
+    source = data()
+    source["choices"][0]["decision_at"] = decision
+    with pytest.raises(ValueError, match="precede"):
+        build_observed([source])
 
 
 def test_missing_and_future_times_have_explicit_missing_features():
@@ -131,6 +141,7 @@ def fixture_run():
                 {
                     "at": at,
                     "review_at": at + 60,
+                    "decision_at": at + 30,
                     "review_id": f"r-{window}-{i}",
                     "snapshot_id": f"s-{window}-{i}",
                     "chosen": chosen,

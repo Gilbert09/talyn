@@ -2,6 +2,21 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: decision timing and censored outcomes (2026-09-21)
+
+The outcome collector now joins GraphQL creation times to REST review identities.
+The default protocol requires a snapshot before review creation, rather than just before submission.
+Submission-time comparisons need their own frozen protocol. Legacy journals without timing provenance are refused.
+Visible unfinished reviews and late submissions censor the first choice instead of promoting a later completion.
+Session conversion remains separate, so an already-started review cannot create a false ranking choice or negative conversion.
+Training inputs enforce the decision-time boundary.
+
+Seventy-three focused tests passed, together with Ruff and formatting checks.
+A live GraphQL request verified 20 stored review identities and both timestamps.
+The timing gap affects 38 of 3,440 focus-reviewer records by more than a minute.
+It is real, but does not explain the main mismatch between historical and live candidate queues.
+Production ranking remains unchanged. Authoritative request rounds and fresh human outcomes remain open.
+
 ## Review ranking: longer local capture (2026-09-21)
 
 Added a shared IndexedDB archive for both clients, with 30-day retention.

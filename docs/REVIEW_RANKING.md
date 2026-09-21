@@ -273,6 +273,29 @@ The archive now retains a longer local history, with explicit loss counters and 
 Fresh human outcomes, authoritative request rounds, shadow evaluation, and controlled product evidence remain open release gates.
 Production ranking behavior remains unchanged.
 
+## Review timing and unfinished outcomes (2026-09-21)
+
+The outcome collector now records review creation and submission separately.
+GraphQL supplies creation time. Identity checks bind it to the REST review, reviewer, repository, and PR.
+The primary join requires a queue snapshot before creation. Submission timing remains a separate protocol option.
+Visible unfinished reviews and late submissions can censor a choice.
+An unfinished first review cannot be replaced with a later completed review from the same snapshot.
+Training inputs reject snapshots at or after the recorded decision time.
+
+Submitted-review conversion remains a separate observation.
+A review can finish after a snapshot even when its ranking decision occurred earlier.
+That completion can count toward conversion, but cannot become a new ranking choice for that snapshot.
+Negative conversion still requires a closed 24-hour window without a newer snapshot.
+
+Creation time is an approximation. GitHub review objects can remain pending before submission.
+Neither timestamp records the moment a human opened the PR. Pending-review visibility also depends on account access.
+See the [GitHub review API](https://docs.github.com/en/rest/pulls/reviews#about-pull-request-reviews).
+
+In the collected history, 6,082 of 146,508 valid submitted reviews had a delay longer than one minute.
+For the focus reviewer, 38 of 3,440 exceeded one minute, and one exceeded an hour.
+This is a real validation gap, but the observed delays do not explain the main queue mismatch.
+Twenty records from a fresh API request matched the stored review identities and both timestamps exactly.
+
 ## Next experiment protocol
 
 The following steps retain the agreed order. Unchecked work is not implemented yet.
@@ -282,6 +305,7 @@ The following steps retain the agreed order. Unchecked work is not implemented y
 - [x] Test available activity features through separate validation ablations.
 - [x] Add local snapshots, exposure observations, exports, and a completeness checker.
 - [x] Build a scoped outcome collector and strict snapshot join.
+- [x] Separate review creation, submission, unfinished outcomes, and session conversion.
 - [x] Collect repository histories, reconstruct earlier titles, and compare twelve models across successive periods.
 - [x] Check label-volume curves, submission-time sensitivity, and an exploratory fallback based on earlier personal results.
 - [ ] Collect fresh exports and complete outcome journals for the pilot.
@@ -298,11 +322,11 @@ Before joining outcomes, freeze the repository scope, observation window, and la
 Fetch or record all submitted reviews in that scope, with pagination and completeness checks.
 Fetching outcomes only for suggested candidates cannot establish the next review.
 Deduplicate by GitHub review ID. Keep request rounds separate.
-Use only snapshots recorded strictly before the review, within a fixed 24-hour attribution window.
+Use only snapshots recorded strictly before review creation, within a fixed 24-hour attribution window.
 For each decision, use the latest eligible snapshot; do not duplicate one review across earlier snapshots.
 Keep reviews outside the observed candidate set as coverage failures, not forced positives.
 For session conversion, wait until the 24-hour outcome window closes before assigning a negative label.
-Record review starts when available, since submission timestamps can misstate the decision context.
+Keep actual review-start observations separate from GitHub's creation-time approximation.
 
 Use additional forward time windows for model development.
 Then freeze the model, features, candidate policy, baselines, and an untouched future evaluation period.

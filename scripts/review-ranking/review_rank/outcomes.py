@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -49,6 +50,7 @@ class Protocol:
     start: float
     end: float
     horizon: int = DAY
+    decision_time: str = "created"
 
     @classmethod
     def parse(cls, payload: dict) -> "Protocol":
@@ -71,12 +73,16 @@ class Protocol:
         start, end = required_time(payload["start"]), required_time(payload["end"])
         if start >= end or payload.get("horizon_seconds", DAY) != DAY:
             raise ValueError("Use an ordered window and the fixed 24-hour horizon")
+        decision_time = payload.get("decision_time", "created")
+        if decision_time not in {"created", "submitted"}:
+            raise ValueError("Unknown review timing policy")
         return cls(
             payload["workspace"],
             payload["reviewer"].lower(),
             tuple(sorted(repo.lower() for repo in repos)),
             start,
             end,
+            decision_time=decision_time,
         )
 
 
@@ -126,6 +132,56 @@ class GitHub:
                 return
             page += 1
 
+    def query(self, query: str, variables: dict) -> dict:
+        if self.requests >= self.max_requests:
+            raise ValueError("Request budget exhausted; no complete journal was written")
+        self.requests += 1
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "graphql", "--input", "-"],
+            input=json.dumps({"query": query, "variables": variables}),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=90,
+        )
+        if result.returncode:
+            raise RuntimeError("GitHub review timing read failed")
+        response = json.loads(result.stdout)
+        if response.get("errors") or not response.get("data"):
+            raise ValueError("GitHub returned incomplete review timing")
+        return response["data"]
+
+
+def enrich_review_timing(api: GitHub, reviews: dict[str, dict]) -> None:
+    query = """query($ids:[ID!]!) { nodes(ids:$ids) { ... on PullRequestReview {
+      id createdAt submittedAt author { login }
+      pullRequest { number repository { nameWithOwner } }
+    } } }"""
+    ids = sorted(reviews)
+    for offset in range(0, len(ids), 100):
+        batch = ids[offset : offset + 100]
+        nodes = api.query(query, {"ids": batch}).get("nodes")
+        if (
+            not isinstance(nodes, list)
+            or any(not node or not node.get("id") for node in nodes)
+            or len(nodes) != len(batch)
+            or {node["id"] for node in nodes} != set(batch)
+        ):
+            raise ValueError("Review timing does not cover the complete journal")
+        for node in nodes:
+            row = reviews[node["id"]]
+            pull = node["pullRequest"]
+            created = required_time(node["createdAt"])
+            if (
+                timestamp(node["submittedAt"]) != row["at"]
+                or (row["at"] is not None and created > row["at"])
+                or (node.get("author") or {}).get("login", "").lower() != row["reviewer"]
+                or pull["repository"]["nameWithOwner"].lower() != row["repo"]
+                or pull["number"] != row["number"]
+            ):
+                raise ValueError("Review identity or timing changed during collection")
+            row["created_at"] = created
+
 
 def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
     if now < protocol.end:
@@ -155,7 +211,7 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
                 for batch in api.pages(f"repos/{repo}/pulls/{number}/reviews"):
                     for row in batch:
                         at = timestamp(row.get("submitted_at"))
-                        if at is None or not protocol.start <= at < protocol.end:
+                        if at is not None and at < protocol.start:
                             continue
                         login = (row.get("user") or {}).get("login")
                         if not login:
@@ -167,8 +223,11 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
                             "CHANGES_REQUESTED",
                             "COMMENTED",
                             "DISMISSED",
+                            "PENDING",
                         }:
                             raise ValueError("Unknown submitted review state")
+                        if (at is None) != (row["state"] == "PENDING"):
+                            raise ValueError("Review state does not match its submission time")
                         review = {
                             "id": row["node_id"],
                             "repo": repo,
@@ -191,18 +250,30 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
                 "enumeration_complete": True,
             }
         )
+    enrich_review_timing(api, reviews)
+    completed = [
+        row for row in reviews.values() if row["at"] is not None and row["at"] < protocol.end
+    ]
+    censored = [
+        row
+        for row in reviews.values()
+        if row["created_at"] < protocol.end and (row["at"] is None or row["at"] >= protocol.end)
+    ]
     return {
         "schema_version": 1,
+        "review_timing": "github_created_at",
         "protocol": asdict(protocol),
         "protocol_sha256": digest(asdict(protocol)),
         "collection_started_at": now,
         "complete": True,
         "evidence": evidence,
         "requests": api.requests,
-        "reviews": sorted(reviews.values(), key=lambda row: (row["at"], row["id"])),
+        "reviews": sorted(completed, key=lambda row: (row["at"], row["id"])),
+        "censored_reviews": sorted(censored, key=lambda row: (row["created_at"], row["id"])),
         "limits": [
             "Deleted or inaccessible GitHub records cannot be recovered.",
-            "Submission time is a proxy for the start of a review.",
+            "Review creation time is a proxy, not an observed human decision time.",
+            "Pending reviews are limited to what the authenticated account can read.",
             "The REST API does not supply a transactional snapshot.",
         ],
     }
@@ -211,6 +282,7 @@ def collect(protocol: Protocol, api: GitHub, now: float) -> dict:
 def validate_journal(protocol: Protocol, journal: dict) -> list[dict]:
     if (
         journal.get("schema_version") != 1
+        or journal.get("review_timing") != "github_created_at"
         or journal.get("complete") is not True
         or journal.get("protocol_sha256") != digest(asdict(protocol))
         or digest(journal.get("protocol")) != digest(asdict(protocol))
@@ -223,21 +295,43 @@ def validate_journal(protocol: Protocol, journal: dict) -> list[dict]:
     ):
         raise ValueError("The journal does not cover every repository")
     unique = {}
-    for row in journal["reviews"]:
+    if not isinstance(journal.get("censored_reviews"), list):
+        raise ValueError("The journal must record visible unfinished reviews")
+    for completed, row in [
+        *[(True, row) for row in journal["reviews"]],
+        *[(False, row) for row in journal["censored_reviews"]],
+    ]:
+        valid_submission = type(row.get("at")) in {int, float} and math.isfinite(row["at"])
         if (
             row["repo"] not in protocol.repos
             or row["reviewer"] != protocol.reviewer
-            or not protocol.start <= row["at"] < protocol.end
             or not isinstance(row["id"], str)
             or not row["id"]
             or type(row["number"]) is not int
             or row["number"] < 1
+            or type(row.get("created_at")) not in {int, float}
+            or not math.isfinite(row["created_at"])
+            or (row["at"] is not None and (not valid_submission or row["created_at"] > row["at"]))
+            or (
+                completed
+                and (not valid_submission or not protocol.start <= row["at"] < protocol.end)
+            )
+            or (
+                not completed
+                and (
+                    row["created_at"] >= protocol.end
+                    or (row["at"] is not None and row["at"] < protocol.end)
+                )
+            )
         ):
             raise ValueError("Review outside the protocol")
         if row["id"] in unique and unique[row["id"]] != row:
             raise ValueError("Conflicting review identity")
         unique[row["id"]] = row
-    return sorted(unique.values(), key=lambda row: (row["at"], row["id"]))
+    return sorted(
+        (row for row in unique.values() if row["at"] is not None and row["at"] < protocol.end),
+        key=lambda row: (row["at"], row["id"]),
+    )
 
 
 def join(
@@ -247,7 +341,9 @@ def join(
     excluded_snapshot_ids: frozenset[str] = frozenset(),
 ) -> dict:
     reviews = validate_journal(protocol, journal)
-    audit = Counter(submitted_reviews=len(reviews))
+    audit = Counter(
+        submitted_reviews=len(reviews), censored_reviews=len(journal["censored_reviews"])
+    )
     unique = {}
     for snapshot in snapshots:
         if (
@@ -263,7 +359,16 @@ def join(
     ordered = sorted(unique.values(), key=lambda row: (row.at, row.snapshot_id))
     assigned = defaultdict(list)
     pointer = 0
-    for at, group in groupby(reviews, key=lambda row: row["at"]):
+    time_field = "created_at" if protocol.decision_time == "created" else "at"
+    decisions = [
+        *[{**row, "decision_at": row[time_field], "outcome_complete": True} for row in reviews],
+        *[
+            {**row, "decision_at": row["created_at"], "outcome_complete": False}
+            for row in journal["censored_reviews"]
+        ],
+    ]
+    decisions.sort(key=lambda row: (row["decision_at"], row["id"]))
+    for at, group in groupby(decisions, key=lambda row: row["decision_at"]):
         group = list(group)
         while pointer < len(ordered) and ordered[pointer].at < at:
             pointer += 1
@@ -304,14 +409,28 @@ def join(
             and len(set(keys)) == len(keys)
             and times[snapshot.at] == 1
         )
+        next_at = ordered[index + 1].at if index + 1 < len(ordered) else float("inf")
+        deadline = snapshot.at + protocol.horizon
+        converted = any(snapshot.at < review["at"] <= min(deadline, next_at) for review in reviews)
+        conversion = (
+            None
+            if not eligible
+            else True
+            if converted
+            else False
+            if deadline <= protocol.end and next_at > deadline
+            else None
+        )
         if not eligible:
             status = "excluded_snapshot"
             audit["reviews_on_excluded_snapshots"] += len(outcomes)
         elif outcomes:
-            first_at = outcomes[0]["at"]
-            simultaneous = [row for row in outcomes if row["at"] == first_at]
+            first_at = outcomes[0]["decision_at"]
+            simultaneous = [row for row in outcomes if row["decision_at"] == first_at]
             audit["later_reviews_without_fresh_snapshot"] += len(outcomes) - len(simultaneous)
-            if len(simultaneous) != 1:
+            if any(not row["outcome_complete"] for row in simultaneous):
+                status = "incomplete_review"
+            elif len(simultaneous) != 1:
                 status = "ambiguous_reviews"
             else:
                 review = simultaneous[0]
@@ -327,6 +446,7 @@ def join(
                             "snapshot_id": snapshot.snapshot_id,
                             "at": snapshot.at,
                             "review_at": review["at"],
+                            "decision_at": review[time_field],
                             "review_id": review["id"],
                             "chosen": keys.index(key),
                             "candidates": candidates,
@@ -336,10 +456,21 @@ def join(
                     )
         else:
             # A newer snapshot censors this opportunity; no duplicate conversion labels.
-            next_at = ordered[index + 1].at if index + 1 < len(ordered) else float("inf")
-            deadline = snapshot.at + protocol.horizon
-            status = "no_review" if deadline <= protocol.end and next_at > deadline else "censored"
-        sessions.append({"snapshot_id": snapshot.snapshot_id, "at": snapshot.at, "status": status})
+            status = (
+                "submitted_without_new_choice"
+                if conversion is True
+                else "no_review"
+                if conversion is False
+                else "censored"
+            )
+        sessions.append(
+            {
+                "snapshot_id": snapshot.snapshot_id,
+                "at": snapshot.at,
+                "status": status,
+                "submitted_review_conversion": conversion,
+            }
+        )
         audit[status] += 1
     return {
         "schema_version": 1,

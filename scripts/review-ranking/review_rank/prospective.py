@@ -112,6 +112,12 @@ def build_observed(
                 raise ValueError("Overlapping exports duplicate a review decision")
             if not protocol.start <= row["at"] < row["review_at"] < protocol.end:
                 raise ValueError("Decision outside the observation window")
+            decision_at = row.get("decision_at")
+            if (
+                type(decision_at) not in {int, float}
+                or not row["at"] < decision_at <= row["review_at"]
+            ):
+                raise ValueError("The queue must precede the recorded review decision")
             seen.add(key)
             rows.append((row, users[protocol.reviewer]))
     rows.sort(key=lambda item: (item[0]["at"], item[1]))
