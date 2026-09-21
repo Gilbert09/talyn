@@ -10,6 +10,12 @@ import { Providers } from "@/components/sections/Providers";
 import { Pricing } from "@/components/sections/Pricing";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
+import type { Metadata } from "next";
+
+/** Moved off the root layout — see the note there on inherited canonicals. */
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 export default function Home() {
   return (

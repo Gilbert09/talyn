@@ -30,9 +30,17 @@ export const metadata: Metadata = {
     template: `%s · ${site.name}`,
   },
   description: site.description,
-  alternates: {
-    canonical: "/",
-  },
+  // NO canonical here, deliberately. Next inherits metadata down the tree, so
+  // a root `canonical: "/"` is inherited by every page that does not set its
+  // own — which declares that page a duplicate of the home page and asks
+  // Google not to index it. That is not hypothetical: Search Console reports
+  // /checkout-success under "Alternative page with proper canonical tag" for
+  // exactly this reason, and every future landing page would have joined it.
+  //
+  // With it absent, a page that forgets a canonical simply has none and Google
+  // infers self-canonical. The failure mode becomes "no hint" instead of
+  // "please de-index me". Each page sets its own; the home page's lives in
+  // app/page.tsx.
   keywords: [
     "GitHub PR management",
     "CI fixes",
