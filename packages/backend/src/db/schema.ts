@@ -1379,8 +1379,18 @@ export const reviewRankModels = pgTable(
     /** `ReviewRankFitResult['refusedBecause']` — why a refusal was a refusal. */
     refusedBecause: text('refused_because'),
     trainedAt: timestamp('trained_at', { withTimezone: true }).notNull().defaultNow(),
-    /** When the one-time history backfill completed, so it is not re-run. */
+    /** When the history backfill last completed. */
     backfilledAt: timestamp('backfilled_at', { withTimezone: true }),
+    /**
+     * Which RECIPE that backfill used — see `BACKFILL_VERSION`.
+     *
+     * A timestamp alone says "done" and cannot say "done, but to an older
+     * shape". When the collected fields change, every viewer already marked
+     * done would keep a history missing the new ones, the features reading them
+     * would return zero for everybody, and nothing would report it. Comparing a
+     * version makes that a one-line bump instead of a silent gap.
+     */
+    backfillVersion: integer('backfill_version').notNull().default(0),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.workspaceId, t.viewerLogin] }),

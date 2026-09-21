@@ -20,11 +20,13 @@ import {
   shouldRetrain,
 } from '../services/reviewPriority/sweep.js';
 import { topDirsOf } from '../services/githubGraphql.js';
+import { BACKFILL_VERSION, hasBackfilled } from '../services/reviewPriority/backfill.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
   reviewHistory as reviewHistoryTable,
+  reviewRankModels as reviewRankModelsTable,
 } from '../db/schema.js';
 
 const T0 = Date.parse('2026-01-01T00:00:00Z');
@@ -508,5 +510,66 @@ describe('recency — "these days", not "ever"', () => {
     const p = buildProfile(rows, NOW);
     expect(p.teamAffinity['posthog/ignored'].got).toBeGreaterThan(0);
     expect(p.teamAffinity['posthog/ignored'].gave).toBe(0);
+  });
+});
+
+describe('the backfill marker is VERSIONED', () => {
+  let db: Database;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    const testDb = await createTestDb();
+    db = testDb.db;
+    cleanup = testDb.cleanup;
+    await seedUser(db, { id: TEST_USER_ID });
+    await db.insert(workspacesTable).values({
+      id: 'ws2',
+      ownerId: TEST_USER_ID,
+      name: 'ws',
+      settings: {},
+    });
+  });
+
+  afterEach(async () => {
+    await cleanup();
+  });
+
+  it('re-reads a viewer backfilled under an OLDER recipe', async () => {
+    // The failure this prevents: migration 0063 added team slugs, and every
+    // viewer already marked "done" would keep a history without them. Team
+    // affinity would read zero for all of them and nothing would say so — the
+    // model just quietly gets worse than it should be.
+    await db.insert(reviewRankModelsTable).values({
+      workspaceId: 'ws2',
+      viewerLogin: 'me',
+      backfilledAt: new Date(),
+      backfillVersion: BACKFILL_VERSION - 1,
+    });
+    expect(await hasBackfilled('ws2', 'me')).toBe(false);
+  });
+
+  it('leaves a viewer on the current recipe alone', async () => {
+    await db.insert(reviewRankModelsTable).values({
+      workspaceId: 'ws2',
+      viewerLogin: 'me',
+      backfilledAt: new Date(),
+      backfillVersion: BACKFILL_VERSION,
+    });
+    expect(await hasBackfilled('ws2', 'me')).toBe(true);
+  });
+
+  it('treats the pre-column default of 0 as needing a re-read', async () => {
+    // Rows written before migration 0064 default to 0, which is below every
+    // real version — that default is what makes them re-run.
+    await db.insert(reviewRankModelsTable).values({
+      workspaceId: 'ws2',
+      viewerLogin: 'me',
+      backfilledAt: new Date(),
+    });
+    expect(await hasBackfilled('ws2', 'me')).toBe(false);
+  });
+
+  it('does not claim a viewer with no row at all is done', async () => {
+    expect(await hasBackfilled('ws2', 'nobody')).toBe(false);
   });
 });

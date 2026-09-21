@@ -45,6 +45,23 @@ import { reviewHistory, reviewRankModels } from '../../db/schema.js';
  */
 export const BACKFILL_PR_CAP = 400;
 
+/**
+ * The recipe version of the collected history.
+ *
+ * BUMP THIS whenever the shape this backfill writes changes — a new column, a
+ * different derivation, a widened cap. `hasBackfilled` compares against it, so
+ * a bump re-reads history for every viewer on the next sweep.
+ *
+ * Without it a completion marker means "done" and cannot mean "done, to an
+ * older recipe": everyone already marked done keeps a history missing the new
+ * field, every feature reading it returns zero for all of them, and nothing
+ * reports it. The model just quietly gets worse than it should be.
+ *
+ *  1 — author, repo, size, dirs, request/review timestamps
+ *  2 — adds the requesting TEAM slugs (migration 0063)
+ */
+export const BACKFILL_VERSION = 2;
+
 /** GitHub's search page size. 25 keeps each query's node count off the 504 line. */
 const PAGE_SIZE = 25;
 
@@ -333,21 +350,35 @@ export async function backfillReviewHistory(
   if (!deferred) {
     await db
       .insert(reviewRankModels)
-      .values({ workspaceId, viewerLogin, backfilledAt: new Date() })
+      .values({
+        workspaceId,
+        viewerLogin,
+        backfilledAt: new Date(),
+        backfillVersion: BACKFILL_VERSION,
+      })
       .onConflictDoUpdate({
         target: [reviewRankModels.workspaceId, reviewRankModels.viewerLogin],
-        set: { backfilledAt: new Date() },
+        set: { backfilledAt: new Date(), backfillVersion: BACKFILL_VERSION },
       });
   }
 
   return { rows: rows.length, deferred };
 }
 
-/** Whether this viewer's one-time history read has already completed. */
+/**
+ * Whether this viewer's history has been read AT THE CURRENT RECIPE.
+ *
+ * Not merely "has it ever been read". A viewer backfilled under an older
+ * {@link BACKFILL_VERSION} is missing whatever that version did not collect, so
+ * they are re-read — which is the whole point of versioning the marker.
+ */
 export async function hasBackfilled(workspaceId: string, viewerLogin: string): Promise<boolean> {
   const db = getPoolDbClient();
   const [row] = await db
-    .select({ backfilledAt: reviewRankModels.backfilledAt })
+    .select({
+      backfilledAt: reviewRankModels.backfilledAt,
+      backfillVersion: reviewRankModels.backfillVersion,
+    })
     .from(reviewRankModels)
     .where(
       and(
@@ -356,5 +387,5 @@ export async function hasBackfilled(workspaceId: string, viewerLogin: string): P
       ),
     )
     .limit(1);
-  return !!row?.backfilledAt;
+  return !!row?.backfilledAt && (row.backfillVersion ?? 0) >= BACKFILL_VERSION;
 }
