@@ -1332,6 +1332,12 @@ export const reviewHistory = pgTable(
     deletions: integer('deletions'),
     /** Top-level directories the PR touched, for the path-familiarity feature. */
     dirs: text('dirs').array().notNull().default(sql`'{}'`),
+    /**
+     * Team slugs (`org/team`) whose review request put this PR in front of the
+     * viewer. Empty is a real answer — an individually-requested PR names no
+     * team — not a missing value.
+     */
+    teams: text('teams').array().notNull().default(sql`'{}'`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

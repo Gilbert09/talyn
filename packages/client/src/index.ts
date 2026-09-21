@@ -302,6 +302,8 @@ export interface ReviewRankPayload {
   authorAffinity: Record<string, { gave: number; got: number }>;
   dirAffinity: Record<string, number>;
   repoAffinity: Record<string, number>;
+  /** Per team slug: responded / requested, recency-weighted. */
+  teamAffinity: Record<string, { gave: number; got: number }>;
   /**
    * Per-feature mean and sd. On the PROFILE, not inside the model: they
    * describe the viewer's population of PRs rather than any particular fit, and
@@ -775,6 +777,15 @@ export interface PRSummaryShape {
    * and shipping every path on every poll would be real egress for that.
    */
   topDirs?: string[];
+  /**
+   * Whether a MACHINE opened this PR, from GitHub's own `__typename`.
+   *
+   * The login alone is not enough: `dependabot[bot]` carries the suffix, a
+   * GitHub App need not, and PostHog's automation opens PRs as `@PostHog` — an
+   * Organization account with an ordinary-looking name. Absent means UNKNOWN,
+   * never "a person wrote this".
+   */
+  prAuthorIsBot?: boolean;
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;

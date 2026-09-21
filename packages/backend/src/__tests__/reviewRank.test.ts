@@ -27,6 +27,7 @@ function profile(over: Partial<ReviewRankProfile> = {}): ReviewRankProfile {
     authorAffinity: {},
     dirAffinity: {},
     repoAffinity: {},
+    teamAffinity: {},
     model: null,
     ...over,
   };
@@ -42,7 +43,7 @@ describe('reviewRankFeatures', () => {
 
   it('is all zeroes with no profile, so a cold user is not invented for', () => {
     const f = reviewRankFeatures({ author: 'sarah', repoFullName: 'acme/widgets' }, null);
-    expect(f.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(f.slice(0, 5)).toEqual([0, 0, 0, 0, 0]);
   });
 
   it('separates reviews you GAVE from reviews you GOT', () => {
@@ -105,30 +106,30 @@ describe('reviewRankFeatures', () => {
 });
 
 describe('standardize', () => {
-  const stats = { mean: [1, 1, 1, 1, 1], sd: [2, 2, 2, 2, 2] };
+  const stats = { mean: [1, 1, 1, 1, 1, 1], sd: [2, 2, 2, 2, 2, 2] };
 
   it('z-scores each column', () => {
-    expect(standardize([3, 3, 3, 3, 3], stats)).toEqual([1, 1, 1, 1, 1]);
+    expect(standardize([3, 3, 3, 3, 3, 3], stats)).toEqual([1, 1, 1, 1, 1, 1]);
   });
 
   it('maps an unknown to the MEAN, which is zero once standardised', () => {
     // The honest stand-in for "we do not know": it contributes nothing rather
     // than pulling the score in either direction.
-    expect(standardize([Number.NaN, 1, 1, 1, 1], stats)[0]).toBe(0);
+    expect(standardize([Number.NaN, 1, 1, 1, 1, 1], stats)[0]).toBe(0);
   });
 
   it('survives a feature that never varied', () => {
     // sd = 0 would divide by zero and poison every downstream number.
-    const flat = { mean: [0, 0, 0, 0, 0], sd: [0, 0, 0, 0, 0] };
-    expect(standardize([5, 5, 5, 5, 5], flat).every((v) => v === 0)).toBe(true);
+    const flat = { mean: [0, 0, 0, 0, 0, 0], sd: [0, 0, 0, 0, 0, 0] };
+    expect(standardize([5, 5, 5, 5, 5, 5], flat).every((v) => v === 0)).toBe(true);
   });
 });
 
 describe('computeFeatureStats', () => {
   it('computes mean and sample sd per column', () => {
     const stats = computeFeatureStats([
-      [1, 0, 0, 0, 0],
-      [3, 0, 0, 0, 0],
+      [1, 0, 0, 0, 0, 0],
+      [3, 0, 0, 0, 0, 0],
     ]);
     expect(stats.mean[0]).toBe(2);
     expect(stats.sd[0]).toBeCloseTo(Math.SQRT2, 6);
@@ -136,8 +137,8 @@ describe('computeFeatureStats', () => {
 
   it('ignores unknowns rather than treating them as zero', () => {
     const stats = computeFeatureStats([
-      [10, 0, 0, 0, 0],
-      [Number.NaN, 0, 0, 0, 0],
+      [10, 0, 0, 0, 0, 0],
+      [Number.NaN, 0, 0, 0, 0, 0],
     ]);
     expect(stats.mean[0]).toBe(10);
   });
@@ -153,15 +154,15 @@ describe('applyReviewRank and its contributions', () => {
   it('sums the per-feature contributions EXACTLY', () => {
     // The property the reason chip depends on: "ranked high because you review
     // Alex often (+0.8)" is only true if the parts add up to the whole.
-    const f = [1, 2, 3, 4, 5];
-    const w = [0.1, -0.2, 0.3, -0.4, 0.5];
+    const f = [1, 2, 3, 4, 5, 6];
+    const w = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6];
     const total = applyReviewRank(f, w);
     const parts = reviewRankContributions(f, w).reduce((a, c) => a + c.value, 0);
     expect(parts).toBeCloseTo(total, 12);
   });
 
   it('names every feature in its contribution list', () => {
-    expect(reviewRankContributions([0, 0, 0, 0, 0], [0, 0, 0, 0, 0]).map((c) => c.feature)).toEqual(
+    expect(reviewRankContributions([0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]).map((c) => c.feature)).toEqual(
       [...REVIEW_RANK_FEATURES],
     );
   });
@@ -195,7 +196,7 @@ function syntheticPairs(trueWeights: number[], n: number): ReviewRankPair[] {
 
 describe('fitReviewRank', () => {
   it('recovers the DIRECTION of known weights', () => {
-    const truth = [1.5, -0.8, 0.4, 0, 0];
+    const truth = [1.5, -0.8, 0.4, 0, 0, 0];
     const w = fitReviewRank(syntheticPairs(truth, 400), 0.1);
     expect(Math.sign(w[0])).toBe(1);
     expect(Math.sign(w[1])).toBe(-1);
@@ -207,14 +208,14 @@ describe('fitReviewRank', () => {
     // that package has no regularization, and on near-separable data at this
     // sample size an unregularized fit walks to infinity — at which point the
     // contribution breakdown the chip renders stops meaning anything.
-    const pairs = syntheticPairs([3, 0, 0, 0, 0], 300);
+    const pairs = syntheticPairs([3, 0, 0, 0, 0, 0], 300);
     const strong = fitReviewRank(pairs, 10);
     expect(strong.every((v) => Number.isFinite(v))).toBe(true);
     expect(Math.max(...strong.map(Math.abs))).toBeLessThan(50);
   });
 
   it('shrinks harder as lambda rises', () => {
-    const pairs = syntheticPairs([2, 1, 0, 0, 0], 300);
+    const pairs = syntheticPairs([2, 1, 0, 0, 0, 0], 300);
     const light = fitReviewRank(pairs, 0.01);
     const heavy = fitReviewRank(pairs, 10);
     expect(Math.abs(heavy[0])).toBeLessThan(Math.abs(light[0]));
@@ -228,7 +229,7 @@ describe('fitReviewRank', () => {
     // A NaN weight silently ranks every PR identically, which reads as the
     // sort being broken rather than the model being wrong.
     const degenerate: ReviewRankPair[] = Array.from({ length: 20 }, (_, i) => ({
-      diff: [0, 0, 0, 0, 0],
+      diff: [0, 0, 0, 0, 0, 0],
       eventKey: `e${i}`,
     }));
     expect(fitReviewRank(degenerate, 1).every(Number.isFinite)).toBe(true);
@@ -241,16 +242,16 @@ describe('groupFoldsByEvent', () => {
     // Splitting them trains on part of a decision and validates on the rest of
     // the same decision, so the accuracy measures memorisation.
     const pairs: ReviewRankPair[] = [
-      { diff: [0, 0, 0, 0, 0], eventKey: 'e1' },
-      { diff: [0, 0, 0, 0, 0], eventKey: 'e1' },
-      { diff: [0, 0, 0, 0, 0], eventKey: 'e1' },
+      { diff: [0, 0, 0, 0, 0, 0], eventKey: 'e1' },
+      { diff: [0, 0, 0, 0, 0, 0], eventKey: 'e1' },
+      { diff: [0, 0, 0, 0, 0, 0], eventKey: 'e1' },
     ];
     expect(new Set(groupFoldsByEvent(pairs, 5)).size).toBe(1);
   });
 
   it('spreads different events across the folds', () => {
     const pairs: ReviewRankPair[] = Array.from({ length: 10 }, (_, i) => ({
-      diff: [0, 0, 0, 0, 0],
+      diff: [0, 0, 0, 0, 0, 0],
       eventKey: `e${i}`,
     }));
     expect(new Set(groupFoldsByEvent(pairs, 5)).size).toBe(5);
@@ -258,7 +259,7 @@ describe('groupFoldsByEvent', () => {
 
   it('is deterministic, so a retrain on unchanged data cannot flip the gate', () => {
     const pairs: ReviewRankPair[] = Array.from({ length: 20 }, (_, i) => ({
-      diff: [0, 0, 0, 0, 0],
+      diff: [0, 0, 0, 0, 0, 0],
       eventKey: `e${i % 7}`,
     }));
     expect(groupFoldsByEvent(pairs, 5)).toEqual(groupFoldsByEvent(pairs, 5));
@@ -267,9 +268,9 @@ describe('groupFoldsByEvent', () => {
 
 describe('pairwiseAccuracy', () => {
   it('is 1 when every pair is ordered right, and 0 when every one is wrong', () => {
-    const pairs: ReviewRankPair[] = [{ diff: [1, 0, 0, 0, 0], eventKey: 'e1' }];
-    expect(pairwiseAccuracy(pairs, [1, 0, 0, 0, 0])).toBe(1);
-    expect(pairwiseAccuracy(pairs, [-1, 0, 0, 0, 0])).toBe(0);
+    const pairs: ReviewRankPair[] = [{ diff: [1, 0, 0, 0, 0, 0], eventKey: 'e1' }];
+    expect(pairwiseAccuracy(pairs, [1, 0, 0, 0, 0, 0])).toBe(1);
+    expect(pairwiseAccuracy(pairs, [-1, 0, 0, 0, 0, 0])).toBe(0);
   });
 
   it('is 0 for no pairs rather than NaN', () => {
@@ -282,7 +283,7 @@ describe('fitAndValidateReviewRank — the install gate', () => {
     // Not fitted with fewer features, not fitted with heavier regularization —
     // not fitted. A "model" trained on forty rows is worse than none, because
     // it gets reported as one.
-    const result = fitAndValidateReviewRank(syntheticPairs([2, 0, 0, 0, 0], 400), 40);
+    const result = fitAndValidateReviewRank(syntheticPairs([2, 0, 0, 0, 0, 0], 400), 40);
     expect(result.installed).toBe(false);
     expect(result.refusedBecause).toBe('too_few_events');
     expect(result.weights).toEqual(REVIEW_RANK_PRIOR);
@@ -292,7 +293,7 @@ describe('fitAndValidateReviewRank — the install gate', () => {
     // A model that merely ties the prior is a liability: harder to reason
     // about, changes when the data changes, buys nothing.
     const noise: ReviewRankPair[] = Array.from({ length: 200 }, (_, i) => ({
-      diff: [0, 0, 0, 0, 0],
+      diff: [0, 0, 0, 0, 0, 0],
       eventKey: `e${Math.floor(i / 4)}`,
     }));
     const result = fitAndValidateReviewRank(noise, 400);
@@ -304,7 +305,7 @@ describe('fitAndValidateReviewRank — the install gate', () => {
     // A viewer whose behaviour is the OPPOSITE of the shipped prior — they
     // reliably read the big PRs from people they rarely review. The prior does
     // badly here, which is exactly when a personal model earns its place.
-    const truth = [-1.5, 0, 0, 0, 1.5];
+    const truth = [-1.5, 0, 0, 0, 0, 1.5];
     const result = fitAndValidateReviewRank(syntheticPairs(truth, 600), 400);
     expect(result.installed).toBe(true);
     expect(result.cvAccuracy).toBeGreaterThan(result.baselineAccuracy + REVIEW_RANK_MIN_LIFT);
@@ -313,7 +314,7 @@ describe('fitAndValidateReviewRank — the install gate', () => {
   it('records the numbers even when it refuses', () => {
     // "We looked and it was not worth it" is a fact with evidence, not an
     // absence — and it is how we find out later whether this was worth building.
-    const result = fitAndValidateReviewRank(syntheticPairs([1, 0, 0, 0, 0], 20), 10);
+    const result = fitAndValidateReviewRank(syntheticPairs([1, 0, 0, 0, 0, 0], 20), 10);
     expect(result.baselineAccuracy).toBeGreaterThanOrEqual(0);
     expect(result).toHaveProperty('cvAccuracy');
   });
@@ -339,7 +340,7 @@ describe('the blend', () => {
       effectiveReviewRankWeights({
         installed: false,
         nEvents: 9_000,
-        weights: [9, 9, 9, 9, 9],
+        weights: [9, 9, 9, 9, 9, 9],
         featureStats: { mean: [], sd: [] },
         cvAccuracy: 0,
         baselineAccuracy: 0,
@@ -351,19 +352,19 @@ describe('the blend', () => {
     const w = effectiveReviewRankWeights({
       installed: true,
       nEvents: REVIEW_RANK_FULL_EVENTS,
-      weights: [2, 2, 2, 2, 2],
+      weights: [2, 2, 2, 2, 2, 2],
       featureStats: { mean: [], sd: [] },
       cvAccuracy: 0.7,
       baselineAccuracy: 0.6,
     });
-    expect(w).toEqual([2, 2, 2, 2, 2]);
+    expect(w).toEqual([2, 2, 2, 2, 2, 2]);
   });
 
   it('is exactly the prior at the floor, so crossing it changes nothing', () => {
     const w = effectiveReviewRankWeights({
       installed: true,
       nEvents: REVIEW_RANK_MIN_EVENTS,
-      weights: [2, 2, 2, 2, 2],
+      weights: [2, 2, 2, 2, 2, 2],
       featureStats: { mean: [], sd: [] },
       cvAccuracy: 0.7,
       baselineAccuracy: 0.6,

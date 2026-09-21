@@ -949,6 +949,10 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     // A handful of short strings — the ranking asks "do you know this part of
     // the codebase", which two path segments answer.
     topDirs: s.topDirs,
+    // GitHub's own answer to "did a machine open this", not a guess from the
+    // login — which misses an App with no `[bot]` suffix and an Organization
+    // account entirely.
+    prAuthorIsBot: s.prAuthorIsBot,
     // Whether the viewer has already looked, and when. Distinguishes a
     // re-review from a PR nobody has opened — different work, and until now
     // indistinguishable on the list.
@@ -1052,6 +1056,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     additions: meta.additions as number | undefined,
     deletions: meta.deletions as number | undefined,
     topDirs: meta.topDirs as string[] | undefined,
+    prAuthorIsBot: meta.prAuthorIsBot as boolean | undefined,
     viewerLatestReview: (meta.viewerLatestReview as PRSummary['viewerLatestReview']) ?? null,
     reviewRequestVia: meta.reviewRequestVia as PRSummary['reviewRequestVia'],
     // Left undefined (not '') on rows cached before it shipped: the merge

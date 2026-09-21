@@ -105,6 +105,16 @@ export interface PRSummary {
   /** How many of the unresolved threads the VIEWER opened. */
   unresolvedThreadsOpenedByViewer?: number;
   /**
+   * Whether the PR was opened by a MACHINE rather than a person.
+   *
+   * From GitHub's own `__typename`, not guessed from the login. The login only
+   * catches the obvious cases: `dependabot[bot]` has the suffix, a GitHub App
+   * need not, and PostHog's automation opens PRs as `@PostHog` — an
+   * Organization account with an entirely ordinary-looking name. Absent on rows
+   * cached before this shipped, and absent means UNKNOWN, never "human".
+   */
+  prAuthorIsBot?: boolean;
+  /**
    * The top-level directories the PR touches, derived from a 20-file sample.
    *
    * A handful of short strings rather than the file list itself: the ranking
@@ -1116,7 +1126,12 @@ function prFieldsSelection(numberExpr: string | null): string {
   reviewDecision
   viewerCanEnableAutoMerge
   autoMergeRequest { enabledAt enabledBy { login } mergeMethod }
-  author { login }
+  # __typename, not just the login. A "[bot]" suffix catches Dependabot and
+  # misses everything else: a GitHub App whose login has no suffix, an
+  # Organization (PostHog's own automation opens PRs as @PostHog, which is an
+  # Organization account), and a Mannequin from an import. Free — a scalar on a
+  # node already being fetched.
+  author { login __typename }
   labels(first: 30) { nodes { name } }
   reviewRequests(first: 50) {
     nodes {
@@ -1294,7 +1309,7 @@ interface RawPullRequest {
     enabledBy: { login: string } | null;
     mergeMethod: string | null;
   } | null;
-  author: { login: string } | null;
+  author: { login: string; __typename?: string } | null;
   labels?: { nodes: Array<{ name: string }> } | null;
   reviewRequests: {
     nodes: Array<{
@@ -1557,6 +1572,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     unresolvedThreadsOpenedByViewer,
     url: raw.url,
     author: raw.author?.login ?? '',
+    prAuthorIsBot: raw.author ? !isHumanAuthor(raw.author) : undefined,
     labels: (raw.labels?.nodes ?? []).map((l) => l.name),
     draft: raw.isDraft,
     state,
@@ -1609,6 +1625,23 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
         url: c.url,
       })),
   };
+}
+
+/**
+ * Was this pull request opened by a PERSON?
+ *
+ * Only `User` counts. `Bot` is a GitHub App, `Organization` is automation
+ * acting as the org itself, and `Mannequin` is a placeholder left by an
+ * importer — none of them is somebody waiting on your review, and all three
+ * were invisible to the old `[bot]`-suffix check.
+ *
+ * An author we cannot read at all is treated as human, matching `isBotActor`
+ * below: the conservative direction is to leave a PR in the list rather than
+ * quietly demote one nobody asked us to.
+ */
+function isHumanAuthor(author: { login: string; __typename?: string }): boolean {
+  if (author.__typename && author.__typename !== 'User') return false;
+  return !/\[bot\]$/i.test(author.login);
 }
 
 /**

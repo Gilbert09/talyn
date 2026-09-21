@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { REVIEW_RANK_MIN_EVENTS } from '@talyn/shared';
+import {
+  REVIEW_AFFINITY_HALF_LIFE_DAYS,
+  REVIEW_RANK_MIN_EVENTS,
+  recencyWeight,
+} from '@talyn/shared';
 import {
   MAX_CHOICE_SET,
   buildPairs,
@@ -37,6 +41,7 @@ function histRow(over: Partial<TrainingRow> = {}): TrainingRow {
     additions: 50,
     deletions: 10,
     dirs: ['src/api'],
+    teams: [],
     ...over,
   };
 }
@@ -77,40 +82,51 @@ describe('topDirsOf', () => {
 });
 
 describe('buildProfile', () => {
+  /**
+   * `buildProfile` is recency-weighted, so a test that does not pin `now` is
+   * really testing how long ago its fixtures were written. These fixtures live
+   * at T0, so the clock goes just after them.
+   */
+  const buildProfileAt = (rows: TrainingRow[]) => buildProfile(rows, T0 + 3 * 3_600_000);
+
   it('counts a review performed as "gave", and every request as "got"', () => {
-    const p = buildProfile([
+    const p = buildProfileAt([
       histRow({ prNumber: 1, authorLogin: 'sarah', reviewedAt: at(1) }),
       histRow({ prNumber: 2, authorLogin: 'sarah', reviewedAt: null }),
     ]);
-    expect(p.authorAffinity.sarah).toEqual({ gave: 1, got: 2 });
+    // Close-to, not equal: every contribution is recency-weighted, so these
+    // are weights rather than counts. A review seconds old is worth ~1, never
+    // exactly 1.
+    expect(p.authorAffinity.sarah.gave).toBeCloseTo(1, 2);
+    expect(p.authorAffinity.sarah.got).toBeCloseTo(2, 2);
   });
 
   it('counts the DENOMINATOR, which is what makes affinity a rate', () => {
     // Built only from reviews performed it would say "you review the people you
     // review" — true, and useless for ranking.
-    const p = buildProfile([
+    const p = buildProfileAt([
       histRow({ prNumber: 1, authorLogin: 'eager', reviewedAt: at(1) }),
       histRow({ prNumber: 2, authorLogin: 'ignored', reviewedAt: null }),
       histRow({ prNumber: 3, authorLogin: 'ignored', reviewedAt: null }),
     ]);
-    expect(p.authorAffinity.eager.got).toBe(1);
+    expect(p.authorAffinity.eager.got).toBeCloseTo(1, 2);
     expect(p.authorAffinity.ignored.gave).toBe(0);
-    expect(p.authorAffinity.ignored.got).toBe(2);
+    expect(p.authorAffinity.ignored.got).toBeCloseTo(2, 2);
   });
 
   it('credits directories only for reviews ACTUALLY performed', () => {
     // A PR you were asked about and ignored taught you nothing about its files.
     // Counting it would make "familiar with" mean "adjacent to".
-    const p = buildProfile([
+    const p = buildProfileAt([
       histRow({ prNumber: 1, dirs: ['src/read'], reviewedAt: at(1) }),
       histRow({ prNumber: 2, dirs: ['src/ignored'], reviewedAt: null }),
     ]);
-    expect(p.dirAffinity['src/read']).toBe(1);
+    expect(p.dirAffinity['src/read']).toBeCloseTo(1, 2);
     expect(p.dirAffinity['src/ignored']).toBeUndefined();
   });
 
   it('expresses repo affinity as a share that sums to one', () => {
-    const p = buildProfile([
+    const p = buildProfileAt([
       histRow({ prNumber: 1, repoFullName: 'acme/a', reviewedAt: at(1) }),
       histRow({ prNumber: 2, repoFullName: 'acme/a', reviewedAt: at(1) }),
       histRow({ prNumber: 3, repoFullName: 'acme/b', reviewedAt: at(1) }),
@@ -120,13 +136,13 @@ describe('buildProfile', () => {
   });
 
   it('lowercases logins and repos so casing cannot split a person in two', () => {
-    const p = buildProfile([histRow({ authorLogin: 'SaRaH', repoFullName: 'ACME/Widgets' })]);
+    const p = buildProfileAt([histRow({ authorLogin: 'SaRaH', repoFullName: 'ACME/Widgets' })]);
     expect(p.authorAffinity.sarah).toBeDefined();
     expect(p.repoAffinity['acme/widgets']).toBeDefined();
   });
 
   it('survives a history with no reviews at all', () => {
-    const p = buildProfile([histRow({ reviewedAt: null })]);
+    const p = buildProfileAt([histRow({ reviewedAt: null })]);
     expect(Object.values(p.repoAffinity).every((v) => v === 0)).toBe(true);
   });
 });
@@ -396,5 +412,101 @@ describe('the sweep actually runs', () => {
     reviewPrioritySweep.stop();
     await vi.advanceTimersByTimeAsync(BOOT_DELAY_MS + SWEEP_INTERVAL_MS);
     expect(tick).not.toHaveBeenCalled();
+  });
+});
+
+describe('recency — "these days", not "ever"', () => {
+  const NOW = Date.parse('2026-09-21T00:00:00Z');
+  const daysAgo = (d: number) => new Date(NOW - d * 86_400_000);
+
+  it('halves a contribution at the half-life', () => {
+    expect(recencyWeight(0)).toBe(1);
+    expect(recencyWeight(REVIEW_AFFINITY_HALF_LIFE_DAYS)).toBeCloseTo(0.5, 6);
+    expect(recencyWeight(REVIEW_AFFINITY_HALF_LIFE_DAYS * 2)).toBeCloseTo(0.25, 6);
+  });
+
+  it('decays smoothly rather than falling off a window edge', () => {
+    // A cutoff would make somebody's affinity lurch the day an old review
+    // dropped out of it, and there is no principled place to put the edge.
+    const a = recencyWeight(89);
+    const b = recencyWeight(91);
+    expect(a).toBeGreaterThan(b);
+    expect(a - b).toBeLessThan(0.02);
+  });
+
+  it('never rewards a future or nonsense timestamp with more than full weight', () => {
+    expect(recencyWeight(-10)).toBe(1);
+    expect(recencyWeight(Number.NaN)).toBe(1);
+  });
+
+  it('ranks a team reviewed RECENTLY above one reviewed long ago', () => {
+    // The whole point. Without decay these two are identical — both are
+    // "20 reviews given, 20 requested" — and the profile can only say who the
+    // viewer has EVER worked with, never who they work with now.
+    const rows: TrainingRow[] = [
+      ...Array.from({ length: 20 }, (_, i) =>
+        histRow({
+          prNumber: 100 + i,
+          teams: ['posthog/current'],
+          requestedAt: daysAgo(10),
+          reviewedAt: daysAgo(9),
+        }),
+      ),
+      ...Array.from({ length: 20 }, (_, i) =>
+        histRow({
+          prNumber: 200 + i,
+          teams: ['posthog/former'],
+          requestedAt: daysAgo(400),
+          reviewedAt: daysAgo(399),
+        }),
+      ),
+    ];
+    const p = buildProfile(rows, NOW);
+    expect(p.teamAffinity['posthog/current'].gave).toBeGreaterThan(
+      p.teamAffinity['posthog/former'].gave * 5,
+    );
+  });
+
+  it('keeps the RATE intact for a team that is simply quiet now', () => {
+    // Decay must shrink both halves together. A team you always serviced and
+    // which has gone quiet should read as "still trusted, just idle" — not as
+    // one you ignore.
+    const rows: TrainingRow[] = Array.from({ length: 10 }, (_, i) =>
+      histRow({
+        prNumber: 300 + i,
+        teams: ['posthog/quiet'],
+        requestedAt: daysAgo(300),
+        reviewedAt: daysAgo(299),
+      }),
+    );
+    const p = buildProfile(rows, NOW);
+    const t = p.teamAffinity['posthog/quiet'];
+    expect(t.gave / t.got).toBeCloseTo(1, 6);
+  });
+
+  it('decays author affinity the same way', () => {
+    const rows: TrainingRow[] = [
+      histRow({ prNumber: 1, authorLogin: 'recent', requestedAt: daysAgo(5), reviewedAt: daysAgo(4) }),
+      histRow({ prNumber: 2, authorLogin: 'lapsed', requestedAt: daysAgo(500), reviewedAt: daysAgo(499) }),
+    ];
+    const p = buildProfile(rows, NOW);
+    expect(p.authorAffinity.recent.gave).toBeGreaterThan(p.authorAffinity.lapsed.gave * 10);
+  });
+
+  it('counts an unreviewed request against the team, recency-weighted', () => {
+    // The denominator matters as much as the numerator: ignoring recent
+    // requests is what "I don't review for them these days" actually looks
+    // like in the data.
+    const rows: TrainingRow[] = Array.from({ length: 10 }, (_, i) =>
+      histRow({
+        prNumber: 400 + i,
+        teams: ['posthog/ignored'],
+        requestedAt: daysAgo(6),
+        reviewedAt: null,
+      }),
+    );
+    const p = buildProfile(rows, NOW);
+    expect(p.teamAffinity['posthog/ignored'].got).toBeGreaterThan(0);
+    expect(p.teamAffinity['posthog/ignored'].gave).toBe(0);
   });
 });

@@ -67,7 +67,7 @@ function learned(feature: (typeof REVIEW_RANK_FEATURES)[number], over: Partial<R
     dirAffinity: {},
     repoAffinity: {},
     ...over,
-    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
     model: {
       installed: true,
       nEvents: 10_000,
@@ -386,6 +386,16 @@ describe('the reason vocabulary', () => {
         {
           now: NOW,
           profile: learned('repoAffinity', { repoAffinity: { 'acme/widgets': 0.9 } }),
+        } as typeof ctx,
+      ],
+      [
+        'their_team',
+        row({ reviewRequestVia: { direct: false, teams: ['posthog/hogql'] } }),
+        {
+          now: NOW,
+          profile: learned('teamAffinity', {
+            teamAffinity: { 'posthog/hogql': { gave: 30, got: 30 } },
+          }),
         } as typeof ctx,
       ],
       [
@@ -709,14 +719,15 @@ describe('the learned term — its limits are the safety property', () => {
     authorAffinity: { [author]: { gave: 10_000, got: 10_000 } },
     dirAffinity: {},
     repoAffinity: { 'acme/widgets': 1 },
-    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    teamAffinity: {},
+    featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
     model: {
       installed: true,
       nEvents: 10_000,
       // Absurd weights on every feature — far beyond anything a fit would
       // produce. The clamp has to hold against a model that has gone wrong,
       // not merely against a reasonable one.
-      weights: [50, 50, 50, 50, 50],
+      weights: [50, 50, 50, 50, 50, 50],
       cvAccuracy: 0.9,
       baselineAccuracy: 0.5,
     },
@@ -769,11 +780,12 @@ describe('the learned term — its limits are the safety property', () => {
       authorAffinity: { sarah: { gave: 100, got: 100 } },
       dirAffinity: {},
       repoAffinity: {},
+      teamAffinity: {},
       featureStats: null,
       model: {
         installed: true,
         nEvents: 500,
-        weights: [5, 5, 5, 5, 5],
+        weights: [5, 5, 5, 5, 5, 5],
         cvAccuracy: 0.8,
         baselineAccuracy: 0.5,
       },
@@ -789,11 +801,12 @@ describe('the learned term — its limits are the safety property', () => {
       authorAffinity: { sarah: { gave: 200, got: 0 } },
       dirAffinity: {},
       repoAffinity: {},
-      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      teamAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
       model: {
         installed: false,
         nEvents: 12,
-        weights: [0, 0, 0, 0, 0],
+        weights: [0, 0, 0, 0, 0, 0],
         cvAccuracy: 0,
         baselineAccuracy: 0.5,
       },
@@ -810,7 +823,8 @@ describe('the learned term — its limits are the safety property', () => {
       authorAffinity: { sarah: { gave: 60, got: 40 }, stranger: { gave: 0, got: 1 } },
       dirAffinity: {},
       repoAffinity: {},
-      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      teamAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
       model: null,
     };
     const c = { now: NOW, profile: p };
@@ -827,7 +841,8 @@ describe('the learned term — its limits are the safety property', () => {
       authorAffinity: { sarah: { gave: 200, got: 200 } },
       dirAffinity: {},
       repoAffinity: {},
-      featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+      teamAffinity: {},
+      featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
       model: null,
     };
     const c = { now: NOW, profile: p };
@@ -857,11 +872,12 @@ describe('the chip can actually name the model', () => {
     authorAffinity: { [author]: { gave: 80, got: 80 } },
     dirAffinity: { 'posthog/hogql': 40 },
     repoAffinity: { 'acme/widgets': 0.8 },
-    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    teamAffinity: {},
+    featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
     model: {
       installed: true,
       nEvents: 201,
-      weights: [1, 0.8, 0.5, 0.3, -0.3],
+      weights: [1, 0.8, 0.5, 0.3, 0.7, -0.3],
       cvAccuracy: 0.72,
       baselineAccuracy: 0.63,
     },
@@ -927,5 +943,115 @@ describe('the chip can actually name the model', () => {
 
   it('changes nothing when there is no model at all', () => {
     expect(scorePRForReview(row({ waitedHours: 30 }), ctx).topReason?.reason).toBe('waited');
+  });
+});
+
+describe('machine-authored PRs', () => {
+  it('trusts GitHub’s own answer over the login', () => {
+    // The case that prompted this: PostHog's automation opens PRs as
+    // `@PostHog`, an ORGANIZATION account whose name looks entirely human. The
+    // old `[bot]`-suffix check scored it as a person and left a wall of
+    // machine-authored PRs sitting at the top of the list.
+    expect(reasonsOf(row({ author: 'PostHog', prAuthorIsBot: true }))).toContain('bot_author');
+  });
+
+  it('still catches the obvious suffix on rows cached before the field shipped', () => {
+    expect(reasonsOf(row({ author: 'dependabot[bot]' }))).toContain('bot_author');
+  });
+
+  it('treats an UNKNOWN author as a person, not as a machine', () => {
+    // The conservative direction: leave a PR in the list rather than demote one
+    // nobody asked us to.
+    expect(reasonsOf(row({ author: 'sarah' }))).not.toContain('bot_author');
+  });
+
+  it('lets GitHub OVERRIDE a misleading login either way', () => {
+    // A human whose login happens to end in [bot] is vanishingly rare, but the
+    // explicit field should win rather than be ANDed with a guess.
+    expect(reasonsOf(row({ author: 'weird[bot]', prAuthorIsBot: false }))).not.toContain(
+      'bot_author',
+    );
+  });
+
+  it('still lets a machine PR that is blocking a stack surface', () => {
+    // Heavier than the other adjustments, but deliberately short of a gate.
+    const v = scorePRForReview(
+      row({ author: 'renovate[bot]', stack: { size: 4, position: 1 } }),
+      ctx,
+    );
+    expect(v.gate).toBe('blocking_others');
+  });
+});
+
+describe('the requesting team', () => {
+  const teamProfile = (rates: Record<string, { gave: number; got: number }>): ReviewRankProfile => ({
+    authorAffinity: {},
+    dirAffinity: {},
+    repoAffinity: {},
+    teamAffinity: rates,
+    featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] },
+    model: null,
+  });
+
+  it('ranks a team you service above one you do not', () => {
+    // The user's own framing: "I don't review PRs for team hogql these days."
+    const p = teamProfile({
+      'posthog/warehouse': { gave: 18, got: 20 },
+      'posthog/hogql': { gave: 1, got: 40 },
+    });
+    const c = { now: NOW, profile: p };
+    const serviced = scorePRForReview(
+      row({ id: 'a', reviewRequestVia: { direct: false, teams: ['posthog/warehouse'] } }),
+      c,
+    );
+    const ignored = scorePRForReview(
+      row({ id: 'b', reviewRequestVia: { direct: false, teams: ['posthog/hogql'] } }),
+      c,
+    );
+    expect(serviced.score).toBeGreaterThan(ignored.score);
+  });
+
+  it('takes the BEST-serviced team when several requested it', () => {
+    // A PR is in front of you because of whichever team you actually answer.
+    // Averaging would let a team you ignore dilute one you always service.
+    const p = teamProfile({
+      'posthog/good': { gave: 20, got: 20 },
+      'posthog/ignored': { gave: 0, got: 50 },
+    });
+    const c = { now: NOW, profile: p };
+    const both = scorePRForReview(
+      row({ id: 'a', reviewRequestVia: { direct: false, teams: ['posthog/ignored', 'posthog/good'] } }),
+      c,
+    );
+    const onlyGood = scorePRForReview(
+      row({ id: 'b', reviewRequestVia: { direct: false, teams: ['posthog/good'] } }),
+      c,
+    );
+    expect(both.score).toBe(onlyGood.score);
+  });
+
+  it('is a RATE, so a noisy team cannot buy rank with volume', () => {
+    const p = teamProfile({
+      'posthog/noisy': { gave: 10, got: 200 },
+      'posthog/quiet': { gave: 4, got: 4 },
+    });
+    const c = { now: NOW, profile: p };
+    const noisy = scorePRForReview(
+      row({ id: 'a', reviewRequestVia: { direct: false, teams: ['posthog/noisy'] } }),
+      c,
+    );
+    const quiet = scorePRForReview(
+      row({ id: 'b', reviewRequestVia: { direct: false, teams: ['posthog/quiet'] } }),
+      c,
+    );
+    expect(quiet.score).toBeGreaterThan(noisy.score);
+  });
+
+  it('says nothing about a team it has never seen', () => {
+    const v = scorePRForReview(
+      row({ reviewRequestVia: { direct: false, teams: ['posthog/brand-new'] } }),
+      { now: NOW, profile: teamProfile({}) },
+    );
+    expect(v.terms.map((t) => t.reason)).not.toContain('their_team');
   });
 });

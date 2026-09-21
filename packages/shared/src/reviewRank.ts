@@ -53,6 +53,21 @@ export const REVIEW_RANK_FEATURES = [
   'reciprocity',
   'pathFamiliarity',
   'repoAffinity',
+  /**
+   * How often the viewer services review requests from THIS TEAM.
+   *
+   * Added because it is how people actually describe their own behaviour —
+   * "I don't review for team hogql these days" — and because nothing else
+   * captures it. Path familiarity is only an indirect proxy: a team's work
+   * spills across directories (an `mcp` fix and a `web-analytics` change can
+   * both be requested by the same team), and a directory can be shared by
+   * teams whose review requests mean very different things to you.
+   *
+   * The data was already there and being thrown away: `reviewRequestVia.teams`
+   * is on every row, and the backfill reads `Team { combinedSlug }` from the
+   * timeline and kept only a `direct` boolean from it.
+   */
+  'teamAffinity',
   'logSize',
 ] as const;
 
@@ -118,6 +133,7 @@ export const REVIEW_RANK_PRIOR: number[] = [
   0.8, // reciprocity
   0.5, // pathFamiliarity
   0.3, // repoAffinity
+  0.7, // teamAffinity — a social signal, so weighted with the social ones
   -0.3, // logSize — bigger is slower to get to
 ];
 
@@ -135,6 +151,14 @@ export interface ReviewRankProfile {
   dirAffinity: Record<string, number>;
   /** Per `owner/repo`: share of the viewer's past reviews, 0..1. */
   repoAffinity: Record<string, number>;
+  /**
+   * Per team slug (`org/team`): responded / requested, recency-weighted.
+   *
+   * A RATE rather than a count, because the question is "do I service this
+   * team's requests", and a team that sends you forty a month you ignore
+   * should not outrank one that sends you two you always do.
+   */
+  teamAffinity: Record<string, { gave: number; got: number }>;
   /**
    * Per-feature mean and sd, so a live PR is standardised on the same scale the
    * weights expect.
@@ -157,6 +181,8 @@ export interface ReviewRankTarget {
   repoFullName?: string;
   /** Top-level directories the PR touches. */
   dirs?: string[];
+  /** Team slugs (`org/team`) whose review request put this PR in front of you. */
+  teams?: string[];
   additions?: number;
   deletions?: number;
 }
@@ -169,6 +195,35 @@ export interface ReviewRankTarget {
  * who has reviewed it five times, and a raw count would say they were.
  */
 export const PATH_FAMILIARITY_SATURATION = 5;
+
+/**
+ * Half-life, in days, of a past review's contribution to affinity.
+ *
+ * Without this every count is a LIFETIME total, and the profile can only say
+ * who you have ever worked with — never who you work with now. Somebody who
+ * reviewed a team's PRs heavily last year and none since still reads as their
+ * closest reviewer, which is the opposite of useful.
+ *
+ * Ninety days, because the thing being measured is which part of the codebase
+ * somebody is currently working in, and that turns over on the scale of a
+ * quarter rather than a week. Aviator decays review LOAD with a ~3.5-day
+ * half-life, but that is a different quantity — how busy you are right now, not
+ * who you collaborate with. At 90 days, work from three months ago counts half
+ * and work from a year ago about a sixteenth.
+ */
+export const REVIEW_AFFINITY_HALF_LIFE_DAYS = 90;
+
+/**
+ * How much a review performed `ageDays` ago still counts, in [0, 1].
+ *
+ * Exponential rather than a cutoff: a window would make a person's affinity
+ * lurch the day an old review fell out of it, and there is no principled place
+ * to put the edge.
+ */
+export function recencyWeight(ageDays: number): number {
+  if (!Number.isFinite(ageDays) || ageDays <= 0) return 1;
+  return 0.5 ** (ageDays / REVIEW_AFFINITY_HALF_LIFE_DAYS);
+}
 
 /** Extract the five features for one PR, in {@link REVIEW_RANK_FEATURES} order. */
 export function reviewRankFeatures(
@@ -193,13 +248,23 @@ export function reviewRankFeatures(
 
   const repoAffinity = profile?.repoAffinity[(pr.repoFullName ?? '').toLowerCase()] ?? 0;
 
+  // The BEST-serviced requesting team, not the average. A PR requested by two
+  // teams is in front of you because of whichever one you actually answer, and
+  // averaging would let a team you ignore dilute a team you always service.
+  let teamAffinity = 0;
+  for (const team of pr.teams ?? []) {
+    const entry = profile?.teamAffinity?.[team.toLowerCase()];
+    if (!entry || entry.got <= 0) continue;
+    teamAffinity = Math.max(teamAffinity, entry.gave / entry.got);
+  }
+
   // Absent size is UNKNOWN, and the honest encoding of unknown in a z-scored
   // linear model is the mean — which after standardisation is 0. Passing a raw
   // 0 here would say "an empty diff", the smallest thing the model can see.
   const known = pr.additions !== undefined || pr.deletions !== undefined;
   const logSize = known ? Math.log1p((pr.additions ?? 0) + (pr.deletions ?? 0)) : Number.NaN;
 
-  return [authorAffinity, reciprocity, pathFamiliarity, repoAffinity, logSize];
+  return [authorAffinity, reciprocity, pathFamiliarity, repoAffinity, teamAffinity, logSize];
 }
 
 /** z-score a raw feature vector. A zero sd means the feature never varied. */

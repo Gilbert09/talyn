@@ -14,6 +14,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   REVIEW_RANK_MIN_EVENTS,
   computeFeatureStats,
+  recencyWeight,
   fitAndValidateReviewRank,
   reviewRankFeatures,
   standardize,
@@ -29,7 +30,7 @@ import { reviewHistory, reviewRankModels } from '../../db/schema.js';
  */
 export type ReviewRankAggregates = Pick<
   ReviewRankProfile,
-  'authorAffinity' | 'dirAffinity' | 'repoAffinity'
+  'authorAffinity' | 'teamAffinity' | 'dirAffinity' | 'repoAffinity'
 >;
 
 /** One history row, as the trainer reads it. */
@@ -43,6 +44,8 @@ export interface TrainingRow {
   additions: number | null;
   deletions: number | null;
   dirs: string[];
+  /** Team slugs whose request put this PR in front of the viewer. */
+  teams: string[];
 }
 
 /**
@@ -57,25 +60,45 @@ export interface TrainingRow {
  * built only from reviews performed says "you review the people you review",
  * which is true and useless: the denominator is what makes it a rate.
  */
-export function buildProfile(rows: TrainingRow[]): ReviewRankAggregates {
+export function buildProfile(rows: TrainingRow[], now = Date.now()): ReviewRankAggregates {
   const authorAffinity: Record<string, { gave: number; got: number }> = {};
+  const teamAffinity: Record<string, { gave: number; got: number }> = {};
   const dirAffinity: Record<string, number> = {};
   const repoCounts: Record<string, number> = {};
   let reviewed = 0;
 
   for (const row of rows) {
+    // Every contribution is RECENCY-WEIGHTED. Without this the profile is a
+    // lifetime total and can only say who the viewer has ever worked with,
+    // never who they work with now — so somebody who reviewed a team heavily
+    // last year and none since still reads as their closest reviewer.
+    const at = row.reviewedAt ?? row.requestedAt ?? row.closedAt;
+    const ageDays = at ? (now - at.getTime()) / 86_400_000 : 0;
+    const w = recencyWeight(ageDays);
+
     const author = row.authorLogin.toLowerCase();
     const entry = (authorAffinity[author] ??= { gave: 0, got: 0 });
-    entry.got++;
+    entry.got += w;
+
+    // A PR can be requested by more than one team, and each of them asked.
+    for (const team of row.teams) {
+      const slug = team.toLowerCase();
+      const t = (teamAffinity[slug] ??= { gave: 0, got: 0 });
+      t.got += w;
+    }
+
     if (row.reviewedAt) {
-      entry.gave++;
-      reviewed++;
+      entry.gave += w;
+      for (const team of row.teams) {
+        teamAffinity[team.toLowerCase()].gave += w;
+      }
+      reviewed += w;
       // Directory and repo familiarity come from reviews ACTUALLY PERFORMED.
       // A PR you were asked about and ignored taught you nothing about its
       // files, so counting it would make "familiar" mean "adjacent to".
-      for (const dir of row.dirs) dirAffinity[dir] = (dirAffinity[dir] ?? 0) + 1;
+      for (const dir of row.dirs) dirAffinity[dir] = (dirAffinity[dir] ?? 0) + w;
       const repo = row.repoFullName.toLowerCase();
-      repoCounts[repo] = (repoCounts[repo] ?? 0) + 1;
+      repoCounts[repo] = (repoCounts[repo] ?? 0) + w;
     }
   }
 
@@ -84,7 +107,7 @@ export function buildProfile(rows: TrainingRow[]): ReviewRankAggregates {
     repoAffinity[repo] = reviewed > 0 ? count / reviewed : 0;
   }
 
-  return { authorAffinity, dirAffinity, repoAffinity };
+  return { authorAffinity, teamAffinity, dirAffinity, repoAffinity };
 }
 
 /** A row with the timestamps the pairing step requires. */
@@ -142,6 +165,7 @@ export function buildPairs(
           author: row.authorLogin,
           repoFullName: row.repoFullName,
           dirs: row.dirs,
+          teams: row.teams,
           additions: row.additions ?? undefined,
           deletions: row.deletions ?? undefined,
         },
@@ -219,6 +243,7 @@ export async function trainReviewRank(
       additions: reviewHistory.additions,
       deletions: reviewHistory.deletions,
       dirs: reviewHistory.dirs,
+      teams: reviewHistory.teams,
     })
     .from(reviewHistory)
     .where(
@@ -240,6 +265,7 @@ export async function trainReviewRank(
           author: r.authorLogin,
           repoFullName: r.repoFullName,
           dirs: r.dirs,
+          teams: r.teams,
           additions: r.additions ?? undefined,
           deletions: r.deletions ?? undefined,
         },
@@ -335,6 +361,7 @@ export async function readReviewRankPayload(
 
   const empty: ReviewRankPayload = {
     authorAffinity: {},
+    teamAffinity: {},
     dirAffinity: {},
     repoAffinity: {},
     featureStats: null,
@@ -348,6 +375,7 @@ export async function readReviewRankPayload(
   const nEvents = row.nEvents ?? 0;
   return {
     authorAffinity: profile.authorAffinity ?? {},
+    teamAffinity: profile.teamAffinity ?? {},
     dirAffinity: profile.dirAffinity ?? {},
     repoAffinity: profile.repoAffinity ?? {},
     featureStats: (row.featureStats ?? profile.featureStats ?? null) as

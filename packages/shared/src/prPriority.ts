@@ -111,6 +111,7 @@ export type PRPriorityReason =
   | 'reviews_you'
   | 'known_files'
   | 'your_repo'
+  | 'their_team'
   | 'quick_for_you';
 
 /**
@@ -144,6 +145,7 @@ export const PR_PRIORITY_REASON_LABEL: Record<PRPriorityReason, string> = {
   reviews_you: 'They review your PRs',
   known_files: 'You know these files',
   your_repo: 'Your repo',
+  their_team: 'You review for this team',
   quick_for_you: 'Quick for you',
 };
 
@@ -234,6 +236,8 @@ export interface PRPriorityTarget {
     viewerLatestReview?: { state: string; submittedAt: string | null } | null;
     reviewRequestVia?: { direct: boolean; teams: string[] } | null;
     autoMergeBy?: string | null;
+    /** Whether a MACHINE opened this PR. Absent = unknown, never "human". */
+    prAuthorIsBot?: boolean;
     /** Top-level directories the PR touches, for path familiarity. */
     topDirs?: string[];
     stack?: { size: number; position: number } | null;
@@ -285,7 +289,15 @@ export const PR_PRIORITY_WEIGHTS = {
   directRequest: 8,
   humanThreads: -6,
   botThreads: -3,
-  botAuthor: -10,
+  /**
+   * A machine opened this PR.
+   *
+   * Heavier than the other state adjustments on purpose: a dependency bump or
+   * an agent-authored fix is real work, but it is almost never the thing a
+   * person should read FIRST, and these arrive in bulk. Still short of a gate —
+   * a bot PR that is blocking a stack should still surface.
+   */
+  botAuthor: -16,
   /** Per PR stacked above this one, capped by {@link unblocksStackCap}. */
   unblocksStack: 4,
   unblocksStackCap: 12,
@@ -321,6 +333,7 @@ const LEARNED_REASONS = new Set<PRPriorityReason>([
   'reviews_you',
   'known_files',
   'your_repo',
+  'their_team',
   'quick_for_you',
 ]);
 
@@ -330,6 +343,7 @@ const LEARNED_REASON: Record<ReviewRankFeature, PRPriorityReason> = {
   reciprocity: 'reviews_you',
   pathFamiliarity: 'known_files',
   repoAffinity: 'your_repo',
+  teamAffinity: 'their_team',
   logSize: 'quick_for_you',
 };
 
@@ -521,7 +535,14 @@ export function scorePRForReview(
     push('bot_threads', PR_PRIORITY_WEIGHTS.botThreads);
   }
 
-  if (/\[bot\]$/i.test(s.author ?? '')) {
+  // GitHub's own answer first, the login only as a fallback for rows cached
+  // before the field shipped. The login alone catches `dependabot[bot]` and
+  // misses a GitHub App with no suffix, and an Organization account — which is
+  // how PostHog's own automation opens PRs, under the perfectly human-looking
+  // name `@PostHog`. Absent stays UNKNOWN: a PR is left in the list rather than
+  // demoted on a guess.
+  const machineAuthored = s.prAuthorIsBot ?? /\[bot\]$/i.test(s.author ?? '');
+  if (machineAuthored) {
     push('bot_author', PR_PRIORITY_WEIGHTS.botAuthor);
   }
 
@@ -581,6 +602,7 @@ export function scorePRForReview(
         author: s.author,
         repoFullName: row.owner && row.repo ? `${row.owner}/${row.repo}` : undefined,
         dirs: s.topDirs,
+        teams: s.reviewRequestVia?.teams,
         additions: s.additions,
         deletions: s.deletions,
       },

@@ -115,6 +115,8 @@ export interface ReviewHistoryRow {
   additions: number | null;
   deletions: number | null;
   dirs: string[];
+  /** Team slugs whose request put this PR in front of the viewer. */
+  teams: string[];
 }
 
 /**
@@ -139,6 +141,7 @@ export function toHistoryRow(raw: RawHistoryPr, viewerLogin: string): ReviewHist
   // the two are not equally strong asks.
   let requestedAt: Date | null = null;
   let direct = false;
+  const teams: string[] = [];
   for (const node of raw.timelineItems?.nodes ?? []) {
     const rr = node.requestedReviewer;
     if (!rr || !node.createdAt) continue;
@@ -149,6 +152,13 @@ export function toHistoryRow(raw: RawHistoryPr, viewerLogin: string): ReviewHist
     if (!Number.isFinite(at.getTime())) continue;
     if (!requestedAt || at < requestedAt) requestedAt = at;
     if (isMe) direct = true;
+    if (isTeam) {
+      // The slug the request actually carried, kept rather than reduced to the
+      // `direct` boolean it used to be. This is the team-affinity feature's
+      // only source of history.
+      const slug = (rr as { combinedSlug: string }).combinedSlug?.toLowerCase();
+      if (slug && !teams.includes(slug)) teams.push(slug);
+    }
   }
 
   // GitHub does not emit a ReviewRequestedEvent for a reviewer named in the
@@ -169,6 +179,7 @@ export function toHistoryRow(raw: RawHistoryPr, viewerLogin: string): ReviewHist
     additions: raw.additions ?? null,
     deletions: raw.deletions ?? null,
     dirs: topDirsOf((raw.files?.nodes ?? []).map((f) => f.path)),
+    teams,
   };
 }
 
@@ -291,6 +302,7 @@ export async function backfillReviewHistory(
           additions: r.additions,
           deletions: r.deletions,
           dirs: r.dirs,
+          teams: r.teams,
         })),
       )
       .onConflictDoUpdate({
@@ -308,6 +320,7 @@ export async function backfillReviewHistory(
           additions: sql`excluded.additions`,
           deletions: sql`excluded.deletions`,
           dirs: sql`excluded.dirs`,
+          teams: sql`excluded.teams`,
         },
       });
   }

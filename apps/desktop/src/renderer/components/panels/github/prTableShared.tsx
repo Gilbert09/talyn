@@ -867,8 +867,14 @@ function PRTableRow({
         </div>
       </td>
       {variant === 'review' ? (
-        <td className="px-2 py-2 text-xs">
-          <div className="flex items-center gap-1.5">
+        // `max-w` bounds the column so a long team slug truncates instead of
+        // growing the cell into "Updated" — `@PostHog/team-warehouse-sources`
+        // is 30 characters and did exactly that. `min-w-0` on the flex row is
+        // load-bearing rather than tidying: a flex child defaults to
+        // min-width:auto, which refuses to shrink below its content and so
+        // silently defeats every `truncate` inside it.
+        <td className="max-w-[240px] px-2 py-2 text-xs">
+          <div className="flex min-w-0 items-center gap-1.5">
           {priority?.topReason && (
             <span
               className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
@@ -892,7 +898,7 @@ function PRTableRow({
           )}
           {requested ? (
             <span
-              className="inline-flex items-center gap-1 text-muted-foreground"
+              className="inline-flex min-w-0 items-center gap-1 text-muted-foreground"
               title={
                 requested.direct
                   ? 'You were asked to review directly'
@@ -907,7 +913,9 @@ function PRTableRow({
                 <Users className="h-3.5 w-3.5 shrink-0" />
               )}
               <span className="truncate">{requested.label}</span>
-              {requested.extra > 0 && <span className="opacity-70">+{requested.extra}</span>}
+              {requested.extra > 0 && (
+                <span className="shrink-0 opacity-70">+{requested.extra}</span>
+              )}
             </span>
           ) : (
             <span className="text-muted-foreground">—</span>
