@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { and, eq } from 'drizzle-orm';
-import type { CloudProviderType } from '@talyn/shared';
+import { fleetAgentLabel, type CloudProviderType, type FleetAgent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { environments as environmentsTable } from '../../db/schema.js';
 import { emitEnvironmentCreated } from '../websocket.js';
@@ -73,15 +73,27 @@ export async function ensureCloudEnvironment(
  * it is also reached by the disconnect path, which must never announce itself
  * as a setup.
  *
- * Fired unconditionally: the dedupe key is per workspace and provider, so a
- * reconnect, a credential swap or a second agent on the same fleet all resolve
- * to the setup that already happened and store nothing.
+ * Fired unconditionally: the dedupe key is per workspace, provider AND agent,
+ * so a reconnect or a credential swap resolves to the setup that already
+ * happened and stores nothing.
+ *
+ * The agent is PART of the key rather than merely part of the payload, and the
+ * two halves of that are one decision. The fleet is one provider running two
+ * different vendors on the workspace's own subscription, so "which one did they
+ * connect" is the first thing anyone asks of a fleet signup — and with the
+ * vendor named in the notification, collapsing the second agent into the first
+ * would be worse than leaving it out: the feed would say a workspace connected
+ * the fleet with Claude and nothing anywhere would record that Codex arrived
+ * too. Two agents means at most two events, each a separate fact, each once.
+ * Every other provider passes no agent, so its key is unchanged.
  */
 export function notifyProviderConnected(args: {
   workspaceId: string;
   type: CloudProviderType;
   /** Free-form detail for the feed — a PostHog project, a fleet agent name. */
   detail?: string;
+  /** Which fleet agent this connected. Absent for a single-agent provider. */
+  agent?: FleetAgent;
 }): void {
   const name = getCloudProvider(args.type)?.displayName ?? args.type;
   // Deferred: this is called from three connect routes, and none of them
@@ -93,17 +105,27 @@ export function notifyProviderConnected(args: {
     return {
       kind: 'workspace.provider_connected',
       level: 'success',
-      title: `${workspaceLabel(ws)} connected ${name}`,
+      // The agent goes in the TITLE, not only the metadata: the feed is read as
+      // a list of one-liners, and "connected Talyn Fleet" answered the question
+      // a fleet signup actually raises with the one detail it needed.
+      title: `${workspaceLabel(ws)} connected ${name}${
+        args.agent ? ` \u00B7 ${fleetAgentLabel(args.agent)}` : ''
+      }`,
       message: [args.detail ?? 'It can run cloud tasks now.', ownerLine(ws)]
         .filter(Boolean)
         .join(' '),
       metadata: {
         provider_name: name,
         provider: args.type,
+        // The raw vendor id, matching `FleetAgent` and what the wire uses, so
+        // it can be filtered on rather than read.
+        ...(args.agent ? { fleet_agent: args.agent } : {}),
         ...workspaceMetadata(ws),
         ...(args.detail ? { detail: args.detail } : {}),
       },
-      dedupeKey: `workspace:${args.workspaceId}:provider:${args.type}:connected`,
+      dedupeKey: `workspace:${args.workspaceId}:provider:${args.type}${
+        args.agent ? `:agent:${args.agent}` : ''
+      }:connected`,
     };
   });
 }

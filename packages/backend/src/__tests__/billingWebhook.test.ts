@@ -393,6 +393,40 @@ describe('what the inbox is told about a subscription', () => {
     expect((event.metadata as Record<string, unknown>).plan).toBe('unlimited');
   });
 
+  /**
+   * Observed 2026-09-21: one sale, two identical cards. Polar announces a new
+   * subscription twice — `subscription.created`, then `subscription.active`
+   * seconds later — and each delivery has its own `webhook-id`, which is what
+   * the dedupe key is built from, so neither gate could see they were the same
+   * news. The second is now recognised by the state it arrives in.
+   */
+  it('announces a new subscription once, not once per Polar event', async () => {
+    await post('evt-pair-1', { type: 'subscription.created', data: paidSubscription() });
+    const first = await nextInboxEvent();
+    expect(first.kind).toBe('subscription.created');
+
+    await post('evt-pair-2', { type: 'subscription.active', data: paidSubscription() });
+    // Give the deferred POST the same room to arrive as the first one had.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(received).toHaveLength(1);
+  });
+
+  it('still announces an activation that follows a lapse', async () => {
+    // The distinction that makes the rule safe: a recovery is news, and it is
+    // the same event type as the twin above.
+    await post('evt-lapse-1', {
+      type: 'subscription.updated',
+      data: subscription({ status: 'canceled' }),
+    });
+    // Wait for the cancellation's own card before clearing, or it lands in the
+    // list after the clear and the assertion below reads it instead.
+    await nextInboxEvent();
+    received.length = 0;
+    await post('evt-lapse-2', { type: 'subscription.active', data: paidSubscription() });
+    const event = await nextInboxEvent();
+    expect(event.kind).toBe('subscription.active');
+  });
+
   it('says a cancellation ends access, and when', async () => {
     await post('evt-inbox-3', {
       type: 'subscription.updated',

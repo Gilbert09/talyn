@@ -153,9 +153,31 @@ export function cloudProviderRoutes(): Router {
       clearClaude?: boolean;
       clearCodex?: boolean;
     };
-    const supplied = Boolean(body.claudeToken || body.codexAccessToken || body.openaiKey);
-    if (supplied && !body.clearClaude && !body.clearCodex) {
-      notifyProviderConnected({ workspaceId, type: provider.type });
+    // Which agent arrived decides what the notification says, so it is read off
+    // the credential that was actually supplied rather than off the provider.
+    // The fleet is one provider running two vendors on the workspace's own
+    // subscription, and "Talyn Fleet connected" left out the first thing anyone
+    // asks of a fleet signup. A save carrying both announces both — they are
+    // two separate facts, and the dedupe key is per agent.
+    const agents: Array<{ agent: FleetAgent; detail: string }> = [];
+    if (body.claudeToken) {
+      agents.push({ agent: 'claude', detail: 'Claude connected with an Anthropic API key.' });
+    }
+    if (body.codexAccessToken) {
+      agents.push({ agent: 'codex', detail: 'Codex signed in with a ChatGPT subscription.' });
+    } else if (body.openaiKey) {
+      // Not a subscription — a metered platform key, which is a different thing
+      // to be told about even though it runs the same agent.
+      agents.push({ agent: 'codex', detail: 'Codex connected with an OpenAI API key.' });
+    }
+    // No provider-type branch needed: the three fields above are the fleet's
+    // own, so `agents` is empty for anything else — and everything else
+    // announces itself from its own connect route (PostHog Code in
+    // routes/posthog.ts), which is also why an empty list stays silent here.
+    if (!body.clearClaude && !body.clearCodex) {
+      for (const { agent, detail } of agents) {
+        notifyProviderConnected({ workspaceId, type: provider.type, agent, detail });
+      }
     }
     res.json({ success: true, data: { connected: true } });
   });
@@ -260,7 +282,8 @@ export function cloudProviderRoutes(): Router {
       notifyProviderConnected({
         workspaceId,
         type: 'selfhosted',
-        detail: 'Claude subscription linked.',
+        agent: 'claude',
+        detail: 'Claude signed in with a Claude Pro/Max subscription.',
       });
       res.json({ success: true, data: { connected: true } });
     } catch (err) {

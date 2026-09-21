@@ -2,6 +2,44 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Two fixes to the todiex feed: which fleet agent, and one sale one card (2026-09-21)
+
+Both from reading the feed rather than the code.
+
+**`workspace.provider_connected` said "connected Talyn Fleet" and nothing more.**
+The fleet is one provider running two vendors on the workspace's own
+subscription, so the vendor is the first thing a fleet signup raises, and it was
+in neither the title nor the metadata. Now `agent?: FleetAgent` on
+`notifyProviderConnected` → `Talyn Fleet · Claude` in the title and
+`fleet_agent: 'claude' | 'codex'` in the metadata, read off the credential that
+actually arrived (`claudeToken` → Claude; `codexAccessToken` → Codex on a
+ChatGPT subscription; `openaiKey` → Codex on a metered platform key, which the
+detail line says out loud because it is a different thing to be told about).
+
+The agent is in the **dedupe key** as well, which is the part worth arguing.
+Collapsing a second agent into the first was deliberate while the notification
+did not name one; with the vendor named it becomes worse than silence — the feed
+would say a workspace connected the fleet with Claude and nothing anywhere would
+record that Codex arrived too. Two agents, at most two events, each once. Every
+other provider passes no agent, so its key is byte-identical and nobody already
+connected gets re-announced.
+
+**One sale produced two cards.** Polar announces a new subscription twice,
+`subscription.created` then `subscription.active` seconds later, with identical
+content — and each delivery carries its own `webhook-id`, which is what the
+dedupe key is built from, so neither gate could see they were the same news.
+`applySubscriptionEvent` now carries out `previouslyGranting` (read before the
+write it already does), and `describeSubscriptionEvent` suppresses a start event
+for a subscription that was already granting.
+
+Stated on **both** start events rather than by dropping `subscription.active`,
+because Polar promises no order: whichever lands first announces, the other
+stores nothing. An `active` after a lapse — `past_due` recovered, a revoked
+subscription resumed — is not a repeat and still announces, which is the whole
+reason the rule reads the stored state rather than the event name. Cancellation
+and payment-failure events are untouched: they are about access ENDING, and "it
+was already granting" is exactly the state they arrive in.
+
 ## Not pushing to a PR an external merge queue is holding — the two doors left open (2026-09-21)
 
 Raised in PostHog's #team-infrastructure: an alert fires when a push to a queued

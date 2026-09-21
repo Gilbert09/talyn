@@ -68,6 +68,17 @@ export interface CloudAgentChoice {
 const AGENT_LABELS: Record<FleetAgent, string> = { claude: 'Claude', codex: 'Codex' };
 
 /**
+ * One fleet agent, as the product says it out loud.
+ *
+ * Exported so anything naming an agent outside the picker — the notification a
+ * fleet connect sends, a log line — reads the same word the user chose from,
+ * rather than keeping a second copy of these two strings.
+ */
+export function fleetAgentLabel(agent: FleetAgent): string {
+  return AGENT_LABELS[agent] ?? agent;
+}
+
+/**
  * Every agent this workspace can start a task on, in provider order.
  *
  * Filters to connected providers itself, so a caller cannot forget to: a

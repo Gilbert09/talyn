@@ -72,6 +72,14 @@ export interface ApplyResult {
   applied: boolean;
   reason?: 'no_user' | 'stale' | 'ignored_type';
   userId?: string;
+  /**
+   * Was THIS subscription already granting paid access before this event?
+   *
+   * Read before the write, and the only reason it is carried out of here: it is
+   * what tells a subscription starting apart from one that was already running
+   * — see {@link describeSubscriptionEvent}. Absent when nothing was applied.
+   */
+  previouslyGranting?: boolean;
 }
 
 function subscriptionFromEvent(data: unknown): PolarSubscription | null {
@@ -120,10 +128,25 @@ async function resolveUserId(sub: PolarSubscription): Promise<string | null> {
  *
  * Returns null for the transitions not worth a notification — a `trialing`
  * heartbeat, a metadata-only update. Exported for tests.
+ *
+ * **One sale is ONE notification.** Polar announces a new subscription twice,
+ * `subscription.created` then `subscription.active` seconds later, with
+ * identical content, and each carries its own `webhook-id` — so the per-event
+ * dedupe key cannot see they are the same news, and the feed showed both
+ * (observed 2026-09-21). `previouslyGranting` is what distinguishes them: the
+ * second one arrives with the subscription already stored as granting.
+ *
+ * Stated on BOTH start events rather than by dropping `subscription.active`,
+ * because Polar does not promise an order. Whichever lands first announces the
+ * start; the other stores nothing. An `active` that follows a lapse —
+ * `past_due` recovered, a revoked subscription resumed — is NOT a repeat and
+ * still announces, which is the whole reason the rule is about the stored state
+ * and not about the event name.
  */
 export function describeSubscriptionEvent(
   eventType: string,
-  status: string
+  status: string,
+  opts: { previouslyGranting?: boolean } = {}
 ): { kind: string; level: TodiexLevel; title: string } | null {
   if (eventType === 'subscription.revoked' || status === 'canceled') {
     return { kind: 'subscription.cancelled', level: 'warn', title: 'Talyn subscription ended' };
@@ -131,11 +154,16 @@ export function describeSubscriptionEvent(
   if (status === 'past_due') {
     return { kind: 'payment.failed', level: 'error', title: 'Talyn payment failed — in dunning' };
   }
+  const starting = !opts.previouslyGranting;
   if (eventType === 'subscription.created' && GRANTING_STATUSES.has(status)) {
-    return { kind: 'subscription.created', level: 'success', title: 'New Talyn subscription' };
+    return starting
+      ? { kind: 'subscription.created', level: 'success', title: 'New Talyn subscription' }
+      : null;
   }
   if (eventType === 'subscription.active') {
-    return { kind: 'subscription.active', level: 'success', title: 'Talyn subscription active' };
+    return starting
+      ? { kind: 'subscription.active', level: 'success', title: 'Talyn subscription active' }
+      : null;
   }
   return null;
 }
@@ -218,11 +246,16 @@ export async function applySubscriptionEvent(
     .select({
       subscriptionId: usersTable.polarSubscriptionId,
       eventAt: usersTable.subscriptionEventAt,
+      // For the notification, not for the state machine — the stored status is
+      // what says whether this subscription was already running.
+      status: usersTable.subscriptionStatus,
     })
     .from(usersTable)
     .where(eq(usersTable.id, userId))
     .limit(1);
   const sameSubscription = current[0]?.subscriptionId === sub.id;
+  const previouslyGranting =
+    sameSubscription && GRANTING_STATUSES.has(current[0]?.status ?? '');
   if (sameSubscription && current[0]?.eventAt && occurredAt < current[0].eventAt) {
     return { applied: false, reason: 'stale', userId };
   }
@@ -254,7 +287,7 @@ export async function applySubscriptionEvent(
     })
     .where(eq(usersTable.id, userId));
 
-  return { applied: true, userId };
+  return { applied: true, userId, previouslyGranting };
 }
 
 /** Express handler for POST /api/v1/webhooks/polar (raw body). */
@@ -344,7 +377,13 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
     // Polar event id so a redelivery Polar makes after our 200 was lost in
     // flight cannot notify twice — the idempotency gate above already stops
     // one that reaches us, but this covers the half-second where it does not.
-    const described = sub ? describeSubscriptionEvent(event.type, sub.status) : null;
+    const described = sub
+      ? describeSubscriptionEvent(event.type, sub.status, {
+          ...(result.previouslyGranting !== undefined
+            ? { previouslyGranting: result.previouslyGranting }
+            : {}),
+        })
+      : null;
     if (described) {
       const subscription = sub!;
       const userId = result.userId;

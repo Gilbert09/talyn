@@ -222,6 +222,59 @@ describe('which subscription transitions are worth a notification', () => {
   ])('stays quiet for %s', (_label, eventType, status) => {
     expect(describeSubscriptionEvent(eventType, status)).toBeNull();
   });
+
+  /**
+   * Observed 2026-09-21: one sale, two identical cards in the feed. Polar
+   * announces a new subscription as `subscription.created` and then
+   * `subscription.active` seconds later, each with its own `webhook-id`, so the
+   * per-event dedupe key cannot tell they are the same news.
+   */
+  describe('one sale is one notification', () => {
+    it('announces the start and then stays quiet for the twin', () => {
+      // The pair as Polar sends it: created first (nothing stored yet), then
+      // active (the row now says the subscription is granting).
+      expect(
+        describeSubscriptionEvent('subscription.created', 'active', { previouslyGranting: false })
+          ?.kind
+      ).toBe('subscription.created');
+      expect(
+        describeSubscriptionEvent('subscription.active', 'active', { previouslyGranting: true })
+      ).toBeNull();
+    });
+
+    it('works whichever of the two lands first', () => {
+      // Polar promises no order, so the rule is on the stored state and not on
+      // the event name — otherwise an out-of-order pair announces twice again.
+      expect(
+        describeSubscriptionEvent('subscription.active', 'active', { previouslyGranting: false })
+          ?.kind
+      ).toBe('subscription.active');
+      expect(
+        describeSubscriptionEvent('subscription.created', 'active', { previouslyGranting: true })
+      ).toBeNull();
+    });
+
+    it('still announces an activation that follows a lapse', () => {
+      // `past_due` recovered or a revoked subscription resumed: the stored
+      // status is not granting, so this is news rather than a repeat.
+      expect(
+        describeSubscriptionEvent('subscription.active', 'active', { previouslyGranting: false })
+          ?.kind
+      ).toBe('subscription.active');
+    });
+
+    it.each([
+      ['a cancellation', 'subscription.revoked', 'active', 'subscription.cancelled'],
+      ['a payment failure', 'subscription.updated', 'past_due', 'payment.failed'],
+    ])('never suppresses %s', (_label, eventType, status, kind) => {
+      // Both are about access ENDING, and a running subscription is exactly the
+      // state they arrive in — suppressing them would be the worst possible
+      // reading of "it was already granting".
+      expect(
+        describeSubscriptionEvent(eventType, status, { previouslyGranting: true })?.kind
+      ).toBe(kind);
+    });
+  });
 });
 
 describe('the cloud-provider setup notification', () => {
@@ -317,6 +370,55 @@ describe('the cloud-provider setup notification', () => {
     await flushMicrotasks();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * The fleet is ONE provider running two vendors on the workspace's own
+   * subscription, so "connected Talyn Fleet" left out the first thing anyone
+   * asks of a fleet signup.
+   */
+  describe('which fleet agent a workspace connected', () => {
+    beforeEach(() => {
+      registerCloudProvider({
+        type: 'selfhosted',
+        displayName: 'Talyn Fleet',
+      } as unknown as CloudTaskProvider);
+    });
+
+    it.each([
+      ['claude' as const, 'Claude'],
+      ['codex' as const, 'Codex'],
+    ])('names %s in the title the way the picker does', async (agent, label) => {
+      notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted', agent });
+      await flushMicrotasks();
+      expect(sentBody().title).toBe(`A Talyn workspace connected Talyn Fleet \u00B7 ${label}`);
+    });
+
+    it('carries the raw vendor id in the metadata, for filtering', async () => {
+      notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted', agent: 'codex' });
+      await flushMicrotasks();
+      expect(sentBody().metadata).toMatchObject({ provider: 'selfhosted', fleet_agent: 'codex' });
+    });
+
+    it('gives each agent its own key, so the second one is not swallowed', async () => {
+      notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted', agent: 'claude' });
+      await flushMicrotasks();
+      const first = sentBody().dedupeKey;
+      fetchMock.mockClear();
+      notifyProviderConnected({ workspaceId: 'ws1', type: 'selfhosted', agent: 'codex' });
+      await flushMicrotasks();
+      expect(first).toBe('workspace:ws1:provider:selfhosted:agent:claude:connected');
+      expect(sentBody().dedupeKey).toBe('workspace:ws1:provider:selfhosted:agent:codex:connected');
+    });
+
+    it('leaves a single-agent provider exactly as it was', async () => {
+      // No agent, no agent segment: PostHog Code's key must not move, or every
+      // workspace already connected to it is announced a second time.
+      notifyProviderConnected({ workspaceId: 'ws1', type: 'posthog_code' });
+      await flushMicrotasks();
+      expect(sentBody().dedupeKey).toBe('workspace:ws1:provider:posthog_code:connected');
+      expect(sentBody().metadata).not.toHaveProperty('fleet_agent');
+    });
+  });
 });
 
 /**
@@ -327,23 +429,34 @@ describe('the cloud-provider setup notification', () => {
  * hook could do, so the condition is pinned here rather than only in the route.
  */
 describe('a disconnect is not a setup', () => {
-  const shouldNotify = (body: {
+  interface ConfigBody {
     claudeToken?: string;
     codexAccessToken?: string;
     openaiKey?: string;
     clearClaude?: boolean;
     clearCodex?: boolean;
-  }): boolean =>
-    Boolean(body.claudeToken || body.codexAccessToken || body.openaiKey) &&
-    !body.clearClaude &&
-    !body.clearCodex;
+  }
+
+  /** Mirrors the route: which agents a save announces, in its order. */
+  const announced = (body: ConfigBody): string[] => {
+    if (body.clearClaude || body.clearCodex) return [];
+    const agents: string[] = [];
+    if (body.claudeToken) agents.push('claude');
+    if (body.codexAccessToken || body.openaiKey) agents.push('codex');
+    return agents;
+  };
 
   it.each([
-    ['a Claude token', { claudeToken: 'sk-ant-x' }],
-    ['a Codex token', { codexAccessToken: 'codex-x' }],
-    ['an OpenAI key', { openaiKey: 'sk-x' }],
-  ])('notifies when %s arrives', (_label, body) => {
-    expect(shouldNotify(body)).toBe(true);
+    ['a Claude token', { claudeToken: 'sk-ant-x' }, ['claude']],
+    ['a Codex token', { codexAccessToken: 'codex-x' }, ['codex']],
+    ['an OpenAI key', { openaiKey: 'sk-x' }, ['codex']],
+    [
+      'both agents in one save',
+      { claudeToken: 'sk-ant-x', codexAccessToken: 'codex-x' },
+      ['claude', 'codex'],
+    ],
+  ])('announces %s', (_label, body: ConfigBody, expected) => {
+    expect(announced(body)).toEqual(expected);
   });
 
   it.each([
@@ -351,8 +464,8 @@ describe('a disconnect is not a setup', () => {
     ['clearing Codex', { clearCodex: true }],
     ['a clear that also carries the old token', { claudeToken: 'sk-ant-x', clearClaude: true }],
     ['a save with no credential at all', {}],
-  ])('stays silent for %s', (_label, body) => {
-    expect(shouldNotify(body)).toBe(false);
+  ])('stays silent for %s', (_label, body: ConfigBody) => {
+    expect(announced(body)).toEqual([]);
   });
 });
 
