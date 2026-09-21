@@ -8,7 +8,13 @@ import {
   trainReviewRank,
   type TrainingRow,
 } from '../services/reviewPriority/trainer.js';
-import { shouldRetrain, RETRAIN_EVENT_DELTA } from '../services/reviewPriority/sweep.js';
+import {
+  BOOT_DELAY_MS,
+  RETRAIN_EVENT_DELTA,
+  SWEEP_INTERVAL_MS,
+  reviewPrioritySweep,
+  shouldRetrain,
+} from '../services/reviewPriority/sweep.js';
 import { topDirsOf } from '../services/githubGraphql.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
@@ -335,5 +341,60 @@ describe('trainReviewRank — end to end', () => {
     await trainReviewRank('ws1', 'me');
     const other = await readReviewRankPayload('ws1', 'someone-else');
     expect(other.nEvents).toBe(0);
+  });
+});
+
+describe('the sweep actually runs', () => {
+  afterEach(() => {
+    reviewPrioritySweep.stop();
+    vi.useRealTimers();
+  });
+
+  it('sweeps shortly after boot, not an hour later', async () => {
+    // The defect this guards: `setInterval` alone puts the first sweep a full
+    // hour out, and every push to main redeploys this backend — restarting the
+    // hour. On a repo that deploys per-push, the sweep can go days without
+    // firing once, and nothing says so: the Reviews ordering silently runs on
+    // its deterministic half while the model it advertises is never built.
+    vi.useFakeTimers();
+    const tick = vi.spyOn(reviewPrioritySweep, 'tick').mockResolvedValue({
+      workspaces: 0,
+      backfilled: 0,
+      trained: 0,
+    });
+
+    reviewPrioritySweep.init();
+    expect(tick).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(BOOT_DELAY_MS);
+    expect(tick).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps sweeping on the interval afterwards', async () => {
+    vi.useFakeTimers();
+    const tick = vi.spyOn(reviewPrioritySweep, 'tick').mockResolvedValue({
+      workspaces: 0,
+      backfilled: 0,
+      trained: 0,
+    });
+
+    reviewPrioritySweep.init();
+    await vi.advanceTimersByTimeAsync(BOOT_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS);
+    expect(tick).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops both timers, so a stopped sweep stays stopped', async () => {
+    vi.useFakeTimers();
+    const tick = vi.spyOn(reviewPrioritySweep, 'tick').mockResolvedValue({
+      workspaces: 0,
+      backfilled: 0,
+      trained: 0,
+    });
+
+    reviewPrioritySweep.init();
+    reviewPrioritySweep.stop();
+    await vi.advanceTimersByTimeAsync(BOOT_DELAY_MS + SWEEP_INTERVAL_MS);
+    expect(tick).not.toHaveBeenCalled();
   });
 });

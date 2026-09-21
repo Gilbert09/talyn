@@ -26,6 +26,14 @@ import { trainReviewRank } from './trainer.js';
 /** How often the sweep looks. Habits do not move faster than this. */
 export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
+/**
+ * How long after boot the first sweep runs.
+ *
+ * Long enough to stay out of the way of migrations, provider registration and
+ * the first PR poll; far short of the hour a bare `setInterval` would impose.
+ */
+export const BOOT_DELAY_MS = 60_000;
+
 /** Retrain when the history has grown by this many events since the last fit. */
 export const RETRAIN_EVENT_DELTA = 25;
 
@@ -138,6 +146,7 @@ export async function runReviewPrioritySweep(): Promise<SweepOutcome> {
 
 class ReviewPrioritySweep {
   private timer: NodeJS.Timeout | null = null;
+  private bootTimer: NodeJS.Timeout | null = null;
   // Generous, because a backfill is 32 paginated GraphQL round-trips and a slow
   // GitHub is not a wedged sweep.
   private guard = new TickGuard('review_priority_sweep', 30 * 60_000);
@@ -152,11 +161,31 @@ class ReviewPrioritySweep {
     this.timer = setInterval(() => {
       void this.tick();
     }, SWEEP_INTERVAL_MS);
+
+    // A LEADING tick, shortly after boot, and it is not a nicety.
+    //
+    // `setInterval` alone means the first sweep is a full hour after start —
+    // and every push to main redeploys this backend, which restarts that hour.
+    // On a repository that deploys per-push, an hourly timer with no leading
+    // tick can go days without firing once, and the failure is silent: the
+    // Reviews ordering just quietly runs on its deterministic half forever
+    // while the model it advertises is never built.
+    //
+    // Delayed rather than immediate so it does not compete with the rest of
+    // boot — migrations, provider registration, the first PR poll — for the
+    // same GitHub budget it is careful about everywhere else.
+    this.bootTimer = setTimeout(() => {
+      void this.tick();
+    }, BOOT_DELAY_MS);
+    // Never hold the process open for this.
+    this.bootTimer.unref?.();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    if (this.bootTimer) clearTimeout(this.bootTimer);
     this.timer = null;
+    this.bootTimer = null;
   }
 
   /** Exposed for tests, which drive a tick directly rather than on a timer. */
