@@ -82,6 +82,7 @@ See [`docs/TESTING.md`](./docs/TESTING.md) for the broader strategy.
 - **[`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md)** — the cloud task provider abstraction (registry, per-provider modules, roadmap)
 - **[`docs/QUALITY_PARITY.md`](./docs/QUALITY_PARITY.md)** — desktop polish/parity assessment vs Conductor; what's done + prioritized backlog (feed perf, PR diffs/merge, composer, tests)
 - **[`docs/INCREMENTAL_CHECK_COUNTS.md`](./docs/INCREMENTAL_CHECK_COUNTS.md)** — webhook-driven incremental check counting design
+- **[`docs/REVIEW_RANKING.md`](./docs/REVIEW_RANKING.md)** — what the offline experiment found about the Reviews tab's ordering: the shipped model is worth ~+23 points of top-3 once fitted, but a plain newest-first sort is within 1.5 points of the best model found, and recency is provably near its ceiling
 - **[`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md)** — the `@talyn/mcp-server` package
 - **[`docs/SETUP.md`](./docs/SETUP.md)** — env vars / account setup
 - **[`docs/TESTING.md`](./docs/TESTING.md)** — testing strategy + coverage

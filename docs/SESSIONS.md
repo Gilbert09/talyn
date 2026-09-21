@@ -2,6 +2,89 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Measuring the review ranker, and finding out it barely beats a date sort (2026-09-21)
+
+Built an offline lab to answer the question the shipped feature could not answer
+about itself: **is the ranking any good?** Full write-up in
+[`REVIEW_RANKING.md`](./REVIEW_RANKING.md); this note is the reasoning and the
+things that did not work.
+
+**Why it was needed.** The production install gate compares a fit against our own
+hand-set prior, on our own data, with no external reference — so "it beat the
+prior" can equally mean the prior is bad. Nothing had ever measured how often
+the ordering matches what a person reviews next.
+
+**Method**: 7 heavy `PostHog/posthog` reviewers, spread across areas rather than
+taken top-N by volume; train `T-6mo→T-2mo`, pick the configuration on
+`T-2mo→T-1mo`, touch the final month exactly once. Split by **time**, never at
+random — a random split over a time series leaks the future into the past, which
+is the whole question.
+
+**The headline, and it is deflationary.** Best learned model **53.4%** top-3;
+newest-first **51.9%**; the shipped model fitted **30.8%**; the shipped prior a
+cold user actually gets **24.1%**. So +22.6 over what ships and **+1.5 over
+sorting by date**. A perfect recency oracle reaches 50.4%, which explains the
+rest: recency is saturated, and a single model fighting it head-on has nothing
+left to win.
+
+**The correction that matters.** An earlier run said 65.5% and "+13.6 over
+newest-first". It was scoring against a choice set truncated to 10 candidates
+when the real queue averages **24** — an easier task than a reviewer faces.
+Newest-first is *invariant* to that truncation (a pick in the overall top 3 is
+also in the top 3 of the top 10), so the whole apparent margin was the artifact.
+Three signs confirm the full-set number: random fell 31%→19% (≈3/24),
+oldest-first collapsed to 3.9%, newest-first did not move at all.
+
+**Verification first, and it earned its keep.** Three checks before believing
+anything — the lab's IRLS is bit-identical to `fitReviewRank` at dim 6; the
+training window genuinely restricts what the profile sees (710 vs 896 events);
+shuffled labels collapse both models (54%→28%, 50%→15%). They caught a
+one-feature floor scoring **100%**, whose cause was that `computeFeatureStats`
+and `fitReviewRank` hardcode `dim = REVIEW_RANK_DIM`. Correct in production,
+where the feature list is fixed — but in the lab it silently zeroed every
+feature past the sixth, so feature sets of 7, 8 and 9 features printed numbers
+*identical* to the 6-feature set. That reads as "the new features add nothing":
+confident, plausible, publishable and wrong. The lab now carries its own
+dimension-generic `linalg.ts`.
+
+**What the features are worth.** `authorAffinity` 0.699 leads, then **pass-over
+count** 0.506 — how many times the subject reviewed something *else* while this
+PR sat there. Each one is an explicit decision to skip, and it explains the
+strangest result in the table: oldest-first scores *below random*. Age does not
+mean "most owed", it means "already declined, N times" — so `agePoints`, built
+to reward age, has the sign wrong.
+
+**Three things shipped this same week that the data does not support**, recorded
+because they were added on intuition and this is the first evidence either way:
+the absence correction is worth **−0.0**; every half-life from 7 days to never
+lands within 1.4 points (so the careful argument for 90 days was not
+load-bearing); and `teamAffinity`, added that morning, ranks 16th of 23.
+`pathFamiliarity` is near-dead too, and `repoAffinity` is constant when everyone
+works in one repo.
+
+**A feature that is constant within a choice set cannot rank anything.**
+`queueDepth` and `inSession` measured exactly 0.000 — they are properties of the
+moment, identical for every candidate, so they cancel. Only useful crossed with
+a per-candidate feature. Worth remembering before adding another one.
+
+**Cost was 345 GraphQL points against a planned 3,300.** GitHub prices a search
+by the connection's `first:`, not by the depth of the sub-selection, so the
+`files`/`reviews`/`timeline` selections came free. The production backfill's
+header carries the wrong estimate.
+
+**Caveats to keep attached to the number.** This measures *habit*, not review
+quality — a model that perfectly predicted the next review would score 100% and
+add nothing. No live state (checks, conflicts, approvals) appears anywhere,
+because GitHub does not retain it historically, so production's deterministic
+half is untested. And one subject regressed by 7.4 points: the gain is not
+uniform.
+
+**Next**, and it is the only idea left with real headroom: a **two-stage
+cascade** — recency selects the fresh cohort, affinity re-ranks within it. If
+that does not clear newest-first by a meaningful margin, the finding is that a
+good recency sort plus a light affinity tiebreak is the right product, which is
+a far simpler thing to ship and maintain than what is there now.
+
 ## Ranking the Reviews tab, from your own history (2026-09-21)
 
 The Reviews tab had one ordering — created date, newest or oldest — and rows
