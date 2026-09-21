@@ -2,6 +2,64 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Not pushing to a PR an external merge queue is holding — the two doors left open (2026-09-21)
+
+Raised in PostHog's #team-infrastructure: an alert fires when a push to a queued
+PR resets other people's test runs, and the 30-day board is headed by
+**`talyn-app[bot]` — 59 other PRs reset across 8 pushes, worst single push 13**.
+Trunk ejects a PR on any push and every PR testing on top of it goes back to the
+start of the line, so this is not one wasted cycle, it is up to thirteen.
+
+**What was already right.** R5b/R5d, the auto-keep gate, `pending_failure`
+parsing (2026-09-12) and the "don't submit while our own run is in flight" rule
+(2026-09-03) had closed every incident on the board except the last one.
+
+**The one still open — PostHog/posthog#100150, 2026-09-14.** Three pushes, three
+ejections, 45 minutes:
+
+- trunk failed the PR at 14:41 → fix run dispatched
+- **15:16:07** Talyn resubmits, **15:19:28** trunk queues it, **15:22:39** the
+  run — still working — pushes. Ejected at 15:22:47.
+- the same run's base-update merges land at 15:42:07 and 16:05:57, 27 seconds
+  and 4 minutes after trunk had queued the PR again each time.
+
+Two distinct defects behind that, both of the same shape: **an answer that was
+true when it was read, and false when it was used.**
+
+1. **The submit hold was bounded by AGE, not by life.** 30 minutes from
+   dispatch, on the evidence of #93148 where both runs pushed within minutes.
+   This run was 35 minutes old and perfectly healthy, so the bound read as
+   permission. It now holds on SILENCE instead: `fixTaskLastActivityAt` (the
+   task row's `updated_at`, which the transcript store rewrites on a 45s
+   debounce) against the cloud poller's own 10-minute idle-finalize window. A
+   live run of any length holds the submission; a wedged one still falls out,
+   which is the only thing the bound ever existed for.
+2. **Every state read may be up to ten minutes old** — right for deciding what
+   to do next, since a provider's next move is a test cycle away, and wrong in
+   the instant before a push, because the ACCEPT is exactly what happens inside
+   that window. So on a gated base the reading is now taken again, at max age 0,
+   immediately before anything that pushes: `externalQueueEjectingNow` in
+   `externalQueueState.ts`, called from the merge queue's action executor
+   (`fire_fix_run`, and `update_branch` against a future rule change — it cannot
+   be emitted on a gated base today) and from the auto-keep watcher's last gate.
+   One REST call, only on a gated base, only for a PR about to be given a cloud
+   run, which costs far more.
+
+The executor guard feeds the fresh reading back through `extras` and re-runs
+`decide` rather than parking the entry itself — R5d already knows how to park an
+entry the provider is holding, with the right status, event and reason.
+
+**What the branch-update commits actually were.** Not Talyn pressing GitHub's
+"Update branch": `queueBlockedFor` stops counting BEHIND as a blocker on a gated
+base, so the queue cannot emit `update_branch` there at all. They were the cloud
+run's own base-update flow (`git_signed_merge`), which the mergeable prompt asks
+for when a branch is behind. That is correct behaviour for a run — the bug was
+only ever that a run was alive under a submitted PR.
+
+**Still open, deliberately**: a workflow action that runs a prompt on a PR has no
+such gate. It is user-configured per rule rather than an unattended watcher, and
+no incident on the board came from one.
+
 ## Measuring the review ranker, and finding out it barely beats a date sort (2026-09-21)
 
 Built an offline lab to answer the question the shipped feature could not answer

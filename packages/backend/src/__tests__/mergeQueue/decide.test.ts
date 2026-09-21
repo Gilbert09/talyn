@@ -103,6 +103,7 @@ function ctx(o: Partial<DecisionContext> = {}): DecisionContext {
     groupMergeInFlight: false,
     fixTaskState: 'none',
     fixTaskStartedAt: null,
+    fixTaskLastActivityAt: null,
     otherLinkedTaskActive: false,
     signingRequired: false,
     autoMergeCapability: 'unavailable',
@@ -1287,8 +1288,13 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
   describe('submitting while our own fix run is in flight', () => {
     const readyForSubmit = () =>
       pr({ mergeStateStatus: 'BLOCKED' }, { blockingReason: 'blocked', reviewDecision: 'APPROVED' });
-    const running = (startedAt: string) =>
-      ctx({ externalGate: 'confirmed', fixTaskState: 'active', fixTaskStartedAt: startedAt });
+    const running = (lastActivityAt: string, startedAt = '2026-07-16T11:00:00.000Z') =>
+      ctx({
+        externalGate: 'confirmed',
+        fixTaskState: 'active',
+        fixTaskStartedAt: startedAt,
+        fixTaskLastActivityAt: lastActivityAt,
+      });
 
     it('waits instead of submitting a PR its own run is about to push to', () => {
       const d = decide(entry(), readyForSubmit(), running('2026-07-16T11:59:47.000Z'));
@@ -1305,20 +1311,36 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       expect(d.verdict).toBe('advance');
     });
 
+    /**
+     * PostHog/posthog#100150, 2026-09-14. The bound used to be 30 minutes from
+     * DISPATCH, which a healthy run outlives: dispatched 14:41, still working
+     * at 15:16, so the submit went in, the run pushed at 15:22:39 and trunk
+     * sent the PR back — taking the test cycles of everything queued behind it.
+     */
+    it('keeps waiting on a long run that is still talking', () => {
+      const d = decide(
+        entry(),
+        readyForSubmit(),
+        // Dispatched three hours ago, said something a minute ago.
+        running('2026-07-16T11:59:00.000Z', '2026-07-16T09:00:00.000Z')
+      );
+      expect(kinds(d)).not.toContain('submit_external');
+    });
+
     // The bound. A run that never terminalises would otherwise hold the PR out
     // of the queue forever, and we have runs that sat in_progress for a day.
-    it('gives up waiting on a run that has been going far too long', () => {
-      // 31 minutes — past SUBMIT_HOLD_FOR_RUN_MS.
-      const d = decide(entry(), readyForSubmit(), running('2026-07-16T11:29:00.000Z'));
+    it('gives up waiting on a run that has gone silent', () => {
+      // 11 minutes without a word — past SUBMIT_HOLD_RUN_SILENCE_MS.
+      const d = decide(entry(), readyForSubmit(), running('2026-07-16T11:49:00.000Z'));
       expect(kinds(d)).toContain('submit_external');
     });
 
     it('is still waiting just inside the bound', () => {
-      const d = decide(entry(), readyForSubmit(), running('2026-07-16T11:31:00.000Z'));
+      const d = decide(entry(), readyForSubmit(), running('2026-07-16T11:51:00.000Z'));
       expect(kinds(d)).not.toContain('submit_external');
     });
 
-    it('waits when the run has no readable start time', () => {
+    it('waits when the run has no readable activity time', () => {
       // Fail toward waiting: that costs latency, the other way costs a trunk
       // test cycle and an ejection.
       const d = decide(entry(), readyForSubmit(), running('not-a-date'));

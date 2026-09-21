@@ -2290,20 +2290,34 @@ function dispatchResign(d: DecisionBuilder, ctx: DecisionContext, runActive: boo
  * remove — the blocked reason carries it in the UI instead.
  */
 /**
- * How long submission waits for an in-flight fix run before going anyway.
+ * How long a run may say NOTHING before submission stops waiting for it.
  *
  * The wait itself is the point (see {@link submitHeldForRun}); this bounds it,
  * because a run that never reaches a terminal state would otherwise hold the PR
  * out of the queue forever — and that is not hypothetical, we have runs that sat
- * `in_progress` for a day. Observed on PostHog/posthog#93148, both fix runs
- * pushed within minutes of being dispatched (6m34s and 2m39s), so 30 minutes is
- * several times the window in which the ejection risk is real.
+ * `in_progress` for a day.
  *
- * The trade is deliberate and worth stating: a run still alive at 30 minutes can
- * push afterwards and still earn an ejection. One possible wasted test cycle is
- * the better side of that trade against a PR stranded out of the queue forever.
+ * It used to bound the wait by AGE instead: 30 minutes from dispatch, on the
+ * evidence of PostHog/posthog#93148, where both fix runs pushed within minutes.
+ * Runs that long are not the common case any more, and the bound quietly became
+ * a licence to submit under a perfectly healthy run: on
+ * PostHog/posthog#100150 a run dispatched at 14:41 was still working at 15:16,
+ * so the submit went in, the run pushed at 15:22, and trunk sent the PR back.
+ *
+ * Silence is the better question, because it separates the two cases the age
+ * bound conflates. `fixTaskLastActivityAt` moves as the run talks (a 45s
+ * transcript debounce), so a live run of any length keeps holding, while a
+ * wedged one falls out after this window. The window matches the cloud poller's
+ * own idle-finalize threshold (`POSTHOG_CODE_IDLE_TIMEOUT_MS`, 10 minutes):
+ * past it, the system that owns the run already treats it as finished, so the
+ * queue has no business waiting longer than the poller does.
+ *
+ * The cost of waiting is latency on one PR. The cost of guessing wrong the
+ * other way is a whole test cycle AND — under a batching queue — every other PR
+ * being tested on top of this one going back to the start of the line. One push
+ * to PostHog/posthog#103554 reset nine of them.
  */
-export const SUBMIT_HOLD_FOR_RUN_MS = 30 * 60_000;
+export const SUBMIT_HOLD_RUN_SILENCE_MS = 10 * 60_000;
 
 /**
  * Don't hand a PR to the external queue while our OWN fix run is working it.
@@ -2323,6 +2337,11 @@ export const SUBMIT_HOLD_FOR_RUN_MS = 30 * 60_000;
  * Called beside {@link queueBackoff} at the submit sites that can be reached
  * with a run in flight. The two in `decideMergeAftermath` are downstream of a
  * merge attempt, which only happens on the clean path, so they inherit this.
+ *
+ * Held while the run is ALIVE, not merely young — see
+ * {@link SUBMIT_HOLD_RUN_SILENCE_MS}. A run that another PR's task owns
+ * (`otherLinkedTaskActive`, with no timestamp of our own to read) holds the
+ * submission until it ends, exactly as it did before.
  */
 function submitHeldForRun(
   d: DecisionBuilder,
@@ -2330,11 +2349,11 @@ function submitHeldForRun(
   runActive: boolean
 ): Decision | null {
   if (!runActive) return null;
-  const startedAt = ctx.fixTaskStartedAt ? Date.parse(ctx.fixTaskStartedAt) : NaN;
-  const heldFor = Number.isNaN(startedAt) ? 0 : Date.parse(ctx.nowIso) - startedAt;
-  // Unparseable or missing start time reads as "just started" — fail toward
-  // waiting, which costs latency, rather than toward the ejection.
-  if (heldFor > SUBMIT_HOLD_FOR_RUN_MS) return null;
+  const lastActivity = ctx.fixTaskLastActivityAt ? Date.parse(ctx.fixTaskLastActivityAt) : NaN;
+  const silentFor = Number.isNaN(lastActivity) ? 0 : Date.parse(ctx.nowIso) - lastActivity;
+  // An unparseable or missing timestamp reads as "it just said something" —
+  // fail toward waiting, which costs latency, rather than toward the ejection.
+  if (silentFor > SUBMIT_HOLD_RUN_SILENCE_MS) return null;
   d.ensure('fixing');
   return d.done('advance');
 }

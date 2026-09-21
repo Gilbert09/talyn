@@ -15,6 +15,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
   buildMergeablePrompt,
+  externalQueueProviderLabel,
   prNeedsFollowup,
   type PRMergeableSummary,
   type VisualReviewSettings,
@@ -45,7 +46,7 @@ import {
   noteStackBatchAccepted,
   noteStackBatchRefused,
 } from '../repoStackBatching.js';
-import { readExternalQueueState } from '../externalQueueState.js';
+import { externalQueueEjectingNow, readExternalQueueState } from '../externalQueueState.js';
 import { noteInfraFailure, noteMerge, queueHealth } from '../repoQueueHealth.js';
 import { classifyExternalQueueFailure } from '../externalQueueFailure.js';
 import {
@@ -372,6 +373,7 @@ async function buildBaseContext(
     fixTaskState:
       ourFix === null ? 'none' : ACTIVE_STATUSES.has(ourFix.status) ? 'active' : 'terminal',
     fixTaskStartedAt: ourFix?.startedAt.toISOString() ?? null,
+    fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
     fixTaskNeedsHumanReason:
       ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
     otherLinkedTaskActive: otherFix !== null,
@@ -526,6 +528,8 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     case 'resolve_visual_review':
       return resolveVisualReview(action, ctx);
     case 'update_branch': {
+      const held = await providerHoldsBeforePush(ctx);
+      if (held) return held;
       ctx.extras.updateBranchOutcome = await githubService.updatePullRequestBranch(
         ctx.pr.workspaceId,
         ctx.pr.owner,
@@ -536,8 +540,11 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
     }
     case 'retarget_base':
       return retargetBase(action, ctx);
-    case 'fire_fix_run':
+    case 'fire_fix_run': {
+      const held = await providerHoldsBeforePush(ctx);
+      if (held) return held;
       return fireFixRun(action.resign, ctx, action.queueFailure);
+    }
     case 'record_merged': {
       await recordMerged(ctx.entry, ctx.pr);
       return {};
@@ -599,6 +606,58 @@ async function performAction(action: Action, ctx: ActionContext): Promise<Action
       return {};
     }
   }
+}
+
+/**
+ * Last-moment live re-check before an action that PUSHES to the PR — the same
+ * discipline {@link verifyLiveThenMerge} applies before the merge, for the same
+ * reason: the snapshot the decision was made on is allowed to be minutes old,
+ * and both of these actions are irreversible once spent.
+ *
+ * R5b/R5d already refuse to push while the provider is observed holding the PR.
+ * What they cannot see is the provider taking the PR BETWEEN the context build
+ * and the push. That window is up to `externalStateMaxAge` wide (60s while a
+ * submission is outstanding, 10 minutes otherwise), and the accept is precisely
+ * the event that happens inside it: PostHog/posthog#100150 was queued by trunk
+ * at 15:41:40 and branch-updated at 15:42:07, then queued again at 16:02:00 and
+ * branch-updated at 16:05:57. Two test cycles, and every PR trunk was testing
+ * on top of it went back to the start of the line with them.
+ *
+ * Feeds the fresh reading back through `extras` and asks decide again rather
+ * than parking the entry here: R5d already knows how to park an entry the
+ * provider is holding, with the right status, event and reason. This one only
+ * has to make sure decide is looking at the truth before it spends a push.
+ *
+ * `fire_fix_run` is the one that can actually reach this today. `update_branch`
+ * cannot be emitted on a gated base at all — `queueBlockedFor` stops counting
+ * BEHIND as a blocker there, because being behind the base is the external
+ * queue's job and not ours — so the guard on it is for the day that rule
+ * changes, which is precisely the day it would be needed.
+ */
+async function providerHoldsBeforePush(ctx: ActionContext): Promise<ActionOutcome | null> {
+  if (!ctx.base.externalGate) return null;
+  const ejecting = await externalQueueEjectingNow(
+    ctx.pr.workspaceId,
+    ctx.pr.owner,
+    ctx.pr.repo,
+    ctx.pr.number
+  ).catch(() => null);
+  if (!ejecting) return null;
+  console.log(
+    `[mergeQueueV2] ${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number}: not pushing — ` +
+      `${externalQueueProviderLabel(ejecting.provider)}'s merge queue took the PR (${ejecting.state}).`
+  );
+  debugBus.recordEvent({
+    service: 'merge_queue',
+    action: 'push_withheld',
+    summary:
+      `${ctx.pr.owner}/${ctx.pr.repo}#${ctx.pr.number}: ${ejecting.provider} → ${ejecting.state} ` +
+      'since the decision was made — push withheld',
+    workspaceId: ctx.pr.workspaceId,
+    meta: { entryId: ctx.entry.id },
+  });
+  ctx.extras.externalQueue = ejecting;
+  return { redecide: true };
 }
 
 /**

@@ -211,14 +211,20 @@ export async function linkedTaskStatus(taskId: string | null): Promise<string | 
  * Separate from {@link linkedTaskStatus} so its callers keep their shape; this
  * is one query either way.
  */
-export async function linkedTaskRun(
-  taskId: string | null
-): Promise<{ status: string; startedAt: Date; needsHumanReason: string | null } | null> {
+export async function linkedTaskRun(taskId: string | null): Promise<{
+  status: string;
+  startedAt: Date;
+  lastActivityAt: Date;
+  needsHumanReason: string | null;
+} | null> {
   if (!taskId) return null;
   const rows = await getDbClient()
     .select({
       status: tasksTable.status,
       createdAt: tasksTable.createdAt,
+      // The run's liveness signal: the transcript store rewrites this row as the
+      // run talks, so a stale one is a run that has stopped talking.
+      updatedAt: tasksTable.updatedAt,
       // `result` is a small jsonb (never the transcript), and reading it here
       // is what lets the queue tell a refusal from a failure without a second
       // round trip per entry.
@@ -233,6 +239,7 @@ export async function linkedTaskRun(
   return {
     status: row.status,
     startedAt: row.createdAt,
+    lastActivityAt: row.updatedAt,
     needsHumanReason:
       typeof result.needsHuman?.reason === 'string' ? result.needsHuman.reason : null,
   };

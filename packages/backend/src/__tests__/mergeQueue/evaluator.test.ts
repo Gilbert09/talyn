@@ -916,6 +916,60 @@ describe('mergeQueue v2 pipeline', () => {
       expect(entry?.externalState).toBe('pending_failure');
     });
 
+    /**
+     * PostHog/posthog#100150, 2026-09-14. Talyn resubmitted the PR at 15:16:07,
+     * trunk queued it at 15:19:28, and the fix run that was still working it
+     * pushed at 15:22:39 — straight back out, taking the test cycles of
+     * everything queued behind it with it.
+     *
+     * Nothing was wrong with the decision to remediate: it was made on a
+     * reading the caller is allowed to have, up to ten minutes old. The accept
+     * is what happens inside that window, so on a gated base the reading has to
+     * be taken again in the instant before anything pushes.
+     */
+    it('does not dispatch a fix run at a PR the queue took while deciding', async () => {
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      vi.spyOn(githubService, 'listIssueComments')
+        // The context build: trunk has said nothing about this PR yet.
+        .mockResolvedValueOnce([])
+        // The pre-push re-read, moments later: it has the PR now.
+        .mockResolvedValue([
+          {
+            user: { login: 'trunk-io[bot]' },
+            body:
+              '\u{1F9EA} Running tests on this pull request. See more details ' +
+              '[here](https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/100150).',
+          },
+        ]);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const { prId, entryId } = await insertQueuedPr(db, { summary: conflictSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).not.toHaveBeenCalled();
+      const entry = await entryOf(db, prId);
+      expect(entry?.status).toBe('awaiting_external');
+      expect(entry?.externalState).toBe('testing');
+      expect((await eventsOf(db, entryId)).map((e) => e.code)).toContain('external_queue_holding');
+    });
+
+    it('still dispatches when the pre-push re-read says the queue does NOT have the PR', async () => {
+      // The guard may cost a wasted REST call; it may never cost a stuck PR.
+      gated();
+      mockCapability.mockResolvedValue('unavailable');
+      mockSubmitLabel.mockResolvedValue(null);
+      vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([]);
+      const fixRun = vi.spyOn(taskCreateModule, 'createCloudTask');
+      const { prId } = await insertQueuedPr(db, { summary: conflictSummary() });
+
+      await evaluateGroupNow('repo1', 'main', 'test');
+
+      expect(fixRun).toHaveBeenCalledTimes(1);
+      expect((await entryOf(db, prId))?.status).toBe('fixing');
+    });
+
     // The cross-PR half: the tally is fed by the very transitions the pipeline
     // writes, so a queue that has killed several PRs stops taking new ones.
     it('stops submitting new PRs once several others died on queue infrastructure', async () => {

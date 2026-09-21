@@ -43,12 +43,23 @@ const FRESHNESS_MS = 90_000;
 const MAX_ATTEMPTS = 3;
 const LABEL_FAILURE_BACKOFF_MS = 15 * 60_000;
 /**
- * How stale an external-queue reading may be before firing a run. Matches the
- * merge queue's own backstop (`externalStateMaxAge`): a provider's next move is
- * a whole test cycle away, and every move edits its comment, so the webhook
- * feed normally answers this for free.
+ * How stale an external-queue reading may be before firing a run: not at all.
+ *
+ * It used to be 10 minutes, matching the merge queue's own backstop, on the
+ * reasoning that a provider's next move is a whole test cycle away and every
+ * move edits its comment, so the webhook feed answers for free. That is right
+ * for every reading EXCEPT this one. This one is taken in the instant before a
+ * run is dispatched — and a run exists to push, which is what the provider
+ * ejects on — so the one transition the staleness hides (the provider ACCEPTING
+ * the PR, which happens in seconds and not on a test-cycle rhythm) is the one
+ * that turns this gate into an ejection. Observed on PostHog/posthog#100150,
+ * where a push landed 27 seconds after trunk queued the PR.
+ *
+ * It costs one REST call, on a gated base, only for a PR that is about to get a
+ * cloud run anyway — which is far more expensive, and, under a batching queue,
+ * expensive for every other PR being tested on top of this one.
  */
-const EXTERNAL_STATE_MAX_AGE_MS = 10 * 60_000;
+const EXTERNAL_STATE_MAX_AGE_MS = 0;
 
 interface AutoMergeState {
   attempts: number;

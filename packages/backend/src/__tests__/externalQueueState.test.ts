@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   _resetExternalQueueState,
+  externalQueueEjectingNow,
   noteIssueComment,
   noteIssueComments,
   readExternalQueueState,
@@ -18,6 +19,20 @@ import { githubService } from '../services/github.js';
 const LINK = '(https://app.trunk.io/posthog-inc/merge-queue/3921a8a3/74552)';
 const testing = `\u{1F9EA} Running tests on this pull request - [details]${LINK}.`;
 const merged = `\u{1F60E} Merged successfully - [details]${LINK}.`;
+const queued = `\u{23F3} Waiting to start tests on this pull request - [details]${LINK}.`;
+const passed = `\u{1F44D} Pull request will be merged soon because tests have passed on #74553 - [details]${LINK}.`;
+const pendingFailure =
+  '\u26A0\uFE0F The required check `Django Tests Pass` (Failure) has failed. Pull request failed ' +
+  `tests and is waiting for other pull requests to finish testing - [details]${LINK}.`;
+const notReady =
+  '\u2728 Submitted to Merge by @Gilbert09. It will be added to the merge queue once all branch ' +
+  `protection rules pass - [details]${LINK}.`;
+const notSubmitted =
+  '<!-- Start PR Submit Checkbox -->\n- [ ] To merge this pull request, check the box to the left ' +
+  'or comment `/trunk merge` below.\n<!-- End PR Submit Checkbox -->';
+const failed =
+  '\u274C This pull request was removed from the merge queue because it failed tests. PR #74553 ' +
+  `was used for testing - [details]${LINK}.`;
 const trunk = (body: string) => ({ body, user: { login: 'trunk-io[bot]' } });
 
 describe('externalQueueState', () => {
@@ -102,6 +117,57 @@ describe('externalQueueState', () => {
   it('returns null (never a guess) when GitHub refuses and nothing was cached', async () => {
     list.mockRejectedValue(new Error('403'));
     expect(await read()).toBeNull();
+  });
+});
+
+/**
+ * The reading taken in the instant before Talyn PUSHES.
+ *
+ * PostHog/posthog#100150, 2026-09-14: trunk queued the PR at 15:41:40 and
+ * Talyn's branch update landed at 15:42:07. Every other reading in the system
+ * is allowed to be up to ten minutes old, which is correct for deciding what to
+ * do next and fatal 27 seconds after an accept.
+ */
+describe('externalQueueEjectingNow', () => {
+  let list: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    _resetExternalQueueState();
+    list = vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([trunk(testing)]);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const ask = () => externalQueueEjectingNow('ws', 'PostHog', 'posthog', 74552);
+
+  it('re-reads even when the cache has a fresh observation', async () => {
+    noteIssueComment('PostHog', 'posthog', 74552, trunk(merged));
+    expect((await ask())?.state).toBe('testing');
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers the provider state when a push would eject the PR', async () => {
+    for (const body of [testing, queued, passed, pendingFailure]) {
+      _resetExternalQueueState();
+      list.mockResolvedValue([trunk(body)]);
+      expect(await ask()).not.toBeNull();
+    }
+  });
+
+  it('answers null on a state a push costs nothing', async () => {
+    // `not_ready` is the one HOLDING state where nothing is running: trunk has
+    // the submission but has not added the PR, and what it is waiting for is
+    // what a push produces. Standing down there deadlocked the queue once
+    // already (PostHog/posthog#84450).
+    for (const body of [notReady, notSubmitted, failed, merged]) {
+      _resetExternalQueueState();
+      list.mockResolvedValue([trunk(body)]);
+      expect(await ask()).toBeNull();
+    }
+  });
+
+  it('answers null when GitHub cannot be read — never a guess either way', async () => {
+    list.mockRejectedValue(new Error('403'));
+    expect(await ask()).toBeNull();
   });
 });
 

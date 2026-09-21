@@ -387,6 +387,15 @@ export interface DecisionContext {
   /** When the linked fix run was created; null when there is none. */
   fixTaskStartedAt: string | null;
   /**
+   * When the linked fix run last showed a sign of life — its task row's
+   * `updated_at`, which the transcript store rewrites as the run talks (on a
+   * 45s debounce). Null when there is no run.
+   *
+   * This is how {@link submitHeldForRun} tells a long run from a dead one:
+   * only the second is a reason to submit to the external queue underneath it.
+   */
+  fixTaskLastActivityAt: string | null;
+  /**
    * The fix run ended `needs_human` and this is what it said it needs.
    *
    * Null on every other outcome. Distinct from a failure on purpose: a refusal

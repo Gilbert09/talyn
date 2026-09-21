@@ -10,7 +10,10 @@ import { graphqlBudget } from '../services/graphqlBudget.js';
 import { githubRateGate } from '../services/githubRateGate.js';
 import { githubService } from '../services/github.js';
 import { _resetMergeGateCache } from '../services/repoMergeGate.js';
-import { _resetExternalQueueState } from '../services/externalQueueState.js';
+import {
+  _resetExternalQueueState,
+  noteIssueComment,
+} from '../services/externalQueueState.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -738,6 +741,35 @@ describe('prAutoMergeWatcher', () => {
 
       await prAutoMergeWatcher.runOnce();
 
+      expect(await countTasks(db)).toBe(0);
+    });
+
+    /**
+     * PostHog/posthog#100150, 2026-09-14: a push landed 27 seconds after trunk
+     * queued the PR. Every other reading of the queue may be up to ten minutes
+     * old — correct, because a provider's next move is a test cycle away — but
+     * this one is taken in the instant before a run that exists to PUSH, and
+     * the accept it hides is what turns the gate into an ejection.
+     */
+    it('re-reads the queue state rather than trusting a cached observation', async () => {
+      gateThe('gated');
+      // A fresh cache entry, well inside the old ten-minute allowance, saying
+      // trunk does not have the PR…
+      noteIssueComment('a', 'b', 1, {
+        user: { login: 'trunk-io[bot]' },
+        body:
+          '<!-- Start PR Submit Checkbox -->\n- [ ] To merge this pull request, check the box ' +
+          'to the left or comment `/trunk merge` below.\n<!-- End PR Submit Checkbox -->',
+      });
+      // …and the truth, which is that it took it moments ago.
+      const comments = vi.spyOn(githubService, 'listIssueComments').mockResolvedValue([
+        TRUNK_COMMENT('⏳ Waiting to start tests on this pull request'),
+      ]);
+      await insertPr(db);
+
+      await prAutoMergeWatcher.runOnce();
+
+      expect(comments).toHaveBeenCalled();
       expect(await countTasks(db)).toBe(0);
     });
 

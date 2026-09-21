@@ -20,6 +20,7 @@
 
 import {
   externalQueueInstructionFromComments,
+  externalQueuePushWouldEject,
   externalQueueStatusFromComment,
   externalQueueStatusFromComments,
   type ExternalQueueComment,
@@ -145,6 +146,38 @@ export async function readExternalQueueState(
   const status = externalQueueStatusFromComments(comments);
   observations.set(key, { status, at: Date.now() });
   prune(now);
+  return status;
+}
+
+/**
+ * The last-moment answer to "would a push right now throw this PR out?", taken
+ * because the caller is ABOUT TO PUSH.
+ *
+ * Every other reading in this system is allowed to be minutes old, and that is
+ * correct for deciding what to do next: a provider's next move is a whole test
+ * cycle away. It is wrong for the instant before a push, because the one event
+ * the staleness hides is the one that matters — the provider accepting the PR.
+ * PostHog/posthog#100150 lost two test cycles to exactly that: trunk queued it
+ * at 15:41:40 and Talyn's branch update landed at 15:42:07, 27 seconds inside a
+ * window the caller was allowed to read as "nobody has this PR".
+ *
+ * So this always re-reads (max age 0). It costs one REST call, it is only ever
+ * called on a gated base, and it is only called when the caller is about to
+ * spend a push — which is far more expensive than the call, and, in a batching
+ * queue, expensive for every OTHER PR being tested on top of this one too.
+ *
+ * Answers null when nothing holds the PR, when the provider says nothing, and
+ * when GitHub cannot be read: the caller's own evidence then decides, exactly
+ * as it did before this existed.
+ */
+export async function externalQueueEjectingNow(
+  workspaceId: string,
+  owner: string,
+  repo: string,
+  number: number
+): Promise<ExternalQueueStatus | null> {
+  const status = await readExternalQueueState(workspaceId, owner, repo, number, 0);
+  if (!status || !externalQueuePushWouldEject(status.state)) return null;
   return status;
 }
 
