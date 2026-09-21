@@ -1,6 +1,5 @@
 import { eq } from 'drizzle-orm';
 import {
-  defaultFleetModelForAgent,
   type FleetAgent,
   type TaskResult,
 } from '@talyn/shared';
@@ -10,6 +9,7 @@ import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { fleetAgentStatus } from '../selfHosted/credentials.js';
+import { workspaceAgentModel } from '../selfHosted/fleetModel.js';
 import {
   agentLabel,
   exhaustedDeadEndSummary,
@@ -134,6 +134,12 @@ export async function failoverExhaustedRun(opts: {
       ? `${agentLabel(next.agent)} on Talyn Fleet`
       : (getCloudProvider(next.providerType)?.displayName ?? next.providerType);
 
+  // Resolved BEFORE the patch: `patchTaskMetadata` takes a synchronous
+  // transform (it runs inside the metadata mutex), so a query cannot happen in
+  // there.
+  const nextModel =
+    next.kind === 'fleet' ? await workspaceAgentModel(workspaceId, next.agent) : null;
+
   await patchTaskMetadata(taskId, (existing: Record<string, unknown>) => {
     const meta = { ...existing };
     // Clear the finished run's handles so dispatch starts a fresh one instead
@@ -150,10 +156,16 @@ export async function failoverExhaustedRun(opts: {
     meta.runAttempt = (Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0) + 1;
     // A fleet hop is a MODEL change, because the model is what carries the
     // vendor — `fleetProviderForModel` reads it and the host builds the
-    // microVM's egress table from it. The agent's shipped default rather than
-    // a like-for-like tier: there is no honest mapping from a Claude tier to
-    // an OpenAI one, and the default is the id we have grounds to trust.
-    if (next.kind === 'fleet') meta.model = defaultFleetModelForAgent(next.agent);
+    // microVM's egress table from it.
+    //
+    // The WORKSPACE's model for that agent, ending at the agent's shipped
+    // default. Not a like-for-like tier translation: there is no honest mapping
+    // from a Claude tier to an OpenAI one. But there is something better than
+    // the default and this used to step over it — the model the workspace
+    // picked for the agent being moved ONTO. Every task on Tom's workspace ran
+    // gpt-5.6-terra all day on 2026-09-21 while its Codex model was
+    // gpt-5.6-sol, which reads as the setting being ignored, because it was.
+    if (next.kind === 'fleet') meta.model = nextModel;
     meta.quotaFailover = {
       tried: [...tried, next.kind === 'fleet' ? FLEET_HOP(next.agent) : next.providerType],
       exhausted,

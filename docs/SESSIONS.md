@@ -23,6 +23,49 @@ Updated `REVIEW_RANKING.md` with results, corrected earlier claims, and explicit
 The next gate requires complete review outcomes and a fresh evaluation period.
 Neural models, code features, teacher rankings, and production promotion remain later experiments.
 
+## Why every task ran on Codex Terra: a real quota failover with the wrong model (2026-09-21)
+
+Reported as "tasks are still using Terra on Codex when they should be using
+Claude". Read the prod rows rather than guessing, and the answer was in two
+parts.
+
+**The failover itself was right.** The fleet integration row carries
+`quotaExhausted.claude` with the vendor's own words — *"You're out of extra
+usage. Add more at claude.ai/settings/usage and keep going."* Every task on the
+workspace since 08:00 shows `run_llm: openai`, `failover_from: claude`,
+`movedTo: Codex on Talyn Fleet`. Session 139's work doing exactly what it was
+built to do, on Tom's own ChatGPT subscription (both `claudeOAuth` and
+`codexOAuth` are connected), and the hold re-probes after five minutes, so
+topping up at claude.ai puts the next task back on Claude with nothing to reset.
+
+**The model it moved to was wrong.** The workspace's settings said
+`fleetModels: { claude: claude-sonnet-5, codex: gpt-5.6-sol }` and every
+failover ran **gpt-5.6-terra** — the shipped Codex default. Both swap paths
+(`selfHosted/executor.ts`'s dispatch-time hold check and
+`cloudProviders/quotaFailover.ts`'s run-time hop) reached for
+`defaultFleetModelForAgent`, whose justification — "there is no honest mapping
+from a Claude tier to an OpenAI one" — is true and answers a different question.
+There is no tier to translate: the workspace had already SAID which Codex model
+it wants. The vendor change is forced by the quota; the model within that vendor
+is still a preference, and stepping over it makes the setting look broken.
+
+Both now read `workspaceAgentModel`, which ends at the shipped default, so a
+workspace that has chosen nothing is unaffected. `workspaceAgentModel` and
+`workspaceFleetModel` moved out of the executor into
+`services/selfHosted/fleetModel.ts` — the failover had no way to ask the
+question, which is part of why it did not.
+
+**And the reason it took a screenshot to notice.** `task_dispatched` carried
+`provider` and no model, so a whole day of work silently moved from Claude to
+Codex and every funnel in PostHog read it as a normal day on Talyn Fleet —
+`provider` cannot distinguish them, because the fleet is one provider with two
+agents and the model is what picks between them. The event now carries `model`,
+`fleet_agent` (derived from the MODEL CATALOGUE, not from `env.type`, so a
+PostHog Code model is never given an invented fleet agent) and
+`failed_over_from`. Read out of the fresh metadata inside `patchTaskMetadata`'s
+transform, because the provider writes the model DURING the dispatch and the
+row the loop captured predates it.
+
 ## Two fixes to the todiex feed: which fleet agent, and one sale one card (2026-09-21)
 
 Both from reading the feed rather than the code.

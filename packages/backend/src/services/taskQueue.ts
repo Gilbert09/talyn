@@ -1,11 +1,13 @@
 import { EventEmitter } from 'events';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type {
-  CloudProviderType,
-  Environment,
-  EnvironmentConfig,
-  Task,
-  TaskPriority,
+import {
+  FLEET_MODELS,
+  fleetAgentForModel,
+  type CloudProviderType,
+  type Environment,
+  type EnvironmentConfig,
+  type Task,
+  type TaskPriority,
 } from '@talyn/shared';
 import { guardCrossReplica } from './advisoryLock.js';
 import { captureWorkspaceEvent } from './analytics.js';
@@ -310,12 +312,27 @@ class TaskQueueService extends EventEmitter {
       // Stamp when the remote run started so finalize can report the
       // actual run duration (vs total time incl. queueing) — and clear the
       // retry bookkeeping so a later re-queue starts a fresh attempt budget.
+      // Read the run's own facts out of the patch's fresh `existing`, not out
+      // of the `task` this closure captured: the provider wrote them during the
+      // dispatch that just happened, so the captured copy predates them.
+      // Held in an object rather than two `let`s: the assignments happen inside
+      // the callback, which TypeScript's flow analysis does not follow, so a
+      // plain `let` reads as `null` for the rest of the function.
+      const dispatched: { model: string | null; failedOverFrom: string | null } = {
+        model: null,
+        failedOverFrom: null,
+      };
       await patchTaskMetadata(task.id, (existing) => {
         const {
           dispatchAttempts: _attempts,
           nextDispatchAttemptAt: _nextAt,
           ...rest
         } = existing;
+        const extra = (rest.cloudTask as { extra?: { model?: unknown } } | undefined)?.extra;
+        dispatched.model = typeof extra?.model === 'string' ? extra.model : null;
+        const failover = rest.quotaFailover as { exhausted?: unknown } | undefined;
+        dispatched.failedOverFrom =
+          typeof failover?.exhausted === 'string' ? failover.exhausted : null;
         return { ...rest, dispatchedAt: new Date().toISOString() };
       });
       // `metadata.loop` is written by createCloudTask for a loop firing, and is
@@ -323,10 +340,27 @@ class TaskQueueService extends EventEmitter {
       // `code_writing`. Without it, loop-driven work cannot be segmented out of
       // any task funnel in PostHog.
       const loop = (task.metadata as { loop?: { loopId?: string } } | null)?.loop;
+      const fleetModelAgent =
+        dispatched.model !== null && FLEET_MODELS.some((m) => m.id === dispatched.model)
+          ? fleetAgentForModel(dispatched.model)
+          : null;
+      // The MODEL, and for the fleet the vendor it carries. `provider` alone
+      // cannot answer "what is my work actually running on": Talyn Fleet is one
+      // provider with two agents, and the model is what picks between them — so
+      // a day of work silently failing over from Claude to Codex looked
+      // identical to a day of Claude in every funnel we had (2026-09-21).
+      // `failed_over_from` is what separates the two.
       captureWorkspaceEvent(task.workspaceId, 'task_dispatched', {
         task_id: task.id,
         task_type: task.type,
         provider: env.type,
+        ...(dispatched.model ? { model: dispatched.model } : {}),
+        // Asked of the MODEL CATALOGUE, not of `env.type`: `fleetAgentForModel`
+        // answers 'claude' for anything it does not know (the back-compat
+        // answer a stale pin needs), so handing it a PostHog Code model id
+        // would invent a fleet agent for a run that has none.
+        ...(fleetModelAgent ? { fleet_agent: fleetModelAgent } : {}),
+        ...(dispatched.failedOverFrom ? { failed_over_from: dispatched.failedOverFrom } : {}),
         priority: task.priority,
         duration_queued_ms: Date.now() - new Date(task.createdAt).getTime(),
         origin: loop?.loopId ? 'loop' : 'user',

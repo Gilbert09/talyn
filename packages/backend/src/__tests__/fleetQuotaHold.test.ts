@@ -163,6 +163,39 @@ describe('a held-back agent never boots a sandbox', () => {
     expect(String(body.task?.model)).toMatch(/gpt/);
   });
 
+  /**
+   * Observed 2026-09-21: Tom's workspace had picked gpt-5.6-sol for Codex, and
+   * every task that failed over from an exhausted Claude ran gpt-5.6-terra —
+   * the shipped default — all day. A swap is a change of VENDOR, which the
+   * quota forces; it is not a licence to ignore the model the workspace chose
+   * for the vendor being moved onto.
+   */
+  it('swaps onto the workspace\'s own model for the other agent', async () => {
+    await connect(db, ['claude', 'codex']);
+    await db
+      .update(workspacesTable)
+      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-5.6-sol' } } })
+      .where(eq(workspacesTable.id, 'ws1'));
+    await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.");
+
+    await dispatchTaskToFleet(taskAt('claude-sonnet-5'), ENV);
+
+    const body = createSandbox.mock.calls[0]![0] as { task?: { model?: string } };
+    expect(body.task?.model).toBe('gpt-5.6-sol');
+  });
+
+  it('falls back to the shipped default when the workspace chose nothing', async () => {
+    // The floor is unchanged: `workspaceAgentModel` still ends at the agent's
+    // shipped default, so a workspace with no choice behaves exactly as before.
+    await connect(db, ['claude', 'codex']);
+    await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.");
+
+    await dispatchTaskToFleet(taskAt('claude-sonnet-5'), ENV);
+
+    const body = createSandbox.mock.calls[0]![0] as { task?: { model?: string } };
+    expect(body.task?.model).toBe('gpt-5.6-terra');
+  });
+
   it('dispatches normally once the hold has lapsed', async () => {
     await connect(db, ['claude']);
     await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.");

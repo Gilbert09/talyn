@@ -277,6 +277,30 @@ describe('quota failover', () => {
     expect(t.result?.summary).toContain('Add usage');
   });
 
+  /**
+   * The hop's MODEL. Observed 2026-09-21: a workspace whose Codex model was
+   * gpt-5.6-sol watched every Claude-exhausted run land on gpt-5.6-terra, the
+   * shipped default. The vendor change is forced; the model within that vendor
+   * is still the workspace's choice.
+   */
+  it("hops onto the workspace's own model for the agent it moves to", async () => {
+    await connectAgents(db, ['claude', 'codex']);
+    await db
+      .update(workspacesTable)
+      .set({ settings: { fleetModels: { claude: 'claude-opus-5', codex: 'gpt-5.6-sol' } } })
+      .where(eq(workspacesTable.id, 'ws1'));
+
+    expect(await run()).toBe(true);
+
+    expect((await task()).metadata.model).toBe('gpt-5.6-sol');
+  });
+
+  it('hops onto the shipped default when the workspace chose nothing', async () => {
+    await connectAgents(db, ['claude', 'codex']);
+    expect(await run()).toBe(true);
+    expect((await task()).metadata.model).toBe('gpt-5.6-terra');
+  });
+
   it('leaves the workspace default model alone — a spent quota is not a preference', async () => {
     await connectAgents(db, ['claude', 'codex']);
     await run();

@@ -1,24 +1,20 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   fleetProviderForModel,
-  isStoredFleetModelId,
   readCloudTaskMeta,
   type CloudTaskMetadata,
   type Environment,
   type Task,
   resolveFleetModel,
-  fleetModelForAgent,
   fleetAgentForModel,
-  defaultFleetModelForAgent,
   type FleetAgent,
-  type WorkspaceSettings,
 } from '@talyn/shared';
+import { workspaceAgentModel, workspaceFleetModel } from './fleetModel.js';
 import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,
   repositories as repositoriesTable,
-  workspaces as workspacesTable,
 } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
@@ -290,7 +286,13 @@ export async function dispatchTaskToFleet(task: Task, env: Environment): Promise
           error: heldBackReason(wanted, held[wanted]!),
         };
       }
-      model = defaultFleetModelForAgent(other);
+      // The workspace's OWN choice for that agent, not the shipped default.
+      // A swap is a vendor change, not a licence to ignore the setting: this
+      // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
+      // workspace whose Codex model was gpt-5.6-sol, every task, all day
+      // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
+      // default, so a workspace that has chosen nothing is unaffected.
+      model = await workspaceAgentModel(task.workspaceId, other);
       quotaSwap = { from: wanted, to: other };
       console.warn(
         `[selfhosted] task ${task.id.slice(0, 8)}: ${wanted} usage is held back — ` +
@@ -523,42 +525,6 @@ function parseGitHubSlug(url: string): string | null {
 
 function sanitizeSlug(name: string): string | null {
   return /^[\w.-]+\/[\w.-]+$/.test(name) ? name : null;
-}
-
-/**
- * The workspace's Settings → Talyn Fleet model choice, or undefined when unset
- * or unrecognised. Extracted in SQL so the settings jsonb never ships.
- *
- * An unrecognised value falls through to the next source rather than to the
- * default: a workspace that pinned a model the picker no longer offers should
- * keep whatever its environment says, not be quietly moved.
- */
-/**
- * The workspace's choice for ONE agent, or that agent's shipped default.
- *
- * Separate from `workspaceFleetModel` below because they answer different
- * questions: that one is "what does this workspace run by default" (vendor
- * included, may be absent); this one is "given that we are running `agent`,
- * what model" — and it always answers, because it is the bottom of the ladder.
- */
-async function workspaceAgentModel(workspaceId: string, agent: FleetAgent): Promise<string> {
-  const db = getDbClient();
-  const [row] = await db
-    .select({ settings: workspacesTable.settings })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  return fleetModelForAgent(row?.settings as WorkspaceSettings | null, agent);
-}
-
-async function workspaceFleetModel(workspaceId: string): Promise<string | undefined> {
-  const db = getDbClient();
-  const [row] = await db
-    .select({ model: sql<string | null>`${workspacesTable.settings} ->> 'fleetModel'` })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  return isStoredFleetModelId(row?.model) ? row.model : undefined;
 }
 
 /**
