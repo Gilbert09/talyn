@@ -2,6 +2,25 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: larger history replay and personal fallback (2026-09-21)
+
+Added a repository-wide collector with complete review and filtered timeline pagination.
+The replay applies request rounds, removals, submissions, closures, reopen events, and draft transitions.
+Uncertain candidate state excludes the whole decision. Verified title changes reconstruct earlier text for local encoding.
+The corpus contains 51,765 PR histories and yields 3,647 usable choices from 95 reviewers.
+Thirty sampled queues matched a separate reconstruction. Thirty sampled histories matched fresh API reads.
+
+Twelve numeric and title models were compared across four successive periods under two timestamp policies.
+Selected models found 719 of 997 next reviews in their top three, compared with 658 for request recency.
+The equal-reviewer gain remains uncertain. The focus reviewer regressed from 26/29 to 22/29.
+An exploratory fallback based on earlier personal results retained 678 hits and preserved that reviewer's baseline.
+All eight selected fits reproduced their original metrics exactly. Learning curves gave mixed gains from more labels.
+
+Validation passed 94 focused tests, Ruff, and formatting checks.
+Aggregate results and the protocol are committed. Raw histories, titles, vectors, and full reports remain local.
+Production ranking remains unchanged. The next requirement is fresh observed decisions and parity with the complete production order.
+See the [experiment report](../scripts/review-ranking/results/2026-09-21-repository.md).
+
 ## Review ranking: outcome pipeline and shared queue model (2026-09-21)
 
 Added a local pipeline for the next ranking experiment.

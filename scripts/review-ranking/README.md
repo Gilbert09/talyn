@@ -24,6 +24,98 @@ The lab includes actual training checks for each model family.
 Use `uv sync --frozen --extra encoder` to install the optional encoder and run its tests.
 Pass `--extra encoder` to `uv run` for those checks too. CI tests this extra without downloading weights.
 
+## Repository-wide historical experiment
+
+Use this collector for new historical work. The older spike cache remains a development reference.
+Select the repository and dates before collection. Keep them fixed throughout model comparison.
+
+```sh
+uv run --frozen python -m review_rank.history \
+  --repo OWNER/REPOSITORY \
+  --start 2026-03-25T00:00:00Z --end 2026-09-21T00:00:00Z \
+  --cache artifacts/repository-history-cache \
+  --output artifacts/repository-history.json
+uv run --frozen python -m review_rank.history_audit \
+  --history artifacts/repository-history.json --output artifacts/history-audit.json
+uv run --frozen --extra encoder python -m review_rank.history_encode \
+  --history artifacts/repository-history.json --output artifacts/title-vectors.json
+uv run --frozen python -m review_rank.rolling \
+  --history artifacts/repository-history.json --embeddings artifacts/title-vectors.json \
+  --output artifacts/rolling.json
+```
+
+The encoder uses the fixed MiniLM cache. Add `--download-model` to permit the first public weight download.
+Later runs use the local cache. Private text is encoded locally.
+Omit `--embeddings` to compare numeric models alone.
+Use `--decision-time submitted` for a separate timing sensitivity check.
+
+The collector enumerates every PR in creation order until the fixed end date.
+It fetches histories for PRs updated since the start, plus older PRs that remain open.
+This includes requests that were later removed without a review.
+It does not select PRs through reviewer searches or use a search-result cap.
+Four concurrent read requests keep collection bounded. Raw responses stay in a resumable private cache.
+Request limits and a rate reserve stop collection before a complete output is written.
+Resume with the same dates and cache after a transient failure or rate reset.
+
+Review lists and filtered timeline lists are fully paginated.
+The timeline uses `filteredCount`; GitHub's `totalCount` includes excluded event types.
+History is checked against the current title, draft state, and closure state.
+Inconsistent records receive one separate read. Remaining gaps stay explicit in the output.
+Complete pagination does not imply complete historical truth. Deleted records and access gaps remain unknown.
+
+The replay includes every observed direct human request in the repository.
+It applies removals, submissions, closures, reopen events, and draft transitions.
+A decision with uncertain candidate state is excluded as a whole.
+The selected PR never bypasses eligibility. Team membership remains outside this historical cohort.
+Features count completed review activity only from the fixed collection start.
+The first 30 days supply history before model training starts.
+
+The default decision timestamp is the review's `createdAt`.
+A recorded earlier creation time can exclude requests that arrived during the review.
+It remains an approximation of the human's decision time.
+An outcome must finish inside its assigned window before the decision can enter training or evaluation.
+Invalid start timestamps remain audited. They cannot supply a choice under the creation-time policy.
+Their valid submissions still update earlier review activity.
+
+Title changes reconstruct the text available before each decision.
+The encoder runs locally and caches vectors by text hash and encoder version.
+Unverified title histories supply missing values. They do not remove candidates.
+Content features compare the candidate with the reviewer's last 20 completed reviews.
+They include title similarity, scope overlap, change type, and missing-value indicators.
+PR bodies, file paths, and diffs do not enter this historical experiment.
+
+Four successive comparisons each use a 14-day selection window and a 14-day evaluation window.
+Training expands from the same fixed start. All models receive the same eligible decisions.
+The fixed comparison includes pooled and personal logistic models, boosted trees, and shared neural models.
+One personal model scales its prior by reviewer count and each reviewer's available training decisions.
+Adding reviewers therefore does not automatically suppress every personal adjustment.
+This model remains an offline candidate. It does not replace the prospective pipeline's separate personal validation gate.
+Numeric and title models remain separate candidates. Selection uses reviewer-average Hit@3 on queues larger than three.
+Models do not refit on selection data, so training budgets remain equal.
+
+Reports include reviewer and decision averages, sample counts, queue sizes, gains, losses, and paired intervals.
+Learning curves compare one quarter, one half, and all available training history on the same selection window.
+Separate curves sample labels within the full training window, while retaining every training reviewer.
+This helps separate label volume from the age of the training data.
+A shuffled-label control helps diagnose accidental shortcuts. It is not a proof that all leakage is absent.
+The independent audit reconstructs up to 30 queues from raw events through a separate implementation.
+It checks API records, not the queue that a human actually saw.
+All historical comparisons remain development evidence. Production promotion stays disabled.
+
+The [21 September report](results/2026-09-21-repository.md) records the larger replay and its limits.
+It also tests an exploratory fallback after the original model comparison.
+This command refits the selected models and requires exact metric reproduction before testing the fallback:
+
+```sh
+uv run --frozen python -m review_rank.fallback \
+  --history artifacts/repository-history.json --embeddings artifacts/title-vectors.json \
+  --report artifacts/rolling.json --output artifacts/fallback.json
+```
+
+The fallback requires 20 informative earlier choices and a positive personal Hit@3 difference.
+It uses the selected baseline elsewhere. These requirements are heuristic and need a separate future trial.
+The earlier selection window supplies all routing decisions. Evaluation labels cannot select a reviewer's policy.
+
 ## Historical comparison
 
 The existing spike cache supplies raw timeline responses and its dataset manifest.

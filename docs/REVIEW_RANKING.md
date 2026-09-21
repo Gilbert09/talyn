@@ -212,6 +212,34 @@ A local run verified the fixed encoder's 384-value output, unit norm, and identi
 These checks establish implementation behavior. They do not establish a gain on fresh human decisions.
 Fresh local exports and closed outcome windows remain the next measurement requirement.
 
+## Larger repository replay (2026-09-21)
+
+The [experiment report](../scripts/review-ranking/results/2026-09-21-repository.md) records the new results and reproduction steps.
+The collector now enumerates repository PRs without selecting them by review outcomes.
+It collected 51,765 histories with complete review and filtered timeline pagination.
+Thirty sampled queues matched a separate reconstruction. Thirty sampled histories matched fresh API reads.
+Deleted records, access gaps, team membership, and human exposure remain unknown.
+
+The replay supplies 3,647 usable choices from 95 reviewers, including 2,349 queues larger than three.
+Twelve models compare numeric features and reconstructed historical titles across four successive time windows.
+The personal prior now scales with each reviewer's training count and the number of reviewers.
+This prevents a larger pool from automatically suppressing every personal adjustment.
+
+The combined evaluation contains 997 informative choices from 32 reviewers.
+Selected models score 719 hits, compared with 658 for request recency: 72.12% versus 66.00%.
+Equal-reviewer Hit@3 rises from 82.47% to 83.20%. Its descriptive difference interval still includes zero.
+Most gains come from queues with at least eleven PRs. The focus reviewer's result regresses from 26/29 to 22/29.
+
+A further exploratory policy uses learned scores only where earlier personal results support them.
+It retains 678 hits and preserves the focus reviewer's 26/29 result.
+This policy came after the initial results were inspected. Its positive descriptive bound is not confirmation.
+Both comparisons were repeated using submission timestamps. All eight selected model fits reproduced their original metrics exactly.
+
+More training labels give mixed gains. Current evidence does not justify collecting raw history without a specific measurement goal.
+Prioritize actual queues, readiness, authoritative request rounds, content revisions, and fresh human decisions.
+Freeze the fallback policy for a future comparison against the complete production order.
+Production ranking remains unchanged. Historical results cannot establish that changing the order causes more reviews.
+
 ## Next experiment protocol
 
 The following steps retain the agreed order. Unchecked work is not implemented yet.
@@ -221,6 +249,8 @@ The following steps retain the agreed order. Unchecked work is not implemented y
 - [x] Test available activity features through separate validation ablations.
 - [x] Add local snapshots, exposure observations, exports, and a completeness checker.
 - [x] Build a scoped outcome collector and strict snapshot join.
+- [x] Collect repository histories, reconstruct earlier titles, and compare twelve models across successive periods.
+- [x] Check label-volume curves, submission-time sensitivity, and an exploratory fallback based on earlier personal results.
 - [ ] Collect fresh exports and complete outcome journals for the pilot.
 - [ ] Record authoritative request rounds, backend model versions, and historical content revisions.
 - [ ] Evaluate the complete production ordering, including readiness gates and score limits.

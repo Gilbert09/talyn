@@ -71,6 +71,13 @@ The shared queue model has optional personal adjustments, enabled only by a sepa
 Four forward windows separate training, model selection, personal validation, and development evaluation.
 The JSON artifact refuses production use. See [`REVIEW_RANKING.md`](./REVIEW_RANKING.md).
 
+Historical comparisons now enumerate repository PRs without selecting them by reviewer outcomes.
+The replay applies direct requests, removals, submissions, and PR lifecycle events.
+Uncertain candidate state excludes the whole decision. Missing text does not remove a candidate.
+Verified title changes reconstruct earlier text for local encoding.
+Successive time windows compare models on equal data and retain learning curves and coverage counts.
+Complete API pagination still cannot establish what a reviewer saw or recover deleted records.
+
 
 ## Key Decisions
 

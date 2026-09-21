@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "status": "historical_development_only",
+  "collection_start": "2026-03-25T00:00:00Z",
+  "collection_end": "2026-09-21T00:00:00Z",
+  "repository_count": 1,
+  "cohort": "All observed direct human review requests; no outcome-based reviewer search.",
+  "warmup_days": 30,
+  "evaluation_days": 14,
+  "selection_days": 14,
+  "evaluation_end_lags_days": [
+    42,
+    28,
+    14,
+    0
+  ],
+  "primary_metric": "Equal-reviewer Hit@3 on queues with more than three candidates.",
+  "decision_time": "Review createdAt; submissions must finish inside their assigned window.",
+  "timing_sensitivity": "Separate submittedAt reconstruction.",
+  "models": [
+    "pooled-logit-l2-0.001",
+    "pooled-logit-l2-0.01",
+    "personal-logit-l2-0.01",
+    "lightgbm-depth-3-trees-300",
+    "catboost-depth-4-trees-150",
+    "shared-network-32",
+    "hierarchical-logit-prior-50",
+    "title-pooled-logit-l2-0.01",
+    "title-lightgbm-depth-3-trees-300",
+    "title-catboost-depth-4-trees-150",
+    "title-shared-network-32",
+    "title-hierarchical-logit-prior-50"
+  ],
+  "numeric_specs": [
+    {
+      "family": "logit",
+      "regularization": 0.001,
+      "depth": 3,
+      "iterations": 150,
+      "personal": false
+    },
+    {
+      "family": "logit",
+      "regularization": 0.01,
+      "depth": 3,
+      "iterations": 150,
+      "personal": false
+    },
+    {
+      "family": "logit",
+      "regularization": 0.01,
+      "depth": 3,
+      "iterations": 150,
+      "personal": true
+    },
+    {
+      "family": "lightgbm",
+      "regularization": 0.01,
+      "depth": 3,
+      "iterations": 300,
+      "personal": false
+    },
+    {
+      "family": "catboost",
+      "regularization": 0.01,
+      "depth": 4,
+      "iterations": 150,
+      "personal": false
+    }
+  ],
+  "shared_network": {
+    "hidden": 32,
+    "regularization": 0.05,
+    "seed": 71
+  },
+  "hierarchical_personal_prior_decisions": 50,
+  "features": [
+    "log_request_age",
+    "log_first_request_age",
+    "recency_quantile",
+    "is_newest",
+    "in_newest_three",
+    "log_creation_age",
+    "log_intervening_reviews",
+    "is_unpassed",
+    "log_author_reviews",
+    "log_author_requests",
+    "author_response_rate",
+    "bot_author",
+    "log_previous_rounds",
+    "log_requests_this_round",
+    "same_author_last",
+    "same_author_recent",
+    "author_share_last_five",
+    "log_author_reviews_30d",
+    "log_author_reviews_7d",
+    "log_queue_size",
+    "log_minutes_since_review",
+    "affinity_x_session",
+    "recency_x_deep_queue",
+    "affinity_x_unpassed",
+    "title_last_review_cosine",
+    "title_recent_mean_cosine",
+    "title_recent_max_cosine",
+    "title_recent_scope_share",
+    "title_recent_type_share",
+    "title_recent_missing",
+    "title_scope_missing",
+    "title_type_fix",
+    "title_type_feat",
+    "title_type_chore",
+    "title_type_docs",
+    "title_type_test",
+    "title_type_refactor",
+    "title_missing",
+    "title_last_review_missing"
+  ],
+  "learning_curves": {
+    "history_fractions": [
+      0.25,
+      0.5,
+      1
+    ],
+    "label_fractions": [
+      0.25,
+      0.5,
+      1
+    ],
+    "seed": 71,
+    "evaluation": "selection window only"
+  },
+  "promotion_allowed": false,
+  "limits": [
+    "Historical windows are development data, not an untouched final test.",
+    "Complete API reads do not establish what a reviewer saw."
+  ]
+}

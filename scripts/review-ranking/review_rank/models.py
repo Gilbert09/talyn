@@ -74,8 +74,7 @@ class Ranker:
             design = self._design(z, np.repeat([c.user for c in choices], sizes))
             group_weight = weights / weights.sum()
             row_weight = np.repeat(group_weight, sizes)
-            penalty = np.full(design.shape[1], self.spec.regularization)
-            penalty[z.shape[1] :] *= 10
+            penalty = self._penalties(z.shape[1], choices)
 
             def objective(w: np.ndarray) -> tuple[float, np.ndarray]:
                 scores = design @ w
@@ -142,6 +141,12 @@ class Ranker:
             raise ValueError(f"Unknown model family: {self.spec.family}")
         return self
 
+    def _penalties(self, width: int, choices: list[Choice]) -> np.ndarray:
+        size = width * (1 + len(self.users)) if self.spec.personal else width
+        penalty = np.full(size, self.spec.regularization)
+        penalty[width:] *= 10
+        return penalty
+
     def _design(self, z: np.ndarray, users: np.ndarray) -> csr_matrix:
         shared = csr_matrix(z)
         if not self.spec.personal:
@@ -167,3 +172,18 @@ class Ranker:
         else:
             scores = self.estimator.predict(x)
         return list(np.split(scores, np.cumsum(sizes)[:-1]))
+
+
+class HierarchicalRanker(Ranker):
+    """Scale personal priors by reviewer count and each reviewer's available decisions."""
+
+    def __init__(self, columns: np.ndarray, prior_decisions: float = 50):
+        super().__init__(Spec("logit", regularization=0.01, personal=True), columns)
+        if prior_decisions <= 0:
+            raise ValueError("The personal prior must be positive")
+        self.prior_decisions = prior_decisions
+
+    def _penalties(self, width: int, choices: list[Choice]) -> np.ndarray:
+        counts = Counter(choice.user for choice in choices)
+        personal = [self.prior_decisions / (len(self.users) * counts[user]) for user in self.users]
+        return np.r_[np.full(width, self.spec.regularization), np.repeat(personal, width)]

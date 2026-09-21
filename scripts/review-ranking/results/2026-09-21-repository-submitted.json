@@ -1,0 +1,2860 @@
+{
+  "schema_version": 1,
+  "source_sha256": "13c5e971d71c6d5a9c9da8221fc2be52e267b6561c57cb043753a7283b967aca",
+  "code_sha256": "7815806a02593664703d5dce8e66905c1ae40fdf2befd3db90bfe72262f835f6",
+  "python": "3.12.9",
+  "seed": 71,
+  "packages": {
+    "numpy": "2.4.6",
+    "scipy": "1.17.1",
+    "lightgbm": "4.7.0",
+    "catboost": "1.2.10",
+    "scikit-learn": "1.9.1"
+  },
+  "decision_time": "submitted",
+  "features": [
+    "log_request_age",
+    "log_first_request_age",
+    "recency_quantile",
+    "is_newest",
+    "in_newest_three",
+    "log_creation_age",
+    "log_intervening_reviews",
+    "is_unpassed",
+    "log_author_reviews",
+    "log_author_requests",
+    "author_response_rate",
+    "bot_author",
+    "log_previous_rounds",
+    "log_requests_this_round",
+    "same_author_last",
+    "same_author_recent",
+    "author_share_last_five",
+    "log_author_reviews_30d",
+    "log_author_reviews_7d",
+    "log_queue_size",
+    "log_minutes_since_review",
+    "affinity_x_session",
+    "recency_x_deep_queue",
+    "affinity_x_unpassed",
+    "title_last_review_cosine",
+    "title_recent_mean_cosine",
+    "title_recent_max_cosine",
+    "title_recent_scope_share",
+    "title_recent_type_share",
+    "title_recent_missing",
+    "title_scope_missing",
+    "title_type_fix",
+    "title_type_feat",
+    "title_type_chore",
+    "title_type_docs",
+    "title_type_test",
+    "title_type_refactor",
+    "title_missing",
+    "title_last_review_missing"
+  ],
+  "title_encoder": {
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "dimension": 384,
+    "files_sha256": [
+      "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+      "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452"
+    ],
+    "pooling": "masked token mean, chunk mean, L2 normalization",
+    "max_tokens": 256,
+    "max_chunks": 16
+  },
+  "audit": {
+    "nonhuman_or_team_request_events": 46439,
+    "submitted_reviews_in_window": 65270,
+    "invalid_review_start_times": 836,
+    "submitted_review_decisions": 65270,
+    "review_outside_direct_queue": 59079,
+    "outside_queue_no_prior_direct_request": 26257,
+    "outside_queue_after_prior_review": 32656,
+    "single_candidate_choices": 1265,
+    "outside_queue_closed_or_draft": 137,
+    "outside_queue_removed_request": 29,
+    "simultaneous_decisions": 1180,
+    "choices": 3746,
+    "candidate_rows": 26841,
+    "reviewers_with_choices": 96,
+    "informative_choices": 2418
+  },
+  "limits": [
+    "All windows are development evidence. They are not an untouched final test.",
+    "The cohort includes direct human requests only, not team membership.",
+    "Historical CI gates, production scores, PR bodies, and diffs are unavailable.",
+    "Review creation is an approximation of the actual decision time.",
+    "Learning curves use earlier validation, not final evaluation, to assess data needs.",
+    "Missing and deleted GitHub records can still affect candidate coverage."
+  ],
+  "promotion_allowed": false,
+  "full_private_report_sha256": "b9590e25328bc12ac6d8ee02385547dafd4177fd4e0899c4318356f81996ba54",
+  "combined_selected": {
+    "decisions": 1032,
+    "reviewers": 32,
+    "macro_hit3": 0.8265142892716841,
+    "micro_hit3": 0.7063953488372093,
+    "hits": 729.0
+  },
+  "combined_baseline": {
+    "decisions": 1032,
+    "reviewers": 32,
+    "macro_hit3": 0.8248939450939821,
+    "micro_hit3": 0.6569767441860465,
+    "hits": 678.0
+  },
+  "combined_paired": {
+    "interval": {
+      "macro_delta": 0.0016203441777019843,
+      "low": -0.04033099407941223,
+      "high": 0.040937104130183845,
+      "samples": 2000,
+      "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+    },
+    "gains": 120,
+    "losses": 69,
+    "largest_reviewer_share": 0.17344961240310078,
+    "queue_sizes": {
+      "4-5": {
+        "decisions": 195,
+        "model_hits": 181.0,
+        "baseline_hits": 185.0
+      },
+      "6-10": {
+        "decisions": 335,
+        "model_hits": 271.0,
+        "baseline_hits": 253.0
+      },
+      "11+": {
+        "decisions": 502,
+        "model_hits": 277.0,
+        "baseline_hits": 240.0
+      }
+    }
+  },
+  "combined_families": {
+    "pooled-logit-l2-0.001": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8189361056893392,
+        "micro_hit3": 0.7083333333333334,
+        "hits": 731.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": -0.005957839404642925,
+          "low": -0.04892726130257572,
+          "high": 0.0353837790861972,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 128,
+        "losses": 75,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 182.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 263.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 286.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "pooled-logit-l2-0.01": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8268630805234798,
+        "micro_hit3": 0.7054263565891473,
+        "hits": 728.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.001969135429497676,
+          "low": -0.04047630199588307,
+          "high": 0.04219869367271768,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 122,
+        "losses": 72,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 183.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 263.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 282.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "personal-logit-l2-0.01": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8397240079547201,
+        "micro_hit3": 0.7180232558139535,
+        "hits": 741.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.01483006286073808,
+          "low": -0.01578850241594978,
+          "high": 0.04685177935435584,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 124,
+        "losses": 61,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 185.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 270.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 286.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "lightgbm-depth-3-trees-300": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8322883177803773,
+        "micro_hit3": 0.7093023255813954,
+        "hits": 732.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.007394372686395291,
+          "low": -0.026854534713500876,
+          "high": 0.039280129313631784,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 108,
+        "losses": 54,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 178.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 275.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 279.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "catboost-depth-4-trees-150": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8380494338992652,
+        "micro_hit3": 0.6947674418604651,
+        "hits": 717.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.013155488805283158,
+          "low": -0.014171883314173107,
+          "high": 0.03629178941474685,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 75,
+        "losses": 36,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 183.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 267.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 267.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "shared-network-32": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8321534485127133,
+        "micro_hit3": 0.7112403100775194,
+        "hits": 734.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.007259503418731285,
+          "low": -0.03437030458865647,
+          "high": 0.045245727099668176,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 111,
+        "losses": 55,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 185.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 266.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 283.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "hierarchical-logit-prior-50": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8300262654451664,
+        "micro_hit3": 0.7131782945736435,
+        "hits": 736.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.005132320351184393,
+          "low": -0.03689877805709192,
+          "high": 0.04633385000844661,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 122,
+        "losses": 64,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 182.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 269.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 285.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "title-pooled-logit-l2-0.01": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8298710883018476,
+        "micro_hit3": 0.7170542635658915,
+        "hits": 740.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.00497714320786566,
+          "low": -0.037374326640026594,
+          "high": 0.04535370659602435,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 119,
+        "losses": 57,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 185.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 267.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 288.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "title-lightgbm-depth-3-trees-300": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8370693838908339,
+        "micro_hit3": 0.7238372093023255,
+        "hits": 747.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.012175438796851717,
+          "low": -0.02798339628706945,
+          "high": 0.047689867907177254,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 118,
+        "losses": 49,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 184.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 272.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 291.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "title-catboost-depth-4-trees-150": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8282654471359264,
+        "micro_hit3": 0.6908914728682171,
+        "hits": 713.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.0033715020419443887,
+          "low": -0.033161935004669164,
+          "high": 0.030215141575702938,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 70,
+        "losses": 35,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 184.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 263.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 266.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "title-shared-network-32": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8389542732598035,
+        "micro_hit3": 0.7170542635658915,
+        "hits": 740.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.014060328165821482,
+          "low": -0.02606550616256979,
+          "high": 0.04971242022709544,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 113,
+        "losses": 51,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 187.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 265.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 288.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "title-hierarchical-logit-prior-50": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8351906196664174,
+        "micro_hit3": 0.7141472868217055,
+        "hits": 737.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.010296674572435344,
+          "low": -0.032385388044544244,
+          "high": 0.04687047764450439,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 125,
+        "losses": 66,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 183.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 264.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 290.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "request-newest": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.8248939450939821,
+        "micro_hit3": 0.6569767441860465,
+        "hits": 678.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": 0.0,
+          "low": 0.0,
+          "high": 0.0,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 0,
+        "losses": 0,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 185.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 253.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 240.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "creation-newest": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.7647817010780893,
+        "micro_hit3": 0.6143410852713178,
+        "hits": 634.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": -0.060112244015892796,
+          "low": -0.13484300457277243,
+          "high": 0.001119598273499233,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 56,
+        "losses": 100,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 173.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 244.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 217.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "request-oldest": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.17975621209484527,
+        "micro_hit3": 0.08914728682170543,
+        "hits": 92.0
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": -0.6451377329991368,
+          "low": -0.765316450420722,
+          "high": -0.5141523557873436,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 59,
+        "losses": 644,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 44.0,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 33.0,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 15.0,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    },
+    "random-expectation": {
+      "metrics": {
+        "decisions": 1032,
+        "reviewers": 32,
+        "macro_hit3": 0.5443897236871071,
+        "micro_hit3": 0.34129876658539515,
+        "hits": 352.2203271161278
+      },
+      "paired": {
+        "interval": {
+          "macro_delta": -0.2805042214068748,
+          "low": -0.3291592805174174,
+          "high": -0.2182580129739682,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 354,
+        "losses": 678,
+        "largest_reviewer_share": 0.17344961240310078,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 195,
+            "model_hits": 132.89999999999998,
+            "baseline_hits": 185.0
+          },
+          "6-10": {
+            "decisions": 335,
+            "model_hits": 131.88809523809522,
+            "baseline_hits": 253.0
+          },
+          "11+": {
+            "decisions": 502,
+            "model_hits": 87.43223187803254,
+            "baseline_hits": 240.0
+          }
+        }
+      }
+    }
+  },
+  "folds": [
+    {
+      "windows": {
+        "train_start": 1776988800.0,
+        "train_end": 1783900800.0,
+        "tune_end": 1785110400.0,
+        "test_end": 1786320000.0
+      },
+      "counts": {
+        "train": 1484,
+        "tune": 273,
+        "test": 344
+      },
+      "selected_model": "title-lightgbm-depth-3-trees-300",
+      "selected_baseline": "request-newest",
+      "paired": {
+        "interval": {
+          "macro_delta": 0.00041531554328333166,
+          "low": -0.09020042683688695,
+          "high": 0.058549272742268815,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 24,
+        "losses": 16,
+        "largest_reviewer_share": 0.17204301075268819,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 50,
+            "model_hits": 47.0,
+            "baseline_hits": 50.0
+          },
+          "6-10": {
+            "decisions": 109,
+            "model_hits": 93.0,
+            "baseline_hits": 88.0
+          },
+          "11+": {
+            "decisions": 120,
+            "model_hits": 73.0,
+            "baseline_hits": 67.0
+          }
+        }
+      },
+      "validation": {
+        "request-newest": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7819693767383985,
+          "micro_hit3": 0.8064516129032258,
+          "hits": 150.0
+        },
+        "creation-newest": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7754360090154568,
+          "micro_hit3": 0.7580645161290323,
+          "hits": 141.0
+        },
+        "request-oldest": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.22909256803350053,
+          "micro_hit3": 0.0967741935483871,
+          "hits": 18.0
+        },
+        "random-expectation": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.5310953498287517,
+          "micro_hit3": 0.4566373185249895,
+          "hits": 84.93454124564805
+        },
+        "pooled-logit-l2-0.001": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.8054009175469417,
+          "micro_hit3": 0.8387096774193549,
+          "hits": 156.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7921536349382459,
+          "micro_hit3": 0.8172043010752689,
+          "hits": 152.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7831522762425938,
+          "micro_hit3": 0.8118279569892473,
+          "hits": 151.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7895094393592677,
+          "micro_hit3": 0.8584229390681003,
+          "hits": 159.66666666666666
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7707415979012089,
+          "micro_hit3": 0.8279569892473119,
+          "hits": 154.0
+        },
+        "shared-network-32": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7904175238271348,
+          "micro_hit3": 0.8172043010752689,
+          "hits": 152.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.779369544029155,
+          "micro_hit3": 0.8064516129032258,
+          "hits": 150.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7914302553086163,
+          "micro_hit3": 0.8118279569892473,
+          "hits": 151.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.8145155008802749,
+          "micro_hit3": 0.8548387096774194,
+          "hits": 159.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.78095068606546,
+          "micro_hit3": 0.8387096774193549,
+          "hits": 156.0
+        },
+        "title-shared-network-32": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.7983117971765712,
+          "micro_hit3": 0.8279569892473119,
+          "hits": 154.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 186,
+          "reviewers": 16,
+          "macro_hit3": 0.8100911623866429,
+          "micro_hit3": 0.8494623655913979,
+          "hits": 158.0
+        }
+      },
+      "evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8156688843631343,
+          "micro_hit3": 0.7598566308243727,
+          "hits": 212.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.830227707892546,
+          "micro_hit3": 0.7670250896057348,
+          "hits": 214.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8425004351652733,
+          "micro_hit3": 0.7741935483870968,
+          "hits": 216.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8400055416309806,
+          "micro_hit3": 0.7777777777777778,
+          "hits": 217.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8136209718059708,
+          "micro_hit3": 0.7491039426523297,
+          "hits": 209.0
+        },
+        "shared-network-32": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8235764762744304,
+          "micro_hit3": 0.7634408602150538,
+          "hits": 213.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8277886835023022,
+          "micro_hit3": 0.7598566308243727,
+          "hits": 212.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8266551458300271,
+          "micro_hit3": 0.7777777777777778,
+          "hits": 217.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8207795831269277,
+          "micro_hit3": 0.7634408602150538,
+          "hits": 213.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8179279203270878,
+          "micro_hit3": 0.7491039426523297,
+          "hits": 209.0
+        },
+        "title-shared-network-32": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8292149520753327,
+          "micro_hit3": 0.7741935483870968,
+          "hits": 216.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8260955224853148,
+          "micro_hit3": 0.7741935483870968,
+          "hits": 216.0
+        },
+        "request-newest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8203642675836443,
+          "micro_hit3": 0.7347670250896058,
+          "hits": 205.0
+        },
+        "creation-newest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.727887499949653,
+          "micro_hit3": 0.6917562724014337,
+          "hits": 193.0
+        },
+        "request-oldest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.07362201630021227,
+          "micro_hit3": 0.03942652329749104,
+          "hits": 11.0
+        },
+        "random-expectation": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.47116982147546305,
+          "micro_hit3": 0.35036377060202967,
+          "hits": 97.75149199796628
+        }
+      },
+      "supported_reviewers_evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7313377687262687,
+          "micro_hit3": 0.75,
+          "hits": 186.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7404554157850922,
+          "micro_hit3": 0.7540322580645161,
+          "hits": 187.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7450008703305467,
+          "micro_hit3": 0.7580645161290323,
+          "hits": 188.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7400110832619614,
+          "micro_hit3": 0.7620967741935484,
+          "hits": 189.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.6872419436119419,
+          "micro_hit3": 0.7298387096774194,
+          "hits": 181.0
+        },
+        "shared-network-32": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7271529525488611,
+          "micro_hit3": 0.75,
+          "hits": 186.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7355773670046044,
+          "micro_hit3": 0.7459677419354839,
+          "hits": 185.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7533102916600543,
+          "micro_hit3": 0.7701612903225806,
+          "hits": 191.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7215591662538553,
+          "micro_hit3": 0.75,
+          "hits": 186.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.6958558406541758,
+          "micro_hit3": 0.7298387096774194,
+          "hits": 181.0
+        },
+        "title-shared-network-32": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7384299041506656,
+          "micro_hit3": 0.7620967741935484,
+          "hits": 189.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.7321910449706299,
+          "micro_hit3": 0.7620967741935484,
+          "hits": 189.0
+        },
+        "request-newest": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.6807285351672887,
+          "micro_hit3": 0.7096774193548387,
+          "hits": 176.0
+        },
+        "creation-newest": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.6524416665659725,
+          "micro_hit3": 0.6814516129032258,
+          "hits": 169.0
+        },
+        "request-oldest": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.027244032600424527,
+          "micro_hit3": 0.036290322580645164,
+          "hits": 9.0
+        },
+        "random-expectation": {
+          "decisions": 248,
+          "reviewers": 10,
+          "macro_hit3": 0.28141107152235456,
+          "micro_hit3": 0.3136724907752097,
+          "hits": 77.79077771225201
+        }
+      },
+      "learning_curve": {
+        "0.25": {
+          "training_decisions": 392,
+          "training_reviewers": 45,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.7920089590123199,
+            "micro_hit3": 0.8225806451612904,
+            "hits": 153.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 869,
+          "training_reviewers": 58,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.8021362738271348,
+            "micro_hit3": 0.8333333333333334,
+            "hits": 155.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 1484,
+          "training_reviewers": 71,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.7921536349382459,
+            "micro_hit3": 0.8172043010752689,
+            "hits": 152.0
+          }
+        }
+      },
+      "sample_learning_curve": {
+        "0.25": {
+          "training_decisions": 407,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.7831522762425938,
+            "micro_hit3": 0.8172043010752689,
+            "hits": 152.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 763,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.7909647762425938,
+            "micro_hit3": 0.8225806451612904,
+            "hits": 153.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 1484,
+          "validation": {
+            "decisions": 186,
+            "reviewers": 16,
+            "macro_hit3": 0.7921536349382459,
+            "micro_hit3": 0.8172043010752689,
+            "hits": 152.0
+          }
+        }
+      },
+      "shuffled_training_labels_validation": {
+        "decisions": 186,
+        "reviewers": 16,
+        "macro_hit3": 0.5146677930484423,
+        "micro_hit3": 0.3010752688172043,
+        "hits": 56.0
+      }
+    },
+    {
+      "windows": {
+        "train_start": 1776988800.0,
+        "train_end": 1785110400.0,
+        "tune_end": 1786320000.0,
+        "test_end": 1787529600.0
+      },
+      "counts": {
+        "train": 1757,
+        "tune": 344,
+        "test": 360
+      },
+      "selected_model": "pooled-logit-l2-0.01",
+      "selected_baseline": "request-newest",
+      "paired": {
+        "interval": {
+          "macro_delta": 0.03812197253618144,
+          "low": -0.010939216785769411,
+          "high": 0.12013476443418797,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 38,
+        "losses": 18,
+        "largest_reviewer_share": 0.23972602739726026,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 42,
+            "model_hits": 39.0,
+            "baseline_hits": 40.0
+          },
+          "6-10": {
+            "decisions": 116,
+            "model_hits": 97.0,
+            "baseline_hits": 90.0
+          },
+          "11+": {
+            "decisions": 134,
+            "model_hits": 77.0,
+            "baseline_hits": 63.0
+          }
+        }
+      },
+      "validation": {
+        "request-newest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8203642675836443,
+          "micro_hit3": 0.7347670250896058,
+          "hits": 205.0
+        },
+        "creation-newest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.727887499949653,
+          "micro_hit3": 0.6917562724014337,
+          "hits": 193.0
+        },
+        "request-oldest": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.07362201630021227,
+          "micro_hit3": 0.03942652329749104,
+          "hits": 11.0
+        },
+        "random-expectation": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.47116982147546305,
+          "micro_hit3": 0.35036377060202967,
+          "hits": 97.75149199796628
+        },
+        "pooled-logit-l2-0.001": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8368943745592127,
+          "micro_hit3": 0.7670250896057348,
+          "hits": 214.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8456103824089464,
+          "micro_hit3": 0.7849462365591398,
+          "hits": 219.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8454954398802107,
+          "micro_hit3": 0.7813620071684588,
+          "hits": 218.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.832549314090649,
+          "micro_hit3": 0.7580645161290323,
+          "hits": 211.5
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8138101345936339,
+          "micro_hit3": 0.7419354838709677,
+          "hits": 207.0
+        },
+        "shared-network-32": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8301821673313411,
+          "micro_hit3": 0.7741935483870968,
+          "hits": 216.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8268404076402331,
+          "micro_hit3": 0.7491039426523297,
+          "hits": 209.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.825893167152938,
+          "micro_hit3": 0.7670250896057348,
+          "hits": 214.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8198558170687802,
+          "micro_hit3": 0.7598566308243727,
+          "hits": 212.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.815823954323682,
+          "micro_hit3": 0.7491039426523297,
+          "hits": 209.0
+        },
+        "title-shared-network-32": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8410955224853149,
+          "micro_hit3": 0.7813620071684588,
+          "hits": 218.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8352121088706144,
+          "micro_hit3": 0.7741935483870968,
+          "hits": 216.0
+        }
+      },
+      "evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.824949011564832,
+          "micro_hit3": 0.7363013698630136,
+          "hits": 215.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8210680971576018,
+          "micro_hit3": 0.7294520547945206,
+          "hits": 213.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8198717250471024,
+          "micro_hit3": 0.7431506849315068,
+          "hits": 217.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8313768458564436,
+          "micro_hit3": 0.7054794520547946,
+          "hits": 206.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8304610795667159,
+          "micro_hit3": 0.7226027397260274,
+          "hits": 211.0
+        },
+        "shared-network-32": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8180252851364616,
+          "micro_hit3": 0.7294520547945206,
+          "hits": 213.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8235667680773254,
+          "micro_hit3": 0.7328767123287672,
+          "hits": 214.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8292961210121534,
+          "micro_hit3": 0.7363013698630136,
+          "hits": 215.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8560171124390271,
+          "micro_hit3": 0.7363013698630136,
+          "hits": 215.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8051291769852379,
+          "micro_hit3": 0.708904109589041,
+          "hits": 207.0
+        },
+        "title-shared-network-32": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8353471337113655,
+          "micro_hit3": 0.7363013698630136,
+          "hits": 215.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8366789619913191,
+          "micro_hit3": 0.75,
+          "hits": 219.0
+        },
+        "request-newest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7829461246214203,
+          "micro_hit3": 0.660958904109589,
+          "hits": 193.0
+        },
+        "creation-newest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7408717691076939,
+          "micro_hit3": 0.5958904109589042,
+          "hits": 174.0
+        },
+        "request-oldest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.08126536436785743,
+          "micro_hit3": 0.05821917808219178,
+          "hits": 17.0
+        },
+        "random-expectation": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.47941980412488583,
+          "micro_hit3": 0.338755281327306,
+          "hits": 98.91654214757335
+        }
+      },
+      "supported_reviewers_evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7614350550633383,
+          "micro_hit3": 0.7346153846153847,
+          "hits": 191.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7547316574508499,
+          "micro_hit3": 0.7269230769230769,
+          "hits": 189.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7478805075374989,
+          "micro_hit3": 0.7384615384615385,
+          "hits": 192.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7773223669258823,
+          "micro_hit3": 0.7038461538461539,
+          "hits": 183.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7422477658225731,
+          "micro_hit3": 0.6961538461538461,
+          "hits": 181.0
+        },
+        "shared-network-32": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7494758912325167,
+          "micro_hit3": 0.7269230769230769,
+          "hits": 189.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7590475435849178,
+          "micro_hit3": 0.7307692307692307,
+          "hits": 190.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7386406683511357,
+          "micro_hit3": 0.7307692307692307,
+          "hits": 190.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7800104190932479,
+          "micro_hit3": 0.7269230769230769,
+          "hits": 189.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7032773503588716,
+          "micro_hit3": 0.6846153846153846,
+          "hits": 178.0
+        },
+        "title-shared-network-32": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7443077285636505,
+          "micro_hit3": 0.7269230769230769,
+          "hits": 189.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.7816958785272704,
+          "micro_hit3": 0.75,
+          "hits": 195.0
+        },
+        "request-newest": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.6601764800079718,
+          "micro_hit3": 0.6269230769230769,
+          "hits": 163.0
+        },
+        "creation-newest": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.5827179042163199,
+          "micro_hit3": 0.55,
+          "hits": 143.0
+        },
+        "request-oldest": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.07497669794320512,
+          "micro_hit3": 0.05384615384615385,
+          "hits": 14.0
+        },
+        "random-expectation": {
+          "decisions": 260,
+          "reviewers": 11,
+          "macro_hit3": 0.36296968254060313,
+          "micro_hit3": 0.32105124298516263,
+          "hits": 83.47332317614229
+        }
+      },
+      "learning_curve": {
+        "0.25": {
+          "training_decisions": 445,
+          "training_reviewers": 51,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8203357943261407,
+            "micro_hit3": 0.7455197132616488,
+            "hits": 208.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 966,
+          "training_reviewers": 66,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8189470814130377,
+            "micro_hit3": 0.7526881720430108,
+            "hits": 210.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 1757,
+          "training_reviewers": 75,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8456103824089464,
+            "micro_hit3": 0.7849462365591398,
+            "hits": 219.0
+          }
+        }
+      },
+      "sample_learning_curve": {
+        "0.25": {
+          "training_decisions": 473,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8261123958146603,
+            "micro_hit3": 0.7562724014336918,
+            "hits": 211.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 902,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8225517897540543,
+            "micro_hit3": 0.7598566308243727,
+            "hits": 212.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 1757,
+          "validation": {
+            "decisions": 279,
+            "reviewers": 20,
+            "macro_hit3": 0.8456103824089464,
+            "micro_hit3": 0.7849462365591398,
+            "hits": 219.0
+          }
+        }
+      },
+      "shuffled_training_labels_validation": {
+        "decisions": 279,
+        "reviewers": 20,
+        "macro_hit3": 0.46160930431343977,
+        "micro_hit3": 0.2724014336917563,
+        "hits": 76.0
+      }
+    },
+    {
+      "windows": {
+        "train_start": 1776988800.0,
+        "train_end": 1786320000.0,
+        "tune_end": 1787529600.0,
+        "test_end": 1788739200.0
+      },
+      "counts": {
+        "train": 2101,
+        "tune": 360,
+        "test": 338
+      },
+      "selected_model": "hierarchical-logit-prior-50",
+      "selected_baseline": "request-newest",
+      "paired": {
+        "interval": {
+          "macro_delta": -0.005769616107914714,
+          "low": -0.07883649094000436,
+          "high": 0.06009297842185538,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 36,
+        "losses": 20,
+        "largest_reviewer_share": 0.188,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 59,
+            "model_hits": 54.0,
+            "baseline_hits": 55.0
+          },
+          "6-10": {
+            "decisions": 74,
+            "model_hits": 58.0,
+            "baseline_hits": 54.0
+          },
+          "11+": {
+            "decisions": 117,
+            "model_hits": 65.0,
+            "baseline_hits": 52.0
+          }
+        }
+      },
+      "validation": {
+        "request-newest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7829461246214203,
+          "micro_hit3": 0.660958904109589,
+          "hits": 193.0
+        },
+        "creation-newest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7408717691076939,
+          "micro_hit3": 0.5958904109589042,
+          "hits": 174.0
+        },
+        "request-oldest": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.08126536436785743,
+          "micro_hit3": 0.05821917808219178,
+          "hits": 17.0
+        },
+        "random-expectation": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.47941980412488583,
+          "micro_hit3": 0.338755281327306,
+          "hits": 98.91654214757335
+        },
+        "pooled-logit-l2-0.001": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8082814631553902,
+          "micro_hit3": 0.726027397260274,
+          "hits": 212.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.807205689943394,
+          "micro_hit3": 0.726027397260274,
+          "hits": 212.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8175979808310411,
+          "micro_hit3": 0.726027397260274,
+          "hits": 212.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8311334495807838,
+          "micro_hit3": 0.7277397260273972,
+          "hits": 212.5
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8215587898563189,
+          "micro_hit3": 0.7054794520547946,
+          "hits": 206.0
+        },
+        "shared-network-32": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8095296817410701,
+          "micro_hit3": 0.7191780821917808,
+          "hits": 210.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8354874366217514,
+          "micro_hit3": 0.7397260273972602,
+          "hits": 216.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7984681363304942,
+          "micro_hit3": 0.708904109589041,
+          "hits": 207.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8227605904683599,
+          "micro_hit3": 0.7226027397260274,
+          "hits": 211.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8199487040357067,
+          "micro_hit3": 0.702054794520548,
+          "hits": 205.0
+        },
+        "title-shared-network-32": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8053271075694557,
+          "micro_hit3": 0.7054794520547946,
+          "hits": 206.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.8327682359556712,
+          "micro_hit3": 0.75,
+          "hits": 219.0
+        }
+      },
+      "evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7341631672001622,
+          "micro_hit3": 0.688,
+          "hits": 172.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7319805078452309,
+          "micro_hit3": 0.684,
+          "hits": 171.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7425588360658566,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7620562394010298,
+          "micro_hit3": 0.728,
+          "hits": 182.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7339415339907316,
+          "micro_hit3": 0.68,
+          "hits": 170.0
+        },
+        "shared-network-32": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7457239494824208,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7620500101253508,
+          "micro_hit3": 0.708,
+          "hits": 177.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7653770332566481,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7847505642663614,
+          "micro_hit3": 0.74,
+          "hits": 185.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.777116502653929,
+          "micro_hit3": 0.692,
+          "hits": 173.0
+        },
+        "title-shared-network-32": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7640780495253255,
+          "micro_hit3": 0.7,
+          "hits": 175.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.797781338142784,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "request-newest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7678196262332655,
+          "micro_hit3": 0.644,
+          "hits": 161.0
+        },
+        "creation-newest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.6827444933333581,
+          "micro_hit3": 0.608,
+          "hits": 152.0
+        },
+        "request-oldest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.20891941701637118,
+          "micro_hit3": 0.116,
+          "hits": 29.0
+        },
+        "random-expectation": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.47505773554760233,
+          "micro_hit3": 0.3538645771197497,
+          "hits": 88.46614427993742
+        }
+      },
+      "supported_reviewers_evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6234279277457518,
+          "micro_hit3": 0.676056338028169,
+          "hits": 144.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6194263855950449,
+          "micro_hit3": 0.6713615023474179,
+          "hits": 143.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6284033206661919,
+          "micro_hit3": 0.6901408450704225,
+          "hits": 147.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6537318934473424,
+          "micro_hit3": 0.7136150234741784,
+          "hits": 152.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.5841958426193715,
+          "micro_hit3": 0.647887323943662,
+          "hits": 138.0
+        },
+        "shared-network-32": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6266302710208018,
+          "micro_hit3": 0.6854460093896714,
+          "hits": 146.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6328871397752643,
+          "micro_hit3": 0.6948356807511737,
+          "hits": 148.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6702366821826424,
+          "micro_hit3": 0.6901408450704225,
+          "hits": 147.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.7133305799428746,
+          "micro_hit3": 0.7370892018779343,
+          "hits": 157.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6320999518352334,
+          "micro_hit3": 0.6619718309859155,
+          "hits": 141.0
+        },
+        "title-shared-network-32": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6602794544327936,
+          "micro_hit3": 0.6807511737089202,
+          "hits": 145.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6747203320496492,
+          "micro_hit3": 0.6807511737089202,
+          "hits": 145.0
+        },
+        "request-newest": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.6197905268821988,
+          "micro_hit3": 0.6103286384976526,
+          "hits": 130.0
+        },
+        "creation-newest": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.5793497529293384,
+          "micro_hit3": 0.5727699530516432,
+          "hits": 122.0
+        },
+        "request-oldest": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.1727916584694078,
+          "micro_hit3": 0.09859154929577464,
+          "hits": 21.0
+        },
+        "random-expectation": {
+          "decisions": 213,
+          "reviewers": 12,
+          "macro_hit3": 0.3596341674072567,
+          "micro_hit3": 0.3097952224186645,
+          "hits": 65.98638237517554
+        }
+      },
+      "learning_curve": {
+        "0.25": {
+          "training_decisions": 599,
+          "training_reviewers": 57,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.7966178812231576,
+            "micro_hit3": 0.7054794520547946,
+            "hits": 206.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 1142,
+          "training_reviewers": 73,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.7977259645243898,
+            "micro_hit3": 0.7054794520547946,
+            "hits": 206.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 2101,
+          "training_reviewers": 84,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.807205689943394,
+            "micro_hit3": 0.726027397260274,
+            "hits": 212.0
+          }
+        }
+      },
+      "sample_learning_curve": {
+        "0.25": {
+          "training_decisions": 562,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.8422417448036774,
+            "micro_hit3": 0.7191780821917808,
+            "hits": 210.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 1076,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.7989942868453437,
+            "micro_hit3": 0.7054794520547946,
+            "hits": 206.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 2101,
+          "validation": {
+            "decisions": 292,
+            "reviewers": 19,
+            "macro_hit3": 0.807205689943394,
+            "micro_hit3": 0.726027397260274,
+            "hits": 212.0
+          }
+        }
+      },
+      "shuffled_training_labels_validation": {
+        "decisions": 292,
+        "reviewers": 19,
+        "macro_hit3": 0.3898486308195791,
+        "micro_hit3": 0.20205479452054795,
+        "hits": 59.0
+      }
+    },
+    {
+      "windows": {
+        "train_start": 1776988800.0,
+        "train_end": 1787529600.0,
+        "tune_end": 1788739200.0,
+        "test_end": 1789948800.0
+      },
+      "counts": {
+        "train": 2461,
+        "tune": 338,
+        "test": 314
+      },
+      "selected_model": "title-hierarchical-logit-prior-50",
+      "selected_baseline": "request-newest",
+      "paired": {
+        "interval": {
+          "macro_delta": 0.012722757040938849,
+          "low": -0.12300671098225448,
+          "high": 0.12495630001311804,
+          "samples": 2000,
+          "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+        },
+        "gains": 22,
+        "losses": 15,
+        "largest_reviewer_share": 0.17061611374407584,
+        "queue_sizes": {
+          "4-5": {
+            "decisions": 44,
+            "model_hits": 41.0,
+            "baseline_hits": 40.0
+          },
+          "6-10": {
+            "decisions": 36,
+            "model_hits": 23.0,
+            "baseline_hits": 21.0
+          },
+          "11+": {
+            "decisions": 131,
+            "model_hits": 62.0,
+            "baseline_hits": 58.0
+          }
+        }
+      },
+      "validation": {
+        "request-newest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7678196262332655,
+          "micro_hit3": 0.644,
+          "hits": 161.0
+        },
+        "creation-newest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.6827444933333581,
+          "micro_hit3": 0.608,
+          "hits": 152.0
+        },
+        "request-oldest": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.20891941701637118,
+          "micro_hit3": 0.116,
+          "hits": 29.0
+        },
+        "random-expectation": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.47505773554760233,
+          "micro_hit3": 0.3538645771197497,
+          "hits": 88.46614427993742
+        },
+        "pooled-logit-l2-0.001": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7367141184611946,
+          "micro_hit3": 0.68,
+          "hits": 170.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7466654391814113,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7351935162005371,
+          "micro_hit3": 0.696,
+          "hits": 174.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7696678237307165,
+          "micro_hit3": 0.744,
+          "hits": 186.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7601084011960669,
+          "micro_hit3": 0.696,
+          "hits": 174.0
+        },
+        "shared-network-32": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7412410731597447,
+          "micro_hit3": 0.712,
+          "hits": 178.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7520376060035396,
+          "micro_hit3": 0.7,
+          "hits": 175.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.728627852213463,
+          "micro_hit3": 0.688,
+          "hits": 172.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7771449266947833,
+          "micro_hit3": 0.732,
+          "hits": 183.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7527931023006768,
+          "micro_hit3": 0.672,
+          "hits": 168.0
+        },
+        "title-shared-network-32": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7567856855359167,
+          "micro_hit3": 0.704,
+          "hits": 176.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7782600135511093,
+          "micro_hit3": 0.708,
+          "hits": 177.0
+        }
+      },
+      "evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.828333409015227,
+          "micro_hit3": 0.6255924170616114,
+          "hits": 132.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8318326875145057,
+          "micro_hit3": 0.6161137440758294,
+          "hits": 130.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8352598159416341,
+          "micro_hit3": 0.6255924170616114,
+          "hits": 132.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7937702449066086,
+          "micro_hit3": 0.6018957345971564,
+          "hits": 127.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7948330709694347,
+          "micro_hit3": 0.6018957345971564,
+          "hits": 127.0
+        },
+        "shared-network-32": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8365224422042602,
+          "micro_hit3": 0.6255924170616114,
+          "hits": 132.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8391755971301424,
+          "micro_hit3": 0.6303317535545023,
+          "hits": 133.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8332920867011776,
+          "micro_hit3": 0.6255924170616114,
+          "hits": 132.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8283831067921976,
+          "micro_hit3": 0.6350710900473934,
+          "hits": 134.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7732960221596585,
+          "micro_hit3": 0.5876777251184834,
+          "hits": 124.0
+        },
+        "title-shared-network-32": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.8388446149809787,
+          "micro_hit3": 0.6350710900473934,
+          "hits": 134.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7783722590540773,
+          "micro_hit3": 0.5971563981042654,
+          "hits": 126.0
+        },
+        "request-newest": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7656495020131384,
+          "micro_hit3": 0.5639810426540285,
+          "hits": 119.0
+        },
+        "creation-newest": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7495764336673427,
+          "micro_hit3": 0.5450236966824644,
+          "hits": 115.0
+        },
+        "request-oldest": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.3010198135198135,
+          "micro_hit3": 0.16587677725118483,
+          "hits": 35.0
+        },
+        "random-expectation": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.4814777975478643,
+          "micro_hit3": 0.31794383265711235,
+          "hits": 67.0861486906507
+        }
+      },
+      "supported_reviewers_evaluation": {
+        "pooled-logit-l2-0.001": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7269445831945832,
+          "micro_hit3": 0.5738636363636364,
+          "hits": 101.0
+        },
+        "pooled-logit-l2-0.01": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7166932604432604,
+          "micro_hit3": 0.5568181818181818,
+          "hits": 98.0
+        },
+        "personal-logit-l2-0.01": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7229763292263293,
+          "micro_hit3": 0.5681818181818182,
+          "hits": 100.0
+        },
+        "lightgbm-depth-3-trees-300": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.6635787823287823,
+          "micro_hit3": 0.5511363636363636,
+          "hits": 97.0
+        },
+        "catboost-depth-4-trees-150": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.6488606301106302,
+          "micro_hit3": 0.5397727272727273,
+          "hits": 95.0
+        },
+        "shared-network-32": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7252911440411439,
+          "micro_hit3": 0.5681818181818182,
+          "hits": 100.0
+        },
+        "hierarchical-logit-prior-50": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7301552614052613,
+          "micro_hit3": 0.5738636363636364,
+          "hits": 101.0
+        },
+        "title-pooled-logit-l2-0.01": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7193688256188255,
+          "micro_hit3": 0.5681818181818182,
+          "hits": 100.0
+        },
+        "title-lightgbm-depth-3-trees-300": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7020356957856957,
+          "micro_hit3": 0.5738636363636364,
+          "hits": 101.0
+        },
+        "title-catboost-depth-4-trees-150": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.6677093739593739,
+          "micro_hit3": 0.5397727272727273,
+          "hits": 95.0
+        },
+        "title-shared-network-32": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.7212151274651274,
+          "micro_hit3": 0.5738636363636364,
+          "hits": 101.0
+        },
+        "title-hierarchical-logit-prior-50": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.618682474932475,
+          "micro_hit3": 0.5340909090909091,
+          "hits": 94.0
+        },
+        "request-newest": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.6036907536907536,
+          "micro_hit3": 0.4943181818181818,
+          "hits": 87.0
+        },
+        "creation-newest": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.6464456839456838,
+          "micro_hit3": 0.5,
+          "hits": 88.0
+        },
+        "request-oldest": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.19631410256410256,
+          "micro_hit3": 0.125,
+          "hits": 22.0
+        },
+        "random-expectation": {
+          "decisions": 176,
+          "reviewers": 12,
+          "macro_hit3": 0.30699500979013195,
+          "micro_hit3": 0.2504488967812946,
+          "hits": 44.07900583350785
+        }
+      },
+      "learning_curve": {
+        "0.25": {
+          "training_decisions": 725,
+          "training_reviewers": 59,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7712822902159349,
+            "micro_hit3": 0.708,
+            "hits": 177.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 1337,
+          "training_reviewers": 73,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7662848519257988,
+            "micro_hit3": 0.688,
+            "hits": 172.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 2461,
+          "training_reviewers": 86,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7466654391814113,
+            "micro_hit3": 0.704,
+            "hits": 176.0
+          }
+        }
+      },
+      "sample_learning_curve": {
+        "0.25": {
+          "training_decisions": 652,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7418778685490434,
+            "micro_hit3": 0.688,
+            "hits": 172.0
+          }
+        },
+        "0.5": {
+          "training_decisions": 1256,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7336793456019712,
+            "micro_hit3": 0.68,
+            "hits": 170.0
+          }
+        },
+        "1.0": {
+          "training_decisions": 2461,
+          "validation": {
+            "decisions": 250,
+            "reviewers": 22,
+            "macro_hit3": 0.7466654391814113,
+            "micro_hit3": 0.704,
+            "hits": 176.0
+          }
+        }
+      },
+      "shuffled_training_labels_validation": {
+        "decisions": 250,
+        "reviewers": 22,
+        "macro_hit3": 0.6148664356795573,
+        "micro_hit3": 0.392,
+        "hits": 98.0
+      }
+    }
+  ],
+  "focus_reviewer": {
+    "combined_selected": {
+      "events": 29,
+      "hit1": 0.5172413793103449,
+      "hit3": 0.7586206896551724,
+      "mrr": 0.6797208538587848,
+      "ndcg3": 0.6650199490147843
+    },
+    "combined_baseline": {
+      "events": 29,
+      "hit1": 0.4827586206896552,
+      "hit3": 0.896551724137931,
+      "mrr": 0.6928571428571428,
+      "ndcg3": 0.7302885442118318
+    }
+  },
+  "exploratory_fallback": {
+    "source_sha256": "13c5e971d71c6d5a9c9da8221fc2be52e267b6561c57cb043753a7283b967aca",
+    "original_report_sha256": "b9590e25328bc12ac6d8ee02385547dafd4177fd4e0899c4318356f81996ba54",
+    "policy_code_sha256": "4363afe19c721f641d5fd55096326ca35a74ff9c7a145da1455c847420a89ebd",
+    "decision_time": "submitted",
+    "minimum_informative_validation_choices": 20,
+    "rule": "Use the selected model only with a positive earlier personal Hit@3 gain.",
+    "selected_results_reproduced": true,
+    "paired": {
+      "interval": {
+        "macro_delta": 0.007505403034799474,
+        "low": 0.0006064513938028946,
+        "high": 0.01574054891122849,
+        "samples": 2000,
+        "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+      },
+      "gains": 44,
+      "losses": 20,
+      "largest_reviewer_share": 0.17344961240310078,
+      "queue_sizes": {
+        "4-5": {
+          "decisions": 195,
+          "model_hits": 182.0,
+          "baseline_hits": 185.0
+        },
+        "6-10": {
+          "decisions": 335,
+          "model_hits": 259.0,
+          "baseline_hits": 253.0
+        },
+        "11+": {
+          "decisions": 502,
+          "model_hits": 261.0,
+          "baseline_hits": 240.0
+        }
+      }
+    },
+    "promotion_allowed": false,
+    "limits": [
+      "This policy was proposed after the original development results were inspected.",
+      "The minimum and positive point estimate are a heuristic, not a confidence gate.",
+      "Global selection and personal screening share the earlier validation window.",
+      "A separate future evaluation must test the frozen policy before production use."
+    ],
+    "full_private_report_sha256": "c55dfe846c941cd014b9cadde839b0168693aa898727eee15c87818f07d38506",
+    "combined": {
+      "decisions": 1032,
+      "reviewers": 32,
+      "macro_hit3": 0.8323993481287816,
+      "micro_hit3": 0.6802325581395349,
+      "hits": 702.0
+    },
+    "focus_reviewer": {
+      "events": 29,
+      "hit1": 0.4827586206896552,
+      "hit3": 0.896551724137931,
+      "mrr": 0.6928571428571428,
+      "ndcg3": 0.7302885442118318
+    },
+    "folds": [
+      {
+        "windows": {
+          "train_start": 1776988800.0,
+          "train_end": 1783900800.0,
+          "tune_end": 1785110400.0,
+          "test_end": 1786320000.0
+        },
+        "selected_model": "title-lightgbm-depth-3-trees-300",
+        "selected_baseline": "request-newest",
+        "learned_decisions": 17,
+        "paired": {
+          "interval": {
+            "macro_delta": 0.008823529411764706,
+            "low": 0.0,
+            "high": 0.03651027077497664,
+            "samples": 2000,
+            "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+          },
+          "gains": 4,
+          "losses": 1,
+          "largest_reviewer_share": 0.17204301075268819,
+          "queue_sizes": {
+            "4-5": {
+              "decisions": 50,
+              "model_hits": 50.0,
+              "baseline_hits": 50.0
+            },
+            "6-10": {
+              "decisions": 109,
+              "model_hits": 89.0,
+              "baseline_hits": 88.0
+            },
+            "11+": {
+              "decisions": 120,
+              "model_hits": 69.0,
+              "baseline_hits": 67.0
+            }
+          }
+        },
+        "eligible_reviewer_count": 1,
+        "evaluation": {
+          "decisions": 279,
+          "reviewers": 20,
+          "macro_hit3": 0.8291877969954091,
+          "micro_hit3": 0.7455197132616488,
+          "hits": 208.0
+        }
+      },
+      {
+        "windows": {
+          "train_start": 1776988800.0,
+          "train_end": 1785110400.0,
+          "tune_end": 1786320000.0,
+          "test_end": 1787529600.0
+        },
+        "selected_model": "pooled-logit-l2-0.01",
+        "selected_baseline": "request-newest",
+        "learned_decisions": 119,
+        "paired": {
+          "interval": {
+            "macro_delta": 0.01455108359133127,
+            "low": -0.004678362573099415,
+            "high": 0.04000571898363977,
+            "samples": 2000,
+            "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+          },
+          "gains": 17,
+          "losses": 7,
+          "largest_reviewer_share": 0.23972602739726026,
+          "queue_sizes": {
+            "4-5": {
+              "decisions": 42,
+              "model_hits": 40.0,
+              "baseline_hits": 40.0
+            },
+            "6-10": {
+              "decisions": 116,
+              "model_hits": 93.0,
+              "baseline_hits": 90.0
+            },
+            "11+": {
+              "decisions": 134,
+              "model_hits": 70.0,
+              "baseline_hits": 63.0
+            }
+          }
+        },
+        "eligible_reviewer_count": 3,
+        "evaluation": {
+          "decisions": 292,
+          "reviewers": 19,
+          "macro_hit3": 0.7974972082127516,
+          "micro_hit3": 0.6952054794520548,
+          "hits": 203.0
+        }
+      },
+      {
+        "windows": {
+          "train_start": 1776988800.0,
+          "train_end": 1786320000.0,
+          "tune_end": 1787529600.0,
+          "test_end": 1788739200.0
+        },
+        "selected_model": "hierarchical-logit-prior-50",
+        "selected_baseline": "request-newest",
+        "learned_decisions": 74,
+        "paired": {
+          "interval": {
+            "macro_delta": -0.008381689232753063,
+            "low": -0.045454545454545456,
+            "high": 0.018181818181818184,
+            "samples": 2000,
+            "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+          },
+          "gains": 10,
+          "losses": 4,
+          "largest_reviewer_share": 0.188,
+          "queue_sizes": {
+            "4-5": {
+              "decisions": 59,
+              "model_hits": 54.0,
+              "baseline_hits": 55.0
+            },
+            "6-10": {
+              "decisions": 74,
+              "model_hits": 55.0,
+              "baseline_hits": 54.0
+            },
+            "11+": {
+              "decisions": 117,
+              "model_hits": 58.0,
+              "baseline_hits": 52.0
+            }
+          }
+        },
+        "eligible_reviewer_count": 3,
+        "evaluation": {
+          "decisions": 250,
+          "reviewers": 22,
+          "macro_hit3": 0.7594379370005125,
+          "micro_hit3": 0.668,
+          "hits": 167.0
+        }
+      },
+      {
+        "windows": {
+          "train_start": 1776988800.0,
+          "train_end": 1787529600.0,
+          "tune_end": 1788739200.0,
+          "test_end": 1789948800.0
+        },
+        "selected_model": "title-hierarchical-logit-prior-50",
+        "selected_baseline": "request-newest",
+        "learned_decisions": 116,
+        "paired": {
+          "interval": {
+            "macro_delta": 0.012049062049062049,
+            "low": -0.004042775917775918,
+            "high": 0.05202146520663592,
+            "samples": 2000,
+            "method": "paired reviewer/week bootstrap; descriptive on the development replay"
+          },
+          "gains": 13,
+          "losses": 8,
+          "largest_reviewer_share": 0.17061611374407584,
+          "queue_sizes": {
+            "4-5": {
+              "decisions": 44,
+              "model_hits": 38.0,
+              "baseline_hits": 40.0
+            },
+            "6-10": {
+              "decisions": 36,
+              "model_hits": 22.0,
+              "baseline_hits": 21.0
+            },
+            "11+": {
+              "decisions": 131,
+              "model_hits": 64.0,
+              "baseline_hits": 58.0
+            }
+          }
+        },
+        "eligible_reviewer_count": 4,
+        "evaluation": {
+          "decisions": 211,
+          "reviewers": 22,
+          "macro_hit3": 0.7776985640622004,
+          "micro_hit3": 0.5876777251184834,
+          "hits": 124.0
+        }
+      }
+    ]
+  }
+}
