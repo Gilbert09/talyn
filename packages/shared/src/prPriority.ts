@@ -315,6 +315,15 @@ export const PR_PRIORITY_WEIGHTS = {
   learnedCap: 12,
 } as const;
 
+/** The reasons that come from the learned model rather than a rule. */
+const LEARNED_REASONS = new Set<PRPriorityReason>([
+  'known_author',
+  'reviews_you',
+  'known_files',
+  'your_repo',
+  'quick_for_you',
+]);
+
 /** Which reason names each learned feature's contribution. */
 const LEARNED_REASON: Record<ReviewRankFeature, PRPriorityReason> = {
   authorAffinity: 'known_author',
@@ -620,9 +629,33 @@ export function scorePRForReview(
 
   const score = terms.reduce((sum, t) => sum + t.points, 0);
 
-  const positive = terms.find((t) => t.points > 0) ?? null;
-  const marker = terms.find((t) => t.gateMarker) ?? null;
-  const negative = terms.find((t) => t.points < 0) ?? null;
+  // Pick the chip from a view in which the LEARNED contribution counts as ONE
+  // candidate, not five.
+  //
+  // Without this the model can never be named, whatever it does. Age is a
+  // single term worth up to 16; the learned signal is capped at 12 in TOTAL and
+  // then apportioned across five features, so each part averages around 2.4.
+  // Comparing those parts against age individually means age wins essentially
+  // always — and a list the model has genuinely reordered reads as a plain age
+  // sort, which is indistinguishable from the model not existing. That is the
+  // exact confusion this chip is meant to prevent.
+  //
+  // The FULL per-feature breakdown stays in `terms`, which is what the tooltip
+  // renders. Only the headline is collapsed.
+  const learned = terms.filter((t) => LEARNED_REASONS.has(t.reason));
+  const learnedTotal = learned.reduce((sum, t) => sum + t.points, 0);
+  const candidates: PRPriorityTerm[] = terms.filter((t) => !LEARNED_REASONS.has(t.reason));
+  if (learned.length > 0 && learnedTotal !== 0) {
+    // Named by its largest component, because "you review them often" says
+    // something a person can act on and "your profile likes this" does not.
+    const lead = learned.reduce((a, b) => (Math.abs(b.points) > Math.abs(a.points) ? b : a));
+    candidates.push({ reason: lead.reason, points: learnedTotal, detail: lead.detail });
+  }
+  candidates.sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
+
+  const positive = candidates.find((t) => t.points > 0) ?? null;
+  const marker = candidates.find((t) => t.gateMarker) ?? null;
+  const negative = candidates.find((t) => t.points < 0) ?? null;
 
   // A gate marker ALWAYS wins the chip, because it is why the row is where it
   // is. The points only decide the order among its neighbours, and saying the

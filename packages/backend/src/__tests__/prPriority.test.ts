@@ -850,3 +850,82 @@ describe('the learned cap is calibrated against the age ramp', () => {
     expect(PR_PRIORITY_WEIGHTS.learnedCap).toBeLessThan(maxAge);
   });
 });
+
+describe('the chip can actually name the model', () => {
+  /** A profile that likes this author, with a realistic installed model. */
+  const likes = (author: string): ReviewRankProfile => ({
+    authorAffinity: { [author]: { gave: 80, got: 80 } },
+    dirAffinity: { 'posthog/hogql': 40 },
+    repoAffinity: { 'acme/widgets': 0.8 },
+    featureStats: { mean: [0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1] },
+    model: {
+      installed: true,
+      nEvents: 201,
+      weights: [1, 0.8, 0.5, 0.3, -0.3],
+      cvAccuracy: 0.72,
+      baselineAccuracy: 0.63,
+    },
+  });
+
+  it('names the model on a PR the model likes, even against an older one', () => {
+    // The bug this guards: age is ONE term worth up to 16, while the learned
+    // signal is capped at 12 in total and split across five features — so
+    // compared part-by-part, age wins essentially always. Every chip then
+    // reads "Waited Nd", and a list the model genuinely reordered is
+    // indistinguishable from a plain age sort.
+    const v = scorePRForReview(
+      row({ author: 'sarah', topDirs: ['posthog/hogql'], waitedHours: 30 }),
+      { now: NOW, profile: likes('sarah') },
+    );
+    expect(v.topReason?.reason).not.toBe('waited');
+    expect(
+      ['known_author', 'reviews_you', 'known_files', 'your_repo', 'quick_for_you'],
+    ).toContain(v.topReason!.reason);
+  });
+
+  it('still lets a long wait win when the model is indifferent', () => {
+    // The collapse must not flip the opposite way: a PR nobody has touched for
+    // a week, on an author the model has no opinion about, is a waiting PR.
+    const v = scorePRForReview(row({ author: 'stranger', waitedHours: 200 }), {
+      now: NOW,
+      profile: likes('sarah'),
+    });
+    expect(v.topReason?.reason).toBe('waited');
+  });
+
+  it('keeps the FULL per-feature breakdown for the tooltip', () => {
+    // Only the headline collapses. The tooltip still has to show which parts
+    // of the model moved the row, or the explanation is just a different
+    // opaque claim.
+    const v = scorePRForReview(
+      row({ author: 'sarah', topDirs: ['posthog/hogql'] }),
+      { now: NOW, profile: likes('sarah') },
+    );
+    const learnedTerms = v.terms.filter((t) =>
+      ['known_author', 'reviews_you', 'known_files', 'your_repo', 'quick_for_you'].includes(
+        t.reason,
+      ),
+    );
+    expect(learnedTerms.length).toBeGreaterThan(1);
+  });
+
+  it('names the collapsed group by its LARGEST component', () => {
+    // "You review them often" is actionable; a generic "your profile likes
+    // this" is not.
+    const v = scorePRForReview(row({ author: 'sarah' }), {
+      now: NOW,
+      profile: likes('sarah'),
+    });
+    const fromModel = v.terms.filter((t) =>
+      ['known_author', 'reviews_you', 'known_files', 'your_repo', 'quick_for_you'].includes(
+        t.reason,
+      ),
+    );
+    const largest = fromModel.reduce((a, b) => (Math.abs(b.points) > Math.abs(a.points) ? b : a));
+    expect(v.topReason?.reason).toBe(largest.reason);
+  });
+
+  it('changes nothing when there is no model at all', () => {
+    expect(scorePRForReview(row({ waitedHours: 30 }), ctx).topReason?.reason).toBe('waited');
+  });
+});
