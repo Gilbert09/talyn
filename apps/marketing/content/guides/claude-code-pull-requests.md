@@ -3,7 +3,7 @@ title: "How to manage multiple Claude Code pull requests"
 description: "Running several coding agents at once produces pull requests faster than you can land them. Why they go stale in a predictable order, why updating each branch makes it worse, and what to do instead."
 navLabel: "Multiple Claude Code PRs"
 updated: "2026-09-21"
-related: ["fix-failing-github-actions-with-ai"]
+related: ["fix-failing-github-actions-with-ai", "keep-pr-up-to-date", "github-merge-queue-alternative"]
 ---
 
 The first time you run three Claude Code sessions in parallel it feels like a
