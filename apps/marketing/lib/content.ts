@@ -21,7 +21,7 @@ export const site = {
 export const nav = [
   { label: "How it works", href: "#how" },
   { label: "Features", href: "#features" },
-  { label: "Providers", href: "#providers" },
+  { label: "Agents", href: "#providers" },
   { label: "Pricing", href: "#pricing" },
   { label: "FAQ", href: "#faq" },
 ];
@@ -217,30 +217,46 @@ export const midCta = {
   secondary: "See pricing",
 };
 
+// Headed by the AGENTS, not by our provider names.
+//
+// This section used to lead with a "Talyn Fleet" card, and readers did not
+// know what that was \u2014 which is fatal here, because this is the section that
+// answers "what am I signing in with?". Our own brand is the one name on the
+// page a visitor has no reason to recognise, and spending the most valuable
+// card on it asked them to learn our vocabulary before they could tell whether
+// the product was for them. The same argument the PoweredBy strip above
+// already makes.
+//
+// The fleet has not gone anywhere, and it is still the differentiator \u2014 it is
+// stated once in `note`, under the grid, as a description rather than a brand.
 export const providers = {
-  kicker: "Providers",
-  title: "No lock-in. Use the agent you trust.",
-  sub: "Talyn conducts cloud coding agents rather than replacing them. Use the one you already pay for, and switch per task.",
+  kicker: "Agents",
+  title: "No lock-in. Use the agent you already pay for.",
+  sub: "Talyn conducts coding agents rather than replacing them. Connect one or both, and switch per task.",
   items: [
     {
-      name: "Talyn Fleet",
-      mark: "fleet" as const,
-      // The two agents it runs, shown as their own marks. A card headed by our
-      // owl and nothing else does not say what you would be signing in with.
-      agents: ["claude", "codex"] as const,
-      body: "The default. Sign in with Claude or ChatGPT and your tasks run on that subscription \u2014 no API bill on top. Each one gets its own microVM on our hardware, and your credentials are attached outside the machine, so they never enter it.",
+      name: "Claude",
+      mark: "claude" as const,
+      meta: "Runs on your Claude Pro or Max plan",
+      body: "Sign in with Claude and every task runs on that subscription. No API key, no metered credits, no second bill for tokens.",
+    },
+    {
+      name: "Codex",
+      mark: "codex" as const,
+      meta: "Runs on your ChatGPT Plus or Pro plan",
+      body: "Sign in with ChatGPT and Talyn hands the work to Codex on your own plan \u2014 same deal, nothing metered on top.",
     },
     {
       name: "PostHog Code",
       mark: "posthog" as const,
+      meta: "Runs in your PostHog project",
       body: "Already at PostHog? Connect PostHog Code and it powers the lot \u2014 fixes, clashes, and review replies, end to end.",
     },
-    {
-      name: "More on the way",
-      mark: "soon" as const,
-      body: "Every provider is a self-contained module behind one clean interface, so the next agent slots in without touching your workflow.",
-    },
   ],
+  // The sandbox claim has to survive losing the fleet card: it is the only
+  // thing in this section a competitor cannot match by adding a model.
+  // Stated once, below the grid, because it is true of both agents.
+  note: "Claude and Codex run on Talyn Fleet, our own hardware. Every task gets a fresh virtual machine; your credentials are attached from outside it, so no token is ever inside the machine running your code; and the machine is destroyed when the task ends.",
 };
 
 export const why = {
@@ -396,7 +412,7 @@ export const footer = {
         { label: "Features", href: "/#features" },
         { label: "Workflows", href: "/#workflows" },
         { label: "Loops", href: "/#loops" },
-        { label: "Providers", href: "/#providers" },
+        { label: "Agents", href: "/#providers" },
         { label: "Pricing", href: "/#pricing" },
         { label: "Download", href: "/#download" },
         { label: "Open the web app", href: site.appUrl },
