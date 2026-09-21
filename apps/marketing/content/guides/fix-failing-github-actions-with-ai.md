@@ -1,6 +1,7 @@
 ---
 title: "Fixing failing GitHub Actions with an AI agent"
 description: "What it actually takes to get a red workflow back to green automatically — where the failure signal comes from, why re-running the job is the wrong reflex, and the four ways an agent gets this wrong."
+navLabel: "Fix failing GitHub Actions"
 updated: "2026-09-21"
 related: ["claude-code-pull-requests"]
 ---

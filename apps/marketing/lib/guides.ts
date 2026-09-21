@@ -28,6 +28,7 @@ interface RawFrontmatter {
   title?: unknown;
   description?: unknown;
   updated?: unknown;
+  navLabel?: unknown;
   /** Slugs of other guides to link at the foot. */
   related?: unknown;
 }
@@ -36,6 +37,13 @@ export interface GuideMeta {
   slug: string;
   title: string;
   description: string;
+  /**
+   * Short label for the footer. A guide's `title` is written for a search
+   * result and a browser tab, where forty characters is fine; in a footer
+   * column it wraps to three lines and looks like a mistake. Optional —
+   * falls back to the title, so forgetting it is ugly rather than broken.
+   */
+  navLabel: string;
   /** ISO `YYYY-MM-DD`. Shown, and used as the sitemap's lastModified. */
   updated: string;
   related: string[];
@@ -71,6 +79,7 @@ function readGuide(fileName: string): Guide {
     slug,
     title,
     description,
+    navLabel: typeof fm.navLabel === "string" && fm.navLabel ? fm.navLabel : title,
     updated,
     related: Array.isArray(fm.related)
       ? fm.related.filter((r): r is string => typeof r === "string")
