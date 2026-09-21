@@ -4,7 +4,12 @@ import { api, type ReviewRankPayload } from '../../../lib/api';
 import { trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
-import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
+import type {
+  TaskStatus,
+  AnyCloudProviderType,
+  PRFilterDefinition,
+  PRPriorityVerdict,
+} from '@talyn/shared';
 import {
   TASK_STATUS_TERMINAL,
   buildPRPriorityMap,
@@ -199,15 +204,38 @@ export function ReviewsPanel() {
    */
   const priorityById = useMemo(() => {
     if (!priorityMode) return null;
-    const now = Date.now();
-    return buildPRPriorityMap(cohort, {
-      now,
-      profile: rankProfile,
-      isTaskActive: (taskId) => {
-        const status = taskStatusById.get(taskId);
-        return status ? TASK_STATUS_TERMINAL[status] === false : false;
-      },
-    });
+
+    // The BACKEND's verdict wins where it sent one.
+    //
+    // The ranking is computed server-side so it can change without a desktop
+    // release: `packages/shared` is bundled into this app, and the first week
+    // of tuning produced four fixes that were all logic rather than
+    // configuration — none of which a config-from-server approach would have
+    // delivered.
+    //
+    // The local path below is not a second implementation; it is the SAME
+    // shared function, kept for a backend that predates this and for one that
+    // has the feature switched off. A row the server scored is never rescored,
+    // so the two can never disagree about the same PR.
+    const map = new Map<string, PRPriorityVerdict>();
+    const unscored: typeof cohort = [];
+    for (const row of cohort) {
+      if (row.priority) map.set(row.id, row.priority);
+      else unscored.push(row);
+    }
+    if (unscored.length > 0) {
+      const now = Date.now();
+      const local = buildPRPriorityMap(unscored, {
+        now,
+        profile: rankProfile,
+        isTaskActive: (taskId) => {
+          const status = taskStatusById.get(taskId);
+          return status ? TASK_STATUS_TERMINAL[status] === false : false;
+        },
+      });
+      for (const [id, verdict] of local) map.set(id, verdict);
+    }
+    return map;
   }, [priorityMode, cohort, taskStatusById, rankProfile]);
 
   /**

@@ -3,6 +3,7 @@ import {
   getConfig,
   getWebSocketUrl,
 } from './config.js';
+import type { PRPriorityVerdict } from '@talyn/shared';
 import type {
   Features,
   LoopInput,
@@ -839,6 +840,20 @@ export interface PRRow {
    * once they submit a review, so an approved PR leaves the "Review" list.
    */
   reviewRequested: boolean;
+  /**
+   * Why this PR sits where it does in the Reviews tab's Priority ordering.
+   *
+   * Computed SERVER-SIDE and sent down, so the ranking can change without a
+   * desktop release — `packages/shared` is bundled into the app, and the first
+   * week of tuning produced four fixes that were all logic rather than
+   * configuration.
+   *
+   * Absent on a row outside the review cohort, when the feature is off, and on
+   * an older backend. The client keeps the same shared function and falls back
+   * to computing it locally, so a rollback costs the ranking's freshness rather
+   * than the ranking.
+   */
+  priority?: PRPriorityVerdict;
   /**
    * When this PR entered the viewer's review-requested cohort, or `null` on a
    * row that predates the column.

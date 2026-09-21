@@ -23,6 +23,7 @@ import {
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
 import { reviewHistory, reviewRankModels } from '../../db/schema.js';
+import { invalidateReviewRankProfile } from './score.js';
 
 /**
  * The counting half of a profile — everything except the feature scales and the
@@ -308,6 +309,11 @@ export async function trainReviewRank(
         trainedAt: new Date(),
       },
     });
+
+  // The list route caches the profile for five minutes, so a fresh fit would
+  // otherwise sit invisible for that long. Dropped here rather than on a TTL
+  // guess: the trainer is the only thing that writes it.
+  invalidateReviewRankProfile(workspaceId, viewerLogin);
 
   return {
     nEvents,

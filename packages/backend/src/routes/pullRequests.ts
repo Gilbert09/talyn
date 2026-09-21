@@ -24,6 +24,8 @@ import {
   type ActiveView,
 } from '../services/prFocus.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { isFeatureEnabled } from '../services/featureFlags.js';
+import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
 import { noteHeadSha } from '../services/webhookHeadIndex.js';
@@ -58,7 +60,7 @@ import {
   StackCycleError,
   type StackNode,
 } from '@talyn/shared';
-import type { ApiResponse, PRStackInfo } from '@talyn/shared';
+import type { ApiResponse, PRPriorityVerdict, PRStackInfo } from '@talyn/shared';
 
 /**
  * Routes for the PR/CI surface. Mostly read-only — the one write path is
@@ -301,11 +303,40 @@ export function pullRequestRoutes(): Router {
       );
     }
 
+    // The Reviews tab's Priority ordering, computed HERE rather than in the
+    // renderer.
+    //
+    // It began client-side and moved for one reason: `packages/shared` is
+    // bundled into the desktop app, so every change to the ranking needed a
+    // release and an update before anybody saw it. The first day of real use
+    // produced four fixes and all four were LOGIC — bot detection, chip
+    // selection, team affinity, recency — so shipping weights from the server
+    // would not have helped with any of them.
+    //
+    // Gated, so a workspace outside the audience pays neither the profile read
+    // nor the task lookup. Failures inside `scoreReviewRows` degrade to an
+    // empty map rather than throwing: this is the request that paints the
+    // Reviews page, and a ranking that cannot be computed must cost the
+    // ordering, never the list.
+    let priorityById = new Map<string, PRPriorityVerdict>();
+    const viewer = assertUser(req);
+    if (
+      await isFeatureEnabled('reviewPriority', { distinctId: viewer.id, email: viewer.email })
+    ) {
+      const viewerLogin = await githubService.getViewerLogin(workspaceId).catch(() => null);
+      priorityById = await scoreReviewRows(db, workspaceId, viewerLogin, rows);
+    }
+
     res.json({
       success: true,
       data: rows.map((r) => ({
         ...rowToPublicShape(r),
         mergeQueue: v2ByPrId.get(r.id) ?? null,
+        // Absent for a row outside the cohort, and absent on an older backend.
+        // The client keeps its own copy of the same shared function and falls
+        // back to it, so a rollback degrades the ranking's freshness rather
+        // than removing it.
+        ...(priorityById.has(r.id) ? { priority: priorityById.get(r.id) } : {}),
       })),
     } as ApiResponse<Array<ReturnType<typeof rowToPublicShape> & { mergeQueue: unknown }>>);
   });
