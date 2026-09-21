@@ -160,30 +160,55 @@ export function resetInstantFrom(
 }
 
 /**
- * How long to hold a spent agent back when the vendor named no reset.
+ * How long to hold a spent agent back before trying it again.
  *
- * This is the vendors' OWN published cadence, not a number picked for feel:
- * both Anthropic and OpenAI meter their consumer subscriptions on a rolling
- * five-hour window, so five hours is the soonest a windowed limit can have
- * returned. It is a RE-PROBE interval and not a claim about the reset — when
- * it elapses the next task simply tries that agent again, and if the vendor is
- * still refusing, the refusal re-arms the hold at a cost of one microVM boot.
+ * # What this number is for, which is not what it used to be for
  *
- * It has to be a fall-back at all because the case that prompted this — "out
- * of extra usage" — is a spent CREDIT BALANCE that does not reset on any
- * schedule. It comes back when somebody buys more, which no vendor announces
- * and no endpoint reports, so probing is the only way to find out.
+ * It exists to collapse a BURST into one discovery. A webhook fan-out, a
+ * merge-queue pass or a loop firing several tasks can dispatch many runs in
+ * the same few seconds, and without a hold each one boots its own microVM to
+ * be told the same thing. That is the whole cost being avoided, and a burst is
+ * over in minutes.
+ *
+ * It is NOT an estimate of when the quota returns. It used to be five hours,
+ * on the reasoning that both vendors meter consumer subscriptions on a rolling
+ * five-hour window. The word doing the damage there is ROLLING: such a window
+ * frees capacity continuously as old usage ages out, so a subscription refused
+ * at 08:00 can be perfectly usable at 08:20. Observed on 2026-09-21 — Claude
+ * reported "out of extra usage" at 08:00:33, the quota was back well before
+ * the 13:00 probe, and a 10:00 loop ran on Codex having never asked Claude.
+ *
+ * # Why minutes rather than hours
+ *
+ * The two ways of being wrong are not remotely symmetric, and the old number
+ * optimised the cheap one:
+ *
+ *   - Too short costs ONE extra microVM boot per dispatch. The fleet is our
+ *     own hardware, so that is seconds of CPU and no metered spend at all.
+ *   - Too long runs the user's work on a vendor they did not choose, silently,
+ *     for hours — and on a subscription product the vendor IS the choice.
+ *
+ * So the hold buys back the burst and nothing more. A still-spent quota simply
+ * re-arms it on the next refusal, which is the same one-boot cost again.
  */
-const PROBE_AFTER_MS = 5 * 60 * 60 * 1000;
+const PROBE_AFTER_MS = 5 * 60 * 1000;
 
-/** When a record stops holding its agent back. */
+/**
+ * When a record stops holding its agent back: the EARLIER of our own probe and
+ * whatever instant the vendor named.
+ *
+ * `resetsAt` can now only ever shorten the hold. It used to win outright, but
+ * a vendor naming a later instant is describing a FULL window reset, which on
+ * a rolling limit is pessimistic for exactly the reason above — capacity comes
+ * back before the window formally rolls. We would rather spend a boot finding
+ * that out than sit out the difference.
+ */
 export function probeAfter(record: { at: string; resetsAt?: string }): number {
-  if (record.resetsAt) {
-    const at = new Date(record.resetsAt).getTime();
-    if (!Number.isNaN(at)) return at;
-  }
   const observed = new Date(record.at).getTime();
-  return Number.isNaN(observed) ? 0 : observed + PROBE_AFTER_MS;
+  const ours = Number.isNaN(observed) ? 0 : observed + PROBE_AFTER_MS;
+  if (!record.resetsAt) return ours;
+  const vendor = new Date(record.resetsAt).getTime();
+  return Number.isNaN(vendor) ? ours : Math.min(ours, vendor);
 }
 
 /** Whether this record still holds its agent back at `now`. */
@@ -194,12 +219,17 @@ export function isHeldBack(
   return record ? now.getTime() < probeAfter(record) : false;
 }
 
-/** How the hold reads on a refusal, when we know when it lifts. */
+/**
+ * How the hold reads on a refusal.
+ *
+ * Names {@link probeAfter}, not `resetsAt`. It used to quote the vendor's
+ * instant, which since that stopped deciding the hold would have been a time
+ * the agent was NOT waiting for — and a refusal that names the wrong moment is
+ * worse than one that names none.
+ */
 export function heldBackReason(agent: FleetAgent, record: { at: string; resetsAt?: string }): string {
-  const until = record.resetsAt
-    ? ` until ${new Date(record.resetsAt).toISOString()}`
-    : '';
-  return `${agentLabel(agent)} usage is exhausted${until}.`;
+  const retry = new Date(probeAfter(record)).toISOString();
+  return `${agentLabel(agent)} usage is exhausted; retrying it after ${retry}.`;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   exhaustedAgentFrom,
+  heldBackReason,
   isHeldBack,
   probeAfter,
   resetInstantFrom,
@@ -109,23 +110,45 @@ describe('resetInstantFrom', () => {
   });
 });
 
+/**
+ * The hold buys back a BURST of dispatches, and nothing longer.
+ *
+ * It was five hours, on the reasoning that both vendors meter consumer
+ * subscriptions on a rolling five-hour window. Rolling is the word that broke
+ * it: such a window frees capacity continuously, so a subscription refused at
+ * 08:00 can be usable at 08:20. On 2026-09-21 Claude reported "out of extra
+ * usage" at 08:00:33, the quota came back well before the 13:00 probe, and a
+ * 10:00 loop ran on Codex having never asked Claude.
+ */
 describe('holding a spent agent back', () => {
   const AT = '2026-09-20T12:00:00.000Z';
+  const FIVE_MIN = 5 * 60 * 1000;
 
-  it('honours the vendor\'s reset when it named one', () => {
-    const record = { at: AT, resetsAt: '2026-09-20T13:00:00.000Z' };
-    expect(isHeldBack(record, new Date('2026-09-20T12:59:00.000Z'))).toBe(true);
-    expect(isHeldBack(record, new Date('2026-09-20T13:00:01.000Z'))).toBe(false);
+  it('re-probes five minutes after the refusal when the vendor named no reset', () => {
+    const record = { at: AT };
+    expect(probeAfter(record)).toBe(new Date(AT).getTime() + FIVE_MIN);
+    expect(isHeldBack(record, new Date('2026-09-20T12:04:59.000Z'))).toBe(true);
+    expect(isHeldBack(record, new Date('2026-09-20T12:05:01.000Z'))).toBe(false);
   });
 
-  it('falls back to a re-probe window when the vendor named none', () => {
-    const record = { at: AT };
-    // Five hours — both vendors' published consumer-subscription window, and a
-    // RE-PROBE rather than a claim about the reset: when it elapses the next
-    // task simply tries again, and a still-spent quota re-arms the hold.
-    expect(probeAfter(record)).toBe(new Date(AT).getTime() + 5 * 60 * 60 * 1000);
-    expect(isHeldBack(record, new Date('2026-09-20T16:59:00.000Z'))).toBe(true);
-    expect(isHeldBack(record, new Date('2026-09-20T17:00:01.000Z'))).toBe(false);
+  it('takes the vendor\'s reset when it is SOONER — no point holding past a known return', () => {
+    const record = { at: AT, resetsAt: '2026-09-20T12:02:00.000Z' };
+    expect(probeAfter(record)).toBe(new Date('2026-09-20T12:02:00.000Z').getTime());
+    expect(isHeldBack(record, new Date('2026-09-20T12:01:59.000Z'))).toBe(true);
+    expect(isHeldBack(record, new Date('2026-09-20T12:02:01.000Z'))).toBe(false);
+  });
+
+  // The change. A vendor naming a LATER instant is describing a full window
+  // reset, which on a rolling limit is pessimistic for the same reason — so we
+  // spend one microVM boot finding out rather than sitting out the difference.
+  it.each([
+    ['an hour out', '2026-09-20T13:00:00.000Z'],
+    ['five hours out', '2026-09-20T17:00:00.000Z'],
+    ['years out', '2099-01-01T00:00:00.000Z'],
+  ])('ignores the vendor\'s reset when it is later (%s)', (_label, resetsAt) => {
+    const record = { at: AT, resetsAt };
+    expect(probeAfter(record)).toBe(new Date(AT).getTime() + FIVE_MIN);
+    expect(isHeldBack(record, new Date('2026-09-20T12:05:01.000Z'))).toBe(false);
   });
 
   it('holds nothing back when there is no record', () => {
@@ -134,5 +157,25 @@ describe('holding a spent agent back', () => {
 
   it('does not hold on a corrupt timestamp — an unreadable record must not be a permanent ban', () => {
     expect(isHeldBack({ at: 'nonsense' }, new Date(AT))).toBe(false);
+  });
+
+  it('falls back to our own window when the vendor\'s reset is unparseable', () => {
+    const record = { at: AT, resetsAt: 'not-a-date' };
+    expect(probeAfter(record)).toBe(new Date(AT).getTime() + FIVE_MIN);
+  });
+});
+
+describe('what the refusal says', () => {
+  // It used to quote `resetsAt`. Since that stopped deciding the hold, quoting
+  // it would name a moment the agent is not waiting for — worse than naming
+  // none, because it reads as a fact about the vendor.
+  it('names the instant we will actually retry, not the vendor\'s reset', () => {
+    const reason = heldBackReason('claude', {
+      at: '2026-09-20T12:00:00.000Z',
+      resetsAt: '2026-09-20T17:00:00.000Z',
+    });
+    expect(reason).toContain('2026-09-20T12:05:00.000Z');
+    expect(reason).not.toContain('17:00:00');
+    expect(reason).toContain('Claude');
   });
 });

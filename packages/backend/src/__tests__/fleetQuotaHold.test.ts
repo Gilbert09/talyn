@@ -166,14 +166,17 @@ describe('a held-back agent never boots a sandbox', () => {
   it('dispatches normally once the hold has lapsed', async () => {
     await connect(db, ['claude']);
     await noteExhaustedAgent('ws1', 'claude', "You're out of extra usage.");
-    // Backdate the record past its probe window.
+    // Backdate the record just past its probe window. Six MINUTES, not the six
+    // hours this used to use: the window is now a burst-collapsing five
+    // minutes, and a test that overshoots it by hours stops proving where the
+    // boundary is.
     const rows = await db
       .select({ id: integrationsTable.id, config: integrationsTable.config })
       .from(integrationsTable)
       .where(eq(integrationsTable.workspaceId, 'ws1'))
       .limit(1);
     const config = rows[0]!.config as { quotaExhausted?: Record<string, { at: string }> };
-    config.quotaExhausted!.claude!.at = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    config.quotaExhausted!.claude!.at = new Date(Date.now() - 6 * 60 * 1000).toISOString();
     await db
       .update(integrationsTable)
       .set({ config })
