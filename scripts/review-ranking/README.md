@@ -1,7 +1,9 @@
 # Review ranking lab
 
 This package runs local ranking experiments and validates prospective exports.
-It makes no network calls and installs no production model.
+Training stays local and installs no production model.
+The outcome and content collectors use read-only GitHub requests through the existing `gh` login.
+The optional encoder downloads public weights only when requested. PR content is encoded on this machine.
 See [`docs/REVIEW_RANKING.md`](../../docs/REVIEW_RANKING.md) for results and release gates.
 
 ## Setup and checks
@@ -19,6 +21,8 @@ uv run --frozen pytest -q
 
 Tests use synthetic data. They need no GitHub token or private history.
 The lab includes actual training checks for each model family.
+Use `uv sync --frozen --extra encoder` to install the optional encoder and run its tests.
+Pass `--extra encoder` to `uv run` for those checks too. CI tests this extra without downloading weights.
 
 ## Historical comparison
 
@@ -64,9 +68,124 @@ Exposure and open events reference that snapshot ID and an observation timestamp
 The client logs changed queues and refreshes stable queues every five visible minutes.
 The storage cap and seven-day window can remove history. Export before that history expires.
 
-Review labels require a separate, complete outcome journal.
-The current importer deliberately reports zero review labels.
-The research document specifies attribution, coverage, delayed outcomes, and the next evaluation gate.
+The checker alone reports zero review labels. The following pipeline adds submitted-review outcomes.
+
+## Collect and join outcomes
+
+Create `artifacts/protocol.json` before the pilot. Use the full repository scope of the unfiltered Reviews queue.
+Keep that scope fixed during collection. Each reviewer needs a protocol and a journal.
+The example dates are placeholders. Replace them before collection, then keep the file unchanged.
+
+```json
+{
+  "schema_version": 1,
+  "workspace": "workspace-id-from-export",
+  "reviewer": "github-login",
+  "repos": ["owner/repository"],
+  "start": "2026-10-01T00:00:00Z",
+  "end": "2026-12-01T00:00:00Z",
+  "horizon_seconds": 86400
+}
+```
+
+Export local snapshots regularly. After the protocol ends, collect outcomes and join all exports:
+
+```sh
+uv run --frozen python -m review_rank.outcomes collect \
+  --protocol artifacts/protocol.json --max-requests 2000 \
+  --output artifacts/outcomes.json
+uv run --frozen python -m review_rank.outcomes join \
+  --protocol artifacts/protocol.json --journal artifacts/outcomes.json \
+  --exports artifacts/export-01.json artifacts/export-02.json \
+  --output artifacts/joined.json
+```
+
+The collector enumerates all PRs created before the end date, then paginates every review list.
+It includes submitted reviews on PRs absent from the queue. Dismissed reviews still count as submitted reviews.
+This can require many requests on large repositories. A budget limit or API error stops the collection.
+It writes no journal on failure. Increase the explicit budget and retry when appropriate.
+It does not use GitHub search, which would impose a result limit.
+Creation order prevents new review activity from moving PRs between pages.
+Deleted records and API access gaps remain limits. GitHub does not provide a transactional snapshot.
+
+The join uses the latest snapshot strictly before each review, within 24 hours.
+Each snapshot labels its next review only. Later reviews need a fresh snapshot.
+Duplicate review IDs are removed. Conflicting records stop the join.
+Filtered queues, ambiguous timestamps, missing candidates, and expired windows remain visible in the audit.
+They never become forced positive examples. Unknown request rounds remain unknown.
+A negative session needs a closed 24-hour window and no newer snapshot.
+Other unfinished sessions remain censored. Clicks do not supply review labels.
+The protocol declares the repository scope because version 1 exports do not store that scope independently.
+
+## Observe content and encode it locally
+
+Run content capture during the pilot. Capture again when PR revisions change.
+It reads the current title, description, filenames, and available patches for exported candidates.
+The collector verifies the head revision, base revision, update time, and file count around the read.
+It refuses changed revisions and incomplete file lists. GitHub can omit or shorten individual patches.
+The content is therefore a representation of available text, not a guaranteed complete diff.
+
+```sh
+uv run --frozen python -m review_rank.content \
+  --export artifacts/export-01.json --output artifacts/content-01.json
+uv run --frozen --extra encoder python -m review_rank.encoder \
+  --content artifacts/content-01.json --download-model \
+  --output artifacts/embeddings.json
+```
+
+Later encoding runs can omit `--download-model` and use the local cache.
+The encoder uses MiniLM at a fixed commit, with ONNX CPU inference and no remote Python code.
+Each vector has 384 values. The output records model hashes, pooling, and truncation counts.
+It encodes up to sixteen chunks of 254 content tokens, with two special tokens per chunk.
+It averages tokens within chunks, then averages chunks and normalizes the result.
+This is a compact text baseline. It is not a code-specialized model or proof of ranking quality.
+See the [model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+
+Content captured today cannot supply features for yesterday's queue.
+The feature builder requires a matching head revision and an observation time at or before the snapshot.
+Use the app after capture, then export again to obtain eligible later snapshots.
+Missing content has explicit indicators. Recent content uses only reviews submitted before the current snapshot.
+All exports, content, vectors, journals, and models remain private files under `artifacts`.
+Output files use mode `0600` and refuse replacement. Their parent directories must also remain private.
+
+## Shared model and personal adjustments
+
+Freeze four window ends before examining results: training, shared selection, personal validation, and test.
+Use one complete journal per reviewer that covers the full test period.
+Pool reviewers from one workspace only. Cross-workspace pooling needs a separate data policy.
+
+```sh
+uv run --frozen python -m review_rank.experiment \
+  --joined artifacts/joined.json --embeddings artifacts/embeddings.json \
+  --train-end 2026-11-01T00:00:00Z --tune-end 2026-11-11T00:00:00Z \
+  --personal-end 2026-11-21T00:00:00Z --test-end 2026-12-01T00:00:00Z \
+  --output artifacts/experiment.json --model-output artifacts/model.json
+```
+
+The dates illustrate the command. Set pilot windows from observed volume before model selection.
+Each window needs ten decisions and at least one queue larger than three.
+These minimums prevent empty comparisons. They do not establish statistical power.
+Decisions whose review crosses a window boundary are excluded.
+Omit `--embeddings` to test observed numeric features alone.
+
+The experiment compares pooled logistic models and a shared neural network.
+The network combines each candidate with the mean features of its full queue.
+A sixteen-unit hidden layer learns interactions. A listwise loss trains against the chosen PR.
+Candidate permutation changes only the score order. There are no position features in the model.
+Training gives equal total weight to each reviewer.
+
+The shared model stays fixed after selection. Personal linear adjustments fit its remaining errors.
+They have strong regularization and scale by `n / (n + 50)`.
+A reviewer needs twenty training choices and twenty informative validation choices across two calendar weeks.
+The lower bootstrap bound for validation Hit@3 gain must exceed zero before their adjustment turns on.
+Other reviewers receive the exact shared score. The final test cannot enable adjustments.
+These are experimental safeguards, not a guarantee of generalization.
+
+All comparisons preserve observed readiness gates. Raw recency baselines are also reported.
+The report includes actual displayed order, team requests, returning reviews, long queues, and unseen reviewers.
+Displayed order can come from different sort modes. The priority-sort subset is reported separately.
+The experiment does not reproduce backend score caps or guarantee production parity.
+Both the report and JSON model explicitly refuse production promotion.
 
 ## Model boundaries
 

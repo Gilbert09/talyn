@@ -2,8 +2,9 @@
 
 import argparse
 import json
+import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .data import timestamp
@@ -19,6 +20,7 @@ class Snapshot:
     candidates: tuple[dict, ...]
     visible: frozenset[str]
     opened: frozenset[str]
+    header: dict = field(default_factory=dict)
 
 
 def nonempty(value: object) -> bool:
@@ -99,6 +101,8 @@ def load_snapshots(path: Path) -> tuple[list[Snapshot], dict]:
                 if (
                     not nonempty(candidate.get("repo"))
                     or type(candidate.get("pr_number")) is not int
+                    or candidate["pr_number"] < 1
+                    or not re.fullmatch(r"[\w.-]+/[\w.-]+", candidate["repo"])
                 ):
                     raise ValueError("Missing GitHub identity")
                 ids.add(candidate["pr_id"])
@@ -128,6 +132,7 @@ def load_snapshots(path: Path) -> tuple[list[Snapshot], dict]:
                     candidates,
                     frozenset(visible),
                     frozenset(opened),
+                    header,
                 )
             )
         except (KeyError, TypeError, ValueError, AttributeError):

@@ -24,7 +24,7 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: '0.2.37'
-      - run: uv sync --frozen
-      - run: uv run --frozen ruff check .
-      - run: uv run --frozen ruff format --check .
-      - run: uv run --frozen pytest -q
+      - run: uv sync --frozen --extra encoder
+      - run: uv run --frozen --extra encoder ruff check .
+      - run: uv run --frozen --extra encoder ruff format --check .
+      - run: uv run --frozen --extra encoder pytest -q

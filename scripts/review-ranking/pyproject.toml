@@ -10,6 +10,13 @@ dependencies = [
     "scikit-learn>=1.6,<2",
 ]
 
+[project.optional-dependencies]
+encoder = [
+    "onnxruntime>=1.20,<2",
+    "tokenizers>=0.21,<1",
+    "huggingface-hub>=0.27,<1",
+]
+
 [tool.uv]
 dev-dependencies = ["pytest>=8,<9", "ruff>=0.11,<1"]
 

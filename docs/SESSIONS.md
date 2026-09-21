@@ -2,6 +2,29 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: outcome pipeline and shared queue model (2026-09-21)
+
+Added a local pipeline for the next ranking experiment.
+A frozen protocol declares the reviewer, workspace, repository scope, and observation window.
+The collector enumerates PRs and paginates submitted reviews, including reviews outside the candidate queue.
+The join requires an earlier snapshot, uses a 24-hour horizon, and preserves coverage failures and censored sessions.
+Request rounds remain unknown. Deleted records and API access still limit completeness.
+
+Content capture records current revisions and observation times. Later content cannot enter earlier examples.
+A fixed MiniLM encoder runs through ONNX on the local CPU. Runtime telemetry is disabled before initialization.
+The neural ranker combines candidate features, queue context, and earlier review activity.
+Personal adjustments keep shared weights fixed and need a separate validation gain before activation.
+Unknown reviewers receive the shared score unchanged.
+
+Four forward windows separate training, shared selection, personal validation, and development evaluation.
+Reports compare displayed order, raw and gated recency, pooled models, and the shared neural model.
+JSON artifacts retain provenance and restore exact predictions. They explicitly refuse production use.
+
+Validation passed 92 focused tests, Ruff, compilation, and a clean locked install.
+A command-level synthetic run exercised real local encoding, three trained models, report output, and artifact output.
+No fresh prospective dataset was available, so this work makes no ranking-gain claim.
+Production ranking remains unchanged. Fresh local exports and complete outcome journals are the next requirement.
+
 ## Review ranking: corrected benchmark and local observations (2026-09-21)
 
 Added a maintained Python lab under `scripts/review-ranking`, with locked dependencies and focused CI.

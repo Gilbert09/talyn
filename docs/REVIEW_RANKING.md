@@ -168,8 +168,49 @@ Reads exclude records older than seven days. Writes remove them and evict whole 
 Old bytes can remain until the next write. Clearing site storage removes the log.
 Export regularly during the pilot; this bounded local log is not a durable event archive.
 
-Current limits include external-link opens and authoritative review outcomes.
-The importer reports `review_labels: 0` because neither snapshots nor clicks supply review truth.
+Current limits include external-link opens and authoritative request rounds.
+The snapshot checker reports `review_labels: 0`; the separate outcome join supplies submitted-review labels.
+
+## Shared model and outcome pipeline (2026-09-21)
+
+The lab now has an executable pipeline for prospective data.
+See the [lab commands](../scripts/review-ranking/README.md) for protocol files and each collection step.
+
+The outcome collector enumerates repository PRs and paginates every review list.
+It includes reviews outside the displayed queue, then assigns each review to the latest earlier snapshot.
+The fixed horizon is 24 hours. A snapshot supplies one next-review choice.
+Filtered queues, ambiguous timestamps, missing candidates, and incomplete outcome windows cannot supply positive labels.
+Session negatives require a closed horizon without a newer snapshot.
+GitHub deletions, access gaps, and concurrent API changes still limit completeness.
+The declared repository scope must match the unfiltered queue throughout the pilot.
+
+Content capture stores current observations locally. It records both revisions and the observation time.
+A fixed MiniLM encoder turns the available title, description, paths, and patches into 384-value vectors.
+Inference runs locally through ONNX. No private text goes to an embedding service.
+Features require a matching head revision and an earlier content observation.
+Later content cannot fill a historical gap. Missing content remains explicit.
+MiniLM is a compact text baseline; code-specialized encoders remain a later comparison.
+
+The shared neural network uses candidate features and mean features from the complete queue.
+It adds recent review activity, content similarity, size, readiness, and observed affinity features.
+Its hidden layer has sixteen units. The loss balances reviewers and scores complete choice groups.
+It has no candidate-position feature. Tests verify stable scores when candidates change order.
+
+Personal adjustments fit residual errors while shared weights remain fixed.
+Strong regularization and a sample-size factor limit their contribution.
+An adjustment stays off unless a separate, earlier validation window supports a positive Hit@3 lower bound.
+Unknown reviewers and reviewers without enough evidence use the shared score unchanged.
+
+Four forward windows separate training, shared selection, personal validation, and the final development comparison.
+The experiment compares the observed display order, pooled models, shared neural scores, and guarded personal scores.
+It preserves observed readiness gates and also reports raw recency baselines.
+Backend score limits and authoritative model versions still need a separate parity check.
+The artifact and report both refuse production promotion.
+
+Synthetic tests cover collection, attribution, feature timing, actual model fitting, and personal gating.
+A local run verified the fixed encoder's 384-value output, unit norm, and identical repeated results.
+These checks establish implementation behavior. They do not establish a gain on fresh human decisions.
+Fresh local exports and closed outcome windows remain the next measurement requirement.
 
 ## Next experiment protocol
 
@@ -179,11 +220,13 @@ The following steps retain the agreed order. Unchecked work is not implemented y
 - [x] Compare pooled logistic, personal logistic, LambdaMART, and CatBoost.
 - [x] Test available activity features through separate validation ablations.
 - [x] Add local snapshots, exposure observations, exports, and a completeness checker.
-- [ ] Join snapshots to complete review outcome history for the observed reviewer and repository scope.
+- [x] Build a scoped outcome collector and strict snapshot join.
+- [ ] Collect fresh exports and complete outcome journals for the pilot.
 - [ ] Record authoritative request rounds, backend model versions, and historical content revisions.
 - [ ] Evaluate the complete production ordering, including readiness gates and score limits.
-- [ ] Add revision-specific code representations and recent-work features.
-- [ ] Compare a small neural model over the queue and an offline LLM teacher.
+- [x] Add observed content vectors, recent review features, a shared neural model, and guarded personal adjustments.
+- [ ] Measure these features on prospective data, then compare code-specialized encoders and attention models.
+- [ ] Compare an offline LLM teacher against human outcomes.
 - [ ] Run the selected model without changing displayed order, then run a controlled product experiment.
 
 Before joining outcomes, freeze the repository scope, observation window, and label rules.
