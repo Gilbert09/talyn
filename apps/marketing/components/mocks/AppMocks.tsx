@@ -25,6 +25,8 @@ import {
   Workflow,
   Repeat,
   Plus,
+  AtSign,
+  Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -102,7 +104,24 @@ function StatusPill({
 
 /* ---------- sidebar (mirrors layout/Sidebar) ---------- */
 
-function Sidebar({ active = "prs" }: { active?: string }) {
+/**
+ * Collapsed by default, which is the opposite of the app's own default.
+ *
+ * These mocks exist to show the CONTENT — a PR list, a merge queue, a running
+ * transcript — and at the width a marketing card gives them, an expanded
+ * 12rem rail was taking about a third of the frame and truncating every row it
+ * left behind ("feat: streaming results in the dashboa…"). The rail is real
+ * chrome and worth showing, but it is never the subject of the shot.
+ *
+ * Pass `collapsed={false}` where the navigation itself is the point.
+ */
+function Sidebar({
+  active = "prs",
+  collapsed = true,
+}: {
+  active?: string;
+  collapsed?: boolean;
+}) {
   const items = [
     { id: "prs", label: "My PRs", icon: GitPullRequest, badge: 4 },
     { id: "reviews", label: "Reviews", icon: Eye, badge: 5 },
@@ -112,56 +131,97 @@ function Sidebar({ active = "prs" }: { active?: string }) {
     { id: "loops", label: "Loops", icon: Repeat, badge: 3 },
   ];
   return (
-    <div className="hidden w-48 shrink-0 flex-col border-r border-line bg-paper-100 sm:flex">
+    <div
+      className={cn(
+        "hidden shrink-0 flex-col border-r border-line bg-paper-100 sm:flex",
+        collapsed ? "w-14" : "w-48"
+      )}
+    >
       {/* workspace switcher */}
-      <div className="flex items-center gap-2 border-b border-line p-3">
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-clay/15">
+      <div
+        className={cn(
+          "flex items-center border-b border-line",
+          collapsed ? "justify-center p-2.5" : "gap-2 p-3"
+        )}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-clay/15">
           <OwlMark className="h-4 w-4 text-clay" />
         </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-ink">Sundial</p>
-          <p className="text-[10px] text-ink-400">3 repos</p>
-        </div>
-        <ChevronsUpDown className="h-3.5 w-3.5 text-ink-400" />
+        {!collapsed && (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-ink">Sundial</p>
+              <p className="text-[10px] text-ink-400">3 repos</p>
+            </div>
+            <ChevronsUpDown className="h-3.5 w-3.5 text-ink-400" />
+          </>
+        )}
       </div>
 
       {/* nav */}
-      <div className="flex-1 space-y-0.5 p-2">
+      <div className={cn("flex-1 space-y-0.5", collapsed ? "p-1.5" : "p-2")}>
         {items.map((it) => (
           <div
             key={it.id}
+            title={collapsed ? it.label : undefined}
             className={cn(
-              "flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs",
+              "flex items-center rounded-lg text-xs",
+              collapsed
+                ? "relative justify-center py-2"
+                : "gap-2.5 px-2.5 py-1.5",
               active === it.id
                 ? "bg-white font-medium text-ink shadow-soft"
                 : "text-ink-500"
             )}
           >
-            <it.icon className="h-3.5 w-3.5" />
-            <span className="flex-1">{it.label}</span>
-            <span className="rounded-full bg-paper-300 px-1.5 text-[10px] text-ink-600">
-              {it.badge}
-            </span>
+            <it.icon className={collapsed ? "h-4 w-4" : "h-3.5 w-3.5"} />
+            {collapsed ? (
+              // A dot, not the count: at this width a numeral is unreadable,
+              // and "there is something here" is the whole job of a badge in a
+              // still image.
+              <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-clay" />
+            ) : (
+              <>
+                <span className="flex-1">{it.label}</span>
+                <span className="rounded-full bg-paper-300 px-1.5 text-[10px] text-ink-600">
+                  {it.badge}
+                </span>
+              </>
+            )}
           </div>
         ))}
       </div>
 
       {/* footer: provider dots + user chip */}
-      <div className="border-t border-line p-2">
-        <div className="mb-2 flex flex-col gap-0.5 px-1 text-[10px] text-ink-400">
-          {/* Only providers that are actually registered. These mocks read as
-              screenshots of the app, so a name here is a promise the download
-              has to keep — Claude Code was removed in Session 114. */}
-          <span className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> PostHog Code
-          </span>
-        </div>
-        <div className="flex items-center gap-2 px-1">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay text-[10px] font-semibold text-white">
-            D
-          </span>
-          <span className="text-xs text-ink-600">@dana</span>
-        </div>
+      <div className={cn("border-t border-line", collapsed ? "p-2" : "p-2")}>
+        {/* Only providers that are actually registered. These mocks read as
+            screenshots of the app, so a name here is a promise the download
+            has to keep — Claude Code was removed in Session 114. */}
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-2">
+            <span
+              title="PostHog Code connected"
+              className="h-1.5 w-1.5 rounded-full bg-status-green"
+            />
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay text-[10px] font-semibold text-white">
+              D
+            </span>
+          </div>
+        ) : (
+          <>
+            <div className="mb-2 flex flex-col gap-0.5 px-1 text-[10px] text-ink-400">
+              <span className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-status-green" /> PostHog Code
+              </span>
+            </div>
+            <div className="flex items-center gap-2 px-1">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-clay text-[10px] font-semibold text-white">
+                D
+              </span>
+              <span className="text-xs text-ink-600">@dana</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -235,6 +295,108 @@ export function MockDashboard({ filters = true }: MockProps) {
               </div>
               <StatusPill {...r.pill} />
               <span className="w-8 shrink-0 text-right text-[10px] text-ink-400">{r.updated}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- reviews (mirrors panels/github/ReviewsPanel) ---------- */
+
+/**
+ * The Reviews page: every open PR where you are a requested reviewer and have
+ * not reviewed yet, across every connected repo.
+ *
+ * Mirrors the real panel's columns — Title, Requested, Updated — and NOT My
+ * PRs' status column: on Reviews the second column is replaced by who asked
+ * you, directly or through which team. Deliberately shows only the shipped,
+ * ungated behaviour: one flat list, newest first. The Priority sort, its
+ * reason chips and the per-reviewer model sit behind the `reviewPriority`
+ * flag, whose audience is currently one person, so they must not appear in a
+ * shot that reads as a screenshot of what you get on download.
+ */
+const reviewRows = [
+  {
+    title: "feat: add the audit log export",
+    sub: "sundial/api#421 · @theo · opened 3h ago",
+    via: { kind: "direct" as const, label: "@dana" },
+    updated: "20m",
+  },
+  {
+    title: "refactor: split the billing client",
+    sub: "sundial/web#415 · @priya · opened 1d ago",
+    via: { kind: "team" as const, label: "@sundial/web" },
+    updated: "2h",
+  },
+  {
+    title: "fix: handle empty search results",
+    sub: "sundial/mobile#24 · @theo · opened 2d ago",
+    via: { kind: "direct" as const, label: "@dana" },
+    updated: "5h",
+  },
+  {
+    title: "chore: upgrade the CI runner image",
+    sub: "sundial/charts#88 · @priya · opened 4d ago",
+    via: { kind: "team" as const, label: "@sundial/infra" },
+    updated: "1d",
+  },
+];
+
+export function MockReviews({ filters = true }: MockProps) {
+  return (
+    <div className="flex h-[360px] bg-white text-left">
+      <Sidebar active="reviews" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {filters && (
+          <div className="flex items-center gap-2 overflow-hidden border-b border-line px-4 py-2 text-[11px]">
+            <span className="shrink-0 rounded-md border border-line bg-white px-2 py-1 text-ink-500">
+              All repos
+            </span>
+            {/* The filter the page exists for: "only what my team was asked
+                to look at" is the question a flat GitHub list cannot answer. */}
+            <span className="shrink-0 rounded-md border border-clay/40 bg-clay/10 px-2 py-1 font-medium text-clay-600">
+              @sundial/web
+            </span>
+            <span className="shrink-0 rounded-md border border-line bg-white px-2 py-1 text-ink-500">
+              Newest
+            </span>
+            <span className="ml-auto hidden items-center gap-1.5 rounded-md border border-line bg-white px-2 py-1 text-ink-400 sm:flex">
+              <Search className="h-3 w-3" />
+              Search title, repo or #number…
+            </span>
+          </div>
+        )}
+        <div className="flex-1 overflow-hidden">
+          {/* column header — the real panel labels this column "Requested" */}
+          <div className="flex items-center gap-3 border-b border-line bg-paper-50 px-4 py-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-400">
+            <span className="min-w-0 flex-1">Title</span>
+            <span className="hidden w-32 shrink-0 sm:block">Requested</span>
+            <span className="w-14 shrink-0 text-right">Updated</span>
+          </div>
+          {reviewRows.map((r) => (
+            <div
+              key={r.title}
+              className="group flex items-center gap-3 border-b border-line px-4 py-2.5 hover:bg-paper-50"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-ink">{r.title}</p>
+                <p className="truncate font-mono text-[10px] text-ink-400">{r.sub}</p>
+              </div>
+              <span className="hidden w-32 shrink-0 items-center gap-1.5 text-[11px] text-ink-500 sm:flex">
+                {r.via.kind === "direct" ? (
+                  <AtSign className="h-3 w-3 shrink-0 text-clay" />
+                ) : (
+                  <Users className="h-3 w-3 shrink-0 text-ink-400" />
+                )}
+                <span className="truncate font-mono">{r.via.label}</span>
+              </span>
+              {/* w-14, not the dashboard's w-8: this table has a header row,
+                  and "UPDATED" is wider than any value under it. */}
+              <span className="w-14 shrink-0 text-right text-[10px] text-ink-400">
+                {r.updated}
+              </span>
             </div>
           ))}
         </div>
@@ -779,6 +941,7 @@ export function MockLoops(_props: MockProps) {
 
 export const MOCKS = {
   dashboard: MockDashboard,
+  reviews: MockReviews,
   "task-running": MockTaskRunning,
   "merge-queue": MockMergeQueue,
   "pr-detail": MockPrDetail,

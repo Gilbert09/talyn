@@ -5,25 +5,55 @@ import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
 import { features } from "@/lib/content";
 import type { MockId } from "@/components/mocks/AppMocks";
 
+/**
+ * The subhead used to say "Seven things" as a literal, one line above a map
+ * over the array. Counting the array instead means the copy cannot quietly
+ * start lying the next time a feature is added or dropped.
+ */
+const COUNT_WORDS = [
+  "No",
+  "One",
+  "Two",
+  "Three",
+  "Four",
+  "Five",
+  "Six",
+  "Seven",
+  "Eight",
+  "Nine",
+  "Ten",
+  "Eleven",
+  "Twelve",
+];
+
+function countWord(n: number): string {
+  return COUNT_WORDS[n] ?? String(n);
+}
+
 export function Features() {
   return (
     <section id="features" className="py-20">
       <div className="container">
         <SectionHeading
-          kicker="Features"
+          kicker="The day job"
           title="The PR busywork, handled."
-          sub="Seven things Talyn does so you can stay in flow."
+          sub={`${countWord(features.length)} things Talyn does so you can stay in flow.`}
         />
 
         <div className="mt-14 space-y-20">
-          {features.map((f) => (
+          {features.map((f, i) => {
+            // Alternate sides from position, not from a hand-set `flip` field:
+            // inserting a feature used to leave two cards on the same side
+            // until somebody noticed and re-flipped every one below it.
+            const flip = i % 2 === 1;
+            return (
             <div
               key={f.id}
               id={f.id}
               className="grid scroll-mt-24 items-center gap-10 lg:grid-cols-2"
             >
               {/* min-w-0 on both grid items — see HowItWorks for the why. */}
-              <Reveal className={f.flip ? "min-w-0 lg:order-2" : "min-w-0"}>
+              <Reveal className={flip ? "min-w-0 lg:order-2" : "min-w-0"}>
                 <p className="font-mono text-xs uppercase tracking-[0.2em] text-clay-600">
                   {f.eyebrow}
                 </p>
@@ -43,11 +73,12 @@ export function Features() {
                 </ul>
               </Reveal>
 
-              <Reveal delay={0.1} className={f.flip ? "min-w-0 lg:order-1" : "min-w-0"}>
+              <Reveal delay={0.1} className={flip ? "min-w-0 lg:order-1" : "min-w-0"}>
                 <ScreenshotPlaceholder shot={f.shot as MockId} filters={false} />
               </Reveal>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>

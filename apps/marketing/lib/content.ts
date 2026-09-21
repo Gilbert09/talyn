@@ -116,14 +116,31 @@ export const features = [
     id: "dashboard",
     eyebrow: "Mission control",
     title: "Every PR, triaged. No tabs required.",
-    body: "A live dashboard sorts your work into Needs attention, Mine, and Review, so the pull request that's actually blocking you is always at the top. One glance tells you what's passing, who's waiting, and what won't merge yet.",
+    // "Needs attention, Mine, and Review" described a three-bucket page the
+    // app does not have. Shipped, those are two separate pages — My PRs, with
+    // a Needs-attention filter on it, and Reviews (its own entry below) —
+    // plus the Merge Queue. Copy that names a layout nobody will find is the
+    // kind of small lie a download exposes in the first ten seconds.
+    body: "A live dashboard puts every PR you've opened in one list, with a Needs-attention filter that pulls the blocked ones to the front. One glance tells you what's passing, who's waiting, and what won't merge yet.",
     bullets: [
       "Live status across every project you've connected",
-      "A Needs-attention list that puts blockers first",
+      "A Needs-attention filter that puts blockers first",
       "Diffs, checks, and conversation right inside the app",
     ],
     shot: "dashboard",
-    flip: false,
+  },
+  {
+    id: "reviews",
+    eyebrow: "Reviews",
+    title: "Every review request, in one list.",
+    body: "The PRs waiting on you are scattered across repos and buried in notifications. Talyn keeps them on one page — every open PR where you're a requested reviewer and haven't reviewed yet — and tells you who asked, you directly or one of your teams. Filter to a single team, save the filter, and get on with it.",
+    bullets: [
+      "Every repo you've connected, one list, nothing to chase",
+      "See whether you were asked directly or through a team — and filter by it",
+      "Save a filter you use often, per workspace",
+      "Run one of your review playbooks on any of them with a cloud agent",
+    ],
+    shot: "reviews",
   },
   {
     id: "delegate",
@@ -136,7 +153,6 @@ export const features = [
       "Green checks back on your existing PR, no new PR to wrangle",
     ],
     shot: "task-running",
-    flip: true,
   },
   {
     id: "auto-merge",
@@ -150,7 +166,6 @@ export const features = [
       "Auto-fixes any PR that falls behind or breaks before it merges",
     ],
     shot: "merge-queue",
-    flip: false,
   },
   {
     id: "workflows",
@@ -164,7 +179,6 @@ export const features = [
       "Every run is logged, per rule, so you can see what fired and what it did",
     ],
     shot: "workflows",
-    flip: true,
   },
   {
     id: "loops",
@@ -178,7 +192,6 @@ export const features = [
       "Start one by hand any time, without waiting for its next turn",
     ],
     shot: "loops",
-    flip: false,
   },
   {
     id: "skills",
@@ -191,7 +204,6 @@ export const features = [
       "Output lands on the PR: a single review comment, or commits to the branch",
     ],
     shot: "skill-picker",
-    flip: true,
   },
   {
     id: "context",
@@ -204,7 +216,6 @@ export const features = [
       "Queue the ready ones straight to merge",
     ],
     shot: "pr-detail",
-    flip: false,
   },
 ];
 
