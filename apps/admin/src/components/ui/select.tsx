@@ -19,7 +19,17 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
         <div className="relative">
           <select
             className={cn(
-              'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 appearance-none',
+              // `bg-none` removes the chevron `@tailwindcss/forms` paints on EVERY
+              // `select` as a background-image from the base layer. Without it the
+              // plugin's arrow and ours both render, a couple of pixels apart, and
+              // the pair reads as a `W`. `appearance-none` does not help — it strips
+              // the platform control, which is what lets the plugin's image show.
+              //
+              // `pr-9`, not `px-3`: the chevron below is absolutely positioned over
+              // this element, so the padding has to RESERVE its space rather than
+              // leave it to luck — otherwise the value runs underneath it on any
+              // select narrow enough to shrink to its content.
+              'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background pl-3 pr-9 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 appearance-none bg-none disabled:cursor-not-allowed disabled:opacity-50',
               error && 'border-red-500',
               className
             )}

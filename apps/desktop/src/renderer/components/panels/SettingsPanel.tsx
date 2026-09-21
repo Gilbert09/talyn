@@ -888,9 +888,18 @@ function IntegrationsSettings() {
 }
 
 /**
- * Native <select> with room to breathe: the global appearance reset strips
- * the platform chevron, which left option text jammed against (and clipping
- * under) the border. Explicit right padding + our own chevron instead.
+ * Native <select> with room to breathe, and with exactly ONE chevron.
+ *
+ * `bg-none` is load-bearing. `@tailwindcss/forms` styles every `select` in the
+ * BASE layer, and part of that is its own chevron drawn as a background-image
+ * — so `appearance-none` strips the platform arrow and the plugin immediately
+ * paints a replacement, which our icon then lands on top of as a second one.
+ * `appearance: none` does not remove a background-image; only `bg-none` does.
+ *
+ * Ours is the one worth keeping: it follows `text-muted-foreground` into dark
+ * mode, while the plugin's is a hardcoded gray-500 data URI. The explicit
+ * right padding then reserves the space it sits in rather than leaving it to
+ * luck.
  */
 function SettingsSelect({
   className,
@@ -900,7 +909,7 @@ function SettingsSelect({
     <div className={cn('relative shrink-0', className)}>
       <select
         {...props}
-        className="w-full appearance-none rounded-md border bg-background py-1.5 pl-3 pr-8 text-sm disabled:opacity-60"
+        className="w-full appearance-none bg-none rounded-md border bg-background py-1.5 pl-3 pr-8 text-sm disabled:opacity-60"
       />
       <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
     </div>
