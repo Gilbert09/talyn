@@ -13,6 +13,9 @@ dependencies = [
 [tool.uv]
 dev-dependencies = ["pytest>=8,<9", "ruff>=0.11,<1"]
 
+[tool.setuptools]
+packages = ["review_rank"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
