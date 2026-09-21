@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { ReviewRankingArchive } from '@talyn/client';
 import {
   appendReviewRankingLog,
   readReviewRankingLog,
@@ -7,9 +8,23 @@ import {
   type ReviewRankingRow,
 } from '@talyn/shared';
 
-export function exportReviewRankingData(workspaceId: string): void {
-  const events = readReviewRankingLog(localStorage, workspaceId);
-  const data = JSON.stringify({ schema_version: 1, events }, null, 2);
+const archive = new ReviewRankingArchive();
+
+export async function exportReviewRankingData(workspaceId: string): Promise<void> {
+  let recent = [] as ReturnType<typeof readReviewRankingLog>;
+  try {
+    recent = readReviewRankingLog(localStorage, workspaceId);
+  } catch {
+    // The browser can refuse localStorage while the archive remains available.
+  }
+  const stored = await archive.read(workspaceId).catch(() => null);
+  const unique = new Map([...stored?.events ?? [], ...recent].map((event) => [
+    JSON.stringify([event.event, event.properties]), event,
+  ]));
+  const events = [...unique.values()].sort((left, right) => left.stored_at - right.stored_at);
+  const data = JSON.stringify({
+    schema_version: 1, events, archive_available: stored !== null, archive: stored?.archive ?? null,
+  }, null, 2);
   const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
   const link = document.createElement('a');
   link.href = url;
@@ -26,6 +41,7 @@ export function useReviewRankingCapture(
   const recorder = useMemo(
     () => new ReviewRankingRecorder(
       (event, properties) => {
+        void archive.append(event, properties);
         try {
           appendReviewRankingLog(localStorage, event, properties);
         } catch {

@@ -1,7 +1,8 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readReviewRankingLog, type ReviewRankingContext, type ReviewRankingRow } from '@talyn/shared';
-import { useReviewRankingCapture } from '../components/panels/github/useReviewRankingCapture';
+import { ReviewRankingArchive } from '@talyn/client';
+import { exportReviewRankingData, useReviewRankingCapture } from '../components/panels/github/useReviewRankingCapture';
 
 const rows: ReviewRankingRow[] = [{ id: 'pr', workspaceId: 'workspace', number: 1, owner: 'org', repo: 'repo', summary: {} }];
 const context: ReviewRankingContext = {
@@ -35,6 +36,30 @@ afterEach(() => {
 });
 
 describe('local ranking capture', () => {
+  it.each([true, false])('exports recent events when the archive is available: %s', async (available) => {
+    renderHook(() => useReviewRankingCapture(rows, context, true));
+    const recent = log();
+    const archived = { ...recent[0], properties: { ...recent[0].properties, snapshot_id: 'older' } };
+    const reader = vi.spyOn(ReviewRankingArchive.prototype, 'read');
+    if (available) reader.mockResolvedValue({
+      events: [...recent, archived],
+      archive: { max_age_ms: 100, max_chars: 1000, expired: 0, size_evicted: 0, failed_writes: 0 },
+    });
+    else reader.mockRejectedValue(new Error('archive disabled'));
+    let serialized = '';
+    vi.stubGlobal('Blob', class {
+      constructor(parts: string[]) { serialized = parts.join(''); }
+    });
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:export', revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await exportReviewRankingData('workspace');
+    const exported = JSON.parse(serialized);
+    expect(exported.archive_available).toBe(available);
+    expect(exported.events).toHaveLength(available ? 2 : 1);
+    expect(click).toHaveBeenCalledOnce();
+    act(() => vi.advanceTimersByTime(1000));
+  });
+
   it('records nothing when the feature is unavailable', () => {
     const { result } = renderHook(() => useReviewRankingCapture(rows, context, false));
     act(() => result.current('pr'));

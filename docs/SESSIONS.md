@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: longer local capture (2026-09-21)
+
+Added a shared IndexedDB archive for both clients, with 30-day retention.
+Each workspace retains at most 50 million serialized characters.
+Writes freeze their inputs, serialize concurrent changes, and update snapshot groups and metadata in one transaction.
+Retention removes complete groups. The smaller localStorage log remains the fallback.
+Exports wait for pending writes, merge both stores, remove duplicate events, and report archive failures and retention losses.
+The import audit preserves those diagnostics. No archive event leaves the device automatically.
+
+Tests cover reopening, workspace isolation, concurrent instances, expiry, size limits, transaction rollback, recovery, and export fallback.
+Current content for all 79 observed candidates was captured through 237 read-only GitHub requests.
+Local encoding prepares that content for later observations with matching revisions. It cannot supply earlier features.
+Fresh human outcomes remain necessary before another model comparison.
+Validation passed 72 focused tests, client builds, type checks, ESLint, Ruff, and formatting checks.
+A Chromium check retained all 20 concurrent synthetic writes across a page reload, with workspace isolation intact.
+
 ## Review ranking: production provenance and capture audit (2026-09-21)
 
 A live desktop check found 77 team requests and two direct requests in a queue of 79 candidates.

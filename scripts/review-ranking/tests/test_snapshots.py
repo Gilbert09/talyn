@@ -104,3 +104,23 @@ def test_workspaces_do_not_share_chunk_identity(tmp_path):
     second[0]["properties"]["workspace_id"] = "other"
     snapshots, _ = read(tmp_path, first + second)
     assert len(snapshots) == 2
+
+
+def test_archive_loss_counts_remain_visible_in_import_audit(tmp_path):
+    path = tmp_path / "export.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "events": events(1),
+                "archive_available": False,
+                "archive": {"expired": 12, "size_evicted": 3, "failed_writes": 1},
+            }
+        )
+    )
+    snapshots, audit = load_snapshots(path)
+    assert len(snapshots) == 1
+    assert audit["archive_expired"] == 12
+    assert audit["archive_size_evicted"] == 3
+    assert audit["archive_failed_writes"] == 1
+    assert audit["archive_unavailable"] == 1

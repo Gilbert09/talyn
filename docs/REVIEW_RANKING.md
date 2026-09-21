@@ -152,9 +152,9 @@ Chunks contain at most 25 candidates. Each chunk carries the total count and a s
 The importer rejects incomplete chunks, conflicting headers, duplicate PRs, and invalid ranks.
 It checks exposure timestamps and candidate membership separately.
 
-The client records its available model parameters and numeric feature values.
-The backend can use a different cached profile, so this is labelled `client_profile`.
-The observed scores and order remain available, but exact backend replay still needs a model version.
+New snapshots record the exact scoring trace, including its server or client source.
+Server traces include a profile hash, so a stale client profile cannot replace the actual scoring inputs.
+Older snapshots retain their `client_profile` label and cannot pass exact replay without a trace.
 `request_first_seen_at` is an observation time, not an authoritative GitHub request timestamp.
 
 New records stay in local storage on the device.
@@ -163,10 +163,13 @@ No new snapshot event is sent to PostHog or another service.
 Raw titles, descriptions, code, author names, paths, and search text are omitted.
 Exports still contain reviewer login, repository names, and PR identifiers. Keep them private.
 
-Storage is capped at one million characters per workspace.
-Reads exclude records older than seven days. Writes remove them and evict whole snapshot groups when needed.
-Old bytes can remain until the next write. Clearing site storage removes the log.
-Export regularly during the pilot; this bounded local log is not a durable event archive.
+An IndexedDB archive retains up to 30 days and 50 million serialized characters per workspace.
+Transactions keep each snapshot and its size metadata together. Concurrent tabs cannot overwrite each other's events.
+Retention removes whole snapshot groups, including their observations. Old bytes can remain until the next write.
+The original seven-day, one-million-character log remains a fallback when archive storage fails.
+Exports merge both stores and report archive availability, eviction counts, and write failures in the current app session.
+Clearing site storage removes both stores. Browser quotas and device failures can still lose data.
+Export regularly during the pilot. The archive has no network path.
 
 Current limits include external-link opens and authoritative request rounds.
 The snapshot checker reports `review_labels: 0`; the separate outcome join supplies submitted-review labels.
@@ -266,8 +269,7 @@ Outcome attribution excludes snapshots with unknown or different scope.
 Explicit exclusions, including agent checks, censor attribution instead of falling back to an older snapshot.
 Existing exports remain readable, but missing provenance cannot qualify them for the new checks.
 
-The local log still has a seven-day and one-million-character limit per workspace.
-Durable collection remains necessary for a longer prospective study.
+The archive now retains a longer local history, with explicit loss counters and a smaller fallback log.
 Fresh human outcomes, authoritative request rounds, shadow evaluation, and controlled product evidence remain open release gates.
 Production ranking behavior remains unchanged.
 

@@ -64,6 +64,9 @@ The heart of the app: webhook-first PR monitoring (with polling reconciliation a
 Review-ranking research runs offline in `scripts/review-ranking`; Python models are not production dependencies.
 The existing scorer remains the serving boundary until a future model passes the release gates.
 Web and desktop keep bounded local snapshots for the `reviewPriority` audience, with a manual JSON export.
+The shared browser client archives them in IndexedDB for up to 30 days and 50 million serialized characters per workspace.
+Atomic transactions preserve snapshot groups across concurrent tabs. A smaller localStorage log remains the failure fallback.
+Exports combine both stores and report retention losses. No archive event is uploaded automatically.
 Queue membership, viewport exposure, and opens remain separate observations.
 Scoring traces retain exact serving inputs and a server profile hash, without raw PR text or affinity identities.
 The offline parity command uses the compiled production scorer and comparator, with a version check and runtime digest.

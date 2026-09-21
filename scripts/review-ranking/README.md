@@ -182,7 +182,10 @@ Each export has `schema_version: 1` and an `events` array.
 Queue events carry a workspace, reviewer, snapshot ID, timestamp, model data, and candidate chunks.
 Exposure and open events reference that snapshot ID and an observation timestamp.
 The client logs changed queues and refreshes stable queues every five visible minutes.
-The storage cap and seven-day window can remove history. Export before that history expires.
+The IndexedDB archive retains up to 30 days and 50 million serialized characters per workspace.
+The original seven-day localStorage log remains a fallback. Exports merge both sources.
+Archive availability and loss counters remain visible in the import audit.
+The archive can still lose history through retention limits, browser quotas, or device failures. Export regularly.
 
 The checker alone reports zero review labels. The following pipeline adds submitted-review outcomes.
 

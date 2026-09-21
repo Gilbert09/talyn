@@ -36,6 +36,14 @@ def load_snapshots(path: Path) -> tuple[list[Snapshot], dict]:
     chunks = defaultdict(list)
     observations = defaultdict(list)
     audit = Counter()
+    archive = payload.get("archive")
+    if isinstance(archive, dict):
+        for name in ["expired", "size_evicted", "failed_writes"]:
+            value = archive.get(name)
+            if type(value) is int and value >= 0:
+                audit[f"archive_{name}"] = value
+    if payload.get("archive_available") is False:
+        audit["archive_unavailable"] = 1
     for event in payload["events"]:
         if not isinstance(event, dict):
             audit["invalid_events"] += 1
