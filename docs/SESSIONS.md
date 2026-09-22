@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: validate saved models before restoration (2026-09-22)
+
+The offline loader previously converted arrays without validating their dimensions or numeric values.
+It could truncate fractional column indices and accept zero scales or nonfinite validation times.
+It now rejects these cases, plus malformed personal identities and incomplete coefficients.
+Optional input contracts require exact feature order and encoder configuration.
+The model writer also refuses personal adjustments attached to another shared model.
+
+The experiment restores JSON before writing its reports and requires exact raw score reproduction on every test choice.
+Valid logistic and neural models retain their predictions. Unknown and disabled reviewers retain the shared fallback.
+Validation passed 97 focused artifact, model, and experiment tests, plus Ruff and formatting checks.
+The production identity contract, feature extraction parity, fresh evaluation, and controlled product outcomes remain incomplete.
+
 ## Review ranking: compare against actual Priority order (2026-09-22)
 
 The prospective experiment previously used displayed order and recency baselines.

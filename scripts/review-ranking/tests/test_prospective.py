@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from test_outcomes import START, journal, protocol, review, snapshot
 
+from review_rank import experiment
 from review_rank.experiment import run
 from review_rank.features import DAY
 from review_rank.outcomes import iso, join
@@ -171,6 +172,7 @@ def test_four_windows_train_real_models_without_promoting(monkeypatch):
     assert report["selected_baseline"] == "production-priority"
     assert report["test"]["production-priority"]["macro"]["hit3"] == 1
     assert report["production_replay"]["choices"] == 96
+    assert report["artifact_validation"] == {"exact_score_roundtrip": True, "choices": 24}
 
 
 def test_a_replay_failure_stops_the_experiment(monkeypatch):
@@ -179,6 +181,30 @@ def test_a_replay_failure_stops_the_experiment(monkeypatch):
 
     monkeypatch.setattr("review_rank.experiment.production_baselines", refuse)
     with pytest.raises(ValueError, match="pass production score replay"):
+        run(fixture_run(), None, [START + d * DAY for d in [14, 28, 42, 56]])
+
+
+def test_changed_saved_weights_stop_the_experiment(monkeypatch):
+    monkeypatch.setattr(
+        "review_rank.experiment.production_baselines",
+        lambda rows: (
+            {
+                row["review_id"]: [candidate["pr_id"] for candidate in row["candidates"]]
+                for row in rows
+            },
+            {"all_passed": True},
+        ),
+    )
+    original = experiment.artifact
+
+    def corrupt(model, personal):
+        saved = original(model, personal)
+        key = "parameters" if saved["shared"]["family"] == "shared_network" else "coefficients"
+        saved["shared"][key] = [0.0] * len(saved["shared"][key])
+        return saved
+
+    monkeypatch.setattr("review_rank.experiment.artifact", corrupt)
+    with pytest.raises(ValueError, match="changed predictions"):
         run(fixture_run(), None, [START + d * DAY for d in [14, 28, 42, 56]])
 
 

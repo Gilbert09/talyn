@@ -214,6 +214,12 @@ Strong regularization and a sample-size factor limit their contribution.
 An adjustment stays off unless a separate, earlier validation window supports a positive Hit@3 lower bound.
 Unknown reviewers and reviewers without enough evidence use the shared score unchanged.
 
+Saved models now reject invalid dimensions, nonfinite values, nonpositive scales, and fractional or repeated feature columns.
+Personal identities must be unique, and enabled adjustments must have complete coefficients.
+The experiment checks the saved feature order and encoder configuration before restoring the model.
+JSON restoration must preserve every raw test score before any result file is written.
+These checks do not establish stable production identities, feature extraction parity, or ranking quality.
+
 Four forward windows separate training, shared selection, personal validation, and the final development comparison.
 The experiment compares the observed display order, pooled models, shared neural scores, and guarded personal scores.
 It preserves observed readiness gates and also reports raw recency baselines.

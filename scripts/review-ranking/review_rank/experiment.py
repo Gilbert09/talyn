@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
@@ -21,6 +22,8 @@ from .prospective import FEATURES, build_observed, gated_order
 
 
 def artifact(model, personal: PersonalAdjustments) -> dict:
+    if personal.shared is not model:
+        raise ValueError("Personal adjustments must belong to the saved shared model")
     if isinstance(model, SharedNetwork):
         shared = {
             "family": "shared_network",
@@ -53,34 +56,125 @@ def artifact(model, personal: PersonalAdjustments) -> dict:
     }
 
 
-def restore_artifact(saved: dict) -> PersonalAdjustments:
+_UNSPECIFIED_ENCODER = object()
+
+
+def finite_number(value: object, name: str) -> float:
+    if type(value) not in {int, float}:
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        result = float(value)
+    except OverflowError:
+        raise ValueError(f"{name} must be a finite number") from None
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number")
+    return result
+
+
+def numeric_vector(value: object, name: str, length: int | None = None) -> np.ndarray:
+    if not isinstance(value, list) or not value or (length is not None and len(value) != length):
+        raise ValueError(f"Invalid {name} dimension")
+    return np.asarray([finite_number(item, name) for item in value], dtype=float)
+
+
+def positive_scale(value: object, name: str, length: int) -> np.ndarray:
+    result = numeric_vector(value, name, length)
+    if np.any(result <= 0):
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
+def restore_artifact(
+    saved: dict,
+    *,
+    expected_features: list[str] | None = None,
+    expected_encoder: object = _UNSPECIFIED_ENCODER,
+) -> PersonalAdjustments:
     """Restore a local experiment without executable pickle data."""
-    if saved.get("schema_version") != 1 or saved.get("serving_allowed") is not False:
+    if (
+        not isinstance(saved, dict)
+        or type(saved.get("schema_version")) is not int
+        or saved["schema_version"] != 1
+        or saved.get("serving_allowed") is not False
+    ):
         raise ValueError("Expected a version 1 offline artifact")
-    source = saved["shared"]
-    if source["family"] == "shared_network":
-        shared = SharedNetwork(source["hidden"], source["regularization"])
-        shared.parameters = np.asarray(source["parameters"], dtype=float)
-    elif source["family"] == "pooled_logit":
-        spec = Spec(**source["spec"])
-        if spec.family != "logit" or spec.personal:
+    source, adjustment = saved.get("shared"), saved.get("personal")
+    if not isinstance(source, dict) or not isinstance(adjustment, dict):
+        raise ValueError("Shared and personal model records are required")
+    mean = numeric_vector(adjustment.get("mean"), "personal mean")
+    dimension = len(mean)
+    scale = positive_scale(adjustment.get("scale"), "personal scale", dimension)
+    names = saved.get("feature_names")
+    if names is not None and (
+        not isinstance(names, list)
+        or len(names) != dimension
+        or any(not isinstance(name, str) or not name for name in names)
+        or len(set(names)) != len(names)
+    ):
+        raise ValueError("Feature names must identify every input column once")
+    if expected_features is not None and names != expected_features:
+        raise ValueError("The saved feature order does not match the input contract")
+    if expected_encoder is not _UNSPECIFIED_ENCODER and digest(saved.get("encoder")) != digest(
+        expected_encoder
+    ):
+        raise ValueError("The saved encoder does not match the input contract")
+
+    if source.get("family") == "shared_network":
+        hidden = source.get("hidden")
+        regularization = finite_number(source.get("regularization"), "regularization")
+        if type(hidden) is not int or hidden < 1 or regularization < 0:
+            raise ValueError("Invalid shared network configuration")
+        shared = SharedNetwork(hidden, regularization)
+        shared.parameters = numeric_vector(
+            source.get("parameters"),
+            "network parameters",
+            (2 * dimension + 2) * hidden,
+        )
+        shared.fit_info = source.get("fit", {})
+        shared_width = dimension
+    elif source.get("family") == "pooled_logit":
+        try:
+            spec = Spec(**source["spec"])
+        except (KeyError, TypeError):
+            raise ValueError("Invalid shared logistic configuration") from None
+        regularization = finite_number(spec.regularization, "regularization")
+        if spec.family != "logit" or spec.personal is not False or regularization < 0:
             raise ValueError("Expected shared logistic coefficients")
-        shared = Ranker(spec, np.asarray(source["columns"], dtype=int))
-        shared.coefficients = np.asarray(source["coefficients"], dtype=float)
+        columns = source.get("columns")
+        if (
+            not isinstance(columns, list)
+            or not columns
+            or any(type(column) is not int or not 0 <= column < dimension for column in columns)
+            or len(set(columns)) != len(columns)
+        ):
+            raise ValueError("Invalid shared feature columns")
+        shared = Ranker(spec, np.asarray(columns, dtype=int))
+        shared_width = len(columns)
+        shared.coefficients = numeric_vector(
+            source.get("coefficients"), "shared coefficients", shared_width
+        )
         shared.users = {}
     else:
         raise ValueError("Unknown shared model")
-    shared.mean = np.asarray(source["mean"], dtype=float)
-    shared.scale = np.asarray(source["scale"], dtype=float)
+    shared.mean = numeric_vector(source.get("mean"), "shared mean", shared_width)
+    shared.scale = positive_scale(source.get("scale"), "shared scale", shared_width)
     personal = PersonalAdjustments(shared)
-    source = saved["personal"]
-    personal.mean = np.asarray(source["mean"], dtype=float)
-    personal.scale = np.asarray(source["scale"], dtype=float)
+    personal.mean, personal.scale = mean, scale
+    coefficients, enabled = adjustment.get("coefficients"), adjustment.get("enabled")
+    if (
+        not isinstance(coefficients, dict)
+        or any(not isinstance(user, str) or not user for user in coefficients)
+        or not isinstance(enabled, list)
+        or any(not isinstance(user, str) or not user for user in enabled)
+        or len(set(enabled)) != len(enabled)
+    ):
+        raise ValueError("Invalid personal model identities")
     personal.coefficients = {
-        user: np.asarray(values, dtype=float) for user, values in source["coefficients"].items()
+        user: numeric_vector(values, "personal coefficients", dimension)
+        for user, values in coefficients.items()
     }
-    personal.enabled = set(source["enabled"])
-    personal.validation_end = source["validation_end"]
+    personal.enabled = set(enabled)
+    personal.validation_end = finite_number(adjustment.get("validation_end"), "validation end")
     if not personal.enabled <= personal.coefficients.keys():
         raise ValueError("Missing enabled personal coefficients")
     return personal
@@ -239,9 +333,20 @@ def run(joined: list[dict], embeddings: dict | None, boundaries: list[float]) ->
         ],
     }
     saved = artifact(selected, personal)
-    saved["report_sha256"] = digest(report)
     saved["feature_names"] = report["features"]
     saved["encoder"] = report["encoder"]
+    restored = restore_artifact(
+        json.loads(json.dumps(saved, allow_nan=False)),
+        expected_features=report["features"],
+        expected_encoder=report["encoder"],
+    )
+    if any(
+        not np.array_equal(before, after)
+        for before, after in zip(personal.predict(test), restored.predict(test), strict=True)
+    ):
+        raise ValueError("The saved model changed predictions after restoration")
+    report["artifact_validation"] = {"exact_score_roundtrip": True, "choices": len(test)}
+    saved["report_sha256"] = digest(report)
     return report, saved
 
 

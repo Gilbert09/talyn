@@ -335,6 +335,12 @@ Displayed order can come from different sort modes. The priority-sort subset is 
 The production baseline uses the real score caps and comparator. Candidate models still lack verified production serving parity.
 Both the report and JSON model explicitly refuse production promotion.
 
+Model restoration checks finite numbers, positive scales, complete dimensions, integer column indices, and personal identities.
+It rejects duplicate columns, duplicate enabled identities, missing personal weights, and invalid validation times.
+Call `restore_artifact` with `expected_features` and `expected_encoder` to enforce the exact input contract.
+The experiment supplies both contracts, saves and restores JSON in memory, then requires identical test predictions.
+It writes no result files if this check fails. This check does not establish production serving parity or model quality.
+
 ## Model boundaries
 
 Training uses full choice groups and balances reviewer contributions.
