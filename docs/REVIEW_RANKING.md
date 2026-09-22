@@ -159,6 +159,11 @@ Older snapshots retain their `client_profile` label and cannot pass exact replay
 
 New records stay in local storage on the device.
 The **Export ranking data** button downloads them as JSON.
+Desktop exports use a native save dialog and report success only after the file write completes.
+Canceling leaves existing files unchanged. A failed write preserves an earlier export and displays an error.
+The destination comes from the save dialog. The renderer cannot supply a file path.
+New export files use owner-only permissions on systems that support them.
+The original disabled Save button remains an unconfirmed native UI issue pending a packaged-app check.
 No new snapshot event is sent to PostHog or another service.
 Raw titles, descriptions, code, author names, paths, and search text are omitted.
 Exports contain reviewer login, repository names, PR identifiers, and matched team names. Keep them private.

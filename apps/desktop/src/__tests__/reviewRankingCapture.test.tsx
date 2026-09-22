@@ -1,7 +1,8 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { randomUUID } from 'node:crypto';
+import { ReviewRankingArchive } from '@talyn/client';
 import { readReviewRankingLog, type ReviewRankingContext, type ReviewRankingRow } from '@talyn/shared';
-import { useReviewRankingCapture } from '../renderer/components/panels/github/useReviewRankingCapture';
+import { exportReviewRankingData, useReviewRankingCapture } from '../renderer/components/panels/github/useReviewRankingCapture';
 
 const rows: ReviewRankingRow[] = [{ id: 'pr', workspaceId: 'workspace', number: 1, owner: 'org', repo: 'repo', summary: {} }];
 const context: ReviewRankingContext = {
@@ -30,9 +31,54 @@ afterEach(() => {
   cleanup();
   jest.useRealTimers();
   Reflect.deleteProperty(globalThis, 'IntersectionObserver');
+  Reflect.deleteProperty(window, 'electron');
   jest.restoreAllMocks();
   jest.clearAllMocks();
   document.body.innerHTML = '';
+});
+
+describe('local ranking export', () => {
+  it('merges both stores without duplicate events and preserves archive metadata', async () => {
+    renderHook(() => useReviewRankingCapture(rows, context, true));
+    const recent = log();
+    const older = { ...recent[0], stored_at: recent[0].stored_at - 1000,
+      properties: { ...recent[0].properties, snapshot_id: 'earlier' } };
+    const metadata = { max_age_ms: 1000, max_chars: 5000, expired: 2, size_evicted: 3, failed_writes: 4 };
+    jest.spyOn(ReviewRankingArchive.prototype, 'read').mockResolvedValue({ events: [recent[0], older], archive: metadata });
+    const save = jest.fn().mockResolvedValue({ status: 'saved' });
+    Object.defineProperty(window, 'electron', { configurable: true, value: { reviewRanking: { export: save } } });
+
+    expect(await exportReviewRankingData('workspace')).toEqual({ status: 'saved' });
+    expect(JSON.parse(save.mock.calls[0][0])).toEqual({
+      schema_version: 1, events: [older, recent[0]], archive_available: true, archive: metadata,
+    });
+  });
+
+  it('exports the fallback with explicit archive unavailability', async () => {
+    renderHook(() => useReviewRankingCapture(rows, context, true));
+    const recent = log();
+    jest.spyOn(ReviewRankingArchive.prototype, 'read').mockRejectedValue(new Error('archive blocked'));
+    const save = jest.fn().mockResolvedValue({ status: 'canceled' });
+    Object.defineProperty(window, 'electron', { configurable: true, value: { reviewRanking: { export: save } } });
+
+    expect(await exportReviewRankingData('workspace')).toEqual({ status: 'canceled' });
+    expect(JSON.parse(save.mock.calls[0][0])).toEqual({
+      schema_version: 1, events: recent, archive_available: false, archive: null,
+    });
+  });
+
+  it('retains archived events when localStorage access fails', async () => {
+    renderHook(() => useReviewRankingCapture(rows, context, true));
+    const events = log();
+    const metadata = { max_age_ms: 1000, max_chars: 5000, expired: 0, size_evicted: 0, failed_writes: 0 };
+    jest.spyOn(ReviewRankingArchive.prototype, 'read').mockResolvedValue({ events, archive: metadata });
+    jest.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new Error('blocked'); });
+    const save = jest.fn().mockResolvedValue({ status: 'saved' });
+    Object.defineProperty(window, 'electron', { configurable: true, value: { reviewRanking: { export: save } } });
+
+    expect(await exportReviewRankingData('workspace')).toEqual({ status: 'saved' });
+    expect(JSON.parse(save.mock.calls[0][0]).events).toEqual(events);
+  });
 });
 
 describe('local ranking capture', () => {

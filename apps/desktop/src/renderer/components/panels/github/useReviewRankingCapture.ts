@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { ReviewRankingArchive } from '@talyn/client';
+import type { ReviewRankingExportResult } from '../../../../main/reviewRankingExport';
 import {
   appendReviewRankingLog,
   readReviewRankingLog,
@@ -10,7 +11,7 @@ import {
 
 const archive = new ReviewRankingArchive();
 
-export async function exportReviewRankingData(workspaceId: string): Promise<void> {
+export async function exportReviewRankingData(workspaceId: string): Promise<ReviewRankingExportResult> {
   let recent = [] as ReturnType<typeof readReviewRankingLog>;
   try {
     recent = readReviewRankingLog(localStorage, workspaceId);
@@ -25,12 +26,7 @@ export async function exportReviewRankingData(workspaceId: string): Promise<void
   const data = JSON.stringify({
     schema_version: 1, events, archive_available: stored !== null, archive: stored?.archive ?? null,
   }, null, 2);
-  const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'talyn-review-ranking.json';
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return window.electron.reviewRanking.export(data);
 }
 
 export function useReviewRankingCapture(

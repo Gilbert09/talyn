@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: native export status and file writes (2026-09-22)
+
+Desktop exports now use a dedicated native save operation instead of a temporary browser download.
+The main window supplies JSON. The native dialog supplies the destination.
+Other windows and child frames cannot invoke this operation. Duplicate requests cannot open concurrent dialogs.
+The writer creates a private temporary file beside the destination, then replaces the destination after the write succeeds.
+Failed writes preserve earlier exports. The button reports completion, cancellation, and errors, and permits retries.
+Its retention text now reflects the 30-day archive, subject to storage limits.
+
+This change does not establish the cause of the disabled Save button observed in version 0.2.102.
+A packaged-app check remains necessary. No new human observations or model gains are claimed.
+Implementation follows Electron's [native dialog API](https://www.electronjs.org/docs/latest/api/dialog).
+
+Validation passed 34 focused tests, desktop type checking, ESLint, and the desktop production build.
+Tests cover real file replacement, failure cleanup, and sender checks.
+They also cover export contents, fallback storage, status messages, and retries.
+
 ## Review ranking: replay older profile statistics (2026-09-22)
 
 Full CI later found two failures in the adjacent review-timing suite.

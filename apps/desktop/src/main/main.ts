@@ -24,8 +24,11 @@ import { initAutoUpdater } from './updater';
 import { signInToCodex } from './codexAuth';
 import { scanLocalMcpServers } from './localMcp';
 import { readWindowState, restoredWindowOptions, trackWindowState } from './windowState';
+import { registerReviewRankingExport } from './reviewRankingExport';
 
 let mainWindow: BrowserWindow | null = null;
+
+registerReviewRankingExport(() => mainWindow);
 
 /**
  * Only ever hand http(s) URLs to the OS. Renderer-supplied input (IPC,

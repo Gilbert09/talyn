@@ -31,7 +31,8 @@ import {
 } from './filters';
 import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
 import { useGitHubActions } from './useGitHubActions';
-import { exportReviewRankingData, useReviewRankingCapture } from './useReviewRankingCapture';
+import { useReviewRankingCapture } from './useReviewRankingCapture';
+import { ReviewRankingExportButton } from './ReviewRankingExportButton';
 
 /**
  * Where the chosen sort lives.
@@ -379,14 +380,7 @@ export function ReviewsPanel() {
             />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
             {offerPriority && workspaceId && (
-              <button
-                type="button"
-                className="h-7 rounded-md border px-2 text-xs text-muted-foreground hover:bg-muted/40"
-                title="Download the last seven days of ranking data stored on this device"
-                onClick={() => exportReviewRankingData(workspaceId)}
-              >
-                Export ranking data
-              </button>
+              <ReviewRankingExportButton key={workspaceId} workspaceId={workspaceId} />
             )}
           </>
         }

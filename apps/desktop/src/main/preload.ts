@@ -3,6 +3,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
+import type { ReviewRankingExportResult } from './reviewRankingExport';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
 export interface LocalMcpFinding {
@@ -28,6 +29,11 @@ export interface LocalSkillFile {
 const electronHandler = {
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,
+  reviewRanking: {
+    export(data: string): Promise<ReviewRankingExportResult> {
+      return ipcRenderer.invoke('review-ranking:export', data);
+    },
+  },
   auth: {
     /** Open an OAuth URL in the user's default browser. */
     openExternal(url: string): Promise<void> {
