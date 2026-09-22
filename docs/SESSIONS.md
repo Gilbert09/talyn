@@ -211,11 +211,36 @@ Claude-Code-identity system block. A guest that does NOT get Pi's OAuth
 placeholder produces a **429 `rate_limit_error`**, which is a different failure
 from the one being seen — so the stealth-mode theory does not fit either.
 
-**Still open**: what in the sandbox path turns a request Anthropic serves into
-one it refuses. Everything reproducible from outside the guest now reproduces
-GREEN, so the next step has to be inside it — a log line in the runner naming
-the placeholder and the outgoing shape, which needs a fleet build and root on
-the host.
+**Then it was bisected, on the fleet itself.** With the gateway credentials from
+Railway, `scripts/fleet-claude-repro.mts` boots one sandbox the way the executor
+does — same credential, same model, same trivial prompt — and each run settles
+in about forty seconds:
+
+| sandbox | outcome |
+|---|---|
+| Claude, no MCP servers | **completed**, $0.017, 1 agent turn |
+| Claude + `context7` | **completed** |
+| Claude + `posthog` | **"You're out of extra usage"** |
+| Claude + both | **"You're out of extra usage"** |
+
+So it is the **PostHog MCP server attached to a Claude run**, and nothing else.
+Both loops inherit every connected server (`mcp_server_ids` is null = all), which
+is why every loop firing died, and the merge-queue runs with it.
+
+What it is NOT, each ruled out by experiment: the server's tool DEFINITIONS —
+`scripts/probe-mcp-tools.mts` pulls the real ones over MCP (one tool, `exec`,
+14.5k input tokens' worth of schema) and Anthropic accepts them in the Claude
+Code shape, 200. Nor tool-description size (40KB each, 200), nor request size
+(200KB, 200), nor tool count, nor the `mcp__server__tool` naming.
+
+**Still open**: what the GUEST does differently when that server is attached.
+The remaining step is inside the microVM — a log line in the runner dumping the
+outgoing request — which needs a fleet build and root on the host. Everything
+reproducible from outside the guest now reproduces green.
+
+**Workaround until then**: disable the `posthog` MCP server (Settings → MCP
+servers, or `UPDATE mcp_servers SET enabled = false WHERE name = 'posthog'`),
+and Claude runs work. Leaving it on means every Claude run fails over to Codex.
 
 **What changed here, and why it is not a workaround.** The inference "a run said
 this, therefore the subscription is spent" was load-bearing — it parked the

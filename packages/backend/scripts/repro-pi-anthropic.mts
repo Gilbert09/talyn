@@ -98,9 +98,19 @@ function trim(b: any): unknown {
   };
 }
 
+/**
+ * `PROBE_TOOL_KB` pads a tool's DESCRIPTION. An MCP server's tools arrive with
+ * whatever prose the vendor wrote, and PostHog's `exec` carries a manual —
+ * which is the one difference between a fleet run that completes and one
+ * Anthropic refuses.
+ */
 const tool = (name: string) => ({
   name,
-  description: `${name} does a thing`,
+  description: process.env.PROBE_TOOL_KB
+    ? `${name} does a thing. ${'Describe the thing at length. '.repeat(
+        (Number(process.env.PROBE_TOOL_KB) * 1024) / 30
+      )}`
+    : `${name} does a thing`,
   parameters: { type: 'object', properties: { path: { type: 'string' } }, required: [] },
 });
 /** A few of Claude Code's own, then the fleet's, which are nobody else's. */
