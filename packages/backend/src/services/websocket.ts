@@ -601,6 +601,11 @@ export function emitPullRequestUpdated(
     // preserves its current value with `??` (never `||`: the un-watch emit
     // sends `false` and it must not be swallowed).
     watching?: boolean;
+    // The Reviews-tab hide, as an ISO instant or null. Optional and
+    // `??`-preserved on the client like the flags above — only the hide route
+    // emits it, and `null` is a real value here (an unhide), so the client must
+    // distinguish "absent" from "null" rather than treating both as visible.
+    reviewHiddenAt?: string | null;
     // Auto-keep-mergeable watcher state, so the toggle + row badge update live.
     // Optional: emitters that don't change them omit them.
     autoKeepMergeable?: boolean;

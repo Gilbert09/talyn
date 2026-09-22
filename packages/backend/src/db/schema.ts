@@ -523,6 +523,24 @@ export const pullRequests = pgTable(
      * column; only the two /watch routes do.
      */
     watching: boolean('watching').notNull().default(false),
+    /**
+     * When the user hid this PR from the Reviews tab, or NULL when it is
+     * visible. A timestamp rather than a boolean because it is the only record
+     * of the choice: nothing else writes it, and "when did I decide to skip
+     * this" is the question anyone asks when the count looks wrong.
+     *
+     * Hiding is STICKY — Tom's call. It does not touch {@link reviewRequested}
+     * (the user is still a requested reviewer, and the monitor would rewrite
+     * that flag within a tick anyway), and nothing clears it automatically: not
+     * a re-request, not a new commit. Only the user, through the Reviews tab's
+     * hidden list.
+     *
+     * The consequence is that this column must OUTLIVE the cohort. A row that
+     * carries a hide is therefore treated as referenced by the un-watch route's
+     * delete-when-unreferenced check — dropping it would forget the choice and
+     * silently unhide the PR the next time GitHub asks.
+     */
+    reviewHiddenAt: timestamp('review_hidden_at', { withTimezone: true }),
     mergedAt: timestamp('merged_at', { withTimezone: true }),
     /**
      * Drives the TTL: prCache returns this row if `last_polled_at` is

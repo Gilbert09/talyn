@@ -24,6 +24,9 @@ export interface PullRequestUpdatePayload {
   reviewRequested?: boolean;
   /** Only on the emit that STAMPED it — a plain `authored` flip omits it. */
   reviewRequestedFirstSeenAt?: string | null;
+  /** The Reviews-tab hide. Only the hide route emits it, and `null` (an
+   *  unhide) is a real value — see the merge below. */
+  reviewHiddenAt?: string | null;
   authored?: boolean;
   watching?: boolean;
   autoKeepMergeable?: boolean;
@@ -130,6 +133,11 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
       // this, so every other echo must leave the stamp we already hold alone.
       reviewRequestedFirstSeenAt:
         p.reviewRequestedFirstSeenAt ?? next[idx].reviewRequestedFirstSeenAt,
+      // `undefined` means the echo says nothing about the hide; `null` means it
+      // says the PR is visible again. `??` would swallow the unhide, so this
+      // one tests for `undefined` explicitly.
+      reviewHiddenAt:
+        p.reviewHiddenAt !== undefined ? p.reviewHiddenAt : next[idx].reviewHiddenAt,
       authored: p.authored ?? next[idx].authored,
       // Same rule, and it matters more here: the poll's flag reconcile and every
       // prCache upsert emit this event WITHOUT `watching`, so a `||` (or a

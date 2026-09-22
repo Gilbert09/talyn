@@ -62,6 +62,15 @@ interface GitHubPageShellProps {
   emptyIcon?: React.ReactNode;
   emptyTitle?: string;
   emptyHint?: string;
+  /**
+   * Rendered under the list, inside the same scroll area — where the Reviews
+   * tab keeps its hidden PRs. Below the rows rather than in the filter bar
+   * because it is the END of the list, not a control over it, and it must stay
+   * reachable when the list is empty (hide everything and the footer is the
+   * only way back). Gets the same selection handle as the rows, so a PR opened
+   * from it lands in the same detail panel.
+   */
+  listFooter?: (sel: { selectedId: string | null; onSelect: (id: string) => void }) => React.ReactNode;
   children: (sel: { selectedId: string | null; onSelect: (id: string) => void }) => React.ReactNode;
 }
 
@@ -80,6 +89,7 @@ export function GitHubPageShell({
   emptyIcon,
   emptyTitle = 'No pull requests match the current filters.',
   emptyHint,
+  listFooter,
   children,
 }: GitHubPageShellProps) {
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
@@ -254,6 +264,12 @@ export function GitHubPageShell({
               </div>
             )}
             {rows.length > 0 && children({ selectedId, onSelect: setSelectedId })}
+            {/* Not gated on `rows.length`: with every PR hidden the list is
+                empty and the footer is the only route back to them. Gated on
+                the connection, because a disconnected workspace has nothing to
+                say here and the CTA above is the only thing worth showing. */}
+            {connected !== false &&
+              listFooter?.({ selectedId, onSelect: setSelectedId })}
           </ScrollArea>
           )}
         </div>

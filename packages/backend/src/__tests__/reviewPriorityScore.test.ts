@@ -242,4 +242,12 @@ describe('scoreReviewRows', () => {
     expect(versions.size).toBe(1);
     expect(clocks.size).toBe(1);
   });
+  it('excludes hidden PRs from shared queue features and serving', async () => {
+    const out = await scoreReviewRows(db, 'ws1', 'me', [
+      row({ id: 'visible' }), row({ id: 'hidden', reviewHiddenAt: new Date() }),
+    ], 'candidate');
+    expect([...out.keys()]).toEqual(['visible']);
+    expect(out.get('visible')?.experiment?.features?.[6]).toBe(Math.log1p(1));
+  });
+
 });

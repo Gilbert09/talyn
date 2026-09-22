@@ -28,6 +28,7 @@ import { isFeatureEnabled } from '../services/featureFlags.js';
 import { scoreReviewRows } from '../services/reviewPriority/score.js';
 import { withMergeQueueLimitGate } from '../services/billing/entitlements.js';
 import { emitPullRequestUpdated } from '../services/websocket.js';
+import { captureWorkspaceEvent } from '../services/analytics.js';
 import { noteHeadSha } from '../services/webhookHeadIndex.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
 import {
@@ -113,6 +114,9 @@ const PR_FLAG_COLUMNS = {
   authored: pullRequestsTable.authored,
   reviewRequested: pullRequestsTable.reviewRequested,
   watching: pullRequestsTable.watching,
+  // A hide has to survive the un-watch delete for the same reason (see the
+  // column's doc): the row IS the record of the choice.
+  reviewHiddenAt: pullRequestsTable.reviewHiddenAt,
   autoKeepMergeable: pullRequestsTable.autoKeepMergeable,
   mergeQueued: pullRequestsTable.mergeQueued,
 } as const;
@@ -139,6 +143,7 @@ export const LIST_COLUMNS = {
   reviewRequested: pullRequestsTable.reviewRequested,
   reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
   reviewRequestedClearedAt: pullRequestsTable.reviewRequestedClearedAt,
+  reviewHiddenAt: pullRequestsTable.reviewHiddenAt,
   authored: pullRequestsTable.authored,
   watching: pullRequestsTable.watching,
   mergedAt: pullRequestsTable.mergedAt,
@@ -173,6 +178,7 @@ export const DETAIL_COLUMNS = {
   reviewRequested: pullRequestsTable.reviewRequested,
   reviewRequestedFirstSeenAt: pullRequestsTable.reviewRequestedFirstSeenAt,
   reviewRequestedClearedAt: pullRequestsTable.reviewRequestedClearedAt,
+  reviewHiddenAt: pullRequestsTable.reviewHiddenAt,
   authored: pullRequestsTable.authored,
   watching: pullRequestsTable.watching,
   mergedAt: pullRequestsTable.mergedAt,
@@ -531,6 +537,10 @@ export function pullRequestRoutes(): Router {
         row.taskId === null &&
         !row.mergeQueued &&
         !row.autoKeepMergeable &&
+        // A hide is a decision the user made about this PR, and the row is the
+        // only place it lives. Deleting it here would forget it, and the PR
+        // would be back in the Reviews list the next time GitHub asks.
+        row.reviewHiddenAt === null &&
         !activeEntry;
       if (deleted) {
         await db.delete(pullRequestsTable).where(eq(pullRequestsTable.id, row.id));
@@ -842,6 +852,65 @@ export function pullRequestRoutes(): Router {
       });
     }
     res.status(201).json({ success: true, data: rowToTask(result.task) });
+  });
+
+  // Hide / unhide a PR in the Reviews tab. Body `{ hidden: boolean }`.
+  //
+  // Deliberately NOT a change to `reviewRequested`: the user is still a
+  // requested reviewer on GitHub, the monitor rewrites that flag from the
+  // search on every poll, and clearing it would also drop the PR out of the
+  // review-history record. This is a view decision, stored as one.
+  //
+  // Sticky by design (Tom's call): nothing clears it but this route with
+  // `hidden: false`. A re-request does not, and neither does a new commit — the
+  // user said they no longer want to review it, and a hide that quietly undoes
+  // itself is worse than one that needs an explicit unhide, because the count
+  // it was meant to reduce creeps back with no explanation.
+  router.post('/:id/review-hidden', async (req, res) => {
+    const db = getDbClient();
+    const rows = await db
+      .select(PR_FLAG_COLUMNS)
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: 'Pull request not found' });
+    }
+    try {
+      await requireWorkspaceAccess(req, row.workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+
+    const hidden = (req.body as { hidden?: boolean }).hidden !== false;
+    // Re-hiding an already-hidden PR keeps the ORIGINAL instant. The column
+    // answers "when did I decide to skip this", and a double-click from a
+    // second client must not restate it as now.
+    const reviewHiddenAt = hidden ? (row.reviewHiddenAt ?? new Date()) : null;
+    await db
+      .update(pullRequestsTable)
+      .set({ reviewHiddenAt, updatedAt: new Date() })
+      .where(eq(pullRequestsTable.id, row.id));
+
+    captureWorkspaceEvent(row.workspaceId, hidden ? 'pr_review_hidden' : 'pr_review_unhidden', {
+      repo: `${row.owner}/${row.repo}`,
+      pr_number: row.number,
+    });
+
+    emitPullRequestUpdated(row.workspaceId, {
+      id: row.id,
+      taskId: row.taskId,
+      repositoryId: row.repositoryId,
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      state: row.state,
+      lastSummary: (row.lastSummary as Record<string, unknown>) ?? {},
+      reviewHiddenAt: reviewHiddenAt ? reviewHiddenAt.toISOString() : null,
+    });
+
+    return res.json({ success: true, data: null } as ApiResponse<null>);
   });
 
   // Auto-keep-mergeable toggle. Body `{ enabled: boolean }`. When on, the
@@ -1489,6 +1558,7 @@ interface PullRequestRow {
   reviewRequested: boolean;
   reviewRequestedFirstSeenAt: Date | null;
   reviewRequestedClearedAt: Date | null;
+  reviewHiddenAt: Date | null;
   authored: boolean;
   watching: boolean;
   mergedAt: Date | null;
@@ -1645,6 +1715,7 @@ type PublicShapeRow = Pick<
   | 'state'
   | 'reviewRequested'
   | 'reviewRequestedFirstSeenAt'
+  | 'reviewHiddenAt'
   | 'authored'
   | 'watching'
   | 'mergedAt'
@@ -1709,6 +1780,10 @@ function rowToPublicShape(row: PublicShapeRow) {
     reviewRequestedFirstSeenAt: row.reviewRequestedFirstSeenAt
       ? row.reviewRequestedFirstSeenAt.toISOString()
       : null,
+    // Hidden rows still ship. The Reviews tab keeps them out of the list and
+    // its count, and shows them behind "Show hidden" — which it can only do
+    // with the rows in hand. They are the same handful of PRs either way.
+    reviewHiddenAt: row.reviewHiddenAt ? row.reviewHiddenAt.toISOString() : null,
     authored: row.authored,
     watching: row.watching,
     mergedAt: row.mergedAt ? row.mergedAt.toISOString() : null,

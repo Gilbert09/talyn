@@ -33,6 +33,49 @@ Issue #63 — a PostHog Code task finishes fine and its log pane is empty, durin
 Worth recording about the method: every unit passed in isolation, and a two-tick end-to-end repro through the real poller and streamer passed too. What settled it was looking at what PostHog actually sends — first a real run's `session_logs` off the API, then the stream view in its source. Also worth noting the local checkout at `~/dev/posthog/posthog` is the authority for this integration; two rounds of inference about the id format were both wrong in detail.
 
 Tests: `posthogCodeStreamer.test.ts` (the `log-<n>` digit boundary, the backlog→live handover, a 400-entry replay losing nothing, final-on-backfill but not on a live seed), `posthogCodePollerGating.test.ts` (a torn-down stream's provisional transcript is still backfilled; a finished task never re-finalises and never re-asks the vendor), `cloudPollerEgress.test.ts` (the marker's SQL, and every terminal status re-selected), `taskMetadataMutex.test.ts` (the no-op write).
+## Reviews tab: hide a PR you are not going to review (2026-09-22)
+
+Asked for directly: a button to drop a PR out of the Reviews list and take the
+count down with it, and a "show hidden" control at the foot of the list to get
+it back.
+
+`pull_requests.review_hidden_at` (migration `0065`), NULL when visible. A
+timestamp rather than a boolean because the column is the only record of the
+decision, and "when did I decide to skip this" is the question anyone asks when
+the count looks wrong. `POST /pull-requests/:id/review-hidden` writes it;
+re-hiding keeps the ORIGINAL instant, so a second client cannot restate it.
+
+**It does not touch `review_requested`.** GitHub still wants the review, the
+monitor rewrites that flag from its search every poll, and clearing it would
+also lose the row from the review-history record. Hiding is a VIEW decision and
+is stored as one — which means every reader of the review cohort has to exclude
+hidden rows itself. There are three (the list, the hidden section, the sidebar
+badge), so the rule is one helper, `reviewHidden.ts`, duplicated across the two
+renderer forks. A badge that keeps counting a PR the list has dropped is the
+nag the user was dismissing.
+
+**Sticky — Tom's call.** Nothing clears the hide: not a fresh review request,
+not a new commit. Only the hidden list. The consequence is that the flag has to
+OUTLIVE the cohort, so a row carrying a hide now counts as referenced by the
+un-watch route's delete-when-unreferenced check. Without that, hiding a PR and
+then un-watching it drops the row, and the PR is back in the list the next time
+GitHub asks — the one path that could silently undo the choice.
+
+The hidden rows still ship to the client (the hidden section needs them in
+hand); the tab filters. The WS echo carries `reviewHiddenAt` only when it
+changes, and `null` is a real value there — an unhide — so the store tests
+`undefined` explicitly rather than using `??`, which is the bug `watching` had
+to be taught not to have.
+
+The footer is a `listFooter` slot on `GitHubPageShell`, rendered under the rows
+inside the scroll area and deliberately NOT gated on `rows.length`: hide
+everything and the list is empty, and the footer is the only route back.
+
+Tests: `routes/reviewHidden.test.ts` (stamp, idempotent re-hide, unhide, the
+un-watch survival and its negative) plus `reviewHidden.test.tsx` in both forks
+(the cohort rule, and the three WS merge cases).
+
+The ranking trial uses migration `0066`. Both client cohorts exclude hidden PRs.
 
 ## GitHub connect: one answer to "are we connected" (2026-09-22)
 

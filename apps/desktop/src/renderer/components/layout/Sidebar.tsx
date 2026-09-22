@@ -24,6 +24,7 @@ import { Badge } from '../ui/badge';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
+import { visibleReviewCohort } from '../panels/github/reviewHidden';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -55,7 +56,9 @@ export function Sidebar({ className }: SidebarProps) {
   // My PRs holds `authored || watching` — a manually tracked PR renders
   // there, so the badge must count it or it disagrees with the page.
   const myPrCount = prRows.filter((r) => r.authored || r.watching).length;
-  const reviewCount = prRows.filter((r) => r.reviewRequested).length;
+  // Through the page's own rule, not a copy of it: a badge that keeps counting
+  // a PR the list has dropped is the nag the user was dismissing.
+  const reviewCount = visibleReviewCohort(prRows).length;
   const queueCount = prRows.filter((r) => r.mergeQueued).length;
 
   /**

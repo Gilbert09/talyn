@@ -138,6 +138,7 @@ export interface ScorableRow {
   taskId: string | null;
   mergeQueued?: boolean;
   reviewRequested?: boolean;
+  reviewHiddenAt?: Date | null;
   reviewRequestedFirstSeenAt?: Date | null;
   createdAt?: Date;
   lastSummary?: unknown;
@@ -172,7 +173,7 @@ export async function scoreReviewRows(
   assigned: 'control' | 'candidate' = 'control',
 ): Promise<Map<string, PRPriorityVerdict>> {
   const out = new Map<string, PRPriorityVerdict>();
-  const cohort = rows.filter((r) => r.reviewRequested);
+  const cohort = rows.filter((r) => r.reviewRequested && !r.reviewHiddenAt);
   if (cohort.length === 0) return out;
 
   try {
