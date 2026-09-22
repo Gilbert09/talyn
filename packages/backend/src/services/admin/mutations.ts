@@ -6,6 +6,7 @@ import { rowToTask, taskColumnsNoTranscript } from '../taskSerialize.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { getCloudProvider } from '../cloudProviders/registry.js';
 import { clearWatched } from '../cloudProviders/taskWatch.js';
+import { TRANSCRIPT_FINAL_KEY } from '../cloudProviders/transcriptStore.js';
 import { taskQueueService } from '../taskQueue.js';
 import { emitTaskStatus } from '../websocket.js';
 import { readCloudTaskProvider } from '@talyn/shared';
@@ -159,6 +160,9 @@ export async function afterRetry(taskId: string, workspaceId: string): Promise<v
     delete next.posthogRunId;
     delete next.posthogStatus;
     delete next.cloudTask;
+    // Whatever is in the transcript column belongs to the run being thrown
+    // away, so it is not the record of the one about to start.
+    delete next[TRANSCRIPT_FINAL_KEY];
     return next;
   });
   emitTaskStatus(workspaceId, taskId, 'queued');

@@ -40,7 +40,7 @@ function undispatchedRow(id: string, overrides: Partial<CloudTaskRow> = {}): Clo
     title: 'Get PostHog/posthog#70991 mergeable',
     repositoryId: null,
     metadata: { cloudTask: { provider: 'selfhosted', status: 'queued' } },
-    transcriptEmpty: true,
+    transcriptFinal: false,
     watched: false,
     status: 'in_progress',
     completedAt: null,

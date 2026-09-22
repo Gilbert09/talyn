@@ -41,8 +41,12 @@ function row(id: string, overrides: Partial<CloudTaskRow> = {}): CloudTaskRow {
     workspaceId: WS,
     title: 'T',
     repositoryId: null,
-    metadata: { posthogTaskId: 'pt', posthogRunId: 'pr' },
-    transcriptEmpty: false,
+    // Mirrors what `seedCompleted` writes and what the generic poller therefore
+    // hands the provider. `reviveEligible` is the gate for the resume re-check:
+    // a task finalised because the REMOTE run ended never carries it, and never
+    // re-asks the vendor.
+    metadata: { posthogTaskId: 'pt', posthogRunId: 'pr', reviveEligible: true },
+    transcriptFinal: true,
     watched: false,
     status: 'completed',
     completedAt: COMPLETED_AT,

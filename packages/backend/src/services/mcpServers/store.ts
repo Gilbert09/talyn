@@ -48,8 +48,9 @@ type PublicRow = Pick<typeof mcpServersTable.$inferSelect, keyof typeof PUBLIC_C
  *
  * `hasSecret` is a boolean the UI needs on every row; the envelope it is
  * derived from is the one thing that must not leave. Deriving it here rather
- * than selecting the column and testing it in JS is the same trick the cloud
- * poller uses for `transcriptEmpty`.
+ * than selecting the column and testing it in JS is the same trick every
+ * projection in `docs`' DB-egress rules uses: answer the question in SQL so the
+ * blob behind it never ships.
  */
 const HAS_SECRET = {
   hasSecret: sql<boolean>`${mcpServersTable.secretEnc} is not null`,

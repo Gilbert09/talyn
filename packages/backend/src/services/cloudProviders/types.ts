@@ -91,7 +91,13 @@ export interface CloudTaskRow {
   title: string;
   repositoryId: string | null;
   metadata: Record<string, unknown>;
-  transcriptEmpty: boolean;
+  /**
+   * The stored transcript is this run's whole record, so there is nothing left
+   * to fetch — `metadata.transcriptFinal`. NOT "the transcript is non-empty":
+   * see transcriptStore.ts § TRANSCRIPT_FINAL_KEY for why the two differ and
+   * what the difference cost.
+   */
+  transcriptFinal: boolean;
   /** A desktop client is viewing this task (taskWatch registry) — gates
    *  whether the provider keeps a live transcript stream open. */
   watched: boolean;

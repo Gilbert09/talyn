@@ -20,7 +20,7 @@ vi.mock('../services/websocket.js', () => ({ emitTaskEvent, emitTaskUpdate }));
 import { eq } from 'drizzle-orm';
 import {
   postHogCodeStreamer,
-  streamIdGreaterThan,
+  streamIdIsNew,
 } from '../services/posthogCode/streamer.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
@@ -132,6 +132,15 @@ async function waitForInactive(timeoutMs = 2000): Promise<void> {
 
 function texts(transcript: AgentEvent[]): string[] {
   return transcript.map((e) => (e.message as { content: Array<{ text: string }> }).content[0].text);
+}
+
+/** The marker the poller reads to decide whether anything is left to fetch. */
+async function transcriptFinal(db: Database): Promise<boolean> {
+  const rows = await db
+    .select({ metadata: schema.tasks.metadata })
+    .from(schema.tasks)
+    .where(eq(schema.tasks.id, TASK));
+  return (rows[0]?.metadata as Record<string, unknown> | null)?.transcriptFinal === true;
 }
 
 function ensureLive(): void {
@@ -435,18 +444,131 @@ describe('postHogCodeStreamer', () => {
     expect(mockClient.openRunStream).toHaveBeenCalledTimes(5);
     expect(texts(await getTranscript(db))).toEqual(['one']);
   }, 15_000);
-});
 
-describe('streamIdGreaterThan', () => {
-  it('orders Redis stream ids by ms then seq', () => {
-    expect(streamIdGreaterThan('1780316106450-0', '1780316106449-0')).toBe(true);
-    expect(streamIdGreaterThan('1780316106450-1', '1780316106450-0')).toBe(true);
-    expect(streamIdGreaterThan('1780316106450-0', '1780316106450-0')).toBe(false); // equal → not newer
-    expect(streamIdGreaterThan('1780316106449-9', '1780316106450-0')).toBe(false);
+  /**
+   * End to end on the ids PostHog actually sends: a `log-<n>` backlog replay
+   * that crosses a digit boundary, then the live Redis tail that follows it.
+   * The old comparison lost entries 10 and 11 to the string compare and then
+   * the entire live tail to the `log-` → Redis handover.
+   */
+  it('keeps the backlog across a digit boundary and the live tail after it', async () => {
+    mockClient.getSessionLogs.mockResolvedValue(EMPTY_PAGE);
+    mockClient.openRunStream.mockResolvedValue(
+      sseResponse([
+        ...Array.from({ length: 12 }, (_, i) =>
+          acpFrame(
+            { sessionUpdate: 'agent_message', content: { text: `msg${i + 1}` } },
+            `log-${i}`,
+          ),
+        ),
+        acpFrame(
+          { sessionUpdate: 'agent_message', content: { text: 'live' } },
+          '1790316106450-0',
+        ),
+        STREAM_END_FRAME,
+      ]) as Response,
+    );
+
+    ensureLive();
+    await waitForInactive();
+
+    expect(texts(await getTranscript(db))).toEqual([
+      ...Array.from({ length: 12 }, (_, i) => `msg${i + 1}`),
+      'live',
+    ]);
   });
 
-  it('falls back to string compare for non-numeric ids', () => {
-    expect(streamIdGreaterThan('b', 'a')).toBe(true);
-    expect(streamIdGreaterThan('a', 'a')).toBe(false);
+  /**
+   * `metadata.transcriptFinal` is what tells the poller it can stop fetching,
+   * so only a read that went through `converter.end()` may set it. A seed for a
+   * live tail is a snapshot of a run still in flight; claiming it as the record
+   * is what stranded a torn-down stream's fragment on the task forever.
+   */
+  it('marks the transcript final on a backfill, but not on a live seed', async () => {
+    mockClient.getSessionLogs.mockResolvedValue(page([message('from S3')]));
+    mockClient.openRunStream.mockResolvedValue(
+      sseResponse([], openSseStream([])) as Response,
+    );
+
+    ensureLive();
+    await waitForTranscript(db);
+    expect(await transcriptFinal(db)).toBe(false);
+
+    postHogCodeStreamer.stop(TASK);
+    await waitForInactive();
+
+    postHogCodeStreamer.ensure({
+      taskId: TASK, workspaceId: WS, posthogTaskId: 'pt', posthogRunId: 'pr', backfillOnly: true,
+    });
+    await waitForInactive();
+    expect(await transcriptFinal(db)).toBe(true);
+  });
+});
+
+describe('streamIdIsNew', () => {
+  it('orders Redis stream ids by ms then seq', () => {
+    expect(streamIdIsNew('1780316106450-0', '1780316106449-0')).toBe(true);
+    expect(streamIdIsNew('1780316106450-1', '1780316106450-0')).toBe(true);
+    expect(streamIdIsNew('1780316106450-0', '1780316106450-0')).toBe(false); // equal → not newer
+    expect(streamIdIsNew('1780316106449-9', '1780316106450-0')).toBe(false);
+  });
+
+  /**
+   * The backlog-replay id space (`log-<n>`, from posthog's
+   * `logic/stream/backlog.py`). A thin-tail run serves its history under these
+   * before attaching the live stream, and the counter MUST compare as a number:
+   * lexically `log-10` sorts below `log-9`, so the old dedup dropped entry 10
+   * and everything up to 89.
+   */
+  it('orders a `log-<n>` backlog id by its counter, across digit boundaries', () => {
+    expect(streamIdIsNew('log-1', 'log-0')).toBe(true);
+    expect(streamIdIsNew('log-10', 'log-9')).toBe(true);
+    expect(streamIdIsNew('log-100', 'log-99')).toBe(true);
+    expect(streamIdIsNew('log-9', 'log-10')).toBe(false);
+    expect(streamIdIsNew('log-7', 'log-7')).toBe(false);
+  });
+
+  /**
+   * The handover the old comparison lost entirely: after the backlog the cursor
+   * is `log-<n>` and every following id is a Redis id. `'1'` sorts below `'l'`,
+   * so not one live event was accepted and the cursor never advanced past the
+   * backlog — the whole live tail, gone.
+   */
+  it('accepts the live tail that follows a backlog replay', () => {
+    expect(streamIdIsNew('1790316106450-0', 'log-42')).toBe(true);
+    // And once across, ordering is ordinary Redis arithmetic again.
+    expect(streamIdIsNew('1790316106451-0', '1790316106450-0')).toBe(true);
+    expect(streamIdIsNew('1790316106450-0', '1790316106451-0')).toBe(false);
+  });
+
+  /**
+   * The agent's own event id, stamped on `session_logs` entries: a random
+   * per-boot prefix and a counter monotonic within that boot.
+   */
+  it('orders a `<boot>-<seq>` agent event id by its counter', () => {
+    expect(streamIdIsNew('6d92ea6c-10', '6d92ea6c-9')).toBe(true);
+    expect(streamIdIsNew('6d92ea6c-100', '6d92ea6c-99')).toBe(true);
+    expect(streamIdIsNew('6d92ea6c-9', '6d92ea6c-10')).toBe(false);
+  });
+
+  it('keeps every entry of a real-length replay, dropping none', () => {
+    let seen: string | null = null;
+    let kept = 0;
+    for (let i = 0; i < 400; i += 1) {
+      const id = `log-${i}`;
+      if (seen && !streamIdIsNew(id, seen)) continue;
+      seen = id;
+      kept += 1;
+    }
+    expect(kept).toBe(400);
+  });
+
+  it('treats an id it cannot order as new — a duplicate is bounded, a drop is not', () => {
+    // A boot-prefix change: the agent restarted, so its counter restarted too
+    // and "already seen" has no answer. The entry must not be discarded.
+    expect(streamIdIsNew('b1c2d3e4-1', '6d92ea6c-400')).toBe(true);
+    // No counter at all.
+    expect(streamIdIsNew('b', 'a')).toBe(true);
+    expect(streamIdIsNew('a', 'a')).toBe(true);
   });
 });

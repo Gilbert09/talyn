@@ -1,24 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { and, eq, gte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
+import { TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import { tasks as tasksTable, workspaces as workspacesTable } from '../db/schema.js';
 import type { Database } from '../db/client.js';
 
 /**
- * The cloud-task poller no longer selects the `transcript` jsonb (a multi-MB
- * blob) every tick — it computes emptiness server-side. This test pins that
- * SQL expression to the exact JS semantics it replaced
- * (`!Array.isArray(t) || t.length === 0`) across every jsonb shape, using real
+ * The cloud-task poller never selects the `transcript` jsonb (a multi-MB blob).
+ * It used to compute the transcript's EMPTINESS server-side; it now reads a
+ * marker off `metadata` instead, because emptiness turned out to answer a
+ * different question (see transcriptStore.ts § TRANSCRIPT_FINAL_KEY). These
+ * tests pin the marker's SQL to the JS check it has to agree with, using real
  * Postgres semantics via pglite.
  */
 
 let db: Database;
 let cleanup: () => Promise<void>;
 
-/** The exact emptiness expression used in cloudProviders/poller.ts. */
-const transcriptEmptyExpr = sql<boolean>`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`;
+/** The exact marker expression used in cloudProviders/poller.ts. */
+const transcriptFinalExpr = sql<boolean>`COALESCE(${tasksTable.metadata} @> '{"transcriptFinal":true}'::jsonb, false)`;
 
-async function seedTask(id: string, transcript: unknown): Promise<void> {
+async function seedTask(id: string, metadata: unknown): Promise<void> {
   await db.insert(tasksTable).values({
     id,
     workspaceId: 'ws1',
@@ -27,7 +29,7 @@ async function seedTask(id: string, transcript: unknown): Promise<void> {
     priority: 'medium',
     title: 't',
     description: 'd',
-    transcript: transcript as object | null,
+    metadata: metadata as object | null,
   });
 }
 
@@ -41,43 +43,40 @@ afterEach(async () => {
   await cleanup();
 });
 
-describe('narrowed transcriptEmpty SQL', () => {
+describe('transcriptFinal marker SQL', () => {
   it.each([
-    ['null transcript', null, true],
-    ['empty array', [], true],
-    ['non-empty array', [{ type: 'message' }], false],
-    ['multi-element array', [{ a: 1 }, { b: 2 }], false],
-    ['non-array object', { foo: 'bar' }, true],
-  ])('%s → empty=%s, matching the old JS check', async (label, transcript, expected) => {
+    ['absent metadata', null, false],
+    ['empty metadata', {}, false],
+    ['marker true', { transcriptFinal: true }, true],
+    ['marker false', { transcriptFinal: false }, false],
+    ['marker alongside other keys', { posthogRunId: 'r1', transcriptFinal: true }, true],
+    // Containment is typed: the string "true" is not the boolean, and reading
+    // it as one would strand the task it belongs to.
+    ['marker as a string', { transcriptFinal: 'true' }, false],
+  ])('%s → final=%s, matching the JS check', async (label, metadata, expected) => {
     const id = `task-${label.replace(/\s+/g, '-')}`;
-    await seedTask(id, transcript);
+    await seedTask(id, metadata);
 
     const [row] = await db
-      .select({ id: tasksTable.id, transcriptEmpty: transcriptEmptyExpr })
+      .select({ id: tasksTable.id, transcriptFinal: transcriptFinalExpr })
       .from(tasksTable)
       .where(eq(tasksTable.id, id));
 
-    // Old behaviour we must preserve, computed the JS way for cross-check.
-    const jsEmpty = !Array.isArray(transcript) || transcript.length === 0;
+    // The poller reads the same fact off the already-loaded `metadata` in JS;
+    // the two must not be able to disagree.
+    const js = (metadata as Record<string, unknown> | null)?.transcriptFinal === true;
 
-    expect(row.transcriptEmpty).toBe(expected);
-    expect(row.transcriptEmpty).toBe(jsEmpty);
+    expect(row.transcriptFinal).toBe(expected);
+    expect(row.transcriptFinal).toBe(js);
   });
 
-  it('only returns in-progress tasks, with emptiness resolved per row', async () => {
-    await seedTask('a', [{ type: 'x' }]);
-    await seedTask('b', null);
-    await db
-      .update(tasksTable)
-      .set({ status: 'completed' })
-      .where(eq(tasksTable.id, 'a'));
-
-    const rows = await db
-      .select({ id: tasksTable.id, transcriptEmpty: transcriptEmptyExpr })
+  it('a NULL metadata column is false, not null — the poller branches on it', async () => {
+    await seedTask('null-meta', null);
+    const [row] = await db
+      .select({ transcriptFinal: transcriptFinalExpr })
       .from(tasksTable)
-      .where(eq(tasksTable.status, 'in_progress'));
-
-    expect(rows).toEqual([{ id: 'b', transcriptEmpty: true }]);
+      .where(eq(tasksTable.id, 'null-meta'));
+    expect(row.transcriptFinal).toBe(false);
   });
 });
 
@@ -94,7 +93,12 @@ describe('cloud poller task selection (in-flight + revival candidates)', () => {
   async function seedRow(
     id: string,
     status: string,
-    opts: { completedAt?: Date | null; reviveEligible?: boolean } = {},
+    opts: {
+      completedAt?: Date | null;
+      updatedAt?: Date;
+      reviveEligible?: boolean;
+      transcriptFinal?: boolean;
+    } = {},
   ): Promise<void> {
     await db.insert(tasksTable).values({
       id,
@@ -105,7 +109,11 @@ describe('cloud poller task selection (in-flight + revival candidates)', () => {
       title: 't',
       description: 'd',
       completedAt: opts.completedAt ?? null,
-      metadata: opts.reviveEligible ? { reviveEligible: true } : {},
+      ...(opts.updatedAt ? { updatedAt: opts.updatedAt } : {}),
+      metadata: {
+        ...(opts.reviveEligible ? { reviveEligible: true } : {}),
+        ...(opts.transcriptFinal ? { transcriptFinal: true } : {}),
+      },
     });
   }
 
@@ -141,31 +149,44 @@ describe('cloud poller task selection (in-flight + revival candidates)', () => {
   /**
    * The transcript-backfill window (services/cloudProviders/poller.ts).
    *
-   * A provider's "terminal but no transcript → pull the durable log" branch used
-   * to get one attempt, on the tick that saw the run finish — which is the moment
-   * the provider's log is least likely to have been flushed yet. Miss it and the
-   * task was never selected again, so its transcript stayed null forever. This
-   * clause re-selects recently-finished tasks that still have nothing.
+   * A provider's "terminal but the stored transcript is not the record → pull
+   * the durable log" branch used to get one attempt, on the tick that saw the
+   * run finish — which is the moment the provider's log is least likely to have
+   * been flushed yet. Miss it and the task was never selected again. This clause
+   * re-selects recently-finished tasks that have not yet stored the record.
    */
-  it('re-selects recently-finished tasks with no transcript, and drops them once filled', async () => {
+  it('re-selects every recently-finished status that has not stored the record', async () => {
     const BACKFILL_WINDOW_MS = 30 * 60 * 1000;
     const now = Date.now();
     const justNow = new Date(now - 60 * 1000); // 1m ago — inside the window
     const oldish = new Date(now - 2 * 60 * 60 * 1000); // 2h ago — outside it
 
-    await seedRow('empty-recent', 'completed', { completedAt: justNow });
-    await seedRow('empty-old', 'completed', { completedAt: oldish });
-    await seedRow('filled-recent', 'completed', { completedAt: justNow });
+    // Every terminal status, not just `completed`. A FAILED run is the one whose
+    // log somebody actually needs, and `completedAt` is null on it — which is
+    // why the window is measured from `updatedAt`.
+    await seedRow('done-recent', 'completed', { completedAt: justNow, updatedAt: justNow });
+    await seedRow('failed-recent', 'failed', { updatedAt: justNow });
+    await seedRow('needshuman-recent', 'needs_human', { updatedAt: justNow });
+    await seedRow('cancelled-recent', 'cancelled', { updatedAt: justNow });
+
+    // Still running: covered by the in_progress clause, not this one.
+    await seedRow('running', 'in_progress', { updatedAt: justNow });
+    await seedRow('done-old', 'completed', { completedAt: oldish, updatedAt: oldish });
+    await seedRow('done-final', 'completed', {
+      completedAt: justNow,
+      updatedAt: justNow,
+      transcriptFinal: true,
+    });
+
+    // The case the marker exists for: a live stream torn down mid-run left a
+    // fragment behind, so the transcript is NOT empty — and it is still not the
+    // run's log. The old `jsonb_array_length(transcript) = 0` clause excluded
+    // this row permanently; it has to be selected.
+    await seedRow('partial-recent', 'completed', { completedAt: justNow, updatedAt: justNow });
     await db
       .update(tasksTable)
-      .set({ transcript: [{ id: 'e1', type: 'text' }] })
-      .where(eq(tasksTable.id, 'filled-recent'));
-    // An empty ARRAY must count as empty too, not just SQL NULL.
-    await seedRow('emptyarray-recent', 'completed', { completedAt: justNow });
-    await db
-      .update(tasksTable)
-      .set({ transcript: [] })
-      .where(eq(tasksTable.id, 'emptyarray-recent'));
+      .set({ transcript: [{ seq: 0, type: 'assistant' }] })
+      .where(eq(tasksTable.id, 'partial-recent'));
 
     const backfillCutoff = new Date(now - BACKFILL_WINDOW_MS);
     const rows = await db
@@ -173,15 +194,21 @@ describe('cloud poller task selection (in-flight + revival candidates)', () => {
       .from(tasksTable)
       .where(
         and(
-          eq(tasksTable.status, 'completed'),
-          gte(tasksTable.completedAt, backfillCutoff),
-          sql`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
+          inArray(tasksTable.status, [...TERMINAL_TASK_STATUSES]),
+          gte(tasksTable.updatedAt, backfillCutoff),
+          sql`NOT COALESCE(${tasksTable.metadata} @> '{"transcriptFinal":true}'::jsonb, false)`,
         ),
       );
 
-    // `filled-recent` is excluded because it already has what we'd be fetching —
+    // `done-final` is excluded because it already has what we'd be fetching —
     // that is what stops this clause re-polling every finished task forever.
-    // `empty-old` is excluded by the window; opening it is its recovery path.
-    expect(rows.map((r) => r.id).sort()).toEqual(['empty-recent', 'emptyarray-recent']);
+    // `done-old` is excluded by the window; opening it is its recovery path.
+    expect(rows.map((r) => r.id).sort()).toEqual([
+      'cancelled-recent',
+      'done-recent',
+      'failed-recent',
+      'needshuman-recent',
+      'partial-recent',
+    ]);
   });
 });

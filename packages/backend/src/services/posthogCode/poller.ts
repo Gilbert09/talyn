@@ -1,5 +1,10 @@
 import { and, eq } from 'drizzle-orm';
-import { parseNeedsHumanSentinel, type TaskResult, type TaskStatus } from '@talyn/shared';
+import {
+  parseNeedsHumanSentinel,
+  TASK_STATUS_TERMINAL,
+  type TaskResult,
+  type TaskStatus,
+} from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
   tasks as tasksTable,
@@ -10,6 +15,7 @@ import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
 import { clearWatched } from '../cloudProviders/taskWatch.js';
+import { clearTranscriptFinal } from '../cloudProviders/transcriptStore.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { postHogCodeStreamer } from './streamer.js';
 import type { PostHogCodeClient, PostHogRun, PostHogRunStatus } from './client.js';
@@ -73,10 +79,12 @@ class PostHogCodePoller {
       title: row.title,
       repositoryId: row.repositoryId,
       posthogTaskId,
+      posthogRunId,
       lastStatus: row.metadata.posthogStatus as string | undefined,
       localStatus: row.status,
       completedAt: row.completedAt,
-      transcriptEmpty: row.transcriptEmpty,
+      reviveEligible: row.metadata.reviveEligible === true,
+      transcriptFinal: row.transcriptFinal,
       watched: row.watched,
     });
   }
@@ -87,20 +95,57 @@ class PostHogCodePoller {
     title: string;
     repositoryId: string | null;
     posthogTaskId: string;
+    /** The run id on record. Self-healed from `latest_run.id` each tick while
+     *  the task is live, so on a finished task it is the run that ended. */
+    posthogRunId: string;
     lastStatus?: string;
     localStatus: TaskStatus;
     completedAt: Date | null;
-    transcriptEmpty: boolean;
+    /** `metadata.reviveEligible` — we finalised this optimistically while the
+     *  remote run was merely idle, so it may yet resume. */
+    reviveEligible: boolean;
+    transcriptFinal: boolean;
     watched: boolean;
   }): Promise<void> {
     const client = await getPostHogCodeClient(task.workspaceId);
     if (!client) return; // credentials removed mid-run; leave as-is.
 
+    // The LOCAL task is already finished. The poller still sees it because the
+    // generic scheduler re-selects a terminal task whose transcript is not yet
+    // the provider's record, and (separately) an optimistically-finalised one
+    // to ask whether its remote run resumed. Nothing past the block below may
+    // run for a finished task: that code ends in `finalize`, and finalising an
+    // already-terminal task re-emits its status and re-files its outcome
+    // analytics every tick.
+    const localTerminal = TASK_STATUS_TERMINAL[task.localStatus];
+
     // Revival candidate: an idle run we optimistically completed (see
-    // maybeFinalizeIdle) that may have resumed. Re-check is throttled so we
-    // don't re-poll every idle-finalized task each 10s tick.
+    // maybeFinalizeIdle) that may have resumed. Gated on the flag, not on the
+    // status, and the distinction is what keeps this cheap: a task finalised
+    // the ordinary way — because the REMOTE run reached a terminal state — can
+    // never resume, so re-asking the vendor about it every tick for the length
+    // of the backfill window would be ~180 requests that cannot change the
+    // answer. Re-check is throttled on top of that.
     const reviving =
-      task.localStatus === 'completed' || task.localStatus === 'needs_human';
+      task.reviveEligible &&
+      (task.localStatus === 'completed' || task.localStatus === 'needs_human');
+
+    // Which leaves the common finished task with exactly one thing left to do,
+    // and nothing to ask: we hold its run id, and we already know the run is
+    // over. Fetch the log we do not have, and stop.
+    if (localTerminal && !reviving) {
+      if (!task.transcriptFinal) {
+        postHogCodeStreamer.ensure({
+          taskId: task.id,
+          workspaceId: task.workspaceId,
+          posthogTaskId: task.posthogTaskId,
+          posthogRunId: task.posthogRunId,
+          backfillOnly: true,
+        });
+      }
+      return;
+    }
+
     if (reviving) {
       const lastCheck = this.lastReviveCheck.get(task.id) ?? 0;
       if (Date.now() - lastCheck < IDLE_RECHECK_MS) return;
@@ -112,20 +157,21 @@ class PostHogCodePoller {
     const status = run?.status;
     if (!status) return;
 
-    // Decide whether a completed task's remote run has resumed. If it hasn't,
+    // Decide whether a finished task's remote run has resumed. If it hasn't,
     // this returns without touching the task (and stops tracking it once the
     // remote run is genuinely terminal). If it has, the task is flipped back to
     // `in_progress` and we fall through to normal reconcile below.
     if (reviving) {
       const revived = await this.maybeRevive(task, run, status);
       if (!revived) {
-        // Not resuming — but a finished run with NO transcript is exactly what
-        // the generic poller's backfill window re-selects this task for, and
-        // returning here is what made that window pointless. PostHog flushes its
-        // durable session log asynchronously, so the single attempt made at the
-        // instant the run ended often found nothing; this is the retry.
+        // Not resuming — but a finished run whose transcript is not yet the
+        // durable log is exactly what the generic poller's backfill window
+        // re-selects this task for, and returning here is what made that window
+        // pointless. PostHog flushes its durable session log asynchronously, so
+        // the single attempt made at the instant the run ended often found
+        // nothing; this is the retry.
         const terminalRunId = run?.id;
-        if (terminalRunId && TERMINAL.has(status) && task.transcriptEmpty) {
+        if (terminalRunId && TERMINAL.has(status) && !task.transcriptFinal) {
           postHogCodeStreamer.ensure({
             taskId: task.id,
             workspaceId: task.workspaceId,
@@ -148,14 +194,23 @@ class PostHogCodePoller {
     // Live streaming is view-gated (taskWatch) — the SSE firehose plus
     // full-transcript persists are pure UI bytes, so nobody watching
     // means no stream.
-    //   - terminal but no transcript yet (run finished unwatched, or
-    //     while the backend was down): one-shot durable backfill from
-    //     S3 — the stream self-terminates once drained.
+    //   - terminal and the stored transcript is not yet the durable log
+    //     (nothing stored at all, or a live stream torn down mid-run left
+    //     a provisional one): one-shot durable backfill from S3 — the
+    //     stream self-terminates once drained.
     //   - running AND watched: keep a live SSE stream open.
-    //   - otherwise (unwatched, or terminal with a transcript): tear
-    //     down any lingering stream — `stop` persists what's buffered.
+    //   - otherwise (unwatched, or terminal with the record already
+    //     stored): tear down any lingering stream.
+    //
+    // The first gate asks `transcriptFinal`, NOT "is the transcript empty".
+    // Emptiness was the question for years and it is the wrong one: a live
+    // stream that is stopped early — the watch TTL lapsing is the ordinary
+    // case — settles its buffer into the column on the way out, and a single
+    // flushed fragment made the transcript non-empty and so permanently
+    // ineligible for the backfill that would have replaced it with the real
+    // log. See transcriptStore.ts § TRANSCRIPT_FINAL_KEY.
     const isTerminal = TERMINAL.has(status);
-    if (runId && isTerminal && task.transcriptEmpty) {
+    if (runId && isTerminal && !task.transcriptFinal) {
       // `backfillOnly` is what makes this the "one-shot durable backfill" the
       // comment above describes. Without it, `ensure` opens the LIVE SSE stream
       // first — and for a finished run whose Redis stream has been trimmed that
@@ -415,6 +470,11 @@ class PostHogCodePoller {
       .set({ status: 'in_progress', result: null, completedAt: null, updatedAt: now })
       .where(eq(tasksTable.id, task.id));
     await this.clearReviveEligible(task.id);
+    // The run is writing again, so whatever we last read from its durable log
+    // is no longer the whole of it. Leaving the marker set would make the NEXT
+    // terminal tick skip the backfill and freeze the transcript at the point
+    // the run went idle.
+    await clearTranscriptFinal(task.id);
     emitTaskStatus(task.workspaceId, task.id, 'in_progress');
     console.log(
       `[posthogCode] task ${task.id.slice(0, 8)}: remote run resumed after idle-finalize — revived to in_progress`,

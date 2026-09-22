@@ -21,6 +21,7 @@ import {
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { taskQueueService } from '../taskQueue.js';
 import { getCloudProvider } from './registry.js';
+import { TRANSCRIPT_FINAL_KEY } from './transcriptStore.js';
 
 /**
  * Moving a run whose vendor said the subscription is spent.
@@ -184,6 +185,10 @@ export async function failoverExhaustedRun(opts: {
     // gpt-5.6-terra all day on 2026-09-21 while its Codex model was
     // gpt-5.6-sol, which reads as the setting being ignored, because it was.
     if (next.kind === 'fleet') meta.model = nextModel;
+    // The dead run's log goes below; its marker has to go with it, or the run
+    // this task is about to start inherits "the transcript is already the
+    // record" and never fetches its own.
+    delete meta[TRANSCRIPT_FINAL_KEY];
     meta.quotaFailover = {
       tried: [...tried, next.kind === 'fleet' ? FLEET_HOP(next.agent) : next.providerType],
       exhausted,

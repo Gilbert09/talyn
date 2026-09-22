@@ -3,6 +3,7 @@ import type { AgentEvent } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable } from '../../db/schema.js';
 import { emitTaskEvent } from '../websocket.js';
+import { patchTaskMetadata } from '../taskMetadataMutex.js';
 
 /**
  * The transcript machinery every cloud provider needs, in one place.
@@ -139,6 +140,46 @@ export async function writeTranscript(taskId: string, transcript: AgentEvent[]):
       updatedAt: new Date(),
     })
     .where(eq(tasksTable.id, taskId));
+}
+
+/**
+ * `metadata.transcriptFinal` — "the stored transcript is this provider's whole
+ * record of the run, so stop trying to fetch it again".
+ *
+ * The poller used to ask whether the transcript was EMPTY instead, and that is
+ * a different question with the same answer only some of the time. A live
+ * PostHog stream persists as it goes, and when it is torn down early — the
+ * viewer navigated away and the watch TTL lapsed, the backend was deployed
+ * mid-run — it settles whatever it had buffered into the column. One flushed
+ * fragment of a thought is enough to make the transcript non-empty, and from
+ * then on the terminal backfill that would have replaced it with the durable
+ * S3 log was skipped FOREVER: the task kept a fragment nobody can read and the
+ * real log was never fetched. Emptiness says "we stored nothing"; this says
+ * "what we stored is the record", which is what the decision actually needs.
+ *
+ * Written by a provider once it has read the run's durable log to the end (for
+ * PostHog, a finalize-mode `session_logs` rebuild; for the fleet, the forced
+ * flush on its terminal tick). Cleared by every path that points an existing
+ * task row at a NEW or resumed run — otherwise the next run inherits a marker
+ * that says its log is already stored.
+ */
+export const TRANSCRIPT_FINAL_KEY = 'transcriptFinal';
+
+export async function markTranscriptFinal(taskId: string): Promise<void> {
+  await patchTaskMetadata(taskId, (existing) =>
+    existing[TRANSCRIPT_FINAL_KEY] === true
+      ? existing
+      : { ...existing, [TRANSCRIPT_FINAL_KEY]: true },
+  );
+}
+
+export async function clearTranscriptFinal(taskId: string): Promise<void> {
+  await patchTaskMetadata(taskId, (existing) => {
+    if (existing[TRANSCRIPT_FINAL_KEY] === undefined) return existing;
+    const next = { ...existing };
+    delete next[TRANSCRIPT_FINAL_KEY];
+    return next;
+  });
 }
 
 /**

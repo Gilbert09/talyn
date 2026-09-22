@@ -19,6 +19,7 @@ import {
 import { patchTaskMetadata } from '../services/taskMetadataMutex.js';
 import { getCloudProvider } from '../services/cloudProviders/registry.js';
 import { clearWatched, markWatched } from '../services/cloudProviders/taskWatch.js';
+import { TRANSCRIPT_FINAL_KEY } from '../services/cloudProviders/transcriptStore.js';
 import { getPostHogCodeClient } from '../services/posthogCode/credentials.js';
 import { postHogCodeStreamer } from '../services/posthogCode/streamer.js';
 import {
@@ -400,6 +401,9 @@ export function taskRoutes(): Router {
       delete next.posthogRunId;
       delete next.posthogStatus;
       delete next.cloudTask;
+      // Whatever is in the transcript column belongs to the run being thrown
+      // away, so it is not the record of the one about to start.
+      delete next[TRANSCRIPT_FINAL_KEY];
       return next;
     });
     await db
@@ -598,8 +602,9 @@ export function taskRoutes(): Router {
           title: task.title,
           repositoryId: task.repositoryId ?? null,
           metadata: (task.metadata ?? {}) as Record<string, unknown>,
-          // The point of the request: assume nothing is stored and re-sync.
-          transcriptEmpty: true,
+          // The point of the request: assume what is stored is not the record
+          // and re-sync.
+          transcriptFinal: false,
           // The caller is looking at it, by definition — this is what opens the
           // live stream for a still-running task.
           watched: true,

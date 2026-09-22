@@ -13,7 +13,7 @@ import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate, emitTaskEvent } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
 import { clearWatched } from '../cloudProviders/taskWatch.js';
-import { TranscriptCursors } from '../cloudProviders/transcriptStore.js';
+import { markTranscriptFinal, TranscriptCursors } from '../cloudProviders/transcriptStore.js';
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 import { githubService } from '../github.js';
 import { getSelfHostedClient, getSelfHostedCredentials } from './credentials.js';
@@ -252,6 +252,12 @@ class SelfHostedPoller {
     // host-side and serves events past a cursor, so we never refetch the whole
     // transcript. That keeps a long run's egress flat rather than quadratic.
     await this.syncTranscript(row, client, runId, terminal);
+    // That call force-flushes on a terminal tick, and the fleet serves its whole
+    // event log by cursor, so at this point the column IS the run's record.
+    // Saying so is what keeps a finished fleet task out of the generic poller's
+    // transcript-backfill window — which would otherwise re-reconcile (and
+    // re-finalise) it every tick for half an hour.
+    if (terminal) await markTranscriptFinal(row.id);
 
     // For a task somebody is actually watching, also open a live stream. The
     // poll above still runs and is still what finalises the task — this only

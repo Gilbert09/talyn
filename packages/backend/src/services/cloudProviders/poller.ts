@@ -1,13 +1,14 @@
-import { and, eq, gte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { tasks as tasksTable } from '../../db/schema.js';
-import { readCloudTaskProvider } from '@talyn/shared';
+import { readCloudTaskProvider, TERMINAL_TASK_STATUSES } from '@talyn/shared';
 import { getCloudProvider } from './registry.js';
 import { isWatched } from './taskWatch.js';
 import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import { ThrottleBackoff, throttleRetryAfterMs } from './throttleBackoff.js';
+import { TRANSCRIPT_FINAL_KEY } from './transcriptStore.js';
 import type { CloudTaskRow } from './types.js';
 
 const POLL_INTERVAL_MS = 10_000;
@@ -36,9 +37,17 @@ const REVIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
  * did.
  *
  * 30 minutes of retries at the poll interval is far more than an async flush
- * needs, and the set is naturally tiny (only finished tasks that still have
- * nothing). Past the window, opening the task remains the recovery path: its
- * `refresh-logs` call runs the same backfill on demand.
+ * needs, and the set is naturally tiny (only finished tasks whose transcript is
+ * not yet the provider's record). Past the window, opening the task remains the
+ * recovery path: its `refresh-logs` call runs the same backfill on demand.
+ *
+ * Measured from `updatedAt`, not `completedAt`, because the window covers EVERY
+ * terminal status and `completedAt` is null for all but one of them — a failed
+ * run, which is the one whose log somebody most wants to read, would have been
+ * excluded by its own timestamp. For a `completed` task the two are the same
+ * instant anyway. It relies on a finished task's row going quiet: a write per
+ * tick would renew the window forever, which is why `patchTaskMetadata` no
+ * longer writes when a patch changes nothing.
  */
 const TRANSCRIPT_BACKFILL_WINDOW_MS = 30 * 60 * 1000;
 
@@ -110,14 +119,11 @@ class CloudTaskPoller {
       // run (duplicate transcript ingests / finalizations) without it.
       const lock = await guardCrossReplica('cloudPoller:tick', async () => {
         const db = getDbClient();
-        // Only the columns the scheduler needs. Crucially we compute the
-        // transcript's emptiness in Postgres rather than selecting the
-        // `transcript` jsonb — that blob is the cloud-run conversation log
-        // (often MBs) and pulling it every 10s for every in-flight task was the
-        // dominant source of database egress. The CASE mirrors the old JS check
-        // `!Array.isArray(t) || t.length === 0`: only an array runs through
-        // `jsonb_array_length` (so it never throws on a non-array), and null /
-        // non-array values fall to the `ELSE true` (empty) branch.
+        // Only the columns the scheduler needs, and NEVER `transcript` — that
+        // blob is the cloud-run conversation log (often MBs) and pulling it
+        // every 10s for every in-flight task was the dominant source of
+        // database egress. Whether the stored transcript is the provider's
+        // record is answered by a key on `metadata`, which is already here.
         // In-flight tasks, plus revival candidates: tasks a provider
         // optimistically finalised while the remote run was still active
         // (`metadata.reviveEligible`) and completed within the revive window. A
@@ -137,7 +143,6 @@ class CloudTaskPoller {
             status: tasksTable.status,
             completedAt: tasksTable.completedAt,
             updatedAt: tasksTable.updatedAt,
-            transcriptEmpty: sql<boolean>`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
           })
           .from(tasksTable)
           .where(
@@ -148,15 +153,29 @@ class CloudTaskPoller {
                 gte(tasksTable.completedAt, reviveCutoff),
                 sql`${tasksTable.metadata} @> '{"reviveEligible":true}'::jsonb`,
               ),
-              // Recently-finished tasks that still have no transcript, so the
-              // durable-log backfill gets more than the single attempt it had at
-              // the instant the run ended (see TRANSCRIPT_BACKFILL_WINDOW_MS).
-              // Bounded by completedAt so it cannot grow into a re-poll of every
-              // task we ever ran, and it drops out the moment a transcript lands.
+              // Recently-finished tasks whose stored transcript is not yet the
+              // provider's record, so the durable-log backfill gets more than
+              // the single attempt it had at the instant the run ended (see
+              // TRANSCRIPT_BACKFILL_WINDOW_MS). Bounded by updatedAt so it
+              // cannot grow into a re-poll of every task we ever ran, and it
+              // drops out the moment the record lands.
+              //
+              // Asks the marker, not `jsonb_array_length(transcript) = 0`. A
+              // PostHog stream torn down early writes a provisional fragment on
+              // the way out, and counting that as "we have it" is what stranded
+              // those tasks with an unreadable transcript and no retry. Reading
+              // `metadata` here also means the hot select no longer has to touch
+              // the transcript blob at all.
+              //
+              // EVERY terminal status, not just `completed`. A failed run is the
+              // one whose log somebody actually needs, and it was getting the
+              // single attempt this window exists to replace. The provider must
+              // therefore not re-finalise a task that is already terminal —
+              // PostHog's reconcile returns early on one.
               and(
-                eq(tasksTable.status, 'completed'),
-                gte(tasksTable.completedAt, backfillCutoff),
-                sql`CASE WHEN jsonb_typeof(${tasksTable.transcript}) = 'array' THEN jsonb_array_length(${tasksTable.transcript}) = 0 ELSE true END`,
+                inArray(tasksTable.status, [...TERMINAL_TASK_STATUSES]),
+                gte(tasksTable.updatedAt, backfillCutoff),
+                sql`NOT COALESCE(${tasksTable.metadata} @> '{"transcriptFinal":true}'::jsonb, false)`,
               ),
             ),
           );
@@ -207,7 +226,7 @@ class CloudTaskPoller {
             title: row.title,
             repositoryId: row.repositoryId,
             metadata,
-            transcriptEmpty: row.transcriptEmpty,
+            transcriptFinal: metadata[TRANSCRIPT_FINAL_KEY] === true,
             watched: isWatched(row.id),
             status: row.status as CloudTaskRow['status'],
             completedAt: row.completedAt,

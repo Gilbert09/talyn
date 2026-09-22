@@ -32,6 +32,7 @@ import {
 } from '../services/cloudProviders/taskWatch.js';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import * as schema from '../db/schema.js';
+import * as websocketModule from '../services/websocket.js';
 import type { Database } from '../db/client.js';
 import type { CloudTaskRow } from '../services/cloudProviders/types.js';
 
@@ -45,7 +46,7 @@ function row(overrides: Partial<CloudTaskRow> = {}): CloudTaskRow {
     title: 'T',
     repositoryId: null,
     metadata: { posthogTaskId: 'pt', posthogRunId: 'pr' },
-    transcriptEmpty: true,
+    transcriptFinal: false,
     watched: false,
     status: 'in_progress',
     completedAt: null,
@@ -107,7 +108,7 @@ describe('postHogCodePoller stream gating', () => {
       name: 'in_progress + watched → live stream ensured',
       status: 'in_progress',
       watched: true,
-      transcriptEmpty: true,
+      transcriptFinal: false,
       isActive: false,
       expectEnsure: true,
       expectStop: false,
@@ -116,7 +117,7 @@ describe('postHogCodePoller stream gating', () => {
       name: 'in_progress + unwatched with an active stream → stream torn down',
       status: 'in_progress',
       watched: false,
-      transcriptEmpty: true,
+      transcriptFinal: false,
       isActive: true,
       expectEnsure: false,
       expectStop: true,
@@ -125,34 +126,47 @@ describe('postHogCodePoller stream gating', () => {
       name: 'in_progress + unwatched with no stream → nothing to do',
       status: 'in_progress',
       watched: false,
-      transcriptEmpty: true,
+      transcriptFinal: false,
       isActive: false,
       expectEnsure: false,
       expectStop: false,
     },
     {
-      name: 'terminal + empty transcript → one-shot durable backfill regardless of watch',
+      name: 'terminal + no stored record → one-shot durable backfill regardless of watch',
       status: 'completed',
       watched: false,
-      transcriptEmpty: true,
+      transcriptFinal: false,
       isActive: false,
       expectEnsure: true,
       expectStop: false,
     },
     {
-      name: 'terminal + transcript present → lingering stream stopped',
+      name: 'terminal + the record already stored → lingering stream stopped',
       status: 'completed',
       watched: false,
-      transcriptEmpty: false,
+      transcriptFinal: true,
       isActive: true,
       expectEnsure: false,
       expectStop: true,
     },
-  ])('$name', async ({ status, watched, transcriptEmpty, isActive, expectEnsure, expectStop }) => {
+    {
+      // The regression: a live stream torn down mid-run (watch TTL lapsed,
+      // deploy) settles its buffer into the column on the way out. That
+      // transcript is NOT empty and is NOT the run's log, and gating on
+      // emptiness meant this task was never backfilled again.
+      name: 'terminal + a provisional transcript from a torn-down stream → still backfilled',
+      status: 'completed',
+      watched: false,
+      transcriptFinal: false,
+      isActive: false,
+      expectEnsure: true,
+      expectStop: false,
+    },
+  ])('$name', async ({ status, watched, transcriptFinal, isActive, expectEnsure, expectStop }) => {
     mockClient.getTask.mockResolvedValue(remoteTask(status));
     mockStreamer.isActive.mockReturnValue(isActive);
 
-    await postHogCodePoller.reconcileTask(row({ watched, transcriptEmpty }));
+    await postHogCodePoller.reconcileTask(row({ watched, transcriptFinal }));
 
     if (expectEnsure) {
       expect(mockStreamer.ensure).toHaveBeenCalledWith(
@@ -168,12 +182,72 @@ describe('postHogCodePoller stream gating', () => {
     }
   });
 
-  it('finalizing a terminal run clears the watch and completes the task', async () => {
-    markWatched(TASK);
+  /**
+   * A task the poller finished is re-selected for the backfill window, and the
+   * run it is about to fetch the log for cannot change — so asking the vendor
+   * about it again is ~180 requests that cannot alter the answer.
+   */
+  it('a finished task backfills from its stored run id without asking the vendor', async () => {
+    await postHogCodePoller.reconcileTask(row({ status: 'failed', transcriptFinal: false }));
+
+    expect(mockClient.getTask).not.toHaveBeenCalled();
+    expect(mockStreamer.ensure).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: TASK, posthogRunId: 'pr', backfillOnly: true }),
+    );
+  });
+
+  it('a finished task that already has its log does nothing at all', async () => {
+    await postHogCodePoller.reconcileTask(row({ status: 'failed', transcriptFinal: true }));
+
+    expect(mockClient.getTask).not.toHaveBeenCalled();
+    expect(mockStreamer.ensure).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The reason the guard above has to exist at all: everything past it ends in
+   * `finalize`, which re-emits the status and re-files the outcome analytics.
+   * Before the window covered non-`completed` statuses this was unreachable;
+   * widening it is what made it a live hazard.
+   */
+  it('never re-finalizes an already-terminal task', async () => {
+    const statusSpy = vi.spyOn(websocketModule, 'emitTaskStatus');
     mockClient.getTask.mockResolvedValue(remoteTask('completed'));
 
-    await postHogCodePoller.reconcileTask(row({ transcriptEmpty: false, watched: true }));
+    await postHogCodePoller.reconcileTask(row({ status: 'failed', transcriptFinal: false }));
+    await postHogCodePoller.reconcileTask(row({ status: 'cancelled', transcriptFinal: false }));
+    await postHogCodePoller.reconcileTask(row({ status: 'completed', transcriptFinal: false }));
 
+    expect(statusSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `reviveEligible` is the gate, not the status. A task finalised the ordinary
+   * way — because the REMOTE run reached a terminal state — can never resume.
+   */
+  it('re-checks the vendor only for an optimistically-finalized task', async () => {
+    mockClient.getTask.mockResolvedValue(remoteTask('in_progress'));
+
+    await postHogCodePoller.reconcileTask(
+      row({
+        status: 'completed',
+        transcriptFinal: false,
+        metadata: { posthogTaskId: 'pt', posthogRunId: 'pr', reviveEligible: true },
+      }),
+    );
+
+    expect(mockClient.getTask).toHaveBeenCalled();
+  });
+
+  it('finalizing a terminal run clears the watch and completes the task', async () => {
+    markWatched(TASK);
+    const statusSpy = vi.spyOn(websocketModule, 'emitTaskStatus');
+    mockClient.getTask.mockResolvedValue(remoteTask('completed'));
+
+    await postHogCodePoller.reconcileTask(row({ transcriptFinal: true, watched: true }));
+
+    // Also pins the spy used by the negative assertion above: a finalize that
+    // really happens does reach it.
+    expect(statusSpy).toHaveBeenCalledWith(WS, TASK, 'completed', expect.anything());
     expect(isWatched(TASK)).toBe(false);
     const rows = await db
       .select({ status: schema.tasks.status })

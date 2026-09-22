@@ -59,11 +59,49 @@ describe('taskMetadataMutex', () => {
     return (rows[0]?.metadata as Record<string, unknown> | null) ?? null;
   }
 
+  async function readRow(id: string): Promise<{ metadata: unknown; updatedAt: Date } | null> {
+    const rows = await db
+      .select({ metadata: tasksTable.metadata, updatedAt: tasksTable.updatedAt })
+      .from(tasksTable)
+      .where(eq(tasksTable.id, id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
   it('applies a patch, persists it, and returns the new metadata + workspaceId', async () => {
     const result = await patchTaskMetadata('t1', (m) => ({ ...m, a: 1 }));
 
     expect(result).toEqual({ metadata: { a: 1 }, workspaceId: 'ws1' });
     expect(await readMetadata('t1')).toEqual({ a: 1 });
+  });
+
+  it('writes nothing when a patch hands its input straight back', async () => {
+    const spy = vi.spyOn(websocketModule, 'emitTaskUpdate');
+    await patchTaskMetadata('t1', (m) => ({ ...m, a: 1 }));
+    const before = await readRow('t1');
+    spy.mockClear();
+
+    // The "nothing to do" idiom — `clearReviveEligible` on a task that was
+    // never marked, `markTranscriptFinal` on one already marked.
+    const result = await patchTaskMetadata('t1', (m) => m);
+
+    expect(result).toEqual({ metadata: { a: 1 }, workspaceId: 'ws1' });
+    expect(spy).not.toHaveBeenCalled();
+    // `updatedAt` untouched is the point: the cloud poller's backfill window is
+    // bounded by it, and a no-op write per tick renews that window forever.
+    expect(await readRow('t1')).toEqual(before);
+  });
+
+  it('still writes when a patch builds an equal but distinct object', async () => {
+    await patchTaskMetadata('t1', (m) => ({ ...m, a: 1 }));
+    const spy = vi.spyOn(websocketModule, 'emitTaskUpdate');
+
+    // Reference equality, not a deep compare: anything that means to write
+    // builds a new object, and second-guessing that is how a real change
+    // gets swallowed.
+    await patchTaskMetadata('t1', (m) => ({ ...m }));
+
+    expect(spy).toHaveBeenCalledWith('ws1', 't1', { metadata: { a: 1 } });
   });
 
   it('emits task:update with the patched metadata', async () => {

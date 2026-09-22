@@ -93,7 +93,7 @@ describe('cloud task tenant isolation', () => {
     return {
       id: task.id, workspaceId: task.workspaceId, repositoryId: task.repositoryId ?? null,
       title: task.title, status: 'in_progress', completedAt: null, updatedAt: new Date(),
-      watched: true, transcriptEmpty: true,
+      watched: true, transcriptFinal: false,
       metadata: { cloudTask: { provider: 'selfhosted', remoteTaskId: 'sandbox2', extra: { llm: 'anthropic', repo: 'acme/one' } } },
     };
   }
@@ -254,7 +254,7 @@ describe('cloud task tenant isolation', () => {
         latest_run: { id: 'run1', status: 'completed', output: { pr_url: 'https://github.com/private/two/pull/42' } },
       });
       const link = vi.spyOn(prCache, 'linkTaskToPullRequest');
-      await postHogCodePoller.reconcileTask({ ...row(), repositoryId, metadata, watched: false, transcriptEmpty: false });
+      await postHogCodePoller.reconcileTask({ ...row(), repositoryId, metadata, watched: false, transcriptFinal: true });
       expect(link).not.toHaveBeenCalled();
       expect(await db.select().from(pullRequests)).toEqual(prsBefore);
       const [updated] = await db.select().from(tasks).where(eq(tasks.id, ownTask.id));
@@ -271,7 +271,7 @@ describe('cloud task tenant isolation', () => {
     });
     await postHogCodePoller.reconcileTask({
       ...row(), metadata: { posthogTaskId: 'posthog1', posthogRunId: 'run1' },
-      watched: false, transcriptEmpty: false,
+      watched: false, transcriptFinal: true,
     });
     const [pr] = await db.select().from(pullRequests);
     expect(pr).toMatchObject({ workspaceId: 'ws1', repositoryId: 'repo1', taskId: ownTask.id, number: 42 });

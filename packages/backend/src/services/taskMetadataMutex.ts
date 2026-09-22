@@ -103,6 +103,19 @@ async function runPatch(
   const existing = (row.metadata as Record<string, unknown>) ?? {};
   const next = patch(existing);
 
+  // A patch that hands `existing` straight back has decided there is nothing to
+  // do — `clearReviveEligible` on a task that was never marked, say. Writing it
+  // anyway costs a dead tuple, a WAL record and a `task:update` broadcast per
+  // tick, and it bumps `updatedAt`, which some callers read as "when this task
+  // last actually changed". The cloud poller's transcript-backfill window is
+  // one: bounded by `updatedAt`, a no-op write every tick renews the window
+  // forever and the task is re-polled until the end of time.
+  //
+  // REFERENCE equality, not a deep compare. Every patch that means to change
+  // something builds a new object, so this can only skip the explicit
+  // "return the input" idiom — never a real change that happens to look equal.
+  if (next === existing) return { metadata: existing, workspaceId: row.workspaceId };
+
   await db
     .update(tasksTable)
     .set({ metadata: next, updatedAt: new Date() })

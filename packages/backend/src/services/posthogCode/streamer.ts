@@ -1,6 +1,10 @@
 import type { AgentEvent } from '@talyn/shared';
 import { emitTaskEvent, emitTaskUpdate } from '../websocket.js';
-import { PERSIST_INTERVAL_MS, writeTranscript } from '../cloudProviders/transcriptStore.js';
+import {
+  markTranscriptFinal,
+  PERSIST_INTERVAL_MS,
+  writeTranscript,
+} from '../cloudProviders/transcriptStore.js';
 import { getPostHogCodeClient } from './credentials.js';
 import { AcpConverter, type AcpLogEntry, type AgentEventInput } from './acpConverter.js';
 import type { PostHogCodeClient } from './client.js';
@@ -369,7 +373,7 @@ class PostHogCodeStreamer {
       // Last-Event-ID, but if PostHog ignores it and replays from the
       // start, skip everything we've already processed — so reconnect-to-
       // tail can't double-emit or grow the transcript unbounded.
-      if (stream.lastEventId && !streamIdGreaterThan(eventId, stream.lastEventId)) {
+      if (stream.lastEventId && !streamIdIsNew(eventId, stream.lastEventId)) {
         return 'skip';
       }
       stream.lastEventId = eventId;
@@ -419,7 +423,7 @@ class PostHogCodeStreamer {
   ): Promise<number> {
     const durable = await this.readDurableLog(stream, client, opts);
     if (durable.entries === 0) return 0;
-    await this.replaceTranscript(stream, durable);
+    await this.replaceTranscript(stream, durable, { final: opts.finalize });
     return durable.entries;
   }
 
@@ -430,7 +434,7 @@ class PostHogCodeStreamer {
   ): Promise<boolean> {
     const durable = await this.readDurableLog(stream, client, { finalize: true });
     if (durable.entries === 0 || durable.lastEntryAt < stream.lastLiveEntryAt) return false;
-    await this.replaceTranscript(stream, durable);
+    await this.replaceTranscript(stream, durable, { final: true });
     return true;
   }
 
@@ -438,14 +442,23 @@ class PostHogCodeStreamer {
    * The desktop merges `task:event`s by seq, so a transcript restarting at 0
    * needs a reset first, and the reset must follow the persist or a concurrent
    * `GET /tasks/:id` re-merges the old events on top.
+   *
+   * `final` says this read went through `converter.end()` — the whole durable
+   * log, settled — so the poller can stop re-fetching it. A seed for a live
+   * tail is NOT final: the run is still writing.
    */
-  private async replaceTranscript(stream: ActiveStream, durable: DurableRead): Promise<void> {
+  private async replaceTranscript(
+    stream: ActiveStream,
+    durable: DurableRead,
+    opts: { final: boolean },
+  ): Promise<void> {
     if (stream.closed) return;
     stream.converter = durable.converter;
     stream.transcript = durable.events;
     stream.nextSeq = durable.events.length;
     stream.unpersisted = 1;
     await this.persist(stream);
+    if (opts.final) await markTranscriptFinal(stream.taskId);
     emitTaskUpdate(stream.workspaceId, stream.taskId, { transcript: [] });
     for (const event of durable.events) emitTaskEvent(stream.workspaceId, stream.taskId, event);
   }
@@ -546,18 +559,63 @@ export function raceWithIdleTimeout<T>(
   ]);
 }
 
+/** An id split into its `<prefix>-<counter>` halves, or null if it is neither. */
+function splitStreamId(id: string): { prefix: string; counter: number } | null {
+  // The LAST hyphen: a prefix may contain one, a counter never does.
+  const at = id.lastIndexOf('-');
+  if (at <= 0) return null;
+  const counter = Number(id.slice(at + 1));
+  return Number.isFinite(counter) ? { prefix: id.slice(0, at), counter } : null;
+}
+
 /**
- * Compare two Redis stream ids (`<ms>-<seq>`). Returns true if `a` is
- * strictly newer than `b`. Non-numeric ids fall back to string compare.
+ * Is `candidate` an entry we have not already processed, given `seen` is the
+ * newest id processed so far?
+ *
+ * PostHog's SSE puts TWO id spaces on the `id:` line, and the old comparison
+ * mishandled both (see posthog's `products/tasks/backend/`: the `stream` action
+ * in `presentation/views/api.py`, and `logic/stream/backlog.py`):
+ *
+ *   - **`log-<n>`** — synthetic ids for the connect-time backlog replay, where a
+ *     "thin tail" run serves its history out of the durable run log before
+ *     attaching the live stream. A plain decimal counter from 0.
+ *   - **A Redis stream id `<ms>-<seq>`** — the live tail itself.
+ *
+ * The COUNTER MUST BE COMPARED AS A NUMBER. The old code fell back to a string
+ * compare whenever the prefix was not numeric, so inside a backlog replay
+ * `log-10` sorted BELOW `log-9`: entry 10 was discarded as already seen, and so
+ * was everything up to 89. Worse is the backlog→live handover, where the cursor
+ * is `log-<n>` and the next id is a Redis id — `'1'` sorts below `'l'`, so every
+ * live event was dropped AND the cursor never moved off `log-<n>`, which loses
+ * the whole live tail rather than a slice of it. The same arithmetic applies to
+ * the agent's own `<boot>-<seq>` ids (a random per-boot prefix plus a counter),
+ * which is what `session_logs` entries are stamped with.
+ *
+ * So: split at the last hyphen, compare counters numerically when the prefixes
+ * match, and keep the numeric prefix compare for Redis ids whose millisecond
+ * half has moved.
+ *
+ * An id we cannot order counts as NEW, and that is what carries the
+ * backlog→live handover — the two id spaces are incomparable by construction.
+ * The dedup exists only to absorb a server that ignores `Last-Event-ID` and
+ * replays from the start; PostHog's own endpoint docs say a Redis-id reconnect
+ * "may re-deliver a few events already served as backlog frames", so duplicates
+ * are expected, bounded and visible, while a dropped entry is none of those.
+ * Pure + exported for tests.
  */
-export function streamIdGreaterThan(a: string, b: string): boolean {
-  const [am, as] = a.split('-');
-  const [bm, bs] = b.split('-');
-  const amN = Number(am);
-  const bmN = Number(bm);
-  if (Number.isNaN(amN) || Number.isNaN(bmN)) return a > b;
-  if (amN !== bmN) return amN > bmN;
-  return Number(as || 0) > Number(bs || 0);
+export function streamIdIsNew(candidate: string, seen: string): boolean {
+  const a = splitStreamId(candidate);
+  const b = splitStreamId(seen);
+  if (!a || !b) return true;
+  if (a.prefix !== b.prefix) {
+    const aMs = Number(a.prefix);
+    const bMs = Number(b.prefix);
+    // Redis ids carry a millisecond timestamp here, so they stay orderable
+    // across a prefix change. Any other prefix change is a different id space
+    // (a resumed session), where "already seen" cannot be answered — so don't.
+    return Number.isFinite(aMs) && Number.isFinite(bMs) ? aMs > bMs : true;
+  }
+  return a.counter > b.counter;
 }
 
 export const postHogCodeStreamer = new PostHogCodeStreamer();
