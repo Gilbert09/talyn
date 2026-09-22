@@ -27,7 +27,15 @@ DIMENSION = 384
 
 
 class Encoder:
-    def __init__(self, cache: Path, download: bool = False):
+    def __init__(
+        self, cache: Path, download: bool = False, *, max_chunks: int = 16, batch_chunks: int = 16
+    ):
+        if type(max_chunks) is not int or not 1 <= max_chunks <= 128:
+            raise ValueError("Use between 1 and 128 content chunks")
+        if type(batch_chunks) is not int or not 1 <= batch_chunks <= 16:
+            raise ValueError("Use between 1 and 16 chunks per inference batch")
+        self.max_chunks = max_chunks
+        self.batch_chunks = batch_chunks
         paths = [
             Path(
                 hf_hub_download(
@@ -48,7 +56,9 @@ class Encoder:
             "files_sha256": [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths],
             "pooling": "masked token mean, chunk mean, L2 normalization",
             "max_tokens": 256,
-            "max_chunks": 16,
+            "max_chunks": max_chunks,
+            "batch_chunks": batch_chunks,
+            "max_characters": 2_000_000,
         }
         self.tokenizer = Tokenizer.from_file(str(paths[0]))
         self.tokenizer.no_truncation()
@@ -62,32 +72,40 @@ class Encoder:
 
     def encode(self, text: str) -> tuple[list[float], dict]:
         ids = self.tokenizer.encode(text[:2_000_000], add_special_tokens=False).ids
-        truncated = len(ids) > 254 * 16 or len(text) > 2_000_000
-        ids = ids[: 254 * 16]
+        available_tokens = len(ids)
+        truncated = available_tokens > 254 * self.max_chunks or len(text) > 2_000_000
+        ids = ids[: 254 * self.max_chunks]
         chunks = [ids[i : i + 254] for i in range(0, len(ids), 254)] or [[]]
         cls, sep, pad = [self.tokenizer.token_to_id(name) for name in ["[CLS]", "[SEP]", "[PAD]"]]
         if any(value is None for value in [cls, sep, pad]):
             raise ValueError("Unexpected tokenizer")
-        width = max(len(chunk) for chunk in chunks) + 2
-        token_ids = np.full((len(chunks), width), pad, dtype=np.int64)
-        mask = np.zeros_like(token_ids)
-        for i, chunk in enumerate(chunks):
-            token_ids[i, : len(chunk) + 2] = [cls, *chunk, sep]
-            mask[i, : len(chunk) + 2] = 1
-        inputs = {
-            "input_ids": token_ids,
-            "attention_mask": mask,
-            "token_type_ids": np.zeros_like(token_ids),
-        }
-        output = self.session.run(
-            None, {item.name: inputs[item.name] for item in self.session.get_inputs()}
-        )[0]
-        pooled = (output * mask[:, :, None]).sum(axis=1) / mask.sum(axis=1)[:, None]
-        vector = pooled.mean(axis=0)
+        pooled = []
+        for start in range(0, len(chunks), self.batch_chunks):
+            batch = chunks[start : start + self.batch_chunks]
+            width = max(len(chunk) for chunk in batch) + 2
+            token_ids = np.full((len(batch), width), pad, dtype=np.int64)
+            mask = np.zeros_like(token_ids)
+            for i, chunk in enumerate(batch):
+                token_ids[i, : len(chunk) + 2] = [cls, *chunk, sep]
+                mask[i, : len(chunk) + 2] = 1
+            inputs = {
+                "input_ids": token_ids,
+                "attention_mask": mask,
+                "token_type_ids": np.zeros_like(token_ids),
+            }
+            output = self.session.run(
+                None, {item.name: inputs[item.name] for item in self.session.get_inputs()}
+            )[0]
+            pooled.extend((output * mask[:, :, None]).sum(axis=1) / mask.sum(axis=1)[:, None])
+        vector = np.asarray(pooled).mean(axis=0)
         vector /= max(np.linalg.norm(vector), 1e-12)
         if vector.shape != (DIMENSION,) or not np.isfinite(vector).all():
             raise ValueError("Invalid encoder output")
-        return vector.tolist(), {"truncated": truncated, "chunks": len(chunks)}
+        return vector.tolist(), {
+            "truncated": truncated,
+            "chunks": len(chunks),
+            "available_tokens": available_tokens,
+        }
 
 
 def main() -> None:
@@ -96,8 +114,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=Path("artifacts/encoder-cache"))
     parser.add_argument("--download-model", action="store_true")
+    parser.add_argument("--max-chunks", type=int, default=16)
+    parser.add_argument("--batch-chunks", type=int, default=16)
     args = parser.parse_args()
-    encoder = Encoder(args.cache, args.download_model)
+    encoder = Encoder(
+        args.cache, args.download_model, max_chunks=args.max_chunks, batch_chunks=args.batch_chunks
+    )
     records, cache = [], {}
     for path in args.content:
         payload = json.loads(path.read_text())

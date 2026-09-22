@@ -275,8 +275,13 @@ uv run --frozen --extra encoder python -m review_rank.encoder \
 Later encoding runs can omit `--download-model` and use the local cache.
 The encoder uses MiniLM at a fixed commit, with ONNX CPU inference and no remote Python code.
 Each vector has 384 values. The output records model hashes, pooling, and truncation counts.
-It encodes up to sixteen chunks of 254 content tokens, with two special tokens per chunk.
+By default, it encodes sixteen chunks of 254 content tokens, with two special tokens per chunk.
 It averages tokens within chunks, then averages chunks and normalizes the result.
+Use `--max-chunks 128 --batch-chunks 16` to include more text with bounded inference batches.
+The limits allow one to 128 content chunks and one to sixteen chunks per batch.
+The character limit remains two million. Token counts describe text within that character limit.
+Output provenance records all three limits. Truncation remains explicit for each record.
+Each chunk still runs independently. This option does not create attention between distant chunks.
 This is a compact text baseline. It is not a code-specialized model or proof of ranking quality.
 See the [model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
 

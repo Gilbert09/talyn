@@ -2,6 +2,19 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: reproducible longer-input encoding (2026-09-22)
+
+The lab encoder now accepts a content limit and an inference batch size.
+The default remains sixteen chunks. The longer option processes up to 128 chunks in batches of at most sixteen.
+Model weights, token pooling, chunk pooling, and output dimensions remain unchanged.
+Provenance records chunk, batch, and character limits. Each record includes available token counts and truncation status.
+The two-million-character cap still applies. Chunks do not share attention.
+
+Validation passed 84 focused encoder, feature, and history tests, plus Ruff checks and formatting.
+Tests cover exact limits, empty input, padding, unequal final batches, character truncation, and invalid settings.
+The earlier private prototype reduced truncation from 58 to seven records in an 84-PR sample.
+This is input coverage evidence. It does not prove a ranking gain or permit model promotion.
+
 ## Review ranking: native export status and file writes (2026-09-22)
 
 Desktop exports now use a dedicated native save operation instead of a temporary browser download.

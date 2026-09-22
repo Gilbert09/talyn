@@ -176,6 +176,11 @@ Exports merge both stores and report archive availability, eviction counts, and 
 Clearing site storage removes both stores. Browser quotas and device failures can still lose data.
 Export regularly during the pilot. The archive has no network path.
 
+The local encoder also supports 128 content chunks, processed in batches of at most sixteen.
+Its default remains sixteen chunks. Both options use the same fixed MiniLM weights and pooling rule.
+The longer option reduced truncation from 58 to seven records in the private 84-PR content sample.
+This measures input coverage only. Fresh review choices must establish any ranking improvement.
+
 Current limits include external-link opens and authoritative request rounds.
 The snapshot checker reports `review_labels: 0`; the separate outcome join supplies submitted-review labels.
 
