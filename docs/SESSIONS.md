@@ -4,6 +4,11 @@ Chronological notes from development sessions. Most recent first. See [`CLAUDE.m
 
 ## Review ranking: replay older profile statistics (2026-09-22)
 
+Full CI later found two failures in the adjacent review-timing suite.
+Its search mock treated direct-request queries as team-inclusive queries and returned the wrong request set.
+The fixture now separates those queries. Added cases verify unchanged wait timestamps and no completion event for active direct requests.
+All 77 focused eligibility and timestamp tests passed, with backend type checking and ESLint.
+
 A desktop export contained six feature values but five stored statistics per candidate.
 Production skips the learned term for this mismatch. The replay validator incorrectly rejected that valid fallback.
 Replay now accepts finite, paired statistics of another dimension and calls the unchanged production scorer.

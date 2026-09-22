@@ -70,11 +70,17 @@ function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
   } as PRSummary;
 }
 
-function mockSearch(authored: number[], reviewRequested: number[] = [], reviewedBy: number[] = []) {
+function mockSearch(
+  authored: number[],
+  reviewRequested: number[] = [],
+  reviewedBy: number[] = [],
+  directRequested: number[] = [],
+) {
   return vi
     .spyOn(githubService, 'searchPullRequestNumbers')
     .mockImplementation(async (_ws: string, q: string) => {
       if (q.includes('reviewed-by:')) return reviewedBy;
+      if (q.includes('user-review-requested:')) return directRequested;
       if (q.includes('review-requested:')) return reviewRequested;
       if (q.includes('author:')) return authored;
       return [];
@@ -190,14 +196,12 @@ describe('review_requested_first_seen_at', () => {
     expect(row?.reviewRequestedFirstSeenAt?.getTime()).toBe(stamped.getTime());
   });
 
-  it('stamps cleared_at when the viewer reviews it and the PR leaves the cohort', async () => {
-    // The only record that the review happened at all: most reviews are
-    // submitted on github.com, so nothing else in the app observes one.
+  it('stamps cleared_at when only a reviewed team request remains', async () => {
     await seedRow({
       reviewRequested: true,
       reviewRequestedFirstSeenAt: new Date(Date.now() - 5 * 3_600_000),
     });
-    // Requested AND reviewed-by → the monitor subtracts it out of the cohort.
+    // No active direct request remains after this review.
     mockSearch([], [9], [9]);
 
     await prMonitorService.forcePoll();
@@ -206,6 +210,29 @@ describe('review_requested_first_seen_at', () => {
     expect(row?.reviewRequested).toBe(false);
     expect(row?.reviewRequestedClearedAt).toBeInstanceOf(Date);
   });
+
+  it.each([false, true])(
+    'preserves the wait for a reviewed PR with an active direct request (fresh cache: %s)',
+    async (fresh) => {
+      const stamped = new Date(Date.now() - 30 * 3_600_000);
+      await seedRow({
+        reviewRequested: true,
+        reviewRequestedFirstSeenAt: stamped,
+        lastPolledAt: new Date(Date.now() - (fresh ? 0 : 6 * 60_000)),
+      });
+      mockSearch([], [9], [9], [9]);
+
+      await prMonitorService.forcePoll();
+
+      const row = await readRow();
+      expect(row?.reviewRequested).toBe(true);
+      expect(row?.reviewRequestedFirstSeenAt?.getTime()).toBe(stamped.getTime());
+      expect(row?.reviewRequestedClearedAt).toBeNull();
+      expect(vi.mocked(captureWorkspaceEvent).mock.calls.some(
+        (call) => call[1] === 'pr_review_submitted',
+      )).toBe(false);
+    },
+  );
 
   it('clears a stale cleared_at when the PR is requested again', async () => {
     // A re-request is a live question. Leaving the previous answer attached
