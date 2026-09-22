@@ -47,6 +47,23 @@ vi.mock('../services/github.js', () => ({
 const { dispatchTaskToFleet } = await import('../services/selfHosted/executor.js');
 const { noteExhaustedAgent } = await import('../services/selfHosted/exhaustedQuota.js');
 
+/**
+ * `noteExhaustedAgent` now ASKS the vendor before believing a run's claim (see
+ * quotaProbe.ts), so these tests have to say what the vendor answers. They are
+ * about the hold, so the vendor agrees: the refusal is real.
+ */
+function vendorConfirmsExhaustion(): void {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: "You're out of extra usage." },
+      }),
+      { status: 400 },
+    ),
+  );
+}
+
 const ENV: Environment = {
   id: 'fleet1',
   name: 'Talyn Fleet',
@@ -101,6 +118,7 @@ describe('a held-back agent never boots a sandbox', () => {
     process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
     ({ db, cleanup } = await createTestDb());
     ({ encryptString: encrypted } = await import('../services/tokenCrypto.js'));
+    vendorConfirmsExhaustion();
     createSandbox.mockReset();
     createSandbox.mockResolvedValue({ id: 'sb1', status: 'running' });
     process.env.FLEET_API_TOKEN = 'fleet-token';

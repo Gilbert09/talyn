@@ -4,6 +4,8 @@ import {
   patchSelfHostedConfig,
   type ExhaustedQuotaRecord,
 } from './credentials.js';
+import { verifyAgentQuota } from './quotaProbe.js';
+import { debugBus } from '../debugBus.js';
 
 /**
  * Learning, at run time, that a workspace's own subscription has nothing left.
@@ -91,6 +93,24 @@ export function failoverSummary(from: FleetAgent, to: string): string {
   return (
     `${agentLabel(from)} usage was exhausted, so this run moved to ${to}. ` +
     `Your default agent is unchanged — a spent quota is not a preference.`
+  );
+}
+
+/**
+ * How the task explains a move the vendor would NOT confirm.
+ *
+ * Deliberately not {@link failoverSummary}: that one tells the user their
+ * subscription is spent and to go and top it up, which on 2026-09-21 was false
+ * for every run for a day — the credential answered a probe at the same minute
+ * it was refusing runs. Saying so plainly is the point. The work still moved,
+ * because it is still wanted and the other agent can do it, but nobody should
+ * be sent to a billing page over it.
+ */
+export function unconfirmedRefusalSummary(from: FleetAgent, to: string): string {
+  return (
+    `${agentLabel(from)} refused this run, but the same credential answered a check moments ` +
+    `later — so this is not a spent subscription. The run moved to ${to} while that is looked ` +
+    `into; your ${agentLabel(from)} usage was not held back.`
   );
 }
 
@@ -237,11 +257,34 @@ export function heldBackReason(agent: FleetAgent, record: { at: string; resetsAt
 // ---------------------------------------------------------------------------
 
 /**
- * Remember that `agent` is spent for this workspace.
+ * Remember that `agent` is spent for this workspace — once the vendor has
+ * CONFIRMED it.
  *
  * Stored on the fleet integration row, not in memory: the in-memory version
  * dies at the next deploy, which for this repo is every push to main, and a
  * loop firing hourly would then re-discover the same exhaustion all day.
+ *
+ * # Why the sentence is no longer enough on its own
+ *
+ * This used to write the hold straight from the words the failed run came back
+ * with, and on 2026-09-21 those words were false about the account they named.
+ * Anthropic refused every fleet run with "You're out of extra usage. Add more
+ * at claude.ai/settings/usage" while the same stored credential answered 200
+ * (`unified-status: allowed`) to a one-token request — from a laptop, from the
+ * fleet host, and through the fleet harness's own request builder. Something
+ * in the sandbox path is turning a good subscription request into a refusal;
+ * until that is found, believing the sentence costs a day of somebody's work
+ * running on a vendor they did not choose, plus a notification telling them to
+ * go and buy usage they already have.
+ *
+ * So the vendor is ASKED (`verifyAgentQuota`) before the hold is written, and
+ * `available` means no hold and no failover. `unknown` — an unreachable
+ * vendor, a credential we cannot read, an unrecognised refusal, or any agent
+ * the probe cannot speak for — still writes it: being unsure must not be more
+ * decisive than being told, in either direction.
+ *
+ * Returns whether the agent is actually being held back, so the caller can
+ * decide whether moving the work is warranted at all.
  *
  * Best-effort by construction — this runs on the failure path of a run that
  * has already died, and throwing here would replace a useful error with a
@@ -251,7 +294,25 @@ export async function noteExhaustedAgent(
   workspaceId: string,
   agent: FleetAgent,
   detail: string | null,
-): Promise<void> {
+): Promise<boolean> {
+  const verdict = await verifyAgentQuota(workspaceId, agent).catch(() => 'unknown' as const);
+  if (verdict === 'available') {
+    console.warn(
+      `[exhaustedQuota] ${workspaceId}: a run reported ${agentLabel(agent)} usage exhausted, ` +
+        'but the vendor served a probe on the same credential — not holding the agent back. ' +
+        `Run's words: ${(detail ?? '').slice(0, 200)}`,
+    );
+    debugBus.recordEvent({
+      service: 'fleet',
+      action: 'quota_exhaustion_unconfirmed',
+      summary:
+        `${agentLabel(agent)} reported exhausted by a run, but the vendor answered a probe — ` +
+        'no hold written',
+      workspaceId,
+      ok: false,
+    });
+    return false;
+  }
   try {
     const config = await readSelfHostedConfig(workspaceId);
     const record: ExhaustedQuotaRecord = {
@@ -265,6 +326,7 @@ export async function noteExhaustedAgent(
   } catch (err) {
     console.error(`[exhaustedQuota] could not record ${agent} exhaustion:`, err);
   }
+  return true;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { randomBytes } from 'crypto';
 import { eq } from 'drizzle-orm';
 import type { CloudProviderType, FleetAgent } from '@talyn/shared';
 import { failoverExhaustedRun } from '../services/cloudProviders/quotaFailover.js';
@@ -82,7 +83,23 @@ describe('quota failover', () => {
   let cleanup: () => Promise<void>;
   const originals = new Map<CloudProviderType, CloudTaskProvider | null>();
 
+  /** What the vendor says when `noteExhaustedAgent` checks the claim. */
+  function vendorAnswers(kind: 'confirms' | 'serves'): void {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      kind === 'confirms'
+        ? new Response(
+            JSON.stringify({
+              type: 'error',
+              error: { type: 'invalid_request_error', message: "You're out of extra usage." },
+            }),
+            { status: 400 },
+          )
+        : new Response(JSON.stringify({ id: 'msg_1', content: [] }), { status: 200 }),
+    );
+  }
+
   beforeEach(async () => {
+    vendorAnswers('confirms');
     ({ db, cleanup } = await createTestDb());
     taskQueueService.resetForTests();
     await seedUser(db, { id: TEST_USER_ID, email: 'tom@example.com' });
@@ -190,6 +207,60 @@ describe('quota failover', () => {
     expect(t.assignedEnvironmentId).toBe('fleet1');
     expect(String(t.metadata.model)).toMatch(/gpt/);
     expect(t.metadata.quotaFailover).toMatchObject({ movedTo: 'Codex on Talyn Fleet' });
+  });
+
+  /**
+   * The 2026-09-21 case: Anthropic refused every run for a day while the same
+   * credential answered a probe at the same minute. The work still has to get
+   * done, so the run still moves — but nothing may be parked and nobody may be
+   * sent to a billing page over a subscription that is fine.
+   */
+  it('moves a run the vendor will not confirm, without holding the agent back', async () => {
+    await connectAgents(db, ['claude', 'codex']);
+    // A credential the probe can actually read: the other tests here only need
+    // the SHAPE of one, so they store a stub envelope, and an unreadable
+    // credential is (correctly) an `unknown` verdict rather than a clean bill.
+    const prior = process.env.TALYN_TOKEN_KEY;
+    process.env.TALYN_TOKEN_KEY = randomBytes(32).toString('base64');
+    const { encryptString } = await import('../services/tokenCrypto.js');
+    const [existing] = await db
+      .select({ config: integrationsTable.config })
+      .from(integrationsTable)
+      .where(eq(integrationsTable.workspaceId, 'ws1'))
+      .limit(1);
+    await db
+      .update(integrationsTable)
+      .set({
+        // MERGED, not replaced: the OAuth stubs above are what
+        // `fleetAgentStatus` reads to know which agents are connected at all,
+        // and without them the hop leaves the fleet entirely.
+        config: {
+          ...(existing!.config as Record<string, unknown>),
+          anthropicKeyEnc: encryptString('sk-ant-api-test'),
+        },
+      })
+      .where(eq(integrationsTable.workspaceId, 'ws1'));
+    vendorAnswers('serves');
+
+    expect(await run()).toBe(true);
+
+    const t = await task();
+    expect(t.status).toBe('queued');
+    expect(t.assignedEnvironmentId).toBe('fleet1');
+    // No hold: the next task asks Claude again instead of inheriting a claim
+    // nothing could verify.
+    const [row] = await db
+      .select({ config: integrationsTable.config })
+      .from(integrationsTable)
+      .where(eq(integrationsTable.workspaceId, 'ws1'))
+      .limit(1);
+    expect((row!.config as { quotaExhausted?: unknown }).quotaExhausted).toBeUndefined();
+    if (prior === undefined) delete process.env.TALYN_TOKEN_KEY;
+    else process.env.TALYN_TOKEN_KEY = prior;
+    // And the note says what actually happened.
+    const note = String((t.metadata.quotaFailover as { note?: string }).note);
+    expect(note).toContain('not a spent subscription');
+    expect(note).not.toContain('exhausted');
   });
 
   it('falls through to PostHog Code when the fleet has no other agent', async () => {

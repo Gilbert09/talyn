@@ -16,6 +16,7 @@ import {
   failoverSummary,
   heldBackAgents,
   noteExhaustedAgent,
+  unconfirmedRefusalSummary,
 } from '../selfHosted/exhaustedQuota.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
 import { taskQueueService } from '../taskQueue.js';
@@ -88,6 +89,13 @@ function readState(metadata: unknown): FailoverState {
  * false when it was settled here as a dead end. Either way the task is left in
  * a coherent terminal-or-queued state — the caller's `finalize` is done with
  * it once this returns.
+ *
+ * A refusal the vendor does NOT confirm still moves — the work is wanted and
+ * the other agent can do it — but it moves as what it is. `noteExhaustedAgent`
+ * writes no hold in that case, so the next task tries the first agent again
+ * rather than being parked behind a claim nothing could verify, and the note
+ * on the task says the credential still works instead of telling the user to
+ * go and buy usage they already have (2026-09-21).
  */
 export async function failoverExhaustedRun(opts: {
   taskId: string;
@@ -115,7 +123,17 @@ export async function failoverExhaustedRun(opts: {
   // Remember it BEFORE choosing where to go. This is what stops the next task
   // paying the same discovery cost — dispatch reads the hold and skips the
   // spent agent without booting a microVM to be refused again.
-  await noteExhaustedAgent(workspaceId, exhausted, detail);
+  //
+  // It also VERIFIES the claim with the vendor, and answers false when the
+  // subscription turns out to be fine. There is then nothing to fail over
+  // from: hand the failure back rather than spending the user's other vendor
+  // on a refusal that was never about their quota.
+  //
+  // It also VERIFIES the claim with the vendor. An unconfirmed one still moves
+  // the run — the work is wanted and the other agent can do it — but it writes
+  // no hold, so the next task asks the first agent again instead of inheriting
+  // a claim nothing could verify.
+  const confirmed = await noteExhaustedAgent(workspaceId, exhausted, detail);
 
   const state = readState(row.metadata);
   const tried = new Set<Hop>(state.tried ?? []);
@@ -170,7 +188,9 @@ export async function failoverExhaustedRun(opts: {
       tried: [...tried, next.kind === 'fleet' ? FLEET_HOP(next.agent) : next.providerType],
       exhausted,
       movedTo,
-      note: failoverSummary(exhausted, movedTo),
+      note: confirmed
+        ? failoverSummary(exhausted, movedTo)
+        : unconfirmedRefusalSummary(exhausted, movedTo),
       at: new Date().toISOString(),
     } satisfies FailoverState;
     return meta;
@@ -208,6 +228,11 @@ export async function failoverExhaustedRun(opts: {
     task_id: taskId,
     exhausted_agent: exhausted,
     to: next.kind === 'fleet' ? `fleet:${next.agent}` : next.providerType,
+    // Whether the vendor stood behind the refusal when asked directly. An
+    // unconfirmed one is a fleet-path failure wearing a quota error's words,
+    // and the two need telling apart in the funnel — otherwise a day of them
+    // reads as a user who ran out of usage.
+    quota_confirmed: confirmed,
   });
   console.warn(
     `[quotaFailover] task ${taskId.slice(0, 8)}: ${agentLabel(exhausted)} usage exhausted — ` +

@@ -173,6 +173,71 @@ Updated `REVIEW_RANKING.md` with results, corrected earlier claims, and explicit
 The next gate requires complete review outcomes and a fresh evaluation period.
 Neural models, code features, teacher rankings, and production promotion remain later experiments.
 
+## "You're out of extra usage" was true, and not about the account it named (2026-09-22)
+
+Yesterday's note said Claude's quota was spent and the failover was working as
+designed. The first half was wrong, and it was wrong because I believed a
+sentence instead of checking it. Tom said his subscription had usage; it does.
+
+**What was measured.** Decrypted the workspace's stored `claudeOAuth` token and
+called `api.anthropic.com/v1/messages` with it, at the same minutes the fleet
+was being refused:
+
+- `claude-sonnet-5` and `claude-opus-5` → **HTTP 200**,
+  `anthropic-ratelimit-unified-status: allowed`
+- still 200 at `max_tokens: 128000`, with thinking, with the `claude-code`,
+  `context-management` and 1M-context betas, with tools, with a 200KB request,
+  streaming
+- still 200 **from the fleet host itself** (same curl, piped over ssh, so the
+  egress IP is not it)
+- still 200 **through the fleet harness's own request builder** —
+  `@earendil-works/pi-ai` at the version the guest image pins, driven with a
+  logging fetch and a stand-in for the credential proxy's header rewriting
+
+Meanwhile `fleetd`'s journal has **26** refusals since 2026-09-20 19:07 UTC,
+one per Claude run, always within 8s of boot. The last successful Claude fleet
+run was 2026-09-20 08:00 UTC; the host was redeployed at 16:49 UTC that day.
+
+**What it is not** (each ruled out by experiment, not by reading): the account's
+usage, the egress IP, the auth mode (`authAnthropic` sends Bearer + the oauth
+beta for an `sk-ant-oat` token, which is right), the harness's beta list, the
+model, `max_tokens`, request size, streaming, the tool list, or the
+Claude-Code-identity system block. A guest that does NOT get Pi's OAuth
+placeholder produces a **429 `rate_limit_error`**, which is a different failure
+from the one being seen — so the stealth-mode theory does not fit either.
+
+**Still open**: what in the sandbox path turns a request Anthropic serves into
+one it refuses. Everything reproducible from outside the guest now reproduces
+GREEN, so the next step has to be inside it — a log line in the runner naming
+the placeholder and the outgoing shape, which needs a fleet build and root on
+the host.
+
+**What changed here, and why it is not a workaround.** The inference "a run said
+this, therefore the subscription is spent" was load-bearing — it parked the
+agent for every later task, moved a day of work onto a vendor the user had not
+chosen, and told them to go and buy usage they already had. So the vendor is now
+ASKED before any of that happens: `services/selfHosted/quotaProbe.ts` sends one
+1-token Claude-Code-shaped request with the workspace's own credential, on the
+failure path only.
+
+- `available` → **no hold**, and the run still moves (the work is wanted and the
+  other agent can do it) with a note that says the credential still works. The
+  next task asks Claude again rather than inheriting a claim nothing verified.
+- `spent` → exactly what happened before.
+- `unknown` — unreachable vendor, unreadable credential, unrecognised refusal,
+  or Codex, which this cannot probe — → also exactly what happened before.
+  Being unsure must not be more decisive than being told, in either direction.
+
+The false hold on the live workspace was cleared by hand. The cost of no hold is
+one wasted microVM boot per task on our own hardware, which is the trade
+`PROBE_AFTER_MS` already documents.
+
+Diagnostics kept, because this will be needed again:
+`scripts/probe-claude-credential.mts` (stored credential → live call),
+`scripts/emit-claude-curl-config.mts` (same request, runnable anywhere),
+`scripts/repro-pi-anthropic.mts` (the harness's own request builder, with a
+logging fetch and a proxy stand-in).
+
 ## Why every task ran on Codex Terra: a real quota failover with the wrong model (2026-09-21)
 
 Reported as "tasks are still using Terra on Codex when they should be using
