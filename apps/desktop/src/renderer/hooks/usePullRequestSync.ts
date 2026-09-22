@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { useOnReconnect } from './useOnReconnect';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -11,12 +11,20 @@ import {
  * A real GitHub force-poll followed by a re-list of the workspace's open PRs.
  * Standalone (reads both stores via `getState`) so the page header's Refresh
  * button can call it directly without threading a callback through the tree.
+ *
+ * It deliberately does not touch `connected`. A list that succeeds says the
+ * BACKEND answered, not that GitHub is connected — the rows it returns are
+ * cached and outlive a revoked installation — and a second writer of that flag
+ * is how the page's CTA and the banner's came to disagree in the first place.
  */
-export async function refreshPullRequests(): Promise<void> {
+export async function refreshPullRequests(
+  opts: { initialSync?: boolean } = {}
+): Promise<void> {
   const currentWorkspaceId = useWorkspaceStore.getState().currentWorkspaceId;
   if (!currentWorkspaceId) return;
-  const { setRows, setLoading, setError, setConnected } = usePullRequestStore.getState();
+  const { setRows, setLoading, setError, setInitialSync } = usePullRequestStore.getState();
   setLoading(true);
+  if (opts.initialSync) setInitialSync(true);
   setError(null);
   // A failed force-poll (backend busy/restarting) shouldn't abort the
   // refresh — the cached list is still worth re-reading, and a successful
@@ -34,7 +42,6 @@ export async function refreshPullRequests(): Promise<void> {
       state: 'open',
     });
     setRows(data);
-    setConnected(true); // a successful list implies a working connection
     if (pollFailure) {
       console.warn(`PR refresh: force-poll failed (${pollFailure}); showing cached rows`);
     }
@@ -42,17 +49,25 @@ export async function refreshPullRequests(): Promise<void> {
     setError(err instanceof Error ? err.message : pollFailure ?? 'Refresh failed');
   } finally {
     setLoading(false);
+    if (opts.initialSync) setInitialSync(false);
   }
 }
 
 /**
  * Owns the open-PR data lifecycle for the whole app: the initial fetch, the
- * GitHub/PostHog connection probes, and the single `pull_request:updated`
- * subscription that patches rows in place. Mounted once (in MainLayout) so the
- * Sidebar badges and all three GitHub pages share one live set of rows.
+ * PostHog connection probe, and the single `pull_request:updated` subscription
+ * that patches rows in place. Mounted once (in MainLayout) so the Sidebar
+ * badges and all three GitHub pages share one live set of rows.
+ *
+ * GitHub's connection state is the one thing it does NOT probe: that answer
+ * belongs to `useSystemStatus`, and this hook mirrors it.
  */
 export function usePullRequestSync(): void {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  // GitHub's connection state comes from the workspace store — see the effect
+  // below for why this hook no longer fetches its own.
+  const githubStatus = useWorkspaceStore((s) => s.githubStatus);
+  const githubUser = useWorkspaceStore((s) => s.githubUser);
   const fetchError = usePullRequestStore((s) => s.error);
   const {
     setRows,
@@ -81,7 +96,7 @@ export function usePullRequestSync(): void {
     const { justOnboarded, setJustOnboarded } = useWorkspaceStore.getState();
     if (justOnboarded) {
       setJustOnboarded(false);
-      void refreshPullRequests();
+      void refreshPullRequests({ initialSync: true });
       return;
     }
     let cancelled = false;
@@ -105,34 +120,40 @@ export function usePullRequestSync(): void {
 
   // GitHub connection status + viewer login — drive the "Connect GitHub" CTA
   // and the Reviews "requested directly (@you)" label.
+  //
+  // MIRRORED from the workspace store, never fetched here. `useSystemStatus`
+  // owns that fetch and re-checks it whenever the window regains focus, which
+  // is the ONLY signal the app gets that a connection landed: the GitHub App
+  // install completes in the system browser. This used to be a second,
+  // one-shot fetch per workspace, so the two answers diverged the moment
+  // somebody connected — the banner's CTA cleared on their return and the
+  // identical CTA under "My PRs" did not, which reads as a connect that
+  // failed and sends the user round the flow again.
+  const connectionRef = useRef<{ workspaceId: string; connected: boolean } | null>(null);
   useEffect(() => {
     if (!currentWorkspaceId) {
+      connectionRef.current = null;
       setConnected(null);
       setViewerLogin(null);
       return;
     }
-    let cancelled = false;
-    api.github
-      .getStatus(currentWorkspaceId)
-      .then((s) => {
-        if (cancelled) return;
-        setConnected(s.connected);
-        if (s.connected) {
-          api.github
-            .getUser(currentWorkspaceId)
-            .then((u) => {
-              if (!cancelled) setViewerLogin(u.login);
-            })
-            .catch(() => {});
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setConnected(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentWorkspaceId, setConnected, setViewerLogin]);
+    // `null` means the status has not been read yet — distinct from "not
+    // connected", and the pages draw it as neither.
+    const connected = githubStatus ? githubStatus.connected : null;
+    setConnected(connected);
+    setViewerLogin(connected ? githubUser?.login ?? null : null);
+    if (connected === null) return;
+
+    const previous = connectionRef.current;
+    connectionRef.current = { workspaceId: currentWorkspaceId, connected };
+    // Just connected, in this workspace: nothing has ever been polled, so the
+    // cached list is empty and the plain fetch above would land the user on
+    // "no pull requests" a second after they authorized. Ask GitHub instead,
+    // and keep the page in its loading state while that runs.
+    if (connected && previous?.workspaceId === currentWorkspaceId && previous.connected === false) {
+      void refreshPullRequests({ initialSync: true });
+    }
+  }, [currentWorkspaceId, githubStatus, githubUser, setConnected, setViewerLogin]);
 
   // PostHog Code connection status — gates the per-row "Get PR mergeable" run.
   useEffect(() => {
@@ -182,12 +203,11 @@ export function usePullRequestSync(): void {
         .then((data) => {
           setRows(data);
           setError(null);
-          setConnected(true);
         })
         .catch(() => {}); // still down — banner stays, next tick retries
     }, 30_000);
     return () => clearInterval(timer);
-  }, [fetchError, currentWorkspaceId, setRows, setError, setConnected]);
+  }, [fetchError, currentWorkspaceId, setRows, setError]);
 
   // Reconnect catch-up: `pull_request:updated` broadcasts (which carry live
   // merge-queue positions/status) are fire-and-forget to open sockets only, so

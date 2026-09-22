@@ -44,6 +44,12 @@ interface PullRequestState {
   viewerLogin: string | null;
   // Whether PostHog Code (cloud tasks) is configured — gates follow-up runs.
   posthogConnected: boolean;
+  // True while the catch-up poll that follows a fresh GitHub connection runs.
+  // That fetch asks GitHub rather than the cache, so it is the slow one — and
+  // it is the one somebody is watching, having just authorized. It only
+  // changes the loader's wording: without it the page shows a bare spinner and
+  // then, for a workspace whose repos have never been polled, an empty list.
+  initialSync: boolean;
 
   setRows: (rows: PRRow[]) => void;
   setLoading: (loading: boolean) => void;
@@ -51,6 +57,7 @@ interface PullRequestState {
   setConnected: (connected: boolean | null) => void;
   setViewerLogin: (login: string | null) => void;
   setPosthogConnected: (connected: boolean) => void;
+  setInitialSync: (initialSync: boolean) => void;
 
   /**
    * Merge a `pull_request:updated` echo into `rows` in place. Returns true
@@ -80,6 +87,7 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
   connected: null,
   viewerLogin: null,
   posthogConnected: false,
+  initialSync: false,
 
   setRows: (rows) => set({ rows }),
   setLoading: (loading) => set({ loading }),
@@ -87,6 +95,7 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   setViewerLogin: (viewerLogin) => set({ viewerLogin }),
   setPosthogConnected: (posthogConnected) => set({ posthogConnected }),
+  setInitialSync: (initialSync) => set({ initialSync }),
 
   applyPullRequestUpdate: (p) => {
     const prev = get().rows;

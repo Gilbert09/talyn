@@ -2,6 +2,44 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## GitHub connect: one answer to "are we connected" (2026-09-22)
+
+User feedback: after launching the app, two "Connect GitHub" buttons — one in
+the header banner, one in the My PRs body. Connecting cleared the header one and
+left the body one asking, so the flow read as failed and the whole install was
+run a second time, to the same place.
+
+Two hooks answered the same question from two fetches. `useSystemStatus` (via
+`useGithubConnection`) fetches `GET /github/status` and RE-CHECKS IT ON FOCUS —
+the only signal the app gets that an install landed, because the GitHub App flow
+finishes in the system browser. `usePullRequestSync` fetched the same route once
+per workspace into `pullRequests.connected`, which is what every PR page's empty
+state reads. The second fetch never ran again, so from the moment of connecting
+the two disagreed, and the page kept a CTA for a connection that already
+existed.
+
+`usePullRequestSync` now MIRRORS the workspace store instead of probing: one
+fetch, one writer, and the focus re-check that clears the banner clears the page
+CTA in the same pass. Its viewer login comes from the same place
+(`workspace.githubUser`), so that is one fewer request too. The list no longer
+writes `connected` on success either — cached rows outlive a revoked
+installation, so a list that answers proves the BACKEND replied and nothing
+about GitHub, and a second writer of that flag is the bug's shape.
+
+The other half of the report — "it's missing some kind of 'we're pulling in your
+PRs' loader" — was real and separate. A freshly connected workspace has never
+been polled, so its cached list is empty: the plain fetch returned nothing and
+the page settled on "no pull requests" a second after authorizing. The
+false→true transition now force-polls GitHub (what onboarding already did via
+`justOnboarded`) under a new `initialSync` flag, and the shell says "Pulling in
+your pull requests…" while it runs. The loader keys on `initialSync` as well as
+`loading`, or a late-resolving cached list would clear `loading` underneath the
+poll and flash the empty state anyway.
+
+Regression tests in both forks (`githubConnectRecovery.test.tsx`): the mirror,
+the no-self-probe assertion, the catch-up poll, no re-poll for an
+already-connected workspace, and `connected` surviving a successful list.
+
 ## Review ranking: validate saved models before restoration (2026-09-22)
 
 The offline loader previously converted arrays without validating their dimensions or numeric values.

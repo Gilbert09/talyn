@@ -87,6 +87,7 @@ export function GitHubPageShell({
   const loading = usePullRequestStore((s) => s.loading);
   const error = usePullRequestStore((s) => s.error);
   const connected = usePullRequestStore((s) => s.connected);
+  const initialSync = usePullRequestStore((s) => s.initialSync);
   const allRows = usePullRequestStore((s) => s.rows);
   const { copyList, connect } = useGitHubActions();
 
@@ -204,11 +205,24 @@ export function GitHubPageShell({
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div className="min-w-0 flex-1 overflow-hidden">
           {/* First load (no rows yet): a centered spinner instead of flashing
-              the empty state while the initial PR fetch is in flight. */}
-          {loading && rows.length === 0 && !error ? (
+              the empty state while the initial PR fetch is in flight.
+              `initialSync` counts as loading in its own right — a cached list
+              resolving late would otherwise clear `loading` underneath the
+              post-connect poll and flash "no pull requests" at somebody who
+              has just authorized. */}
+          {(loading || initialSync) && rows.length === 0 && !error ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
-              <p className="text-sm">Loading pull requests…</p>
+              {/* The catch-up poll that follows a fresh connection reads from
+                  GitHub and takes a few seconds. Say what is happening: the
+                  person watching has just authorized and is waiting to see
+                  their PRs appear. */}
+              <p className="text-sm">
+                {initialSync ? 'Pulling in your pull requests…' : 'Loading pull requests…'}
+              </p>
+              {initialSync && (
+                <p className="text-xs">This takes a few seconds the first time.</p>
+              )}
             </div>
           ) : (
           <ScrollArea className="h-full">
