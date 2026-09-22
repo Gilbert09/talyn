@@ -228,7 +228,8 @@ describe('workflow routes', () => {
         workflows: true,
         loops: false,
         mcpServers: false,
-        reviewPriority: false,
+        reviewPriority: true,
+        reviewRankingCandidate: false,
       });
     });
 
@@ -246,7 +247,8 @@ describe('workflow routes', () => {
         workflows: false,
         loops: false,
         mcpServers: false,
-        reviewPriority: false,
+        reviewPriority: true,
+        reviewRankingCandidate: false,
       });
     });
   });

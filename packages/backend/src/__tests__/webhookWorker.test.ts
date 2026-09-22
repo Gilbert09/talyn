@@ -22,6 +22,7 @@ import {
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
+  reviewRankingParticipants, reviewRankingOutcomes,
   workspaces as workspacesTable,
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
@@ -249,6 +250,19 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
    * gate and above the `check_suite` no-op, because "does this imply a PR data
    * refresh" is a narrower question than "does a user care".
    */
+  it('stores a submitted review through the webhook path for an untracked PR', async () => {
+    await db.insert(reviewRankingParticipants).values({
+      workspaceId: 'wsA', userId: TEST_USER_ID, viewerLogin: 'viewer', enabled: true,
+    });
+    await processWebhookDelivery(delivery({ eventType: 'pull_request_review', action: 'submitted', payload: {
+      pull_request: { number: 999 }, review: { node_id: 'ranking-review', state: 'approved',
+        submitted_at: new Date().toISOString(), user: { type: 'User', login: 'viewer' } },
+    } }));
+    expect(await db.select().from(reviewRankingOutcomes)).toMatchObject([
+      { workspaceId: 'wsA', reviewId: 'ranking-review', prNumber: 999 },
+    ]);
+  });
+
   describe('workflow engine hook', () => {
     it.each(['edited', 'closed'])('refreshes current state instead of applying a replayed %s payload', async (action) => {
       await seedTrackedPr('rA', 'wsA', 7);

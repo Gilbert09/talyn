@@ -1396,3 +1396,43 @@ export const reviewRankModels = pgTable(
     pk: primaryKey({ columns: [t.workspaceId, t.viewerLogin] }),
   })
 );
+
+export const reviewRankingParticipants = pgTable('review_ranking_participants', {
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  viewerLogin: text('viewer_login').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ pk: primaryKey({ columns: [t.workspaceId, t.userId] }) }));
+
+export const reviewRankingEvents = pgTable('review_ranking_events', {
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  eventId: text('event_id').notNull(),
+  event: text('event').notNull(),
+  snapshotId: text('snapshot_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  payload: jsonb('payload').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workspaceId, t.userId, t.eventId] }),
+  time: index('review_ranking_events_time').on(t.receivedAt),
+  snapshot: index('review_ranking_events_snapshot').on(t.workspaceId, t.userId, t.snapshotId),
+}));
+
+export const reviewRankingOutcomes = pgTable('review_ranking_outcomes', {
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  reviewId: text('review_id').notNull(),
+  lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+  viewerLogin: text('viewer_login').notNull(),
+  repo: text('repo').notNull(),
+  prNumber: integer('pr_number').notNull(),
+  state: text('state').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workspaceId, t.reviewId] }),
+  time: index('review_ranking_outcomes_time').on(t.submittedAt),
+}));

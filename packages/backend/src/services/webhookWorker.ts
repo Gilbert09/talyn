@@ -1,3 +1,4 @@
+import { recordRankingOutcome } from './reviewPriority/collection.js';
 import type { Redis } from 'ioredis';
 import { createRedisConnection, isRedisEnabled } from './redis.js';
 import { REPLICA_ID } from './wsBus.js';
@@ -291,6 +292,10 @@ export async function processWebhookDelivery(
   if (targets.length === 0) {
     whTrace(`  └ ${delivery.repoFullName}: no authorized watching workspace — dropped`);
     return 0;
+  }
+
+  if (delivery.eventType === 'pull_request_review' && delivery.action === 'submitted') {
+    await recordRankingOutcome(targets.map((target) => target.workspaceId), delivery.repoFullName, delivery.payload);
   }
 
   // Workflows — user-defined PR automation. Evaluated HERE, above the

@@ -324,7 +324,10 @@ export function pullRequestRoutes(): Router {
       await isFeatureEnabled('reviewPriority', { distinctId: viewer.id, email: viewer.email })
     ) {
       const viewerLogin = await githubService.getViewerLogin(workspaceId).catch(() => null);
-      priorityById = await scoreReviewRows(db, workspaceId, viewerLogin, rows);
+      const candidate = await isFeatureEnabled('reviewRankingCandidate', {
+        distinctId: viewer.id, email: viewer.email,
+      });
+      priorityById = await scoreReviewRows(db, workspaceId, viewerLogin, rows, candidate ? 'candidate' : 'control');
     }
 
     res.json({

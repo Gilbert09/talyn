@@ -1,3 +1,4 @@
+import type { RankingExperimentTrace } from './reviewRankingModel.js';
 // Review priority — the ordering behind the Reviews tab's "Priority" sort.
 //
 // This is the ONE definition of "which of these PRs should I read next". The
@@ -50,7 +51,7 @@ import {
   type ReviewRankFeatureStats,
 } from './reviewRank.js';
 
-export const PR_PRIORITY_SCORER_VERSION = 'priority-1';
+export const PR_PRIORITY_SCORER_VERSION = 'priority-2';
 
 export interface PRPriorityRankInputs {
   features: number[];
@@ -64,6 +65,7 @@ export interface PRPriorityTrace {
   source: 'server' | 'client';
   modelVersion: string | null;
   scoredAt: number;
+  pooledScore?: number;
   target: PRPriorityTarget;
   taskActive: boolean;
   rankInputs: (Omit<PRPriorityRankInputs, 'features'> & { features: (number | null)[] }) | null;
@@ -133,6 +135,7 @@ export type PRPriorityReason =
   | 'known_files'
   | 'your_repo'
   | 'their_team'
+  | 'shared_model'
   | 'quick_for_you';
 
 /**
@@ -162,6 +165,7 @@ export const PR_PRIORITY_REASON_LABEL: Record<PRPriorityReason, string> = {
   re_review: 'Re-review',
   your_threads: 'Your comments open',
   waited: 'Waited',
+  shared_model: 'Suggested for review',
   known_author: 'You review them often',
   reviews_you: 'They review your PRs',
   known_files: 'You know these files',
@@ -195,6 +199,7 @@ export interface PRPriorityTerm {
 
 /** What {@link scorePRForReview} decides about one row. */
 export interface PRPriorityVerdict {
+  experiment?: RankingExperimentTrace;
   trace?: PRPriorityTrace;
   gate: PRPriorityGate;
   /**
@@ -303,6 +308,7 @@ export interface PRPriorityContext {
   profile?: ReviewRankProfile | null;
   /** Exact numeric inputs for replay. Null explicitly disables the learned term. */
   rankInputs?: PRPriorityRankInputs | null;
+  pooledScore?: number;
   captureTrace?: { source: 'server' | 'client'; modelVersion?: string };
 }
 
@@ -364,6 +370,7 @@ function scoringTrace(
     source: ctx.captureTrace!.source,
     modelVersion: ctx.captureTrace!.modelVersion ?? null,
     scoredAt: ctx.now,
+    pooledScore: ctx.pooledScore,
     target,
     taskActive,
     rankInputs,
@@ -371,9 +378,12 @@ function scoringTrace(
 }
 
 export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict {
-  if (trace.schemaVersion !== 1 || trace.scorerVersion !== PR_PRIORITY_SCORER_VERSION ||
+  if (trace.schemaVersion !== 1 || ![PR_PRIORITY_SCORER_VERSION, 'priority-1'].includes(trace.scorerVersion) ||
       !Number.isFinite(trace.scoredAt)) {
     throw new Error('Unsupported scoring trace');
+  }
+  if (trace.pooledScore !== undefined && (!Number.isFinite(trace.pooledScore) || trace.scorerVersion === 'priority-1')) {
+    throw new Error('Invalid shared score');
   }
   const inputs = trace.rankInputs;
   // Production skips the learned term when stored statistics have an older dimension.
@@ -387,6 +397,7 @@ export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict
   }
   return scorePRForReview(trace.target, {
     now: trace.scoredAt,
+    pooledScore: trace.pooledScore,
     isTaskActive: () => trace.taskActive,
     // JSON stores unknown features as null. Standardization maps NaN to the mean.
     rankInputs: inputs ? { ...inputs, features: inputs.features.map((value) => value ?? NaN) } : null,
@@ -707,7 +718,9 @@ export function scorePRForReview(
   // from the viewer's own history, and it is deliberately the smaller half —
   // see PR_PRIORITY_WEIGHTS.learnedCap.
   const inputs = rankingInputs(row, ctx);
-  if (inputs) {
+  if (ctx.pooledScore !== undefined && Number.isFinite(ctx.pooledScore)) {
+    push('shared_model', Math.round(PR_PRIORITY_WEIGHTS.learnedCap * Math.tanh(ctx.pooledScore / 2)));
+  } else if (inputs) {
     const { weights, stats, features: raw } = inputs;
     // Without stored stats the features are on raw scales the weights were
     // never fitted against, so scoring them would be arithmetic on mismatched

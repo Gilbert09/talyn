@@ -1,7 +1,9 @@
+import { api } from '../lib/api';
 import { useEffect, useRef } from 'react';
 import { useAuth, takePendingLogin } from './auth/AuthProvider';
 import { useWorkspaceStore } from '../stores/workspace';
 import {
+  getAnalyticsOptOut,
   identifyAnalyticsUser,
   registerSuperProperties,
   resetAnalyticsUser,
@@ -29,6 +31,30 @@ export function Analytics() {
   // track logged_in when the user id appears after being absent.
   const prevUserIdRef = useRef<string | null | undefined>(undefined);
   const previousPanelRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!userId || !currentWorkspaceId) return;
+    let sent = false;
+    let running = false;
+    const sync = async () => {
+      if (!getAnalyticsOptOut()) { sent = false; return; }
+      if (sent || running) return;
+      running = true;
+      try {
+        await api.workspaces.recordRankingEvents(currentWorkspaceId, { enabled: false, events: [] });
+        sent = true;
+      } catch { /* Retry when the connection returns. */ }
+      finally { running = false; }
+    };
+    void sync();
+    const timer = setInterval(() => void sync(), 30_000);
+    window.addEventListener('talyn-analytics-preference-changed', sync);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('talyn-analytics-preference-changed', sync);
+    };
+  }, [userId, currentWorkspaceId]);
+
 
   useEffect(() => {
     const prevUserId = prevUserIdRef.current;

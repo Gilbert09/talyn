@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
@@ -8,11 +8,13 @@ import {
   PROMPT_TEMPLATE_MAX_CHARS,
   defaultPromptTemplateHash,
 } from '@talyn/shared';
+import { githubService } from '../../services/github.js';
 import { workspaceRoutes } from '../../routes/workspaces.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import {
+  reviewRankingParticipants,
   workspaces as workspacesTable,
   repositories as repositoriesTable,
   integrations as integrationsTable,
@@ -60,6 +62,8 @@ describe('routes/workspaces', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeServer();
     await cleanup();
   });
@@ -67,6 +71,42 @@ describe('routes/workspaces', () => {
   it('rejects unauthenticated callers', async () => {
     const res = await fetch(`${serverUrl}/workspaces`);
     expect(res.status).toBe(401);
+  });
+
+  describe('ranking collection authorization', () => {
+    it.each([false, true])('requires ownership for collection enabled=%s', async (enabled) => {
+      await db.insert(workspacesTable).values({ id: 'other-ws', ownerId: OTHER_USER_ID, name: 'Other' });
+      const res = await fetch(`${serverUrl}/workspaces/other-ws/review-ranking-events`, {
+        method: 'POST', headers: authHeaders, body: JSON.stringify({ enabled, events: [] }),
+      });
+      expect([403, 404]).toContain(res.status);
+    });
+
+    it('accepts opt-out while the ranking flag is off and GitHub is unavailable', async () => {
+      vi.stubEnv('REVIEW_PRIORITY_ENABLED', 'false');
+      await db.insert(workspacesTable).values({ id: 'ws', ownerId: TEST_USER_ID, name: 'Mine' });
+      await db.insert(reviewRankingParticipants).values({ workspaceId: 'ws', userId: TEST_USER_ID, viewerLogin: 'viewer' });
+      const login = vi.spyOn(githubService, 'getViewerLogin').mockRejectedValue(new Error('offline'));
+      const res = await fetch(`${serverUrl}/workspaces/ws/review-ranking-events`, {
+        method: 'POST', headers: authHeaders, body: JSON.stringify({ enabled: false, events: [] }),
+      });
+      expect(res.status).toBe(200);
+      expect((await db.select().from(reviewRankingParticipants))[0].enabled).toBe(false);
+      expect(login).not.toHaveBeenCalled();
+    });
+
+    it('uses the connected GitHub identity when collection starts', async () => {
+      vi.stubEnv('REVIEW_PRIORITY_ENABLED', 'true');
+      await db.insert(workspacesTable).values({ id: 'ws', ownerId: TEST_USER_ID, name: 'Mine' });
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('Viewer');
+      const res = await fetch(`${serverUrl}/workspaces/ws/review-ranking-events`, {
+        method: 'POST', headers: authHeaders, body: JSON.stringify({ enabled: true, events: [] }),
+      });
+      expect(res.status).toBe(200);
+      expect(await db.select().from(reviewRankingParticipants)).toMatchObject([
+        { workspaceId: 'ws', userId: TEST_USER_ID, viewerLogin: 'viewer', enabled: true },
+      ]);
+    });
   });
 
   describe('POST /workspaces', () => {

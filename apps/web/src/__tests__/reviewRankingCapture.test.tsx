@@ -1,3 +1,4 @@
+import { api } from '../lib/api';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readReviewRankingLog, type ReviewRankingContext, type ReviewRankingRow } from '@talyn/shared';
@@ -16,6 +17,7 @@ function log() { return readReviewRankingLog(localStorage, 'workspace'); }
 
 beforeEach(() => {
   localStorage.clear();
+  vi.spyOn(api.workspaces, 'recordRankingEvents').mockResolvedValue({ accepted: 1 });
   vi.useFakeTimers();
   vi.stubGlobal('IntersectionObserver', class {
     constructor(callback: IntersectionObserverCallback) { intersect = callback; }
@@ -36,6 +38,21 @@ afterEach(() => {
 });
 
 describe('local ranking capture', () => {
+  it('uploads an observed queue with session identity, then sends opt-out without events', async () => {
+    renderHook(() => useReviewRankingCapture(rows, context, true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(api.workspaces.recordRankingEvents).toHaveBeenCalledWith('workspace', expect.objectContaining({
+      enabled: true, events: [expect.objectContaining({
+        event: 'pr_review_queue_snapshot', properties: expect.objectContaining({
+          session_id: expect.any(String), viewer_login: 'viewer', candidate_count: 1,
+        }),
+      })],
+    }));
+    localStorage.setItem('fastowl-analytics-opt-out', 'true');
+    await act(async () => { window.dispatchEvent(new Event('talyn-analytics-preference-changed')); });
+    expect(api.workspaces.recordRankingEvents).toHaveBeenLastCalledWith('workspace', { enabled: false, events: [] });
+  });
+
   it.each([true, false])('exports recent events when the archive is available: %s', async (available) => {
     renderHook(() => useReviewRankingCapture(rows, context, true));
     const recent = log();

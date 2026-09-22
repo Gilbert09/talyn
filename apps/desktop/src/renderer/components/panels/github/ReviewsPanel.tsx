@@ -1,3 +1,4 @@
+import { loadReviewSortMode, REVIEW_SORT_MODE_KEY } from '@talyn/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye } from 'lucide-react';
 import { api, type ReviewRankPayload } from '../../../lib/api';
@@ -41,16 +42,11 @@ import { ReviewRankingExportButton } from './ReviewRankingExportButton';
  * a round-trip per click to persist which way a list is sorted would be absurd.
  * Same call `AutoKeepToggle` makes for its own toggle.
  */
-const SORT_MODE_KEY = 'talyn-reviews-sort-mode';
+const SORT_MODE_KEY = REVIEW_SORT_MODE_KEY;
 
 function loadSortMode(): ReviewSortMode {
-  try {
-    const raw = window.localStorage.getItem(SORT_MODE_KEY);
-    if (raw === 'newest' || raw === 'oldest' || raw === 'priority') return raw;
-  } catch {
-    // Private mode, or a renderer with no storage. Not worth a warning.
-  }
-  return 'newest';
+  try { return loadReviewSortMode(window.localStorage); }
+  catch { return 'priority'; }
 }
 
 /**
@@ -326,13 +322,14 @@ export function ReviewsPanel() {
     workspaceId: workspaceId ?? '',
     viewerLogin: viewerLogin ?? '',
     sortMode: priorityMode ? 'priority' as const : sortMode === 'oldest' ? 'oldest' as const : 'newest' as const,
+    assignedArm: features?.reviewRankingCandidate ? 'candidate' as const : 'control' as const,
     filterKey: JSON.stringify([repoFilter, requestedFilter, search, activeFilterIds]),
     filtered: anyFilterActive,
     profile: profileWorkspaceId.current === workspaceId ? rankProfile : null,
     priorityById,
     repositoryScope: repositories.filter((repo) => repo.workspaceId === workspaceId).map((repo) => repo.fullName),
   }), [workspaceId, viewerLogin, priorityMode, sortMode, repoFilter, requestedFilter,
-    search, activeFilterIds, anyFilterActive, rankProfile, priorityById, repositories]);
+    search, activeFilterIds, anyFilterActive, rankProfile, priorityById, repositories, features]);
   const recordReviewOpen = useReviewRankingCapture(
     filtered,
     rankingCaptureContext,

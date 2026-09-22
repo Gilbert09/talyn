@@ -152,3 +152,16 @@ Migration 0055 requires draining old replicas before revoking their former role'
 
 - **PostHog Code** — https://github.com/PostHog/code
 - **Electron React Boilerplate** — https://github.com/electron-react-boilerplate/electron-react-boilerplate
+
+
+## Review ranking production trial (2026-09-22)
+
+Priority is the default review sort in new clients. Explicit later choices remain saved.
+The `review-priority` flag controls general availability and defaults on.
+The separate `review-ranking-candidate-v1` flag assigns the fixed shared model and defaults off.
+The candidate replaces the bounded learned score. Readiness gates and waiting points remain common to both groups.
+Server verdicts include exact replay inputs and model versions.
+Authenticated clients upload queue observations to Talyn, with analytics opt-out handling and bounded retry storage.
+GitHub webhooks record submitted reviews; reconciliation obtains creation times separately.
+Migration `0066` applies ownership policies and 90-day retention. No PR prose or code enters these tables.
+See [the trial protocol](REVIEW_RANKING.md) for allocation, attribution limits, and rollback criteria.

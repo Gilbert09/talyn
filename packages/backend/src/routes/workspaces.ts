@@ -1,3 +1,5 @@
+import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js';
+import { disableRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
 import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -198,6 +200,32 @@ export function workspaceRoutes(): Router {
    * works perfectly well without a model, which is the entire point of the
    * shipped prior. "No model yet" is a normal state.
    */
+  router.post('/:id/review-ranking-events', async (req, res) => {
+    try { await requireWorkspaceAccess(req, req.params.id); }
+    catch (error) { return handleAccessError(error, res); }
+    const parsed = rankingBatchSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ success: false, error: 'Invalid ranking events' });
+    const user = assertUser(req);
+    if (!parsed.data.enabled) {
+      await disableRankingCollection(getDbClient(), user.id);
+      return res.json({ success: true, data: { accepted: 0 } });
+    }
+    if (!(await isFeatureEnabled('reviewPriority', { distinctId: user.id, email: user.email }))) {
+      return res.status(403).json({ success: false, error: 'Ranking collection is disabled' });
+    }
+    const login = await githubService.getViewerLogin(req.params.id).catch(() => null);
+    if (!login) return res.status(409).json({ success: false, error: 'GitHub identity is unavailable' });
+    try {
+      await storeRankingEvents(getDbClient(), req.params.id, user.id, login, parsed.data);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Invalid ranking identity or time') {
+        return res.status(400).json({ success: false, error: error.message });
+      }
+      throw error;
+    }
+    res.json({ success: true, data: { accepted: parsed.data.enabled ? parsed.data.events.length : 0 } });
+  });
+
   router.get('/:id/review-rank-model', async (req, res) => {
     const user = assertUser(req);
     const db = getDbClient();

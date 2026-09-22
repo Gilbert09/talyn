@@ -449,6 +449,7 @@ describe('featuresForUser', () => {
       'loops',
       'mcpServers',
       'reviewPriority',
+      'reviewRankingCandidate',
       'workflows',
     ]);
   });
@@ -459,7 +460,8 @@ describe('featuresForUser', () => {
       workflows: false,
       loops: false,
       mcpServers: false,
-      reviewPriority: false,
+      reviewPriority: true,
+      reviewRankingCandidate: false,
     });
   });
 
@@ -473,18 +475,15 @@ describe('featuresForUser', () => {
       workflows: true,
       loops: false,
       mcpServers: false,
-      reviewPriority: false,
+      reviewPriority: true,
+      reviewRankingCandidate: false,
     });
   });
 
-  it('refuses review priority by default, because its backfill spends budget', async () => {
-    // The ordering itself is a pure client-side function and costs nothing.
-    // Its other half reads a viewer's whole review history out of GitHub, and
-    // the GraphQL point budget is shared per rate-limit ACCOUNT — so failing
-    // open here would take points from the poller and the merge queue, which
-    // are the things that have to keep working.
+  it('offers Priority by default and keeps the candidate closed on failure', async () => {
     const features = await featuresForUser(SUBJECT);
-    expect(features.reviewPriority).toBe(false);
+    expect(features.reviewPriority).toBe(true);
+    expect(features.reviewRankingCandidate).toBe(false);
   });
 
   it('lets the env override turn review priority on for local development', async () => {

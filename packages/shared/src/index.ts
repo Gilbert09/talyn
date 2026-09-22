@@ -1716,3 +1716,6 @@ export interface GenerateTaskMetadataResponse {
   description: string;
   suggestedPriority: TaskPriority;
 }
+
+export * from './reviewRankingPreference.js';
+export * from './reviewRankingModel.js';

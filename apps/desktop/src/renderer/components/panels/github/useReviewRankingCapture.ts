@@ -1,5 +1,7 @@
+import { api } from '../../../lib/api';
+import { getAnalyticsOptOut } from '../../../lib/analytics';
 import { useEffect, useMemo } from 'react';
-import { ReviewRankingArchive } from '@talyn/client';
+import { ReviewRankingArchive, ReviewRankingUploader } from '@talyn/client';
 import type { ReviewRankingExportResult } from '../../../../main/reviewRankingExport';
 import {
   appendReviewRankingLog,
@@ -34,9 +36,37 @@ export function useReviewRankingCapture(
   context: ReviewRankingContext,
   enabled: boolean,
 ): (id: string) => void {
+  const session = useMemo(() => ({ id: crypto.randomUUID(), startedAt: new Date().toISOString() }), [context.workspaceId]);
+  const uploader = useMemo(() => new ReviewRankingUploader(
+    context.workspaceId, {
+      getItem: (key) => localStorage.getItem(key),
+      setItem: (key, value) => localStorage.setItem(key, value),
+      removeItem: (key) => localStorage.removeItem(key),
+    }, (batch) => api.workspaces.recordRankingEvents(context.workspaceId, batch),
+  ), [context.workspaceId]);
+  useEffect(() => {
+    if (!enabled) return;
+    const flush = () => {
+      uploader.setEnabled(!getAnalyticsOptOut());
+      void uploader.flush();
+    };
+    flush();
+    const timer = setInterval(flush, 5000);
+    window.addEventListener('talyn-analytics-preference-changed', flush);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('talyn-analytics-preference-changed', flush);
+      flush();
+    };
+  }, [uploader, enabled]);
+
   const recorder = useMemo(
     () => new ReviewRankingRecorder(
       (event, properties) => {
+        uploader.setEnabled(!getAnalyticsOptOut());
+        uploader.append({ id: crypto.randomUUID(), event, properties: {
+          ...properties, session_id: session.id, session_started_at: session.startedAt,
+        } });
         void archive.append(event, properties);
         try {
           appendReviewRankingLog(localStorage, event, properties);
@@ -46,7 +76,7 @@ export function useReviewRankingCapture(
       },
       () => crypto.randomUUID(),
     ),
-    [context.workspaceId],
+    [context.workspaceId, session, uploader],
   );
 
   useEffect(() => {

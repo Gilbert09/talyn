@@ -1,0 +1,420 @@
+{
+  "modelVersion": "shared-queue-v1-3d2399cacfea4ea6",
+  "training": {
+    "sourceSha256": "13c5e971d71c6d5a9c9da8221fc2be52e267b6561c57cb043753a7283b967aca",
+    "start": 1776988800.0,
+    "end": 1787529600.0,
+    "choices": 2400,
+    "reviewers": 85
+  },
+  "audit": {
+    "nonhuman_or_team_request_events": 46439,
+    "submitted_reviews_in_window": 65270,
+    "invalid_review_start_times": 836,
+    "submitted_review_decisions": 64432,
+    "review_outside_direct_queue": 58391,
+    "outside_queue_no_prior_direct_request": 25729,
+    "outside_queue_after_prior_review": 32495,
+    "single_candidate_choices": 1224,
+    "outside_queue_closed_or_draft": 138,
+    "outside_queue_removed_request": 29,
+    "simultaneous_decisions": 1170,
+    "choices": 3647,
+    "candidate_rows": 25967,
+    "reviewers_with_choices": 95,
+    "informative_choices": 2349
+  },
+  "developmentRawModel": {
+    "events": 629,
+    "macro": {
+      "hit1": 0.5945370690312549,
+      "hit3": 0.9205305360565462,
+      "mrr": 0.7578781592521187,
+      "ndcg3": 0.7906450528170412
+    },
+    "micro": {
+      "hit1": 0.47058823529411764,
+      "hit3": 0.7376788553259142,
+      "mrr": 0.6287467272490994,
+      "ndcg3": 0.6272387959402732
+    },
+    "per_user": {
+      "reviewer-10": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-102": {
+        "events": 2,
+        "hit1": 0.0,
+        "hit3": 1.0,
+        "mrr": 0.41666666666666663,
+        "ndcg3": 0.5654648767857288
+      },
+      "reviewer-105": {
+        "events": 6,
+        "hit1": 0.8333333333333334,
+        "hit3": 1.0,
+        "mrr": 0.9166666666666666,
+        "ndcg3": 0.9384882922619097
+      },
+      "reviewer-109": {
+        "events": 2,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.75,
+        "ndcg3": 0.8154648767857288
+      },
+      "reviewer-111": {
+        "events": 19,
+        "hit1": 0.7368421052631579,
+        "hit3": 1.0,
+        "mrr": 0.8596491228070174,
+        "ndcg3": 0.8959852112782016
+      },
+      "reviewer-120": {
+        "events": 41,
+        "hit1": 0.3902439024390244,
+        "hit3": 0.5853658536585366,
+        "mrr": 0.5221880842872982,
+        "ndcg3": 0.5037719211672509
+      },
+      "reviewer-127": {
+        "events": 8,
+        "hit1": 0.625,
+        "hit3": 1.0,
+        "mrr": 0.7916666666666666,
+        "ndcg3": 0.8452324383928644
+      },
+      "reviewer-144": {
+        "events": 27,
+        "hit1": 0.8888888888888888,
+        "hit3": 1.0,
+        "mrr": 0.9444444444444444,
+        "ndcg3": 0.9589921948412731
+      },
+      "reviewer-148": {
+        "events": 5,
+        "hit1": 0.6,
+        "hit3": 1.0,
+        "mrr": 0.8,
+        "ndcg3": 0.8523719014285831
+      },
+      "reviewer-162": {
+        "events": 11,
+        "hit1": 0.18181818181818182,
+        "hit3": 0.45454545454545453,
+        "mrr": 0.37672933127478586,
+        "ndcg3": 0.3300845230519507
+      },
+      "reviewer-174": {
+        "events": 2,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.6666666666666666,
+        "ndcg3": 0.75
+      },
+      "reviewer-188": {
+        "events": 38,
+        "hit1": 0.6052631578947368,
+        "hit3": 0.8421052631578947,
+        "mrr": 0.756140350877193,
+        "ndcg3": 0.7512483691729385
+      },
+      "reviewer-191": {
+        "events": 6,
+        "hit1": 0.16666666666666666,
+        "hit3": 0.8333333333333334,
+        "mrr": 0.4777777777777777,
+        "ndcg3": 0.5436432511904858
+      },
+      "reviewer-193": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-21": {
+        "events": 4,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.75,
+        "ndcg3": 0.8154648767857288
+      },
+      "reviewer-221": {
+        "events": 3,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-226": {
+        "events": 12,
+        "hit1": 0.9166666666666666,
+        "hit3": 1.0,
+        "mrr": 0.9583333333333334,
+        "ndcg3": 0.9692441461309548
+      },
+      "reviewer-228": {
+        "events": 4,
+        "hit1": 0.75,
+        "hit3": 1.0,
+        "mrr": 0.875,
+        "ndcg3": 0.9077324383928644
+      },
+      "reviewer-23": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-234": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-237": {
+        "events": 1,
+        "hit1": 0.0,
+        "hit3": 1.0,
+        "mrr": 0.5,
+        "ndcg3": 0.6309297535714575
+      },
+      "reviewer-239": {
+        "events": 78,
+        "hit1": 0.48717948717948717,
+        "hit3": 0.7564102564102564,
+        "mrr": 0.6499592999593,
+        "ndcg3": 0.6452950839743642
+      },
+      "reviewer-247": {
+        "events": 2,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-248": {
+        "events": 2,
+        "hit1": 0.0,
+        "hit3": 1.0,
+        "mrr": 0.5,
+        "ndcg3": 0.6309297535714575
+      },
+      "reviewer-251": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-258": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-260": {
+        "events": 2,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.75,
+        "ndcg3": 0.8154648767857288
+      },
+      "reviewer-271": {
+        "events": 6,
+        "hit1": 0.3333333333333333,
+        "hit3": 1.0,
+        "mrr": 0.638888888888889,
+        "ndcg3": 0.7321315434523954
+      },
+      "reviewer-274": {
+        "events": 8,
+        "hit1": 0.75,
+        "hit3": 1.0,
+        "mrr": 0.8541666666666666,
+        "ndcg3": 0.8913662191964322
+      },
+      "reviewer-282": {
+        "events": 1,
+        "hit1": 0.0,
+        "hit3": 1.0,
+        "mrr": 0.5,
+        "ndcg3": 0.6309297535714575
+      },
+      "reviewer-284": {
+        "events": 9,
+        "hit1": 0.7777777777777778,
+        "hit3": 1.0,
+        "mrr": 0.8518518518518517,
+        "ndcg3": 0.8888888888888888
+      },
+      "reviewer-292": {
+        "events": 65,
+        "hit1": 0.18461538461538463,
+        "hit3": 0.4,
+        "mrr": 0.36798945272927175,
+        "ndcg3": 0.30640781961538777
+      },
+      "reviewer-297": {
+        "events": 4,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.7083333333333334,
+        "ndcg3": 0.7827324383928644
+      },
+      "reviewer-30": {
+        "events": 19,
+        "hit1": 0.2631578947368421,
+        "hit3": 0.631578947368421,
+        "mrr": 0.4640688259109311,
+        "ndcg3": 0.4749325796992543
+      },
+      "reviewer-302": {
+        "events": 14,
+        "hit1": 0.2857142857142857,
+        "hit3": 0.9285714285714286,
+        "mrr": 0.613095238095238,
+        "ndcg3": 0.6819598591836902
+      },
+      "reviewer-309": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-31": {
+        "events": 11,
+        "hit1": 0.7272727272727273,
+        "hit3": 1.0,
+        "mrr": 0.8484848484848485,
+        "ndcg3": 0.8874417733766287
+      },
+      "reviewer-37": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-45": {
+        "events": 3,
+        "hit1": 0.6666666666666666,
+        "hit3": 1.0,
+        "mrr": 0.8333333333333334,
+        "ndcg3": 0.8769765845238192
+      },
+      "reviewer-50": {
+        "events": 18,
+        "hit1": 0.3888888888888889,
+        "hit3": 0.7777777777777778,
+        "mrr": 0.5898148148148148,
+        "ndcg3": 0.6051549589285763
+      },
+      "reviewer-51": {
+        "events": 31,
+        "hit1": 0.4838709677419355,
+        "hit3": 0.8709677419354839,
+        "mrr": 0.6685867895545313,
+        "ndcg3": 0.6985370570276545
+      },
+      "reviewer-54": {
+        "events": 3,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-7": {
+        "events": 33,
+        "hit1": 0.6060606060606061,
+        "hit3": 0.8181818181818182,
+        "mrr": 0.740981240981241,
+        "ndcg3": 0.731959053571433
+      },
+      "reviewer-70": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-71": {
+        "events": 2,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.75,
+        "ndcg3": 0.8154648767857288
+      },
+      "reviewer-78": {
+        "events": 1,
+        "hit1": 0.0,
+        "hit3": 1.0,
+        "mrr": 0.5,
+        "ndcg3": 0.6309297535714575
+      },
+      "reviewer-82": {
+        "events": 2,
+        "hit1": 0.5,
+        "hit3": 1.0,
+        "mrr": 0.75,
+        "ndcg3": 0.8154648767857288
+      },
+      "reviewer-85": {
+        "events": 1,
+        "hit1": 1.0,
+        "hit3": 1.0,
+        "mrr": 1.0,
+        "ndcg3": 1.0
+      },
+      "reviewer-89": {
+        "events": 64,
+        "hit1": 0.15625,
+        "hit3": 0.3125,
+        "mrr": 0.3114841564659701,
+        "ndcg3": 0.2507412191964322
+      },
+      "reviewer-91": {
+        "events": 32,
+        "hit1": 0.34375,
+        "hit3": 0.65625,
+        "mrr": 0.5233630952380952,
+        "ndcg3": 0.5163662191964322
+      },
+      "reviewer-95": {
+        "events": 15,
+        "hit1": 0.9333333333333333,
+        "hit3": 1.0,
+        "mrr": 0.9666666666666667,
+        "ndcg3": 0.9753953169047639
+      },
+      "reviewer-99": {
+        "events": 3,
+        "hit1": 0.3333333333333333,
+        "hit3": 1.0,
+        "mrr": 0.6666666666666666,
+        "ndcg3": 0.7539531690476383
+      }
+    },
+    "queues_over_three": {
+      "events": 441,
+      "macro_hit3": 0.8017361986881947
+    }
+  },
+  "promotionProven": false,
+  "limits": [
+    "These historical outcomes were used during development.",
+    "Historical direct requests differ from live requests first observed by Talyn.",
+    "Live readiness rules and the bounded score component need online evaluation.",
+    "Features were selected for serving availability, without tuning on these results.",
+    "This fixed candidate has no personal residual or content encoder."
+  ]
+}

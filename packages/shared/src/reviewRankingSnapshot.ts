@@ -21,6 +21,7 @@ export interface ReviewRankingContext {
   profile: ReviewRankProfile | null;
   priorityById?: Map<string, PRPriorityVerdict> | null;
   repositoryScope?: string[];
+  assignedArm?: 'control' | 'candidate';
 }
 
 export function reviewRankingCandidate(
@@ -73,6 +74,7 @@ export function reviewRankingCandidate(
     gate: verdict?.gate ?? null,
     score: verdict?.score ?? null,
     priority_trace: verdict?.trace ?? null,
+    experiment: verdict?.experiment ?? null,
   };
 }
 
@@ -114,7 +116,7 @@ export class ReviewRankingRecorder {
         priority_trace: candidate.priority_trace
           ? { ...candidate.priority_trace, scoredAt: 0 }
           : null,
-      })), clientModel, scope,
+      })), clientModel, scope, context.assignedArm,
     ]);
     if (fingerprint === this.fingerprint && now - this.recordedAt < 300_000 && this.snapshotId) {
       return this.snapshotId;
@@ -135,6 +137,7 @@ export class ReviewRankingRecorder {
         recorded_at: new Date(now).toISOString(),
         sort_mode: context.sortMode,
         filtered: context.filtered,
+        assigned_arm: context.assignedArm ?? null,
         repository_scope: scope,
         candidate_count: candidates.length,
         chunk_index: chunk,

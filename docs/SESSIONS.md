@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: shared candidate and central production pilot (2026-09-22)
+
+Prepare Priority as the default for every user, including existing installations. Later sort choices remain saved.
+Add a fixed shared network behind a separate candidate flag, with existing Priority as control.
+The model uses eight numeric inputs available during serving. Readiness gates and score limits remain unchanged.
+Historical development metrics do not prove a production gain.
+
+Add authenticated queue uploads, opt-out propagation, idempotent storage, webhook outcomes, and review-time reconciliation.
+Records exclude PR prose and code. Central retention is 90 days.
+The descriptive report retains sessions without reviews and excludes incomplete or ambiguous attribution.
+It separates PR opens from submissions and reports inference latency and waiting work.
+The original private pilot remains unchanged.
+
+Validation covers Python/runtime prediction parity, score replay, fallbacks, gates, capture, retries, ownership, and webhook integration.
+Route tests require local server access outside the network sandbox.
+See [the rollout protocol](REVIEW_RANKING.md) for allocation and evaluation limits.
+
+
 ## PostHog Code run logs: the dedup was eating the run (2026-09-22)
 
 Issue #63 — a PostHog Code task finishes fine and its log pane is empty, during the run and after it. Fleet tasks were unaffected. Two bugs in series, and neither is in the part that fetches the log.

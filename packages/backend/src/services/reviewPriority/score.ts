@@ -1,3 +1,5 @@
+import sharedCandidate from './sharedCandidate.json';
+import { predictSharedRanking, sharedRankingFeatures, REVIEW_RANKING_EXPERIMENT } from '@talyn/shared';
 // Score the Reviews list SERVER-SIDE, so the ranking can change without a release.
 //
 // # Why this moved
@@ -167,6 +169,7 @@ export async function scoreReviewRows(
   workspaceId: string,
   viewerLogin: string | null,
   rows: ScorableRow[],
+  assigned: 'control' | 'candidate' = 'control',
 ): Promise<Map<string, PRPriorityVerdict>> {
   const out = new Map<string, PRPriorityVerdict>();
   const cohort = rows.filter((r) => r.reviewRequested);
@@ -192,19 +195,41 @@ export async function scoreReviewRows(
     // Pinned once for the whole pass, exactly as the client did. A clock that
     // advances mid-sort makes a comparator non-transitive.
     const now = Date.now();
-    for (const row of cohort) {
-      out.set(
-        row.id,
-        scorePRForReview(toTarget(row), {
-          now,
-          profile,
-          captureTrace: { source: 'server', modelVersion },
-          isTaskActive: (taskId) => {
-            const status = statusById.get(taskId);
-            return status ? TASK_STATUS_TERMINAL[status] === false : false;
-          },
-        }),
-      );
+    const started = performance.now();
+    const targets = cohort.map(toTarget);
+    let features: number[][] | null = null;
+    let predictions: number[] | null = null;
+    let fallback: string | null = null;
+    try {
+      features = sharedRankingFeatures(targets, now);
+      predictions = predictSharedRanking(sharedCandidate, features);
+    } catch (error) {
+      fallback = error instanceof Error ? error.message : 'model_failure';
+    }
+    const latencyMs = performance.now() - started;
+    for (const [i, row] of cohort.entries()) {
+      const context = {
+        now, profile,
+        captureTrace: { source: 'server' as const, modelVersion },
+        isTaskActive: (taskId: string) => {
+          const status = statusById.get(taskId);
+          return status ? TASK_STATUS_TERMINAL[status] === false : false;
+        },
+      };
+      const baseline = scorePRForReview(targets[i], context);
+      const candidate = predictions ? scorePRForReview(targets[i], {
+        ...context, pooledScore: predictions[i],
+        captureTrace: { source: 'server', modelVersion: sharedCandidate.version },
+      }) : null;
+      const served = assigned === 'candidate' && candidate ? 'candidate' : 'control';
+      const verdict = served === 'candidate' ? candidate! : baseline;
+      verdict.experiment = {
+        experiment: REVIEW_RANKING_EXPERIMENT, assigned, served,
+        modelVersion: sharedCandidate.version, baselineScore: baseline.score,
+        candidateScore: candidate?.score ?? null, features: features?.[i] ?? null,
+        fallback, latencyMs,
+      };
+      out.set(row.id, verdict);
     }
   } catch (err) {
     console.warn(

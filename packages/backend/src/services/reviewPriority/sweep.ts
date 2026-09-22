@@ -1,3 +1,4 @@
+import { reconcileRankingOutcomes } from './collection.js';
 // The clock behind the review-ranking model: backfill once, retrain rarely.
 //
 // Deliberately slow. Review habits move over months, not minutes, so this is
@@ -67,7 +68,7 @@ export function shouldRetrain(
 async function sweepWorkspace(workspaceId: string): Promise<{ backfilled: boolean; trained: boolean }> {
   // The owner gate. Asked per workspace rather than once, so taking the flag
   // away from one account stops its spend on the next tick.
-  if (!(await workspaceHasFeature('reviewPriority', workspaceId))) {
+  if (!(await workspaceHasFeature('reviewPriority', workspaceId)).enabled) {
     return { backfilled: false, trained: false };
   }
 
@@ -125,6 +126,7 @@ async function sweepWorkspace(workspaceId: string): Promise<{ backfilled: boolea
  * a caller could do with the throw anyway — this runs on a timer.
  */
 export async function runReviewPrioritySweep(): Promise<SweepOutcome> {
+  await reconcileRankingOutcomes();
   const outcome: SweepOutcome = { workspaces: 0, backfilled: 0, trained: 0 };
   const db = getPoolDbClient();
   const rows = await db.select({ id: workspacesTable.id }).from(workspacesTable);

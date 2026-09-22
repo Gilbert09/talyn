@@ -75,6 +75,7 @@ export function setAnalyticsOptOut(optedOut: boolean): void {
   } catch {
     // Privacy mode — the in-memory client state below still applies.
   }
+  window.dispatchEvent(new Event('talyn-analytics-preference-changed'));
   if (!initialized) return;
   if (optedOut) {
     posthog.stopSessionRecording();

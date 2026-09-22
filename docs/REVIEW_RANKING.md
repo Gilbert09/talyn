@@ -1,5 +1,71 @@
 # Review ranking: experiments and release gates
 
+## Controlled production rollout (2026-09-22)
+
+Priority becomes the default review sort for every user on the new web and desktop builds.
+A new preference key applies this once to existing installations. Later explicit sort choices remain saved.
+The `review-priority` flag becomes a general release flag with an enabled fallback.
+It remains the feature kill switch.
+
+The fixed candidate is `shared-queue-v1-3d2399cacfea4ea6`, under experiment `priority-shared-v1`.
+The initial allocation is 10% candidate and 90% existing Priority, using `review-ranking-candidate-v1` and stable account IDs.
+That flag defaults off. A disabled candidate flag restores existing Priority on the next list fetch.
+Keep the UI label **Priority** in both groups.
+
+The candidate uses eight available numeric inputs and a shared network with 32 hidden units.
+Training used 2,400 historical choices from 85 reviewers, before 2026-08-24.
+The [candidate report](../scripts/review-ranking/results/2026-09-22-production-candidate.json) records provenance and development metrics.
+Those metrics do not prove production improvement. Historical request times differ from Talyn's first observation times.
+This version has no content encoder or personal residual. Those remain separate experiments.
+The candidate replaces only the bounded learned component. Readiness gates, waiting points, and deterministic ties remain unchanged.
+Missing or future timestamps refuse the whole candidate queue. Existing Priority then supplies the order.
+Both groups record candidate scores in parallel, model versions, numeric inputs, latency, and fallback reasons.
+
+Authenticated clients send bounded batches to Talyn's backend while the Reviews panel is visible.
+Migration `0066` stores participants, queue observations, and GitHub review submissions.
+The backend checks workspace ownership and the connected GitHub identity.
+Unknown payload fields are removed. Scoring traces must reproduce their submitted scores and readiness gates.
+Event IDs make retries idempotent. Upload queues have size limits and report dropped records.
+Central records expire after 90 days. Existing device archives retain their previous limits.
+The usage analytics opt-out stops uploads and disables outcome collection across that account's workspaces.
+Both apps retry an opt-out when a connection returns, including from Settings.
+Preferences remain device-local; another device with analytics enabled can restart collection.
+No titles, descriptions, diffs, or search text are uploaded.
+Reviewer logins, repository names, PR identifiers, and requested team names are private analytical data.
+
+Submitted-review webhooks collect outcomes even for untracked PRs in authorized watched repositories.
+An hourly reconciliation obtains review creation times from GitHub.
+Unknown creation times cannot supply Hit@3 labels. Webhook coverage still needs an independent GitHub audit before training.
+Agent actions through a human account need explicit exclusions; account type alone cannot identify them.
+
+Run the descriptive report from `packages/backend` against the intended database:
+
+```sh
+npx tsx scripts/report-review-ranking.mts START_ISO END_ISO
+```
+
+Use a completed window. Keep the database credentials and raw exports private.
+The report includes zero-review sessions and waits 24 hours for each session's outcome window.
+It deduplicates outcomes across workspaces and excludes incomplete or mixed-assignment sessions.
+Hit@3 uses the first eligible choice and the latest complete, unfiltered Priority queue with more than three candidates.
+Unknown timing or a newer incomplete queue prevents attribution to an older observation.
+PR opens measure navigation separately from review submissions.
+Monitor completed reviews per session, equal-reviewer Hit@3, first-open delay, overdue ready work, blocking work, latency, and fallbacks.
+Useful review quality still needs a separate assessment. More submissions alone cannot prove better reviews.
+
+Freeze this model and the initial allocation for a 14-day feasibility pilot from activation.
+Do not tune weights or expand allocation from early Hit@3 changes.
+Check operational health after deployment and review coverage after 24 hours.
+Stop candidate serving for invalid scores, changed readiness gates, or reproducible list errors.
+Investigate inference p95 above 50 ms or candidate fallback above 5% of observed queues.
+An absence of candidate users is an allocation limitation, not evidence of equivalence.
+At the pilot review, report reviewer counts, queue sizes, missing data, and outcome completeness before comparing results.
+Do not claim a gain from this descriptive report or its development metrics.
+Choose a powered confirmation design from observed variance before a wider experiment.
+Freeze later evaluation dates before training another version. Preserve a control group through that evaluation.
+The original single-reviewer pilot remains separate; its protocol and exclusions are unchanged.
+
+
 Updated: 2026-09-21.
 
 **The first pooled-model comparison is complete. No new model qualifies for production.**
@@ -140,7 +206,7 @@ A stricter reconstruction reduces some errors; it does not recover missing histo
 ## Prospective collection
 
 Web and desktop record local snapshots while the Reviews panel is visible.
-Collection uses the existing `reviewPriority` audience, which currently contains Tom only.
+Collection uses the `reviewPriority` audience. The production rollout expands this audience to all users.
 It covers creation-newest, creation-oldest, and Priority sorts within that audience.
 
 Each snapshot contains the full displayed queue, including rows outside the viewport.
@@ -157,14 +223,14 @@ Server traces include a profile hash, so a stale client profile cannot replace t
 Older snapshots retain their `client_profile` label and cannot pass exact replay without a trace.
 `request_first_seen_at` is an observation time, not an authoritative GitHub request timestamp.
 
-New records stay in local storage on the device.
+Records remain available in local storage on the device. New builds also upload bounded observations to Talyn.
 The **Export ranking data** button downloads them as JSON.
 Desktop exports use a native save dialog and report success only after the file write completes.
 Canceling leaves existing files unchanged. A failed write preserves an earlier export and displays an error.
 The destination comes from the save dialog. The renderer cannot supply a file path.
 New export files use owner-only permissions on systems that support them.
 The original disabled Save button remains an unconfirmed native UI issue pending a packaged-app check.
-No new snapshot event is sent to PostHog or another service.
+Snapshot payloads go to Talyn's database. They are not sent to PostHog.
 Raw titles, descriptions, code, author names, paths, and search text are omitted.
 Exports contain reviewer login, repository names, PR identifiers, and matched team names. Keep them private.
 

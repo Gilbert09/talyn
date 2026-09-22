@@ -206,6 +206,15 @@ describe('scoreReviewRows', () => {
     expect(spy).toHaveBeenCalled();
   });
 
+  it('serves the candidate with a reproducible trace and falls back for missing inputs', async () => {
+    const scored = await scoreReviewRows(db, 'ws1', 'me', [row()], 'candidate');
+    expect(scored.get('pr-1')?.experiment).toMatchObject({ assigned: 'candidate', served: 'candidate', fallback: null });
+    const candidate = scored.get('pr-1')!;
+    expect(replayPRPriorityTrace(candidate.trace!).score).toBe(candidate.score);
+    const missing = await scoreReviewRows(db, 'ws1', 'me', [row({ reviewRequestedFirstSeenAt: null })], 'candidate');
+    expect(missing.get('pr-1')?.experiment).toMatchObject({ assigned: 'candidate', served: 'control', fallback: 'missing_or_future_timestamp' });
+  });
+
   it('pins one clock across the whole pass', async () => {
     // A comparator whose inputs were scored at different instants is
     // non-transitive, and V8 returns a scrambled array with no error.
@@ -221,11 +230,13 @@ describe('scoreReviewRows', () => {
     expect(new Set(waits).size).toBe(1);
     const versions = new Set<string>();
     const clocks = new Set<number>();
-    for (const { trace, ...verdict } of out.values()) {
+    for (const { trace, experiment, ...verdict } of out.values()) {
       expect(trace?.source).toBe('server');
       expect(trace?.modelVersion).toMatch(/^[a-f0-9]{64}$/);
       versions.add(trace!.modelVersion!);
       clocks.add(trace!.scoredAt);
+      expect(experiment?.assigned).toBe('control');
+      expect(experiment?.baselineScore).toBe(verdict.score);
       expect(replayPRPriorityTrace(trace!)).toEqual(verdict);
     }
     expect(versions.size).toBe(1);
