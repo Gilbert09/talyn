@@ -2,6 +2,26 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: replay older profile statistics (2026-09-22)
+
+A desktop export contained six feature values but five stored statistics per candidate.
+Production skips the learned term for this mismatch. The replay validator incorrectly rejected that valid fallback.
+Replay now accepts finite, paired statistics of another dimension and calls the unchanged production scorer.
+Malformed statistics still fail. Tests cover absent, shorter, longer, matching, and invalid statistics.
+
+All 246 candidate scores and all three Priority orders from the live export now replay exactly.
+The archive reported no failed writes or retention losses. Every new candidate recorded its matched teams.
+These agent-operated observations remain excluded from human evaluation.
+
+The first export had an empty repository scope after incomplete workspace initialization.
+Restarting the app restored all 13 repositories. Both previously hidden active direct requests appeared in Reviews.
+A second export could not finish because the native Save button stayed disabled.
+The recovered repository scope was checked through the complete repository menu.
+The initial export cannot supply evaluation labels. Scope matching still rejects it.
+
+Validation passed 150 focused tests, shared builds, backend type checking, ESLint, and the live replay check.
+No learned model was promoted. A private future pilot protocol separates collection checks from model confirmation.
+
 ## Review ranking: preserve active direct requests (2026-09-22)
 
 The poll and webhook refresh previously excluded every PR with an earlier review by the viewer.

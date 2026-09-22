@@ -347,6 +347,12 @@ Use observed queues for the next promotion comparison. Historical alternatives r
 
 ## Next experiment protocol
 
+A live check on 22 September reproduced 246 candidate scores and three complete Priority orders.
+The replay validator needed a fix for older profile statistics. Production already skipped their incompatible learned term.
+The observations were agent-operated and had an empty repository scope. They cannot supply human evaluation labels.
+Restarting the desktop restored all 13 repositories and showed both active direct requests excluded by the earlier rule.
+This verifies the eligibility repair, not a ranking gain.
+
 The following steps retain the agreed order. Unchecked work is not implemented yet.
 
 - [x] Freeze the historical benchmark, audit eligibility, and test temporal features and ties.

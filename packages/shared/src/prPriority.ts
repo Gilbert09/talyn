@@ -376,10 +376,11 @@ export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict
     throw new Error('Unsupported scoring trace');
   }
   const inputs = trace.rankInputs;
+  // Production skips the learned term when stored statistics have an older dimension.
   if (inputs && (inputs.features.length !== REVIEW_RANK_DIM || inputs.weights.length !== REVIEW_RANK_DIM ||
       inputs.features.some((value) => value !== null && !Number.isFinite(value)) ||
       inputs.weights.some((value) => !Number.isFinite(value)) ||
-      (inputs.stats && (inputs.stats.mean.length !== REVIEW_RANK_DIM || inputs.stats.sd.length !== REVIEW_RANK_DIM ||
+      (inputs.stats && (inputs.stats.mean.length !== inputs.stats.sd.length ||
         [...inputs.stats.mean, ...inputs.stats.sd].some((value) => !Number.isFinite(value)) ||
         inputs.stats.sd.some((value) => value < 0))))) {
     throw new Error('Invalid scoring inputs');

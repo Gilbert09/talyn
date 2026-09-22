@@ -136,6 +136,8 @@ Priority snapshots also check the complete displayed order, including ties.
 Other sort modes check scores only. Unsupported versions and missing traces fail explicitly.
 The output records the scorer version and a digest of its compiled code.
 Passing replay does not authorize promotion or establish candidate completeness.
+Older stored statistics can have fewer fields than the current features.
+Production skips the learned term in that case. Replay preserves this fallback and still checks every recorded score.
 
 New snapshots also record the workspace's repository scope.
 The outcome join excludes snapshots whose scope does not match the frozen protocol, including older snapshots without scope.

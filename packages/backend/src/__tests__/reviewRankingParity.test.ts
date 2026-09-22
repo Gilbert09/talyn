@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { scorePRForReview, reviewRankingCandidate, type ReviewRankingRow } from '@talyn/shared';
+import { REVIEW_RANK_DIM, scorePRForReview, reviewRankingCandidate, type ReviewRankingRow } from '@talyn/shared';
 
 const now = Date.parse('2026-09-21T12:00:00Z');
 
-function fixture() {
+function fixture(statsDimension?: number) {
   const rows: ReviewRankingRow[] = [
     { id: 'older', summary: { createdAt: '2026-09-01T00:00:00Z' } },
     { id: 'a', summary: { createdAt: '2026-09-02T00:00:00Z' } },
@@ -17,6 +17,11 @@ function fixture() {
   }));
   for (const row of rows) row.priority = scorePRForReview(row, {
     now, captureTrace: { source: row.id === 'a' ? 'client' : 'server', modelVersion: 'a'.repeat(64) },
+    rankInputs: statsDimension === undefined ? null : {
+      features: Array(REVIEW_RANK_DIM).fill(1),
+      weights: Array(REVIEW_RANK_DIM).fill(1),
+      stats: { mean: Array(statsDimension).fill(0), sd: Array(statsDimension).fill(1) },
+    },
   });
   const context = {
     workspaceId: 'workspace', viewerLogin: 'viewer', sortMode: 'priority' as const,
@@ -36,6 +41,33 @@ function replay(snapshot: ReturnType<typeof fixture>) {
 }
 
 describe('production parity command', () => {
+  it.each([0, REVIEW_RANK_DIM - 1, REVIEW_RANK_DIM + 1])(
+    'replays the production fallback for %i stored statistics', (dimension) => {
+      const snapshot = fixture(dimension);
+      expect(snapshot.candidates.map((candidate) => candidate.score)).toEqual(
+        fixture().candidates.map((candidate) => candidate.score),
+      );
+      expect(replay(snapshot).all_passed).toBe(true);
+    },
+  );
+
+  it('replays matching statistics with an active learned term', () => {
+    const snapshot = fixture(REVIEW_RANK_DIM);
+    expect(snapshot.candidates[0].score).toBeGreaterThan(fixture().candidates[0].score!);
+    expect(replay(snapshot).all_passed).toBe(true);
+  });
+
+  it.each(['length', 'negative', 'nonfinite'])(
+    'rejects malformed statistics: %s', (fault) => {
+      const snapshot = fixture(REVIEW_RANK_DIM - 1);
+      const stats = snapshot.candidates[0].priority_trace!.rankInputs!.stats!;
+      if (fault === 'length') stats.mean.pop();
+      if (fault === 'negative') stats.sd[0] = -1;
+      if (fault === 'nonfinite') stats.mean[0] = Number.POSITIVE_INFINITY;
+      expect(replay(snapshot).snapshots[0].failures).toContain('invalid_trace');
+    },
+  );
+
   it('uses the built serving scorer, gates, older-first ties, and identity ties', () => {
     const result = replay(fixture());
     expect(result.all_passed).toBe(true);
