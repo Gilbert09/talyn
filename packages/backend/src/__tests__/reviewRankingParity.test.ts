@@ -72,7 +72,9 @@ describe('production parity command', () => {
     const result = replay(fixture());
     expect(result.all_passed).toBe(true);
     expect(result.runtime_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.bridge_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(result.snapshots[0].order_checked).toBe(true);
+    expect(result.snapshots[0].priority_order).toEqual(['older', 'a', 'b', 'draft']);
   });
 
   it.each([
@@ -94,14 +96,16 @@ describe('production parity command', () => {
     const result = replay(snapshot);
     expect(result.all_passed).toBe(false);
     expect(result.snapshots[0].failures).toContain(failure);
+    expect(result.snapshots[0].priority_order).toBeNull();
   });
 
-  it('does not claim to check Priority order for another display mode', () => {
+  it.each(['newest', 'oldest'])('reconstructs Priority while the display mode is %s', (mode) => {
     const snapshot = fixture();
-    snapshot.sort_mode = 'newest';
+    snapshot.sort_mode = mode;
     snapshot.candidates.reverse();
     const result = replay(snapshot);
     expect(result.all_passed).toBe(true);
     expect(result.snapshots[0].order_checked).toBe(false);
+    expect(result.snapshots[0].priority_order).toEqual(['older', 'a', 'b', 'draft']);
   });
 });

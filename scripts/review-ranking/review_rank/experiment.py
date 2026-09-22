@@ -16,6 +16,7 @@ from .metrics import evaluate, paired_interval
 from .models import Ranker, Spec
 from .neural import PersonalAdjustments, SharedNetwork
 from .outcomes import digest, required_time, write_private
+from .parity import production_baselines
 from .prospective import FEATURES, build_observed, gated_order
 
 
@@ -109,6 +110,10 @@ def run(joined: list[dict], embeddings: dict | None, boundaries: list[float]) ->
         start = end
     train_rows, tune_rows, personal_rows, test_rows = windows
     train, tune, personal_window, test = [[row.choice for row in rows] for rows in windows]
+    selected_ids = {row.review_id for rows in windows for row in rows}
+    production_orders, production_evidence = production_baselines(
+        [row for data in joined for row in data["choices"] if row["review_id"] in selected_ids]
+    )
     audit["missing_gate_choices"] = sum(bool(np.any(row.gates < 0)) for row in observed)
     audit["boundary_or_outside_choices"] = (
         len(observed) - sum(map(len, windows)) - audit["missing_gate_choices"]
@@ -146,6 +151,12 @@ def run(joined: list[dict], embeddings: dict | None, boundaries: list[float]) ->
 
     def baselines(rows):
         return {
+            "production-priority": [
+                -np.asarray(
+                    [production_orders[row.review_id].index(key) for key in row.choice.keys]
+                )
+                for row in rows
+            ],
             "displayed-order": [row.displayed for row in rows],
             "observed-request-newest-raw": [row.choice.requested for row in rows],
             "creation-newest-raw": [row.choice.created for row in rows],
@@ -210,6 +221,7 @@ def run(joined: list[dict], embeddings: dict | None, boundaries: list[float]) ->
         "personal_validation": personal.validation,
         "baseline_validation": baseline_validation,
         "selected_baseline": baseline,
+        "production_replay": production_evidence,
         "test": results,
         "slices": slices,
         "paired_interval": interval,
@@ -218,7 +230,8 @@ def run(joined: list[dict], embeddings: dict | None, boundaries: list[float]) ->
             "reason": "Development only. Freeze a fresh product evaluation.",
         },
         "limits": [
-            "Readiness gates are preserved; this is not production score parity.",
+            "The production baseline uses the actual scorer, caps, and comparator.",
+            "Candidate models preserve gates but do not establish production serving parity.",
             "Request age starts at first observation, not the GitHub request event.",
             "Recent activity includes joined decisions only.",
             "Team eligibility is taken from the observed application queue.",

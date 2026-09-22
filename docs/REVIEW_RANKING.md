@@ -405,6 +405,14 @@ Require a positive paired confidence bound and acceptable results across reviewe
 Also require evidence of useful product outcomes before changing the default order.
 Keep the existing fallback for groups with insufficient evidence.
 
+The prospective experiment now includes actual Priority order as a separate baseline.
+Displayed order can be Newest or Oldest, so it cannot substitute for this comparison.
+Every selected choice must pass score replay through the built production scorer.
+The baseline uses its gates, caps, and comparator, including age and identity ties.
+Missing traces, mismatched scores, and incomplete orders stop the experiment.
+The report retains runtime, replay script, input, and order hashes.
+Candidate models still need separate serving validation before promotion.
+
 ## Larger model direction
 
 Build a model that represents the reviewer, recent work, code changes, and the whole queue.

@@ -146,19 +146,40 @@ def fixture_run():
                     "snapshot_id": f"s-{window}-{i}",
                     "chosen": chosen,
                     "candidates": candidates,
-                    "header": {},
+                    "header": {"sort_mode": "newest"},
                 }
             )
     return [{"schema_version": 1, "protocol": asdict(p), "choices": rows, "audit": {}}]
 
 
-def test_four_windows_train_real_models_without_promoting():
+def test_four_windows_train_real_models_without_promoting(monkeypatch):
+    def baseline(rows):
+        orders = {}
+        for row in rows:
+            keys = [candidate["pr_id"] for candidate in row["candidates"]]
+            chosen = keys.pop(row["chosen"])
+            orders[row["review_id"]] = [chosen, *keys]
+        return orders, {"choices": len(rows), "all_passed": True}
+
+    monkeypatch.setattr("review_rank.experiment.production_baselines", baseline)
     report, model = run(fixture_run(), None, [START + d * DAY for d in [14, 28, 42, 56]])
     assert report["window_choices"] == [24] * 4
     assert not report["promotion"]["allowed"]
     assert not model["serving_allowed"]
     assert model["personal"]["enabled"] == []
     assert report["test"]["shared-queue-network"]["macro"]["hit3"] > 0.9
+    assert report["selected_baseline"] == "production-priority"
+    assert report["test"]["production-priority"]["macro"]["hit3"] == 1
+    assert report["production_replay"]["choices"] == 96
+
+
+def test_a_replay_failure_stops_the_experiment(monkeypatch):
+    def refuse(_rows):
+        raise ValueError("Every selected choice must pass production score replay")
+
+    monkeypatch.setattr("review_rank.experiment.production_baselines", refuse)
+    with pytest.raises(ValueError, match="pass production score replay"):
+        run(fixture_run(), None, [START + d * DAY for d in [14, 28, 42, 56]])
 
 
 def test_empty_or_unordered_windows_refuse_training():

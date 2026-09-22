@@ -297,6 +297,10 @@ Output files use mode `0600` and refuse replacement. Their parent directories mu
 Freeze four window ends before examining results: training, shared selection, personal validation, and test.
 Use one complete journal per reviewer that covers the full test period.
 Pool reviewers from one workspace only. Cross-workspace pooling needs a separate data policy.
+Build `@talyn/shared` from the repository root before running the experiment: `npm run build -w @talyn/shared`.
+Node replays each selected choice through the production scorer and reconstructs Priority order, regardless of the displayed sort.
+The experiment includes that order as `production-priority`, alongside displayed order and recency baselines.
+Every selected choice must pass replay. Missing traces and mismatched scores stop the run instead of weakening the baseline.
 
 ```sh
 uv run --frozen python -m review_rank.experiment \
@@ -328,7 +332,7 @@ These are experimental safeguards, not a guarantee of generalization.
 All comparisons preserve observed readiness gates. Raw recency baselines are also reported.
 The report includes actual displayed order, team requests, returning reviews, long queues, and unseen reviewers.
 Displayed order can come from different sort modes. The priority-sort subset is reported separately.
-The experiment does not reproduce backend score caps or guarantee production parity.
+The production baseline uses the real score caps and comparator. Candidate models still lack verified production serving parity.
 Both the report and JSON model explicitly refuse production promotion.
 
 ## Model boundaries

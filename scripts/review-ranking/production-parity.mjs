@@ -39,9 +39,10 @@ const results = snapshots.map((snapshot) => {
     }
   }
   if (!snapshot.candidates.length) failures.add('empty_queue');
-  if (!failures.size && snapshot.sort_mode === 'priority') {
+  if (!failures.size) {
     targets.sort((left, right) => comparePRByPriority(left, right, verdicts));
-    if (targets.some((target, index) => target.id !== snapshot.candidates[index].pr_id)) {
+    if (snapshot.sort_mode === 'priority' &&
+        targets.some((target, index) => target.id !== snapshot.candidates[index].pr_id)) {
       failures.add('order_mismatch');
     }
   }
@@ -51,6 +52,7 @@ const results = snapshots.map((snapshot) => {
     passed: failures.size === 0,
     failures: [...failures].sort(),
     order_checked: !failures.size && snapshot.sort_mode === 'priority',
+    priority_order: failures.size ? null : targets.map((target) => target.id),
   };
 });
 const scorer = import.meta.resolve('@talyn/shared');
@@ -61,6 +63,7 @@ for (const file of ['prPriority.js', 'reviewRank.js']) {
 }
 process.stdout.write(JSON.stringify({
   scorer_version: PR_PRIORITY_SCORER_VERSION,
+  bridge_sha256: createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex'),
   runtime_sha256: code.digest('hex'),
   snapshots: results,
   counts,

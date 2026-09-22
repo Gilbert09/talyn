@@ -55,6 +55,7 @@ class ObservedChoice:
     gates: np.ndarray
     team: bool
     returning: bool
+    review_id: str
     sort_mode: str = "unknown"
 
 
@@ -224,6 +225,7 @@ def build_observed(
                 np.asarray([GATES.get(item.get("gate"), -1) for item in candidates]),
                 bool(candidates[chosen].get("requested_team_count")),
                 bool(candidates[chosen].get("previous_review")),
+                row["review_id"],
                 row.get("header", {}).get("sort_mode", "unknown"),
             )
         )

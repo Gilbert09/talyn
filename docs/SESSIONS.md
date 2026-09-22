@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: compare against actual Priority order (2026-09-22)
+
+The prospective experiment previously used displayed order and recency baselines.
+Displayed order can be Newest, so this did not always compare a candidate against the existing Priority policy.
+It now requires score replay for every selected choice and includes a separate production Priority baseline.
+The actual TypeScript scorer and comparator supply this order, including caps, gates, and deterministic ties.
+Invalid traces, score mismatches, missing choices, and incomplete orders stop the experiment.
+Reports retain hashes for the runtime, replay script, input, and resulting orders.
+
+All 246 recorded candidate scores still matched. All three Priority orders stayed unchanged after a synthetic display-order permutation.
+These checks reused agent-operated observations and created no human labels.
+Validation passed 37 focused Python tests and 19 backend parity tests, with type checking, ESLint, and Ruff.
+Candidate models still require serving checks, fresh confirmation data, and a controlled product experiment.
+
 ## Review ranking: reproducible longer-input encoding (2026-09-22)
 
 The lab encoder now accepts a content limit and an inference batch size.
