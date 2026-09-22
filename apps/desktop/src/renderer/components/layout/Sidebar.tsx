@@ -58,34 +58,48 @@ export function Sidebar({ className }: SidebarProps) {
   const reviewCount = prRows.filter((r) => r.reviewRequested).length;
   const queueCount = prRows.filter((r) => r.mergeQueued).length;
 
+  /**
+   * The two kinds of number in this nav, which used to look identical.
+   *
+   * `work` counts things happening TO you — PRs with your name on them, a
+   * queue draining, runs in flight. It moves without you and a jump in it is
+   * news. `inventory` counts things you MADE: workflows, loops, MCP servers.
+   * It changes only when you change it, so it is a fact about your setup
+   * rather than a call to look.
+   *
+   * Drawn as the same pill, seven numbers read as seven demands — Tom's word
+   * was "overwhelming" — and the loudest of them (84 review requests) is the
+   * one least likely to mean "do something now". So inventory keeps its count
+   * and gives up the pill: same information, a quarter of the weight.
+   */
   const navItems = [
     {
       id: 'my_prs' as const,
       icon: GitPullRequest,
       label: 'My PRs',
       badge: myPrCount > 0 ? myPrCount : undefined,
-      badgeVariant: 'secondary',
+      badgeKind: 'work' as const,
     },
     {
       id: 'reviews' as const,
       icon: Eye,
       label: 'Reviews',
       badge: reviewCount > 0 ? reviewCount : undefined,
-      badgeVariant: 'secondary',
+      badgeKind: 'work' as const,
     },
     {
       id: 'merge_queue' as const,
       icon: GitMerge,
       label: 'Merge Queue',
       badge: queueCount > 0 ? queueCount : undefined,
-      badgeVariant: 'secondary',
+      badgeKind: 'work' as const,
     },
     {
       id: 'queue' as const,
       icon: ListTodo,
       label: 'Tasks',
       badge: runningTasksCount > 0 ? runningTasksCount : undefined,
-      badgeVariant: 'secondary',
+      badgeKind: 'work' as const,
     },
     // Workflows is allow-listed. `features === null` is STILL LOADING and must
     // render nothing, exactly like `cloudProviderOffered` — treating it as
@@ -101,7 +115,7 @@ export function Sidebar({ className }: SidebarProps) {
             // on the user's behalf. `null` is not yet counted and draws
             // nothing, so the badge never flashes in at 0 and then corrects.
             badge: enabledWorkflowCount ? enabledWorkflowCount : undefined,
-            badgeVariant: 'secondary',
+            badgeKind: 'inventory' as const,
           },
         ]
       : []),
@@ -117,7 +131,7 @@ export function Sidebar({ className }: SidebarProps) {
             // running, and counting it would overstate what the app is doing
             // unattended — which is the one thing this feature does.
             badge: enabledLoopCount ? enabledLoopCount : undefined,
-            badgeVariant: 'secondary',
+            badgeKind: 'inventory' as const,
           },
         ]
       : []),
@@ -134,7 +148,7 @@ export function Sidebar({ className }: SidebarProps) {
             // Enabled only: a switched-off server is not one the agents have,
             // and counting it would overstate what a run can reach.
             badge: enabledMcpServerCount ? enabledMcpServerCount : undefined,
-            badgeVariant: 'secondary',
+            badgeKind: 'inventory' as const,
           },
         ]
       : []),
@@ -177,14 +191,20 @@ export function Sidebar({ className }: SidebarProps) {
             {!sidebarCollapsed && (
               <>
                 <span className="flex-1 text-left">{item.label}</span>
-                {item.badge && (
-                  <Badge
-                    variant={(item.badgeVariant as 'warning' | 'secondary') || 'warning'}
-                    className="ml-auto"
-                  >
-                    {item.badge}
-                  </Badge>
-                )}
+                {item.badge !== undefined &&
+                  (item.badgeKind === 'work' ? (
+                    <Badge variant="secondary" className="ml-auto">
+                      {item.badge}
+                    </Badge>
+                  ) : (
+                    // No pill, no background, one size down and the muted
+                    // foreground: it reads as a label on the row rather than
+                    // as a count demanding to be cleared. `tabular-nums` so a
+                    // count going 9 → 10 does not shift the row.
+                    <span className="ml-auto text-xs tabular-nums text-muted-foreground/70">
+                      {item.badge}
+                    </span>
+                  ))}
               </>
             )}
           </Button>
