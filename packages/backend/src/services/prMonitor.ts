@@ -386,26 +386,10 @@ class PRMonitorService extends EventEmitter {
     repo: WatchedRepo,
     currentUserLogin: string
   ): Promise<void> {
-    // Two scoped searches: PRs the user authored, and PRs awaiting their
-    // review. Each returns exactly the matches regardless of how many
-    // open PRs the repo has overall.
     const full = `${repo.owner}/${repo.repo}`;
-    // Three scoped searches:
-    //   - authored: PRs the user opened ("Mine").
-    //   - review-requested: PRs the user is asked to review, INCLUDING ones
-    //     where only a team they're on was asked.
-    //   - reviewed-by: PRs the user has already reviewed (approved, requested
-    //     changes, or commented).
-    // "Awaiting my review" = review-requested MINUS reviewed-by (and minus my
-    // own PRs). GitHub drops you from a PR's *individual* request once you
-    // review it, but leaves a *team* request standing — so subtracting
-    // reviewed-by is what actually clears an approved PR off the list.
-    // Run the three searches SERIALLY, not concurrently. GitHub explicitly asks
-    // for serial requests per user and is most aggressive about secondary rate
-    // limits on the tight `search` budget (30/min) — three concurrent searches
-    // per repo was the main trigger for the "exceeded a secondary rate limit"
-    // 403s. (The github layer also serializes searches per account as a backstop
-    // across repos/workspaces.)
+    // Keep searches serial for GitHub's per-account search limit.
+    // A prior review clears a lingering team request. An active direct request
+    // still needs attention, including a request made after an earlier review.
     const authoredNums = await githubService.searchPullRequestNumbers(
       workspaceId,
       `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -420,14 +404,25 @@ class PRMonitorService extends EventEmitter {
     );
     const authoredSet = new Set(authoredNums);
     const reviewedSet = new Set(reviewedNums);
+    const directRequestedNums = requestedNums.some(
+      (n) => reviewedSet.has(n) && !authoredSet.has(n),
+    )
+      ? await githubService.searchPullRequestNumbers(
+          workspaceId,
+          `repo:${full} is:pr is:open user-review-requested:${currentUserLogin}`,
+        )
+      : [];
+    const directRequestedSet = new Set(directRequestedNums);
     const pendingSet = new Set<number>();
-    for (const n of requestedNums) {
-      if (!reviewedSet.has(n) && !authoredSet.has(n)) pendingSet.add(n);
+    for (const n of [...requestedNums, ...directRequestedNums]) {
+      if ((!reviewedSet.has(n) || directRequestedSet.has(n)) && !authoredSet.has(n)) {
+        pendingSet.add(n);
+      }
     }
     // Watch everything we have any relationship with — incl. reviewed
     // review-requested PRs, so their summary stays fresh and the reconcile
     // pass below sees them — but only pendingSet drives the review flag.
-    const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums]));
+    const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums, ...directRequestedNums]));
 
     // Tracked-open rows that have fallen out of all three searches (e.g. a PR
     // we were review-requested on, then reviewed, that's still open on
@@ -1660,13 +1655,9 @@ export function isRepoAccessError(message: string): boolean {
  * so a webhook refresh can set them without a Search call.
  *
  *   - authored: the viewer opened it.
- *   - reviewRequested: the viewer is a requested reviewer (directly, or via a
- *     team — `reviewRequestVia` is set by `annotateReviewRequest`), AND hasn't
- *     already reviewed it, AND isn't the author. GitHub drops an individual
- *     request once you review, but leaves a team request standing, so we also
- *     subtract "the viewer appears in recentReviews" (mirrors the Search
- *     `review-requested MINUS reviewed-by` logic; the reconcile sweep is the
- *     authoritative backstop for the recentReviews-window edge cases).
+ *   - reviewRequested: an active direct request, or a team request without a
+ *     prior review. The author's own PR is always excluded.
+ * Recent reviews can omit an older review. The search poll resolves that case.
  */
 export function relationshipFlags(
   summary: PRSummary,
@@ -1676,11 +1667,11 @@ export function relationshipFlags(
   const me = login.toLowerCase();
   const authored = summary.author?.toLowerCase() === me;
   const via = summary.reviewRequestVia;
-  const requested = via ? via.direct || via.teams.length > 0 : false;
   const reviewedByViewer = (summary.recentReviews ?? []).some(
     (r) => r.author?.toLowerCase() === me
   );
-  return { authored, reviewRequested: requested && !reviewedByViewer && !authored };
+  const requested = via ? via.direct || (via.teams.length > 0 && !reviewedByViewer) : false;
+  return { authored, reviewRequested: requested && !authored };
 }
 
 export const prMonitorService = new PRMonitorService();

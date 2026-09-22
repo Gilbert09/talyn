@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Review ranking: preserve active direct requests (2026-09-22)
+
+The poll and webhook refresh previously excluded every PR with an earlier review by the viewer.
+Both now preserve an active direct request, while still excluding the viewer's own PRs.
+The poll uses one extra direct-request search when requested and reviewed sets overlap for another author's PR.
+Reconciliation handles fresh cached rows. A failed search leaves stored flags intact.
+Completed team requests still clear when the direct request ends.
+
+A live check found two current direct requests that the old rule would exclude.
+One followed an earlier review. The other remained active after three comment-only reviews without another recorded request.
+That second case also disproves the historical replay's general rule that every submission ends a direct request.
+The experiment report now states this limitation. Its results remain reproducible restricted-policy comparisons.
+
+Validation passed 61 focused tests, backend type checking, and ESLint.
+Tests exercise refresh, poll, reconciliation without a refetch, request removal, author exclusion, and failed searches.
+The ranking model remains unpromoted. Fresh observed queues remain necessary for the production comparison.
+
 ## Review ranking: observed teams and batched outcome collection (2026-09-22)
 
 An audit of 79 current PRs reproduced the full request set on 72.

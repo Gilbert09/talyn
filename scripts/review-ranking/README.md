@@ -2,6 +2,9 @@
 
 This package runs local ranking experiments and validates prospective exports.
 Training stays local and installs no production model.
+
+Historical replay ends a request after every submitted review. A live audit found that comment-only reviews can leave requests active.
+Treat that replay as a restricted-policy experiment. Use observed queues for promotion evidence.
 The outcome and content collectors use read-only GitHub requests through the existing `gh` login.
 The optional encoder downloads public weights only when requested. PR content is encoded on this machine.
 See [`docs/REVIEW_RANKING.md`](../../docs/REVIEW_RANKING.md) for results and release gates.

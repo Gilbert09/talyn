@@ -61,11 +61,13 @@ function fakeSummary(over: Partial<PRSummary> = {}): PRSummary {
 function mockSearch(
   authored: number[],
   reviewRequested: number[] = [],
-  reviewedBy: number[] = []
+  reviewedBy: number[] = [],
+  directRequested: number[] = [],
 ) {
   return vi
     .spyOn(githubService, 'searchPullRequestNumbers')
     .mockImplementation(async (_ws: string, q: string) => {
+      if (q.includes('user-review-requested:')) return directRequested;
       if (q.includes('reviewed-by:')) return reviewedBy;
       if (q.includes('review-requested:')) return reviewRequested;
       if (q.includes('author:')) return authored;
@@ -240,10 +242,90 @@ describe('prMonitor — poll orchestration', () => {
     expect(byNumber[3]).toBe(false);
   });
 
+  it.each([false, true])('restores direct requests after a prior review, with a fresh cache: %s', async (fresh) => {
+    const old = new Date(Date.now() - 86_400_000);
+    if (fresh) await db.insert(pullRequestsTable).values({
+      id: 'pr-rerequested', workspaceId: 'ws1', repositoryId: 'repo1',
+      owner: 'acme', repo: 'widgets', number: 5, state: 'open',
+      authored: false, reviewRequested: false, reviewRequestedClearedAt: old,
+      lastPolledAt: new Date(), lastSummary: {}, createdAt: old, updatedAt: old,
+    });
+    const search = mockSearch([], [5], [5], [5]);
+    const batch = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 5, pr: fakeSummary({
+        number: 5, author: 'someone', reviewRequests: { users: ['me'], teams: [] },
+        recentReviews: [{ author: 'me', state: 'APPROVED' }] as never,
+      }) },
+    ]);
+    await prMonitorService.forcePoll();
+    const [row] = await db.select().from(pullRequestsTable);
+    expect(row.reviewRequested).toBe(true);
+    expect(row.reviewRequestedFirstSeenAt!.getTime()).toBeGreaterThan(old.getTime());
+    expect(row.reviewRequestedClearedAt).toBeNull();
+    expect(search.mock.calls.map(([, query]) => query)).toEqual([
+      'repo:acme/widgets is:pr is:open author:me',
+      'repo:acme/widgets is:pr is:open review-requested:me',
+      'repo:acme/widgets is:pr is:open reviewed-by:me',
+      'repo:acme/widgets is:pr is:open user-review-requested:me',
+    ]);
+    expect(batch).toHaveBeenCalledTimes(fresh ? 0 : 1);
+  });
+
+  it('clears a reviewed team request when the direct request ends, without a refetch', async () => {
+    let direct = [5];
+    const search = mockSearch([], [5], [5], direct);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 5, pr: fakeSummary({ number: 5, author: 'someone' }) },
+    ]);
+    await prMonitorService.forcePoll();
+    expect((await db.select().from(pullRequestsTable))[0].reviewRequested).toBe(true);
+    direct = [];
+    search.mockImplementation(async (_ws, query) => {
+      if (query.includes('user-review-requested:')) return direct;
+      if (query.includes('review-requested:') || query.includes('reviewed-by:')) return [5];
+      return [];
+    });
+    await prMonitorService.forcePoll();
+    const [row] = await db.select().from(pullRequestsTable);
+    expect(row.reviewRequested).toBe(false);
+    expect(row.reviewRequestedClearedAt).not.toBeNull();
+  });
+
+  it('does not clear cached requests if the direct-request search fails', async () => {
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-rerequested', workspaceId: 'ws1', repositoryId: 'repo1',
+      owner: 'acme', repo: 'widgets', number: 5, state: 'open',
+      authored: false, reviewRequested: true, lastPolledAt: new Date(), lastSummary: {},
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    mockSearch([], [5], [5]).mockImplementation(async (_ws, query) => {
+      if (query.includes('user-review-requested:')) throw new Error('temporary failure');
+      if (query.includes('review-requested:') || query.includes('reviewed-by:')) return [5];
+      return [];
+    });
+    const result = await prMonitorService.refreshWorkspaceNow('ws1');
+    expect(result.failedRepos).toBe(1);
+    expect((await db.select().from(pullRequestsTable))[0].reviewRequested).toBe(true);
+  });
+
+  it('skips the extra search when no other author has an overlapping review', async () => {
+    const search = mockSearch([1], [1, 2], [1], [1]);
+    vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 1, pr: fakeSummary({ number: 1 }) },
+      { number: 2, pr: fakeSummary({ number: 2, author: 'someone' }) },
+    ]);
+    await prMonitorService.forcePoll();
+    expect(search).toHaveBeenCalledTimes(3);
+    const rows = await db.select().from(pullRequestsTable);
+    expect(rows.find((row) => row.number === 1)?.reviewRequested).toBe(false);
+    expect(rows.find((row) => row.number === 2)?.reviewRequested).toBe(true);
+  });
+
   it('reconciles a stale review flag once I review the PR, without a refetch', async () => {
     let reviewed: number[] = [];
     vi.spyOn(githubService, 'searchPullRequestNumbers').mockImplementation(
       async (_ws: string, q: string) => {
+        if (q.includes('user-review-requested:')) return [];
         if (q.includes('reviewed-by:')) return reviewed;
         if (q.includes('review-requested:')) return [5];
         if (q.includes('author:')) return [];

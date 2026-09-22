@@ -85,10 +85,16 @@ The JSON artifact refuses production use. See [`REVIEW_RANKING.md`](./REVIEW_RAN
 
 Historical comparisons now enumerate repository PRs without selecting them by reviewer outcomes.
 The replay applies direct requests, removals, submissions, and PR lifecycle events.
+Its rule that every submission ends a request has a live counterexample for comment-only reviews.
+Treat those historical metrics as restricted-policy experiments, not proof of complete candidate coverage.
 Uncertain candidate state excludes the whole decision. Missing text does not remove a candidate.
 Verified title changes reconstruct earlier text for local encoding.
 Successive time windows compare models on equal data and retain learning curves and coverage counts.
 Complete API pagination still cannot establish what a reviewer saw or recover deleted records.
+
+Production review eligibility preserves active direct requests after prior reviews.
+The poll checks direct requests when the requested and reviewed sets overlap; webhook refreshes read the current request data.
+Completed team requests still clear. A cached summary cannot make reconciliation discard a confirmed direct request.
 
 
 ## Key Decisions

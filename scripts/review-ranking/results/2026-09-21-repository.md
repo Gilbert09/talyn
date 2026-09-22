@@ -4,6 +4,11 @@ The larger replay shows a useful signal in long queues. It does not establish a 
 More history alone does not consistently improve the model.
 The next candidate combines a shared model with a fallback selected from earlier personal results.
 
+**Qualification added on 22 September:** a live direct request remained active after three comment-only reviews, without another recorded request.
+The replay below ends a request after every submission. That rule does not reproduce all GitHub request states.
+These figures remain reproducible under that restricted policy, but cannot establish complete production candidate coverage.
+Future promotion must use observed queues. Do not interpret these figures as verified gains on the complete pending queue.
+
 ## Data and checks
 
 The collector enumerated PRs without selecting them through reviewer searches.

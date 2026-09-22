@@ -324,6 +324,27 @@ GitHub still supplies no transactional snapshot. Deleted records and access rest
 An independent live comparison covered 339 PRs. Both collectors returned the same eight reviews and timestamps.
 GraphQL used seven requests; REST used 344. This was a collector check, not a fresh human evaluation cohort.
 
+## Active direct requests after earlier reviews (2026-09-22)
+
+The production poll previously subtracted every previously reviewed PR from the requested set.
+The webhook refresh used the same rule. Both could hide an active direct request after an earlier review.
+A live check found three current direct requests in the main repository. Two also matched the reviewed-by search.
+One direct request followed an earlier review. The other remained active after three comment-only reviews.
+Neither case can be resolved by adding more training history.
+
+Both production paths now preserve active direct requests, while still excluding the author's own PRs.
+The poll adds a direct-request search only when requested and reviewed sets overlap for another author's PR.
+It uses GitHub's documented `user-review-requested` qualifier.
+See [GitHub's review search filters](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/filtering-and-searching-issues-and-pull-requests#about-search-terms).
+Reconciliation applies the result even when the cached summary is still fresh.
+An API failure preserves the stored flags and reports a failed poll.
+Previously reviewed team requests still clear when no direct request remains.
+
+The historical replay also ends a direct-request round after every submitted review, including comments.
+The live counterexample disproves that assumption as a general GitHub rule.
+Existing experiment metrics remain reproducible results under that restricted policy. They cannot establish complete production candidate coverage.
+Use observed queues for the next promotion comparison. Historical alternatives require a new, separately identified development experiment.
+
 ## Next experiment protocol
 
 The following steps retain the agreed order. Unchecked work is not implemented yet.

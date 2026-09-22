@@ -68,6 +68,16 @@ describe('relationshipFlags', () => {
     expect(relationshipFlags(s, 'octocat')).toEqual({ authored: false, reviewRequested: true });
   });
 
+  it.each(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED'])(
+    'keeps an active direct request after a %s review', (state) => {
+      const s = summary({
+        reviewRequestVia: { direct: true, teams: ['acme/fe'] },
+        recentReviews: [{ author: 'OCTOCAT', state }] as never,
+      });
+      expect(relationshipFlags(s, 'octocat').reviewRequested).toBe(true);
+    },
+  );
+
   it('marks a team review request as reviewRequested', () => {
     const s = summary({ author: 'someone', reviewRequestVia: { direct: false, teams: ['acme/fe'] } });
     expect(relationshipFlags(s, 'octocat').reviewRequested).toBe(true);
@@ -134,6 +144,29 @@ describe('refreshPr (webhook-driven flags + relevance guard)', () => {
     const row = await rowFor(7);
     expect(row?.authored).toBe(true);
     expect(row?.reviewRequested).toBe(false);
+  });
+
+  it('restores a direct request through refresh, then clears a completed team request', async () => {
+    vi.spyOn(githubService, 'getViewerTeamSlugs').mockResolvedValue(new Set(['acme/fe']));
+    const pr = summary({
+      number: 7, author: 'someone',
+      recentReviews: [{ author: 'octocat', state: 'APPROVED' }] as never,
+      reviewRequests: {
+        users: ['octocat'], teams: [{ slug: 'fe', name: 'Frontend', combinedSlug: 'acme/fe' }],
+      },
+    });
+    const batch = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      { number: 7, pr },
+    ]);
+    await prMonitorService.refreshPr('ws1', 'acme', 'widgets', 7);
+    expect((await rowFor(7))?.reviewRequested).toBe(true);
+    expect((await rowFor(7))?.reviewRequestedFirstSeenAt).not.toBeNull();
+    batch.mockResolvedValue([{ number: 7, pr: {
+      ...pr, reviewRequests: { users: [], teams: pr.reviewRequests!.teams },
+    } }]);
+    await prMonitorService.refreshPr('ws1', 'acme', 'widgets', 7);
+    expect((await rowFor(7))?.reviewRequested).toBe(false);
+    expect((await rowFor(7))?.reviewRequestedClearedAt).not.toBeNull();
   });
 
   it('does NOT materialize a PR the viewer has no relationship with', async () => {
