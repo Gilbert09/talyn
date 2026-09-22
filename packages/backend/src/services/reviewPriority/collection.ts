@@ -1,13 +1,20 @@
 import { and, asc, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { getPoolDbClient, type Database } from '../../db/client.js';
-import { reviewRankingEvents, reviewRankingOutcomes, reviewRankingParticipants } from '../../db/schema.js';
+import { reviewRankingEvents, reviewRankingOutcomes, reviewRankingParticipants, users } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { rankingBatchSchema } from './captureSchema.js';
 
 export async function disableRankingCollection(db: Database, userId: string): Promise<void> {
-  await db.update(reviewRankingParticipants).set({ enabled: false, updatedAt: new Date() })
-    .where(eq(reviewRankingParticipants.userId, userId));
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ reviewRankingOptOut: true }).where(eq(users.id, userId));
+    await tx.update(reviewRankingParticipants).set({ enabled: false, updatedAt: new Date() })
+      .where(eq(reviewRankingParticipants.userId, userId));
+  });
+}
+
+export async function resumeRankingCollection(db: Database, userId: string): Promise<void> {
+  await db.update(users).set({ reviewRankingOptOut: false }).where(eq(users.id, userId));
 }
 
 export async function storeRankingEvents(
@@ -25,6 +32,10 @@ export async function storeRankingEvents(
     }
   }
   await db.transaction(async (tx) => {
+    // Serialize uploads with opt-out. A late upload cannot reverse the preference.
+    const [user] = await tx.select({ optedOut: users.reviewRankingOptOut }).from(users)
+      .where(eq(users.id, userId)).for('update');
+    if (!user || user.optedOut) return;
     await tx.insert(reviewRankingParticipants).values({
       workspaceId, userId, viewerLogin: viewerLogin.toLowerCase(), enabled: batch.enabled, updatedAt: now,
     }).onConflictDoUpdate({

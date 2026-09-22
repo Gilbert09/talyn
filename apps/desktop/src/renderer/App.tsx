@@ -241,24 +241,36 @@ function Analytics() {
 
   useEffect(() => {
     if (!userId || !currentWorkspaceId) return;
-    let sent = false;
+    let acknowledged: boolean | null = null;
+    let resumeRequested = false;
     let running = false;
     const sync = async () => {
-      if (!getAnalyticsOptOut()) { sent = false; return; }
-      if (sent || running) return;
+      const optedOut = getAnalyticsOptOut();
+      if ((!optedOut && !resumeRequested) || running || acknowledged === optedOut) return;
       running = true;
       try {
-        await api.workspaces.recordRankingEvents(currentWorkspaceId, { enabled: false, events: [] });
-        sent = true;
+        await api.workspaces.recordRankingEvents(currentWorkspaceId, {
+          enabled: !optedOut, resume: !optedOut, events: [],
+        });
+        acknowledged = optedOut;
+        if (!optedOut) resumeRequested = false;
       } catch { /* Retry when the connection returns. */ }
-      finally { running = false; }
+      finally {
+        running = false;
+        if (optedOut !== getAnalyticsOptOut()) void sync();
+      }
     };
     void sync();
     const timer = setInterval(() => void sync(), 30_000);
-    window.addEventListener('talyn-analytics-preference-changed', sync);
+    const preferenceChanged = () => {
+      acknowledged = null;
+      resumeRequested = !getAnalyticsOptOut();
+      void sync();
+    };
+    window.addEventListener('talyn-analytics-preference-changed', preferenceChanged);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('talyn-analytics-preference-changed', sync);
+      window.removeEventListener('talyn-analytics-preference-changed', preferenceChanged);
     };
   }, [userId, currentWorkspaceId]);
 

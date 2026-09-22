@@ -3,7 +3,7 @@ import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { ReviewRankingRecorder, scorePRForReview, type ReviewRankingRow } from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import { workspaces, reviewRankingEvents, reviewRankingOutcomes } from '../db/schema.js';
-import { disableRankingCollection, recordRankingOutcome, reconcileRankingOutcomes, storeRankingEvents } from '../services/reviewPriority/collection.js';
+import { disableRankingCollection, recordRankingOutcome, reconcileRankingOutcomes, resumeRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
 import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js';
 import { githubService } from '../services/github.js';
 
@@ -76,6 +76,16 @@ describe('central ranking collection', () => {
     await disableRankingCollection(testDb.db, TEST_USER_ID);
     await recordRankingOutcome(['ranking-ws'], 'Org/Repo', { ...payload, review: { ...payload.review, node_id: 'review-2' } });
     expect(await testDb.db.select().from(reviewRankingOutcomes)).toHaveLength(1);
+  });
+
+  it('refuses late uploads after opt-out until an explicit opt-in', async () => {
+    await disableRankingCollection(testDb.db, TEST_USER_ID);
+    const before = await testDb.db.select().from(reviewRankingEvents);
+    await storeRankingEvents(testDb.db, 'ranking-ws', TEST_USER_ID, 'viewer', batch());
+    expect(await testDb.db.select().from(reviewRankingEvents)).toHaveLength(before.length);
+    await resumeRankingCollection(testDb.db, TEST_USER_ID);
+    await storeRankingEvents(testDb.db, 'ranking-ws', TEST_USER_ID, 'viewer', batch());
+    expect(await testDb.db.select().from(reviewRankingEvents)).toHaveLength(before.length + 1);
   });
 
   it('restricts the new tables to the backend role and owner policies', async () => {

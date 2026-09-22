@@ -57,6 +57,7 @@ export const users = pgTable(
     id: text('id').primaryKey(), // == auth.users.id (uuid)
     email: text('email').notNull(),
     githubUsername: text('github_username'),
+    reviewRankingOptOut: boolean('review_ranking_opt_out').notNull().default(false),
     // Gates the developer Debug panel + its WS stream, which expose backend
     // internals across all accounts. Off by default.
     isAdmin: boolean('is_admin').notNull().default(false),

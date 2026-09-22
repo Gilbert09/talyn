@@ -102,5 +102,5 @@ export const rankingEventSchema = z.discriminatedUnion('event', [
   }) }),
 ]);
 export const rankingBatchSchema = z.object({
-  enabled: z.boolean(), events: z.array(rankingEventSchema).max(20),
+  enabled: z.boolean(), resume: z.boolean().optional(), events: z.array(rankingEventSchema).max(20),
 });

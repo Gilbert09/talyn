@@ -14,7 +14,7 @@ import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import {
-  reviewRankingParticipants,
+  reviewRankingParticipants, users,
   workspaces as workspacesTable,
   repositories as repositoriesTable,
   integrations as integrationsTable,
@@ -93,6 +93,21 @@ describe('routes/workspaces', () => {
       expect(res.status).toBe(200);
       expect((await db.select().from(reviewRankingParticipants))[0].enabled).toBe(false);
       expect(login).not.toHaveBeenCalled();
+    });
+
+    it('requires explicit opt-in before a late upload can restart collection', async () => {
+      vi.stubEnv('REVIEW_PRIORITY_ENABLED', 'true');
+      await db.insert(workspacesTable).values({ id: 'ws', ownerId: TEST_USER_ID, name: 'Mine' });
+      await db.update(users).set({ reviewRankingOptOut: true }).where(eq(users.id, TEST_USER_ID));
+      vi.spyOn(githubService, 'getViewerLogin').mockResolvedValue('Viewer');
+      const send = (body: object) => fetch(`${serverUrl}/workspaces/ws/review-ranking-events`, {
+        method: 'POST', headers: authHeaders, body: JSON.stringify(body),
+      });
+      expect((await send({ enabled: true, events: [] })).status).toBe(200);
+      expect(await db.select().from(reviewRankingParticipants)).toHaveLength(0);
+      expect((await send({ enabled: true, resume: true, events: [] })).status).toBe(200);
+      expect((await send({ enabled: true, events: [] })).status).toBe(200);
+      expect(await db.select().from(reviewRankingParticipants)).toHaveLength(1);
     });
 
     it('uses the connected GitHub identity when collection starts', async () => {

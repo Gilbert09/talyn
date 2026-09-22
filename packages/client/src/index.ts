@@ -343,7 +343,7 @@ export const workspaces = {
    * without it. The prior is what ranks a cold user, so a null here degrades
    * the sort rather than breaking it.
    */
-  recordRankingEvents: (id: string, data: { enabled: boolean; events: import('./reviewRankingUpload.js').RankingUploadEvent[] }) =>
+  recordRankingEvents: (id: string, data: { enabled: boolean; resume?: boolean; events: import('./reviewRankingUpload.js').RankingUploadEvent[] }) =>
     request<{ accepted: number }>('POST', `/workspaces/${id}/review-ranking-events`, data),
   reviewRankModel: (id: string) =>
     request<ReviewRankPayload | null>('GET', `/workspaces/${id}/review-rank-model`),

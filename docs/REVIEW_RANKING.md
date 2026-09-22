@@ -29,7 +29,8 @@ Event IDs make retries idempotent. Upload queues have size limits and report dro
 Central records expire after 90 days. Existing device archives retain their previous limits.
 The usage analytics opt-out stops uploads and disables outcome collection across that account's workspaces.
 Both apps retry an opt-out when a connection returns, including from Settings.
-Preferences remain device-local; another device with analytics enabled can restart collection.
+Migration `0067` stores an account-level ranking opt-out. Late uploads cannot reverse it.
+Only an explicit analytics opt-in restarts ranking collection. Existing PostHog preferences remain device-local.
 No titles, descriptions, diffs, or search text are uploaded.
 Reviewer logins, repository names, PR identifiers, and requested team names are private analytical data.
 

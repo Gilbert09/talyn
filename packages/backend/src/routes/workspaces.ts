@@ -1,5 +1,5 @@
 import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js';
-import { disableRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
+import { disableRankingCollection, resumeRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
 import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -208,6 +208,11 @@ export function workspaceRoutes(): Router {
     const user = assertUser(req);
     if (!parsed.data.enabled) {
       await disableRankingCollection(getDbClient(), user.id);
+      return res.json({ success: true, data: { accepted: 0 } });
+    }
+    if (parsed.data.resume) {
+      if (parsed.data.events.length) return res.status(400).json({ success: false, error: 'Preference updates cannot include events' });
+      await resumeRankingCollection(getDbClient(), user.id);
       return res.json({ success: true, data: { accepted: 0 } });
     }
     if (!(await isFeatureEnabled('reviewPriority', { distinctId: user.id, email: user.email }))) {

@@ -14,6 +14,10 @@ Records exclude PR prose and code. Central retention is 90 days.
 The descriptive report retains sessions without reviews and excludes incomplete or ambiguous attribution.
 It separates PR opens from submissions and reports inference latency and waiting work.
 The original private pilot remains unchanged.
+Migration `0067` adds an account-level ranking opt-out. Late uploads cannot restart collection.
+Only an explicit analytics opt-in clears that guard. Both apps retry preference changes after connection failures.
+A read-only production check scored 73 visible PRs and validated every capture payload without storing test observations.
+The desktop bundle check found a missing export extension; the corrected DLL and production bundles pass.
 
 Validation covers Python/runtime prediction parity, score replay, fallbacks, gates, capture, retries, ownership, and webhook integration.
 Route tests require local server access outside the network sandbox.
