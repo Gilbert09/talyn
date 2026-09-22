@@ -42,6 +42,7 @@ import {
   fixBlockedReason,
   fixBlockedMessage,
   coarseQueueStatus,
+  queueBlockNeedsHuman,
   describePRPriorityReason,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   type PRPriorityVerdict,
@@ -841,6 +842,12 @@ function PRTableRow({
                   const qs = coarseQueueStatus(row.mergeQueue?.status ?? 'queued');
                   const pos = row.mergeQueue?.position ?? 0;
                   const reason = row.mergeQueue?.reason;
+                  // Blocked splits in two. The queue has said for a long time
+                  // WHY it parked, and both front ends threw the answer away —
+                  // so a PR waiting on somebody to approve twelve visual-review
+                  // snapshots was reported as one that had been given up on
+                  // after three failed attempts. See queueBlockNeedsHuman.
+                  const needsHuman = queueBlockNeedsHuman(row.mergeQueue?.blockedCode);
                   return (
                     <span className="inline-flex items-center gap-1">
                       <span
@@ -859,19 +866,38 @@ function PRTableRow({
                           Merging
                         </span>
                       )}
-                      {qs === 'blocked' && (
-                        <span
-                          className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                          title={
-                            reason
-                              ? `Merge queue gave up after 3 attempts — ${reason}. Needs manual intervention.`
-                              : 'Merge queue gave up after 3 attempts — needs manual intervention'
-                          }
-                        >
-                          <AlertTriangle className="h-2.5 w-2.5" />
-                          Blocked
-                        </span>
-                      )}
+                      {qs === 'blocked' &&
+                        (needsHuman ? (
+                          // Amber and worded as a request. Nothing was tried and
+                          // nothing failed; the queue picks this PR back up by
+                          // itself the moment you clear the gate.
+                          <span
+                            className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                            title={
+                              reason
+                                ? `The merge queue is waiting on you — ${reason} It picks this PR back up on its own once that clears.`
+                                : 'The merge queue is waiting on you — it picks this PR back up on its own once that clears'
+                            }
+                          >
+                            <UserRoundCheck className="h-2.5 w-2.5" />
+                            Needs you
+                          </span>
+                        ) : (
+                          // Red, not amber: this one IS a give-up, and it read
+                          // as the same kind of thing as "waiting on you" for as
+                          // long as they shared a colour.
+                          <span
+                            className="inline-flex items-center gap-1 rounded bg-red-200 px-1 py-0.5 text-[10px] uppercase text-red-800 dark:bg-red-900 dark:text-red-200"
+                            title={
+                              reason
+                                ? `Merge queue gave up — ${reason} Needs manual intervention.`
+                                : 'Merge queue gave up — needs manual intervention'
+                            }
+                          >
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            Blocked
+                          </span>
+                        ))}
                     </span>
                   );
                 })()}

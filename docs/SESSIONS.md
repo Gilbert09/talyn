@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The merge queue knew why it parked, and the app never asked (2026-09-22)
+
+A PR blocked on PostHog Visual Review — twelve snapshots waiting on a person — showed the same amber "Blocked" chip as a PR the queue had given up on, with the tooltip "Merge queue gave up after 3 attempts — needs manual intervention". For that PR every clause of that sentence is false: no fix run was spent (the queue recognises the VR gate and deliberately dispatches nothing), nothing was attempted, and it self-heals the moment the check goes green.
+
+The backend has distinguished these for a while. `blockedCode` carries the cause, `toPublicMergeQueue` puts it on the wire, and `MergeQueuePublic.blockedCode` types it on the client. `grep -rn "blockedCode" apps/` returned **zero matches** — neither front end had ever read it. The PR row called `coarseQueueStatus(status)`, which by design collapses `blocked` and `blocked_manual` into one value, and rendered one chip with hardcoded give-up copy.
+
+The fix is a new shared predicate rather than a new `CoarseQueueStatus` member. Adding a member would have left the four existing `=== 'blocked'` comparisons silently not matching the new value — the exact silent-fallthrough this codebase keeps warning about — whereas `queueBlockNeedsHuman(blockedCode)` leaves every branch firing and only changes the copy inside it. It answers a deliberately narrow question: *is the queue waiting for me, and will it carry on by itself once I act?* True for `awaiting_human_check` (our reading of a live VR check) and `agent_needs_human` (the agent's own verdict). **Not** for `external_gate`, `app_refused_hard` or `stack_cycle` — those need a person too, but none self-heals, and "needs you" would promise a recovery that never comes. The classification is pinned as a `Record<BlockedCode, boolean>` so the compiler routes you there when a code is added; a hand-listed set is how a new cause would default to "not a human gate" in silence.
+
+The row now splits into an amber "Needs you" and a red "Blocked" — red because for as long as they shared a colour, "waiting on you" and "we gave up" read as the same kind of thing. The detail sheet's queue toggle, status line and Requeue tooltip got the same treatment; the sheet already rendered `blockedReason` underneath, so the specific cause was visible there even while the heading contradicted it.
+
+Worth noting what this was NOT: the `needs_human` task status and the auto-keep watcher's "Needs you" chip both shipped and both work. They are gated on a linked task and on auto-keep being on, and this PR had neither — the queue parked before spending a run, which is the correct behaviour. So the feature looked absent when what was missing was only the merge-queue path's half of it.
+
+Tests: `externalMergeQueue.test.ts` (the exhaustive classification), `prRowQueueNeedsHuman.test.tsx` in both forks (render-level: the two human causes, a genuine give-up, an absent code, the position chip surviving the split, and the tooltip carrying the queue's own reason while promising no retry). The render tests were checked against the old behaviour and fail 3/6 on it.
+
+Open, unchased: a row reading "2/267 failing" where GitHub said "3 failing, 199 successful" — different count and different denominator, so the check-count derivation needs its own look.
+
 ## Review ranking: shared candidate and central production pilot (2026-09-22)
 
 Prepare Priority as the default for every user, including existing installations. Later sort choices remain saved.

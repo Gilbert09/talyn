@@ -695,3 +695,36 @@ export function coarseQueueStatus(status: QueueEntryStatus | string): CoarseQueu
       return 'waiting';
   }
 }
+
+/**
+ * The blocked causes that are WAITING ON A PERSON rather than giving up on the
+ * PR, and that clear themselves once that person acts.
+ *
+ * `blockedCode` has been on the wire since the queue learned to say why it
+ * parked, and until now NOTHING in either front end read it: every cause landed
+ * on one amber "Blocked" chip whose tooltip said "Merge queue gave up after 3
+ * attempts — needs manual intervention". For these two that is not a rounding
+ * error, it is the opposite of the truth — nothing was attempted, nothing was
+ * given up on, and no requeue is needed.
+ *
+ *   - `awaiting_human_check` — a check only a person can green is holding the
+ *     PR (PostHog Visual Review). The queue recognised the gate and
+ *     deliberately spent NO fix run on it. Self-heals when the check goes green.
+ *   - `agent_needs_human` — the fix run's own verdict that only a person can
+ *     carry the PR forward. Costs no attempt: a refusal is an answer, not a try
+ *     that failed. Self-heals on a new head or a changed blocker signature.
+ *
+ * Deliberately NOT every cause a human could help with. `external_gate`,
+ * `app_refused_hard` and `stack_cycle` also need somebody, but none of them
+ * self-heals — they are a dead end until the PR is handed elsewhere or
+ * dequeued, and "needs you, it will clear itself" would be a lie about each.
+ * The question this answers is narrow on purpose: *is the queue waiting for me,
+ * and will it carry on by itself once I act?*
+ *
+ * Takes the raw string, not a `BlockedCode`: that union lives in the backend,
+ * and a front end must degrade on a code written by a newer deploy rather than
+ * fail to compile against it.
+ */
+export function queueBlockNeedsHuman(blockedCode: string | null | undefined): boolean {
+  return blockedCode === 'awaiting_human_check' || blockedCode === 'agent_needs_human';
+}

@@ -23,6 +23,7 @@ import {
   isExternalQueueSubmitLabel,
   TRUNK_SUBMIT_LABELS,
   coarseQueueStatus,
+  queueBlockNeedsHuman,
 } from '@talyn/shared';
 import { githubService } from '../services/github.js';
 import {
@@ -35,6 +36,7 @@ import {
   markExternalMergeGate,
   PROBE_TTL_MS,
 } from '../services/repoMergeGate.js';
+import type { BlockedCode } from '../services/mergeQueue/types.js';
 import { submitToExternalQueue } from '../services/externalQueueSubmit.js';
 import { _resetSubmitRoutes } from '../services/externalQueueSubmitRoute.js';
 import * as autoMerge from '../services/githubAutoMerge.js';
@@ -965,5 +967,65 @@ describe('coarseQueueStatus', () => {
     // Forward compatibility: a client on an older build must not render a
     // future status as a failure.
     expect(coarseQueueStatus('some_future_status')).toBe('waiting');
+  });
+});
+
+describe('queueBlockNeedsHuman', () => {
+  // `coarseQueueStatus` deliberately answers only "is it blocked". This answers
+  // the follow-up the badges could never ask: is the queue waiting for a PERSON
+  // — and will it carry on by itself once they act?
+
+  it('is true for the two causes that are waiting on somebody and self-heal', () => {
+    // A check only a human can green (PostHog Visual Review). No fix run was
+    // spent; the queue recognised the gate and parked.
+    expect(queueBlockNeedsHuman('awaiting_human_check')).toBe(true);
+    // The agent's own verdict that only a person can carry the PR forward.
+    expect(queueBlockNeedsHuman('agent_needs_human')).toBe(true);
+  });
+
+  /**
+   * Every cause, classified — a `Record<BlockedCode, boolean>` so the COMPILER
+   * routes you here when a new code is added to the engine. A hand-listed set
+   * would let a new cause default to "not a human gate" in silence, which is
+   * how the front end came to ignore `blockedCode` entirely in the first place.
+   */
+  const EXPECTED: Record<BlockedCode, boolean> = {
+    awaiting_human_check: true,
+    agent_needs_human: true,
+    // Budgets genuinely spent on this head.
+    attempts_exhausted: false,
+    no_progress: false,
+    unsigned_commits: false,
+    app_refused_checks: false,
+    external_queue_rejected: false,
+    // Dead ends: a person IS needed, but nothing clears itself, so "needs you"
+    // would promise a recovery that never comes.
+    app_refused_hard: false,
+    external_gate: false,
+    stack_cycle: false,
+    // Waiting on something that is not a person at all.
+    draft: false,
+    external_queue_unhealthy: false,
+    stack_parent_abandoned: false,
+    stack_retarget_failed: false,
+    stack_retarget_loop: false,
+  };
+
+  it.each(Object.entries(EXPECTED))('classifies %s as needs-human=%s', (code, expected) => {
+    expect(queueBlockNeedsHuman(code)).toBe(expected);
+  });
+
+  it('is false when there is no code at all', () => {
+    // An entry blocked before the queue recorded causes, and the ordinary
+    // not-blocked case. Neither may claim to be waiting on the reader.
+    expect(queueBlockNeedsHuman(null)).toBe(false);
+    expect(queueBlockNeedsHuman(undefined)).toBe(false);
+    expect(queueBlockNeedsHuman('')).toBe(false);
+  });
+
+  it('is false for a code written by a newer backend', () => {
+    // Forward compatibility, and the safe direction: an unknown cause reads as
+    // an ordinary block rather than promising the reader it self-heals.
+    expect(queueBlockNeedsHuman('some_future_code')).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   coarseQueueStatus,
+  queueBlockNeedsHuman,
   fixBlockedReason,
   fixBlockedMessage,
   TASK_STATUS_TERMINAL,
@@ -683,7 +684,9 @@ export function PRDetailSheet({
                 title={
                   view.row.mergeQueued
                     ? coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued') === 'blocked'
-                      ? 'Merge queue paused after 3 attempts — click to remove'
+                      ? queueBlockNeedsHuman(view.row.mergeQueue?.blockedCode)
+                        ? 'The merge queue is waiting on you — click to remove'
+                        : 'Merge queue gave up — click to remove'
                       : 'In the merge queue — click to remove'
                     : 'Add to the merge queue: merges automatically when clean, serialized per base branch, auto-fixing conflicts'
                 }
@@ -699,7 +702,11 @@ export function PRDetailSheet({
                 {view.row.mergeQueued
                   ? (() => {
                       const coarse = coarseQueueStatus(view.row.mergeQueue?.status ?? 'queued');
-                      if (coarse === 'blocked') return 'Queue blocked';
+                      if (coarse === 'blocked') {
+                        return queueBlockNeedsHuman(view.row.mergeQueue?.blockedCode)
+                          ? 'Queue needs you'
+                          : 'Queue blocked';
+                      }
                       if (coarse === 'merging') return 'Merging…';
                       if (coarse === 'fixing') return 'Fixing…';
                       const pos = view.row.mergeQueue?.position;
@@ -1060,6 +1067,10 @@ function MergeQueueSection({ row }: { row: PRRow }) {
   // PR below it lands, so offering Requeue would suggest an action that does
   // nothing. Don't "helpfully" add it here.
   const blocked = v2?.status === 'blocked' || v2?.status === 'blocked_manual';
+  // Blocked-because-it-needs-you is not blocked-because-we-gave-up, and
+  // `QUEUE_STATUS_LABEL` cannot tell them apart: it is keyed on the status, and
+  // both causes land on `blocked`. The distinction is in `blockedCode`.
+  const needsHuman = blocked && queueBlockNeedsHuman(v2?.blockedCode);
   const statusLabel = v2
     ? // Riding another rung's submission: the queue has this PR right now and
       // is testing the whole stack as one unit. "Waiting for #N to merge" would
@@ -1074,7 +1085,9 @@ function MergeQueueSection({ row }: { row: PRRow }) {
           // though it was never approved.
           v2.status === 'awaiting_review' && v2.stackParentNumber != null
           ? `Waiting for a required review — this PR was retargeted after #${v2.stackParentNumber} merged, which may have dismissed an earlier approval`
-          : QUEUE_STATUS_LABEL[v2.status]
+          : needsHuman
+            ? 'Waiting on you — the queue carries on by itself once this clears'
+            : QUEUE_STATUS_LABEL[v2.status]
     : 'Waiting';
   const budgets = v2?.budgets;
   const shown = events ? (showAll ? events : events.slice(0, 8)) : null;
@@ -1106,7 +1119,11 @@ function MergeQueueSection({ row }: { row: PRRow }) {
               className="h-6 px-2 text-[11px]"
               onClick={handleRequeue}
               disabled={requeueing}
-              title="Reset the retry budgets and try again now"
+              title={
+                needsHuman
+                  ? 'Try again now. Usually unnecessary — nothing was spent on this and it clears itself once the gate does.'
+                  : 'Reset the retry budgets and try again now'
+              }
             >
               {requeueing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
               Requeue
