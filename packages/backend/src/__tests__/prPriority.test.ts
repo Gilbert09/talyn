@@ -328,6 +328,7 @@ describe('the reason vocabulary', () => {
         { now: NOW, isTaskActive: () => true } as typeof ctx,
       ],
       ['checks_green', row(), ctx],
+      ['shared_model', row(), { ...ctx, pooledScore: 2 } as typeof ctx],
       [
         'checks_running',
         row({ checks: { total: 4, passed: 1, failed: 0, inProgress: 3, skipped: 0 } }),

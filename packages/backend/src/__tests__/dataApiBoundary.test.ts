@@ -119,7 +119,7 @@ describe('Data API database boundary', () => {
     }
   });
 
-  it('grants the backend only the former explicit authenticated privileges', async () => {
+  it('grants the backend only the approved table privileges', async () => {
     testDb = await createTestDb();
     const grants = await testDb.pglite.query<{ table_name: string; privileges: string[] }>(`
       SELECT table_name, array_agg(privilege_type ORDER BY privilege_type) AS privileges
@@ -135,6 +135,9 @@ describe('Data API database boundary', () => {
       // mcp_servers holds an encrypted credential per row, so its grant is the
       // one in here most worth having to add on purpose.
       mcp_servers: crud,
+      review_ranking_participants: crud,
+      review_ranking_events: crud,
+      review_ranking_outcomes: crud,
       merge_queue_events: ['INSERT', 'SELECT'],
       posthog_oauth_states: ['DELETE', 'INSERT', 'SELECT'],
       release_notes: ['SELECT'],

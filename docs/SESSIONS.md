@@ -18,6 +18,8 @@ Migration `0067` adds an account-level ranking opt-out. Late uploads cannot rest
 Only an explicit analytics opt-in clears that guard. Both apps retry preference changes after connection failures.
 A read-only production check scored 73 visible PRs and validated every capture payload without storing test observations.
 The desktop bundle check found a missing export extension; the corrected DLL and production bundles pass.
+Full CI found two test fixtures missing the new table grants and shared-model reason.
+Both fixtures now cover those additions. Their 118 tests, backend type checking, and lint pass locally.
 
 Validation covers Python/runtime prediction parity, score replay, fallbacks, gates, capture, retries, ownership, and webhook integration.
 Route tests require local server access outside the network sandbox.
