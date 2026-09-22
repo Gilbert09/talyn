@@ -108,6 +108,26 @@ jobs:
           Write-Host "Still running after 25s: $alive"
           if (-not $alive) { Write-Host "Exit code: $($proc.ExitCode)" }
 
+          # "The process is alive" is a weaker claim than it sounds. An Electron
+          # main process whose renderer failed to load stays up forever showing
+          # a blank window, crashes nothing, and reports no telemetry — which
+          # is indistinguishable from a healthy app unless you look. The first
+          # run of this workflow hit exactly that ambiguity: alive for 25s, and
+          # no `app_opened` in PostHog.
+          Get-Process -Name 'Talyn' -ErrorAction SilentlyContinue |
+            Select-Object Id, MainWindowTitle, Responding |
+            Format-Table -AutoSize | Out-String | Write-Host
+
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+          Write-Host "Screen: $($bounds.Width)x$($bounds.Height)"
+          $bmp = New-Object Drawing.Bitmap $bounds.Width, $bounds.Height
+          $gfx = [Drawing.Graphics]::FromImage($bmp)
+          $gfx.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)
+          $shot = Join-Path $env:RUNNER_TEMP 'talyn-window.png'
+          $bmp.Save($shot, [Drawing.Imaging.ImageFormat]::Png)
+          Write-Host "Screenshot saved: $shot"
+
           foreach ($f in @($stdout, $stderr)) {
             if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) {
               Write-Host "---- $(Split-Path $f -Leaf) ----"
@@ -122,6 +142,14 @@ jobs:
             "### Launch: DIED after $($proc.ExitCode) — a real defect, not SmartScreen" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
             throw "Talyn.exe exited with $($proc.ExitCode) within 25 seconds of launch."
           }
+
+      - name: Upload the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: talyn-window
+          path: ${{ runner.temp }}/talyn-window.png
+          if-no-files-found: warn
 
       - name: Collect any crash dumps
         if: always()
