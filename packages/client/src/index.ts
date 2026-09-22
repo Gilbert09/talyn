@@ -869,6 +869,20 @@ export interface PRRow {
    * wait rather than under-stating it.
    */
   reviewRequestedFirstSeenAt?: string | null;
+  /**
+   * When the user hid this PR from the Reviews tab, or null when it is visible.
+   *
+   * A view decision, stored server-side so it holds across clients and
+   * restarts. It does NOT clear {@link reviewRequested} — GitHub still wants
+   * the review, and the monitor would rewrite that flag on the next poll
+   * anyway — so anything that counts the review cohort has to exclude hidden
+   * rows itself. Sticky: only an explicit unhide clears it.
+   *
+   * Absent on an older backend, which reads as visible. WS echoes carry it only
+   * when they CHANGE it, and `null` is a real value there (an unhide), so
+   * preserve it with `??` on `undefined` and never with `||`.
+   */
+  reviewHiddenAt?: string | null;
   /** True when the PR was opened by the user. Drives the "Mine" tab. */
   authored: boolean;
   /**
@@ -1164,6 +1178,16 @@ export const pullRequests = {
    */
   setWatching: (id: string, enabled: boolean) =>
     request<{ deleted: boolean }>('POST', `/pull-requests/${id}/watch`, { enabled }),
+  /**
+   * Hide (or unhide) a PR in the Reviews tab — "I am not reviewing this one".
+   *
+   * Costs no GitHub budget: one column on a row we already hold. The PR stays
+   * review-requested on GitHub and in the row; only the tab's list and count
+   * drop it, and the tab's hidden section is how it comes back. Nothing clears
+   * this automatically, not even a fresh review request.
+   */
+  setReviewHidden: (id: string, hidden: boolean) =>
+    request<null>('POST', `/pull-requests/${id}/review-hidden`, { hidden }),
   focus: (id: string, focused = true) =>
     request<null>('POST', `/pull-requests/${id}/focus`, { focused }),
   // Toggle the auto-keep-mergeable watcher for a PR (repeatedly fires a

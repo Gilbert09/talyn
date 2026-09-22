@@ -12,6 +12,7 @@ import {
   Eye,
   Bookmark,
   BookmarkX,
+  EyeOff,
   AlertTriangle,
   UserRoundCheck,
   ListChecks,
@@ -91,6 +92,10 @@ interface PRTableProps {
    *  flag adds something — a reviewed PR leaves that list, and watching keeps
    *  it on My PRs. */
   onSetWatching?: (row: PRRow, enabled: boolean) => Promise<void>;
+  /** Hide this PR from the Reviews list (or bring it back). Reviews only —
+   *  every other page's cohort is one the user built deliberately, so there is
+   *  nothing to opt out of there. */
+  onSetReviewHidden?: (row: PRRow, hidden: boolean) => Promise<void>;
   /** Create a cloud task for the row. Resolves true when a task was actually
    *  created (false when nothing's connected / the user dismissed the picker),
    *  so the button only flashes its confirmation on a real start. An explicit
@@ -142,6 +147,7 @@ export function PRTable({
   onSetMergeQueue,
   onSetMergeQueueStack,
   onSetWatching,
+  onSetReviewHidden,
   onCreatePostHogTask,
   onRunSkill,
   taskAsk,
@@ -233,6 +239,7 @@ export function PRTable({
             onSetMergeQueue={onSetMergeQueue}
             onSetMergeQueueStack={onSetMergeQueueStack}
             onSetWatching={onSetWatching}
+            onSetReviewHidden={onSetReviewHidden}
             onCreatePostHogTask={onCreatePostHogTask}
             onOpenSkillPicker={onRunSkill ? () => setSkillPickerRowId(row.id) : undefined}
             taskAsk={taskAsk}
@@ -275,6 +282,7 @@ function PRTableRow({
   onSetMergeQueue,
   onSetMergeQueueStack,
   onSetWatching,
+  onSetReviewHidden,
   onCreatePostHogTask,
   onOpenSkillPicker,
   taskAsk,
@@ -313,6 +321,7 @@ function PRTableRow({
    *  flag adds something — a reviewed PR leaves that list, and watching keeps
    *  it on My PRs. */
   onSetWatching?: (row: PRRow, enabled: boolean) => Promise<void>;
+  onSetReviewHidden?: (row: PRRow, hidden: boolean) => Promise<void>;
   onCreatePostHogTask: (row: PRRow, providerType?: string, model?: string) => Promise<boolean>;
   /** Open the table-level skill picker for this row (absent → no skill button). */
   onOpenSkillPicker?: () => void;
@@ -328,9 +337,10 @@ function PRTableRow({
 }) {
   const summary = row.summary;
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
+  const hidden = Boolean(row.reviewHiddenAt);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const [busy, setBusy] = useState<
-    null | 'merge' | 'posthog' | 'stop' | 'queue' | 'stack' | 'watch'
+    null | 'merge' | 'posthog' | 'stop' | 'queue' | 'stack' | 'watch' | 'hide'
   >(null);
   // Queuing several PRs at once is worth a second click, and it may publish
   // drafts on the way — same two-step shape as the merge confirm.
@@ -498,6 +508,21 @@ function PRTableRow({
         err instanceof Error
           ? err.message
           : `Could not ${row.watching ? 'stop tracking' : 'track'} this PR`
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runToggleHidden(e: React.MouseEvent) {
+    e.stopPropagation();
+    setBusy('hide');
+    setRowError(null);
+    try {
+      await onSetReviewHidden!(row, !hidden);
+    } catch (err) {
+      setRowError(
+        err instanceof Error ? err.message : `Could not ${hidden ? 'unhide' : 'hide'} this PR`
       );
     } finally {
       setBusy(null);
@@ -1019,6 +1044,33 @@ function PRTableRow({
                 <Layers className="h-3.5 w-3.5" />
               </button>
             ))}
+          {onSetReviewHidden && variant === 'review' && (
+            <button
+              type="button"
+              data-attr={hidden ? 'pr-row-review-unhide' : 'pr-row-review-hide'}
+              onClick={runToggleHidden}
+              disabled={busy !== null}
+              className={cn(
+                'rounded p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                hidden
+                  ? 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-400'
+                  : 'text-muted-foreground opacity-0 hover:bg-amber-500/10 hover:text-amber-600 focus:opacity-100 group-hover:opacity-100 dark:hover:text-amber-400'
+              )}
+              title={
+                hidden
+                  ? 'Put this PR back in your review list'
+                  : "Hide this PR — drops it from the list and the count. It stays hidden until you bring it back, even if you're asked again."
+              }
+            >
+              {busy === 'hide' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : hidden ? (
+                <Eye className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
           {onSetWatching && (row.watching || variant === 'review') && (
             <button
               type="button"

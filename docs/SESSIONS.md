@@ -2,6 +2,53 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Reviews tab: hide a PR you are not going to review (2026-09-22)
+
+Asked for directly: a button to drop a PR out of the Reviews list and take the
+count down with it, and a "show hidden" control at the foot of the list to get
+it back.
+
+`pull_requests.review_hidden_at` (migration `0065`), NULL when visible. A
+timestamp rather than a boolean because the column is the only record of the
+decision, and "when did I decide to skip this" is the question anyone asks when
+the count looks wrong. `POST /pull-requests/:id/review-hidden` writes it;
+re-hiding keeps the ORIGINAL instant, so a second client cannot restate it.
+
+**It does not touch `review_requested`.** GitHub still wants the review, the
+monitor rewrites that flag from its search every poll, and clearing it would
+also lose the row from the review-history record. Hiding is a VIEW decision and
+is stored as one — which means every reader of the review cohort has to exclude
+hidden rows itself. There are three (the list, the hidden section, the sidebar
+badge), so the rule is one helper, `reviewHidden.ts`, duplicated across the two
+renderer forks. A badge that keeps counting a PR the list has dropped is the
+nag the user was dismissing.
+
+**Sticky — Tom's call.** Nothing clears the hide: not a fresh review request,
+not a new commit. Only the hidden list. The consequence is that the flag has to
+OUTLIVE the cohort, so a row carrying a hide now counts as referenced by the
+un-watch route's delete-when-unreferenced check. Without that, hiding a PR and
+then un-watching it drops the row, and the PR is back in the list the next time
+GitHub asks — the one path that could silently undo the choice.
+
+The hidden rows still ship to the client (the hidden section needs them in
+hand); the tab filters. The WS echo carries `reviewHiddenAt` only when it
+changes, and `null` is a real value there — an unhide — so the store tests
+`undefined` explicitly rather than using `??`, which is the bug `watching` had
+to be taught not to have.
+
+The footer is a `listFooter` slot on `GitHubPageShell`, rendered under the rows
+inside the scroll area and deliberately NOT gated on `rows.length`: hide
+everything and the list is empty, and the footer is the only route back.
+
+Tests: `routes/reviewHidden.test.ts` (stamp, idempotent re-hide, unhide, the
+un-watch survival and its negative) plus `reviewHidden.test.tsx` in both forks
+(the cohort rule, and the three WS merge cases).
+
+NOTE for the review-ranking branch: this took migration `0065`, so the
+uncommitted `0065_review_ranking_experiment` needs renumbering to `0066` before
+it lands, and both `ReviewsPanel.tsx` forks have a small conflict around the
+cohort `useMemo`.
+
 ## GitHub connect: one answer to "are we connected" (2026-09-22)
 
 User feedback: after launching the app, two "Connect GitHub" buttons — one in

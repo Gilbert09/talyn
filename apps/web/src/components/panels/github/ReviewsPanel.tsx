@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Eye } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react';
 import { api, type ReviewRankPayload } from '../../../lib/api';
 import { trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -31,6 +31,7 @@ import {
 } from './filters';
 import { PRFilterModal, SavedFilterBar, useSavedPRFilters } from './savedFilters';
 import { useGitHubActions } from './useGitHubActions';
+import { hiddenReviewCohort, visibleReviewCohort } from './reviewHidden';
 import { exportReviewRankingData, useReviewRankingCapture } from './useReviewRankingCapture';
 
 /**
@@ -69,6 +70,10 @@ export function ReviewsPanel() {
   const [repoFilter, setRepoFilter] = useState('all');
   const [requestedFilter, setRequestedFilter] = useState('all');
   const [search, setSearch] = useState('');
+  // Whether the hidden list at the foot of the page is open. Component state,
+  // not persisted: it is a peek at PRs the user has already dealt with, and a
+  // page that reopens it on every visit would undo the hiding.
+  const [showHidden, setShowHidden] = useState(false);
   // Read once on mount rather than on every render: `localStorage` is
   // synchronous and this component re-renders on every poll.
   const [sortMode, setSortMode] = useState<ReviewSortMode>(loadSortMode);
@@ -188,7 +193,11 @@ export function ReviewsPanel() {
 
   // The page's cohort before any filter — what the chips count against and
   // what the modal previews a draft filter over.
-  const cohort = useMemo(() => rows.filter((r) => r.reviewRequested), [rows]);
+  //
+  // Hidden PRs are out of it entirely — see `visibleReviewCohort`.
+  const cohort = useMemo(() => visibleReviewCohort(rows), [rows]);
+
+  const hiddenRows = useMemo(() => hiddenReviewCohort(rows), [rows]);
 
   // A stored 'priority' can outlive the flag being taken away — see
   // ReviewSortToggle, which falls back to the same 'newest' the sort does.
@@ -404,6 +413,59 @@ export function ReviewsPanel() {
             onEdit={(f) => setFilterModal({ open: true, editing: f })}
           />
         }
+        emptyTitle={
+          hiddenRows.length > 0 && cohort.length === 0
+            ? `Nothing to review — ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'PR is' : 'PRs are'} below.`
+            : undefined
+        }
+        listFooter={({ selectedId, onSelect }) =>
+          hiddenRows.length === 0 ? null : (
+            <div className="border-t">
+              <button
+                type="button"
+                data-attr="pr-review-hidden-toggle"
+                onClick={() => {
+                  if (!showHidden) {
+                    trackEvent('pr_review_hidden_list_opened', { hidden_count: hiddenRows.length });
+                  }
+                  setShowHidden((v) => !v);
+                }}
+                className="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+              >
+                {showHidden ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                <EyeOff className="h-3.5 w-3.5" />
+                {showHidden ? 'Hide' : 'Show'} {hiddenRows.length} hidden pull request
+                {hiddenRows.length === 1 ? '' : 's'}
+              </button>
+              {showHidden && (
+                <PRTable
+                  rows={hiddenRows}
+                  variant="review"
+                  viewerLogin={viewerLogin}
+                  selectedId={selectedId}
+                  onSelect={onSelect}
+                  onOpenTask={actions.openTask}
+                  onStopTask={actions.stopTask}
+                  onMerge={actions.mergeRow}
+                  onSetMergeQueue={actions.setMergeQueue}
+                  onSetWatching={actions.setWatching}
+                  onSetReviewHidden={actions.setReviewHidden}
+                  onCreatePostHogTask={actions.createPostHogTask}
+                  onRunSkill={actions.runSkillTask}
+                  taskAsk={actions.taskAsk}
+                  taskProviders={actions.taskProviders}
+                  onOpenIntegrations={actions.openIntegrations}
+                  taskStatusById={taskStatusById}
+                  taskProviderById={taskProviderById}
+                />
+              )}
+            </div>
+          )
+        }
       >
         {({ selectedId, onSelect }) => (
           <PRTable
@@ -421,6 +483,7 @@ export function ReviewsPanel() {
             onMerge={actions.mergeRow}
             onSetMergeQueue={actions.setMergeQueue}
             onSetWatching={actions.setWatching}
+            onSetReviewHidden={actions.setReviewHidden}
             onCreatePostHogTask={actions.createPostHogTask}
             onRunSkill={actions.runSkillTask}
             taskAsk={actions.taskAsk}

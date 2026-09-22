@@ -264,6 +264,35 @@ export function useGitHubActions() {
   );
 
   /**
+   * Hide or unhide a PR in the Reviews tab.
+   *
+   * Optimistic, like every other row toggle here: the row leaves the list on
+   * the click and the WS echo confirms it. The optimistic instant is only a
+   * placeholder for "hidden" — the server decides the stored one, and its echo
+   * replaces this within the round trip.
+   */
+  const setReviewHidden = useCallback(
+    async (row: PRRow, hidden: boolean) => {
+      const previous = row.reviewHiddenAt ?? null;
+      patchRow(row.id, { reviewHiddenAt: hidden ? new Date().toISOString() : null });
+      trackEvent(hidden ? 'pr_review_hidden' : 'pr_review_unhidden', {
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+      });
+      try {
+        await api.pullRequests.setReviewHidden(row.id, hidden);
+      } catch (err) {
+        patchRow(row.id, { reviewHiddenAt: previous });
+        toast.error(
+          `Couldn't ${hidden ? 'hide' : 'unhide'} ${row.owner}/${row.repo}#${row.number}`,
+          err instanceof Error ? err.message : undefined
+        );
+      }
+    },
+    [patchRow]
+  );
+
+  /**
    * Queue or dequeue a whole stack of dependent PRs in one call.
    *
    * The server resolves the chain — the client's own derivation only decides
@@ -522,6 +551,7 @@ export function useGitHubActions() {
     setMergeQueue,
     setMergeQueueStack,
     setWatching,
+    setReviewHidden,
     createPostHogTask,
     runSkillTask,
     connect,
