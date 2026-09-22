@@ -1,0 +1,135 @@
+name: Windows install check
+
+# A diagnostic, not a gate. Manual only — it never runs on push and costs
+# nothing until somebody asks for it.
+#
+# WHY THIS EXISTS: in the whole history of the project, the Windows desktop
+# build has reported `app_opened` exactly zero times, against ~39 Windows
+# download clicks a month on talyn.dev. The Mac build reports fine. That gap
+# has two very different explanations and the analytics cannot separate them:
+#
+#   1. SmartScreen. The installer is unsigned, Windows says "unknown
+#      publisher", and people back out. Nothing is broken; the fix is a cert.
+#   2. The build itself is broken — it does not install, or it dies before it
+#      can report anything. The fix is a bug fix.
+#
+# A CI runner is the instrument that tells them apart, precisely BECAUSE it is
+# not a person: SmartScreen is an interactive shell feature and never appears
+# here. So a green run means the artifact is sound and every one of those lost
+# users was lost at the warning dialog. A red run means there is a real defect
+# and no certificate would have saved it.
+#
+# It cannot prove (1) on its own — nothing automated can, since the thing being
+# measured is a human deciding not to proceed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to test (blank = latest stable)'
+        required: false
+        default: ''
+
+jobs:
+  check:
+    runs-on: windows-latest
+    if: github.repository == 'Gilbert09/talyn'
+    steps:
+      - name: Download the installer from the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.event.inputs.tag }}'
+          New-Item -ItemType Directory -Force -Path dl | Out-Null
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            Write-Host "Downloading the latest stable release's .exe"
+            gh release download --repo '${{ github.repository }}' --pattern '*.exe' --dir dl
+          } else {
+            Write-Host "Downloading $tag"
+            gh release download $tag --repo '${{ github.repository }}' --pattern '*.exe' --dir dl
+          }
+          # The pattern also matches the .blockmap sidecar; keep the installer.
+          $installer = Get-ChildItem dl -Filter *.exe |
+            Where-Object { $_.Name -notlike '*.blockmap' } |
+            Select-Object -First 1
+          if (-not $installer) { throw 'No .exe asset found on the release.' }
+          Write-Host "Installer: $($installer.Name) ($([math]::Round($installer.Length/1MB,1)) MB)"
+          "INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Report the Authenticode signature
+        shell: pwsh
+        run: |
+          # This is the SmartScreen precondition, stated as a fact rather than
+          # an assumption. NotSigned here means every Windows visitor meets the
+          # "unknown publisher" dialog.
+          $sig = Get-AuthenticodeSignature $env:INSTALLER
+          Write-Host "Signature status : $($sig.Status)"
+          Write-Host "Signer           : $(if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(none)' })"
+          "### Signature: ``$($sig.Status)``" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          # electron-builder's NSIS default is a one-click, per-user install.
+          $p = Start-Process -FilePath $env:INSTALLER -ArgumentList '/S' -PassThru -Wait
+          Write-Host "Installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "Installer exited $($p.ExitCode)" }
+
+      - name: Find the installed application
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Talyn'
+          if (-not (Test-Path $root)) {
+            Write-Host "Not at $root — searching more widely."
+            $found = Get-ChildItem -Path $env:LOCALAPPDATA, $env:ProgramFiles -Filter 'Talyn.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw 'Installed Talyn.exe not found anywhere.' }
+            $root = $found.DirectoryName
+          }
+          Write-Host "Install root: $root"
+          Get-ChildItem $root | Select-Object Name, Length | Format-Table -AutoSize | Out-String | Write-Host
+          $exe = Join-Path $root 'Talyn.exe'
+          if (-not (Test-Path $exe)) { throw "Talyn.exe missing from $root" }
+          "APP_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Launch it and see whether it survives
+        shell: pwsh
+        run: |
+          # The question is narrow: does the main process stay up long enough
+          # to have rendered anything? An Electron app that dies in the first
+          # couple of seconds is the "real defect" branch of the diagnosis.
+          $stdout = Join-Path $env:RUNNER_TEMP 'talyn-out.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'talyn-err.log'
+          $proc = Start-Process -FilePath $env:APP_EXE -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 25
+
+          $alive = -not $proc.HasExited
+          Write-Host "Still running after 25s: $alive"
+          if (-not $alive) { Write-Host "Exit code: $($proc.ExitCode)" }
+
+          foreach ($f in @($stdout, $stderr)) {
+            if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) {
+              Write-Host "---- $(Split-Path $f -Leaf) ----"
+              Get-Content $f -Tail 60 | Write-Host
+            }
+          }
+
+          if ($alive) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            "### Launch: survived 25s — the artifact is sound" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            "### Launch: DIED after $($proc.ExitCode) — a real defect, not SmartScreen" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            throw "Talyn.exe exited with $($proc.ExitCode) within 25 seconds of launch."
+          }
+
+      - name: Collect any crash dumps
+        if: always()
+        shell: pwsh
+        run: |
+          $crashes = Join-Path $env:LOCALAPPDATA 'Talyn\Crashpad\reports'
+          if (Test-Path $crashes) {
+            Get-ChildItem $crashes | Format-Table -AutoSize | Out-String | Write-Host
+          } else {
+            Write-Host "No crashpad reports directory — nothing crashed."
+          }
