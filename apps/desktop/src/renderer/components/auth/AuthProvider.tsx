@@ -2,11 +2,24 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
+import { trackEvent } from '../../lib/analytics';
 
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
   loading: boolean;
+  /**
+   * The reason the LAST sign-in attempt did not finish, or null.
+   *
+   * Distinct from the error `signInWithGitHub` returns: that one is about
+   * STARTING the flow and arrives while the user is still looking at the
+   * button. This is about the half that lands minutes later, in the deep-link
+   * callback, long after the click returned cleanly — a denied authorization
+   * or a failed code exchange. It used to be a `console.error` in a packaged
+   * app with no console, so the flow ended as a login screen that had simply
+   * not changed.
+   */
+  authError: string | null;
   signInWithGitHub: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
@@ -21,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -46,12 +60,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // signInWithOAuth — this verifies the callback came from a flow
     // we actually started and can't be replayed with stolen tokens.
     const off = window.electron?.auth?.onCallback(async (url: string) => {
-      const code = extractCodeParam(url);
-      if (!code) return;
+      const { code, error: providerError } = parseCallbackUrl(url);
+      // The callback came back, whatever it says. This is the event that
+      // separates "never left the login screen" from "went to GitHub and
+      // something went wrong on the way home" — the two look identical from
+      // the outside, and the second one is the one we can fix.
+      trackEvent('signin_callback_received', {
+        has_code: Boolean(code),
+        denied: Boolean(providerError),
+      });
+      if (providerError) {
+        setAuthError(providerError);
+        trackEvent('signin_failed', { stage: 'callback_denied', error: providerError });
+        return;
+      }
+      if (!code) {
+        setAuthError('That sign-in did not come back with anything to finish.');
+        trackEvent('signin_failed', { stage: 'callback_empty' });
+        return;
+      }
       const { error } = await supabase.auth.exchangeCodeForSession(code);
       if (error) {
         console.error('auth: exchangeCodeForSession failed:', error.message);
+        setAuthError(error.message);
+        trackEvent('signin_failed', { stage: 'callback_exchange', error: error.message });
+        return;
       }
+      setAuthError(null);
     });
 
     return () => {
@@ -61,7 +96,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function signInWithGitHub(): Promise<{ error: string | null }> {
+    // A retry starts from a clean slate: the previous attempt's failure is
+    // about a round trip that is over.
+    setAuthError(null);
     if (!isSupabaseConfigured()) {
+      trackEvent('signin_failed', { stage: 'unconfigured' });
       return { error: 'Supabase is not configured' };
     }
     const supabase = getSupabase();
@@ -77,12 +116,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         skipBrowserRedirect: true,
       },
     });
-    if (error) return { error: error.message };
-    if (!data.url) return { error: 'No OAuth URL returned' };
+    if (error) {
+      trackEvent('signin_failed', { stage: 'oauth_start', error: error.message });
+      return { error: error.message };
+    }
+    if (!data.url) {
+      trackEvent('signin_failed', { stage: 'oauth_start', error: 'no_url' });
+      return { error: 'No OAuth URL returned' };
+    }
     // Hand the URL off to the main process, which opens it in the user's
     // default browser. We can't `window.open` — Electron would render it
     // in-process and Supabase/GitHub's cookies wouldn't be available there.
     await window.electron?.auth?.openExternal(data.url);
+    // The browser has the flow now. Everything after this point happens out
+    // of our process, so this is the last thing we can say for certain until
+    // the deep link comes back — which is exactly why it is an event.
+    trackEvent('signin_browser_opened');
     return { error: null };
   }
 
@@ -96,6 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     user: session?.user ?? null,
     loading,
+    authError,
     signInWithGitHub,
     signOut,
   };
@@ -109,13 +159,20 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-/** PKCE callback returns `?code=…` on the query string. */
-function extractCodeParam(url: string): string | null {
+/**
+ * Read the PKCE callback: `?code=…` on success, `?error=…` when the user (or
+ * GitHub) said no. Both halves matter — a callback carrying neither is a
+ * third case, and the old reader returned null for all three.
+ */
+export function parseCallbackUrl(url: string): { code: string | null; error: string | null } {
   try {
     // fastowl://auth-callback?code=... — URL parses custom schemes fine.
     const u = new URL(url);
-    return u.searchParams.get('code');
+    return {
+      code: u.searchParams.get('code'),
+      error: u.searchParams.get('error_description') || u.searchParams.get('error'),
+    };
   } catch {
-    return null;
+    return { code: null, error: null };
   }
 }

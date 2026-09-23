@@ -96,7 +96,7 @@ export default function GuidePage({ params }: Params) {
             ChatGPT subscription you already pay for. Free for three tasks at a time.
           </p>
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <DownloadButton size="md" />
+            <DownloadButton size="md" placement="landing-page" />
             <a href={site.appUrl}>
               <Button variant="secondary" size="md">
                 Open in browser

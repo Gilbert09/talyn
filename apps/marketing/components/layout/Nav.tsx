@@ -67,7 +67,7 @@ export function Nav() {
               Open app
             </Button>
           </a>
-          <DownloadButton size="sm">Download</DownloadButton>
+          <DownloadButton size="sm" placement="nav">Download</DownloadButton>
         </div>
 
         <button
@@ -100,7 +100,7 @@ export function Nav() {
               </a>
               {/* No hardcoded platform — DownloadButton resolves it at runtime
                   now that macOS, Windows and Linux all ship. */}
-              <DownloadButton size="md" className="w-full" />
+              <DownloadButton size="md" className="w-full" placement="nav-mobile" />
             </div>
           </div>
         </div>

@@ -18,7 +18,7 @@ export function MidCta() {
         </Reveal>
         <Reveal delay={0.05}>
           <div className="flex flex-col items-center gap-3 sm:flex-row">
-            <DownloadButton>{midCta.cta}</DownloadButton>
+            <DownloadButton placement="mid-cta">{midCta.cta}</DownloadButton>
             <a href="#pricing">
               <Button variant="secondary">
                 {midCta.secondary}

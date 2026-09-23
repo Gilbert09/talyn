@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { buttonVariants, type ButtonProps } from "@/components/ui/button";
 import { capture } from "@/lib/analytics";
@@ -8,6 +8,26 @@ import { cn } from "@/lib/utils";
 
 const REPO = "Gilbert09/talyn";
 const RELEASES_URL = `https://github.com/${REPO}/releases`;
+
+/**
+ * One download per page, not one per button.
+ *
+ * MODULE scope on purpose. This started as a `useRef` per component, which
+ * stops a double-click on ONE button and nothing else — and the page renders
+ * up to seven of these (nav desktop, nav mobile, hero, mid CTA, pricing,
+ * final CTA). A client that clicks several of them produces several events
+ * from several refs, each of which has only ever seen one click.
+ *
+ * That is not hypothetical: in the week after the ref shipped the site still
+ * recorded 1.8-2.25 `download_click` events per session, the pairs 0-1s
+ * apart, and almost every one of those sessions has a replay with zero
+ * recorded mouse movement. A shared latch is the only thing that sees both.
+ *
+ * The 4s reset is the original one and is unchanged: a download usually does
+ * NOT unload the page, so a latch that only ever closes would leave every
+ * button on the page dead for anyone who stays and wants another.
+ */
+let downloadLatched = false;
 
 type Release = {
   assets?: Array<{ name: string; browser_download_url: string }>;
@@ -103,11 +123,14 @@ export function DownloadButton({
   size = "lg",
   variant = "primary",
   className,
+  placement = "unknown",
 }: {
   children?: React.ReactNode;
   size?: ButtonProps["size"];
   variant?: ButtonProps["variant"];
   className?: string;
+  /** Which CTA this is, for the event. See `placement` in the capture below. */
+  placement?: string;
 }) {
   const [loading, setLoading] = useState(false);
   // Resolved after mount, never during render: the server has no navigator,
@@ -120,14 +143,15 @@ export function DownloadButton({
   // click that lands before the re-render commits — which a double-click
   // always does. That guard therefore never stopped anything, and the event
   // fired twice for roughly three quarters of the people who clicked: 109
-  // events from 62 people, every duplicate pair 100-500ms apart. A ref is
-  // written synchronously, so the second click sees it.
-  const dispatched = useRef(false);
-
+  // events from 62 people, every duplicate pair 100-500ms apart. The latch
+  // above is written synchronously, so the second click sees it — from any
+  // button on the page, which is the part a per-component ref could not do.
   const onClick = async () => {
-    if (loading || dispatched.current) return;
-    dispatched.current = true;
-    capture("download_click", { platform: platform.key });
+    if (loading || downloadLatched) return;
+    downloadLatched = true;
+    // `placement` makes a duplicate diagnosable instead of anonymous, and
+    // answers which CTA actually earns the click.
+    capture("download_click", { platform: platform.key, placement });
     setLoading(true);
     const url = await resolveLatestAsset(platform);
     // Navigate to the installer (triggers download). When there's no asset
@@ -140,7 +164,7 @@ export function DownloadButton({
     // only ever closes would leave the button permanently dead for anyone who
     // stays and tries again.
     setTimeout(() => {
-      dispatched.current = false;
+      downloadLatched = false;
       setLoading(false);
     }, 4000);
   };

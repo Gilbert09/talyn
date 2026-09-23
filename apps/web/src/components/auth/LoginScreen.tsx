@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from './AuthProvider';
 import { isSupabaseConfigured } from '../../lib/supabase';
+import { trackEvent } from '../../lib/analytics';
 import { BlinkingOwl } from '../widgets/BlinkingOwl';
 
 export function LoginScreen() {
@@ -9,9 +10,18 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const configured = isSupabaseConfigured();
 
+  // The counterpart to the desktop's: `app_opened` says the client started,
+  // this says the sign-in screen was actually drawn, and `signin_clicked`
+  // says it was acted on. Without the middle one, every abandoned launch
+  // reads the same as one that never painted.
+  useEffect(() => {
+    trackEvent('login_screen_viewed', { configured });
+  }, [configured]);
+
   async function onClick() {
     setError(null);
     setBusy(true);
+    trackEvent('signin_clicked');
     const res = await signInWithGitHub();
     if (res.error) setError(res.error);
     setBusy(false);

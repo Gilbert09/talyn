@@ -101,6 +101,7 @@ export function Pricing() {
                   <DownloadButton
                     size="md"
                     className="w-full"
+                    placement="pricing"
                     variant={tier.highlighted ? "primary" : "secondary"}
                   >
                     {tier.cta}

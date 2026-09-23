@@ -42,7 +42,7 @@ export function Hero() {
           </p>
 
           <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <DownloadButton size="lg">{hero.primaryCta}</DownloadButton>
+            <DownloadButton size="lg" placement="hero">{hero.primaryCta}</DownloadButton>
             {/* The browser app is a peer of the download, not a footnote:
                 it is the whole product with nothing to install, and the
                 only option for anyone who can't or won't install one. */}

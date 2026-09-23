@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, takeReturnPath } from '../components/auth/AuthProvider';
+import { trackEvent } from '../lib/analytics';
 import { StartingSpinner } from '../components/StartingSpinner';
 
 /**
@@ -26,11 +27,22 @@ export function AuthCallback() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const providerError = params.get('error_description') || params.get('error');
+    trackEvent('signin_callback_received', {
+      has_code: params.has('code'),
+      denied: Boolean(providerError),
+    });
     if (providerError) {
       setError(providerError);
+      trackEvent('signin_failed', { stage: 'callback_denied', error: providerError });
       return;
     }
-    const timer = window.setTimeout(() => setTimedOut(true), 15_000);
+    // The 15s ceiling below is the only evidence we get that the exchange
+    // never completed: detectSessionInUrl swallows its failures into a
+    // console warning, so a silent one ends as this timeout and nothing else.
+    const timer = window.setTimeout(() => {
+      setTimedOut(true);
+      trackEvent('signin_failed', { stage: 'callback_timeout' });
+    }, 15_000);
     return () => window.clearTimeout(timer);
   }, []);
 

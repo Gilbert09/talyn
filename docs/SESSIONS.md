@@ -2,6 +2,68 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Sign-in reported nothing, and most "downloads" were not people (2026-09-23)
+
+Started from a dashboard reading: downloads climbing, signups flat at zero.
+Three separate things, stacked, and only the third is a product problem.
+
+**`signup` was six days old.** `captureSignup` shipped 2026-09-16; the first
+event ever recorded is 2026-09-17. Every window reaching further back reads
+zero by construction. Seven accounts exist since — five finished onboarding,
+four connected an agent, four ran tasks. The tile now charts `signup` itself
+and says in its description when the event began, because a zero that means
+"not instrumented yet" and a zero that means "nobody signed up" are the same
+pixel.
+
+**Most download clicks have no human behind them.** Of 76 people who clicked
+download in 30 days, 49 are Windows/Chrome/US with exactly 1.0 pageviews,
+averaging 0.5 mouse events and 0.6s of active time — and 42 of those 49
+sessions recorded NO mouse movement at all, against 47.5 mouse events and 29s
+for the Mac cohort. GitHub's asset counters agree: ~120 Windows clicks produced
+13 real `.exe` downloads. PostHog's own `$virt_is_bot` flags none of it, so
+every "exclude bots" filter passed it through. New tile splits the two.
+
+**The download → signup funnel could never convert.** Of those 76, exactly ONE
+also has an `app_opened` and none have a `signup`: the site's person is a
+cookie on `.talyn.dev` and the desktop app mints its own anonymous person in
+`localStorage` on `file://`. That tile is retired and replaced by the two
+halves that can each be measured. The lesson generalises — a funnel whose steps
+straddle the browser and the packaged app is not a low number, it is not a
+number at all.
+
+**The real loss, and why it was unknowable.** Desktop: 39 opened the app, 21
+reached a signed-in state, 18 did not. Those 18 fired exactly one event
+(`app_opened`), hit zero exceptions and never came back — and 15 of them have
+no session recording, against 21 of 21 among those who signed in. The SDK
+flushed its first event but the recorder never sent a snapshot batch, so the
+window was gone in seconds. WHY was unanswerable: `LoginScreen` captured
+nothing at all, and a failed `exchangeCodeForSession` wrote to a console a
+packaged app does not have, so "quit immediately" and "never painted" produced
+identical data.
+
+So the screen now reports itself: `login_screen_viewed` (from the first render,
+which is what separates a launch that drew from one that did not),
+`signin_clicked`, `signin_browser_opened`, `signin_callback_received`, and
+`signin_failed` with the stage that failed — `oauth_start`, `callback_denied`,
+`callback_empty`, `callback_exchange`, `callback_timeout` on web. The failure
+is also SHOWN now, in both forks. `extractCodeParam` became `parseCallbackUrl`
+and reads the error half too: a callback carrying `?error=` used to return null
+and be discarded as "no code", which is how a denied authorization became a
+screen that simply never changed.
+
+**The duplicate download event was not fixed by the fix.** A `useRef` guard
+shipped 2026-09-22; the site still recorded 1.93 `download_click` per session
+after it (1.76 before), pairs 0-1s apart. The ref is per component instance and
+the page renders up to seven `DownloadButton`s — a client that clicks several
+of them produces several events, each from a ref that has only seen one click.
+The latch is now module-scoped, so it sees all of them, and each button carries
+a `placement` so a duplicate is diagnosable instead of anonymous.
+
+**Windows is unsigned, and that is now a fact rather than a suspicion.** The
+PE certificate table in `Talyn-Setup-0.2.104.exe` is empty, so SmartScreen
+warns on every first install. 13 real `.exe` downloads produced 2 launches.
+The EV certificate is the fix; nothing in the code can be.
+
 ## The merge queue knew why it parked, and the app never asked (2026-09-22)
 
 A PR blocked on PostHog Visual Review — twelve snapshots waiting on a person — showed the same amber "Blocked" chip as a PR the queue had given up on, with the tooltip "Merge queue gave up after 3 attempts — needs manual intervention". For that PR every clause of that sentence is false: no fix run was spent (the queue recognises the VR gate and deliberately dispatches nothing), nothing was attempted, and it self-heals the moment the check goes green.

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
+import { trackEvent } from '../../lib/analytics';
 
 interface AuthContextValue {
   session: Session | null;
@@ -54,7 +55,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function signInWithGitHub(): Promise<{ error: string | null }> {
-    if (!isSupabaseConfigured()) return { error: 'Supabase is not configured' };
+    if (!isSupabaseConfigured()) {
+      trackEvent('signin_failed', { stage: 'unconfigured' });
+      return { error: 'Supabase is not configured' };
+    }
 
     // Come back to wherever they were, not always the default panel.
     const { pathname, search } = window.location;
@@ -78,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     // On success the browser has already navigated away; only a failure to
     // *start* the flow returns here.
+    if (error) trackEvent('signin_failed', { stage: 'oauth_start', error: error.message });
     return { error: error?.message ?? null };
   }
 

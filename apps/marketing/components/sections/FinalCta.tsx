@@ -25,7 +25,7 @@ export function FinalCta() {
           </h2>
           <p className="mx-auto mt-5 max-w-md text-ink-500">{finalCta.sub}</p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <DownloadButton size="lg">{finalCta.cta}</DownloadButton>
+            <DownloadButton size="lg" placement="final-cta">{finalCta.cta}</DownloadButton>
             <a href={site.appUrl}>
               <Button variant="secondary" size="lg">
                 Open in browser
