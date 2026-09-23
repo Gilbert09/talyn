@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Priority styling and private ranking export (2026-09-23)
+
+Active Priority uses the same gradient, glow, and sparkle styling as Keep new PRs green.
+The export button now requires the separate `review-ranking-export` flag, which defaults off.
+Keep that flag limited to Tom. Priority and candidate access do not grant export access.
+Updated clients read a separate Priority capability. The legacy capability also requires export access to protect older clients.
+Validation: 72 targeted tests passed. Type checks and changed-file lint passed for all affected packages.
+The Priority button was checked in light and dark themes. Tom will configure the PostHog flags separately.
+
+
 ## Sign-in reported nothing, and most "downloads" were not people (2026-09-23)
 
 Started from a dashboard reading: downloads climbing, signups flat at zero.

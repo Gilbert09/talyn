@@ -385,7 +385,7 @@ export function ReviewsPanel() {
               nEvents={rankProfile?.nEvents}
             />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
-            {offerPriority && workspaceId && (
+            {offerPriority && features?.reviewRankingExport === true && workspaceId && (
               <ReviewRankingExportButton key={workspaceId} workspaceId={workspaceId} />
             )}
           </>

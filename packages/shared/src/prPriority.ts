@@ -868,7 +868,7 @@ export function buildPRPriorityMap(
  * it is a pure function over rows the client already holds.
  */
 export function reviewPriorityOffered(
-  features: { reviewPriority?: boolean } | null | undefined,
+  features: { reviewPriority?: boolean; reviewPriorityMode?: boolean } | null | undefined,
 ): boolean {
-  return features?.reviewPriority === true;
+  return (features?.reviewPriorityMode ?? features?.reviewPriority) === true;
 }

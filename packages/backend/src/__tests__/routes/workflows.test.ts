@@ -218,18 +218,15 @@ describe('workflow routes', () => {
   describe('GET /features', () => {
     it('answers true for an allow-listed caller', async () => {
       const res = await fetch(`${url}/api/v1/features`, { headers });
-      // `loops`, `mcpServers` and `reviewPriority` ride along because they are
-      // account-scoped too, and all three are false here: their flags fail
-      // CLOSED, the opposite of this one. Asserted as a whole object rather
-      // than one key, so a flag that stops being answered is a failure rather
-      // than a silent absence — which is why adding one to the register is
-      // meant to land here.
+      // Check every capability, including Priority access for current and older clients.
       expect(((await res.json()) as { data: Features }).data).toEqual({
         workflows: true,
         loops: false,
         mcpServers: false,
-        reviewPriority: true,
+        reviewPriority: false,
+        reviewPriorityMode: true,
         reviewRankingCandidate: false,
+        reviewRankingExport: false,
       });
     });
 
@@ -247,8 +244,10 @@ describe('workflow routes', () => {
         workflows: false,
         loops: false,
         mcpServers: false,
-        reviewPriority: true,
+        reviewPriority: false,
+        reviewPriorityMode: true,
         reviewRankingCandidate: false,
+        reviewRankingExport: false,
       });
     });
   });

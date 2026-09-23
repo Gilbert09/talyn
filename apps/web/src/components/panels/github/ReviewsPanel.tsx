@@ -384,7 +384,7 @@ export function ReviewsPanel() {
               nEvents={rankProfile?.nEvents}
             />
             <ClearFiltersButton active={anyFilterActive} onClear={clearFilters} />
-            {offerPriority && workspaceId && (
+            {offerPriority && features?.reviewRankingExport === true && workspaceId && (
               <button
                 type="button"
                 className="h-7 rounded-md border px-2 text-xs text-muted-foreground hover:bg-muted/40"

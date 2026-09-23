@@ -238,6 +238,15 @@ export const FEATURE_FLAGS = {
     releaseScopes: [],
   },
 
+  reviewRankingExport: {
+    posthogKey: 'review-ranking-export',
+    envOverride: 'REVIEW_RANKING_EXPORT_ENABLED',
+    fallback: false,
+    description: 'Export ranking data stored on this device',
+    availability: 'gated',
+    releaseScopes: [],
+  },
+
   fleet: {
     posthogKey: 'talyn-fleet',
     envOverride: 'FLEET_ALLOWED',
@@ -372,6 +381,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'mcpServers',
   'reviewPriority',
   'reviewRankingCandidate',
+  'reviewRankingExport',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
@@ -383,7 +393,10 @@ export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
  * the caller's identity, so a client cannot set it and there is nothing here to
  * persist.
  */
-export type Features = Record<AccountFeatureFlagKey, boolean>;
+export type Features = Record<AccountFeatureFlagKey, boolean> & {
+  /** Priority access without the export button bundled into older clients. */
+  reviewPriorityMode: boolean;
+};
 
 /**
  * Read one flag's env override.

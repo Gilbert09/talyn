@@ -1,4 +1,5 @@
 import { ArrowUpDown, FilterX, Sparkles } from 'lucide-react';
+import { cn } from '../../../lib/utils';
 
 export type SortDir = 'asc' | 'desc';
 
@@ -145,15 +146,32 @@ export function ReviewSortToggle({
       type="button"
       data-attr="pr-review-sort-toggle"
       onClick={() => onChange(next)}
-      className="flex items-center gap-1 rounded-md border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+      className={cn(
+        'inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs transition-all',
+        current === 'priority'
+          ? 'rounded-full border-violet-400/50 bg-gradient-to-r from-violet-500/15 via-fuchsia-500/10 to-sky-500/15 ' +
+            'font-medium text-violet-700 shadow-[0_0_14px_-3px_rgba(139,92,246,0.55)] ' +
+            'hover:shadow-[0_0_18px_-3px_rgba(139,92,246,0.7)] ' +
+            'dark:border-violet-400/40 dark:text-violet-200 ' +
+            'dark:shadow-[0_0_14px_-4px_rgba(167,139,250,0.5)]'
+          : 'rounded-md text-muted-foreground hover:text-foreground',
+      )}
       title={title}
     >
       {current === 'priority' ? (
-        <Sparkles className="h-3 w-3" />
+        <Sparkles className="h-3.5 w-3.5 text-violet-500 dark:text-violet-300" />
       ) : (
         <ArrowUpDown className="h-3 w-3" />
       )}
-      {REVIEW_SORT_LABEL[current]}
+      <span
+        className={cn(
+          current === 'priority' &&
+            'bg-gradient-to-r from-violet-600 via-fuchsia-600 to-sky-600 bg-clip-text text-transparent ' +
+              'dark:from-violet-300 dark:via-fuchsia-300 dark:to-sky-300',
+        )}
+      >
+        {REVIEW_SORT_LABEL[current]}
+      </span>
     </button>
   );
 }

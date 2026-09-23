@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { v4 as uuid } from 'uuid';
-import { FEATURE_FLAGS, readFlagOverride, type FeatureFlagKey } from '@talyn/shared';
+import { FEATURE_FLAGS, readFlagOverride, reviewPriorityOffered, type FeatureFlagKey } from '@talyn/shared';
 import { createTestDb } from './helpers/testDb.js';
 import { users as usersTable, workspaces as workspacesTable } from '../db/schema.js';
 
@@ -438,7 +438,36 @@ describe('workspace subjects', () => {
 });
 
 describe('featuresForUser', () => {
-  it('answers only the account-scoped flags', async () => {
+  it.each([
+    [false, false, false], [false, false, true],
+    [false, true, false], [false, true, true],
+    [true, false, false], [true, false, true],
+    [true, true, false], [true, true, true],
+  ])('separates Priority %s, candidate %s, and export %s access', async (priority, candidate, canExport) => {
+    process.env.TALYN_POSTHOG_KEY = 'phc_test';
+    answer = (key) => ({
+      'review-priority': priority,
+      'review-ranking-candidate-v1': candidate,
+      'review-ranking-export': canExport,
+    })[key];
+    const features = await featuresForUser(SUBJECT);
+    expect(reviewPriorityOffered(features)).toBe(priority);
+    expect(features.reviewRankingCandidate).toBe(candidate);
+    expect(features.reviewRankingExport).toBe(canExport);
+    expect(features.reviewPriority).toBe(priority && canExport);
+  });
+
+  it.each([
+    [null, false], [{}, false],
+    [{ reviewPriority: true }, true],
+    [{ reviewPriority: false }, false],
+    [{ reviewPriority: false, reviewPriorityMode: true }, true],
+    [{ reviewPriority: true, reviewPriorityMode: false }, false],
+  ])('reads current and older backend capabilities: %j', (features, expected) => {
+    expect(reviewPriorityOffered(features)).toBe(expected);
+  });
+
+  it('returns the account feature capabilities', async () => {
     const features = await featuresForUser(SUBJECT);
     // `fleet` is keyed on the workspace OWNER, who is not always the caller, so
     // an account-scoped answer would be wrong for every member of somebody
@@ -449,7 +478,9 @@ describe('featuresForUser', () => {
       'loops',
       'mcpServers',
       'reviewPriority',
+      'reviewPriorityMode',
       'reviewRankingCandidate',
+      'reviewRankingExport',
       'workflows',
     ]);
   });
@@ -460,8 +491,10 @@ describe('featuresForUser', () => {
       workflows: false,
       loops: false,
       mcpServers: false,
-      reviewPriority: true,
+      reviewPriority: false,
+      reviewPriorityMode: true,
       reviewRankingCandidate: false,
+      reviewRankingExport: false,
     });
   });
 
@@ -475,19 +508,23 @@ describe('featuresForUser', () => {
       workflows: true,
       loops: false,
       mcpServers: false,
-      reviewPriority: true,
+      reviewPriority: false,
+      reviewPriorityMode: true,
       reviewRankingCandidate: false,
+      reviewRankingExport: false,
     });
   });
 
   it('offers Priority by default and keeps the candidate closed on failure', async () => {
     const features = await featuresForUser(SUBJECT);
-    expect(features.reviewPriority).toBe(true);
+    expect(features.reviewPriorityMode).toBe(true);
+    expect(features.reviewPriority).toBe(false);
+    expect(features.reviewRankingExport).toBe(false);
     expect(features.reviewRankingCandidate).toBe(false);
   });
 
   it('lets the env override turn review priority on for local development', async () => {
     process.env.REVIEW_PRIORITY_ENABLED = '1';
-    expect((await featuresForUser(SUBJECT)).reviewPriority).toBe(true);
+    expect((await featuresForUser(SUBJECT)).reviewPriorityMode).toBe(true);
   });
 });

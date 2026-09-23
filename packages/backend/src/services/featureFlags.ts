@@ -352,7 +352,13 @@ export async function featuresForUser(subject: FlagSubject): Promise<Features> {
       async (flag) => [flag, await isFeatureEnabled(flag, subject)] as const
     )
   );
-  return Object.fromEntries(entries) as Features;
+  const flags = Object.fromEntries(entries) as Record<(typeof ACCOUNT_FEATURE_FLAGS)[number], boolean>;
+  return {
+    ...flags,
+    reviewPriorityMode: flags.reviewPriority,
+    // Older clients expose exports whenever reviewPriority is true.
+    reviewPriority: flags.reviewPriority && flags.reviewRankingExport,
+  };
 }
 
 // ---------- Lifecycle ----------

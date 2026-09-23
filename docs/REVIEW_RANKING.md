@@ -7,6 +7,12 @@ A new preference key applies this once to existing installations. Later explicit
 The `review-priority` flag becomes a general release flag with an enabled fallback.
 It remains the feature kill switch.
 
+The `review-ranking-export` flag controls the export button separately and defaults off.
+Limit that flag to Tom's account. General Priority access must not expand its audience.
+Updated clients read `reviewPriorityMode` from `/features`.
+The legacy `reviewPriority` capability also requires export access, because older clients display both controls together.
+Active Priority uses the gradient and glow from the automatic PR maintenance button.
+
 The fixed candidate is `shared-queue-v1-3d2399cacfea4ea6`, under experiment `priority-shared-v1`.
 The initial allocation is 10% candidate and 90% existing Priority, using `review-ranking-candidate-v1` and stable account IDs.
 That flag defaults off. A disabled candidate flag restores existing Priority on the next list fetch.
