@@ -397,7 +397,12 @@ function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
   if (!providers || providers.length === 0) return null;
 
   return (
-    <div className={cn('mb-2 border-b pb-2', collapsed && 'flex flex-col items-center gap-1')}>
+    <div
+      className={cn(
+        '-mx-2 mb-2 border-b px-2 pb-2',
+        collapsed && 'flex flex-col items-center gap-1',
+      )}
+    >
       {!collapsed && (
         <p className="px-4 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
           Agents
