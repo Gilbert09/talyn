@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import {
+  cloudProviderStatus,
+  loopsOffered,
+  mcpServersOffered,
+  workflowsOffered,
+  type CloudProviderTone,
+} from '@talyn/shared';
 import {
   ListTodo,
   Settings,
@@ -20,6 +26,8 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
+import { ProviderIcon } from '../../lib/providerMeta';
+import { CLAUDE_LOGO, CODEX_LOGO } from '../../assets/providers/logos';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { visibleReviewCohort } from '../panels/github/reviewHidden';
@@ -227,6 +235,8 @@ export function Sidebar({ className }: SidebarProps) {
             size="icon"
             className="h-8 w-8 flex-shrink-0"
             onClick={toggleSidebar}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {sidebarCollapsed ? (
               <ChevronRight className="w-4 h-4" />
@@ -247,6 +257,8 @@ export function Sidebar({ className }: SidebarProps) {
               size="icon"
               className="h-8 w-8 flex-shrink-0"
               onClick={() => setActivePanel('settings')}
+              aria-label="Settings"
+              title="Settings"
             >
               <Settings className="w-4 h-4" />
             </Button>
@@ -379,49 +391,112 @@ function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
 // app is continuously deployed and a reload IS the update — so the
 // component and its usage are dropped rather than stubbed.
 
-/**
- * Cloud-provider connection status, shown just above the user chip. One row
- * per registered cloud provider with a dot: green = connected (credentials
- * configured for this workspace), grey = not connected.
- */
+const FLEET_AGENT_LOGOS: Record<string, string> = { claude: CLAUDE_LOGO, codex: CODEX_LOGO };
+
 function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
-  // Status comes from the store (preloaded + kept fresh by useSystemStatus on
-  // focus / env WS events / reconnect), so this row never fetches on its own and
-  // can't disagree with the Settings cards.
   const providers = useWorkspaceStore((s) => s.cloudProviders);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
 
   if (!providers || providers.length === 0) return null;
 
   return (
-    <button
-      type="button"
-      onClick={() => openSettings('integrations')}
-      title="Manage cloud providers"
-      className={cn(
-        'mb-2 flex w-full flex-col gap-0.5 border-b pb-2 text-left transition-colors hover:bg-muted/50 rounded-md',
-        collapsed && 'items-center',
+    <div className={cn('mb-2 border-b pb-2', collapsed && 'flex flex-col items-center gap-1')}>
+      {!collapsed && (
+        <p className="px-4 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+          Agents
+        </p>
       )}
-    >
-      {providers.map((p) => (
-        <div
-          key={p.type}
-          title={`${p.displayName} — ${p.connected ? 'connected' : 'not connected'}`}
-          className={cn(
-            'flex items-center gap-2 rounded-md text-xs text-muted-foreground',
-            collapsed ? 'h-6 w-6 justify-center' : 'px-2 py-1',
-          )}
-        >
-          <span
-            className={cn(
-              'h-2 w-2 shrink-0 rounded-full',
-              p.connected ? 'bg-green-500' : 'bg-muted-foreground/40',
+      {providers.map((p) => {
+        const status = cloudProviderStatus(p);
+        const title = `${p.displayName}: ${status.detail}`;
+        const dimmed = status.tone === 'disconnected';
+        if (collapsed) {
+          return (
+            <button
+              key={p.type}
+              type="button"
+              onClick={() => openSettings('integrations')}
+              title={title}
+              aria-label={title}
+              className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+            >
+              <ProviderIcon
+                provider={p.type}
+                label={title}
+                className={cn('h-4 w-4', dimmed && 'opacity-40 grayscale')}
+              />
+              <StatusDot tone={status.tone} className="absolute bottom-1 right-1 ring-2 ring-card" />
+            </button>
+          );
+        }
+        return (
+          <button
+            key={p.type}
+            type="button"
+            onClick={() => openSettings('integrations')}
+            title={title}
+            className="group flex h-7 w-full items-center gap-3 rounded-md px-4 text-xs transition-colors hover:bg-accent"
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+              <ProviderIcon
+                provider={p.type}
+                label={title}
+                className={cn('h-3.5 w-3.5', dimmed && 'opacity-40 grayscale')}
+              />
+            </span>
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-left',
+                dimmed ? 'text-muted-foreground' : 'text-foreground',
+              )}
+            >
+              {p.displayName}
+            </span>
+            {status.agents.map((agent) =>
+              FLEET_AGENT_LOGOS[agent] ? (
+                <img
+                  key={agent}
+                  src={FLEET_AGENT_LOGOS[agent]}
+                  alt=""
+                  aria-hidden
+                  draggable={false}
+                  className="h-3 w-3 shrink-0 rounded-[2px] object-contain"
+                />
+              ) : null,
             )}
-          />
-          {!collapsed && <span className="min-w-0 flex-1 truncate">{p.displayName}</span>}
-        </div>
-      ))}
-    </button>
+            {status.tone === 'connected' ? (
+              <StatusDot tone="connected" className="ring-[3px] ring-green-500/20" />
+            ) : (
+              <span
+                className={cn(
+                  'text-[10px] font-medium',
+                  status.tone === 'reauth'
+                    ? 'text-amber-500'
+                    : 'text-muted-foreground/60 group-hover:text-foreground',
+                )}
+              >
+                {status.tone === 'reauth' ? 'Reconnect' : 'Connect'}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StatusDot({ tone, className }: { tone: CloudProviderTone; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'h-1.5 w-1.5 shrink-0 rounded-full',
+        tone === 'connected' && 'bg-green-500',
+        tone === 'reauth' && 'bg-amber-500',
+        tone === 'disconnected' && 'bg-muted-foreground/40',
+        className,
+      )}
+    />
   );
 }
 

@@ -117,3 +117,37 @@ export function cloudAgentChoices(
       }));
     });
 }
+
+export type CloudProviderTone = 'connected' | 'reauth' | 'disconnected';
+
+export interface CloudProviderStatusSummary {
+  tone: CloudProviderTone;
+  agents: string[];
+  detail: string;
+}
+
+function agentList(agents: readonly string[]): string {
+  const labels = agents.map((agent) => fleetAgentLabel(agent as FleetAgent));
+  if (labels.length < 2) return labels.join('');
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+export function cloudProviderStatus(provider: {
+  connected: boolean;
+  connectedAgents?: string[];
+  reauthAgents?: string[];
+}): CloudProviderStatusSummary {
+  const agents = provider.connectedAgents ?? [];
+  const reauth = provider.reauthAgents ?? [];
+  if (reauth.length > 0) {
+    return { tone: 'reauth', agents, detail: `Reconnect ${agentList(reauth)}` };
+  }
+  if (!provider.connected) {
+    return { tone: 'disconnected', agents: [], detail: 'Not connected' };
+  }
+  return {
+    tone: 'connected',
+    agents,
+    detail: agents.length > 0 ? `${agentList(agents)} connected` : 'Connected',
+  };
+}
