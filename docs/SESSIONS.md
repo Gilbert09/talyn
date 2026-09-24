@@ -2,6 +2,48 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The download event is email scanners pressing the button (2026-09-24)
+
+Follow-up to yesterday's investigation, and now provable rather than inferred.
+The module-level latch worked — today's presses are 1 per session, where
+yesterday's cached bundle was still 1.93 — but the volume is still mostly not
+people. What `placement` and the recordings show:
+
+- Every campaign-tagged press arrives from a DATACENTRE: Boydton, Dulles,
+  Dublin, Des Moines, San Jose, Tecumseh, Oslo, Chennai. Those are Azure, AWS
+  and GCP regions, not where readers live.
+- The URLs carry the campaign's own `utm_content` recipient token, and ONE
+  token is opened from several cities: `wHX_MHB8x7IRweLJ` was fetched from
+  Dulles and San Jose four times inside 20 minutes. Some arrive with `&amp;`
+  still HTML-escaped in the query string — a machine following the raw href
+  out of the mail body rather than a browser that parsed it.
+- Every one reports screen width 1920 and Windows "10", with Chrome versions
+  scattered from 135 to 153.
+- The press lands 21-30s after the pageview, in a tight band across different
+  recipients and countries — a render timeout, not a person deciding.
+- Decisive: of the five recordings we have of email-sourced download sessions,
+  three contain a `download_click` event and NO recorded click. rrweb records
+  pointer events, and a scripted `element.click()` produces none. Active time
+  is 3.7-7.2s of a 17-25s session, with 1-11 mouse events; the Mac human
+  cohort averages 47.5 mouse events and 29s active.
+
+This is email link protection (Defender Safe Links and its peers) detonating
+the link before delivery: load the page, wait, activate the primary CTA, report
+where it goes. More emails sent means more "downloads", and no amount of
+front-end work stops it — the request is indistinguishable from a real browser
+at the network layer.
+
+So the button now records `trusted` (`MouseEvent.isTrusted`, false for a
+scripted click) and `seconds_on_page`. Neither filters anything: the event is
+still captured, because a refusal that leaves no trace is how the count became
+untrustworthy in the first place, and a flag can be corrected later while a
+dropped event cannot.
+
+**The standing rule this leaves: a button press on a public page is not an
+acquisition metric.** The honest ones are the GitHub asset `download_count`
+(~3 real `.exe` fetches in the day that produced 31 press events) and the
+app-side first launch, which a scanner cannot fake because it has to install.
+
 ## Priority styling and private ranking export (2026-09-23)
 
 Active Priority uses the same gradient, glow, and sparkle styling as Keep new PRs green.

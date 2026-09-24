@@ -146,12 +146,38 @@ export function DownloadButton({
   // events from 62 people, every duplicate pair 100-500ms apart. The latch
   // above is written synchronously, so the second click sees it — from any
   // button on the page, which is the part a per-component ref could not do.
-  const onClick = async () => {
+  const onClick = async (e: React.MouseEvent) => {
     if (loading || downloadLatched) return;
     downloadLatched = true;
-    // `placement` makes a duplicate diagnosable instead of anonymous, and
-    // answers which CTA actually earns the click.
-    capture("download_click", { platform: platform.key, placement });
+    capture("download_click", {
+      // Which CTA earned it — and what makes a duplicate diagnosable rather
+      // than anonymous.
+      platform: platform.key,
+      placement,
+      /**
+       * Whether a PERSON pressed this button.
+       *
+       * `isTrusted` is false for a click a script dispatched with
+       * `element.click()`, which is how an email link-protection sandbox
+       * activates a page's primary call to action before delivering the mail.
+       * Those arrive from datacentre IPs with the campaign's own `utm_content`
+       * token, and three of the five recordings we have of them contain a
+       * `download_click` and NO recorded click at all — rrweb sees pointer
+       * events, and a synthetic click produces none.
+       *
+       * Not a filter: the event is still captured. A refusal that leaves no
+       * trace is how the count became untrustworthy in the first place, and a
+       * flag can be corrected later while a dropped event cannot.
+       */
+      trusted: e.isTrusted,
+      /**
+       * Seconds from page load to the press. Human dwell is spread; the
+       * campaign-tagged presses cluster tightly at 21-30s across different
+       * recipients, countries and Chrome versions, which is a render timeout
+       * rather than a person deciding.
+       */
+      seconds_on_page: Math.round(performance.now() / 100) / 10,
+    });
     setLoading(true);
     const url = await resolveLatestAsset(platform);
     // Navigate to the installer (triggers download). When there's no asset
