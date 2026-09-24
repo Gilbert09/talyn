@@ -1,9 +1,15 @@
 import type React from 'react';
-import { readCloudTaskProvider, type AnyCloudProviderType, type CloudProviderType } from '@talyn/shared';
+import {
+  readCloudTaskProvider,
+  type AnyCloudProviderType,
+  type CloudProviderType,
+  type FleetAgent,
+} from '@talyn/shared';
 import { cn } from './utils';
 import {
   POSTHOG_LOGO,
   CODEX_LOGO,
+  CLAUDE_LOGO,
   SELFHOSTED_LOGO,
   GENERIC_PROVIDER_LOGO,
 } from '../assets/providers/logos';
@@ -24,6 +30,7 @@ interface ProviderMeta {
   label: string;
   /** Brand logo as a data URI (see assets/providers/logos.ts). */
   src: string;
+  darkInvert?: boolean;
   /**
    * An inline mark, preferred over `src` when present.
    *
@@ -43,7 +50,7 @@ interface ProviderMeta {
  */
 export const PROVIDER_META: Record<CloudProviderType, ProviderMeta> = {
   posthog_code: { label: 'PostHog Code', src: POSTHOG_LOGO },
-  codex_cloud: { label: 'Codex Cloud', src: CODEX_LOGO },
+  codex_cloud: { label: 'Codex Cloud', src: CODEX_LOGO, darkInvert: true },
   // The wire/DB value stays 'selfhosted' — it is persisted in environments.type
   // and integrations.type. Only the label is the product's name for it.
   selfhosted: { label: 'Talyn Fleet', src: SELFHOSTED_LOGO, Mark: TalynOwlMark },
@@ -156,7 +163,34 @@ export function ProviderIcon({
       alt={label ?? meta.label}
       title={label ?? meta.label}
       draggable={false}
-      className={cn('inline-block h-3.5 w-3.5 shrink-0 rounded-[3px] object-contain', className)}
+      className={cn(
+        'inline-block h-3.5 w-3.5 shrink-0 rounded-[3px] object-contain',
+        meta.darkInvert && 'dark:invert',
+        className,
+      )}
+    />
+  );
+}
+
+const FLEET_AGENT_MARKS: Record<FleetAgent, { src: string; darkInvert?: boolean }> = {
+  claude: { src: CLAUDE_LOGO },
+  codex: { src: CODEX_LOGO, darkInvert: true },
+};
+
+export function FleetAgentMark({ agent, className }: { agent: string; className?: string }) {
+  const mark = FLEET_AGENT_MARKS[agent as FleetAgent];
+  if (!mark) return null;
+  return (
+    <img
+      src={mark.src}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className={cn(
+        'inline-block shrink-0 rounded-[2px] object-contain',
+        mark.darkInvert && 'dark:invert',
+        className,
+      )}
     />
   );
 }

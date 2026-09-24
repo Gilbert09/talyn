@@ -43,7 +43,7 @@ import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
 import { setLogoutReason } from '../../lib/logoutReason';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { cn } from '../../lib/utils';
-import { CLAUDE_LOGO, CODEX_LOGO } from '../../assets/providers/logos';
+import { FleetAgentMark } from '../../lib/providerMeta';
 import { maybeHandleBillingLimit } from '../../stores/billing';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
@@ -1269,13 +1269,7 @@ function FleetAgentRow({
               "Claude subscription" and "Codex (ChatGPT) subscription" are two
               lines of text a reader has to parse; the marks are the thing they
               recognise without reading. Same logos the task badges use. */}
-          <img
-            src={agent === 'claude' ? CLAUDE_LOGO : CODEX_LOGO}
-            alt=""
-            aria-hidden
-            draggable={false}
-            className="h-4 w-4 shrink-0 rounded-[3px] object-contain"
-          />
+          <FleetAgentMark agent={agent} className="h-4 w-4 rounded-[3px]" />
           <span className="text-sm font-medium">{label}</span>
           {needsReauth ? (
             <Badge variant="destructive">Reconnect needed</Badge>

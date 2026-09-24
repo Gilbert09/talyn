@@ -28,8 +28,7 @@ import { cn, isMacDesktop } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
-import { ProviderIcon } from '../../lib/providerMeta';
-import { CLAUDE_LOGO, CODEX_LOGO } from '../../assets/providers/logos';
+import { FleetAgentMark, ProviderIcon } from '../../lib/providerMeta';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { visibleReviewCohort } from '../panels/github/reviewHidden';
@@ -451,8 +450,6 @@ function UpdateNotice({ collapsed }: { collapsed: boolean }) {
   return null;
 }
 
-const FLEET_AGENT_LOGOS: Record<string, string> = { claude: CLAUDE_LOGO, codex: CODEX_LOGO };
-
 function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
   const providers = useWorkspaceStore((s) => s.cloudProviders);
   const openSettings = useWorkspaceStore((s) => s.openSettings);
@@ -512,18 +509,9 @@ function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
             >
               {p.displayName}
             </span>
-            {status.agents.map((agent) =>
-              FLEET_AGENT_LOGOS[agent] ? (
-                <img
-                  key={agent}
-                  src={FLEET_AGENT_LOGOS[agent]}
-                  alt=""
-                  aria-hidden
-                  draggable={false}
-                  className="h-3 w-3 shrink-0 rounded-[2px] object-contain"
-                />
-              ) : null,
-            )}
+            {status.agents.map((agent) => (
+              <FleetAgentMark key={agent} agent={agent} className="h-3 w-3" />
+            ))}
             {status.tone === 'connected' ? (
               <StatusDot tone="connected" className="ring-[3px] ring-green-500/20" />
             ) : (
