@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The merge confirm was never disarmed on success (2026-09-25)
+
+User feedback: "When I use the merge button on a PR, the app shows a spinner, thinks a bit, then a confirm button. I click confirm and then it thinks for a good long while and shows the confirm button *again* before then finally queuing the PR up to be merged."
+
+`runMerge` in `prTableShared.tsx` cleared `confirmMerge` only inside its `catch`. On the merge-that-lands path nobody noticed, because `mergeRow` calls `removeRow(row.id)` and the row unmounts with its state. But when an external merge queue owns the base branch the backend SUBMITS the PR instead of merging it, and that path deliberately KEEPS the row — the PR stays open until trunk lands it. So the row re-rendered with `canMerge` still true and a confirm still armed, and a button labelled "Confirm" reappeared on a PR that had just been submitted. It reads as "that did not work, press it again."
+
+Pressing it again is the expensive half, and it is the rest of the report. `submitToExternalQueue` finds the provider already holding the PR and answers `already_submitted` — which `submitInstead` maps to `'none'`, because only `submitted` and `no_mechanism` are handled. `'none'` means fall through, so the route then attempts a DIRECT merge, the gate refuses it, the refusal handler re-runs the submit (another `already_submitted`, another `'none'`), and it finishes with `reconcileTerminalState` before answering **400** on a PR that is queued and healthy. That is the "thinks for a good long while" and the error at the end of it; the queue chips the user eventually sees came from the FIRST click, which had worked all along.
+
+The fix is one line moved: disarm in `finally`, so the arm is spent by any completed attempt rather than only by a failed one. The detail sheet already did this correctly (`setConfirmMerge(false)` after its await), which is why the bug is row-only.
+
+Not fixed here, and worth its own change: `already_submitted` falling through to `'none'` is a bug in its own right — `externalQueueSubmit.ts` documents that case as "not a submission we made, and not a failure", and warns in the same comment about reporting a healthy PR as unmergeable, which is exactly what the route does with it. With the confirm fixed the user no longer has a button that invites the second click, but the path is still reachable (two clients, or merging a PR trunk has already taken).
+
+Honest gap: the report also describes a spinner BEFORE the first confirm appears. Arming is synchronous in both the row and the sheet, so nothing in either path accounts for it and I did not invent an explanation.
+
+Tests: `prRowMergeConfirm.test.tsx` in both forks — arm, disarm after a submit-to-queue attempt that keeps the row, exactly one handler call per confirm, and disarm plus reason on failure. Checked against the pre-fix code: 2 of the 4 fail on it.
+
 ## The download event is email scanners pressing the button (2026-09-24)
 
 Follow-up to yesterday's investigation, and now provable rather than inferred.

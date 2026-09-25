@@ -478,9 +478,21 @@ function PRTableRow({
         `Couldn't merge ${row.owner}/${row.repo}#${row.number}`,
         friendlyMergeError(message)
       );
-      setConfirmMerge(false);
     } finally {
       setBusy(null);
+      // Disarm on EVERY completed attempt, not just the failures.
+      //
+      // A merge that lands removes the row, so a confirm left armed was
+      // invisible — but the base branch can be owned by an external merge queue
+      // (trunk.io, GitHub's native one), and then the backend SUBMITS the PR
+      // instead of merging it. The PR stays open until that queue lands it, so
+      // the row survives, `canMerge` is still true, and the spent confirm
+      // rendered as a live "Confirm" button on a PR that had just been
+      // submitted. It reads as "that did not work, press it again" — and
+      // pressing it again is the expensive part: the second call finds the
+      // provider already holding the PR, falls through to a direct merge the
+      // gate refuses, and answers 400 on a PR that is queued and healthy.
+      setConfirmMerge(false);
     }
   }
 
