@@ -654,6 +654,50 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
     });
   }
 
+  // R4a2 — CODE REVIEW gate. A review found a blocker on this commit and nobody
+  // has fixed or dismissed it, so merging would land a problem somebody already
+  // knows about.
+  //
+  // Placed with the draft gate rather than among the remediation rules, and for
+  // the same reason: this is not something a fix run can clear on its own
+  // initiative. A person decides — they fix it, or they say it is not a problem —
+  // and until then there is nothing for the queue to attempt. It spends no fix
+  // attempt for exactly that reason.
+  //
+  // The release is directly observable (the finding is gone from the open set),
+  // so unlike `agent_needs_human` this needs no blocker-signature bookkeeping: the
+  // condition that parked it is the same condition that releases it.
+  //
+  // Narrow by construction upstream: `hasOpenBlocker` only counts a blocker-
+  // severity finding the judging pass confirmed, on a review of the current head.
+  // A wrong finding the user dismisses stops blocking immediately, which is what
+  // keeps a bad review from wedging a merge with no way out.
+  if (ctx.codeReviewBlocker) {
+    if (d.entry.status !== 'blocked' || d.entry.blockedCode !== 'code_review_blocker') {
+      d.transition('blocked', {
+        blockedCode: 'code_review_blocker',
+        blockedReason: ctx.codeReviewBlocker.reason,
+        event: {
+          code: 'code_review_blocker',
+          message: ctx.codeReviewBlocker.reason,
+        },
+      });
+      // No `notify_blocked`: nothing was given up on and nothing failed. The
+      // findings tab is where this belongs, and a blocked-queue notification
+      // would read as "the queue broke".
+    }
+    return d.done('advance');
+  }
+  // Self-heal: the blocker was fixed or dismissed, so carry on.
+  if (d.entry.status === 'blocked' && d.entry.blockedCode === 'code_review_blocker') {
+    d.transition('queued', {
+      event: {
+        code: 'code_review_cleared',
+        message: 'The review blocker was dealt with — back in the queue.',
+      },
+    });
+  }
+
   // R4b — MERGE STACK gate. The PR this one is based on hasn't landed yet, so
   // merging now would put it in the parent's branch instead of the real base.
   //

@@ -14,6 +14,7 @@ import { workspacePromptTemplate } from '../promptTemplates.js';
 import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import { findingsForFix, markFixed, unmarkFixed } from './findings.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
+import { onQueueMembershipChanged } from '../mergeQueue/triggers.js';
 import { appendReviewEvent, casTransition, getPrForReview, type ReviewRow } from './store.js';
 import { workspaceReviewSettings } from './cycle.js';
 
@@ -236,6 +237,8 @@ export async function settleFixRun(
       }
     );
     scheduleReviewEvaluation(review.id, 'task:terminal');
+    // A landed fix is the other way a parked merge-queue entry gets released.
+    void onQueueMembershipChanged(review.pullRequestId, 'code_review:fixed');
     return;
   }
 

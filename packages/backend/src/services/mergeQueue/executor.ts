@@ -72,6 +72,7 @@ import {
 import { debugBus } from '../debugBus.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { decide } from './decide.js';
+import { codeReviewBlockerFor } from '../codeReview/queueGate.js';
 import { toPublicMergeQueue } from './legacy.js';
 import {
   casTransition,
@@ -376,6 +377,13 @@ async function buildBaseContext(
     fixTaskLastActivityAt: ourFix?.lastActivityAt.toISOString() ?? null,
     fixTaskNeedsHumanReason:
       ourFix?.status === 'needs_human' ? (ourFix.needsHumanReason ?? '') : null,
+    // An unresolved code-review blocker on this commit. One indexed read of the
+    // open-findings partial index, and only when there is a review at all — a
+    // workspace not using the feature pays a single miss.
+    codeReviewBlocker: await codeReviewBlockerFor(
+      pr.id,
+      ((pr.lastSummary ?? {}) as { headSha?: string }).headSha ?? null
+    ),
     otherLinkedTaskActive: otherFix !== null,
     signingRequired,
     autoMergeCapability,

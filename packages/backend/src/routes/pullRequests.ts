@@ -1456,6 +1456,11 @@ export function pullRequestRoutes(): Router {
       severity: finding.severity,
       reason: reason ?? 'unspecified',
     });
+    // Dismissing a blocker is one of the two ways a parked merge-queue entry gets
+    // released, so tell the queue rather than making it wait for a poll. Not
+    // awaited, and scope-escaped inside, for the reason the enqueue route does the
+    // same: it must not inherit this request's transaction.
+    void onQueueMembershipChanged(req.params.id, 'code_review:dismissed');
     res.json({ success: true, data: await publicReviewById(review.id) });
   });
 
@@ -1469,6 +1474,8 @@ export function pullRequestRoutes(): Router {
       return res.status(404).json({ success: false, error: 'Finding not found' });
     }
     await setDisposition(finding.id, 'open');
+    // And un-dismissing can re-park it, so the queue needs to hear about that too.
+    void onQueueMembershipChanged(req.params.id, 'code_review:undismissed');
     res.json({ success: true, data: await publicReviewById(review.id) });
   });
 

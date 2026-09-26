@@ -136,6 +136,20 @@ export type BlockedCode =
    * refusal is an answer, not a try that failed.
    */
   | 'agent_needs_human'
+  /**
+   * A code review found a blocker on this commit and nobody has dealt with it.
+   *
+   * Narrow on purpose, because a wrong finding must not be able to wedge a merge:
+   * only a `blocker` severity, only one the judging pass CONFIRMED, only from a
+   * review of the CURRENT head, and only while it is still open. A dismissal or a
+   * landed fix clears it, and so does a new commit — a review of an older head
+   * blocks nothing.
+   *
+   * Costs no fix attempt. Like the two above, the queue is waiting for a person
+   * rather than retrying, and the release condition is directly observable — so
+   * unlike `agent_needs_human` it needs no blocker-signature bookkeeping.
+   */
+  | 'code_review_blocker'
   /** Re-sign budget spent on a signed-commits-required base. Self-heals on a new head. */
   | 'unsigned_commits'
   /**
@@ -402,6 +416,14 @@ export interface DecisionContext {
    * is not an attempt that did not work, so R8 must not count it as one.
    */
   fixTaskNeedsHumanReason?: string | null;
+  /**
+   * An unresolved code-review blocker on this PR's current head, or null.
+   *
+   * Absent on a context built before this existed, and absent must mean "no" —
+   * never "unknown, park anyway". A gate that blocks on missing information would
+   * wedge every entry the first time an older replica built a context.
+   */
+  codeReviewBlocker?: { reason: string } | null;
   /**
    * Another run is linked to the PR (`pull_requests.taskId` differs from our
    * fixTaskId and is active) — a manual task or the keep-mergeable watcher.

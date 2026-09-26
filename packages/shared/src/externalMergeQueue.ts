@@ -713,6 +713,10 @@ export function coarseQueueStatus(status: QueueEntryStatus | string): CoarseQueu
  *   - `agent_needs_human` — the fix run's own verdict that only a person can
  *     carry the PR forward. Costs no attempt: a refusal is an answer, not a try
  *     that failed. Self-heals on a new head or a changed blocker signature.
+ *   - `code_review_blocker` — a code review found a blocker on this commit and
+ *     nobody has fixed or dismissed it. It qualifies for the same reason the two
+ *     above do: the queue spent nothing on it, and it clears itself the moment
+ *     the person acts, whichever way they act.
  *
  * Deliberately NOT every cause a human could help with. `external_gate`,
  * `app_refused_hard` and `stack_cycle` also need somebody, but none of them
@@ -726,5 +730,9 @@ export function coarseQueueStatus(status: QueueEntryStatus | string): CoarseQueu
  * fail to compile against it.
  */
 export function queueBlockNeedsHuman(blockedCode: string | null | undefined): boolean {
-  return blockedCode === 'awaiting_human_check' || blockedCode === 'agent_needs_human';
+  return (
+    blockedCode === 'awaiting_human_check' ||
+    blockedCode === 'agent_needs_human' ||
+    blockedCode === 'code_review_blocker'
+  );
 }

@@ -794,6 +794,66 @@ describe('decide — a head pushed by our OWN fix run does NOT reset budgets', (
   });
 });
 
+describe('decide — an unresolved code-review blocker', () => {
+  const blocked = { reason: 'The code review found a blocker on this commit.' };
+
+  it('parks a clean PR rather than merging it', () => {
+    // The whole point: a blocker somebody already knows about must not land just
+    // because CI is green.
+    const d = decide(entry(), cleanPr(), ctx({ codeReviewBlocker: blocked }));
+    const t = lastTransition(d)!;
+    expect(t.to).toBe('blocked');
+    expect(t.blockedCode).toBe('code_review_blocker');
+    expect(t.blockedReason).toBe(blocked.reason);
+    expect(kinds(d)).not.toContain('verify_live_then_merge');
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('spends no fix attempt and raises no blocked notification', () => {
+    // Nothing was attempted and nothing was given up on. A fix run cannot decide
+    // on the user's behalf whether a finding is real, so there is nothing here for
+    // the queue to try — and a blocked-queue notification would read as a fault.
+    const d = decide(entry(), cleanPr(), ctx({ codeReviewBlocker: blocked }));
+    expect(kinds(d)).not.toContain('fire_fix_run');
+    expect(kinds(d)).not.toContain('notify_blocked');
+    expect(lastTransition(d)!.set?.fixAttempts).toBeUndefined();
+  });
+
+  it('does not churn writes while the blocker is still there', () => {
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'code_review_blocker', blockedReason: blocked.reason }),
+      cleanPr(),
+      ctx({ codeReviewBlocker: blocked })
+    );
+    expect(d.actions).toEqual([]);
+    expect(d.verdict).toBe('advance');
+  });
+
+  it('self-heals the moment the finding is fixed or dismissed', () => {
+    // The release condition is the same condition that parked it, which is why —
+    // unlike agent_needs_human — this needs no blocker-signature bookkeeping.
+    const d = decide(
+      entry({ status: 'blocked', blockedCode: 'code_review_blocker', blockedReason: blocked.reason }),
+      cleanPr(),
+      ctx()
+    );
+    expect(transitions(d)[0]!.to).toBe('queued');
+    expect(kinds(d)).toContain('verify_live_then_merge');
+  });
+
+  it('treats an absent blocker as no blocker, never as unknown', () => {
+    // A context built by an older replica has no such field, and a gate that
+    // blocked on missing information would wedge every entry in the queue.
+    const d = decide(entry(), cleanPr(), ctx());
+    expect(lastTransition(d)?.blockedCode).not.toBe('code_review_blocker');
+  });
+
+  it('a draft still wins, because there is nothing to merge either way', () => {
+    const d = decide(entry(), draftPr(), ctx({ codeReviewBlocker: blocked }));
+    expect(lastTransition(d)!.blockedCode).toBe('draft');
+  });
+});
+
 describe('decide — draft head', () => {
   it('does NOT attempt a merge; blocks with the draft reason and advances', () => {
     const d = decide(entry(), draftPr(), ctx());
