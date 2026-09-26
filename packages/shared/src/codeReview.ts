@@ -274,6 +274,16 @@ export function severityAtOrAbove(
 /** What a finding's severity is worth escalating for. Blockers only. */
 export const CODE_REVIEW_BLOCKING_SEVERITY: CodeReviewSeverity = 'blocker';
 
+/**
+ * The bar for "how many findings am I being asked about".
+ *
+ * Nitpicks are below it, which is what puts them in the collapsed bucket at the
+ * foot of the list rather than in the badge. One constant, because the tab badge,
+ * the row chip and the sheet header must never disagree about the number they are
+ * each showing the same person.
+ */
+export const CODE_REVIEW_REPORTING_BAR: CodeReviewSeverity = 'minor';
+
 // ---------- Findings and the public payload ----------
 
 export type CodeReviewDisposition =

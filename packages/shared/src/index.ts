@@ -77,6 +77,11 @@ export * from './mcpServers.js';
 // and the app that renders them.
 export * from './codeReview.js';
 
+// The fix-run prompt. Beside codeReview rather than inside it because it reaches
+// into prMergeable for the publishing dialect, and codeReview is deliberately
+// dependency-free so the parser and the dedupe key stay trivially testable.
+export * from './reviewFixPrompt.js';
+
 // The agent picker — which agents a workspace can start a task on. One pure
 // derivation, shared by the per-PR task menu and the Loop editor on both forks.
 export * from './cloudAgents.js';

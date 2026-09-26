@@ -39,6 +39,34 @@ import {
   rowToEntrySnapshot,
 } from '../services/mergeQueue/store.js';
 import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
+import {
+  codeReviewForPr,
+  codeReviewsForPrs,
+  publicReviewById,
+} from '../services/codeReview/public.js';
+import {
+  cancelReviewCycle,
+  startReviewCycle,
+  workspacePreset,
+} from '../services/codeReview/cycle.js';
+import { startFixRun } from '../services/codeReview/fix.js';
+import {
+  getFinding,
+  listFindings,
+  setDisposition,
+} from '../services/codeReview/findings.js';
+import { getReviewForPr, listReviewEvents } from '../services/codeReview/store.js';
+import {
+  codeReviewRefusalReason,
+  userMayUseCodeReview,
+} from '../services/codeReviewAccess.js';
+import {
+  CODE_REVIEW_PHASE_AT_REST,
+  isCodeReviewDismissReason,
+  validateCodeReviewStart,
+  CodeReviewRequestError,
+  type CodeReviewPhase,
+} from '@talyn/shared';
 import { classifyAutoMergeActor } from '../services/githubAutoMerge.js';
 import { getExternalMergeGate, markExternalMergeGate } from '../services/repoMergeGate.js';
 import { submitToExternalQueue } from '../services/externalQueueSubmit.js';
@@ -290,6 +318,12 @@ export function pullRequestRoutes(): Router {
       .where(and(...conditions))
       .orderBy(desc(pullRequestsTable.lastPolledAt));
 
+    // Code-review payloads for the initial paint, batched for the whole page: the
+    // per-review path costs several reads and doing it per row would put thirty of
+    // them on the app's most-loaded endpoint. Degrades to an empty map, so a
+    // failure here costs a chip rather than the list.
+    const reviewByPrId = await codeReviewsForPrs(rows.map((r) => r.id));
+
     // Merge queue v2 payloads for the initial paint (the WS echoes keep them
     // live afterwards): one indexed query over the workspace's active entries.
     const v2ByPrId = new Map<string, Record<string, unknown>>();
@@ -341,13 +375,14 @@ export function pullRequestRoutes(): Router {
       data: rows.map((r) => ({
         ...rowToPublicShape(r),
         mergeQueue: v2ByPrId.get(r.id) ?? null,
+        codeReview: reviewByPrId.get(r.id) ?? null,
         // Absent for a row outside the cohort, and absent on an older backend.
         // The client keeps its own copy of the same shared function and falls
         // back to it, so a rollback degrades the ranking's freshness rather
         // than removing it.
         ...(priorityById.has(r.id) ? { priority: priorityById.get(r.id) } : {}),
       })),
-    } as ApiResponse<Array<ReturnType<typeof rowToPublicShape> & { mergeQueue: unknown }>>);
+    } as ApiResponse<PublicPRRow[]>);
   });
 
   // Track an arbitrary PR by URL — typically one someone ELSE authored, so the
@@ -458,12 +493,10 @@ export function pullRequestRoutes(): Router {
       if (!row) {
         return res.status(500).json({ success: false, error: 'Failed to read the new row' });
       }
-      const { payload } = await mergeQueueForPr(result.rowId, db);
       return res.status(result.alreadyTracked ? 200 : 201).json({
         success: true,
         data: {
-          ...rowToPublicShape(row),
-          mergeQueue: payload,
+          ...(await publicPrRow(row, db)),
           repoAdded,
           alreadyTracked: result.alreadyTracked,
         },
@@ -587,13 +620,9 @@ export function pullRequestRoutes(): Router {
     const summaryHead =
       ((row.lastSummary as { headBranch?: string } | null)?.headBranch) ?? null;
     if (!summaryHead) {
-      const queue = await mergeQueueForPr(row.id, db);
       return res.json({
         success: true,
-        data: {
-          row: { ...rowToPublicShape(row), mergeQueue: queue.payload },
-          fresh: null,
-        },
+        data: { row: await publicPrRow(row, db), fresh: null },
       });
     }
 
@@ -646,11 +675,10 @@ export function pullRequestRoutes(): Router {
       if (refreshed[0]) outRow = refreshed[0];
     }
 
-    const queue = await mergeQueueForPr(outRow.id, db);
     res.json({
       success: true,
       data: {
-        row: { ...rowToPublicShape(outRow), mergeQueue: queue.payload },
+        row: await publicPrRow(outRow, db),
         fresh,
       },
     });
@@ -794,10 +822,9 @@ export function pullRequestRoutes(): Router {
       // that's stuck (e.g. a merged PR still showing as closed/open).
       const reconciled = await reconcileTerminalState(row);
       if (reconciled) {
-        const queue = await mergeQueueForPr(reconciled.id, db);
         return res.json({
           success: true,
-          data: { ...rowToPublicShape(reconciled), mergeQueue: queue.payload },
+          data: await publicPrRow(reconciled, db),
         });
       }
       return res
@@ -813,10 +840,9 @@ export function pullRequestRoutes(): Router {
       .from(pullRequestsTable)
       .where(eq(pullRequestsTable.id, result.rowId))
       .limit(1);
-    const queue = await mergeQueueForPr(fresh[0].id, db);
     res.json({
       success: true,
-      data: { ...rowToPublicShape(fresh[0]), mergeQueue: queue.payload },
+      data: await publicPrRow(fresh[0], db),
     });
   });
 
@@ -1235,6 +1261,231 @@ export function pullRequestRoutes(): Router {
           at: e.at.toISOString(),
           fromStatus: e.fromStatus,
           toStatus: e.toStatus,
+          trigger: e.trigger,
+          code: e.code,
+          message: e.message,
+          detail: e.detail ?? null,
+        })),
+      },
+    });
+  });
+
+  // ---------- Code review ----------
+  //
+  // Sub-resources of a pull request rather than a router of their own, because
+  // this file already owns pull-request workspace resolution and the RLS scope. A
+  // second router mounted on the same path is how `/count` ends up parsed as an
+  // id, which is the trap routes/loops.ts warns about.
+  //
+  // Every handler starts with `reviewGate`, so none of them can forget the
+  // feature check. It answers 403 with a code rather than 404: "you may not" and
+  // "there is nothing here" are different answers and the client pitches
+  // differently for each.
+
+  /**
+   * Resolve the pull request, check access, and check the feature — in that order.
+   *
+   * Returns the workspace id on success and has already answered on failure, so a
+   * handler reads `const ws = await reviewGate(...); if (!ws) return;`.
+   */
+  async function reviewGate(req: Parameters<Parameters<typeof router.get>[1]>[0], res: Parameters<Parameters<typeof router.get>[1]>[1]): Promise<string | null> {
+    const db = getDbClient();
+    const rows = await db
+      .select({ workspaceId: pullRequestsTable.workspaceId })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, req.params.id))
+      .limit(1);
+    const workspaceId = rows[0]?.workspaceId;
+    if (!workspaceId) {
+      res.status(404).json({ success: false, error: 'Pull request not found' });
+      return null;
+    }
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      handleAccessError(err, res);
+      return null;
+    }
+    const user = assertUser(req);
+    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
+      res.status(403).json({
+        success: false,
+        error: `Code review is not available: ${codeReviewRefusalReason()}.`,
+        code: 'code_review_unavailable',
+      });
+      return null;
+    }
+    return workspaceId;
+  }
+
+  /** The review and its findings, for the sheet's Findings tab. */
+  router.get('/:id/code-review', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+
+    const review = await getReviewForPr(req.params.id);
+    if (!review) {
+      // Never reviewed is a normal state, not a 404: the tab still exists and
+      // shows the pitch, and it needs to know which depth the workspace would use.
+      return res.json({
+        success: true,
+        data: {
+          review: null,
+          findings: [],
+          defaultPreset: await workspacePreset(workspaceId),
+        },
+      });
+    }
+    const [payload, findings] = await Promise.all([
+      publicReviewById(review.id),
+      listFindings(review.id, { includeInactive: true }),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        review: payload,
+        findings: findings.map(serializeFinding),
+        defaultPreset: await workspacePreset(workspaceId),
+      },
+    });
+  });
+
+  /** Start a review, or return the one already running. */
+  router.post('/:id/code-review', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+
+    let input;
+    try {
+      input = validateCodeReviewStart(req.body);
+    } catch (err) {
+      if (err instanceof CodeReviewRequestError) {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      throw err;
+    }
+
+    const user = assertUser(req);
+    // The plan gate throws ReviewCycleLimitError, which the central handler maps
+    // to a 402 with its own code — the client opens the upgrade modal from that.
+    const outcome = await startReviewCycle({
+      pullRequestId: req.params.id,
+      ...(input.preset ? { preset: input.preset } : {}),
+      ...(input.reset ? { reset: true } : {}),
+      userId: user.id,
+    });
+    if (!outcome.ok) {
+      return res.status(outcome.code === 'not_available' ? 403 : 409).json({
+        success: false,
+        error: outcome.message,
+        code: outcome.code,
+      });
+    }
+    void captureWorkspaceEvent(workspaceId, 'code_review_started', {
+      preset: outcome.review.preset,
+      trigger: 'api',
+      is_rereview: outcome.review.cycle > 1,
+      started: outcome.started,
+    });
+    res.json({ success: true, data: await publicReviewById(outcome.review.id) });
+  });
+
+  /** Stop a running review. */
+  router.delete('/:id/code-review', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const review = await getReviewForPr(req.params.id);
+    if (!review) {
+      return res.status(404).json({ success: false, error: 'That pull request has no review.' });
+    }
+    if (CODE_REVIEW_PHASE_AT_REST[review.phase as CodeReviewPhase]) {
+      return res.json({ success: true, data: await publicReviewById(review.id) });
+    }
+    await cancelReviewCycle(review);
+    res.json({ success: true, data: await publicReviewById(review.id) });
+  });
+
+  /** Fix the ticked findings: one run, one push, one optional comment. */
+  router.post('/:id/code-review/fix', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const review = await getReviewForPr(req.params.id);
+    if (!review) {
+      return res.status(404).json({ success: false, error: 'That pull request has no review.' });
+    }
+    const findingIds = Array.isArray(req.body?.findingIds)
+      ? (req.body.findingIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : [];
+
+    const user = assertUser(req);
+    const outcome = await startFixRun(review, findingIds, user.id);
+    if (!outcome.ok) {
+      const status = outcome.code === 'not_available' ? 403 : outcome.code === 'deferred' ? 202 : 409;
+      return res.status(status).json({
+        success: false,
+        error: outcome.message,
+        code: `code_review_fix_${outcome.code}`,
+      });
+    }
+    void captureWorkspaceEvent(workspaceId, 'code_review_fix_requested', {
+      selected_count: findingIds.length,
+      preset: review.preset,
+    });
+    res.json({
+      success: true,
+      data: { taskId: outcome.taskId, review: await publicReviewById(review.id) },
+    });
+  });
+
+  /** Dismiss a finding, with one of the four fixed reasons. */
+  router.post('/:id/code-review/findings/:findingId/dismiss', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const finding = await getFinding(req.params.findingId);
+    if (!finding) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    const review = await getReviewForPr(req.params.id);
+    if (!review || finding.reviewId !== review.id) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    const reason = isCodeReviewDismissReason(req.body?.reason) ? req.body.reason : null;
+    const user = assertUser(req);
+    await setDisposition(finding.id, 'dismissed', { reason, userId: user.id });
+    void captureWorkspaceEvent(workspaceId, 'code_review_finding_dismissed', {
+      severity: finding.severity,
+      reason: reason ?? 'unspecified',
+    });
+    res.json({ success: true, data: await publicReviewById(review.id) });
+  });
+
+  /** Undo a dismissal. Reversible, or nobody would ever use the button. */
+  router.delete('/:id/code-review/findings/:findingId/dismiss', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const finding = await getFinding(req.params.findingId);
+    const review = await getReviewForPr(req.params.id);
+    if (!finding || !review || finding.reviewId !== review.id) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    await setDisposition(finding.id, 'open');
+    res.json({ success: true, data: await publicReviewById(review.id) });
+  });
+
+  /** The audit log, for the sheet's "what happened" disclosure. */
+  router.get('/:id/code-review/timeline', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const review = await getReviewForPr(req.params.id);
+    if (!review) return res.json({ success: true, data: { events: [] } });
+    const events = await listReviewEvents(review.id);
+    res.json({
+      success: true,
+      data: {
+        events: events.map((e) => ({
+          at: e.at.toISOString(),
+          fromPhase: e.fromPhase,
+          toPhase: e.toPhase,
           trigger: e.trigger,
           code: e.code,
           message: e.message,
@@ -1761,6 +2012,62 @@ async function mergeQueueForPr(
     );
     return { payload: null, position: 0 };
   }
+}
+
+/**
+ * A whole pull-request row as the clients read it, decorations included.
+ *
+ * Introduced because the merge-queue payload had SEVEN hand-written spread sites
+ * and the comment on `mergeQueueForPr` spells out what happens when one is
+ * missed: the sheet paints the seeded list row, then REPLACES it with the detail
+ * response, so an omission reads as "never queued" and blanks the panel.
+ *
+ * A code-review payload has the identical failure mode and it is worse — the
+ * findings tab, the row chip and the progress bar would all blink out the moment
+ * an unrelated response landed mid-review. So rather than adding a second field to
+ * seven places and hoping, both decorations live behind one function and every site
+ * calls it. Omitting one is now impossible rather than merely unlikely.
+ */
+export type PublicPRRow = ReturnType<typeof rowToPublicShape> & {
+  mergeQueue: Record<string, unknown> | null;
+  codeReview: unknown;
+};
+
+async function publicPrRow(
+  row: PublicShapeRow,
+  db: ReturnType<typeof getDbClient>
+): Promise<PublicPRRow> {
+  const [queue, review] = await Promise.all([mergeQueueForPr(row.id, db), codeReviewForPr(row.id)]);
+  return { ...rowToPublicShape(row), mergeQueue: queue.payload, codeReview: review };
+}
+
+/**
+ * One finding as the app reads it.
+ *
+ * The list projection has already dropped `body`, `suggestion` and `anchor`, so
+ * they are absent here — forty findings of body-plus-suggestion is a few hundred
+ * kilobytes, and the tab expands one card at a time. `carriedOver` is derived
+ * rather than stored: a finding first seen in an earlier cycle is one the previous
+ * review already reported, which is exactly what the "still here" marker means.
+ */
+function serializeFinding(f: Awaited<ReturnType<typeof listFindings>>[number]) {
+  return {
+    id: f.id,
+    severity: f.severity,
+    category: f.category,
+    lenses: (f.lenses as string[]) ?? [],
+    filePath: f.filePath,
+    lineStart: f.lineStart,
+    lineEnd: f.lineEnd,
+    anchorVerified: f.anchorVerified,
+    title: f.title,
+    confidence: f.confidence,
+    verdict: f.verdict,
+    disposition: f.disposition,
+    dismissedReason: f.dismissedReason,
+    carriedOver: f.firstSeenCycle < f.lastSeenCycle,
+    seenCount: f.seenCount,
+  };
 }
 
 function rowToPublicShape(row: PublicShapeRow) {

@@ -59,6 +59,14 @@ export interface CreateCloudTaskInput {
    */
   loop?: TaskLoopInfo;
   /**
+   * The code review whose findings this run is fixing, when one is.
+   *
+   * Persisted to `metadata.codeReview`, and written in `buildTaskMetadata` rather
+   * than only on the insert path for the same reason `loop` is: a reused task row
+   * must carry the link to the run happening NOW.
+   */
+  codeReview?: TaskCodeReviewInfo;
+  /**
    * Ask the provider for a sandbox that can reach the internet.
    *
    * Only the fleet honours it, and only Loops sets it today. Persisted to
@@ -74,6 +82,17 @@ export interface CreateCloudTaskInput {
    * whatever the loop says today.
    */
   mcpServerIds?: string[] | null;
+}
+
+/**
+ * The code review whose findings a fix run is addressing.
+ * See {@link CreateCloudTaskInput.codeReview}.
+ */
+export interface TaskCodeReviewInfo {
+  reviewId: string;
+  /** Which cycle's findings these were, so a later cycle cannot be misread. */
+  cycle: number;
+  findingIds: string[];
 }
 
 /** Where a loop-started task came from. See {@link CreateCloudTaskInput.loop}. */
@@ -254,6 +273,7 @@ async function buildTaskMetadata(
   // not the one that happened last week.
   if (input.workflow) metadata.workflow = input.workflow;
   if (input.loop) metadata.loop = input.loop;
+  if (input.codeReview) metadata.codeReview = input.codeReview;
   if (input.internetAccess) metadata.internetAccess = true;
   if (input.skill) {
     metadata.skill = input.skill;

@@ -1667,6 +1667,8 @@ export const prCodeReviewFindings = pgTable(
      * can say "it came back" rather than claim a fix that did not hold.
      */
     disposition: text('disposition').notNull().default('open'),
+    /** One of four fixed reasons, so "which lens is wrong most often" is answerable. */
+    dismissedReason: text('dismissed_reason'),
     dispositionAt: timestamp('disposition_at', { withTimezone: true }),
     dispositionBy: text('disposition_by').references(() => users.id, { onDelete: 'set null' }),
     fixTaskId: text('fix_task_id').references((): AnyPgColumn => tasks.id, {

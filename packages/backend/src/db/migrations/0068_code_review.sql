@@ -275,6 +275,10 @@ CREATE TABLE IF NOT EXISTS "pr_code_review_findings" (
   -- key reappears goes back to `open`, which is how the app can say "it came
   -- back" instead of quietly claiming a fix that did not hold.
   "disposition" text DEFAULT 'open' NOT NULL,
+  -- Why the user dismissed it, from a fixed set of four. Kept because "which
+  -- lens is wrong most often" is the first question anybody asks about finding
+  -- quality, and it cannot be answered retrospectively.
+  "dismissed_reason" text,
   "disposition_at" timestamp with time zone,
   "disposition_by" text,
   "fix_task_id" text,

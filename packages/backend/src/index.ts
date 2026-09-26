@@ -32,6 +32,13 @@ import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
+import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
+import { codeReviewPoller, initCodeReviewPoller } from './services/codeReview/poller.js';
+import {
+  codeReviewReconciler,
+  initCodeReviewReconciler,
+} from './services/codeReview/reconciler.js';
+import { codeReviewKillSwitchPulled } from './services/codeReviewAccess.js';
 import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
 import {
   featureFlagsEvaluateLocally,
@@ -164,6 +171,22 @@ async function main() {
     // workspace is in the audience: the flag is per workspace and answered per
     // firing, and a sweep that finds nothing due costs one indexed lookup.
     initLoopScheduler();
+  }
+
+  // Code review reads the same way round as loops: the flag fails CLOSED, so the
+  // interesting log line is the ON one. An armed engine will boot sandboxes on the
+  // workspace's own subscription and can push commits to a branch, and an operator
+  // reading this log should be able to see that without inferring it.
+  if (codeReviewKillSwitchPulled()) {
+    console.log('[code-review] engine NOT armed — CODE_REVIEW_ENABLED=false');
+  } else {
+    console.log('[code-review] engine armed');
+    // Armed whenever the break glass is not pulled, NOT only when some workspace is
+    // in the audience: the flag is per workspace and answered per cycle, and the
+    // sweeps cost one indexed lookup when there is nothing to do.
+    initCodeReviewTriggers();
+    initCodeReviewPoller();
+    initCodeReviewReconciler();
   }
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
@@ -394,6 +417,8 @@ async function main() {
     // listener attached through a drain would have it settling runs against a
     // database connection that is about to close.
     loopScheduler.stop();
+codeReviewPoller.stop();
+codeReviewReconciler.stop();
     // posthog-node batches the `$feature_flag_called` events that make a flag's
     // rollout visible in PostHog. Without this flush they are lost on every
     // deploy — and a deploy is when a rollout is most interesting to look at.

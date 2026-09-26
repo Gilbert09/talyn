@@ -618,6 +618,20 @@ export function emitPullRequestUpdated(
     // emitted alongside a four-status `mergeQueueState` for builds predating
     // it; that shim was retired on 2026-09-01.
     mergeQueue?: Record<string, unknown> | null;
+    // The code review's payload (services/codeReview/public.ts toPublicReview):
+    // phase, its plan, the unit counts behind the progress bar, and the finding
+    // counts. Null when the pull request has never been reviewed.
+    //
+    // OPTIONAL, like `mergeQueue` and `watching` above and for the same reason:
+    // prCache's upsert and the monitor's flag reconcile both emit this event and
+    // neither knows a review exists, so a REQUIRED field would cost a read-back
+    // on the hottest write path in the app.
+    //
+    // `null` is a real value here — a force-push clearing the review — so the
+    // client must distinguish absent from null and preserve on absent only. The
+    // `??` form swallows the clear and leaves a stale review attached to a commit
+    // that no longer exists.
+    codeReview?: Record<string, unknown> | null;
   }
 ): void {
   broadcastToWorkspace(workspaceId, {
