@@ -2,6 +2,10 @@ import { and, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   AUTO_KEEP_DEFAULT_ERROR_CODE,
+  AUTO_REVIEW_ERROR_CODE,
+  CODE_REVIEW_ACTIVE_PHASES,
+  FREE_PLAN_REVIEW_CYCLE_LIMIT,
+  REVIEW_CYCLE_LIMIT_ERROR_CODE,
   FREE_PLAN_ACTIVE_TASK_LIMIT,
   FREE_PLAN_MERGE_QUEUE_LIMIT,
   FREE_PLAN_LOOP_LIMIT,
@@ -23,6 +27,7 @@ import {
   tasks as tasksTable,
   users as usersTable,
   loops as loopsTable,
+  prCodeReviews as prCodeReviewsTable,
   workflows as workflowsTable,
   workspaces as workspacesTable,
 } from '../../db/schema.js';
@@ -146,6 +151,48 @@ export class AutoKeepDefaultPlanError extends Error {
 }
 
 /**
+ * Thrown when a free owner starts a second code review while one is in flight.
+ *
+ * A usage cap, so the message names the two ways out and one of them costs
+ * nothing — the slot frees itself. Deliberately NOT a queue: a parked review is
+ * indistinguishable from a working one on a PR row, and this feature's whole
+ * credibility is that its progress is telling the truth.
+ */
+export class ReviewCycleLimitError extends Error {
+  readonly code = REVIEW_CYCLE_LIMIT_ERROR_CODE;
+  constructor(
+    readonly limit: number,
+    readonly count: number
+  ) {
+    super(
+      `Free plan runs ${limit} code review at a time and does not queue them ` +
+        `(${count} in flight). Upgrade to review as many pull requests at once as ` +
+        'you like, or wait for this one to finish.'
+    );
+    this.name = 'ReviewCycleLimitError';
+  }
+}
+
+/**
+ * Thrown when a free owner tries to turn ON "review my new pull requests
+ * automatically".
+ *
+ * A FEATURE gate like AutoKeepDefaultPlanError, and the same reasoning: there is
+ * no count to wait out, so the client must pitch the upgrade rather than quote a
+ * limit the user is nowhere near.
+ */
+export class AutoReviewPlanError extends Error {
+  readonly code = AUTO_REVIEW_ERROR_CODE;
+  constructor() {
+    super(
+      'Reviewing every new pull request automatically is an Unlimited feature. ' +
+        'Upgrade to turn it on, or review pull requests one at a time.'
+    );
+    this.name = 'AutoReviewPlanError';
+  }
+}
+
+/**
  * Whether billing is configured at all. When the Polar env group is absent
  * (local dev, CI, self-hosted) task limits are NOT enforced — a paywall with
  * no way to pay would brick task creation at 3 with zero recourse. Partial
@@ -192,6 +239,7 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
   const queuedPrs = await countQueuedPrs(ownerId);
   const workflows = await countOwnerWorkflows(ownerId);
   const loops = await countOwnerLoops(ownerId);
+  const activeReviews = await countActiveReviewCycles(ownerId);
   if (!billingEnabled()) {
     return {
       billingEnabled: false,
@@ -206,6 +254,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
       workflowLimit: null,
       loops,
       loopLimit: null,
+      activeReviews,
+      activeReviewLimit: null,
     };
   }
 
@@ -238,6 +288,8 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     workflowLimit: entitlement.plan === 'free' ? FREE_WORKFLOW_LIMIT : null,
     loops,
     loopLimit: entitlement.plan === 'free' ? FREE_LOOP_LIMIT : null,
+    activeReviews,
+    activeReviewLimit: entitlement.plan === 'free' ? FREE_PLAN_REVIEW_CYCLE_LIMIT : null,
   };
 }
 
@@ -338,6 +390,38 @@ export function countOwnerLoopsQuery(ownerId: string) {
 /** How many loops the owner has, across all their workspaces. */
 export async function countOwnerLoops(ownerId: string): Promise<number> {
   const rows = await countOwnerLoopsQuery(ownerId);
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Code-review cycles in flight for this owner, across their workspaces.
+ *
+ * Counts reviews whose phase is NOT at rest, which is the whole subtlety: a
+ * review sitting at `ready` with findings on screen holds no slot, because the
+ * user is reading rather than the machine working. Only a cycle that is actually
+ * spending something counts — which is what lets one number cover both halves of
+ * "review and fix".
+ *
+ * Unexecuted builder exported for the egress test, like its three siblings.
+ */
+export function countActiveReviewCyclesQuery(ownerId: string, excludeReviewId?: string) {
+  const conditions = [
+    eq(workspacesTable.ownerId, ownerId),
+    inArray(prCodeReviewsTable.phase, CODE_REVIEW_ACTIVE_PHASES),
+  ];
+  if (excludeReviewId) conditions.push(ne(prCodeReviewsTable.id, excludeReviewId));
+  return getDbClient()
+    .select({ count: sql<number>`cast(count(*) as int)` })
+    .from(prCodeReviewsTable)
+    .innerJoin(workspacesTable, eq(prCodeReviewsTable.workspaceId, workspacesTable.id))
+    .where(and(...conditions));
+}
+
+export async function countActiveReviewCycles(
+  ownerId: string,
+  excludeReviewId?: string
+): Promise<number> {
+  const rows = await countActiveReviewCyclesQuery(ownerId, excludeReviewId);
   return rows[0]?.count ?? 0;
 }
 
@@ -476,6 +560,38 @@ export async function withLoopLimitGate<T>(ownerId: string, fn: () => Promise<T>
   );
 }
 
+/**
+ * Run `fn` (which starts one code-review cycle) unless the owner already has as
+ * many in flight as their plan allows.
+ *
+ * THE ADVISORY LOCK IS WARRANTED HERE, and it is worth saying why when the
+ * per-workspace unit ceiling deliberately has none. Losing this race means a
+ * free user running two cycles — the paywall-bypass shape this whole file exists
+ * to prevent. Losing the unit-ceiling race means one extra microVM, which the
+ * fleet itself refuses with a 503 the spill path already handles. Do not "fix"
+ * one by copying the other.
+ *
+ * `excludeReviewId` for the same reason the merge-queue gate has it: re-running
+ * a review on a PR that already has one must not be blocked by itself.
+ */
+export async function withReviewCycleGate<T>(
+  ownerId: string,
+  options: { excludeReviewId?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  return withFreePlanGate(
+    ownerId,
+    `reviewCycle:${ownerId}`,
+    async () => {
+      const count = await countActiveReviewCycles(ownerId, options.excludeReviewId);
+      if (count >= FREE_PLAN_REVIEW_CYCLE_LIMIT) {
+        throw new ReviewCycleLimitError(FREE_PLAN_REVIEW_CYCLE_LIMIT, count);
+      }
+    },
+    fn
+  );
+}
+
 /** The shared count-then-act choreography behind the free-plan gates. */
 async function withFreePlanGate<T>(
   ownerId: string,
@@ -531,4 +647,16 @@ export async function assertCanActivateTask(ownerId: string, taskId: string): Pr
 export async function assertCanEnableAutoKeepDefault(ownerId: string): Promise<void> {
   const entitlement = await resolveEntitlement(ownerId);
   if (entitlement.plan === 'free') throw new AutoKeepDefaultPlanError();
+}
+
+/**
+ * Whether this owner may turn ON automatic review of every new pull request.
+ *
+ * Not a `withFreePlanGate` wrapper, for the reason its neighbour is not: there is
+ * nothing to count and nothing to serialize. Asserted on the OFF->ON transition
+ * only, which grandfathers a workspace that already has it on.
+ */
+export async function assertCanEnableAutoReview(ownerId: string): Promise<void> {
+  const entitlement = await resolveEntitlement(ownerId);
+  if (entitlement.plan === 'free') throw new AutoReviewPlanError();
 }

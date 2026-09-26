@@ -25,7 +25,9 @@ import { requireAuth } from '../middleware/auth.js';
 import { asyncHandler, wrapAsyncRoutes } from '../middleware/asyncHandler.js';
 import {
   AutoKeepDefaultPlanError,
+  AutoReviewPlanError,
   MergeQueueLimitError,
+  ReviewCycleLimitError,
   TaskLimitError,
   WorkflowLimitError,
   LoopLimitError,
@@ -257,13 +259,17 @@ export function apiErrorHandler(
     next(err);
     return;
   }
-  // Central mapping for the free-plan gates — task creation/reactivation
-  // paths throw TaskLimitError, the merge-queue toggle throws
-  // MergeQueueLimitError, creating a workflow throws WorkflowLimitError,
-  // creating a loop throws LoopLimitError, turning on the auto-keep default
-  // throws AutoKeepDefaultPlanError, and all five land here so the 402 + code
-  // contract lives in exactly one place. Expected traffic, not an error — no
-  // console spam.
+  // Central mapping for the free-plan gates. Task creation/reactivation throws
+  // TaskLimitError, the merge-queue toggle MergeQueueLimitError, creating a
+  // workflow WorkflowLimitError, creating a loop LoopLimitError, starting a
+  // second code review ReviewCycleLimitError; turning on the auto-keep default
+  // throws AutoKeepDefaultPlanError and turning on automatic code review throws
+  // AutoReviewPlanError. Every one lands here so the 402 + code contract lives
+  // in exactly one place. Expected traffic, not an error — no console spam.
+  //
+  // The last two are FEATURE gates rather than usage caps: there is no count to
+  // wait out, which is why they carry their own codes and the client pitches an
+  // upgrade instead of quoting a limit nobody is at.
   //
   // MCP servers are deliberately absent: they are uncapped on every plan, so
   // there is no limit error for them to throw.
@@ -272,7 +278,9 @@ export function apiErrorHandler(
     err instanceof MergeQueueLimitError ||
     err instanceof WorkflowLimitError ||
     err instanceof LoopLimitError ||
-    err instanceof AutoKeepDefaultPlanError
+    err instanceof ReviewCycleLimitError ||
+    err instanceof AutoKeepDefaultPlanError ||
+    err instanceof AutoReviewPlanError
   ) {
     res.status(402).json({ success: false, error: err.message, code: err.code });
     return;

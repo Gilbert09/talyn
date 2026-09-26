@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb } from './helpers/testDb.js';
 import {
+  countActiveReviewCyclesQuery,
   countActiveTasksQuery,
   countOwnerLoopsQuery,
   countOwnerWorkflowsQuery,
@@ -61,6 +62,30 @@ describe('billing count egress', () => {
     expect(sql).not.toContain('"actions"');
     expect(sql).not.toContain('"events"');
     expect(params).toContain('owner-1');
+  });
+
+  it('countActiveReviewCyclesQuery is a pure count, and counts only cycles in flight', () => {
+    // Runs on every billing snapshot AND before every review start. It must never
+    // touch a review's own columns, and it must filter on phase — counting rows
+    // at rest would have a user reading their findings occupy the free plan's one
+    // slot until they closed the panel.
+    const { sql, params } = countActiveReviewCyclesQuery('owner-1').toSQL();
+    expect(sql).toContain('count(*)');
+    expect(sql).toContain('phase');
+    expect(sql).not.toContain('"lens_keys"');
+    expect(sql).not.toContain('"last_error"');
+    expect(params).toContain('owner-1');
+    // `ready` is at rest, so it must be absent from the phases counted.
+    expect(params).not.toContain('ready');
+    expect(params).toContain('reviewing');
+    expect(params).toContain('fixing');
+  });
+
+  it('countActiveReviewCyclesQuery can exclude the review being re-run', () => {
+    // Same reason the merge-queue gate has it: re-reviewing a pull request that
+    // already carries a review must not be blocked by that review.
+    const { params } = countActiveReviewCyclesQuery('owner-1', 'rev-1').toSQL();
+    expect(params).toContain('rev-1');
   });
 
   it('countOwnerLoopsQuery is a pure count — never the prompt', () => {

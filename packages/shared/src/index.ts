@@ -1,5 +1,10 @@
 // Core types for FastOwl
 
+// A type-only import so `WorkspaceSettings` can name the code-review block. The
+// module is re-exported below as well; this is the edge that lets the settings
+// interface reference it without a value dependency.
+import type { CodeReviewSettings } from './codeReview.js';
+
 // PR mergeable helpers (shared by the desktop button + backend watcher).
 export * from './prMergeable.js';
 
@@ -65,6 +70,12 @@ export * from './loops.js';
 // "an MCP url needs a path" while typing rather than as a dispatch that failed
 // an hour later.
 export * from './mcpServers.js';
+
+// Code review — AI findings on a pull request, shown in the app rather than
+// posted on the PR. The parser and the dedupe key live here because both are
+// pure and both have to mean the same thing to the engine that writes findings
+// and the app that renders them.
+export * from './codeReview.js';
 
 // The agent picker — which agents a workspace can start a task on. One pure
 // derivation, shared by the per-PR task menu and the Loop editor on both forks.
@@ -514,6 +525,21 @@ export interface WorkspaceSettings {
    * they are the ones nobody wants to triage by hand.
    */
   respondToHumanComments?: boolean;
+  /**
+   * Code review's posture for this workspace: the depth preset, whether new PRs
+   * are reviewed automatically, and the two GitHub writes it is allowed.
+   *
+   * Workspace-level rather than per-user, and deliberately: two of the four are
+   * writes into repositories the workspace owns, one spends the owner's agent
+   * subscription and is plan-gated on the owner, and two members must not be
+   * able to give one repository two comment policies. Absent means the defaults
+   * in `resolveCodeReviewSettings`, which post nothing.
+   *
+   * Merged by the workspaces PATCH as a DEEP merge, unlike most of this object:
+   * the route's jsonb `||` is top-level, so sending one of these four keys would
+   * otherwise silently drop the other three. Same treatment `prompts` gets.
+   */
+  codeReview?: CodeReviewSettings;
   /**
    * How the merge queue drains a (repo, base) group:
    * - `'ordered'` (default): FIFO — one merge in flight per group, each PR
@@ -1268,6 +1294,28 @@ export const FREE_PLAN_WORKFLOW_LIMIT = 3;
  */
 export const FREE_PLAN_LOOP_LIMIT = 3;
 
+/**
+ * How many code-review-and-fix CYCLES a free owner may have in flight. One, and
+ * there is no queue behind it.
+ *
+ * It counts cycles, not runs: one review may spend six sandboxes, and metering
+ * those individually would make the cap incomprehensible. A review resting with
+ * findings on screen does NOT hold the slot — only a cycle that is actually
+ * working does (reviewing, or fixing) — which is what lets one number cover both
+ * halves of "review and fix" instead of needing two.
+ *
+ * Deliberately no queueing. A queued review is indistinguishable from a working
+ * one on a PR row, and this feature's whole credibility is that its progress bar
+ * is telling the truth, so the second request is refused rather than parked.
+ *
+ * It COMPOSES with the task cap rather than replacing it. A review's own units
+ * are not tasks and never touch that cap; the fix run IS an ordinary task and
+ * does. When the two collide the fix waits visibly for a task slot instead of
+ * being refused — a person who was invited to press Fix should not be told no
+ * for a reason they cannot see.
+ */
+export const FREE_PLAN_REVIEW_CYCLE_LIMIT = 1;
+
 /* MCP servers are deliberately UNCAPPED, on every plan.
  *
  * They were capped at 3 like the four above, and that turned out to be the
@@ -1330,6 +1378,21 @@ export const LOOP_LIMIT_ERROR_CODE = 'loop_limit_reached';
 export const AUTO_KEEP_DEFAULT_ERROR_CODE = 'auto_keep_default_requires_unlimited';
 
 /**
+ * ApiResponse.code when starting a code review is rejected by the free plan's
+ * one-cycle-at-a-time rule. A usage cap: the slot frees itself when the review
+ * in flight finishes, so the client may say "or wait for this one".
+ */
+export const REVIEW_CYCLE_LIMIT_ERROR_CODE = 'code_review_limit_reached';
+
+/**
+ * ApiResponse.code when a free plan tries to turn ON "review my new pull
+ * requests automatically". A FEATURE gate like AUTO_KEEP_DEFAULT_ERROR_CODE and
+ * not a usage cap — the user is nowhere near a count, so quoting one would
+ * answer a question they did not ask.
+ */
+export const AUTO_REVIEW_ERROR_CODE = 'auto_review_requires_unlimited';
+
+/**
  * The user's billing state as served by `GET /billing/status` and pushed on
  * the `subscription:updated` WS event.
  */
@@ -1359,6 +1422,10 @@ export interface BillingStatus {
   loops: number;
   /** null = unlimited. */
   loopLimit: number | null;
+  /** Code-review cycles in flight for this owner, across their workspaces. */
+  activeReviews: number;
+  /** null = unlimited. */
+  activeReviewLimit: number | null;
 }
 
 export interface CreateCheckoutRequest {

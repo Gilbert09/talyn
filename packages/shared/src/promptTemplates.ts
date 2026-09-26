@@ -1,6 +1,6 @@
-export type PromptKind = 'mergeable' | 'skill';
+export type PromptKind = 'mergeable' | 'skill' | 'review_fix';
 
-export const PROMPT_KINDS: PromptKind[] = ['mergeable', 'skill'];
+export const PROMPT_KINDS: PromptKind[] = ['mergeable', 'skill', 'review_fix'];
 
 export interface PromptKindInfo {
   kind: PromptKind;
@@ -21,9 +21,15 @@ export const PROMPT_KIND_INFO: Record<PromptKind, PromptKindInfo> = {
     usedFor:
       'Running a skill (SKILL.md) against a PR: the wrapper that hands the skill its PR context and publishing rules.',
   },
+  review_fix: {
+    kind: 'review_fix',
+    label: 'Fix review findings',
+    usedFor:
+      'The "Fix selected" button on a code review: hands the agent the findings the user ticked and asks for one commit that addresses them and nothing else.',
+  },
 };
 
-export type PromptVariableGroup = 'pr' | 'skill' | 'talyn';
+export type PromptVariableGroup = 'pr' | 'skill' | 'review' | 'talyn';
 
 export interface PromptVariableSpec {
   name: string;
@@ -48,6 +54,30 @@ export const PROMPT_VARIABLES: PromptVariableSpec[] = [
     shape: 'block',
     description: 'Bulleted list of the blockers Talyn detected (conflicts, unresolved threads, failing checks, ...).',
     kinds: ['mergeable'],
+  },
+  {
+    name: 'review.findings',
+    group: 'review',
+    shape: 'block',
+    description:
+      'The findings the user ticked, each with its severity, file:line, explanation and suggested change.',
+    required: true,
+    kinds: ['review_fix'],
+  },
+  {
+    name: 'review.count',
+    group: 'review',
+    shape: 'value',
+    description: 'How many findings were selected.',
+    kinds: ['review_fix'],
+  },
+  {
+    name: 'review.commentRule',
+    group: 'review',
+    shape: 'block',
+    description:
+      'Whether to post a summary comment after pushing, and what it must contain. Empty when the workspace has that switched off, which is the default.',
+    kinds: ['review_fix'],
   },
   {
     name: 'skill.name',
@@ -298,9 +328,63 @@ Apply this skill to {{pr.ref}} specifically:
 
 Be decisive: gather what you need in one pass, do the work, publish once, and stop. Do not idle waiting on CI unless the skill explicitly requires it.`;
 
+/**
+ * Fixing the findings a user ticked, and nothing else.
+ *
+ * The scope rule is the whole point. A code review's findings are the user's
+ * chosen list; an agent that "also tidied up while it was in there" turns a
+ * reviewed, consented change into a surprise, on a branch somebody else owns.
+ *
+ * It says explicitly that there are no GitHub review threads to resolve,
+ * because the mergeable template's agent spends real effort on exactly that and
+ * these findings never went to GitHub — there is nothing there to reply to.
+ */
+export const DEFAULT_REVIEW_FIX_TEMPLATE = `You are fixing specific problems that a code review found in a pull request.
+
+Pull request: {{pr.url}}
+Repository: {{repo}}
+PR number: #{{pr.number}}
+PR title: {{pr.title}}
+Branch: {{pr.headBranch}} (base: {{pr.baseBranch}})
+
+{{gitRules}}
+
+{{taglineRule}}
+
+## The findings to fix ({{review.count}})
+
+{{review.findings}}
+
+## Your job
+
+1. Fix the findings listed above, on the PR branch ({{pr.headBranch}}).
+2. Address ONLY those findings. Do not refactor around them, do not fix things
+   nobody asked about, and do not reformat files you had no reason to touch. The
+   person reviewing this chose these items deliberately; anything else you change
+   is a surprise in their pull request.
+3. Where a finding is wrong about the code, do not invent a change to satisfy it.
+   Leave that one alone and say so in your final message.
+4. Publish everything as ONE commit per the git rules above. Do not open a new
+   pull request; these changes belong on the existing branch.
+5. There are no review threads on the pull request for these findings — they were
+   reported inside Talyn and were never posted to GitHub. Do not look for them,
+   and do not reply to unrelated threads you happen to find.
+
+{{review.commentRule}}
+
+## When you finish
+
+State plainly which findings you fixed and which you did not, one line each, so
+the list can be reconciled. If the only thing left needs a person — a gate repo
+policy says a human must approve, a credential you do not have, a product
+decision — make the LAST line of your final message exactly:
+     TALYN_NEEDS_HUMAN: <one line: what is needed, and from whom>
+Verbatim prefix, own line, nothing after it.`;
+
 export const DEFAULT_PROMPT_TEMPLATES: Record<PromptKind, string> = {
   mergeable: DEFAULT_MERGEABLE_TEMPLATE,
   skill: DEFAULT_SKILL_TEMPLATE,
+  review_fix: DEFAULT_REVIEW_FIX_TEMPLATE,
 };
 
 export function defaultPromptTemplateHash(kind: PromptKind): string {

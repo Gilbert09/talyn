@@ -475,6 +475,7 @@ describe('featuresForUser', () => {
     // to DRAW, which is a question about the person at the screen — every route
     // gates again on the workspace owner.
     expect(Object.keys(features).sort()).toEqual([
+      'codeReview',
       'loops',
       'mcpServers',
       'reviewPriority',
@@ -491,6 +492,7 @@ describe('featuresForUser', () => {
       workflows: false,
       loops: false,
       mcpServers: false,
+      codeReview: false,
       reviewPriority: false,
       reviewPriorityMode: true,
       reviewRankingCandidate: false,
@@ -502,12 +504,14 @@ describe('featuresForUser', () => {
     // No PostHog at all. Workflows is a released feature and stays ON, so an
     // unconfigured deployment still serves a page that exists. Loops stays OFF,
     // because it creates paid cloud tasks on a timer with nobody watching, and
-    // MCP servers stay OFF because that page stores third-party credentials —
-    // collapsing these to one default would silently flip two of them.
+    // MCP servers stay OFF because that page stores third-party credentials, and
+    // code review stays OFF because it spends an agent subscription and pushes
+    // commits — collapsing these to one default would silently flip three of them.
     expect(await featuresForUser(SUBJECT)).toEqual({
       workflows: true,
       loops: false,
       mcpServers: false,
+      codeReview: false,
       reviewPriority: false,
       reviewPriorityMode: true,
       reviewRankingCandidate: false,

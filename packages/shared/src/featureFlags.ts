@@ -162,6 +162,41 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Code review — AI findings on a pull request, shown in the app.
+   *
+   * Fallback OFF, on the `loops` side of the line rather than the `workflows`
+   * side, and for two reasons that compound. A review spends the workspace's own
+   * agent subscription across several sandboxes per pull request, and the fix
+   * run it leads to PUSHES COMMITS to a branch somebody else may own. "PostHog
+   * is unreachable, so let every account review and fix" is not a graceful
+   * degradation; it is the expensive kind of outage.
+   *
+   * An env override, unlike `mcpServers` which deliberately has none, because
+   * the fix run is the thing you will want to stop in a hurry — and because a
+   * contributor with no PostHog project has to be able to develop this at all.
+   *
+   * `availability: 'gated'` while it rolls out, which withholds every
+   * `code-review` highlight from EVERYBODY — including the accounts PostHog has
+   * already switched it on for. That is correct during a rollout and it is why
+   * the feature carries its own introduction rather than relying on the
+   * changelog. Flipping this to 'general' on launch day is what replays the
+   * withheld backlog.
+   *
+   * The release scope is `code-review` and not `reviews`: `reviewPriority`
+   * already claims the latter, and `gateForScopeIn` returns the FIRST gated flag
+   * matching a scope, so sharing one would tag the Reviews tab's commits as this
+   * feature's and withhold them too.
+   */
+  codeReview: {
+    posthogKey: 'code-review',
+    envOverride: 'CODE_REVIEW_ENABLED',
+    fallback: false,
+    description: 'Code review — AI findings on a pull request, shown in the app',
+    availability: 'gated',
+    releaseScopes: ['code-review'],
+  },
+
+  /**
    * MCP servers — the servers a workspace connects and the fleet wires
    * into every run.
    *
@@ -379,6 +414,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'workflows',
   'loops',
   'mcpServers',
+  'codeReview',
   'reviewPriority',
   'reviewRankingCandidate',
   'reviewRankingExport',
