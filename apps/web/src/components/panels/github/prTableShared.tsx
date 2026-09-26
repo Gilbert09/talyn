@@ -50,6 +50,7 @@ import {
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
+import { CodeReviewRowChip } from '../../widgets/codeReview/CodeReviewRowChip';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
@@ -838,6 +839,21 @@ function PRTableRow({
                   <Layers className="h-2.5 w-2.5" />
                   Stack of {stackAll.length}
                 </span>
+              )}
+              {/* Code review: a phase bar while it runs, a Findings chip when it
+                  has something to say.
+
+                  Placed AFTER the linked-task badge and BEFORE the merge queue's,
+                  which is chronological from the row's point of view: a review
+                  happens before a merge. Suppressed on the queue page, where the
+                  Queue column owns the live storytelling — the same call the
+                  merge-queue badge below makes for itself.
+
+                  One word plus the bar, with the full sentence on `title`. A PR
+                  title already owns this line; every other chip here follows the
+                  same discipline. */}
+              {variant !== 'queue' && row.codeReview && (
+                <CodeReviewRowChip review={row.codeReview} onOpen={onSelect} />
               )}
               {/* Merge-queue indicator. The membership badge ("Queued #N") stays
                   visible the whole time the PR is in the queue; an activity badge

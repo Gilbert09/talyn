@@ -8,6 +8,10 @@ import type {
   PRPriorityVerdict,
 } from '@talyn/shared';
 import type {
+  CodeReviewDismissReason,
+  CodeReviewFinding,
+  CodeReviewPreset,
+  CodeReviewPublic,
   Features,
   LoopInput,
   LoopRun,
@@ -662,6 +666,23 @@ export interface WatchedRepo {
  * ends match on. Nothing fails to compile in that state; the pill just falls
  * to its `default` case and renders a shrug.
  */
+/**
+ * Code review's types, re-exported rather than redeclared.
+ *
+ * `PRBlockingReason` right below is the precedent and it carries the reason: three
+ * hand-written copies of that union existed once, and a new verdict fell through to
+ * a `default` case that rendered a shrug. A payload the backend builds and the
+ * clients render must have ONE definition.
+ */
+export type {
+  CodeReviewDismissReason,
+  CodeReviewFinding,
+  CodeReviewPhase,
+  CodeReviewPreset,
+  CodeReviewPublic,
+  CodeReviewSeverity,
+} from '@talyn/shared';
+
 export type PRBlockingReason = SharedPRBlockingReason;
 
 export type PRMergeable = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
@@ -937,6 +958,18 @@ export interface PRRow {
    *
    *  Superseded a four-status `mergeQueueState` blob, retired 2026-09-01. */
   mergeQueue?: MergeQueuePublic | null;
+  /**
+   * The code review's payload — phase, its plan, the unit counts behind the
+   * progress bar, and the finding counts. Null when this pull request has never
+   * been reviewed.
+   *
+   * Absent (rather than null) on an older backend and on a websocket echo that
+   * did not change it, which is a distinction the client MUST keep: preserving on
+   * absent and clearing on null is what stops a force-push leaving a stale review
+   * attached to a commit that no longer exists. See the merge rule in each fork's
+   * pull-request store.
+   */
+  codeReview?: CodeReviewPublic | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1241,6 +1274,70 @@ export const pullRequests = {
     request<{ events: MergeQueueTimelineEvent[] }>(
       'GET',
       `/pull-requests/${id}/merge-queue/timeline`
+    ),
+  /**
+   * The code review for a pull request, with its findings.
+   *
+   * `review` is null when nothing has ever been reviewed — a normal state, not a
+   * 404: the tab still exists and shows the pitch. `defaultPreset` comes back so
+   * the picker opens on the workspace's own choice rather than guessing.
+   */
+  codeReview: (id: string) =>
+    request<{
+      review: CodeReviewPublic | null;
+      findings: CodeReviewFinding[];
+      defaultPreset: CodeReviewPreset;
+    }>('GET', `/pull-requests/${id}/code-review`),
+  /**
+   * Start a review, or return the one already running.
+   *
+   * 402 with `code_review_limit_reached` when a free plan already has a cycle in
+   * flight — `maybeHandleBillingLimit` turns that into the upgrade modal. `reset`
+   * throws away the findings on record, for a branch force-pushed into something
+   * unrelated; it is never inferred, because the obvious signal is also true of
+   * every ordinary rebase.
+   */
+  startCodeReview: (id: string, opts?: { preset?: CodeReviewPreset; reset?: boolean }) =>
+    request<CodeReviewPublic>('POST', `/pull-requests/${id}/code-review`, {
+      preset: opts?.preset,
+      reset: opts?.reset,
+    }),
+  /** Stop a running review, cancelling whatever it has in flight. */
+  cancelCodeReview: (id: string) =>
+    request<CodeReviewPublic>('DELETE', `/pull-requests/${id}/code-review`),
+  /**
+   * Fix the ticked findings: one run, one push, one optional summary comment.
+   *
+   * 202 with `code_review_fix_deferred` when the plan's TASK slots are full — the
+   * fix is owed rather than refused, and it starts when a task finishes.
+   */
+  fixCodeReviewFindings: (id: string, findingIds: string[]) =>
+    request<{ taskId: string; review: CodeReviewPublic }>(
+      'POST',
+      `/pull-requests/${id}/code-review/fix`,
+      { findingIds }
+    ),
+  /** Dismiss a finding. Reversible — see `undismissCodeReviewFinding`. */
+  dismissCodeReviewFinding: (
+    id: string,
+    findingId: string,
+    reason?: CodeReviewDismissReason
+  ) =>
+    request<CodeReviewPublic>(
+      'POST',
+      `/pull-requests/${id}/code-review/findings/${findingId}/dismiss`,
+      { reason }
+    ),
+  undismissCodeReviewFinding: (id: string, findingId: string) =>
+    request<CodeReviewPublic>(
+      'DELETE',
+      `/pull-requests/${id}/code-review/findings/${findingId}/dismiss`
+    ),
+  /** The review's audit log, newest first. */
+  codeReviewTimeline: (id: string) =>
+    request<{ events: CodeReviewTimelineEvent[] }>(
+      'GET',
+      `/pull-requests/${id}/code-review/timeline`
     ),
   // Tell the backend which list is on screen so it can hard-poll that cohort
   // and slack-poll the other. 'none' = the GitHub panel isn't visible.
@@ -2279,3 +2376,20 @@ export const api = {
 export { ReviewRankingArchive } from './reviewRankingArchive.js';
 
 export { ReviewRankingUploader, type RankingUploadEvent } from './reviewRankingUpload.js';
+
+/**
+ * One row of a code review's audit log.
+ *
+ * Mirrors `MergeQueueTimelineEvent`, and for the same reason: the timeline is the
+ * only place that can say what a review actually did, and every transition appends
+ * its row in the same transaction as the transition, so it cannot lie.
+ */
+export interface CodeReviewTimelineEvent {
+  at: string;
+  fromPhase: string | null;
+  toPhase: string;
+  trigger: string;
+  code: string | null;
+  message: string;
+  detail: unknown;
+}

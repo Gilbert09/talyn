@@ -35,6 +35,8 @@ function status(overrides: Partial<BillingStatus> = {}): BillingStatus {
     workflowLimit: 3,
     loops: 0,
     loopLimit: 3,
+    activeReviews: 0,
+    activeReviewLimit: 1,
     ...overrides,
   };
 }

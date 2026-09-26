@@ -38,6 +38,7 @@ const SELECT_CLASS =
 const GROUP_LABEL: Record<PromptVariableGroup, string> = {
   pr: 'Pull request',
   skill: 'Skill',
+  review: 'Review findings',
   talyn: 'Talyn blocks',
 };
 

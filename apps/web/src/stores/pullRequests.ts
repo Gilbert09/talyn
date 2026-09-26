@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import type { MergeQueuePublic, PRRow, PRSummaryShape, PRState } from '../lib/api';
+import type {
+  CodeReviewPublic,
+  MergeQueuePublic,
+  PRRow,
+  PRSummaryShape,
+  PRState,
+} from '../lib/api';
 
 /**
  * Shared open-PR state, lifted out of the old single GitHub panel so the
@@ -34,6 +40,13 @@ export interface PullRequestUpdatePayload {
   mergeQueued?: boolean;
   /** The merge queue's payload. Null when the PR is not queued. */
   mergeQueue?: MergeQueuePublic | null;
+  /**
+   * The code review's payload. Null when the PR has never been reviewed, and
+   * `null` is a REAL value here — a force-push clears the review. See the merge
+   * below: absent preserves, null clears, and getting that round the wrong way
+   * leaves a stale review pinned to a commit that no longer exists.
+   */
+  codeReview?: CodeReviewPublic | null;
 }
 
 interface PullRequestState {
@@ -151,6 +164,14 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
       // Merge-queue state only rides along when it changed; otherwise keep ours.
       mergeQueued: p.mergeQueued ?? next[idx].mergeQueued,
       mergeQueue: p.mergeQueue !== undefined ? p.mergeQueue : next[idx].mergeQueue,
+      // EXPLICIT undefined, never `??`, and this is the single most likely bug in
+      // the feature. `??` reads correctly and swallows the CLEAR: a force-push
+      // emits `null` to say "those findings describe a commit that is gone", and
+      // `??` would keep showing them. Same family as `reviewHiddenAt`,
+      // `autoMergeState` and `mergeQueue` above — all four distinguish absent
+      // from null because absent means "this emitter did not know" and null means
+      // "there is none".
+      codeReview: p.codeReview !== undefined ? p.codeReview : next[idx].codeReview,
     };
     set({ rows: next });
     return false;

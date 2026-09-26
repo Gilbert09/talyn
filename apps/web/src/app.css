@@ -116,6 +116,35 @@
   animation: owl-scan 1.6s ease-in-out infinite;
 }
 
+/* The active segment of a phase progress bar (components/ui/progress.tsx).
+ *
+ * A gentle pulse, so a step that takes minutes still looks like it is working.
+ * Guarded by prefers-reduced-motion: the bar's POSITION already carries the
+ * information, so the animation is decoration and decoration must be droppable.
+ *
+ * NOTE: this file and its twin in the other fork must both carry it. They differ
+ * only in case (App.css / app.css), which is exactly how one gets missed. */
+@keyframes owl-progress-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.owl-progress-active {
+  animation: owl-progress-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owl-progress-active {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
 .owl-caret {
   animation: owl-caret 1s steps(1) infinite;
 }
