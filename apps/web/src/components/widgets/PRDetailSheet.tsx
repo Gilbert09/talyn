@@ -21,6 +21,7 @@ import {
   CircleDot,
   GitMerge,
   MessageSquare,
+  ScanSearch,
   Layers,
   Check,
   XCircle,
@@ -29,10 +30,12 @@ import {
   ListChecks,
   GitBranch,
   Bot,
-} from 'lucide-react';
+}
+from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
+import { FindingsTab, findingsBadge } from './codeReview/FindingsTab';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import {
@@ -815,7 +818,10 @@ export function PRDetailSheet({
   );
 }
 
-type TabKey = 'overview' | 'files' | 'checks' | 'reviews';
+// `findings` sits SECOND, right after overview: the reading order is "what is this
+// pull request / what is wrong with it / what does CI think". Adding a member here
+// is what routes the compiler to every switch that has to handle it.
+type TabKey = 'overview' | 'findings' | 'files' | 'checks' | 'reviews';
 
 function DetailTabs({
   data,
@@ -846,6 +852,17 @@ function DetailTabs({
           icon={<Layers className="h-3.5 w-3.5" />}
         >
           Overview
+        </TabButton>
+        <TabButton
+          active={tab === 'findings'}
+          onClick={() => setTab('findings')}
+          icon={<ScanSearch className="h-3.5 w-3.5" />}
+          // What the user is being asked about, never the raw total: nitpicks and
+          // dismissals live in the bucket at the foot of the list and must not
+          // inflate a number somebody reads as a to-do count.
+          badge={findingsBadge(data.row.codeReview)}
+        >
+          Findings
         </TabButton>
         <TabButton
           active={tab === 'checks'}
@@ -902,6 +919,9 @@ function DetailTabs({
               detailPending={detailPending}
               cachedBody={cachedBody}
             />
+          )}
+          {tab === 'findings' && (
+            <FindingsTab pullRequestId={data.row.id} seedReview={data.row.codeReview ?? null} />
           )}
           {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
           {tab === 'reviews' && <ReviewsTab data={data} />}
