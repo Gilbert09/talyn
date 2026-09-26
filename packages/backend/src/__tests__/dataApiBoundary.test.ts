@@ -138,7 +138,13 @@ describe('Data API database boundary', () => {
       review_ranking_participants: crud,
       review_ranking_events: crud,
       review_ranking_outcomes: crud,
+      pr_code_reviews: crud,
+      pr_code_review_runs: crud,
+      pr_code_review_findings: crud,
       merge_queue_events: ['INSERT', 'SELECT'],
+      // Append-only, like merge_queue_events: the history has to outlive the
+      // review it describes, so there is no DELETE.
+      pr_code_review_events: ['INSERT', 'SELECT'],
       posthog_oauth_states: ['DELETE', 'INSERT', 'SELECT'],
       release_notes: ['SELECT'],
       workflow_runs: ['INSERT', 'SELECT', 'UPDATE'],

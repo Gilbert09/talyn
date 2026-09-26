@@ -30,6 +30,10 @@ describe('Drizzle migration', () => {
       'settings',
       'pull_requests',
       'github_installations',
+      'pr_code_reviews',
+      'pr_code_review_runs',
+      'pr_code_review_findings',
+      'pr_code_review_events',
     ]) {
       expect(tables).toContain(expected);
     }

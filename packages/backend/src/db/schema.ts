@@ -33,6 +33,7 @@ import {
   integer,
   bigint,
   bigserial,
+  numeric,
   doublePrecision,
   real,
   uniqueIndex,
@@ -1455,3 +1456,262 @@ export const reviewRankingOutcomes = pgTable('review_ranking_outcomes', {
   pk: primaryKey({ columns: [t.workspaceId, t.reviewId] }),
   time: index('review_ranking_outcomes_time').on(t.submittedAt),
 }));
+
+// ---------- Code review ----------
+//
+// AI review of a pull request, with the findings shown in the app rather than
+// posted on the PR. Mirrors migration 0068. See that file's header for why the
+// units are not `tasks` rows and why there are two head-sha columns.
+//
+// Every index below is declared here as well as in the SQL, PARTIAL ONES
+// INCLUDED — `merge_queue_entries` proves drizzle can express them, and a
+// partial index that exists only in the SQL makes the next
+// `drizzle-kit generate` emit a spurious drift diff.
+
+/** One living review per pull request; a re-review bumps `cycle` on this row. */
+export const prCodeReviews = pgTable(
+  'pr_code_reviews',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references((): AnyPgColumn => pullRequests.id, { onDelete: 'cascade' }),
+    /**
+     * Which attempt this is, and half of the unit claim key. Without it a second
+     * cycle's units collide with the first's forever, so a failed review could
+     * never be retried. The analogue of `loops.scheduled_for`.
+     */
+    cycle: integer('cycle').notNull().default(0),
+    /** quick | standard | deep. Plain text, like `tasks.status`. */
+    preset: text('preset').notNull().default('standard'),
+    /** The preset's resolved shape, frozen at cycle start rather than re-read. */
+    lensKeys: jsonb('lens_keys').$type<string[] | null>(),
+    sweep: boolean('sweep').notNull().default(false),
+    validate: boolean('validate').notNull().default(false),
+    chunkTotal: integer('chunk_total').notNull().default(1),
+    /**
+     * The progress denominator, and the only count that is persisted — it is a
+     * decision taken at cycle start, not an aggregate. Finding counts are
+     * aggregated on read, because a stored count drifts.
+     */
+    runsTotal: integer('runs_total').notNull().default(0),
+    phase: text('phase').notNull().default('idle'),
+    phaseStartedAt: timestamp('phase_started_at', { withTimezone: true }),
+    /** What the in-flight cycle is reading. */
+    targetHeadSha: text('target_head_sha').notNull().default(''),
+    /** What the findings on screen belong to. Not the same question. */
+    reviewedHeadSha: text('reviewed_head_sha').notNull().default(''),
+    auto: boolean('auto').notNull().default(false),
+    autoEnabled: boolean('auto_enabled').notNull().default(false),
+    fixTaskId: text('fix_task_id').references((): AnyPgColumn => tasks.id, {
+      onDelete: 'set null',
+    }),
+    fixStartedAt: timestamp('fix_started_at', { withTimezone: true }),
+    startedBy: text('started_by').references(() => users.id, { onDelete: 'set null' }),
+    lastError: text('last_error'),
+    lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+    lastEvaluatedAt: timestamp('last_evaluated_at', { withTimezone: true }),
+    /** Optimistic-concurrency guard — every phase transition is a CAS on this. */
+    version: integer('version').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    prUq: uniqueIndex('uq_pr_code_reviews_pr').on(t.pullRequestId),
+    // `ready` is outside the active set on purpose: a review resting with
+    // findings on screen holds no plan slot; only `fixing` puts it back in
+    // flight. That is what makes one gate cover "review and fix".
+    activeIdx: index('idx_pr_code_reviews_active')
+      .on(t.workspaceId)
+      .where(sql`${t.phase} NOT IN ('idle','ready','failed','cancelled')`),
+    staleIdx: index('idx_pr_code_reviews_stale')
+      .on(t.lastEvaluatedAt)
+      .where(sql`${t.phase} NOT IN ('idle','ready','failed','cancelled')`),
+    fixTaskIdx: index('idx_pr_code_reviews_fix_task')
+      .on(t.fixTaskId)
+      .where(sql`${t.fixTaskId} IS NOT NULL`),
+  })
+);
+
+/** One row per agent run a review spends: a lens, the sweep, the judge, a repair. */
+export const prCodeReviewRuns = pgTable(
+  'pr_code_review_runs',
+  {
+    id: text('id').primaryKey(),
+    reviewId: text('review_id')
+      .notNull()
+      .references(() => prCodeReviews.id, { onDelete: 'cascade' }),
+    /** Carried rather than joined: the per-workspace ceiling is read per dispatch. */
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    cycle: integer('cycle').notNull(),
+    /** lens | sweep | validate | repair */
+    kind: text('kind').notNull(),
+    /**
+     * NOT NULL with an empty sentinel, and that is load-bearing: Postgres treats
+     * NULLs as distinct in a unique index, so a nullable column in the claim key
+     * would dedupe nothing and every pass would boot another sweep.
+     */
+    lens: text('lens').notNull().default(''),
+    chunkIndex: integer('chunk_index').notNull().default(0),
+    chunkTotal: integer('chunk_total').notNull().default(1),
+    status: text('status').notNull().default('claimed'),
+    failureCode: text('failure_code'),
+    provider: text('provider'),
+    model: text('model'),
+    sandboxId: text('sandbox_id'),
+    remoteTaskId: text('remote_task_id'),
+    remoteRunId: text('remote_run_id'),
+    /** An authorization input, not a label — see the migration. */
+    host: text('host'),
+    endpoint: text('endpoint'),
+    /** The durable read cursor into the fleet's event log. */
+    eventCursor: integer('event_cursor').notNull().default(0),
+    findingCount: integer('finding_count').notNull().default(0),
+    parseAttempts: integer('parse_attempts').notNull().default(0),
+    /** Big: an excerpt of what would not parse. Never in a list projection. */
+    parseError: text('parse_error'),
+    costUsd: numeric('cost_usd', { precision: 10, scale: 4 }),
+    /** NULL separates "never got a sandbox" from "had one and it is gone". */
+    dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // THE CONCURRENCY DESIGN: the insert is the claim, so a unique violation
+    // means somebody else owns this unit. No advisory lock in the fire path.
+    claimUq: uniqueIndex('uq_pr_code_review_runs_claim').on(
+      t.reviewId,
+      t.cycle,
+      t.kind,
+      t.lens,
+      t.chunkIndex
+    ),
+    activeIdx: index('idx_pr_code_review_runs_active')
+      .on(t.reviewId, t.cycle, t.status)
+      .where(sql`${t.status} IN ('claimed','dispatching','running','parsing')`),
+    wsInflightIdx: index('idx_pr_code_review_runs_ws_inflight')
+      .on(t.workspaceId, t.dispatchedAt)
+      .where(sql`${t.status} IN ('dispatching','running','parsing')`),
+    inflightIdx: index('idx_pr_code_review_runs_inflight')
+      .on(t.dispatchedAt)
+      .where(sql`${t.status} IN ('dispatching','running','parsing')`),
+    sandboxIdx: index('idx_pr_code_review_runs_sandbox')
+      .on(t.sandboxId)
+      .where(sql`${t.sandboxId} IS NOT NULL`),
+  })
+);
+
+/** What the review found — the product's whole output. */
+export const prCodeReviewFindings = pgTable(
+  'pr_code_review_findings',
+  {
+    id: text('id').primaryKey(),
+    reviewId: text('review_id')
+      .notNull()
+      .references(() => prCodeReviews.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references((): AnyPgColumn => pullRequests.id, { onDelete: 'cascade' }),
+    /** The carry-forward key. Excludes the lens and the line numbers by design. */
+    dedupeKey: text('dedupe_key').notNull(),
+    /** blocker | major | minor | nit */
+    severity: text('severity').notNull(),
+    category: text('category').notNull().default(''),
+    /** Which lenses reported it. Agreement is a signal, not a duplicate. */
+    lenses: jsonb('lenses').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    filePath: text('file_path').notNull().default(''),
+    lineStart: integer('line_start'),
+    lineEnd: integer('line_end'),
+    /** The verbatim source it is about — what survives a rebase. */
+    anchor: text('anchor'),
+    /** False means the agent paraphrased, or invented the path. */
+    anchorVerified: boolean('anchor_verified').notNull().default(false),
+    title: text('title').notNull(),
+    /** The two big columns. Excluded from every list projection. */
+    body: text('body').notNull().default(''),
+    suggestion: text('suggestion'),
+    confidence: integer('confidence'),
+    /** unvalidated | confirmed | rejected | uncertain */
+    verdict: text('verdict').notNull().default('unvalidated'),
+    verdictReason: text('verdict_reason'),
+    validatedByRunId: text('validated_by_run_id').references(
+      (): AnyPgColumn => prCodeReviewRuns.id,
+      { onDelete: 'set null' }
+    ),
+    sourceRunId: text('source_run_id').references((): AnyPgColumn => prCodeReviewRuns.id, {
+      onDelete: 'set null',
+    }),
+    firstSeenHeadSha: text('first_seen_head_sha').notNull().default(''),
+    lastSeenHeadSha: text('last_seen_head_sha').notNull().default(''),
+    firstSeenCycle: integer('first_seen_cycle').notNull().default(0),
+    lastSeenCycle: integer('last_seen_cycle').notNull().default(0),
+    seenCount: integer('seen_count').notNull().default(1),
+    /**
+     * open | selected | dismissed | fixed | stale | discarded.
+     *
+     * `dismissed` is sticky across cycles, the way `reviewHiddenAt` is: a user
+     * who said no must not be asked again on every commit. `fixed` and `stale`
+     * are not — a key that reappears goes back to `open`, which is how the app
+     * can say "it came back" rather than claim a fix that did not hold.
+     */
+    disposition: text('disposition').notNull().default('open'),
+    dispositionAt: timestamp('disposition_at', { withTimezone: true }),
+    dispositionBy: text('disposition_by').references(() => users.id, { onDelete: 'set null' }),
+    fixTaskId: text('fix_task_id').references((): AnyPgColumn => tasks.id, {
+      onDelete: 'set null',
+    }),
+    fixedAt: timestamp('fixed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // An upsert on this is what makes a re-review MERGE into the finding that is
+    // already there, preserving the user's dismissal and the history.
+    dedupeUq: uniqueIndex('uq_pr_code_review_findings_dedupe').on(t.reviewId, t.dedupeKey),
+    openIdx: index('idx_pr_code_review_findings_open')
+      .on(t.reviewId, t.severity)
+      .where(sql`${t.disposition} IN ('open','selected')`),
+    fixTaskIdx: index('idx_pr_code_review_findings_fix_task')
+      .on(t.fixTaskId)
+      .where(sql`${t.fixTaskId} IS NOT NULL`),
+  })
+);
+
+/**
+ * The audit log — one row per phase transition and per fired action, appended in
+ * the SAME transaction as the transition, so the timeline cannot lie. A mirror
+ * of `merge_queue_events` in shape and in purpose. Append-only: no DELETE grant.
+ */
+export const prCodeReviewEvents = pgTable(
+  'pr_code_review_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    reviewId: text('review_id')
+      .notNull()
+      .references(() => prCodeReviews.id, { onDelete: 'cascade' }),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    fromPhase: text('from_phase'),
+    toPhase: text('to_phase').notNull(),
+    /** 'user:start', 'poller:unit_settled', 'task:terminal', 'reconcile', … */
+    trigger: text('trigger').notNull(),
+    /** Machine code ('unit_claimed', 'capacity_deferred', 'findings_ingested', …). */
+    code: text('code'),
+    message: text('message').notNull().default(''),
+    detail: jsonb('detail'),
+  },
+  (t) => ({
+    reviewAtIdx: index('idx_pr_code_review_events_review').on(t.reviewId, t.at),
+  })
+);
