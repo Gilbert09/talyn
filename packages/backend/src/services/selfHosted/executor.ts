@@ -1,106 +1,26 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
-  fleetProviderForModel,
   readCloudTaskMeta,
   type CloudTaskMetadata,
   type Environment,
   type Task,
-  resolveFleetModel,
-  fleetAgentForModel,
-  type FleetAgent,
 } from '@talyn/shared';
-import { workspaceAgentModel, workspaceFleetModel } from './fleetModel.js';
-import { reconcileDefaultBranch } from '../repoDefaultBranch.js';
 import { getDbClient } from '../../db/client.js';
-import {
-  tasks as tasksTable,
-  repositories as repositoriesTable,
-} from '../../db/schema.js';
+import { tasks as tasksTable } from '../../db/schema.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
-import { githubService } from '../github.js';
-import {
-  FleetCapacityError,
-  FleetClient,
-  FleetDispatchUncertainError,
-  type CreateSandboxInput,
-  type FleetMcpServerInline,
-  type FleetSandbox,
-} from './client.js';
-import { workspaceMayUseMcpServers } from '../mcpServersAccess.js';
 import { mcpServerIdsFromMetadata } from '../mcpServers/dispatch.js';
-import {
-  mcpServersForDispatch,
-  type McpServerWithSecret,
-} from '../mcpServers/store.js';
 import { cloudStatusForSandbox } from './poller.js';
-import { getSelfHostedCredentials, resolveFleetTarget } from './credentials.js';
-import {
-  agentLabel,
-  failoverSummary,
-  heldBackAgents,
-  heldBackReason,
-} from './exhaustedQuota.js';
+import { agentLabel, failoverSummary } from './exhaustedQuota.js';
+import { dispatchSandboxRun, type SandboxRunHandle } from './sandboxRun.js';
+import { TASK_SYSTEM_PROMPT } from './systemPrompts.js';
 
 // Re-exported, not redeclared. A second definition of this contract is how the
 // two drift: the shared one grew a `capacity` discriminator and this copy
 // silently did not, so the value the fail-back routes on could not be set.
 import type { DispatchResult } from '../cloudProviders/types.js';
-import { isWithdrawnModel, replacementFor } from './withdrawnModels.js';
 
 export type { DispatchResult };
-
-/**
- * The publishing instruction is load-bearing, not boilerplate.
- *
- * The first real fleet run did its work correctly and then could not ship it:
- * `posthog/posthog` requires verified signatures, so every `git push` came back
- * `GH013: Commits must have verified signatures`. There is no signing key in the
- * VM and there must not be one. The agent then spent minutes probing GitHub API
- * routes looking for a way through — all correctly refused by the credential
- * proxy — and in the process created an empty review draft it could not delete.
- *
- * `fleet-publish` is the way through: it asks the credential proxy to create the
- * commit through GitHub's API, which signs it server-side. Telling the agent
- * that git push WILL fail matters as much as telling it the alternative exists,
- * because an agent that believes push should work treats the refusal as
- * something to route around.
- *
- * The `gh` sentence is the same lesson, learned twice. "The GitHub API is
- * already authenticated" is true of the PROXIED REST API and false of the `gh`
- * CLI, which carries its own credential and holds none here — so an agent told
- * only the first half reaches for `gh` (the obvious tool for "find the PRs this
- * person opened") and gets `gh cannot authenticate in a fleet run`. One loop run
- * spent its whole turn discovering that and shipped nothing. Naming the tool
- * that will not work costs one clause; finding out costs a run.
- */
-const SYSTEM_PROMPT =
-  'You are a coding agent working in an isolated microVM with the repository checked out. ' +
-  'Make the requested change and open a pull request. ' +
-  'Keep the change minimal and focused on what was asked; do not refactor unrelated code.\n\n' +
-  'PUBLISHING YOUR WORK: do not use `git push`. It will be rejected on any repository that ' +
-  'requires verified signatures, and there is no signing key in this VM by design. ' +
-  'Instead run `fleet-publish --branch <branch> --message "<headline>" [--body "<longer text>"]`, ' +
-  'which publishes your working tree as one commit that GitHub signs server-side. ' +
-  'It diffs against the merge-base with the default branch, so commit locally or not as you prefer — ' +
-  'only the final file contents matter. Then open the PR with the GitHub API as usual.\n\n' +
-  'BRINGING A PR UP TO DATE WITH ITS BASE: try these in order and stop at the first that ' +
-  'works. (1) `PUT /repos/{owner}/{repo}/pulls/{n}/update-branch`. (2) `POST /repos/{owner}/{repo}/merges` ' +
-  'merging the base branch into the head branch. Both make GitHub perform the merge server-side, so ' +
-  'the result is signed, and both refuse when the merge is not clean — a refusal means there is a real ' +
-  'conflict, not that you used them wrongly. (3) Only if both refuse: resolve the conflict in the working ' +
-  'tree, `fleet-publish` the result to a NEW scratch branch, then ' +
-  '`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published>`. ' +
-  'Rung 3 rewrites the PR branch and discards its previous commits, so do not reach for it while (1) or ' +
-  '(2) would have worked. Never move the repository default branch; the fleet will refuse.\n\n' +
-  'git and the GitHub API are already authenticated — there are no credentials in this VM and you ' +
-  'do not need any. THE `gh` CLI IS NOT, and cannot be: it looks for a credential of its own, this ' +
-  'guest holds none by design, and no amount of logging in will change that. Use the REST API ' +
-  'instead of `gh` for everything, including searching. ' +
-  'Some API endpoints are deliberately unreachable; if one is refused, that is a ' +
-  'policy decision, not an obstacle to work around. Do not probe for alternatives, and never use a ' +
-  'request that creates state (a review, a comment, a ref) to test whether something is permitted.\n\n' +
-  'When done, state the URL of the pull request you opened.';
 
 /**
  * Derive the fleet sandbox id from the task id and which RUN of it this is.
@@ -123,31 +43,6 @@ export function fleetRunIdForTask(taskId: string, attempt = 0): string {
   return attempt > 0 ? `talyn-${taskId}-r${attempt}` : `talyn-${taskId}`;
 }
 
-/**
- * Why a dispatch was refused for want of a credential, said so the reader knows
- * which of the two things to do about it.
- *
- * Two fixes are always available and the message names both, because the
- * cheaper one is usually the one the user wants: connect the vendor this model
- * needs, or run the task on the vendor already connected. A bare "no credential"
- * sends people to the settings screen when switching models would have done.
- */
-function missingCredentialError(
-  provider: 'anthropic' | 'openai',
-  model: string,
-  creds: { claudeToken?: string; openaiKey?: string },
-): string {
-  const needed = provider === 'openai' ? 'Codex (ChatGPT) subscription' : 'Claude subscription';
-  const other = provider === 'openai' ? 'Claude' : 'Codex';
-  const otherConnected = provider === 'openai' ? Boolean(creds.claudeToken) : Boolean(creds.openaiKey);
-  return (
-    `Talyn Fleet needs your ${needed} to run ${model}, and this workspace has not connected one. ` +
-    (otherConnected
-      ? `Connect it in Settings → Talyn Fleet, or run this task on ${other} instead.`
-      : 'Connect it in Settings → Talyn Fleet.')
-  );
-}
-
 /** Which run of this task row we are dispatching — 0 for its first. */
 export function fleetRunAttempt(task: { metadata?: Record<string, unknown> | null }): number {
   const raw = (task.metadata ?? {}).runAttempt;
@@ -155,405 +50,154 @@ export function fleetRunAttempt(task: { metadata?: Record<string, unknown> | nul
 }
 
 /**
- * How many times a dispatch that got 504 `dispatch_uncertain` is re-sent.
- *
- * The control plane lost the host's answer; the sandbox MAY exist. The only
- * safe move is the SAME id again — the create is idempotent on it — and never
- * another provider, which could run the task twice. Bounded so a gateway that
- * is genuinely down does not hold the queue tick hostage.
- */
-const DISPATCH_UNCERTAIN_RETRIES = 2;
-const DISPATCH_UNCERTAIN_DELAY_MS = 2_000;
-
-/**
  * Hand a task to the self-hosted fleet: POST an ephemeral sandbox whose
  * initial task is the prompt, and let the fleet own the agent loop. The
  * poller drives the local task to completed / failed.
  *
  * Idempotent: a task already carrying a `cloudTask.remoteTaskId` is a no-op.
+ *
+ * Everything vendor-shaped — credentials, the model ladder, withdrawn models,
+ * held-back subscriptions, the credential suppression policy, the uncertain-
+ * dispatch retry — lives in `dispatchSandboxRun`, which the code-review
+ * pipeline shares. What is left here is the part that is genuinely about a task
+ * ROW: its idempotence marker, its run id, its metadata, its status and the
+ * websocket traffic that follows.
  */
 export async function dispatchTaskToFleet(task: Task, env: Environment): Promise<DispatchResult> {
   if (readCloudTaskMeta(task)?.remoteTaskId) return { ok: true };
 
-  const creds = await getSelfHostedCredentials(task.workspaceId);
-  if (!creds) {
-    return {
-      ok: false,
-      error:
-        'Talyn Fleet is not configured for this workspace — add your Claude OAuth token in workspace settings.',
-    };
-  }
-
-  // Fetched fresh each dispatch so a re-connected or rotated token is current.
-  // It goes backend -> fleetd only; the fleet's credential proxy injects it
-  // host-side and it never enters the microVM (fleet spec §8).
-  const githubToken = await githubService.getVerifiedAccessToken(task.workspaceId);
-  if (!githubToken) {
-    return {
-      ok: false,
-      error: 'Connect GitHub for this workspace — the fleet uses it to clone the repo and open the PR.',
-    };
-  }
-
   if (!task.repositoryId) {
     return { ok: false, error: 'Talyn Fleet tasks require a repository.' };
   }
-  const repo = await resolveRepository(task.repositoryId, task.workspaceId);
-  if (!repo) {
-    return { ok: false, error: 'Could not resolve a GitHub owner/repo for this task’s repository.' };
+
+  const dispatched = await dispatchSandboxRun({
+    runId: fleetRunIdForTask(task.id, fleetRunAttempt(task)),
+    workspaceId: task.workspaceId,
+    repositoryId: task.repositoryId,
+    taskType: task.type === 'pr_response' ? 'pr_response' : 'code_writing',
+    prompt: task.prompt?.trim() || task.description?.trim() || task.title,
+    systemPrompt: TASK_SYSTEM_PROMPT,
+    // The task's own pin wins; the environment's is the rung below the
+    // workspace's setting. Kept as two separate fields rather than collapsed
+    // into one, because collapsing them would let an environment's model
+    // outrank the workspace's choice.
+    ...(modelFromTask(task) ? { model: modelFromTask(task) } : {}),
+    ...(modelFromEnv(env) ? { modelFallback: modelFromEnv(env) } : {}),
+    // Rides on the task rather than being read from whatever created it,
+    // because a revived run must get the POSTURE IT HAD: reading the loop
+    // instead would give a re-dispatch whatever the loop says today, which is a
+    // different box from the one being replaced.
+    internetAccess: internetAccessFromTask(task),
+    mcpServerIds: mcpServerIdsFromMetadata(task.metadata),
+    // No budget. Talyn has never sent the fleet a turn, spend or time cap on a
+    // task run, and adding one here would be a tightening nobody asked for —
+    // the caps belong to callers that can justify a number.
+  });
+
+  if (!dispatched.ok) {
+    return dispatched.capacity
+      ? { ok: false, error: dispatched.error, capacity: true }
+      : { ok: false, error: dispatched.error };
   }
 
-  const prompt = task.prompt?.trim() || task.description?.trim() || task.title;
-  const runId = fleetRunIdForTask(task.id, fleetRunAttempt(task));
+  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap } = dispatched.handle;
 
+  // The bookkeeping is inside a boundary of its own, and it matters that it is.
+  // The sandbox is already booted by this point, so a failure here is not a
+  // failure to dispatch — but `dispatch` is a provider-contract function whose
+  // caller (`taskQueue.dispatchTask`) expects a `DispatchResult` and not a
+  // throw. Letting one escape would take down the queue tick for every other
+  // task in it. Reporting it as a plain failure is what the whole function used
+  // to do when it was one big try block, and the retry is safe: the fleet create
+  // is idempotent on the run id, so the next attempt re-attaches to this same
+  // sandbox rather than booting a second one.
   try {
-    // The TARGET, not just a client: the run's metadata records which box took
-    // it, and "which box" is now the registry's answer rather than a string the
-    // workspace stored. Reading it off the resolved target is the only way that
-    // stays true — a remembered endpoint would name the host that was picked
-    // the day the credential was saved.
-    const target = await resolveFleetTarget(task.workspaceId);
-    if (!target) return { ok: false, error: 'Talyn Fleet is not configured for this workspace.' };
-    const client = new FleetClient(target.endpoint, target.token);
-
-    // Per-task override, then the workspace's Settings → Talyn Fleet choice,
-    // then the environment's, then the default. Explicit rather than letting
-    // the SDK decide: an unset model was served by Opus 5 on every turn, which
-    // is how fleet runs came to cost ~$15.85 each.
-    // The last rung is CREDENTIAL-AWARE. A Codex-only workspace that has never
-    // picked a model would otherwise land on Sonnet and be refused below for a
-    // Claude key it was never asked for — a dead end reached by doing nothing
-    // wrong. An EXPLICIT choice is never rewritten this way: if the model says
-    // Claude and there is no Claude token, that is a refusal naming the vendor,
-    // not a silent swap onto a model the user did not pick.
-    // resolveFleetModel wraps the whole ladder, not one rung: a retired Codex id
-    // can be pinned on the task, the workspace, or the environment, and all
-    // three produced the same dead run. OpenAI withdraws models from the
-    // ChatGPT sign-in path on its own schedule, so a pin that worked when it
-    // was made stops working without anything here changing.
-    const resolvedModel = resolveFleetModel(
-      modelFromTask(task) ??
-        (await workspaceFleetModel(task.workspaceId)) ??
-        modelFromEnv(env) ??
-        // The last rung is credential-aware, and now workspace-aware with it.
-        // It used to jump straight to the SHIPPED default, so a workspace that
-        // had chosen a Codex model still got gpt-5.6-terra whenever the choice
-        // did not reach the rungs above — the setting existed and did nothing.
-        (await workspaceAgentModel(task.workspaceId, creds.claudeToken ? 'claude' : 'codex')),
-    );
-
-    // A model the vendor has been OBSERVED to withdraw (withdrawnModels.ts).
-    // The settings migration on the failure path covers the workspace's stored
-    // choice; this covers the two places it can be pinned that the migration
-    // cannot reach — the task's own metadata and the environment's config.
-    const catalogued = isWithdrawnModel(resolvedModel)
-      ? replacementFor(resolvedModel)
-      : resolvedModel;
-
-    // An agent whose subscription a vendor has already told us is spent
-    // (exhaustedQuota.ts). Without this check every task re-discovers the same
-    // exhaustion the expensive way: boot a microVM, make one API call, be
-    // refused, fail over. The hold is DURABLE, so it survives the deploy that
-    // an in-memory one would not.
-    //
-    // Two outcomes, and the second is the reason this sits at dispatch rather
-    // than in the run's failure path. If the OTHER fleet agent is connected
-    // and not itself held, swap onto it — the model is what carries the
-    // vendor, so a swap is a model change. If it is not, refuse as CAPACITY,
-    // which is how the task queue is already told "nothing is wrong with this
-    // task, try the next provider": PostHog Code picks it up without a sandbox
-    // ever being booted.
-    const held: Awaited<ReturnType<typeof heldBackAgents>> = await heldBackAgents(
-      task.workspaceId,
-    ).catch(() => ({}));
-    const wanted = fleetAgentForModel(catalogued);
-    let quotaSwap: { from: FleetAgent; to: FleetAgent } | null = null;
-    let model = catalogued;
-    if (held[wanted]) {
-      const other: FleetAgent = wanted === 'claude' ? 'codex' : 'claude';
-      // The RESOLVED credential, not merely "is one configured". `creds` has
-      // already refreshed what it could, so this asks the question that
-      // matters — can we actually run on the other agent right now — and a
-      // token whose refresh failed falls through to the capacity refusal
-      // instead of being swapped onto and then refused for a missing key,
-      // which is a hard failure the chain does not route around.
-      const otherToken = other === 'codex' ? creds.openaiKey : creds.claudeToken;
-      const otherUsable = !held[other] && Boolean(otherToken);
-      if (!otherUsable) {
-        return {
-          ok: false,
-          capacity: true,
-          error: heldBackReason(wanted, held[wanted]!),
-        };
-      }
-      // The workspace's OWN choice for that agent, not the shipped default.
-      // A swap is a vendor change, not a licence to ignore the setting: this
-      // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
-      // workspace whose Codex model was gpt-5.6-sol, every task, all day
-      // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
-      // default, so a workspace that has chosen nothing is unaffected.
-      model = await workspaceAgentModel(task.workspaceId, other);
-      quotaSwap = { from: wanted, to: other };
-      console.warn(
-        `[selfhosted] task ${task.id.slice(0, 8)}: ${wanted} usage is held back — ` +
-          `dispatching at ${other} instead`,
-      );
-    }
-
-    // The model decides the provider, and the provider decides what the microVM
-    // can reach: the host builds the sandbox's egress route table from it, so a
-    // dispatch at an OpenAI model has no route to Anthropic's API at all.
-    // Sent explicitly rather than left to the host's default — the route table
-    // should be the one this dispatch chose.
-    const provider = fleetProviderForModel(model);
-
-    // THE KEY FOR THIS DISPATCH'S VENDOR, OR NOTHING HAPPENS.
-    //
-    // This used to send `creds.openaiKey ?? ''`, and the empty string is the
-    // whole problem. The sandbox gateway fills an ABSENT OR BLANK credential
-    // from its own tenant's sealed custody — so a workspace with no Codex
-    // credential would not fail, it would quietly run on whatever key the
-    // Talyn tenant holds, billing one account's subscription for another's
-    // work. (Custody is only ever populated for GitHub-born tenants and ours is
-    // operator-minted, so there is nothing behind that door today. The fix is
-    // not about today: it is one settings change away from being live, and the
-    // failure is silent when it arrives.)
-    //
-    // Refusing is also the more useful answer. "Connect Codex" is something the
-    // user can act on; a run that silently spends somebody else's subscription
-    // is something nobody finds out about.
-    const agentKey = provider === 'openai' ? creds.openaiKey : creds.claudeToken;
-    if (!agentKey) {
-      return { ok: false, error: missingCredentialError(provider, model, creds) };
-    }
-
-    // Resolved before the create rather than inside it, so a workspace whose
-    // credentials will not open costs a log line here instead of an exception
-    // halfway through building a request body.
-    const mcpServers = await mcpServersForTask(task);
-
-    const { sandbox, host } = await createSandboxRetryingUncertain(client, {
-      id: runId,
-      workspaceId: task.workspaceId,
-      // Ephemeral is what a run was: the host stops and retires the sandbox
-      // the moment its initial task reaches a terminal state.
-      ephemeral: true,
-      task: {
-        taskType: task.type === 'pr_response' ? 'pr_response' : 'code_writing',
-        prompt,
-        systemPrompt: SYSTEM_PROMPT,
-        model,
-        provider,
-        repo: { slug: repo.slug, baseBranch: repo.defaultBranch },
-      },
-      githubToken,
-      // The credential for this dispatch's vendor, and only that one.
-      ...(provider === 'openai' ? { openaiKey: agentKey } : { anthropicKey: agentKey }),
-      // SUPPRESS THE OTHER VENDOR, which is what makes the custody door
-      // structurally shut rather than shut by our remembering to fill a field.
-      //
-      // The fleet applies `policy.credentials` at EVERY door a credential can
-      // enter a run's proxy — the create body, the /credentials push, the
-      // refresh hook, and the adoption re-pull (`internal/fleet/policy.go`
-      // `filterCredentials`) — so a suppressed vendor cannot be filled from
-      // custody on any of them, including the one that runs when nobody is
-      // looking (a fleetd restart).
-      //
-      // ONE vendor, never both, and never `github`: suppressing everything
-      // nulls the refresh hook outright (`allCredentialsSuppressed`), which
-      // would strip the key we just sent.
-      policy: {
-        credentials: provider === 'openai' ? { anthropic: 'none' } : { openai: 'none' },
-        // Only when the task asked for it. Absent means the fleet's default —
-        // no routed network — and absent is what every task except an
-        // internet-enabled loop sends.
-        //
-        // It rides on the task rather than being decided here because a revived
-        // run must get the POSTURE IT HAD: reading the loop instead would give a
-        // re-dispatch whatever the loop says today, which is a different box
-        // from the one being replaced.
-        ...(internetAccessFromTask(task) ? { egress: { mode: 'open' as const } } : {}),
-      },
-      // The workspace's MCP servers, with their credentials, defined on the
-      // spot. Omitted entirely when there are none, so a workspace that has
-      // connected nothing sends the body it always sent.
-      ...(mcpServers.length > 0 ? { mcpServers } : {}),
+    await recordDispatch(task, env, {
+      sandbox,
+      provider,
+      model,
+      endpoint,
+      host,
+      repoSlug,
+      quotaSwap,
     });
-
-    // WHICH BOX IS RUNNING THIS, from whichever party actually knows.
-    //
-    // Dialling a host directly, the registry chose it and `target.host` says so.
-    // Through the gateway the registry chose nothing — the gateway placed it —
-    // so the name arrives on the create's response and `host` carries it.
-    //
-    // Recorded because it is an authorization input, not a label: when that
-    // host's fleetd restarts it asks us for this run's credentials back, and
-    // `resolveRunCredentials` answers only for a run dispatched TO THE ASKING
-    // HOST. A row with no host refuses every pull, and the run goes on failing
-    // every LLM call for the rest of its deadline. It is also what the operator
-    // console's host column and host filter read.
-    const fleetHost = target.host ?? host;
-    if (!fleetHost) {
-      // Not fatal — the run is dispatched and will do its work. Said out loud
-      // because the consequence surfaces much later and somewhere else: the
-      // credential pull after a fleetd restart, refused, with nothing at the
-      // refusal naming this moment.
-      console.warn(
-        `[fleet] dispatch of ${runId} recorded no host (endpoint ${target.endpoint}); ` +
-          'a credential pull after a host restart will be refused. ' +
-          'The gateway names the host in X-Fleet-Host — is it too old to send one?',
-      );
-    }
-    const cloudTask: CloudTaskMetadata = {
-      provider: 'selfhosted',
-      remoteTaskId: sandbox.id,
-      remoteRunId: sandbox.id,
-      status: cloudStatusForSandbox(sandbox),
-      extra: {
-        repo: repo.slug,
-        endpoint: target.endpoint,
-        // WHICH VENDOR THIS RUN IS SPENDING. Recorded because two other paths
-        // have to agree with the choice made here: the poller re-supplies an
-        // adopted sandbox's credentials, and `resolveRunCredentials` answers a
-        // host that asks for them back after a restart. Both used to send the
-        // Claude key unconditionally, which is a run that authenticates against
-        // the wrong vendor for the rest of its deadline.
-        llm: provider,
-        model,
-        ...(fleetHost ? { host: fleetHost } : {}),
-      },
-    };
-    await patchTaskMetadata(task.id, (existing) => ({
-      ...existing,
-      cloudTask,
-      // The task carries its own explanation when a held-back quota moved it
-      // onto the other agent — the same note the run-time failover writes, so
-      // one place in the UI covers both routes to a swapped vendor.
-      ...(quotaSwap
-        ? {
-            quotaFailover: {
-              ...((existing.quotaFailover as Record<string, unknown> | undefined) ?? {}),
-              exhausted: quotaSwap.from,
-              movedTo: `${agentLabel(quotaSwap.to)} on Talyn Fleet`,
-              note: failoverSummary(quotaSwap.from, `${agentLabel(quotaSwap.to)} on Talyn Fleet`),
-              at: new Date().toISOString(),
-            },
-          }
-        : {}),
-    }));
-    emitTaskUpdate(task.workspaceId, task.id, {
-      metadata: { cloudTask: { provider: cloudTask.provider, extra: { model } } },
-    });
-
-    await getDbClient()
-      .update(tasksTable)
-      .set({ status: 'in_progress', assignedEnvironmentId: env.id, updatedAt: new Date() })
-      .where(eq(tasksTable.id, task.id));
-    emitTaskStatus(task.workspaceId, task.id, 'in_progress');
-
-    console.log(`[selfhosted] task ${task.id.slice(0, 8)} → sandbox ${sandbox.id} (${repo.slug})`);
-    return { ok: true };
   } catch (err) {
-    if (err instanceof FleetCapacityError) {
-      // Availability, not failure: the task is fine and another provider can
-      // run it. `capacity` is what the task queue routes on (§10.7, §11.6).
-      //
-      // The message is written FOR A USER and deliberately does not include
-      // err.message, which carries the host's private endpoint — a tailnet
-      // address has no business in a customer-facing banner. The detail is
-      // already in the log line and on the debug bus for whoever is debugging.
-      console.warn(`[fleet] capacity refusal dispatching ${task.id}: ${err.message}`);
-      return {
-        ok: false,
-        error:
-          err.reason === 'unreachable'
-            ? 'The self-hosted runners are not reachable right now.'
-            : 'All self-hosted runners are busy.',
-        capacity: true,
-      };
-    }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+
+  console.log(`[selfhosted] task ${task.id.slice(0, 8)} → sandbox ${sandbox.id} (${repoSlug})`);
+  return { ok: true };
 }
 
 /**
- * The repo to run against, with its default branch CHECKED rather than trusted.
+ * Write what the dispatch decided onto the task row, and tell the clients.
  *
- * `repositories.default_branch` is hardcoded to 'main' by addWatchedRepo and
- * was never corrected, so a master-defaulted repo carried a branch that does
- * not exist. That is survivable for a run — the agent clones and works it out —
- * and fatal for a golden, whose identity is `(repo, baseBranch)`: the bake
- * cloned `--branch main`, git said "Remote branch main not found", and
- * PostHog/posthog silently never got an image, on every single dispatch.
- *
- * Reconciling here rather than only at add-time is deliberate: every row that
- * already exists is wrong, and a migration cannot ask GitHub. The first
- * dispatch after this ships repairs the row.
+ * Separated from the dispatch itself so the failure boundary around it is
+ * visible: everything here is a database write or a broadcast, and none of it
+ * can un-boot the microVM that already exists.
  */
-async function resolveRepository(
-  repositoryId: string,
-  workspaceId: string,
-): Promise<{ slug: string; defaultBranch: string } | null> {
-  const rows = await getDbClient()
-    .select({
-      url: repositoriesTable.url,
-      name: repositoriesTable.name,
-      defaultBranch: repositoriesTable.defaultBranch,
-    })
-    .from(repositoriesTable)
-    .where(and(eq(repositoriesTable.id, repositoryId), eq(repositoriesTable.workspaceId, workspaceId)))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  const slug = parseGitHubSlug(row.url) ?? sanitizeSlug(row.name);
-  if (!slug) return null;
+async function recordDispatch(
+  task: Task,
+  env: Environment,
+  handle: Pick<
+    SandboxRunHandle,
+    'sandbox' | 'provider' | 'model' | 'endpoint' | 'host' | 'repoSlug' | 'quotaSwap'
+  >,
+): Promise<void> {
+  const { sandbox, provider, model, endpoint, host, repoSlug, quotaSwap } = handle;
 
-  const defaultBranch = await reconcileDefaultBranch({
-    repositoryId,
-    workspaceId,
-    url: row.url,
-    stored: row.defaultBranch,
+  const cloudTask: CloudTaskMetadata = {
+    provider: 'selfhosted',
+    remoteTaskId: sandbox.id,
+    remoteRunId: sandbox.id,
+    status: cloudStatusForSandbox(sandbox),
+    extra: {
+      repo: repoSlug,
+      endpoint,
+      // WHICH VENDOR THIS RUN IS SPENDING. Recorded because two other paths
+      // have to agree with the choice made at dispatch: the poller re-supplies
+      // an adopted sandbox's credentials, and `resolveRunCredentials` answers a
+      // host that asks for them back after a restart. Both used to send the
+      // Claude key unconditionally, which is a run that authenticates against
+      // the wrong vendor for the rest of its deadline.
+      llm: provider,
+      model,
+      // An authorization input, not a label: a row with no host refuses every
+      // credential pull, and the run goes on failing every LLM call for the
+      // rest of its deadline. It is also what the operator console's host
+      // column and host filter read.
+      ...(host ? { host } : {}),
+    },
+  };
+
+  await patchTaskMetadata(task.id, (existing) => ({
+    ...existing,
+    cloudTask,
+    // The task carries its own explanation when a held-back quota moved it
+    // onto the other agent — the same note the run-time failover writes, so
+    // one place in the UI covers both routes to a swapped vendor.
+    ...(quotaSwap
+      ? {
+          quotaFailover: {
+            ...((existing.quotaFailover as Record<string, unknown> | undefined) ?? {}),
+            exhausted: quotaSwap.from,
+            movedTo: `${agentLabel(quotaSwap.to)} on Talyn Fleet`,
+            note: failoverSummary(quotaSwap.from, `${agentLabel(quotaSwap.to)} on Talyn Fleet`),
+            at: new Date().toISOString(),
+          },
+        }
+      : {}),
+  }));
+  emitTaskUpdate(task.workspaceId, task.id, {
+    metadata: { cloudTask: { provider: cloudTask.provider, extra: { model } } },
   });
-  return { slug, defaultBranch };
-}
 
-function parseGitHubSlug(url: string): string | null {
-  const match = url.match(/github\.com[/:]([\w.-]+)\/([\w.-]+)/);
-  if (!match) return null;
-  return `${match[1]}/${match[2].replace(/\.git$/, '')}`;
-}
+  await getDbClient()
+    .update(tasksTable)
+    .set({ status: 'in_progress', assignedEnvironmentId: env.id, updatedAt: new Date() })
+    .where(eq(tasksTable.id, task.id));
+  emitTaskStatus(task.workspaceId, task.id, 'in_progress');
 
-function sanitizeSlug(name: string): string | null {
-  return /^[\w.-]+\/[\w.-]+$/.test(name) ? name : null;
-}
-
-/**
- * POST the create, re-sending the SAME id on 504 `dispatch_uncertain`.
- *
- * That status means the control plane lost the host's answer: the sandbox may
- * or may not exist, and the create is idempotent on the id, so re-asking is
- * always safe and anything else is not — failing back to another provider here
- * could run the task twice. If the retries run out the error propagates as a
- * plain (non-capacity) failure, which is the honest answer: nobody knows
- * whether the work started, so nothing may re-dispatch it elsewhere.
- */
-async function createSandboxRetryingUncertain(
-  client: FleetClient,
-  input: CreateSandboxInput,
-): Promise<{ sandbox: FleetSandbox; host?: string }> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await client.createSandbox(input);
-    } catch (err) {
-      if (!(err instanceof FleetDispatchUncertainError) || attempt >= DISPATCH_UNCERTAIN_RETRIES) {
-        throw err;
-      }
-      console.warn(
-        `[fleet] dispatch of ${input.id} uncertain (attempt ${attempt + 1}): ${err.message} — retrying the same id`,
-      );
-      await new Promise((r) => setTimeout(r, DISPATCH_UNCERTAIN_DELAY_MS));
-    }
-  }
 }
 
 function modelFromTask(task: Task): string | undefined {
@@ -570,67 +214,6 @@ function modelFromTask(task: Task): string | undefined {
  */
 function internetAccessFromTask(task: Task): boolean {
   return (task.metadata as Record<string, unknown> | null)?.internetAccess === true;
-}
-
-/**
- * The workspace's MCP servers, shaped for the fleet's create body.
- *
- * Returns an empty array when the workspace is not in the feature's audience,
- * and that is the right degradation rather than a refusal: the task is still
- * worth doing. A run without its MCP servers is a smaller run; a run that
- * failed because a flag audience changed is a broken one.
- *
- * No count limit and no truncation. The fleet's own caps were removed rather
- * than worked around, so every enabled server is sent.
- */
-async function mcpServersForTask(task: Task): Promise<FleetMcpServerInline[]> {
-  if (!(await workspaceMayUseMcpServers(task.workspaceId))) return [];
-  const servers = await mcpServersForDispatch(task.workspaceId, mcpServerIdsFromMetadata(task.metadata));
-  return servers.map((s) => ({
-    name: s.name,
-    url: s.url,
-    transport: 'http' as const,
-    ...(s.description ? { description: s.description } : {}),
-    ...(s.secret ? { secret: s.secret } : {}),
-    // `none` is sent explicitly rather than omitted: the fleet defaults an
-    // absent recipe to bearer whenever a secret is present, which is right for
-    // nearly every vendor and wrong for the one server that wants no
-    // credential at all.
-    inject: injectionFor(s),
-    // Absent when unrestricted, so the fleet can tell "every tool" from "no
-    // tools". Sending `[]` for a server nobody restricted would silently give
-    // the agent nothing.
-    ...(s.tools === null ? {} : { tools: s.tools }),
-  }));
-}
-
-function injectionFor(s: McpServerWithSecret): FleetMcpServerInline['inject'] {
-  switch (s.authKind) {
-    case 'bearer':
-      return { kind: 'bearer', ...(s.inject?.extra ? { extra: s.inject.extra } : {}) };
-    case 'header':
-      return {
-        kind: 'header',
-        header: s.inject?.header ?? '',
-        ...(s.inject?.prefix ? { prefix: s.inject.prefix } : {}),
-        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
-      };
-    case 'basic':
-      return {
-        kind: 'basic',
-        user: s.inject?.user ?? '',
-        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
-      };
-    case 'query':
-      return {
-        kind: 'query',
-        param: s.inject?.param ?? '',
-        ...(s.inject?.extra ? { extra: s.inject.extra } : {}),
-      };
-    case 'none':
-    default:
-      return { kind: '', ...(s.inject?.extra ? { extra: s.inject.extra } : {}) };
-  }
 }
 
 function modelFromEnv(env: Environment): string | undefined {

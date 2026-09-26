@@ -17,6 +17,7 @@ import { markTranscriptFinal, TranscriptCursors } from '../cloudProviders/transc
 import type { CloudTaskRow } from '../cloudProviders/types.js';
 import { githubService } from '../github.js';
 import { getSelfHostedClient, getSelfHostedCredentials } from './credentials.js';
+import { finalTextFromEvents, toAgentEvent } from './eventCursor.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
@@ -115,56 +116,13 @@ export function cloudStatusForSandbox(
 }
 
 /**
- * Unwrap the fleet's envelope into the shape the transcript renderer reads.
- *
- * The fleet WRAPS each event as `{type, subtype, raw, guestSeq}`, where `raw` is
- * the Agent SDK message itself and the outer `type`/`subtype` are copies fleetd
- * probed out of it so it can index without parsing the payload.
- *
- * `AgentEvent` — what every other provider produces and what the renderer reads
- * — carries the SDK message AT THE TOP LEVEL: `message`, `content`, `result`.
- * Spreading the wrapper put all of that one level down under `raw`, so a
- * transcript looked structurally fine and rendered as nothing: a task sat on
- * "Claude is thinking..." while 47 events were already in Postgres.
- *
- * Worth stating plainly, because the symptom was indistinguishable from the
- * three other causes chased before it (a tailnet MTU black hole, NUL bytes the
- * jsonb column refused, a stale fleet build). Every layer reported success and
- * the payload was present at every hop. Only the shape was wrong, and nothing
- * type-checks a jsonb column.
- *
- * Falls back to the event itself when there is no `raw`, so an older fleet that
- * does not wrap still ingests rather than producing empty entries. The host's
- * synthetic `task_started` / `task_complete` markers take the same path: they
- * carry no `raw`, pass through whole, and the renderer skips types it does not
- * know — tolerated, never fatal.
+ * Unwrapping the fleet's envelope, and reading an agent's last word, both live
+ * in `eventCursor.ts` now — the code-review pipeline needs them and holds no
+ * task row to hang a transcript off. Re-exported here because `toAgentEvent` is
+ * part of this module's published surface and several callers import it from
+ * this path.
  */
-export function toAgentEvent(ev: FleetEvent): AgentEvent {
-  const wrapper = ev.event as { raw?: unknown } | undefined;
-  const payload = (wrapper?.raw ?? ev.event ?? {}) as object;
-  return { ...payload, seq: ev.seq } as AgentEvent;
-}
-
-/**
- * The text of an `assistant` transcript event, flattened.
- *
- * Content is an array of blocks; only `text` blocks are prose. Joined rather
- * than first-only because a single assistant turn is often several blocks and
- * the sentinel sits at the very end of the last one.
- */
-function assistantText(event: AgentEvent): string | null {
-  const content = event.message?.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return null;
-  const text = content
-    .map((block) => {
-      if (!block || typeof block !== 'object') return '';
-      const b = block as { type?: unknown; text?: unknown };
-      return b.type === 'text' && typeof b.text === 'string' ? b.text : '';
-    })
-    .join('');
-  return text.length > 0 ? text : null;
-}
+export { toAgentEvent } from './eventCursor.js';
 
 class SelfHostedPoller {
   /** taskId → highest fleet `seq` already emitted over WS + persisted. */
@@ -765,19 +723,7 @@ class SelfHostedPoller {
    * documents, and much cheaper than the alternative.
    */
   private finalAssistantText(taskId: string): string | null {
-    const transcript = this.transcripts.get(taskId);
-    if (!transcript?.length) return null;
-    for (let i = transcript.length - 1; i >= 0; i--) {
-      const event = transcript[i]!;
-      if (event.type === 'result' && typeof event.result === 'string') {
-        return event.result;
-      }
-      if (event.type === 'assistant') {
-        const text = assistantText(event);
-        if (text) return text;
-      }
-    }
-    return null;
+    return finalTextFromEvents(this.transcripts.get(taskId) ?? []);
   }
 
   private async captureOutcome(
