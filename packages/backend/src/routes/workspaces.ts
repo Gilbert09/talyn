@@ -13,7 +13,10 @@ import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middle
 import { isFeatureEnabled } from '../services/featureFlags.js';
 import { githubService } from '../services/github.js';
 import { readReviewRankPayload } from '../services/reviewPriority/trainer.js';
-import { assertCanEnableAutoKeepDefault } from '../services/billing/entitlements.js';
+import {
+  assertCanEnableAutoKeepDefault,
+  assertCanEnableAutoReview,
+} from '../services/billing/entitlements.js';
 import { ensureDefaultWorkspace } from '../services/workspaceBootstrap.js';
 import {
   PROMPT_KINDS,
@@ -28,6 +31,8 @@ import {
   type ApiResponse,
   type PromptKind,
   type PromptTemplateOverride,
+  codeReviewSettingsPatch,
+  type CodeReviewSettings,
   type PromptTemplateSettings,
   type WorkspaceSettings,
 } from '@talyn/shared';
@@ -129,20 +134,41 @@ function promptSettingsPatch(patch: unknown): PromptTemplateSettings {
 
 // jsonb `||` merges the top level in the row itself; prompts merge one level
 // deeper, and jsonb_strip_nulls turns a `null` kind into a reset.
-function mergedSettingsSql(patch: Partial<WorkspaceSettings>, prompts: PromptTemplateSettings | undefined) {
+function mergedSettingsSql(
+  patch: Partial<WorkspaceSettings>,
+  prompts: PromptTemplateSettings | undefined,
+  codeReview: CodeReviewSettings | undefined
+) {
   const rest = { ...patch };
   delete rest.prompts;
-  const topLevel = sql`${workspacesTable.settings} || ${JSON.stringify(rest)}::jsonb`;
-  if (!prompts) return topLevel;
-  return sql`jsonb_set(
-    ${topLevel},
-    '{prompts}',
-    jsonb_strip_nulls(
-      CASE WHEN jsonb_typeof(${workspacesTable.settings} -> 'prompts') = 'object'
-        THEN ${workspacesTable.settings} -> 'prompts' ELSE '{}'::jsonb END
-      || ${JSON.stringify(prompts)}::jsonb
-    )
-  )`;
+  delete rest.codeReview;
+  let merged = sql`${workspacesTable.settings} || ${JSON.stringify(rest)}::jsonb`;
+  if (prompts) {
+    merged = sql`jsonb_set(
+      ${merged},
+      '{prompts}',
+      jsonb_strip_nulls(
+        CASE WHEN jsonb_typeof(${workspacesTable.settings} -> 'prompts') = 'object'
+          THEN ${workspacesTable.settings} -> 'prompts' ELSE '{}'::jsonb END
+        || ${JSON.stringify(prompts)}::jsonb
+      )
+    )`;
+  }
+  // Code review gets the same one-level-deeper treatment, and it NEEDS it: the
+  // settings card has four independent controls, so a top-level `||` of
+  // `{ codeReview: { preset } }` would replace the whole object and silently drop
+  // the other three. Four checkboxes each doing read-modify-write would also race
+  // each other between two open clients; merging server-side removes both problems.
+  if (codeReview) {
+    merged = sql`jsonb_set(
+      ${merged},
+      '{codeReview}',
+      CASE WHEN jsonb_typeof(${workspacesTable.settings} -> 'codeReview') = 'object'
+        THEN ${workspacesTable.settings} -> 'codeReview' ELSE '{}'::jsonb END
+      || ${JSON.stringify(codeReview)}::jsonb
+    )`;
+  }
+  return merged;
 }
 
 export function workspaceRoutes(): Router {
@@ -314,6 +340,12 @@ export function workspaceRoutes(): Router {
         autoKeepDefault: sql<
           string | null
         >`${workspacesTable.settings} ->> 'defaultAutoKeepMergeable'`,
+        // Same ->> trick, one level deeper. Read here rather than from the
+        // settings blob for the reason above: the probe must not ship prompts and
+        // PR filters to answer a boolean.
+        autoReview: sql<
+          string | null
+        >`${workspacesTable.settings} -> 'codeReview' ->> 'autoReview'`,
       })
       .from(workspacesTable)
       .where(eq(workspacesTable.id, req.params.id))
@@ -374,7 +406,20 @@ export function workspaceRoutes(): Router {
       ) {
         await assertCanEnableAutoKeepDefault(existing[0].ownerId);
       }
-      updates.settings = mergedSettingsSql(body.settings, prompts);
+      let codeReview: CodeReviewSettings | undefined;
+      if (body.settings.codeReview !== undefined) {
+        codeReview = codeReviewSettingsPatch(body.settings.codeReview);
+        // Turning automatic review ON is an Unlimited feature. Gate the
+        // TRANSITION, not the state — exactly as the auto-keep default above: a
+        // workspace that already has it on predates the gate and keeps it, so a
+        // free user is never made to pay to stay where they are. Turning it off
+        // gives that up. Throws AutoReviewPlanError → 402, which is what opens the
+        // upgrade modal with the FEATURE pitch rather than a usage count.
+        if (codeReview.autoReview === true && existing[0].autoReview !== 'true') {
+          await assertCanEnableAutoReview(existing[0].ownerId);
+        }
+      }
+      updates.settings = mergedSettingsSql(body.settings, prompts, codeReview);
     }
 
     if (Object.keys(updates).length > 0) {

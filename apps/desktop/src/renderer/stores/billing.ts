@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import {
   AUTO_KEEP_DEFAULT_ERROR_CODE,
+  AUTO_REVIEW_ERROR_CODE,
   MERGE_QUEUE_LIMIT_ERROR_CODE,
+  REVIEW_CYCLE_LIMIT_ERROR_CODE,
   TASK_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   LOOP_LIMIT_ERROR_CODE,
@@ -103,6 +105,8 @@ const BILLING_LIMIT_CODES: ReadonlySet<string> = new Set([
   WORKFLOW_LIMIT_ERROR_CODE,
   LOOP_LIMIT_ERROR_CODE,
   AUTO_KEEP_DEFAULT_ERROR_CODE,
+  REVIEW_CYCLE_LIMIT_ERROR_CODE,
+  AUTO_REVIEW_ERROR_CODE,
 ]);
 
 /**
@@ -128,13 +132,29 @@ export type UpgradeReason =
    * `task_limit` would answer "you're using all 3" to someone who never
    * clicked, which reads as a non-sequitur rather than an explanation.
    */
-  | 'task_deferred';
+  | 'task_deferred'
+  /**
+   * A free plan already has a code review in flight. A usage cap, but unlike
+   * `task_limit` it arrives as an EXPLICIT server reason rather than being derived
+   * from the snapshot — so it outranks the derived ones in the modal's branch
+   * order, or somebody simultaneously at the task limit gets the wrong pitch.
+   */
+  | 'code_review_limit'
+  /**
+   * Turning ON automatic review of every new pull request. A FEATURE reason, so it
+   * sits with `auto_keep_default` ABOVE every usage branch: the user ticked a
+   * checkbox and is nowhere near a count, and quoting one answers a question they
+   * did not ask.
+   */
+  | 'auto_review';
 
 function reasonFor(code: string): UpgradeReason {
   if (code === MERGE_QUEUE_LIMIT_ERROR_CODE) return 'merge_queue_limit';
   if (code === WORKFLOW_LIMIT_ERROR_CODE) return 'workflow_limit';
   if (code === LOOP_LIMIT_ERROR_CODE) return 'loop_limit';
   if (code === AUTO_KEEP_DEFAULT_ERROR_CODE) return 'auto_keep_default';
+  if (code === REVIEW_CYCLE_LIMIT_ERROR_CODE) return 'code_review_limit';
+  if (code === AUTO_REVIEW_ERROR_CODE) return 'auto_review';
   return 'task_limit';
 }
 
@@ -169,6 +189,8 @@ export function maybeHandleBillingLimit(err: unknown, trigger?: string): boolean
     workflow_limit: status?.workflowLimit,
     loops: status?.loops,
     loop_limit: status?.loopLimit,
+    active_reviews: status?.activeReviews,
+    active_review_limit: status?.activeReviewLimit,
     plan: status?.plan,
   });
   void store.refresh();

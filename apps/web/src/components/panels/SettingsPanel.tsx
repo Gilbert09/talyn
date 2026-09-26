@@ -49,6 +49,7 @@ import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Input } from '../ui/input';
 import { Card } from '../ui/card';
+import { CodeReviewSettingsCard } from './codeReview/CodeReviewSettingsCard';
 import { Badge } from '../ui/badge';
 import { ScrollArea } from '../ui/scroll-area';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
@@ -633,6 +634,10 @@ function WorkspaceSettings() {
 
           <AutoKeepMergeableDefaultToggle />
 <RespondToHumanCommentsToggle />
+          {/* Beside the human-comments toggle deliberately: both are decisions
+              about how loud Talyn is on GitHub, and reading them together is how
+              somebody forms a coherent posture. */}
+          <CodeReviewSettingsCard />
 
           <Card className="p-4 border-destructive/30">
             <h4 className="font-medium mb-1">Delete workspace</h4>

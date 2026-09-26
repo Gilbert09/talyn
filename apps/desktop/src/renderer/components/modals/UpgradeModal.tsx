@@ -81,6 +81,27 @@ export function UpgradeModal({
         'without you asking. You can still arm individual PRs by hand on the free plan.'
       );
     }
+    // A FEATURE refusal like the one above, and it sits here for the same reason:
+    // somebody who ticked a checkbox is nowhere near a count, so a usage branch
+    // would answer a question they did not ask.
+    if (upgradeReason === 'auto_review') {
+      return (
+        'Reviewing every new pull request automatically is an Unlimited feature. ' +
+        'Talyn reads each PR you open and puts its findings in the app, so you see ' +
+        'what is wrong before anybody asks. You can still review PRs one at a time ' +
+        'on the free plan.'
+      );
+    }
+    // An EXPLICIT server reason, which is better evidence than the two derived
+    // usage branches below — a user simultaneously at the task limit would
+    // otherwise be told about tasks when what was refused was a review.
+    if (upgradeReason === 'code_review_limit') {
+      return (
+        "The free plan runs one code review at a time and doesn't queue them — " +
+        'yours is still working. Upgrade to review as many pull requests at once as ' +
+        'you like, or wait for this one to finish.'
+      );
+    }
     // Also a cap, but one the user is not "using" in the moment — the count is
     // how many rules they keep, so it has to be checked before the two live
     // usage branches or a busy queue answers a refusal about workflows.
@@ -198,6 +219,13 @@ export function UpgradeModal({
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Unlimited loops
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="h-4 w-4" /> Review and fix as many pull requests at once as
+                you like
+              </li>
+              <li className="flex items-center gap-2">
+                <Check className="h-4 w-4" /> Review every new pull request automatically
               </li>
               <li className="flex items-center gap-2">
                 <Check className="h-4 w-4" /> Cancel anytime from Settings

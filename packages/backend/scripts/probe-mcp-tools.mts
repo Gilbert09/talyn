@@ -90,7 +90,13 @@ async function ask(subset: any[], label: string): Promise<void> {
       system: [{ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." }],
       messages: [{ role: 'user', content: 'hi' }],
       tools: subset.map((t) => ({
-        name: `mcp__${serverName}__${t.name}`,
+        // The guest registers `mcp_<server>_<tool>` (single underscores);
+        // Claude Code's own shape is `mcp__<server>__<tool>`. That one
+        // difference is the whole bug — see PROBE_NAME_STYLE.
+        name:
+          process.env.PROBE_NAME_STYLE === 'single'
+            ? `mcp_${serverName}_${t.name}`
+            : `mcp__${serverName}__${t.name}`,
         description: t.description ?? '',
         input_schema: t.inputSchema ?? { type: 'object', properties: {} },
       })),
