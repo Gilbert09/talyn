@@ -9,12 +9,29 @@ import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
+import { CodeReviewStep } from './steps/CodeReviewStep';
+import { codeReviewOffered, type Features } from '@talyn/shared';
 
-const STEPS = [
-  { title: 'Connect GitHub', optional: false },
-  { title: 'Connect an agent', optional: true },
-  { title: 'Watch repositories', optional: true },
-] as const;
+/**
+ * The steps, as a FUNCTION of what this account is offered.
+ *
+ * It was a `const`, and the code-review step is why it cannot stay one: that
+ * feature is behind a flag whose fallback is OFF, so most accounts must not see a
+ * fourth step at all. `.length` is read in three derived places below — the last
+ * check, the indicator map, and the clamp — and all three read it from here.
+ */
+function stepsFor(features: Features | null | undefined) {
+  return [
+    { key: 'github', title: 'Connect GitHub', optional: false },
+    { key: 'agent', title: 'Connect an agent', optional: true },
+    { key: 'repos', title: 'Watch repositories', optional: true },
+    // Last, and OPTIONAL — mandatory for the reason the agent step is: only step
+    // 0 gates Next, and a step somebody cannot complete would strand them.
+    ...(codeReviewOffered(features)
+      ? [{ key: 'review', title: 'Turn on code review', optional: true } as const]
+      : []),
+  ] as const;
+}
 
 /**
  * First-run onboarding. Walks a new user through the minimum setup needed to
@@ -45,6 +62,8 @@ export function OnboardingWizard() {
   const { currentWorkspaceId, repositories, cloudProviders, setOnboardingComplete, setJustOnboarded } =
     useWorkspaceStore();
   const { status, user } = useGithubConnection(currentWorkspaceId);
+  const features = useWorkspaceStore((s) => s.features);
+  const STEPS = stepsFor(features);
   const [step, setStep] = useState(0);
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
 
@@ -72,6 +91,9 @@ export function OnboardingWizard() {
         github_connected: githubConnected,
         repos_watched: repositories.length,
         agent_connected: agentConnected,
+        // Reported into the EXISTING completion event rather than a second one, so
+        // the funnel keeps one denominator.
+        code_review_offered: codeReviewOffered(features),
         signup_source: signupSource,
       });
       // Tell the PR sync to force a real poll on first entry (the repos were
@@ -132,6 +154,7 @@ export function OnboardingWizard() {
           {step === 2 && currentWorkspaceId && (
             <WatchReposStep workspaceId={currentWorkspaceId} />
           )}
+          {STEPS[step]?.key === 'review' && <CodeReviewStep />}
 
           {isLast && (
             <div className="mt-4">

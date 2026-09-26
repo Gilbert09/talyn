@@ -14,6 +14,8 @@ import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
 import { ConnectAgentModal } from '../modals/ConnectAgentModal';
 import { WhatsNewModal } from '../modals/WhatsNewModal';
+import { CodeReviewIntroModal } from '../modals/CodeReviewIntroModal';
+import { useCodeReviewIntro } from '../../hooks/useCodeReviewIntro';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
@@ -22,7 +24,8 @@ import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 
 export function MainLayout() {
-  const { activePanel, createWorkspaceOpen, setCreateWorkspaceOpen } = useWorkspaceStore();
+  const { activePanel, setActivePanel, createWorkspaceOpen, setCreateWorkspaceOpen } =
+    useWorkspaceStore();
   const features = useWorkspaceStore((s) => s.features);
   const upgradeModalOpen = useBillingStore((s) => s.upgradeModalOpen);
   const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);
@@ -34,6 +37,12 @@ export function MainLayout() {
   // are worth a modal. Mounted here so it can only run once onboarding is done.
   useWhatsNew();
   useDeferredRuns();
+  // Introduces code review once, to somebody who already uses Talyn. Deferred
+  // while What's-New is open: the release that flips this feature's availability
+  // fires both on the same launch, and two modals stacked on one another is how
+  // the second gets dismissed unread. It takes its turn next launch instead.
+  const codeReviewIntro = useCodeReviewIntro();
+  const whatsNewOpen = useWorkspaceStore((s) => s.whatsNewOpen);
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -65,6 +74,17 @@ export function MainLayout() {
       <UpgradeModal open={upgradeModalOpen} onOpenChange={setUpgradeModalOpen} />
       <ConnectAgentModal />
       <WhatsNewModal />
+      <CodeReviewIntroModal
+        open={codeReviewIntro.open && !whatsNewOpen}
+        examplePrId={codeReviewIntro.examplePrId}
+        onClose={codeReviewIntro.dismiss}
+        onOpenPr={() => {
+          // My PRs, not the sheet: the panels own their own row selection and
+          // there is no store handle for it. The row is a good enough landing —
+          // its phase bar is already moving, which is the demonstration.
+          setActivePanel('my_prs');
+        }}
+      />
     </div>
   );
 }
