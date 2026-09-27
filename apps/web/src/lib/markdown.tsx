@@ -18,7 +18,7 @@ import { cn } from './utils';
  *   - `feed`    — the always-dark agent transcript (bg #1a1a1a).
  *   - `surface` — theme-adaptive panels like the PR detail sheet.
  */
-export type MarkdownVariant = 'feed' | 'surface';
+export type MarkdownVariant = 'feed' | 'surface' | 'inline';
 
 interface MdClasses {
   heading: string;
@@ -185,6 +185,36 @@ function makeComponents(c: MdClasses, forceDark: boolean): Components {
 const FEED_COMPONENTS = makeComponents(FEED, true);
 const SURFACE_COMPONENTS = makeComponents(SURFACE, false);
 
+/**
+ * Markdown inside a line of text, for a heading or a table cell.
+ *
+ * Agents write markdown everywhere, including in one-line fields — a code
+ * review title reading "`request_id` is reused across pages" rendered its
+ * backticks literally. But the surface map answers a paragraph with a `<p>` and
+ * a list with a `<ul>`, and either inside a truncating single-line heading
+ * breaks the row it sits in.
+ *
+ * So this map keeps the INLINE marks — code, emphasis, links — and flattens
+ * every block element to a fragment. The text still reads correctly if an agent
+ * puts a list in a title; it just does not get to lay the row out.
+ */
+const INLINE_COMPONENTS = {
+  ...SURFACE_COMPONENTS,
+  p: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  ul: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  ol: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  li: ({ children }: { children?: React.ReactNode }) => <>{children} </>,
+  h1: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  h2: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  h3: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  h4: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  h5: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  h6: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  blockquote: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  pre: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  hr: () => null,
+};
+
 export function Markdown({
   text,
   variant = 'feed',
@@ -198,7 +228,13 @@ export function Markdown({
       // Cast: the tuple-with-options plugin form is valid at runtime but
       // widens awkwardly against PluggableList.
       rehypePlugins={REHYPE_PLUGINS as never}
-      components={variant === 'surface' ? SURFACE_COMPONENTS : FEED_COMPONENTS}
+      components={
+        variant === 'inline'
+          ? INLINE_COMPONENTS
+          : variant === 'surface'
+            ? SURFACE_COMPONENTS
+            : FEED_COMPONENTS
+      }
     >
       {text}
     </ReactMarkdown>

@@ -36,6 +36,7 @@ import { trackEvent } from '../../../lib/analytics';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
+import { Markdown } from '../../../lib/markdown';
 
 /**
  * The findings a code review produced, in the app.
@@ -518,7 +519,9 @@ export function FindingsTab({
             <div className="space-y-2 border-t p-2">
               {dropped.map((finding) => (
                 <div key={finding.id} className="rounded px-2 py-1.5 text-[11px]">
-                  <p className="font-medium">{finding.title}</p>
+                  <p className="font-medium">
+                    <Markdown text={finding.title} variant="inline" />
+                  </p>
                   <p className="truncate text-muted-foreground">
                     <FilePath path={finding.filePath} line={finding.lineStart} />
                   </p>
@@ -526,7 +529,11 @@ export function FindingsTab({
                       on a review judged before reasons were recorded, and that
                       is said rather than left as a blank line. */}
                   <p className="mt-1 italic text-muted-foreground">
-                    {finding.verdictReason || 'No reason was recorded for this one.'}
+                    {finding.verdictReason ? (
+                      <Markdown text={finding.verdictReason} variant="inline" />
+                    ) : (
+                      'No reason was recorded for this one.'
+                    )}
                   </p>
                 </div>
               ))}
@@ -560,7 +567,9 @@ export function FindingsTab({
                   className="flex items-start justify-between gap-2 rounded px-2 py-1.5 text-[11px] hover:bg-muted/40"
                 >
                   <div className="min-w-0">
-                    <p className="truncate">{finding.title}</p>
+                    <p className="truncate">
+                      <Markdown text={finding.title} variant="inline" />
+                    </p>
                     <p className="truncate text-muted-foreground">
                       <FilePath path={finding.filePath} line={finding.lineStart} />
                       {finding.dismissedReason &&
@@ -695,7 +704,12 @@ function FindingCard({
           className="min-w-0 flex-1 text-left"
           aria-expanded={expanded}
         >
-          <p className="text-xs font-medium">{finding.title}</p>
+          {/* Markdown, because agents write it: a title like "`request_id` is
+              reused" rendered its backticks literally. Inline only — a heading
+              or a list inside a one-line title would break the row. */}
+          <p className="text-xs font-medium">
+            <Markdown text={finding.title} variant="inline" />
+          </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             <FilePath path={finding.filePath} line={finding.lineStart} />
             {finding.carriedOver && ' · still here'}
@@ -717,7 +731,11 @@ function FindingCard({
           {!detail && !detailFailed && (
             <p className="text-muted-foreground">Loading the full finding…</p>
           )}
-          {full.body && <p className="whitespace-pre-wrap">{full.body}</p>}
+          {full.body && (
+            <div className="[overflow-wrap:anywhere]">
+              <Markdown text={full.body} variant="surface" />
+            </div>
+          )}
 
           {/* The agent's VERBATIM quote of the code it judged, and the single most
               useful thing on this card when a finding is wrong. A reader can see
@@ -742,7 +760,9 @@ function FindingCard({
               <p className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">
                 Suggested change
               </p>
-              <p className="whitespace-pre-wrap">{full.suggestion}</p>
+              <div className="[overflow-wrap:anywhere]">
+                <Markdown text={full.suggestion} variant="surface" />
+              </div>
             </div>
           )}
 
@@ -761,7 +781,7 @@ function FindingCard({
           </div>
           {full.verdictReason && (
             <p className="text-[10px] italic text-muted-foreground">
-              Checker&rsquo;s note: {full.verdictReason}
+              Checker&rsquo;s note: <Markdown text={full.verdictReason} variant="inline" />
             </p>
           )}
           {askingReason ? (
