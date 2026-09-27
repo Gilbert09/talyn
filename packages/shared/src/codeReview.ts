@@ -550,8 +550,28 @@ export interface RawCodeReviewFinding {
   confidence: number | null;
 }
 
+/**
+ * One candidate the judging pass threw away, and why.
+ *
+ * Only the judge emits these. It matters because the judging pass rejected five
+ * of six findings on the first real review and recorded nothing about any of
+ * them, which makes the stage that decides what you see unauditable: there was
+ * no way to tell a judge protecting you from noise from one discarding real
+ * bugs.
+ */
+export interface DroppedCodeReviewCandidate {
+  readonly id: string;
+  readonly reason: string;
+}
+
 export type ParsedCodeReviewFindings =
-  | { ok: true; findings: RawCodeReviewFinding[]; truncated: boolean }
+  | {
+      ok: true;
+      findings: RawCodeReviewFinding[];
+      truncated: boolean;
+      /** Empty for every unit except the judge, which is the only one that drops. */
+      dropped: DroppedCodeReviewCandidate[];
+    }
   | { ok: false; error: string };
 
 /**
@@ -645,7 +665,22 @@ export function parseCodeReviewFindings(text: string | null | undefined): Parsed
     .map(normaliseFinding)
     .filter((f): f is RawCodeReviewFinding => f !== null);
 
-  return { ok: true, findings, truncated };
+  // Absent on every unit but the judge, and absent is not an error: a lens has
+  // nothing to drop, and an older prompt that never asked for reasons must keep
+  // parsing rather than failing the unit over a missing optional field.
+  const droppedRaw = (parsed as { dropped?: unknown })?.dropped;
+  const dropped: DroppedCodeReviewCandidate[] = Array.isArray(droppedRaw)
+    ? droppedRaw
+        .map((d) => {
+          const row = (d ?? {}) as Record<string, unknown>;
+          const id = str(row.id).trim();
+          const reason = str(row.reason).slice(0, CODE_REVIEW_MAX_BODY_CHARS).trim();
+          return id ? { id, reason } : null;
+        })
+        .filter((d): d is DroppedCodeReviewCandidate => d !== null)
+    : [];
+
+  return { ok: true, findings, truncated, dropped };
 }
 
 function normaliseFinding(value: unknown): RawCodeReviewFinding | null {

@@ -364,6 +364,38 @@ export function fleetProviderForModel(modelId: string | undefined): FleetProvide
   return FLEET_MODEL_PROVIDERS[modelId] ?? 'anthropic';
 }
 
+/**
+ * The strongest model available for the vendor a given model belongs to.
+ *
+ * `FLEET_MODELS` is ordered most-capable-first within each provider — the first
+ * Anthropic entry is labelled "Most capable", the first OpenAI one "Newest and
+ * most capable" — so the top tier is the first entry matching the provider.
+ * Stated here rather than assumed at a call site, because the ordering is the
+ * whole contract: reordering that list for display would silently change which
+ * model a review escalates to.
+ *
+ * Used by code review, where "how deeply to review" cannot mean reasoning effort
+ * — the fleet's create body has no such field — so it means model tier instead.
+ * Falls back to the model it was given when the id is unknown (a retired or
+ * pinned model), which keeps a run working rather than refusing it.
+ */
+export function topFleetModelForModel(modelId: string | undefined): string {
+  if (!modelId) return modelId ?? '';
+  // Looked up DIRECTLY rather than through `fleetProviderForModel`, which
+  // defaults an unrecognised id to 'anthropic'. That default is right for
+  // deciding which credential to send; it is dangerous here. A retired OpenAI
+  // id is unrecognised, so going through it would escalate a Codex run to a
+  // Claude model — and the fleet builds the microVM's egress table from the
+  // model, so that run would have no route to its own vendor at all.
+  //
+  // An id we cannot place is therefore returned UNCHANGED. Escalation is an
+  // improvement, never a precondition: a pinned or retired model keeps working.
+  const provider = FLEET_MODEL_PROVIDERS[modelId];
+  if (!provider) return modelId;
+  const top = FLEET_MODELS.find((m) => m.provider === provider);
+  return top?.id ?? modelId;
+}
+
 /** Which agent vendor a workspace connected, as the UI and the wire name it. */
 export type FleetAgent = 'claude' | 'codex';
 

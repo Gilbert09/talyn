@@ -323,7 +323,16 @@ export async function applyJudgement(
   reviewId: string,
   cycle: number,
   keptKeys: string[],
-  runId: string
+  runId: string,
+  /**
+   * Why the judge dropped each candidate, keyed by dedupe key — which is exactly
+   * the `id` the judge prompt hands it, so no mapping is needed.
+   *
+   * Optional because a judge on an older prompt will not send any, and a missing
+   * reason must degrade to "rejected, reason unrecorded" rather than to a failed
+   * judging pass.
+   */
+  droppedReasons: ReadonlyMap<string, string> = new Map()
 ): Promise<{ confirmed: number; rejected: number }> {
   const db = getDbClient();
   const confirmed = keptKeys.length
@@ -360,6 +369,25 @@ export async function applyJudgement(
       )
     )
     .returning({ id: prCodeReviewFindings.id });
+
+
+  // Written per key rather than in the bulk update because the reason differs per
+  // row. N is small — a cycle is capped at 40 findings and the judge only reports
+  // on what it dropped — and the alternative is a CASE expression nobody can read.
+  for (const [key, reason] of droppedReasons) {
+    if (!reason) continue;
+    await db
+      .update(prCodeReviewFindings)
+      .set({ verdictReason: reason.slice(0, 2000) })
+      .where(
+        and(
+          eq(prCodeReviewFindings.reviewId, reviewId),
+          eq(prCodeReviewFindings.lastSeenCycle, cycle),
+          eq(prCodeReviewFindings.dedupeKey, key),
+          eq(prCodeReviewFindings.verdict, 'rejected')
+        )
+      );
+  }
 
   return { confirmed: confirmed.length, rejected: rejected.length };
 }

@@ -48,6 +48,58 @@ const oneFinding = {
   confidence: 80,
 };
 
+describe('parseCodeReviewFindings — the judge\'s drop reasons', () => {
+  const sentinel = 'TALYN_REVIEW_FINDINGS:';
+
+  it('reads why each candidate was dropped', () => {
+    // The judging pass rejected five of six findings on the first real review and
+    // recorded nothing about any of them, which makes the stage that decides what
+    // you see unauditable — a judge protecting you from noise and one discarding
+    // real bugs looked identical.
+    const out = parseCodeReviewFindings(
+      `${sentinel}\n\`\`\`json\n${JSON.stringify({
+        schema: 1,
+        findings: [],
+        dropped: [
+          { id: 'abc123', reason: 'the caller validates this two frames up' },
+          { id: 'def456', reason: 'unreachable given the types at every call site' },
+        ],
+      })}\n\`\`\``
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.dropped).toEqual([
+      { id: 'abc123', reason: 'the caller validates this two frames up' },
+      { id: 'def456', reason: 'unreachable given the types at every call site' },
+    ]);
+  });
+
+  it('treats an absent `dropped` as empty, not as a parse failure', () => {
+    // Every lens omits it — it has nothing to drop — and an older judge prompt
+    // never asked for it. A missing optional field must not fail the unit, which
+    // would turn a working review into "the review did not finish".
+    const out = parseCodeReviewFindings(
+      `${sentinel}\n\`\`\`json\n{"schema":1,"findings":[]}\n\`\`\``
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.dropped).toEqual([]);
+  });
+
+  it('skips a dropped entry with no id, since nothing could be keyed to it', () => {
+    const out = parseCodeReviewFindings(
+      `${sentinel}\n\`\`\`json\n${JSON.stringify({
+        schema: 1,
+        findings: [],
+        dropped: [{ reason: 'no id, so unattributable' }, { id: 'keeps', reason: 'kept' }],
+      })}\n\`\`\``
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.dropped).toEqual([{ id: 'keeps', reason: 'kept' }]);
+  });
+});
+
 describe('parseCodeReviewFindings', () => {
   it('reads the block after the sentinel', () => {
     const result = parseCodeReviewFindings(payload([oneFinding]));

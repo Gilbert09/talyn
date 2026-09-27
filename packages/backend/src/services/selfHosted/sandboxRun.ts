@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   fleetProviderForModel,
   resolveFleetModel,
+  topFleetModelForModel,
   fleetAgentForModel,
   type FleetAgent,
 } from '@talyn/shared';
@@ -77,6 +78,14 @@ export interface SandboxRunSpec {
    * vendor, not a silent swap onto a model nobody picked.
    */
   model?: string;
+  /**
+   * 'top' swaps the resolved model for the strongest of the SAME vendor.
+   *
+   * This is what review depth means in practice. Kept as a tier rather than a
+   * model id so the caller does not have to know which vendor the workspace
+   * connected — that is decided by the ladder below, after this struct is built.
+   */
+  modelTier?: 'default' | 'top';
   /**
    * A lower-priority suggestion, tried after the workspace's own setting and
    * before the credential-aware default. This is the rung the task path fills
@@ -243,13 +252,20 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
         (await workspaceAgentModel(spec.workspaceId, creds.claudeToken ? 'claude' : 'codex')),
     );
 
+    // "Deeper" means a STRONGER MODEL, because there is nothing else it can mean:
+    // the create body has no reasoning-effort field and the catalogue has no
+    // effort variants. Applied AFTER the ladder rather than by pinning a model at
+    // the call site, so the credential-aware rung above still decides the VENDOR
+    // — escalating before it would send a Codex-only workspace at a Claude model
+    // and get it refused for a key it was never asked for.
+    const tiered =
+      spec.modelTier === 'top' ? topFleetModelForModel(resolvedModel) : resolvedModel;
+
     // A model the vendor has been OBSERVED to withdraw (withdrawnModels.ts).
     // The settings migration on the failure path covers the workspace's stored
     // choice; this covers the places a caller can pin one that the migration
     // cannot reach.
-    const catalogued = isWithdrawnModel(resolvedModel)
-      ? replacementFor(resolvedModel)
-      : resolvedModel;
+    const catalogued = isWithdrawnModel(tiered) ? replacementFor(tiered) : tiered;
 
     // An agent whose subscription a vendor has already told us is spent
     // (exhaustedQuota.ts). Without this check every run re-discovers the same

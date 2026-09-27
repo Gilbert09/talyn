@@ -340,6 +340,13 @@ export function buildJudgePrompt(
     'dropped. An empty findings array is a valid answer and means none of them were',
     'worth showing.',
     '',
+    'ALSO add a top-level `dropped` array saying why you dropped each one you did',
+    'not keep: `"dropped": [{"id": "<the candidate id above>", "reason": "<one',
+    'sentence>"}]`. Name the specific thing you checked and what you found — "the',
+    'caller validates this two frames up" rather than "not a real problem". This is',
+    'read by the author when they disagree with you, and by us when we are deciding',
+    'whether you are too strict, so a reason nobody can check is worth nothing.',
+    '',
     codeReviewOutputContract(),
   ].join('\n');
 }

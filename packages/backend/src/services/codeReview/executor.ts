@@ -46,6 +46,7 @@ import {
   runsForCycle,
   settleRun,
   type ReviewRow,
+  type RunKind,
   type RunRow,
 } from './store.js';
 import type { Action, UnitKey } from './decide.js';
@@ -383,6 +384,10 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
         // Read the pull request's own head, not trunk. Nothing else in Talyn
         // sends this, and it is the whole reason the seam grew the field.
         ...(loaded.headBranch ? { targetRef: loaded.headBranch } : {}),
+        modelTier: unitModelTier(
+          isCodeReviewPreset(review.preset) ? review.preset : 'standard',
+          unit.kind
+        ),
         budget: { timeoutSec: UNIT_TIMEOUT_SEC[unit.kind] ?? 900 },
       });
       if (result.ok) {
@@ -497,6 +502,25 @@ async function buildUnitPrompt(
   return null;
 }
 
+
+/**
+ * Which model tier a unit runs at.
+ *
+ * The sweep and the judge escalate on EVERY preset, and the reason is what each
+ * one is for: the sweep reads every lens's output at once, which is the largest
+ * context this pipeline ever assembles, and the judge's whole job is to say NO to
+ * a plausible wrong finding. Both are the investigative shape the strongest model
+ * earns its cost on, and running them on the cheap model — which is what happened
+ * on the first real review, where all eight units were Sonnet — makes "Deep"
+ * differ from "Standard" only in how many reviewers there are.
+ *
+ * A preset whose own plan says `effort: 'top'` escalates its lenses too.
+ */
+export function unitModelTier(preset: CodeReviewPreset, kind: RunKind): 'default' | 'top' {
+  if (kind === 'sweep' || kind === 'validate') return 'top';
+  return CODE_REVIEW_PRESET_PLAN[preset].effort === 'top' ? 'top' : 'default';
+}
+
 // ---------- Ingesting a unit's output ----------
 
 /**
@@ -539,7 +563,17 @@ export async function ingestUnitOutput(
     const kept = parsed.findings.map((f) =>
       keyFor(f, verified(f))
     );
-    const { confirmed, rejected } = await applyJudgement(review.id, review.cycle, kept, run.id);
+    // The judge is handed each candidate's dedupe key as its id, so what comes
+    // back needs no mapping. Recorded so that "the checker threw away five of
+    // six" is a claim somebody can audit rather than take on trust.
+    const droppedReasons = new Map(parsed.dropped.map((d) => [d.id, d.reason]));
+    const { confirmed, rejected } = await applyJudgement(
+      review.id,
+      review.cycle,
+      kept,
+      run.id,
+      droppedReasons
+    );
     await patchRun(run.id, { findingCount: confirmed });
     await settleRun(run.id, { status: 'succeeded' });
     await appendReviewEvent(review.id, {
