@@ -335,6 +335,18 @@ export function FindingsTab({
         )}
       </div>
 
+      {/* Findings appear as each reviewer finishes rather than at the end, which is
+          the difference between a first signal at thirteen minutes and at forty.
+          But they have NOT been through the checking pass yet, and that pass threw
+          away five of six on the first real review — so presenting them as settled
+          would invite somebody to fix something that is about to be withdrawn. */}
+      {running && grouped.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          Showing what the reviewers have found so far. These have not been checked yet,
+          and some are usually dropped.
+        </p>
+      )}
+
       {notice && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
           {notice}
@@ -377,6 +389,7 @@ export function FindingsTab({
               key={finding.id}
               finding={finding}
               pullRequestId={pullRequestId}
+              stillChecking={running}
               selected={selected.has(finding.id)}
               expanded={expanded.has(finding.id)}
               onToggleSelected={() =>
@@ -500,6 +513,7 @@ function headline(review: CodeReviewPublic): string {
 function FindingCard({
   finding,
   pullRequestId,
+  stillChecking,
   selected,
   expanded,
   onToggleSelected,
@@ -508,6 +522,8 @@ function FindingCard({
 }: {
   finding: CodeReviewFinding;
   pullRequestId: string;
+  /** The cycle is still running, so this finding may yet be withdrawn. */
+  stillChecking: boolean;
   selected: boolean;
   expanded: boolean;
   onToggleSelected: () => void;
@@ -571,6 +587,9 @@ function FindingCard({
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             <FilePath path={finding.filePath} line={finding.lineStart} />
             {finding.carriedOver && ' · still here'}
+            {/* Only while the cycle is live. Once it is at rest every survivor has
+                been checked, so saying so then would be noise. */}
+            {stillChecking && finding.verdict === 'unvalidated' && ' · not checked yet'}
             {finding.lenses.length > 1 && ` · ${finding.lenses.length} reviewers agreed`}
             {/* Said out loud, because it changes how much to trust the location. */}
             {!finding.anchorVerified && ' · location approximate'}

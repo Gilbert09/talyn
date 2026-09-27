@@ -718,6 +718,41 @@ export async function advancePhase(
   );
 }
 
+
+/**
+ * Whether the evaluator should look again straight away after this action.
+ *
+ * Pulled out of `applyActions` so it can be asserted without a database, a fleet
+ * and a GitHub token — the answer is pure control flow, and its failure mode is
+ * SILENT: a wrong answer here does not break a review, it just makes one crawl.
+ *
+ * `prepare` and `phase` both say yes, and that is the fix for 4m46s of a
+ * 41-minute review. Entering a phase is exactly when its work becomes available
+ * — `queued` becomes `preparing`, which has a pull request to read; `preparing`
+ * becomes `reviewing`, which has lenses to dispatch — so answering no parked the
+ * review until something else poked it. The only thing that reliably does is the
+ * 60-second reconciler, because the poller visits units that are already running
+ * and a review between phases has none.
+ *
+ * `finish` and `fail` say no: the cycle is over, and re-driving a terminal review
+ * is how a finished cycle starts another one.
+ *
+ * Cannot spin: `decide` is pure and answers from the phase, so a pass that moved
+ * the phase sees different state next round, and `evaluateOnce` caps the walk at
+ * MAX_ROUNDS regardless.
+ */
+export function wantsImmediateRepass(type: Action['type']): boolean {
+  switch (type) {
+    case 'prepare':
+    case 'phase':
+    case 'dispatch':
+      return true;
+    case 'finish':
+    case 'fail':
+      return false;
+  }
+}
+
 /**
  * Apply one pass of decisions.
  *
@@ -725,6 +760,25 @@ export async function advancePhase(
  * HTTP call — while a phase change, a finish or a failure is a CAS on the review
  * and therefore has to be the last thing this pass does: the row's version moves
  * under it, so anything after would lose its own CAS.
+ *
+ * # Why advancing a phase asks for another pass
+ *
+ * It used to return false, on the reading that the row had moved and the pass was
+ * therefore done. That was measurably expensive: entering a phase is precisely
+ * when its work becomes available — `queued` becomes `preparing`, which has a
+ * pull request to read; `preparing` becomes `reviewing`, which has lenses to
+ * dispatch — so stopping there left the review parked until something else
+ * happened to poke it. The only thing that reliably does is the 60-second
+ * reconciler, and the poller cannot help because it only visits units that are
+ * already running, of which a review between phases has none.
+ *
+ * On the first real review that cost 4m46s of a 41-minute run: 2m42s sitting in
+ * `queued` and 2m04s in `preparing`, while the dispatch those phases lead to
+ * takes two seconds. A phase boundary should cost nothing.
+ *
+ * Safe against spinning for two reasons: `decide` is pure and answers from the
+ * phase, so a pass that changed the phase necessarily sees a different state
+ * next time, and `evaluateOnce` caps the walk at `MAX_ROUNDS` regardless.
  */
 export async function applyActions(review: ReviewRow, actions: Action[]): Promise<boolean> {
   const dispatches = actions.filter((a): a is Extract<Action, { type: 'dispatch' }> =>
@@ -738,16 +792,16 @@ export async function applyActions(review: ReviewRow, actions: Action[]): Promis
     switch (action.type) {
       case 'prepare':
         await prepareCycle(review);
-        return false;
+        return wantsImmediateRepass('prepare');
       case 'phase':
         await advancePhase(review, action.to, action.code, action.message);
-        return false;
+        return wantsImmediateRepass('phase');
       case 'finish':
         await finishCycle(review);
-        return false;
+        return wantsImmediateRepass('finish');
       case 'fail':
         await failCycle(review, action.code, action.message);
-        return false;
+        return wantsImmediateRepass('fail');
       case 'dispatch':
         break;
     }
