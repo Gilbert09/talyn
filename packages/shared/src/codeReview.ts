@@ -428,6 +428,13 @@ export interface CodeReviewPublic {
   /** Units settled and units planned, for progress within the reviewing phases. */
   runsDone: number;
   runsTotal: number;
+  /**
+   * How many pieces the diff was read in. 1 means whole.
+   *
+   * Scope, which the app otherwise says nothing about — so a review that read
+   * everything and one that skimmed looked identical.
+   */
+  chunkTotal: number;
   headSha: string;
   headShaShort: string;
   /** The sha the findings on screen belong to. */

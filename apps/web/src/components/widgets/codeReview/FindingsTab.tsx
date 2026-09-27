@@ -302,6 +302,10 @@ export function FindingsTab({
                   <code className="font-mono">{review.headShaShort}</code>
                 </>
               ) : null}
+              {/* Scope, which the app otherwise said nothing about — so a review
+                  that read everything and one that skimmed looked identical. */}
+              {review.runsTotal > 0 && ` · ${review.runsTotal} passes`}
+              {review.chunkTotal > 1 && ` over ${review.chunkTotal} chunks`}
               {review.staleForHead && ' · there are newer commits'}
             </p>
           </div>
