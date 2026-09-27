@@ -50,7 +50,7 @@ function loadSortMode(): ReviewSortMode {
 }
 
 /**
- * "Reviews" — every open PR awaiting your review (you're a requested reviewer,
+ * "Review requests" — every open PR awaiting your review (you're a requested reviewer,
  * directly or via a team, and haven't reviewed yet). Carries the repo
  * dropdown, the created-at sort, and the "Requested via" filter (directly to
  * you, or via a specific team).
@@ -347,7 +347,7 @@ export function ReviewsPanel() {
   return (
     <>
       <GitHubPageShell
-        title="Reviews"
+        title="Review requests"
         icon={<Eye className="h-5 w-5" />}
         activeView="review"
         search={search}

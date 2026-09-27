@@ -259,7 +259,8 @@ export type FleetProvider = 'anthropic' | 'openai';
  */
 export const FLEET_MODELS = [
   { id: 'claude-fable-5-1', label: 'Fable 5.1', provider: 'anthropic', blurb: 'Most capable — demanding reasoning.' },
-  { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', blurb: 'Newest Opus, 1M context.' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', blurb: 'Newest Opus.' },
+  { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', blurb: 'The previous Opus — 1M context.' },
   { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', blurb: 'The previous Fable.' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },

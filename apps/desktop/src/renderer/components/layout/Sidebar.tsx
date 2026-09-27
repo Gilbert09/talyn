@@ -93,7 +93,11 @@ export function Sidebar({ className }: SidebarProps) {
     {
       id: 'reviews' as const,
       icon: Eye,
-      label: 'Reviews',
+      // "Review requests", not "Reviews": this page is PRs waiting on YOU to
+      // review them, and Talyn now also does code review of its own. Two things
+      // called review, one label each — the panel id and the route stay
+      // `reviews` so remembered state and existing deep links keep working.
+      label: 'Review requests',
       badge: reviewCount > 0 ? reviewCount : undefined,
       badgeKind: 'work' as const,
     },
