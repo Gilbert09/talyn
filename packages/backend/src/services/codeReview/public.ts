@@ -76,6 +76,7 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
     phasePlan: codeReviewPhasePlan(preset),
     runsDone: facts.runsDone,
     runsTotal: review.runsTotal,
+    lensesRun: ((review.lensKeys as string[]) ?? []).slice(),
     chunkTotal: review.chunkTotal,
     headSha: review.targetHeadSha,
     headShaShort: review.targetHeadSha.slice(0, 7),

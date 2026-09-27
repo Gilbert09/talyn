@@ -19,6 +19,7 @@ import {
   codeReviewLensTally,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
+  CODE_REVIEW_PRESET_PLAN,
   resolveReportingBar,
   CODE_REVIEW_SEVERITY_GROUP_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
@@ -343,6 +344,17 @@ export function FindingsTab({
                   that read everything and one that skimmed looked identical. */}
               {review.runsTotal > 0 && ` · ${review.runsTotal} passes`}
               {review.chunkTotal > 1 && ` over ${review.chunkTotal} chunks`}
+              {/* Which reviewers ran, and — when the change did not need them
+                  all — that some sat out. A reviewer that never ran finds
+                  nothing, and nothing reads exactly like a clean bill of
+                  health, so this says so rather than letting the absence
+                  pass for a result. The reason per reviewer is in the
+                  timeline. */}
+              {review.lensesRun.length > 0 &&
+                ` · read by ${review.lensesRun.map(codeReviewLensLabel).join(', ')}`}
+              {review.lensesRun.length > 0 &&
+                review.lensesRun.length < CODE_REVIEW_PRESET_PLAN[review.preset].lenses &&
+                ` (${CODE_REVIEW_PRESET_PLAN[review.preset].lenses - review.lensesRun.length} not needed here)`}
               {review.staleForHead && ' · there are newer commits'}
             </p>
           </div>

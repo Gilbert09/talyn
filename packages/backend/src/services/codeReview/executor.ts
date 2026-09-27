@@ -11,6 +11,7 @@ import {
   type RawCodeReviewFinding,
   findingsEligibleForAutoFix,
   filesWorthReviewing,
+  selectLensesForFiles,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
@@ -270,7 +271,13 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
   }
 
   const chunkTotal = plan.chunk ? chunkCountFor(loaded.ctx.files) : 1;
-  const runsTotal = codeReviewUnitCount(preset, chunkTotal);
+
+  // Which reviewers this change actually needs, decided HERE because this is
+  // where the file list first exists — and because `runsTotal` is written in
+  // the same transition. Selecting anywhere later would mean a progress bar
+  // that promised five steps and delivered four.
+  const { selected, skipped } = selectLensesForFiles(lensesForPreset(preset), loaded.ctx.files);
+  const runsTotal = codeReviewUnitCount(preset, chunkTotal, selected.length);
 
   await casTransition(
     review.id,
@@ -278,7 +285,7 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     {
       phase: 'reviewing',
       phaseStartedAt: new Date(),
-      lensKeys: lensesForPreset(preset),
+      lensKeys: selected,
       sweep: plan.sweep,
       validate: plan.validate,
       chunkTotal,
@@ -290,8 +297,14 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       toPhase: 'reviewing',
       trigger: 'executor',
       code: 'cycle_planned',
-      message: `Reviewing ${loaded.ctx.files.length} changed files.`,
-      detail: { preset, chunkTotal, runsTotal, headSha: loaded.headSha },
+      message: skipped.length
+        ? `Reviewing ${loaded.ctx.files.length} changed files with ${selected.length} of ` +
+          `${selected.length + skipped.length} reviewers.`
+        : `Reviewing ${loaded.ctx.files.length} changed files.`,
+      // The skips are RECORDED, with their reasons, because a reviewer that
+      // never ran finds nothing and nothing looks exactly like a clean bill of
+      // health. This is what lets the app say which ones sat out and why.
+      detail: { preset, chunkTotal, runsTotal, headSha: loaded.headSha, skippedLenses: skipped },
     }
   );
 }

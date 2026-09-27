@@ -153,9 +153,23 @@ export const CODE_REVIEW_PRESET_PLAN: Record<CodeReviewPreset, CodeReviewPresetP
  * bar and the engine must agree on it. A bar that says "3 of 5" and then
  * discovers a sixth step is worse than an indeterminate one.
  */
-export function codeReviewUnitCount(preset: CodeReviewPreset, chunks = 1): number {
+export function codeReviewUnitCount(
+  preset: CodeReviewPreset,
+  chunks = 1,
+  /**
+   * How many lenses will ACTUALLY run, when that is already known.
+   *
+   * The preset says how many a depth offers; per-chunk selection can drop some
+   * of them once the files are known. This number is the progress denominator,
+   * and a bar that promises five steps and delivers four is worse than one that
+   * never promised. Defaults to the preset's count for callers deciding before
+   * the files are loaded.
+   */
+  lensCount?: number
+): number {
   const plan = CODE_REVIEW_PRESET_PLAN[preset];
-  const perChunk = plan.lenses + (plan.sweep ? 1 : 0);
+  const lenses = lensCount ?? plan.lenses;
+  const perChunk = lenses + (plan.sweep ? 1 : 0);
   return perChunk * Math.max(1, chunks) + (plan.validate ? 1 : 0);
 }
 
@@ -407,6 +421,148 @@ export function filesWorthReviewing<T extends { filename: string }>(files: reado
   return kept.length ? kept : [...files];
 }
 
+/**
+ * What kind of file this is, for deciding which reviewers a change needs.
+ *
+ * Coarse on purpose. The finer the classification, the more confidently it is
+ * wrong — and a wrong answer here means a reviewer that never ran, which looks
+ * exactly like a reviewer that found nothing.
+ */
+export type CodeReviewFileClass = 'code' | 'test' | 'config' | 'migration' | 'docs' | 'asset';
+
+/**
+ * Classify a path.
+ *
+ * Order matters: a file can look like several of these, and the FIRST match
+ * wins. A migration is checked before config because `migrations/0068.sql` is
+ * both; a test before code because `src/foo.test.ts` is both.
+ */
+export function classifyReviewFile(filename: string): CodeReviewFileClass {
+  const f = filename.toLowerCase();
+  if (/(^|\/)migrations?\//.test(f) || /\.sql$/.test(f)) return 'migration';
+  if (
+    /(^|\/)(__tests__|tests?|spec|e2e|cypress)\//.test(f) ||
+    /\.(test|spec)\.[a-z]+$/.test(f) ||
+    /_test\.[a-z]+$/.test(f) ||
+    /(^|\/)conftest\.py$/.test(f)
+  ) {
+    return 'test';
+  }
+  if (/\.(md|mdx|rst|txt|adoc)$/.test(f) || /(^|\/)docs?\//.test(f)) return 'docs';
+  if (
+    /\.(json|ya?ml|toml|ini|cfg|conf|properties|tf|tfvars)$/.test(f) ||
+    /(^|\/)(dockerfile|makefile|procfile)$/.test(f) ||
+    /(^|\/)\.[a-z]+rc$/.test(f) ||
+    /(^|\/)\.env/.test(f)
+  ) {
+    return 'config';
+  }
+  if (/\.(css|scss|sass|less|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|eot|mp4|webm)$/.test(f)) {
+    return 'asset';
+  }
+  return 'code';
+}
+
+/**
+ * What each reviewer needs to see before it is worth dispatching.
+ *
+ * A lens runs when the change contains AT LEAST ONE file of a class it cares
+ * about. Absent from this map means "always runs", which is the safe default
+ * for a lens nobody has classified yet.
+ *
+ * `correctness` is deliberately not here: any change to anything can contain a
+ * mistake, and that is the one reviewer whose absence would be a hole rather
+ * than a saving.
+ */
+export const CODE_REVIEW_LENS_NEEDS: Record<string, readonly CodeReviewFileClass[]> = {
+  // Trust boundaries live in code, configuration and schemas — not in prose or
+  // a stylesheet.
+  security: ['code', 'config', 'migration'],
+  // Load, failure and resource behaviour are properties of things that RUN.
+  reliability: ['code', 'migration'],
+  // Coverage is assessed against a behaviour change, or against the tests
+  // themselves when those are what changed.
+  tests: ['code', 'test', 'migration'],
+  // What this looks like at three in the morning: code, what configures it, and
+  // what migrates it.
+  operability: ['code', 'config', 'migration'],
+};
+
+/** Why a lens was not dispatched, in the words the app shows. */
+export interface SkippedLens {
+  lens: string;
+  reason: string;
+}
+
+/**
+ * Which reviewers this change actually needs.
+ *
+ * # The rule, and why it is this way round
+ *
+ * A lens is SKIPPED only on positive evidence that it has nothing to look at —
+ * never because we are unsure. That asymmetry is the whole safety argument:
+ * running a reviewer that finds nothing costs money, which is the status quo,
+ * while skipping one that would have found something costs a bug and looks
+ * exactly like a clean review. Those are not comparable mistakes, so the
+ * uncertain case takes the expensive branch.
+ *
+ * `correctness` is never skipped, and at least one lens always runs: a change
+ * of any kind can be wrong, and "we reviewed nothing" is not an outcome this
+ * product should be able to produce quietly.
+ *
+ * Deliberately a rule over the file list rather than a model call. A model
+ * would judge better and would also be another unit, another failure mode, and
+ * another bill before the review starts — and its decisions could not be shown
+ * to the user as a reason they can check.
+ */
+export function selectLensesForFiles(
+  lensKeys: readonly string[],
+  files: readonly { filename: string }[]
+): { selected: string[]; skipped: SkippedLens[] } {
+  const present = new Set(files.map((f) => classifyReviewFile(f.filename)));
+
+  const selected: string[] = [];
+  const skipped: SkippedLens[] = [];
+
+  for (const lens of lensKeys) {
+    const needs = CODE_REVIEW_LENS_NEEDS[lens];
+    // Unclassified lens, or the change contains something it cares about.
+    if (!needs || needs.some((klass) => present.has(klass))) {
+      selected.push(lens);
+      continue;
+    }
+    skipped.push({
+      lens,
+      reason: `nothing in this change is ${describeClasses(needs)}`,
+    });
+  }
+
+  // The floor. A change of only documentation still gets read by somebody.
+  if (!selected.length && lensKeys.length) {
+    const first = lensKeys[0]!;
+    return {
+      selected: [first],
+      skipped: skipped.filter((s) => s.lens !== first),
+    };
+  }
+
+  return { selected, skipped };
+}
+
+function describeClasses(classes: readonly CodeReviewFileClass[]): string {
+  const words: Record<CodeReviewFileClass, string> = {
+    code: 'code',
+    test: 'a test',
+    config: 'configuration',
+    migration: 'a migration',
+    docs: 'documentation',
+    asset: 'an asset',
+  };
+  const list = classes.map((c) => words[c]);
+  if (list.length === 1) return list[0]!;
+  return `${list.slice(0, -1).join(', ')} or ${list[list.length - 1]}`;
+}
+
 // ---------- Findings and the public payload ----------
 
 export type CodeReviewDisposition =
@@ -502,6 +658,15 @@ export interface CodeReviewPublic {
   /** Units settled and units planned, for progress within the reviewing phases. */
   runsDone: number;
   runsTotal: number;
+  /**
+   * Which reviewers actually ran on this cycle.
+   *
+   * Fewer than the depth offers means per-chunk selection dropped some, because
+   * the change had nothing they look at. Surfaced rather than left implicit: a
+   * reviewer that never ran finds nothing, and nothing looks exactly like a
+   * clean bill of health. The precise reason for each is in the timeline.
+   */
+  lensesRun: string[];
   /**
    * How many pieces the diff was read in. 1 means whole.
    *
