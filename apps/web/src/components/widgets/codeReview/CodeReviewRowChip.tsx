@@ -123,7 +123,21 @@ function SegmentedBar({
   label: string;
 }) {
   if (total <= 0 || value === null) {
-    return <span className="owl-scan-bar h-1.5 w-12 rounded-sm bg-muted" aria-label={label} />;
+    // The shimmer MUST sit inside a clipping track. `owl-scan` travels from
+    // translateX(-160%) to 360% of the animated element's own width, which is
+    // how an indeterminate bar reads as moving — but a transform does not
+    // affect layout, so with the class on a bare 48px span the paint escaped
+    // roughly 250px in each direction and slid straight across the rest of the
+    // row. Every other user of this class already wraps it (App.tsx's w-44
+    // track, ui/progress.tsx's overflow-hidden); this was the one that did not.
+    return (
+      <span
+        className="inline-block h-1.5 w-12 overflow-hidden rounded-sm bg-muted align-middle"
+        aria-label={label}
+      >
+        <span className="owl-scan-bar block h-full w-1/3 rounded-sm bg-primary/70" />
+      </span>
+    );
   }
   return (
     <span className="flex h-1.5 w-12 items-stretch gap-px" aria-label={label}>
