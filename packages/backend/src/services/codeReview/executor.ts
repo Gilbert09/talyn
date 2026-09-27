@@ -9,6 +9,7 @@ import {
   type CodeReviewPhase,
   type CodeReviewPreset,
   type RawCodeReviewFinding,
+  findingsEligibleForAutoFix,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
@@ -42,6 +43,7 @@ import {
   countLiveUnits,
   countUnitsDispatchedSince,
   getPrForReview,
+  getReview,
   patchRun,
   runsForCycle,
   settleRun,
@@ -50,6 +52,8 @@ import {
   type RunRow,
 } from './store.js';
 import type { Action, UnitKey } from './decide.js';
+import { startFixRun } from './fix.js';
+import { workspaceReviewSettings } from './cycle.js';
 
 /**
  * Performing what `decide` asked for.
@@ -676,6 +680,58 @@ export async function finishCycle(review: ReviewRow): Promise<void> {
       detail: { staled, headSha: review.targetHeadSha },
     }
   );
+
+  await maybeAutoFix(review);
+}
+
+/**
+ * Fix what the review found, without waiting for anybody to tick it.
+ *
+ * Off by default, and the ONLY path in this pipeline that pushes a commit with
+ * no human in the loop. The design deliberately excluded it — every other guard
+ * here assumes a person chose the findings — so it exists because it was asked
+ * for, and it is bounded rather than trusted.
+ *
+ * `findingsEligibleForAutoFix` is the bound: confirmed by the judging pass, at
+ * or above a severity floor that defaults to blockers, and with the location
+ * confirmed. All three came from the first real review, where the judge rejected
+ * five of six candidates and the one that survived quoted code that was not at
+ * the line it named — and was wrong. A person can weigh that against the diff in
+ * a second; an unattended fix run cannot.
+ *
+ * Re-reads the review because `finishCycle` has just CAS'd it to `ready`, so the
+ * row in hand carries a version that would lose its own CAS.
+ *
+ * Failures are logged, never thrown: the cycle HAS finished, its findings are on
+ * screen, and a fix that could not start must not turn that into a failed review.
+ */
+async function maybeAutoFix(review: ReviewRow): Promise<void> {
+  try {
+    const settings = await workspaceReviewSettings(review.workspaceId);
+    if (!settings.autoFix) return;
+
+    const fresh = await getReview(review.id);
+    // Only from `ready`. Anything else means something moved underneath us — a
+    // new commit, a cancel, a fix a person started first — and each of those is
+    // a reason not to push.
+    if (!fresh || fresh.phase !== 'ready') return;
+
+    const eligible = findingsEligibleForAutoFix(await listFindings(fresh.id), settings);
+    if (!eligible.length) return;
+
+    const outcome = await startFixRun(
+      fresh,
+      eligible.map((f) => f.id),
+      // No user id: nobody pressed anything, and recording one would attribute a
+      // push to a person who did not ask for it.
+      null
+    );
+    if (!outcome.ok) {
+      console.log(`[code-review] auto fix for ${fresh.id} declined: ${outcome.code}`);
+    }
+  } catch (err) {
+    console.warn(`[code-review] auto fix for ${review.id} failed:`, err);
+  }
 }
 
 export async function failCycle(

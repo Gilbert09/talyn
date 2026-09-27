@@ -795,6 +795,25 @@ export interface CodeReviewSettings {
   fixSummaryComment?: boolean;
   /** Post blockers as inline review comments. The loud option, off by default. */
   inlineComments?: boolean;
+  /**
+   * Fix findings without waiting for somebody to tick them.
+   *
+   * OFF by default, and the most consequential setting on this object: it is the
+   * only one that pushes a commit to a branch with no human in the loop. The
+   * design deliberately did not include this — every other guard here assumes a
+   * person chose the findings — and it exists because it was asked for, not
+   * because the reasoning changed. `autoFixSeverity` is what keeps it honest.
+   */
+  autoFix?: boolean;
+  /**
+   * The lowest severity auto-fix will touch. Defaults to blockers only.
+   *
+   * Deliberately NOT "everything the review found". On the first real review the
+   * judge rejected five of six findings, and the one that survived was wrong —
+   * so a floor is the difference between fixing what matters and pushing commits
+   * for speculation.
+   */
+  autoFixSeverity?: CodeReviewSeverity;
 }
 
 export interface ResolvedCodeReviewSettings {
@@ -802,6 +821,8 @@ export interface ResolvedCodeReviewSettings {
   autoReview: boolean;
   fixSummaryComment: boolean;
   inlineComments: boolean;
+  autoFix: boolean;
+  autoFixSeverity: CodeReviewSeverity;
 }
 
 /**
@@ -824,6 +845,12 @@ export function resolveCodeReviewSettings(
     autoReview: settings?.autoReview === true,
     fixSummaryComment: settings?.fixSummaryComment === true,
     inlineComments: settings?.inlineComments === true,
+    autoFix: settings?.autoFix === true,
+    // Blockers only unless somebody widens it. The default has to be the narrow
+    // end: this decides what gets committed to a branch unattended.
+    autoFixSeverity: isCodeReviewSeverity(settings?.autoFixSeverity)
+      ? settings.autoFixSeverity
+      : 'blocker',
   };
 }
 
@@ -843,7 +870,49 @@ export function codeReviewSettingsPatch(input: unknown): CodeReviewSettings {
   if (typeof raw.autoReview === 'boolean') patch.autoReview = raw.autoReview;
   if (typeof raw.fixSummaryComment === 'boolean') patch.fixSummaryComment = raw.fixSummaryComment;
   if (typeof raw.inlineComments === 'boolean') patch.inlineComments = raw.inlineComments;
+  if (typeof raw.autoFix === 'boolean') patch.autoFix = raw.autoFix;
+  if (isCodeReviewSeverity(raw.autoFixSeverity)) patch.autoFixSeverity = raw.autoFixSeverity;
   return patch;
+}
+
+/**
+ * The findings auto-fix is allowed to touch.
+ *
+ * Three filters, and each one is a thing that went wrong on the first real
+ * review:
+ *
+ * - CONFIRMED only. An unvalidated finding has not been through the checking
+ *   pass, which rejected five of six candidates. Fixing one mid-review commits
+ *   to a branch for something about to be withdrawn.
+ * - At or above the severity floor, which defaults to blockers.
+ * - Location CONFIRMED. `anchorVerified: false` means the agent quoted code that
+ *   is not at the line it named — the hallucination signal — and the one finding
+ *   that survived judging on that review was exactly this, and was wrong. A
+ *   person can weigh that against the diff; an unattended fix run cannot.
+ *
+ * Returns the empty list when auto-fix is off, so callers need no second check.
+ */
+export function findingsEligibleForAutoFix<
+  T extends {
+    severity: string;
+    verdict: string;
+    disposition: string;
+    anchorVerified: boolean;
+  },
+>(findings: readonly T[], settings: ResolvedCodeReviewSettings): T[] {
+  if (!settings.autoFix) return [];
+  // The fields are typed as plain strings because that is what a database row
+  // gives us, and narrowing here rather than at the call site means a row whose
+  // severity is something this build has never heard of fails the floor check
+  // instead of being cast into passing it.
+  return findings.filter(
+    (f) =>
+      f.verdict === 'confirmed' &&
+      f.disposition === 'open' &&
+      f.anchorVerified &&
+      isCodeReviewSeverity(f.severity) &&
+      severityAtOrAbove(f.severity, settings.autoFixSeverity)
+  );
 }
 
 // ---------- Requests ----------

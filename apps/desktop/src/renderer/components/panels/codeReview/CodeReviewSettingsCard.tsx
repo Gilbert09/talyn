@@ -2,6 +2,9 @@ import { useState } from 'react';
 import {
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
+  CODE_REVIEW_SEVERITY_LABELS,
+  CODE_REVIEW_SEVERITY_ORDER,
+  type CodeReviewSeverity,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   codeReviewOffered,
@@ -181,6 +184,46 @@ export function CodeReviewSettingsCard() {
         other review bot. When on, only BLOCKERS are posted — never the rest, and never for a
         review nobody asked for. Leave it off if your reviewers live in Talyn.
       </Toggle>
+
+      <Toggle
+        checked={settings.autoFix}
+        disabled={saving || !currentWorkspaceId}
+        attr="settings-code-review-auto-fix"
+        title="Fix findings without asking"
+        onChange={(next) => void save({ autoFix: next }, 'automatic fixing')}
+      >
+        Off by default, and the only setting here that pushes a commit to your branch with
+        nobody watching. It only touches findings that survived the checking pass and whose
+        location was confirmed, so speculation and misplaced findings are left alone.
+      </Toggle>
+
+      {settings.autoFix && (
+        <fieldset className="space-y-1.5 pl-1" disabled={saving || !currentWorkspaceId}>
+          <legend className="text-xs font-medium">What it is allowed to fix</legend>
+          <select
+            value={settings.autoFixSeverity}
+            onChange={(e) =>
+              void save(
+                { autoFixSeverity: e.target.value as CodeReviewSeverity },
+                'what auto-fix may touch'
+              )
+            }
+            className="h-8 w-full rounded-md border border-input bg-background bg-none px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 sm:w-64"
+            data-attr="settings-code-review-auto-fix-severity"
+          >
+            {CODE_REVIEW_SEVERITY_ORDER.map((severity) => (
+              <option key={severity} value={severity}>
+                {CODE_REVIEW_SEVERITY_LABELS[severity]} and above
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Blockers only is the default. Widening this means Talyn commits for smaller
+            findings too, and a review that raises six things is not usually six things worth
+            a commit.
+          </p>
+        </fieldset>
+      )}
     </Card>
   );
 }
