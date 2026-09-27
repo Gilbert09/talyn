@@ -564,9 +564,13 @@ export async function ingestUnitOutput(
     // The judge emits what SURVIVES, so its keys are the keeps and everything
     // else this cycle produced is rejected. A judge we could not parse leaves
     // every candidate unvalidated instead, which is why that path returns above.
-    const kept = parsed.findings.map((f) =>
-      keyFor(f, verified(f))
-    );
+    // Carries the judge's severity through, not just the key: the prompt invites
+    // it to correct one, and reading only keys silently discarded every
+    // correction it made.
+    const kept = parsed.findings.map((f) => ({
+      key: keyFor(f, verified(f)),
+      severity: f.severity,
+    }));
     // The judge is handed each candidate's dedupe key as its id, so what comes
     // back needs no mapping. Recorded so that "the checker threw away five of
     // six" is a claim somebody can audit rather than take on trust.

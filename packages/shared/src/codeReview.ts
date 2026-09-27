@@ -274,18 +274,26 @@ export const CODE_REVIEW_SEVERITY_ORDER: readonly CodeReviewSeverity[] = [
   'nit',
 ] as const;
 
+/**
+ * Severity in the words a person would use.
+ *
+ * Phrased as an INSTRUCTION rather than a classification — "Must fix" says what
+ * to do with it, where "Blocker" asks the reader to know our taxonomy. The
+ * stored values stay `blocker`/`major`/`minor`/`nit`, because they are a
+ * database column and a wire contract; only what is shown changes.
+ */
 export const CODE_REVIEW_SEVERITY_LABELS: Record<CodeReviewSeverity, string> = {
-  blocker: 'Blocker',
-  major: 'Worth fixing',
-  minor: 'Minor',
+  blocker: 'Must fix',
+  major: 'Should fix',
+  minor: 'Consider',
   nit: 'Nitpick',
 };
 
 /** Plural group headings, which read better than a bare label plus a count. */
 export const CODE_REVIEW_SEVERITY_GROUP_LABELS: Record<CodeReviewSeverity, string> = {
-  blocker: 'Blockers',
-  major: 'Worth fixing',
-  minor: 'Minor',
+  blocker: 'Must fix',
+  major: 'Should fix',
+  minor: 'Worth considering',
   nit: 'Nitpicks',
 };
 

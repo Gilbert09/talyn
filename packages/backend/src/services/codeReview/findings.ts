@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, inArray, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import {
   CODE_REVIEW_SEVERITY_ORDER,
@@ -9,6 +9,7 @@ import {
   type CodeReviewDismissReason,
   type CodeReviewSeverity,
   type RawCodeReviewFinding,
+  isCodeReviewSeverity,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { prCodeReviewFindings } from '../../db/schema.js';
@@ -322,7 +323,15 @@ export async function findingsForJudging(
 export async function applyJudgement(
   reviewId: string,
   cycle: number,
-  keptKeys: string[],
+  /**
+   * The survivors, with whatever severity the judge settled on.
+   *
+   * Keys alone are not enough: the judging prompt explicitly invites it to
+   * CORRECT a severity, and reading only the keys threw that away — so a finding
+   * the judge downgraded from "must fix" to "consider" still shouted at the
+   * author, and one it promoted stayed quiet.
+   */
+  kept: { key: string; severity: string }[],
   runId: string,
   /**
    * Why the judge dropped each candidate, keyed by dedupe key — which is exactly
@@ -335,6 +344,7 @@ export async function applyJudgement(
   droppedReasons: ReadonlyMap<string, string> = new Map()
 ): Promise<{ confirmed: number; rejected: number }> {
   const db = getDbClient();
+  const keptKeys = kept.map((k) => k.key);
   const confirmed = keptKeys.length
     ? await db
         .update(prCodeReviewFindings)
@@ -348,6 +358,24 @@ export async function applyJudgement(
         )
         .returning({ id: prCodeReviewFindings.id })
     : [];
+
+  // The judge's severity, applied. Written per key because it differs per row,
+  // and only where it actually CHANGED — an UPDATE per survivor that says the
+  // same thing is pure write amplification on a table the poll loops read.
+  for (const { key, severity } of kept) {
+    if (!isCodeReviewSeverity(severity)) continue;
+    await db
+      .update(prCodeReviewFindings)
+      .set({ severity, updatedAt: new Date() })
+      .where(
+        and(
+          eq(prCodeReviewFindings.reviewId, reviewId),
+          eq(prCodeReviewFindings.lastSeenCycle, cycle),
+          eq(prCodeReviewFindings.dedupeKey, key),
+          ne(prCodeReviewFindings.severity, severity)
+        )
+      );
+  }
 
   const rejected = await db
     .update(prCodeReviewFindings)
