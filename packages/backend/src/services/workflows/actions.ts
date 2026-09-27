@@ -5,6 +5,7 @@ import type {
   WorkflowActionOutcome,
   WorkflowActionType,
   WorkflowEventFacts,
+  CodeReviewPreset,
 } from '@talyn/shared';
 import {
   buildSkillPrompt,
@@ -12,6 +13,8 @@ import {
   SKILL_MAX_BYTES,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
+import { startReviewCycle } from '../codeReview/cycle.js';
+import { ReviewCycleLimitError } from '../billing/entitlements.js';
 import { pullRequests as pullRequestsTable, skills as skillsTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { GitHubRateLimitError } from '../githubRateGate.js';
@@ -187,6 +190,101 @@ async function runOne(
     case 'run_skill':
     case 'run_prompt':
       return startTask(action, ctx, prRow);
+    case 'run_code_review':
+      return runCodeReview(action.preset, ctx, prRow);
+  }
+}
+
+/**
+ * Start a code review on the pull request.
+ *
+ * Thin on purpose: `startReviewCycle` already does the feature gate (keyed on
+ * the workspace OWNER, which is the only identity a webhook-driven run provably
+ * has), the open-PR check, the plan's cycle gate, and the "a cycle is already
+ * running" collapse. Re-deriving any of that here would be a second opinion that
+ * can disagree with the route's.
+ *
+ * It does NOT return a taskId. A review's units are not `tasks` rows — they
+ * cannot be, because `activePrTaskId` would refuse the second one and
+ * `withTaskLimitGate` would spend the plan's allowance on them — so there is
+ * nothing to link, and a workflow that reviews does not consume a task slot.
+ * The fix run a review may later lead to is an ordinary task and is metered
+ * there.
+ */
+async function runCodeReview(
+  preset: CodeReviewPreset | undefined,
+  ctx: ActionContext,
+  prRow: PrRowCache
+): Promise<OneResult> {
+  const resolved = await prRow.get();
+  if (!resolved) {
+    return {
+      outcome: no(
+        'run_code_review',
+        'pr_not_tracked',
+        'Talyn could not read this PR from GitHub, so it cannot be reviewed'
+      ),
+    };
+  }
+
+  let outcome;
+  try {
+    outcome = await startReviewCycle({
+      pullRequestId: resolved.id,
+      ...(preset ? { preset } : {}),
+      // No person pressed anything, which is what decides how the refusal reads
+      // and how the cycle is recorded.
+      auto: true,
+    });
+  } catch (err) {
+    // The plan gate THROWS rather than returning a refusal code, because on the
+    // route it becomes a 402 that opens the upgrade modal. There is no modal
+    // here, so it becomes an ordinary recorded outcome — and specifically not a
+    // retryable one: `rate_gated` is the only code the retry sweep re-runs, and
+    // a cycle limit does not clear on a timer.
+    if (err instanceof ReviewCycleLimitError) {
+      return { outcome: no('run_code_review', 'review_limit_reached', err.message) };
+    }
+    throw err;
+  }
+
+  if (outcome.ok) {
+    return {
+      outcome: ok('run_code_review', preset ? `Started a ${preset} review` : 'Started a review'),
+      pullRequestId: resolved.id,
+    };
+  }
+
+  // `busy` is a review already running on this PR, which is the workflow firing
+  // twice on one push rather than a failure — record it as done, because a
+  // second cycle is exactly what should NOT happen.
+  if (outcome.code === 'busy') {
+    return {
+      outcome: ok('run_code_review', 'A review is already running on this pull request'),
+      pullRequestId: resolved.id,
+    };
+  }
+
+  return { outcome: no('run_code_review', workflowCodeFor(outcome.code), outcome.message) };
+}
+
+/**
+ * Map a start refusal onto the vocabulary a run's history row speaks.
+ *
+ * Exhaustive over the refusal union rather than defaulting, so adding a reason
+ * a review can refuse to start is a compile error here instead of silently
+ * becoming a generic 'error' in somebody's workflow history. `busy` never
+ * reaches this — it is handled as a success above, because a second cycle on
+ * one pull request is exactly what should not happen.
+ */
+function workflowCodeFor(code: 'not_available' | 'pr_closed' | 'pr_missing'): WorkflowActionFailureCode {
+  switch (code) {
+    case 'pr_closed':
+      return 'not_open';
+    case 'pr_missing':
+      return 'pr_not_tracked';
+    case 'not_available':
+      return 'code_review_unavailable';
   }
 }
 

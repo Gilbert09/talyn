@@ -1,3 +1,4 @@
+import { isCodeReviewPreset, type CodeReviewPreset } from './codeReview.js';
 // Workflows — the user's own automations over PR lifecycle events.
 //
 // A workflow is a named, workspace-scoped rule of the shape "on these events,
@@ -242,6 +243,7 @@ export const WORKFLOW_ACTION_TYPES = [
   'run_prompt',
   'watch_pr',
   'enqueue_merge_queue',
+  'run_code_review',
 ] as const;
 
 export type WorkflowActionType = (typeof WORKFLOW_ACTION_TYPES)[number];
@@ -267,7 +269,20 @@ export type WorkflowAction =
   | { type: 'run_skill'; skillKey: SkillKey; model?: string }
   | { type: 'run_prompt'; prompt: string; model?: string }
   | { type: 'watch_pr' }
-  | { type: 'enqueue_merge_queue'; method?: WorkflowMergeMethod };
+  | { type: 'enqueue_merge_queue'; method?: WorkflowMergeMethod }
+  /**
+   * Start a code review on the pull request.
+   *
+   * `preset` is optional and falls back to the workspace's own default, so a
+   * workflow written before a team settled on a depth keeps following that
+   * setting rather than pinning whatever was current the day it was saved.
+   *
+   * It does NOT count as a task action below: a review's units are not `tasks`
+   * rows — they cannot be, because `activePrTaskId` would refuse the second one
+   * and `withTaskLimitGate` would eat the plan's allowance — so it is metered by
+   * the review cycle gate instead.
+   */
+  | { type: 'run_code_review'; preset?: CodeReviewPreset };
 
 export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   add_labels: 'Add labels',
@@ -279,6 +294,7 @@ export const WORKFLOW_ACTION_LABELS: Record<WorkflowActionType, string> = {
   run_prompt: 'Run a prompt',
   watch_pr: 'Add to My PRs',
   enqueue_merge_queue: 'Add to the merge queue',
+  run_code_review: 'Run a code review',
 };
 
 /** Actions that start a cloud task, and so consume a plan task slot. */
@@ -423,6 +439,10 @@ export type WorkflowActionFailureCode =
   | 'not_open'
   | 'github_error'
   | 'merge_queue_limit_reached'
+  /** The free plan already has a review cycle in flight; it does not queue. */
+  | 'review_limit_reached'
+  /** Code review is not switched on for this workspace. */
+  | 'code_review_unavailable'
   | 'error';
 
 /** One action's outcome inside one run. */
@@ -1063,6 +1083,19 @@ function validateAction(raw: unknown, at: string): WorkflowAction {
       }
       return { type: 'enqueue_merge_queue', ...(m ? { method: m as WorkflowMergeMethod } : {}) };
     }
+    case 'run_code_review': {
+      const p = a.preset;
+      // Absent is the normal case and means "whatever the workspace has chosen",
+      // which is what keeps an old workflow following a team's current setting
+      // rather than a depth frozen on the day it was saved.
+      if (p !== undefined && !isCodeReviewPreset(p)) {
+        fail(`${at}.preset must be quick, standard or deep`);
+      }
+      return {
+        type: 'run_code_review',
+        ...(p ? { preset: p as CodeReviewPreset } : {}),
+      };
+    }
   }
 }
 
@@ -1159,6 +1192,10 @@ export function emptyWorkflowAction(type: WorkflowActionType): WorkflowAction {
       return { type: 'watch_pr' };
     case 'enqueue_merge_queue':
       return { type: 'enqueue_merge_queue' };
+    case 'run_code_review':
+      // No preset, so a new row inherits the workspace default until somebody
+      // deliberately pins one.
+      return { type: 'run_code_review' };
   }
 }
 
@@ -1438,6 +1475,10 @@ export function describeWorkflowAction(action: WorkflowAction): string {
       return action.method
         ? `Add to the merge queue (${action.method})`
         : 'Add to the merge queue';
+    case 'run_code_review':
+      return action.preset
+        ? `Run a ${action.preset} code review`
+        : 'Run a code review';
   }
 }
 

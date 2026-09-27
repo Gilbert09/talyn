@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import type {
+  CodeReviewPreset,
   WorkflowAction,
   WorkflowActionType,
   WorkflowActorMatch,
@@ -15,6 +16,8 @@ import type {
 } from '@talyn/shared';
 import {
   availableWorkflowConditions,
+  CODE_REVIEW_PRESET_LABELS,
+  CODE_REVIEW_PRESETS,
   emptyWorkflowAction,
   emptyWorkflowConditionValue,
   emptyWorkflowInput,
@@ -323,6 +326,34 @@ function ActionInput({
           </p>
         </div>
       );
+    case 'run_code_review':
+      return (
+        <div className="space-y-1">
+          <Select
+            value={action.preset ?? ''}
+            onChange={(e) =>
+              onChange({
+                ...action,
+                preset: (e.target.value || undefined) as CodeReviewPreset | undefined,
+              })
+            }
+          >
+            {/* Empty is the default and stays the default: a workflow written
+                before a team settles on a depth keeps following that setting
+                rather than pinning whatever happened to be current. */}
+            <option value="">Whatever the workspace is set to</option>
+            {CODE_REVIEW_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {CODE_REVIEW_PRESET_LABELS[preset]}
+              </option>
+            ))}
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Findings appear in Talyn, not on the pull request. Nothing is posted unless you
+            turn that on in Settings.
+          </p>
+        </div>
+      );
     case 'watch_pr':
       return null;
   }
@@ -339,6 +370,8 @@ const ACTION_HINTS: Record<WorkflowActionType, string> = {
   run_prompt: 'Starts a cloud task. Counts against your plan, and never runs twice on one PR.',
   watch_pr: 'Adds the PR to My PRs, exactly as pasting its URL does.',
   enqueue_merge_queue: 'Waits for checks and handles a gated base branch.',
+  run_code_review:
+    'Reviews the PR and puts the findings in Talyn. Does not use a task slot; the free plan runs one review at a time.',
 };
 
 export function WorkflowEditorPage({
