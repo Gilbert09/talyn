@@ -244,9 +244,19 @@ export function FindingsTab({
             <p className="text-xs font-medium" aria-live="polite">
               {running ? progress.label : headline(review)}
             </p>
+            {/* The commit is resolved in `preparing`, so a cycle that has only
+                just been claimed genuinely has none yet. Drop the clause rather
+                than filling it with a placeholder: this line's whole job is to
+                say WHICH commit the findings describe, and "unknown" there reads
+                as a fact we lost rather than one not established yet. */}
             <p className="truncate text-[11px] text-muted-foreground">
-              {CODE_REVIEW_PRESET_LABELS[review.preset]} review of{' '}
-              <code className="font-mono">{review.headShaShort || 'unknown'}</code>
+              {CODE_REVIEW_PRESET_LABELS[review.preset]} review
+              {review.headShaShort ? (
+                <>
+                  {' of '}
+                  <code className="font-mono">{review.headShaShort}</code>
+                </>
+              ) : null}
               {review.staleForHead && ' · there are newer commits'}
             </p>
           </div>

@@ -123,7 +123,12 @@ export function CodeReviewIntroModal({
           </p>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-2">
+        {/* WRAPPING, not a `sm:` breakpoint. The shared `DialogFooter` stacks on
+            `sm:`, which is keyed on the VIEWPORT — and this dialog is `max-w-md`
+            (448px) on a screen that is almost always far wider, so the breakpoint
+            never fires and three buttons overflow their own container. `flex-wrap`
+            measures the thing that actually constrains them. */}
+        <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
           <Button variant="ghost" size="sm" onClick={onClose}>
             Not now
           </Button>
@@ -133,7 +138,7 @@ export function CodeReviewIntroModal({
             </Button>
           )}
           <Button size="sm" disabled={busy || !example} onClick={() => void reviewIt()}>
-            Review this pull request
+            Review this PR
           </Button>
         </div>
       </DialogContent>

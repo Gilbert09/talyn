@@ -1,7 +1,12 @@
 import '@testing-library/jest-dom';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
-import { DEFAULT_MERGEABLE_TEMPLATE, defaultPromptTemplateHash, type Workspace } from '@talyn/shared';
+import {
+  DEFAULT_MERGEABLE_TEMPLATE,
+  defaultPromptTemplateHash,
+  PROMPT_KINDS,
+  type Workspace,
+} from '@talyn/shared';
 import { InstructionsSettings } from '../renderer/components/panels/InstructionsSettings';
 
 const mockUpdate = jest.fn();
@@ -49,12 +54,18 @@ function openEditor(label = 'Keep mergeable / Fix PR') {
 }
 
 describe('InstructionsSettings', () => {
-  it('lists both prompts as Default with a Customize action', () => {
+  it('lists every prompt kind as Default with a Customize action', () => {
+    // Counted rather than sampled, so adding a PromptKind without giving it a
+    // row here is a failure rather than a silent omission — that union drives
+    // three Records and this page, and the page is the only one a person sees.
     render(<InstructionsSettings />);
     expect(screen.getByText('Keep mergeable / Fix PR')).toBeInTheDocument();
     expect(screen.getByText('Skill runs')).toBeInTheDocument();
-    expect(screen.getAllByText('Default')).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: 'Customize' })).toHaveLength(2);
+    expect(screen.getByText('Fix review findings')).toBeInTheDocument();
+    expect(screen.getAllByText('Default')).toHaveLength(PROMPT_KINDS.length);
+    expect(screen.getAllByRole('button', { name: 'Customize' })).toHaveLength(
+      PROMPT_KINDS.length
+    );
   });
 
   it('opens the editor pre-filled with the shipped default and a variable legend', () => {
