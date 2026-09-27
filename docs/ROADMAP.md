@@ -18,6 +18,58 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
+### Code review — shipped behind a flag (2026-09-27)
+
+AI review of a pull request with the findings in the app, and a fix you choose.
+Behind `code-review` (fallback OFF, `availability: 'gated'`). See the session
+note in [`SESSIONS.md`](./SESSIONS.md) for the design and the reasoning.
+
+- [x] The sandbox seam (`dispatchSandboxRun`), so booting a microVM is not a
+      task-only capability. Adds `repo.targetRef` and `timeoutSec`, neither of
+      which Talyn had ever sent.
+- [x] Four tables (migration `0068`), the insert-as-claim concurrency design, and
+      the carry-forward dedupe key.
+- [x] Shared vocabulary: presets, phases, severities, the findings parser, the
+      progress arithmetic.
+- [x] The engine — pure `decide`, executor, coalescing evaluator, poller,
+      reconciler, triggers — on the merge-queue v2 shape, no workflow engine.
+- [x] The findings tab and the PR-row phase bar, in both forks.
+- [x] The fix run: one run per selection, one push, one optional summary comment.
+- [x] Flag, the cycle cap, the auto-review feature gate, the settings card.
+- [x] The merge-queue park on an unresolved blocker.
+- [x] Automatic review on a new head, for Unlimited.
+- [x] Onboarding: a wizard step for new users, a once-ever modal for everyone else.
+
+Follow-ups, in the order they are worth doing:
+
+- [ ] **Measure before setting the budgets.** Record cost, wall clock and turns
+      per unit across the first twenty real reviews, then set `maxTurns` and
+      `maxBudgetUsd` from observed p95. A guessed cap truncates the good reviews
+      and saves nothing on the bad ones.
+- [ ] **Settle `repo.targetRef`.** Dispatch one unit with it and one without
+      against a large repository; compare the golden layer and time-to-first-event.
+      If it forces a re-clone, the review must check the branch out from the
+      prompt instead — minutes per unit on a monorepo, times six units.
+- [ ] **Is the lens roster earning its cost?** Measure how many findings each lens
+      contributes that survive judging, and the cross-lens overlap from
+      `seenCount`. Above ~60% overlap, Standard should be two lenses plus the
+      sweep, and that is a decision the data makes.
+- [ ] **Chunking threshold.** One lens over a large PR whole versus in pieces;
+      compare findings-per-file and the judge's rejection rate. The current
+      file-count split is provisional and marked as such in the code.
+- [ ] **Diff hunk inside a finding card.** `sliceUnifiedHunk` is written and
+      unused; the card shows the path and the explanation but not the code.
+- [ ] **Inline comments for blockers.** The setting exists and the posting path
+      does not, so the toggle currently does nothing. Wire it, or drop the toggle
+      until it does.
+- [ ] **MCP submission channel (v2).** Removes prose-parsing and lets findings
+      arrive incrementally. Needs a streamable-HTTP MCP endpoint and a per-run
+      scoped credential; the text parser stays regardless, because the fall-back
+      provider has no MCP.
+- [ ] **Announce it.** `availability: 'gated'` withholds every `code-review`
+      highlight from everybody until it flips to `'general'`, which is also what
+      replays the withheld backlog.
+
 ### Shipped
 
 - [x] **Review priority — a ranked Reviews tab, learned per person** (2026-09-21). A third sort mode behind the `reviewPriority` PostHog flag (**fallback OFF**, `availability: 'gated'`, audience: Tom only). A hard gate (`blocking_others` → `actionable` → `waiting_on_author` → `not_ready`) then points within it, computed by `packages/shared/src/prPriority.ts` and applied **server-side** (`services/reviewPriority/score.ts`) so the ordering can be changed in a backend deploy rather than a desktop release, and so the desktop and web forks cannot disagree about an ORDER. The relevance term is a per-viewer L2 pairwise-logistic model fitted from that person's own GitHub review history (`services/reviewPriority/{backfill,trainer,sweep}.ts`, migrations `0061`+`0062`), gated at 150 events and a 3pp lift over the shipped prior, clamped below the age ramp so affinity can never bury a PR indefinitely. Open follow-ups below.

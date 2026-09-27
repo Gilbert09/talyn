@@ -2,6 +2,79 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Code review: findings in the app, and a fix you choose (2026-09-27)
+
+Talyn can now review a pull request and show what is wrong with it **inside the
+app**, then fix the findings you tick. Behind the `code-review` PostHog flag,
+fallback OFF.
+
+**The shape.** A cycle walks `queued → preparing → reviewing → sweeping →
+validating → ready`. Several lenses read the same change independently, a sweep
+looks for what they all missed, and a judging pass decides which candidates are
+worth a person's attention. Three presets (Quick / Standard / Deep) choose how
+many lenses run, whether the sweep and the judge run, and whether a big diff is
+read in pieces.
+
+**Why the units are not `tasks` rows.** Three guards make that impossible and all
+three are right for tasks: `activePrTaskId` refuses a second active task on a PR,
+`findReusableTask` rewrites the one row a `(workspace, repo, PR, type)` is
+allowed, and `withTaskLimitGate` counts every task against the free plan's three.
+So review units live in `pr_code_review_runs` and the free plan meters review
+CYCLES instead. The fix run IS an ordinary `pr_response` task, deliberately —
+that is what makes it inherit `activePrTaskId`, so a review fix and a merge-queue
+fix cannot both be pushing to one branch.
+
+**The one refactor.** `dispatchTaskToFleet` became an adapter over a new
+`dispatchSandboxRun`, so the credential refusal, the model ladder, the
+withdrawn-model repair, the held-back-quota swap, the credential suppression and
+the uncertain-dispatch retry are shared rather than re-derived. The task path's
+request body is byte-identical; the seam adds `repo.targetRef` (so a review reads
+the PR head) and the fleet's `timeoutSec`, which Talyn had never sent.
+`SYSTEM_PROMPT` had to become a parameter — it tells the agent to open a pull
+request, which is the opposite of what a reviewer must do.
+
+**Things that will look like oversights.**
+- **Absence of output is a FAILED unit**, never an empty one. A unit whose JSON we
+  could not read has told us nothing, and recording that as "found nothing" turns
+  a broken agent into a green tick.
+- **A partial phase still advances.** One dead lens costs breadth. The cycle only
+  fails when a phase produced nothing at all.
+- **The dedupe key excludes the lens and the line numbers.** Two lenses reporting
+  one problem is agreement (one row, seen count 2), and surviving a rebase is the
+  whole requirement — the agent's verbatim anchor carries the position instead.
+- **`dismissed` is sticky across cycles; `fixed` and `stale` are not.** A finding
+  whose key comes back goes to `open`, so the app can say "this came back" rather
+  than carry a fix that did not hold.
+- **Nothing is ticked by default** in the findings tab, not even blockers: the one
+  button there pushes commits.
+- **The store merges `codeReview` on explicit undefined, never `??`.** `??`
+  swallows the clear a force-push sends and leaves findings pinned to a commit
+  that is gone.
+
+**Pacing is about the hardware, not the plan.** Three live units per workspace, a
+fleet-capacity pre-check that reads the host registry rather than dialling a host,
+a correction for dispatches too recent to appear in the host's 15-second report,
+and spill to the fall-back provider bounded at two units — that provider accepts
+no turn, spend or time cap at all, so unbounded spill turns a queueing problem
+into a billing one. `maxTurns` and `maxBudgetUsd` are deliberately NOT sent; cost
+per unit is recorded instead and the caps come from real numbers later.
+
+**The merge queue parks** on an unresolved blocker — narrowly: blocker severity,
+confirmed by the judge, on a review of the CURRENT head, still open. A dismissal,
+a fix or a new commit clears it. An absent field means no blocker, never unknown,
+or an older replica's context would wedge every entry at once.
+
+**Not built.** Findings are never posted as inline review comments yet (the
+setting exists, the posting path does not), no diff hunk is rendered inside a
+finding card, and the MCP submission channel is still v2 — it needs a
+streamable-HTTP endpoint and a per-run scoped credential, and the fall-back
+provider would need the text parser regardless.
+
+**Open questions the plan names**: whether `repo.targetRef` keeps the golden image
+or forces a re-clone (minutes per unit on a monorepo), the real cost and turn
+distribution per unit, whether three lenses find three times the findings or three
+times the same finding, and where the chunking threshold belongs.
+
 ## The merge confirm was never disarmed on success (2026-09-25)
 
 User feedback: "When I use the merge button on a PR, the app shows a spinner, thinks a bit, then a confirm button. I click confirm and then it thinks for a good long while and shows the confirm button *again* before then finally queuing the PR up to be merged."
