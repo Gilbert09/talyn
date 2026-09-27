@@ -40,6 +40,13 @@ export const FINDING_LIST_COLUMNS = {
   title: prCodeReviewFindings.title,
   confidence: prCodeReviewFindings.confidence,
   verdict: prCodeReviewFindings.verdict,
+  // Carried on the LIST, unlike body/suggestion/anchor. It is one capped
+  // sentence rather than a few kilobytes, and it is the whole point of the
+  // "dropped by the checker" view — fetching it per card would mean a request
+  // per row for a list somebody opened precisely to skim. This projection feeds
+  // the per-pull-request findings endpoint only; the PR list carries counts, not
+  // findings.
+  verdictReason: prCodeReviewFindings.verdictReason,
   disposition: prCodeReviewFindings.disposition,
   dismissedReason: prCodeReviewFindings.dismissedReason,
   firstSeenCycle: prCodeReviewFindings.firstSeenCycle,
@@ -59,7 +66,6 @@ export const FINDING_DETAIL_COLUMNS = {
   body: prCodeReviewFindings.body,
   suggestion: prCodeReviewFindings.suggestion,
   anchor: prCodeReviewFindings.anchor,
-  verdictReason: prCodeReviewFindings.verdictReason,
   dedupeKey: prCodeReviewFindings.dedupeKey,
 } as const;
 

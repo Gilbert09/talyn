@@ -2105,6 +2105,7 @@ function serializeFinding(f: Awaited<ReturnType<typeof listFindings>>[number]) {
     title: f.title,
     confidence: f.confidence,
     verdict: f.verdict,
+    verdictReason: f.verdictReason,
     disposition: f.disposition,
     dismissedReason: f.dismissedReason,
     carriedOver: f.firstSeenCycle < f.lastSeenCycle,

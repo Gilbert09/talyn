@@ -952,6 +952,53 @@ export interface CodeReviewListItem {
   };
 }
 
+/**
+ * What each reviewer was looking for, in the user's words.
+ *
+ * A DELIBERATE REVERSAL. The design said lens names were internal vocabulary
+ * the user must never see, on the reasoning that a preset should be a single
+ * choice rather than a panel of knobs. That holds for CONFIGURING a review and
+ * does not hold for reading one: "raised by 2 reviewers" says less than "logic
+ * and reliability both flagged this", and cross-lens agreement is the strongest
+ * confidence signal the pipeline produces. Showing which angles found something
+ * is reporting, not configuration.
+ *
+ * `sweep` is here because it is attributed like a lens on a finding, and the
+ * name it is given says what it actually did rather than naming our stage.
+ */
+export const CODE_REVIEW_LENS_LABELS: Record<string, string> = {
+  correctness: 'Logic',
+  security: 'Security',
+  reliability: 'Reliability',
+  tests: 'Tests',
+  operability: 'Operability',
+  sweep: 'Second pass',
+};
+
+/** The label for a lens key, falling back to the key for one we do not know. */
+export function codeReviewLensLabel(key: string): string {
+  return CODE_REVIEW_LENS_LABELS[key] ?? key;
+}
+
+/**
+ * How many findings each angle contributed, most first.
+ *
+ * Counts a finding once per lens that raised it, so two lenses agreeing shows up
+ * under both — which is the point: this is the view that makes agreement
+ * visible.
+ */
+export function codeReviewLensTally(
+  findings: readonly { lenses: string[] }[]
+): { lens: string; label: string; count: number }[] {
+  const tally = new Map<string, number>();
+  for (const finding of findings) {
+    for (const lens of finding.lenses) tally.set(lens, (tally.get(lens) ?? 0) + 1);
+  }
+  return [...tally.entries()]
+    .map(([lens, count]) => ({ lens, label: codeReviewLensLabel(lens), count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
 // ---------- Requests ----------
 
 export interface CodeReviewStartInput {

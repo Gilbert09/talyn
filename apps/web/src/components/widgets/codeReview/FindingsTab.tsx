@@ -15,6 +15,8 @@ import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
+  codeReviewLensLabel,
+  codeReviewLensTally,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   CODE_REVIEW_REPORTING_BAR,
@@ -68,6 +70,7 @@ export function FindingsTab({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showBucket, setShowBucket] = useState(false);
+  const [showDropped, setShowDropped] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -136,6 +139,17 @@ export function FindingsTab({
       items: active.filter((f) => f.severity === severity),
     })).filter((g) => g.items.length > 0);
   }, [findings]);
+
+  // What the checking pass threw out. Kept in its own group rather than hidden:
+  // that pass rejected five of six candidates on the first real review, and a
+  // reviewer who cannot see what was dropped has no way to tell a bar that is
+  // protecting them from one that is discarding real bugs.
+  const dropped = useMemo(
+    () => findings.filter((f) => f.verdict === 'rejected'),
+    [findings]
+  );
+
+  const lensTally = useMemo(() => codeReviewLensTally(findings), [findings]);
 
   const bucket = useMemo(
     () =>
@@ -423,6 +437,65 @@ export function FindingsTab({
         </section>
       ))}
 
+      {/* The funnel, stated. Without it a short list is indistinguishable from a
+          shallow review — and the ratio is the most informative thing here. */}
+      {!running && review.funnel.raised > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-muted-foreground">
+            {review.funnel.raised} raised · {review.funnel.kept} kept after checking
+            {review.funnel.rejected > 0 && ` · ${review.funnel.rejected} dropped`}
+          </p>
+          {/* Which angles found things. Two reviewers on one finding is
+              AGREEMENT, and this is the view that makes it visible. */}
+          {lensTally.length > 0 && (
+            <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span>Found by</span>
+              {lensTally.map((entry) => (
+                <span key={entry.lens} className="rounded border px-1.5 py-0.5">
+                  {entry.label} {entry.count}
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
+      )}
+
+      {dropped.length > 0 && (
+        <div className="rounded-md border">
+          <button
+            type="button"
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => setShowDropped((v) => !v)}
+          >
+            {showDropped ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            Dropped by the checker ({dropped.length}) — raised, then judged not worth your
+            time
+          </button>
+          {showDropped && (
+            <div className="space-y-2 border-t p-2">
+              {dropped.map((finding) => (
+                <div key={finding.id} className="rounded px-2 py-1.5 text-[11px]">
+                  <p className="font-medium">{finding.title}</p>
+                  <p className="truncate text-muted-foreground">
+                    <FilePath path={finding.filePath} line={finding.lineStart} />
+                  </p>
+                  {/* The reason, which is the entire value of this list. Absent
+                      on a review judged before reasons were recorded, and that
+                      is said rather than left as a blank line. */}
+                  <p className="mt-1 italic text-muted-foreground">
+                    {finding.verdictReason || 'No reason was recorded for this one.'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* One bucket, not two. Nitpicks and dismissals share the property "you
           deliberately are not being shown this", and two half-empty disclosures at
           the foot of every list is more chrome than either earns. */}
@@ -590,7 +663,10 @@ function FindingCard({
             {/* Only while the cycle is live. Once it is at rest every survivor has
                 been checked, so saying so then would be noise. */}
             {stillChecking && finding.verdict === 'unvalidated' && ' · not checked yet'}
-            {finding.lenses.length > 1 && ` · ${finding.lenses.length} reviewers agreed`}
+            {/* Named, not counted. "Logic and Reliability both flagged this" is a
+                reason to believe it; "2 reviewers agreed" is a number. */}
+            {finding.lenses.length > 1 &&
+              ` · ${finding.lenses.map(codeReviewLensLabel).join(' and ')} agree`}
             {/* Said out loud, because it changes how much to trust the location. */}
             {!finding.anchorVerified && ' · location approximate'}
           </p>
@@ -637,8 +713,8 @@ function FindingCard({
               until this row existed both rendered identically. */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
             <span>
-              Raised by {full.lenses.length === 1 ? '1 reviewer' : `${full.lenses.length} reviewers`}
-              {full.lenses.length > 1 && ' independently'}
+              Raised by {full.lenses.map(codeReviewLensLabel).join(', ') || 'a reviewer'}
+              {full.lenses.length > 1 && ' — independently'}
             </span>
             {full.confidence !== null && <span>Confidence {full.confidence}%</span>}
             <span>{full.anchorVerified ? 'Location confirmed' : 'Location not confirmed'}</span>
