@@ -29,6 +29,7 @@ import {
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
+import { trackEvent } from '../../../lib/analytics';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
@@ -101,6 +102,27 @@ export function FindingsTab({
   useEffect(() => {
     setSelected(new Set());
   }, [pullRequestId, review?.reviewedHeadSha, review?.id]);
+
+  // Reported ONCE per review-and-commit, not per render and not per tab open:
+  // the question it answers is "having seen the findings, what did they do", so a
+  // second impression for the same list would inflate the denominator of every
+  // funnel built on it. Shape only — counts and booleans, never a title, a path
+  // or a repository.
+  const viewedKey = review && !running ? `${review.id}:${review.reviewedHeadSha}` : null;
+  const [viewedReported, setViewedReported] = useState<string | null>(null);
+  useEffect(() => {
+    if (!viewedKey || !review || viewedReported === viewedKey) return;
+    setViewedReported(viewedKey);
+    trackEvent('code_review_findings_viewed', {
+      preset: review.preset,
+      open_count: review.openCount,
+      blocker: review.counts.blocker,
+      major: review.counts.major,
+      minor: review.counts.minor,
+      nit: review.counts.nit,
+      stale_for_head: review.staleForHead,
+    });
+  }, [viewedKey, viewedReported, review]);
 
   const grouped = useMemo(() => {
     const active = findings.filter(
@@ -184,6 +206,14 @@ export function FindingsTab({
       const next = new Set(prev);
       next.delete(finding.id);
       return next;
+    });
+    trackEvent('code_review_finding_dismissed', {
+      severity: finding.severity,
+      // Absent when somebody dismissed without picking one — the reasons are
+      // skippable, so a missing reason is a real answer about the prompt.
+      reason: reason ?? null,
+      lenses: finding.lenses.length,
+      anchor_verified: finding.anchorVerified,
     });
     try {
       await api.pullRequests.dismissCodeReviewFinding(pullRequestId, finding.id, reason);
@@ -359,7 +389,16 @@ export function FindingsTab({
                 setExpanded((prev) => {
                   const next = new Set(prev);
                   if (next.has(finding.id)) next.delete(finding.id);
-                  else next.add(finding.id);
+                  else {
+                    next.add(finding.id);
+                    // Opening only. A collapse is not an expression of interest,
+                    // and counting both would make the rate meaningless.
+                    trackEvent('code_review_finding_expanded', {
+                      severity: finding.severity,
+                      confidence: finding.confidence,
+                      anchor_verified: finding.anchorVerified,
+                    });
+                  }
                   return next;
                 })
               }

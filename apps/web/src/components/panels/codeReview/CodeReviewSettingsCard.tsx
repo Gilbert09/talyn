@@ -12,6 +12,7 @@ import {
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
+import { trackEvent } from '../../../lib/analytics';
 import { Card } from '../../ui/card';
 import { toast } from '../../../stores/toast';
 
@@ -59,6 +60,14 @@ export function CodeReviewSettingsCard() {
       // other three survive — a top-level jsonb merge would drop them.
       const next = { codeReview: patch } as Workspace['settings'];
       await api.workspaces.update(currentWorkspaceId, { settings: next });
+      // After the write, so a refused change (the auto-review 402 below) is not
+      // reported as one that happened. Every value here is an enum or a boolean
+      // — the inline-comments opt-in rate is the number that says whether the
+      // "findings stay in the app" posture is the right one.
+      trackEvent('code_review_settings_changed', {
+        keys: Object.keys(patch).join(','),
+        ...patch,
+      });
       setWorkspaces(
         workspaces.map((w) =>
           w.id === currentWorkspaceId
