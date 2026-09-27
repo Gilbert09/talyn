@@ -648,6 +648,23 @@ export interface VisualReviewSettings {
 
 export type MergeQueueMode = 'ordered' | 'eager';
 
+/**
+ * What a NEW workspace's queue does, and only a new one.
+ *
+ * 'eager' — every queued pull request merges the moment it is clean — is the
+ * better default: waiting your turn behind a sibling is the conservative choice
+ * and costs the thing people came for. The trade is that each merge invalidates
+ * the CI of the entries behind it, which is a re-run rather than a wrong result.
+ *
+ * Written into `settings` AT CREATION rather than applied as the resolver's
+ * fall-back, because those are different claims. A workspace with no
+ * `mergeQueueMode` key is not a workspace that wants the new default — it is
+ * one that has been draining in order, possibly for months, with entries queued
+ * right now. Changing the resolver would reorder those live queues on deploy,
+ * having asked nobody.
+ */
+export const DEFAULT_MERGE_QUEUE_MODE: MergeQueueMode = 'eager';
+
 export interface ContinuousBuildSettings {
   enabled: boolean;
   /** How many code_writing tasks can be in-flight at once. */

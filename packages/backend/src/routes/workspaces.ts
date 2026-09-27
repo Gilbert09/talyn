@@ -35,6 +35,7 @@ import {
   type CodeReviewSettings,
   type PromptTemplateSettings,
   type WorkspaceSettings,
+  DEFAULT_MERGE_QUEUE_MODE,
 } from '@talyn/shared';
 
 // Uploaded logos are stored inline as data URLs on the workspace row, so cap
@@ -306,7 +307,10 @@ export function workspaceRoutes(): Router {
       name: body.name,
       description: body.description ?? null,
       logo,
-      settings: {},
+      // Seeded rather than left to the resolver's fall-back. See
+      // DEFAULT_MERGE_QUEUE_MODE: an ABSENT key means "has been draining in
+      // order", which is not the same claim as "wants the current default".
+      settings: { mergeQueueMode: DEFAULT_MERGE_QUEUE_MODE },
       createdAt: now,
       updatedAt: now,
     });

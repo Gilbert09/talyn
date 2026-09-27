@@ -1,6 +1,10 @@
 import { v4 as uuid } from 'uuid';
 import { eq, sql } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_NAME, type WorkspaceLogo } from '@talyn/shared';
+import {
+  DEFAULT_MERGE_QUEUE_MODE,
+  DEFAULT_WORKSPACE_NAME,
+  type WorkspaceLogo,
+} from '@talyn/shared';
 import {
   getDbClient,
   getPoolDbClient,
@@ -87,7 +91,10 @@ async function insertDefaultWorkspace(ownerId: string): Promise<void> {
     name: DEFAULT_WORKSPACE_NAME,
     description: null,
     logo,
-    settings: {},
+    // Same seed as the create route — see DEFAULT_MERGE_QUEUE_MODE. This is the
+    // path every brand-new account actually takes, so missing it here would
+    // mean the default applied only to a second, hand-made workspace.
+    settings: { mergeQueueMode: DEFAULT_MERGE_QUEUE_MODE },
     createdAt: now,
     updatedAt: now,
   });
