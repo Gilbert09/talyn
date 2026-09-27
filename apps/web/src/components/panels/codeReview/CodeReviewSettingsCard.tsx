@@ -4,7 +4,6 @@ import {
   CODE_REVIEW_PRESET_BLURBS,
   CODE_REVIEW_SEVERITY_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
-  type CodeReviewSeverity,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   codeReviewOffered,
@@ -16,6 +15,7 @@ import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
+import { Gauge, ScanSearch, ShieldCheck, Wrench } from 'lucide-react';
 import { Card } from '../../ui/card';
 import { cn } from '../../../lib/utils';
 import { toast } from '../../../stores/toast';
@@ -97,133 +97,209 @@ export function CodeReviewSettingsCard() {
   };
 
   return (
-    <Card className="space-y-4 p-4">
+    <div className="space-y-3">
       <div>
-        <h4 className="text-sm font-medium">Code review</h4>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Talyn reads a pull request and puts what it finds in the app. Nothing is posted on
-          the pull request unless you ask for it below.
+        <h3 className="text-lg font-semibold">Code review</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Talyn reads a pull request and puts what it finds in the app.
         </p>
       </div>
 
-      {/* Three cards rather than a <select>.
-          A dropdown shows the blurb for whatever is ALREADY chosen, so comparing
-          the three meant selecting each in turn and reading what changed — the
-          one thing somebody picking a depth actually needs to do. The facts are
-          derived from CODE_REVIEW_PRESET_PLAN, so they cannot claim a behaviour
-          the engine will not perform. */}
-      <fieldset className="space-y-1.5" disabled={saving || !currentWorkspaceId}>
-        <legend className="text-xs font-medium">How deeply to review</legend>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {CODE_REVIEW_PRESETS.map((preset) => {
-            const active = settings.preset === preset;
-            return (
+      {/* A FLOW, not a list of switches. Each step is the question the previous
+          answer raises: review everything → how hard → fix it for me → fix what.
+          The two GitHub-posting settings sit apart at the end because they are a
+          different decision — how loud Talyn is on somebody else's pull request —
+          and mixing them into the flow made this page read as eight unrelated
+          checkboxes. */}
+
+      <Step
+        n={1}
+        icon={ScanSearch}
+        title="Review every pull request"
+        badge={settings.autoReview ? 'On' : 'Off'}
+      >
+        <Toggle
+          checked={settings.autoReview}
+          disabled={saving || !currentWorkspaceId}
+          attr="settings-code-review-auto"
+          title="Review my new pull requests automatically"
+          onChange={(next) => void save({ autoReview: next }, 'automatic reviews')}
+        >
+          Every pull request you open in a watched repository is reviewed as you push. Part
+          of Unlimited.
+        </Toggle>
+      </Step>
+
+      <Step
+        n={2}
+        icon={Gauge}
+        title="How deeply"
+        badge={CODE_REVIEW_PRESET_LABELS[settings.preset]}
+      >
+        {/* Buttons rather than a dropdown, because a dropdown shows the blurb for
+            whatever is already chosen — so comparing the three meant picking each
+            in turn. The facts are derived from the preset plan and cannot promise
+            a behaviour the engine will not perform. */}
+        <div className="flex flex-wrap gap-1.5">
+          {CODE_REVIEW_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              disabled={saving || !currentWorkspaceId}
+              onClick={() => void save({ preset }, 'the review depth')}
+              aria-pressed={settings.preset === preset}
+              data-attr="settings-code-review-preset"
+              className={cn(
+                'rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-50',
+                settings.preset === preset
+                  ? 'border-primary bg-primary/10 font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {CODE_REVIEW_PRESET_LABELS[preset]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {CODE_REVIEW_PRESET_BLURBS[settings.preset]}
+        </p>
+        <ul className="mt-1.5 space-y-0.5">
+          {codeReviewPresetFacts(settings.preset).map((fact) => (
+            <li key={fact} className="flex gap-1.5 text-xs text-muted-foreground">
+              <span aria-hidden>·</span>
+              <span>{fact}</span>
+            </li>
+          ))}
+        </ul>
+      </Step>
+
+      <Step
+        n={3}
+        icon={Wrench}
+        title="Fix findings for me"
+        badge={settings.autoFix ? 'On' : 'Off'}
+      >
+        <Toggle
+          checked={settings.autoFix}
+          disabled={saving || !currentWorkspaceId}
+          attr="settings-code-review-auto-fix"
+          title="Fix findings without asking"
+          onChange={(next) => void save({ autoFix: next }, 'automatic fixing')}
+        >
+          The only setting here that pushes a commit with nobody watching. It touches only
+          findings that survived the checking pass and whose location was confirmed.
+        </Toggle>
+      </Step>
+
+      {/* Step 4 exists only once step 3 is on: "which findings" is not a question
+          until something is answering it. */}
+      {settings.autoFix && (
+        <Step
+          n={4}
+          icon={ShieldCheck}
+          title="Which findings it may fix"
+          badge={`${CODE_REVIEW_SEVERITY_LABELS[settings.autoFixSeverity]} and above`}
+        >
+          <div className="flex flex-wrap gap-1.5">
+            {CODE_REVIEW_SEVERITY_ORDER.map((severity) => (
               <button
-                key={preset}
+                key={severity}
                 type="button"
-                onClick={() => void save({ preset }, 'the review depth')}
-                aria-pressed={active}
-                data-attr="settings-code-review-preset"
+                disabled={saving || !currentWorkspaceId}
+                onClick={() =>
+                  void save({ autoFixSeverity: severity }, 'what auto-fix may touch')
+                }
+                aria-pressed={settings.autoFixSeverity === severity}
+                data-attr="settings-code-review-auto-fix-severity"
                 className={cn(
-                  'rounded-md border p-2.5 text-left transition-colors disabled:opacity-50',
-                  active
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                    : 'hover:border-muted-foreground/40'
+                  'rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-50',
+                  settings.autoFixSeverity === severity
+                    ? 'border-primary bg-primary/10 font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
                 )}
               >
-                <p className="text-xs font-medium">{CODE_REVIEW_PRESET_LABELS[preset]}</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  {CODE_REVIEW_PRESET_BLURBS[preset]}
-                </p>
-                <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
-                  {codeReviewPresetFacts(preset).map((fact) => (
-                    <li key={fact} className="flex gap-1.5">
-                      <span aria-hidden>·</span>
-                      <span>{fact}</span>
-                    </li>
-                  ))}
-                </ul>
+                {CODE_REVIEW_SEVERITY_LABELS[severity]}
               </button>
-            );
-          })}
-        </div>
-      </fieldset>
-
-      <Toggle
-        checked={settings.autoReview}
-        disabled={saving || !currentWorkspaceId}
-        attr="settings-code-review-auto"
-        title="Review my new pull requests automatically"
-        onChange={(next) => void save({ autoReview: next }, 'automatic review')}
-      >
-        Every pull request you open in a watched repository gets reviewed as soon as Talyn sees
-        it, and again when you push. The findings stay in the app. Part of Unlimited.
-      </Toggle>
-
-      <Toggle
-        checked={settings.fixSummaryComment}
-        disabled={saving || !currentWorkspaceId}
-        attr="settings-code-review-fix-comment"
-        title="Post a summary comment after a fix"
-        onChange={(next) => void save({ fixSummaryComment: next }, 'the fix summary comment')}
-      >
-        When Talyn fixes findings it pushes a commit to your branch. Turn this on and it also
-        leaves one short comment saying what it fixed and what it did not, so the pull
-        request&rsquo;s other readers know why the branch moved. Off by default — the commit
-        already announces itself.
-      </Toggle>
-
-      <Toggle
-        checked={settings.inlineComments}
-        disabled={saving || !currentWorkspaceId}
-        attr="settings-code-review-inline-comments"
-        title="Post blockers as inline comments on the pull request"
-        onChange={(next) => void save({ inlineComments: next }, 'inline comments')}
-      >
-        Off by default, and it is the one setting here that can make Talyn look like every
-        other review bot. When on, only BLOCKERS are posted — never the rest, and never for a
-        review nobody asked for. Leave it off if your reviewers live in Talyn.
-      </Toggle>
-
-      <Toggle
-        checked={settings.autoFix}
-        disabled={saving || !currentWorkspaceId}
-        attr="settings-code-review-auto-fix"
-        title="Fix findings without asking"
-        onChange={(next) => void save({ autoFix: next }, 'automatic fixing')}
-      >
-        Off by default, and the only setting here that pushes a commit to your branch with
-        nobody watching. It only touches findings that survived the checking pass and whose
-        location was confirmed, so speculation and misplaced findings are left alone.
-      </Toggle>
-
-      {settings.autoFix && (
-        <fieldset className="space-y-1.5 pl-1" disabled={saving || !currentWorkspaceId}>
-          <legend className="text-xs font-medium">What it is allowed to fix</legend>
-          <select
-            value={settings.autoFixSeverity}
-            onChange={(e) =>
-              void save(
-                { autoFixSeverity: e.target.value as CodeReviewSeverity },
-                'what auto-fix may touch'
-              )
-            }
-            className="h-8 w-full rounded-md border border-input bg-background bg-none px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50 sm:w-64"
-            data-attr="settings-code-review-auto-fix-severity"
-          >
-            {CODE_REVIEW_SEVERITY_ORDER.map((severity) => (
-              <option key={severity} value={severity}>
-                {CODE_REVIEW_SEVERITY_LABELS[severity]} and above
-              </option>
             ))}
-          </select>
-          <p className="text-xs text-muted-foreground">
-            Blockers only is the default. Widening this means Talyn commits for smaller
-            findings too, and a review that raises six things is not usually six things worth
-            a commit.
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Blockers only is the default. A review that raises six things is not usually six
+            things worth a commit.
           </p>
-        </fieldset>
+        </Step>
       )}
+
+      <Card className="space-y-4 p-4">
+        <div>
+          <h4 className="text-sm font-medium">On GitHub</h4>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Findings live in Talyn. These two are the exceptions.
+          </p>
+        </div>
+
+        <Toggle
+          checked={settings.fixSummaryComment}
+          disabled={saving || !currentWorkspaceId}
+          attr="settings-code-review-summary-comment"
+          title="Post a summary comment after a fix"
+          onChange={(next) => void save({ fixSummaryComment: next }, 'the summary comment')}
+        >
+          One short comment saying what was fixed and what was not, so the pull request&rsquo;s
+          other readers know why the branch moved.
+        </Toggle>
+
+        <Toggle
+          checked={settings.inlineComments}
+          disabled={saving || !currentWorkspaceId}
+          attr="settings-code-review-inline-comments"
+          title="Post blockers as inline comments"
+          onChange={(next) => void save({ inlineComments: next }, 'inline comments')}
+        >
+          The one setting that can make Talyn look like every other review bot. Only blockers
+          are posted, and never for a review nobody asked for.
+        </Toggle>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * One step of the flow.
+ *
+ * Numbered because the order is the point: each step is the question the
+ * previous answer raises, and a reader who stops after step one has still made a
+ * coherent choice.
+ */
+function Step({
+  n,
+  icon: Icon,
+  title,
+  badge,
+  children,
+}: {
+  n: number;
+  icon: typeof ScanSearch;
+  title: string;
+  badge: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+          {n}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Icon className="h-4 w-4 text-muted-foreground" />
+            <h4 className="text-sm font-medium">{title}</h4>
+            <span className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              {badge}
+            </span>
+          </div>
+          <div className="mt-2">{children}</div>
+        </div>
+      </div>
     </Card>
   );
 }

@@ -349,8 +349,7 @@ function ActionInput({
             ))}
           </Select>
           <p className="text-xs text-muted-foreground">
-            Findings appear in Talyn, not on the pull request. Nothing is posted unless you
-            turn that on in Settings.
+            Findings appear in Talyn.
           </p>
         </div>
       );

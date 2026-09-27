@@ -257,8 +257,7 @@ export function FindingsTab({
           <div className="space-y-1">
             <p className="text-sm font-medium">Have Talyn review this pull request</p>
             <p className="text-xs text-muted-foreground">
-              Findings show up here, in Talyn. Nothing is posted on your pull request unless
-              you ask.
+              Findings show up here, in Talyn.
             </p>
           </div>
         </div>

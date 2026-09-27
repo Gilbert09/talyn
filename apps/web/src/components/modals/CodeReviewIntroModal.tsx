@@ -118,8 +118,7 @@ export function CodeReviewIntroModal({
           {/* The differentiator, stated plainly, because it is the reason to
               prefer this over the bot they have already muted. */}
           <p className="text-xs text-muted-foreground">
-            The findings stay in Talyn. Nothing is posted on your pull request unless you turn it
-            on in Settings.
+            The findings stay in Talyn.
           </p>
         </div>
 

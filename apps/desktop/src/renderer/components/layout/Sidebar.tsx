@@ -68,6 +68,8 @@ export function Sidebar({ className }: SidebarProps) {
   // Through the page's own rule, not a copy of it: a badge that keeps counting
   // a PR the list has dropped is the nag the user was dismissing.
   const reviewCount = visibleReviewCohort(prRows).length;
+  // Pull requests whose review found something nobody has dealt with yet.
+  const codeReviewCount = prRows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length;
   const queueCount = prRows.filter((r) => r.mergeQueued).length;
 
   /**
@@ -103,6 +105,25 @@ export function Sidebar({ className }: SidebarProps) {
       badge: reviewCount > 0 ? reviewCount : undefined,
       badgeKind: 'work' as const,
     },
+    // Code review sits with the two PR cohorts above rather than with the
+    // definition lists below, because that is what it is: pull requests waiting
+    // on you, counted the same way. Gated the same three-state way as Loops and
+    // failing CLOSED — a review spends the workspace's own agent subscription,
+    // so an outage must not draw it for accounts nobody switched it on for.
+    ...(codeReviewOffered(features)
+      ? [
+          {
+            id: 'code_reviews' as const,
+            icon: ScanSearch,
+            label: 'Code review',
+            // Reviews with findings still open — work, not inventory. Derived
+            // from the PR store rather than set when the panel loads, so the
+            // badge is right before you have ever opened it.
+            badge: codeReviewCount > 0 ? codeReviewCount : undefined,
+            badgeKind: 'work' as const,
+          },
+        ]
+      : []),
     {
       id: 'merge_queue' as const,
       icon: GitMerge,
@@ -148,18 +169,6 @@ export function Sidebar({ className }: SidebarProps) {
             // unattended — which is the one thing this feature does.
             badge: enabledLoopCount ? enabledLoopCount : undefined,
             badgeKind: 'inventory' as const,
-          },
-        ]
-      : []),
-    // Code review, gated the same three-state way. Failing CLOSED like loops:
-    // a review spends the workspace's own agent subscription, so an outage must
-    // not draw the entry for accounts nobody switched it on for.
-    ...(codeReviewOffered(features)
-      ? [
-          {
-            id: 'code_reviews' as const,
-            icon: ScanSearch,
-            label: 'Code review',
           },
         ]
       : []),

@@ -84,10 +84,16 @@ export function CodeReviewRowChip({
     <button
       type="button"
       onClick={onOpen}
+      // Coloured, and the original rule is worth restating because this bends
+      // it: the row's grammar is "a coloured chip means state", and a CLEAN
+      // review is still not a state — it renders nothing at all, a few lines
+      // above. But findings that exist are worth noticing, and in muted zinc
+      // this disappeared into a dense row. Blockers keep amber so they stay
+      // distinguishable from the rest at a glance.
       className={
         hasBlockers
-          ? 'inline-flex items-center gap-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] uppercase text-amber-800 dark:bg-amber-900/60 dark:text-amber-200'
-          : 'inline-flex items-center gap-1 rounded bg-zinc-200 px-1 py-0.5 text-[10px] uppercase text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200'
+          ? 'inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 ring-1 ring-inset ring-amber-500/40 dark:bg-amber-400/15 dark:text-amber-300 dark:ring-amber-400/40'
+          : 'inline-flex items-center gap-1 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700 ring-1 ring-inset ring-violet-500/40 dark:bg-violet-400/15 dark:text-violet-300 dark:ring-violet-400/40'
       }
       title={
         hasBlockers

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScanSearch, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESET_LABELS,
@@ -10,6 +10,7 @@ import {
 import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { openExternal } from '../../../lib/openExternal';
+import { FindingsTab } from '../../widgets/codeReview/FindingsTab';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
@@ -30,6 +31,10 @@ export function CodeReviewsPanel() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
   const [items, setItems] = useState<CodeReviewListItem[] | null>(null);
+  // One open at a time. Each expanded row mounts the real findings tab, which
+  // fetches its own findings — several open at once would be several requests
+  // for lists nobody is reading.
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -67,8 +72,7 @@ export function CodeReviewsPanel() {
           Code review
         </h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Every review this workspace has run. Findings stay in Talyn — nothing is posted on
-          a pull request unless you turn that on.
+          Every review this workspace has run.
         </p>
       </div>
 
@@ -102,36 +106,52 @@ export function CodeReviewsPanel() {
         )}
 
         {(items ?? []).map((item) => (
-          <ReviewRow key={item.review.id} item={item} />
+          <ReviewRow
+            key={item.review.id}
+            item={item}
+            expanded={expanded === item.review.id}
+            onToggle={() =>
+              setExpanded((prev) => (prev === item.review.id ? null : item.review.id))
+            }
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function ReviewRow({ item }: { item: CodeReviewListItem }) {
+function ReviewRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: CodeReviewListItem;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const { review, pullRequest } = item;
   const running = !CODE_REVIEW_PHASE_AT_REST[review.phase];
   const progress = codeReviewProgress(review);
   const blockers = review.counts.blocker;
 
   return (
-    <button
-      type="button"
-      // Opens the pull request on GitHub. The findings themselves live in the
-      // sheet's Findings tab, which is local state inside the GitHub page shell
-      // and cannot be opened from here — so this links to the one place that is
-      // reachable from anywhere rather than pretending otherwise.
-      onClick={() =>
-        void openExternal(
-          `https://github.com/${pullRequest.owner}/${pullRequest.repo}/pull/${pullRequest.number}`
-        )
-      }
+    <div
       className={cn(
-        'w-full rounded-md border p-3 text-left transition-colors hover:border-muted-foreground/40',
-        blockers > 0 && !running && 'border-amber-500/40 bg-amber-500/5'
+        'rounded-md border transition-colors',
+        blockers > 0 && !running && 'border-amber-500/40 bg-amber-500/5',
+        !expanded && 'hover:border-muted-foreground/40'
       )}
     >
+      {/* Expands into the REAL findings tab rather than linking away. It takes a
+          pull request id and fetches its own findings, so the whole interaction
+          — pick, fix, dismiss, review again, stop — comes with it rather than
+          being rebuilt here and drifting from the sheet's copy. */}
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="w-full p-3 text-left"
+      >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-medium">{pullRequest.title}</p>
@@ -197,10 +217,31 @@ function ReviewRow({ item }: { item: CodeReviewListItem }) {
       )}
 
       <span className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-        <ExternalLink className="h-3 w-3" />
-        Open on GitHub
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {expanded ? 'Hide findings' : 'Show findings'}
       </span>
-    </button>
+      </button>
+
+      {expanded && (
+        <div className="border-t p-3">
+          {/* Seeded with the row's own payload so it paints immediately and then
+              refreshes, rather than flashing a loading state for data we hold. */}
+          <FindingsTab pullRequestId={pullRequest.id} seedReview={review} />
+          <button
+            type="button"
+            onClick={() =>
+              void openExternal(
+                `https://github.com/${pullRequest.owner}/${pullRequest.repo}/pull/${pullRequest.number}`
+              )
+            }
+            className="mt-3 flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Open on GitHub
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -19,8 +19,7 @@ import { cn } from '../../../lib/utils';
  * `usePullRequestSync` is mounted in `MainLayout`, which is INSIDE the onboarding
  * gate — so at this point the app holds no pull requests and cannot show the
  * user their own. A hand-written example is the honest alternative to a spinner,
- * and it lets the one sentence that matters do its work: findings live here, and
- * nothing is posted on your pull request unless you ask.
+ * and it lets the one sentence that matters do its work: findings live here.
  *
  * # Why a free account is shown no checkbox
  *
@@ -62,10 +61,7 @@ export function CodeReviewStep() {
         <ScanSearch className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <p className="text-sm">
           Talyn can read your pull requests and tell you what is wrong with them.{' '}
-          <span className="font-medium">
-            Findings show up here, in Talyn — nothing is posted on your pull request unless you
-            ask.
-          </span>
+          <span className="font-medium">Findings show up here, in Talyn.</span>
         </p>
       </div>
 
