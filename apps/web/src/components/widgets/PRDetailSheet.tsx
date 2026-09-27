@@ -36,6 +36,7 @@ import { PatchDiff } from '@pierre/diffs/react';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
 import { FindingsTab, findingsBadge } from './codeReview/FindingsTab';
+import { codeReviewOffered } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import {
@@ -835,6 +836,17 @@ function DetailTabs({
   cachedBody: string | null;
 }) {
   const [tab, setTab] = useState<TabKey>('overview');
+  // Whether to draw the Findings tab at all.
+  //
+  // Gated like the nav items are, and it has to be: without this an account
+  // outside the flag's audience saw a Findings tab whose primary button the
+  // backend answers 403 to — a visible dead end, which is worse than an absent
+  // feature. Three-state, so `null` (still loading) draws nothing rather than
+  // flashing the tab in on every launch.
+  const codeReviewOffered_ = codeReviewOffered(useWorkspaceStore((s) => s.features));
+  // A remembered tab must not strand somebody on a panel that no longer exists —
+  // the same reason MainLayout re-checks `activePanel` against the flag.
+  const effectiveTab: TabKey = tab === 'findings' && !codeReviewOffered_ ? 'overview' : tab;
   // Started on open, not on first click — see usePRFiles.
   const filesState = usePRFiles(data.row.id);
   // The loaded list is authoritative; the cached count is what the tab wears
@@ -847,14 +859,15 @@ function DetailTabs({
     <>
       <nav className="flex shrink-0 border-b text-xs">
         <TabButton
-          active={tab === 'overview'}
+          active={effectiveTab === 'overview'}
           onClick={() => setTab('overview')}
           icon={<Layers className="h-3.5 w-3.5" />}
         >
           Overview
         </TabButton>
+        {codeReviewOffered_ && (
         <TabButton
-          active={tab === 'findings'}
+          active={effectiveTab === 'findings'}
           onClick={() => setTab('findings')}
           icon={<ScanSearch className="h-3.5 w-3.5" />}
           // What the user is being asked about, never the raw total: nitpicks and
@@ -864,8 +877,9 @@ function DetailTabs({
         >
           Findings
         </TabButton>
+        )}
         <TabButton
-          active={tab === 'checks'}
+          active={effectiveTab === 'checks'}
           onClick={() => setTab('checks')}
           icon={<CheckCircle2 className="h-3.5 w-3.5" />}
           badge={
@@ -877,7 +891,7 @@ function DetailTabs({
           Checks
         </TabButton>
         <TabButton
-          active={tab === 'reviews'}
+          active={effectiveTab === 'reviews'}
           onClick={() => setTab('reviews')}
           icon={<MessageSquare className="h-3.5 w-3.5" />}
           badge={
@@ -889,7 +903,7 @@ function DetailTabs({
           Reviews
         </TabButton>
         <TabButton
-          active={tab === 'files'}
+          active={effectiveTab === 'files'}
           onClick={() => setTab('files')}
           icon={<FileText className="h-3.5 w-3.5" />}
           // Undefined (not 0) on a row cached before `changedFiles` shipped and
@@ -913,19 +927,19 @@ function DetailTabs({
               Detail fetch unavailable (env offline?). Showing cached state only.
             </p>
           )}
-          {tab === 'overview' && (
+          {effectiveTab === 'overview' && (
             <OverviewTab
               data={data}
               detailPending={detailPending}
               cachedBody={cachedBody}
             />
           )}
-          {tab === 'findings' && (
+          {effectiveTab === 'findings' && (
             <FindingsTab pullRequestId={data.row.id} seedReview={data.row.codeReview ?? null} />
           )}
-          {tab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
-          {tab === 'reviews' && <ReviewsTab data={data} />}
-          {tab === 'files' && <FilesTab data={data} filesState={filesState} />}
+          {effectiveTab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
+          {effectiveTab === 'reviews' && <ReviewsTab data={data} />}
+          {effectiveTab === 'files' && <FilesTab data={data} filesState={filesState} />}
         </div>
       </ScrollArea>
     </>
