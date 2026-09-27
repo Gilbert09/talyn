@@ -67,11 +67,52 @@ export const CODE_REVIEW_PRESET_BLURBS: Record<CodeReviewPreset, string> = {
     'For a change you want picked apart. More angles, a final pass looking for what the others missed, and a large pull request is read in pieces rather than skimmed.',
 };
 
+/**
+ * Roughly how long, from MEASURED runs rather than hope.
+ *
+ * The first Standard review of an eight-file pull request took 41 minutes end to
+ * end — three lenses in parallel (14m), then the sweep (15m), then the judging
+ * pass (8m), because those three phases are necessarily serial. This said
+ * "around ten minutes" before that was measured, which is the kind of estimate
+ * that makes a working feature feel broken.
+ */
 export const CODE_REVIEW_PRESET_TIME_HINTS: Record<CodeReviewPreset, string> = {
-  quick: 'Usually a few minutes.',
-  standard: 'Around ten minutes.',
-  deep: 'Longer on a big pull request.',
+  quick: 'Usually under ten minutes.',
+  standard: 'Typically half an hour.',
+  deep: 'Can take an hour or more on a large pull request.',
 };
+
+/**
+ * What a preset actually does, as comparable lines rather than prose.
+ *
+ * DERIVED from `CODE_REVIEW_PRESET_PLAN` on purpose. A hand-written comparison
+ * is a second source of truth about what "Standard" means, and it goes stale the
+ * first time the plan changes — which is exactly the failure the plan record
+ * exists to prevent. Somebody choosing a depth needs to compare the three
+ * without selecting each in turn to read its blurb.
+ */
+export function codeReviewPresetFacts(preset: CodeReviewPreset): string[] {
+  const plan = CODE_REVIEW_PRESET_PLAN[preset];
+  const facts = [
+    plan.lenses === 1
+      ? 'Read once, by a single reviewer'
+      : `Read by ${plan.lenses} reviewers at once, each looking for something different`,
+  ];
+  facts.push(
+    plan.sweep
+      ? 'A further pass looks for what all of them missed'
+      : 'No second pass — what the reviewer finds is what you get'
+  );
+  facts.push(
+    plan.validate
+      ? 'Every finding is re-checked against the code before you see it'
+      : 'Findings are reported as found, so expect more noise'
+  );
+  if (plan.chunk) facts.push('A large pull request is read in pieces rather than skimmed');
+  if (plan.effort === 'top') facts.push('Uses the strongest model you have connected');
+  facts.push(CODE_REVIEW_PRESET_TIME_HINTS[preset]);
+  return facts;
+}
 
 /**
  * The shape a preset resolves to. One definition, so the settings blurb, the
@@ -339,6 +380,8 @@ export interface CodeReviewFinding {
   /** Absent on a list read — the list projection drops the big columns. */
   body?: string;
   suggestion?: string | null;
+  /** The agent's verbatim quote of the code. Detail read only. */
+  anchor?: string | null;
   confidence: number | null;
   verdict: CodeReviewVerdict;
   verdictReason?: string | null;

@@ -1438,6 +1438,41 @@ export function pullRequestRoutes(): Router {
   });
 
   /** Dismiss a finding, with one of the four fixed reasons. */
+  /**
+   * One finding, with the parts the list deliberately drops.
+   *
+   * `FINDING_LIST_COLUMNS` excludes `body`, `suggestion` and `anchor` because
+   * forty findings of body-plus-suggestion is a few hundred kilobytes on a
+   * payload the PR list also carries. The card expands one at a time, so it
+   * fetches one at a time — which is the whole reason the detail projection
+   * exists separately.
+   */
+  router.get('/:id/code-review/findings/:findingId', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const finding = await getFinding(req.params.findingId);
+    if (!finding) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    // Checked against the PR in the path, not just fetched by id: a finding id
+    // is a uuid somebody could hold from another workspace's review, and the
+    // gate above only proves they may use the feature here.
+    const review = await getReviewForPr(req.params.id);
+    if (!review || finding.reviewId !== review.id) {
+      return res.status(404).json({ success: false, error: 'Finding not found' });
+    }
+    res.json({
+      success: true,
+      data: {
+        ...serializeFinding(finding),
+        body: finding.body,
+        suggestion: finding.suggestion,
+        anchor: finding.anchor,
+        verdictReason: finding.verdictReason,
+      },
+    });
+  });
+
   router.post('/:id/code-review/findings/:findingId/dismiss', async (req, res) => {
     const workspaceId = await reviewGate(req, res);
     if (!workspaceId) return;

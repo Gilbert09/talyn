@@ -34,11 +34,12 @@ import {
   Zap,
   Server,
   Sparkles,
+  ScanSearch,
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
-import { highlightsForSurface } from '@talyn/shared';
+import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -110,12 +111,20 @@ export function SettingsPanel() {
   // status, the per-task "Set default" action) can deep-link to a section.
   const activeSection = useWorkspaceStore((s) => s.settingsSection);
   const setActiveSection = useWorkspaceStore((s) => s.setSettingsSection);
+  const features = useWorkspaceStore((s) => s.features);
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
     { id: 'integrations' as const, icon: Settings, label: 'Integrations' },
     { id: 'skills' as const, icon: Wand2, label: 'Skills' },
     { id: 'instructions' as const, icon: FileText, label: 'Instructions' },
+    // Gated in the NAV, not only in the body: the card renders null when the
+    // feature is not offered, so an unconditional entry would give anyone
+    // outside the flag's audience a nav item that opens onto nothing.
+    ...(codeReviewOffered(features)
+      ? [{ id: 'codeReview' as const, icon: ScanSearch, label: 'Code review' }]
+      : []),
+
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
@@ -161,7 +170,8 @@ export function SettingsPanel() {
             {activeSection === 'billing' && <BillingSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
-            {activeSection === 'mcp' && <MCPServerSettings />}
+            {activeSection === 'codeReview' && <CodeReviewSettingsCard />}
+      {activeSection === 'mcp' && <MCPServerSettings />}
             {activeSection === 'about' && <AboutSettings />}
           </div>
         </ScrollArea>
@@ -634,10 +644,6 @@ function WorkspaceSettings() {
 
           <AutoKeepMergeableDefaultToggle />
 <RespondToHumanCommentsToggle />
-          {/* Beside the human-comments toggle deliberately: both are decisions
-              about how loud Talyn is on GitHub, and reading them together is how
-              somebody forms a coherent posture. */}
-          <CodeReviewSettingsCard />
 
           <Card className="p-4 border-destructive/30">
             <h4 className="font-medium mb-1">Delete workspace</h4>

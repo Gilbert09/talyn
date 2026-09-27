@@ -2,10 +2,10 @@ import { useState } from 'react';
 import {
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
+  codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   codeReviewOffered,
   resolveCodeReviewSettings,
-  type CodeReviewPreset,
   type CodeReviewSettings,
   type Workspace,
 } from '@talyn/shared';
@@ -14,6 +14,7 @@ import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
 import { Card } from '../../ui/card';
+import { cn } from '../../../lib/utils';
 import { toast } from '../../../stores/toast';
 
 /**
@@ -102,33 +103,48 @@ export function CodeReviewSettingsCard() {
         </p>
       </div>
 
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium" htmlFor="code-review-depth">
-          How deeply to review
-        </label>
-        <select
-          id="code-review-depth"
-          value={settings.preset}
-          disabled={saving || !currentWorkspaceId}
-          onChange={(e) =>
-            void save({ preset: e.target.value as CodeReviewPreset }, 'the review depth')
-          }
-          className="h-8 w-full rounded-md border border-input bg-background bg-none px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-          data-attr="settings-code-review-preset"
-        >
-          {CODE_REVIEW_PRESETS.map((preset) => (
-            <option key={preset} value={preset}>
-              {CODE_REVIEW_PRESET_LABELS[preset]}
-            </option>
-          ))}
-        </select>
-        {/* The blurb is what makes "no advanced panel" acceptable: a preset the
-            user cannot see inside has to say what it does, or "Deep" is a mystery
-            knob they will never pick on purpose. */}
-        <p className="text-xs text-muted-foreground">
-          {CODE_REVIEW_PRESET_BLURBS[settings.preset]}
-        </p>
-      </div>
+      {/* Three cards rather than a <select>.
+          A dropdown shows the blurb for whatever is ALREADY chosen, so comparing
+          the three meant selecting each in turn and reading what changed — the
+          one thing somebody picking a depth actually needs to do. The facts are
+          derived from CODE_REVIEW_PRESET_PLAN, so they cannot claim a behaviour
+          the engine will not perform. */}
+      <fieldset className="space-y-1.5" disabled={saving || !currentWorkspaceId}>
+        <legend className="text-xs font-medium">How deeply to review</legend>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {CODE_REVIEW_PRESETS.map((preset) => {
+            const active = settings.preset === preset;
+            return (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => void save({ preset }, 'the review depth')}
+                aria-pressed={active}
+                data-attr="settings-code-review-preset"
+                className={cn(
+                  'rounded-md border p-2.5 text-left transition-colors disabled:opacity-50',
+                  active
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                    : 'hover:border-muted-foreground/40'
+                )}
+              >
+                <p className="text-xs font-medium">{CODE_REVIEW_PRESET_LABELS[preset]}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {CODE_REVIEW_PRESET_BLURBS[preset]}
+                </p>
+                <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
+                  {codeReviewPresetFacts(preset).map((fact) => (
+                    <li key={fact} className="flex gap-1.5">
+                      <span aria-hidden>·</span>
+                      <span>{fact}</span>
+                    </li>
+                  ))}
+                </ul>
+              </button>
+            );
+          })}
+        </div>
+      </fieldset>
 
       <Toggle
         checked={settings.autoReview}

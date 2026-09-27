@@ -1317,6 +1317,18 @@ export const pullRequests = {
       `/pull-requests/${id}/code-review/fix`,
       { findingIds }
     ),
+  /**
+   * One finding, with the parts the list drops.
+   *
+   * The list payload carries no `body`, `suggestion` or `anchor` — forty of them
+   * is a few hundred kilobytes on a response the pull-request list also uses.
+   * The card expands one at a time and fetches one at a time.
+   */
+  codeReviewFinding: (id: string, findingId: string) =>
+    request<CodeReviewFinding>(
+      'GET',
+      `/pull-requests/${id}/code-review/findings/${findingId}`
+    ),
   /** Dismiss a finding. Reversible — see `undismissCodeReviewFinding`. */
   dismissCodeReviewFinding: (
     id: string,

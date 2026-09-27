@@ -15,6 +15,7 @@ import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
+  codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   CODE_REVIEW_REPORTING_BAR,
   CODE_REVIEW_SEVERITY_GROUP_LABELS,
@@ -375,6 +376,7 @@ export function FindingsTab({
             <FindingCard
               key={finding.id}
               finding={finding}
+              pullRequestId={pullRequestId}
               selected={selected.has(finding.id)}
               expanded={expanded.has(finding.id)}
               onToggleSelected={() =>
@@ -497,6 +499,7 @@ function headline(review: CodeReviewPublic): string {
 
 function FindingCard({
   finding,
+  pullRequestId,
   selected,
   expanded,
   onToggleSelected,
@@ -504,6 +507,7 @@ function FindingCard({
   onDismiss,
 }: {
   finding: CodeReviewFinding;
+  pullRequestId: string;
   selected: boolean;
   expanded: boolean;
   onToggleSelected: () => void;
@@ -511,6 +515,31 @@ function FindingCard({
   onDismiss: (reason?: CodeReviewDismissReason) => void;
 }) {
   const [askingReason, setAskingReason] = useState(false);
+  // The list payload carries no body, suggestion or anchor — the projection drops
+  // them so that forty findings are not a few hundred kilobytes on a response the
+  // pull-request list also uses. So the card fetches its own detail the first time
+  // it opens, and keeps it: re-collapsing and re-opening must not re-request.
+  const [detail, setDetail] = useState<CodeReviewFinding | null>(null);
+  const [detailFailed, setDetailFailed] = useState(false);
+  useEffect(() => {
+    if (!expanded || detail || detailFailed) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const full = await api.pullRequests.codeReviewFinding(pullRequestId, finding.id);
+        if (!cancelled) setDetail(full);
+      } catch {
+        // Silent, and the card falls back to what the list already gave it. A
+        // failed detail read must not blank a finding the user can see.
+        if (!cancelled) setDetailFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, detail, detailFailed, pullRequestId, finding.id]);
+
+  const full = detail ?? finding;
 
   return (
     <div className="rounded-md border">
@@ -551,14 +580,55 @@ function FindingCard({
 
       {expanded && (
         <div className="space-y-2 border-t px-2.5 py-2 text-[11px]">
-          {finding.body && <p className="whitespace-pre-wrap">{finding.body}</p>}
-          {finding.suggestion && (
+          {!detail && !detailFailed && (
+            <p className="text-muted-foreground">Loading the full finding…</p>
+          )}
+          {full.body && <p className="whitespace-pre-wrap">{full.body}</p>}
+
+          {/* The agent's VERBATIM quote of the code it judged, and the single most
+              useful thing on this card when a finding is wrong. A reader can see
+              at a glance that the agent is describing code that is not there —
+              which is precisely the case `anchorVerified: false` is reporting, and
+              which a prose summary hides. */}
+          {full.anchor && (
+            <div className="rounded border bg-muted/30 p-2">
+              <p className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">
+                {full.anchorVerified
+                  ? 'The code it read'
+                  : 'The code it quoted — not found at this location'}
+              </p>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">
+                {full.anchor}
+              </pre>
+            </div>
+          )}
+
+          {full.suggestion && (
             <div className="rounded bg-muted/50 p-2">
               <p className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">
                 Suggested change
               </p>
-              <p className="whitespace-pre-wrap">{finding.suggestion}</p>
+              <p className="whitespace-pre-wrap">{full.suggestion}</p>
             </div>
+          )}
+
+          {/* How much to believe it, stated rather than implied. A finding that one
+              reviewer raised, at middling confidence, against code it could not
+              locate is a different object from one three reviewers agreed on — and
+              until this row existed both rendered identically. */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+            <span>
+              Raised by {full.lenses.length === 1 ? '1 reviewer' : `${full.lenses.length} reviewers`}
+              {full.lenses.length > 1 && ' independently'}
+            </span>
+            {full.confidence !== null && <span>Confidence {full.confidence}%</span>}
+            <span>{full.anchorVerified ? 'Location confirmed' : 'Location not confirmed'}</span>
+            {full.seenCount > 1 && <span>Seen in {full.seenCount} reviews</span>}
+          </div>
+          {full.verdictReason && (
+            <p className="text-[10px] italic text-muted-foreground">
+              Checker&rsquo;s note: {full.verdictReason}
+            </p>
           )}
           {askingReason ? (
             <div className="flex flex-wrap items-center gap-1.5">
@@ -639,8 +709,18 @@ export function PresetPicker({
         ))}
       </div>
       {/* The blurb is what makes "no advanced panel" an acceptable design: a preset
-          nobody can see inside has to say what it does. */}
+          nobody can see inside has to say what it does. The facts below it are
+          derived from the preset plan, so they cannot drift from what the engine
+          will actually do. */}
       <p className="text-[11px] text-muted-foreground">{CODE_REVIEW_PRESET_BLURBS[value]}</p>
+      <ul className="space-y-0.5 text-[11px] text-muted-foreground">
+        {codeReviewPresetFacts(value).map((fact) => (
+          <li key={fact} className="flex gap-1.5">
+            <span aria-hidden>·</span>
+            <span>{fact}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

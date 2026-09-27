@@ -73,6 +73,7 @@ export type SettingsSection =
   | 'integrations'
   | 'skills'
   | 'instructions'
+  | 'codeReview'
   | 'account'
   | 'billing'
   | 'appearance'
