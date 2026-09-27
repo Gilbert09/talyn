@@ -538,6 +538,62 @@ export async function funnelCounts(
   return funnel;
 }
 
+/**
+ * How each lens has actually performed for a workspace.
+ *
+ * Raised versus kept, per lens, across recent reviews — which is the only
+ * honest answer to "is this reviewer worth its cost". A lens that raises forty
+ * findings and keeps two is not thorough, it is expensive; one that raises five
+ * and keeps four has earned the sandbox.
+ *
+ * Counts a finding once per lens that raised it, so two lenses agreeing counts
+ * for both. That is deliberate: agreement is the signal the dedupe key exists to
+ * preserve, and splitting the credit would punish a lens for being corroborated.
+ *
+ * Aggregated in SQL with a lateral unnest of the jsonb array rather than by
+ * reading the rows — this is a whole workspace's history, and the alternative
+ * ships every finding's row to count a string.
+ */
+export async function lensEffectiveness(
+  workspaceId: string,
+  limit = 200
+): Promise<{ lens: string; raised: number; kept: number }[]> {
+  const rows = await getDbClient().execute<{
+    lens: string;
+    raised: number;
+    kept: number;
+  }>(sql`
+    SELECT
+      lens.value AS lens,
+      cast(count(*) AS int) AS raised,
+      cast(count(*) FILTER (WHERE f.verdict = 'confirmed') AS int) AS kept
+    FROM (
+      SELECT id, verdict, lenses
+      FROM ${prCodeReviewFindings}
+      WHERE workspace_id = ${workspaceId}
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    ) AS f
+    CROSS JOIN LATERAL jsonb_array_elements_text(f.lenses) AS lens(value)
+    GROUP BY lens.value
+    ORDER BY raised DESC, lens.value ASC
+  `);
+  // `execute` returns a different SHAPE per driver — postgres-js hands back the
+  // rows directly, pglite wraps them in `{ rows }`. Production uses the first
+  // and the test suite the second, so a reader that assumes either one is a
+  // function that cannot be covered by the tests that would catch it. Both are
+  // accepted rather than cast past.
+  const list = Array.isArray(rows)
+    ? rows
+    : ((rows as { rows?: typeof rows }).rows ?? []);
+
+  return [...list].map((r) => ({
+    lens: String(r.lens),
+    raised: Number(r.raised),
+    kept: Number(r.kept),
+  }));
+}
+
 export async function countDismissed(reviewId: string): Promise<number> {
   const rows = await getDbClient()
     .select({ count: sql<number>`cast(count(*) as int)` })

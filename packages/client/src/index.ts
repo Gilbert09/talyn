@@ -10,6 +10,7 @@ import type {
 import type {
   CodeReviewDismissReason,
   CodeReviewFinding,
+  CodeReviewLensStat,
   CodeReviewListItem,
   CodeReviewPreset,
   CodeReviewPublic,
@@ -2162,6 +2163,17 @@ export const features = {
  * everything under `pullRequests.codeReview*` answers about one pull request.
  */
 export const codeReviews = {
+  /**
+   * How each lens has performed for this workspace.
+   *
+   * Read on the settings page, not on a list poll — it answers "is this
+   * reviewer worth its cost", which is a question you ask occasionally.
+   */
+  lenses: (workspaceId: string) =>
+    request<{ lenses: CodeReviewLensStat[] }>(
+      'GET',
+      `/code-reviews/lenses?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
   /** Every review this workspace has run, newest first. */
   list: (workspaceId: string, limit?: number) =>
     request<{ reviews: CodeReviewListItem[] }>(

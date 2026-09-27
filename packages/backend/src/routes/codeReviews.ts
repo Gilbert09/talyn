@@ -7,6 +7,7 @@ import { pullRequests as pullRequestsTable } from '../db/schema.js';
 import { codeReviewRefusalReason, userMayUseCodeReview } from '../services/codeReviewAccess.js';
 import { recentReviewsForWorkspace } from '../services/codeReview/store.js';
 import { codeReviewsForPrs } from '../services/codeReview/public.js';
+import { lensEffectiveness } from '../services/codeReview/findings.js';
 
 /**
  * Every review this workspace has run, newest first.
@@ -107,6 +108,35 @@ export function codeReviewRoutes(): Router {
     }
 
     res.json({ success: true, data: { reviews: items } });
+  });
+
+  /**
+   * How each lens has performed for this workspace.
+   *
+   * Its own route rather than a field on the list, because it answers a
+   * different question on a different clock: the list is "what needs me now",
+   * this is "is this reviewer worth its cost", and it is read on the settings
+   * page rather than on every poll of a pull-request list.
+   */
+  router.get('/lenses', async (req: Request, res: Response<ApiResponse<unknown>>) => {
+    const user = assertUser(req);
+    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
+      return res.status(403).json({
+        success: false,
+        error: `Code review is not available: ${codeReviewRefusalReason()}`,
+        code: 'code_review_unavailable',
+      });
+    }
+    const workspaceId = String(req.query.workspaceId ?? '');
+    if (!workspaceId) {
+      return res.status(400).json({ success: false, error: 'workspaceId is required' });
+    }
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    res.json({ success: true, data: { lenses: await lensEffectiveness(workspaceId) } });
   });
 
   return router;

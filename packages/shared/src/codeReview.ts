@@ -1089,6 +1089,13 @@ export function codeReviewLensTally(
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
+/** How one lens has performed: raised versus kept by the judging pass. */
+export interface CodeReviewLensStat {
+  lens: string;
+  raised: number;
+  kept: number;
+}
+
 // ---------- Requests ----------
 
 export interface CodeReviewStartInput {

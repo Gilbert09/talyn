@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
   CODE_REVIEW_SEVERITY_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
+  codeReviewLensLabel,
   codeReviewPresetFacts,
+  type CodeReviewLensStat,
   CODE_REVIEW_PRESET_LABELS,
   codeReviewOffered,
   resolveCodeReviewSettings,
@@ -47,6 +49,25 @@ export function CodeReviewSettingsCard() {
   const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
   const features = useWorkspaceStore((s) => s.features);
   const [saving, setSaving] = useState(false);
+  // Fetched once when the page opens, not polled: it answers "is this reviewer
+  // worth its cost", which is a question you ask occasionally.
+  const [lensStats, setLensStats] = useState<CodeReviewLensStat[]>([]);
+  useEffect(() => {
+    if (!currentWorkspaceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await api.codeReviews.lenses(currentWorkspaceId);
+        if (!cancelled) setLensStats(res.lenses);
+      } catch {
+        // Silent: this is context, not a control. A settings page that cannot
+        // show a statistic must still let somebody change a setting.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspaceId]);
 
   // Three-state, like every other gated surface: `null` features means still
   // loading and must draw nothing, because conflating that with "not offered" is
@@ -171,6 +192,40 @@ export function CodeReviewSettingsCard() {
             </li>
           ))}
         </ul>
+
+        {/* What each reviewer has actually been worth here, rather than what the
+            preset promises. A lens that raises forty and keeps two is not
+            thorough, it is expensive — and until this existed there was no way
+            to tell those apart from inside the product. Shown only once there is
+            history: "0 of 0" teaches nobody anything. */}
+        {lensStats.length > 0 && (
+          <div className="mt-3 space-y-1 border-t pt-3">
+            <p className="text-xs font-medium">How each reviewer has done here</p>
+            <p className="text-[11px] text-muted-foreground">
+              Findings raised, and how many survived the checking pass.
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {lensStats.map((stat) => (
+                <li key={stat.lens} className="flex items-center gap-2 text-xs">
+                  <span className="w-28 shrink-0 text-muted-foreground">
+                    {codeReviewLensLabel(stat.lens)}
+                  </span>
+                  <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <span
+                      className="block h-full rounded-full bg-primary"
+                      style={{
+                        width: `${stat.raised ? Math.round((stat.kept / stat.raised) * 100) : 0}%`,
+                      }}
+                    />
+                  </span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {stat.kept} of {stat.raised} kept
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Step>
 
       <Step
