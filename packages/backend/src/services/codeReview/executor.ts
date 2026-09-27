@@ -521,8 +521,29 @@ async function buildUnitPrompt(
  * A preset whose own plan says `effort: 'top'` escalates its lenses too.
  */
 export function unitModelTier(preset: CodeReviewPreset, kind: RunKind): 'default' | 'top' {
-  if (kind === 'sweep' || kind === 'validate') return 'top';
-  return CODE_REVIEW_PRESET_PLAN[preset].effort === 'top' ? 'top' : 'default';
+  // DISABLED, deliberately, and not by deleting the mechanism.
+  //
+  // Escalation picks the top catalogue entry for the vendor, which is currently
+  // claude-fable-5-1 — and the fleet's Claude Code refuses it outright:
+  //
+  //   400 invalid_request_error
+  //   "Claude Code 2.1.75 does not support this model; version 2.1.251 or newer
+  //    is required."  (error_code: claude_code_version_too_old)
+  //
+  // The catalogue says what ANTHROPIC serves; it says nothing about what the
+  // agent runtime inside the microVM can drive, and those are different
+  // questions. Nothing checked the second one, so both judging units failed on
+  // every review the moment this shipped — the lenses ran on Sonnet and
+  // survived, so the symptom was not a broken review but an UNJUDGED one, with
+  // every finding left unvalidated and the precision bar silently absent.
+  //
+  // A failed judge is worse than a cheap one, so this returns to the workspace's
+  // own model until the fleet's Claude Code is new enough. Re-enable by deleting
+  // this early return — the rest of the mechanism is correct and tested, and the
+  // cross-vendor guard in topFleetModelForModel still holds.
+  void preset;
+  void kind;
+  return 'default';
 }
 
 // ---------- Ingesting a unit's output ----------
@@ -648,16 +669,45 @@ function keyFor(finding: RawCodeReviewFinding, verified: boolean): string {
 function anchorVerifier(
   files: { filename: string; patch?: string }[]
 ): (finding: RawCodeReviewFinding) => boolean {
-  const patches = new Map(files.map((f) => [f.filename, f.patch ?? '']));
+  const patches = new Map(files.map((f) => [f.filename, patchBodyText(f.patch ?? '')]));
   return (finding) => {
     const anchor = finding.anchor?.trim();
     if (!anchor) return false;
-    const patch = patches.get(finding.file);
-    if (patch === undefined) return false;
+    const haystack = patches.get(finding.file);
+    if (haystack === undefined) return false;
     const needle = anchor.replace(/\s+/g, ' ').trim();
-    const haystack = patch.replace(/\s+/g, ' ');
     return needle.length > 0 && haystack.includes(needle);
   };
+}
+
+/**
+ * A patch as the CODE it represents, not as a diff.
+ *
+ * This is the whole of the verifier's correctness, and getting it wrong made the
+ * check useless in a way that looked like it was working. A unified diff prefixes
+ * every line with `+`, `-` or a space, so collapsing the raw patch left those
+ * markers sitting between the lines: a needle reading `a b` had to match a
+ * haystack reading `+ a + b`. A single-line anchor matched by luck, because the
+ * marker fell outside it. Anything spanning two lines — which is most of what an
+ * agent quotes, given a 200-character budget — could never match at all.
+ *
+ * So EVERY finding came back unverified, the app said "location approximate" on
+ * all of them, and the signal that was supposed to catch a hallucinated path
+ * instead caught everything. Worse, `anchorVerified` gates auto-fix, so that
+ * feature could never have fired.
+ *
+ * Removed lines are dropped rather than included. A finding is about the code as
+ * it now stands, and keeping the `-` side would verify an anchor against text the
+ * pull request has just deleted.
+ */
+function patchBodyText(patch: string): string {
+  return patch
+    .split('\n')
+    .filter((line) => !line.startsWith('@@') && !line.startsWith('---') && !line.startsWith('+++'))
+    .filter((line) => !line.startsWith('-'))
+    .map((line) => (line.startsWith('+') || line.startsWith(' ') ? line.slice(1) : line))
+    .join('\n')
+    .replace(/\s+/g, ' ');
 }
 
 // ---------- Finishing ----------

@@ -12,25 +12,34 @@ import { unitModelTier } from '../services/codeReview/executor.js';
  * Standard only in how many reviewers there were.
  */
 
-describe('unitModelTier', () => {
+describe('unitModelTier — escalation is currently OFF', () => {
+  /**
+   * These assert the DISABLED state on purpose.
+   *
+   * Escalation picked the top catalogue entry, claude-fable-5-1, and the fleet's
+   * Claude Code refuses it: "Claude Code 2.1.75 does not support this model;
+   * version 2.1.251 or newer is required" (claude_code_version_too_old). Both
+   * judging units failed on every review the moment it shipped — and because the
+   * lenses run on the workspace's own model and survived, the symptom was not a
+   * broken review but an UNJUDGED one, with the precision bar silently absent.
+   *
+   * The catalogue says what Anthropic SERVES. It says nothing about what the
+   * agent runtime inside the microVM can drive. Nothing checked the second
+   * question, which is the actual lesson.
+   *
+   * Re-enabling is a deliberate act: delete the early return, flip these back to
+   * expecting 'top', and first confirm the fleet's Claude Code is new enough.
+   */
   it.each(['quick', 'standard', 'deep'] as const)(
-    'escalates the sweep and the judge on %s',
+    'runs the sweep and the judge on the workspace model for %s',
     (preset) => {
-      // Both read more, or have to say no to something plausible, and that is
-      // what the strongest model is for. True on every preset, not just Deep.
-      expect(unitModelTier(preset, 'sweep')).toBe('top');
-      expect(unitModelTier(preset, 'validate')).toBe('top');
+      expect(unitModelTier(preset, 'sweep')).toBe('default');
+      expect(unitModelTier(preset, 'validate')).toBe('default');
     }
   );
 
-  it.each(['quick', 'standard'] as const)('leaves %s lenses on the default model', (preset) => {
+  it.each(['quick', 'standard', 'deep'] as const)('leaves %s lenses alone too', (preset) => {
     expect(unitModelTier(preset, 'lens')).toBe('default');
-  });
-
-  it('escalates deep lenses too, because its plan says so', () => {
-    // Derived from CODE_REVIEW_PRESET_PLAN rather than restated, so the preset
-    // table stays the single definition of what a depth means.
-    expect(unitModelTier('deep', 'lens')).toBe('top');
   });
 });
 
