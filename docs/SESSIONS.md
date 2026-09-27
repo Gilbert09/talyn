@@ -2,6 +2,78 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Code review: what running it for real taught us (2026-09-27)
+
+The feature above shipped and was then used on an actual pull request. Almost
+everything below was invisible until that happened.
+
+**The bug that made it look broken.** Every lens settled `unparseable`. Three
+reviewers ran 33, 40 and 61 agent turns on one PR, cost $5, and all three
+recorded the same parse error — and the text being parsed was `the harness
+completed the task (61 agent turn(s))`, which is not a word an agent wrote.
+
+`finalTextFromEvents` walked the log backwards and returned the first `result`
+event's string, on the reading that it carries the agent server's summary of
+what the agent said. That is true of the Agent SDK, where `result.result` IS
+the final assistant text, so the two agree and the order never mattered. It is
+NOT true of the fleet: fleetd synthesises its own terminal event describing the
+RUN, and being terminal it is always last — so the agent's real final message,
+immediately before it with the sentinel and the JSON, was never looked at. A
+100% shadow, which is why it read as "the agents are broken" rather than as
+flakiness.
+
+It shadowed `TALYN_NEEDS_HUMAN:` on the fleet's transcript-tail path too, so a
+run that deliberately stood down recorded as a crash. `result` is now the
+fall-back rather than the preference. **Confirmed by replaying the three retired
+sandboxes' real logs through the real parser**: all three had emitted the
+sentinel correctly and the review had three findings waiting in it.
+
+**Things that were wired but never ran.**
+
+- *The judge's severity corrections were discarded.* The prompt explicitly
+  invites it to correct a severity, and `applyJudgement` read only the KEYS of
+  what survived. A finding it downgraded still shouted at the author.
+- *Model escalation did not exist.* All eight units ran Sonnet. Depth can only
+  mean model tier — there is no reasoning-effort field on the create body — so
+  Deep differed from Standard only in reviewer count.
+- *`verdict_reason` was written as null and never set.* The pass that rejected
+  five of six findings was therefore unauditable: a bar protecting you from
+  noise and one discarding real bugs looked identical.
+- *A phase boundary cost a reconciler tick.* `applyActions` answered "no more
+  passes" after advancing a phase, so a review parked until the 60-second
+  reconciler noticed — the poller cannot help, it only visits units that are
+  already running. 4m46s of a 41-minute review, for dispatches that take two
+  seconds.
+
+**41 minutes, measured.** Standard on an 8-file PR: 2m42s queued, 2m04s
+preparing, 13m36s reviewing (3 lenses in parallel), 14m30s sweeping, 8m20s
+validating. $6.25. The preset time hints said "around ten minutes" and now say
+what was measured — an estimate that far out makes a working feature feel
+broken. Per-finding parallel validation was considered and REJECTED: six judges
+to save three minutes costs roughly $5.40, and the three-live-unit ceiling means
+two waves anyway.
+
+**Two plan decisions reversed, both Tom's call.**
+
+- *Lens names are now user-facing.* The plan said they were internal vocabulary
+  nobody should see. That holds for CONFIGURING a review and not for reading
+  one: "Logic and Reliability both flagged this" is a reason to believe a
+  finding, "2 reviewers agreed" is a number — and cross-lens agreement is the
+  strongest confidence signal the pipeline produces.
+- *Auto-fix exists*, which the plan deliberately excluded on the grounds that
+  every other guard assumes a human chose the findings. It ships OFF and bounded
+  to judge-confirmed findings, above a severity floor defaulting to blockers,
+  with the location confirmed. All three bounds come from this session: the one
+  finding that survived judging quoted code that was not at the line it named —
+  the hallucination signal — and was wrong.
+
+**The card was empty, and not for the reason it looked.** It renders body and
+suggestion already; the list projection drops them for egress, and nothing ever
+fetched them. So every expanded finding showed a title and a path. There is now
+a detail route. `verdictReason` is the exception carried on the LIST — one
+capped sentence, and fetching it per card would mean a request per row for a
+list opened precisely to skim.
+
 ## Code review: findings in the app, and a fix you choose (2026-09-27)
 
 Talyn can now review a pull request and show what is wrong with it **inside the
