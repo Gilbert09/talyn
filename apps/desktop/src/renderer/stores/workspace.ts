@@ -15,6 +15,7 @@ export type ActivePanel =
   | 'merge_queue'
   | 'workflows'
   | 'loops'
+  | 'code_reviews'
   | 'mcp_servers'
   | 'settings';
 import {
@@ -202,14 +203,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
-  activePanel: 'queue'
-    | 'my_prs'
-    | 'reviews'
-    | 'merge_queue'
-    | 'workflows'
-    | 'loops'
-    | 'mcp_servers'
-    | 'settings';
+  activePanel: ActivePanel;
   selectedTaskId: string | null;
   theme: Theme;
   // Whether the create-workspace modal is open (triggered from the sidebar
@@ -355,16 +349,7 @@ interface WorkspaceState {
   setRepositories: (repos: WatchedRepo[]) => void;
 
   toggleSidebar: () => void;
-  setActivePanel: (
-    panel: 'queue'
-    | 'my_prs'
-    | 'reviews'
-    | 'merge_queue'
-    | 'workflows'
-    | 'loops'
-    | 'mcp_servers'
-    | 'settings'
-  ) => void;
+  setActivePanel: (panel: ActivePanel) => void;
   selectTask: (id: string | null) => void;
   setTheme: (theme: Theme) => void;
 }

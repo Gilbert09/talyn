@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import { codeReviewOffered, loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 
 /**
@@ -25,6 +25,14 @@ const WorkflowsPanel = lazy(() =>
 );
 // Lazy for the same reason, and more so: the loops flag fails closed, so almost
 // every visitor never renders a byte of this.
+// Lazy for the same reason as Loops: the code-review flag fails closed, so
+// most workspaces never draw this and should not pay for its bundle.
+const CodeReviewsPanel = lazy(() =>
+  import('../panels/codeReview/CodeReviewsPanel').then((m) => ({
+    default: m.CodeReviewsPanel,
+  }))
+);
+
 const LoopsPanel = lazy(() =>
   import('../panels/loops/LoopsPanel').then((m) => ({ default: m.LoopsPanel }))
 );
@@ -93,6 +101,9 @@ export function MainLayout() {
                   403s. */}
               {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
               {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
+      {activePanel === 'code_reviews' && codeReviewOffered(features) && (
+        <CodeReviewsPanel />
+      )}
             {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
               {activePanel === 'settings' && <SettingsPanel />}
             </Suspense>

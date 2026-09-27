@@ -12,5 +12,6 @@ export type ActivePanel =
   | 'merge_queue'
   | 'workflows'
   | 'loops'
+  | 'code_reviews'
   | 'mcp_servers'
   | 'settings';

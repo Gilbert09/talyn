@@ -20,6 +20,7 @@ export const PANEL_PATHS = {
   merge_queue: '/merge-queue',
   workflows: '/workflows',
   loops: '/loops',
+  code_reviews: '/code-reviews',
   mcp_servers: '/mcp-servers',
   settings: '/settings',
 } as const satisfies Record<ActivePanel, string>;

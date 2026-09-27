@@ -1,5 +1,5 @@
 import React from 'react';
-import { loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import { codeReviewOffered, loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { QueuePanel } from '../panels/QueuePanel';
@@ -9,6 +9,9 @@ import { MergeQueuePanel } from '../panels/github/MergeQueuePanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { WorkflowsPanel } from '../panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../panels/loops/LoopsPanel';
+// Eager, matching this fork's convention — the desktop ships one bundle, so the
+// web fork's lazy split buys nothing here.
+import { CodeReviewsPanel } from '../panels/codeReview/CodeReviewsPanel';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
@@ -62,6 +65,9 @@ export function MainLayout() {
                 backend will refuse every request for. */}
             {activePanel === 'workflows' && workflowsOffered(features) && <WorkflowsPanel />}
             {activePanel === 'loops' && loopsOffered(features) && <LoopsPanel />}
+      {activePanel === 'code_reviews' && codeReviewOffered(features) && (
+        <CodeReviewsPanel />
+      )}
           {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
             {activePanel === 'settings' && <SettingsPanel />}
           </div>

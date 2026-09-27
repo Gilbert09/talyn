@@ -2399,6 +2399,7 @@ export const api = {
   features,
   workflows,
   loops,
+  codeReviews,
   mcpServers,
   admin,
   ws: wsClient,

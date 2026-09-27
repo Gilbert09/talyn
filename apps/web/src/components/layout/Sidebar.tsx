@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   cloudProviderStatus,
+  codeReviewOffered,
   loopsOffered,
   mcpServersOffered,
   workflowsOffered,
@@ -17,6 +18,7 @@ import {
   Eye,
   Plug,
   Repeat,
+  ScanSearch,
   Workflow,
   Check,
   Plus,
@@ -145,6 +147,18 @@ export function Sidebar({ className }: SidebarProps) {
             // unattended — which is the one thing this feature does.
             badge: enabledLoopCount ? enabledLoopCount : undefined,
             badgeKind: 'inventory' as const,
+          },
+        ]
+      : []),
+    // Code review, gated the same three-state way. Failing CLOSED like loops:
+    // a review spends the workspace's own agent subscription, so an outage must
+    // not draw the entry for accounts nobody switched it on for.
+    ...(codeReviewOffered(features)
+      ? [
+          {
+            id: 'code_reviews' as const,
+            icon: ScanSearch,
+            label: 'Code review',
           },
         ]
       : []),
