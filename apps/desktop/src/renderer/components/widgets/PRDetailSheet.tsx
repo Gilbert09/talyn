@@ -117,6 +117,9 @@ export function PRDetailSheet({
    * waiting", never as "this PR has no description".
    */
   const [cachedBody, setCachedBody] = useState<string | null>(null);
+  // Owned here so the header's actions can open a tab — see DetailTabs.
+  const [tab, setTab] = useState<TabKey>('overview');
+  const features = useWorkspaceStore((s) => s.features);
   const [refreshing, setRefreshing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [confirmMerge, setConfirmMerge] = useState(false);
@@ -595,8 +598,13 @@ export function PRDetailSheet({
             />
           </>
         )}
+        {/* Wraps rather than crams. The two halves are a status group and an
+            action group, and at this width the actions used to spill onto a
+            second line while the pills stayed pinned beside them — which read as
+            one ragged row rather than two groups. `items-start` keeps the pills
+            at the top of their line when the actions do wrap. */}
         {view && (
-          <div className="flex items-center justify-between gap-2 border-t pt-3">
+          <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-2 border-t pt-3">
             {/* Left: the status (own PR) or review-decision (reviewer) pill.
                 For an own PR, mirror the list — a review pill (approval) PLUS a
                 status pill with `hideReviewState`, so the review verdict isn't
@@ -630,6 +638,24 @@ export function PRDetailSheet({
             {/* Right: write actions — only for PRs you own. */}
             {isOwnPr && (view.row.state === 'open' || canMerge) && (
               <div className="flex flex-wrap items-center justify-end gap-1">
+            {/* Findings first: reading what is wrong with a pull request comes
+                before handing it to an agent or queueing it to merge. Opens the
+                tab rather than starting a review — the tab is where the depth
+                picker and the existing findings are, and a button that silently
+                spends a subscription is not one to put beside "Merge". */}
+            {view.row.state === 'open' && codeReviewOffered(features) && (
+              <Button
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setTab('findings')}
+                title="Open the code review findings for this pull request"
+              >
+                <ScanSearch className="mr-1 h-3.5 w-3.5" />
+                {view.row.codeReview?.openCount
+                  ? `${view.row.codeReview.openCount} finding${view.row.codeReview.openCount === 1 ? '' : 's'}`
+                  : 'Code review'}
+              </Button>
+            )}
             {view.row.state === 'open' && (
               <Button
                 variant={fixBlocked ? 'outline' : 'default'}
@@ -813,6 +839,8 @@ export function PRDetailSheet({
           error={error}
           detailPending={detailPending}
           cachedBody={cachedBody}
+          tab={tab}
+          setTab={setTab}
         />
       )}
     </div>
@@ -829,13 +857,23 @@ function DetailTabs({
   error,
   detailPending,
   cachedBody,
+  tab,
+  setTab,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };
   error: string | null;
   detailPending: boolean;
   cachedBody: string | null;
+  /**
+   * Owned by the sheet, not by this component.
+   *
+   * Lifted so the header's actions can open a tab — "Code review" has to be
+   * able to put you on Findings, and a button that scrolls you to a tab strip
+   * and asks you to click again is not the action it claims to be.
+   */
+  tab: TabKey;
+  setTab: (tab: TabKey) => void;
 }) {
-  const [tab, setTab] = useState<TabKey>('overview');
   // Whether to draw the Findings tab at all.
   //
   // Gated like the nav items are, and it has to be: without this an account
