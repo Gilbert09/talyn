@@ -149,6 +149,14 @@ export function FindingsTab({
     [findings]
   );
 
+  // Exactly what the groups below render, flattened. Derived from `grouped`
+  // rather than re-filtered, so the button can never act on a finding the list
+  // is not showing.
+  const fixableAll = useMemo(
+    () => grouped.flatMap((g) => g.items.map((f) => f.id)),
+    [grouped]
+  );
+
   const lensTally = useMemo(() => codeReviewLensTally(findings), [findings]);
 
   const bucket = useMemo(
@@ -192,12 +200,21 @@ export function FindingsTab({
     }
   }
 
-  async function fixSelected() {
+  /**
+   * Fix a set of findings.
+   *
+   * Takes the ids rather than reading `selected`, so "Fix all" and "Fix
+   * selected" are the same call with a different argument — and every guard the
+   * route applies (the plan gate, the task cap deferral, `activePrTaskId`) holds
+   * for both without being restated.
+   */
+  async function fixFindings(ids: string[]) {
+    if (!ids.length) return;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await api.pullRequests.fixCodeReviewFindings(pullRequestId, [...selected]);
+      await api.pullRequests.fixCodeReviewFindings(pullRequestId, ids);
       setSelected(new Set());
       await load();
     } catch (err) {
@@ -327,15 +344,34 @@ export function FindingsTab({
                 Stop
               </Button>
             ) : (
-              <Button
-                size="sm"
-                variant={review.staleForHead ? 'default' : 'outline'}
-                disabled={busy}
-                onClick={() => void startReview()}
-              >
-                <RotateCcw className="mr-1 h-3 w-3" />
-                {review.staleForHead ? 'Review this commit' : 'Review again'}
-              </Button>
+              <>
+                {/* Fix all, for when the answer is "fix everything" and ticking
+                    each one is friction. It acts on what is SHOWN — open, at or
+                    above the reporting bar — rather than on everything ever
+                    raised, so it cannot silently commit for a nitpick that the
+                    list deliberately hides, or for something already dismissed. */}
+                {fixableAll.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void fixFindings(fixableAll)}
+                    title={`Fix all ${fixableAll.length} finding(s) shown`}
+                  >
+                    <Wrench className="mr-1 h-3 w-3" />
+                    Fix all {fixableAll.length}
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant={review.staleForHead ? 'default' : 'outline'}
+                  disabled={busy}
+                  onClick={() => void startReview()}
+                >
+                  <RotateCcw className="mr-1 h-3 w-3" />
+                  {review.staleForHead ? 'Review this commit' : 'Review again'}
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -560,7 +596,7 @@ export function FindingsTab({
             <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
               Clear
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => void fixSelected()}>
+            <Button size="sm" disabled={busy} onClick={() => void fixFindings([...selected])}>
               <Wrench className="mr-1 h-3 w-3" />
               Fix selected
             </Button>
