@@ -2,7 +2,7 @@ import { TASK_STATUS_TERMINAL, type TaskStatus } from '@talyn/shared';
 import { domainEvents } from '../events.js';
 import { runWithoutScope } from '../../db/client.js';
 import { resolveEntitlement } from '../billing/entitlements.js';
-import { workspaceMayUseCodeReview, codeReviewKillSwitchPulled } from '../codeReviewAccess.js';
+import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import { settleFixRun } from './fix.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { startReviewCycle, workspaceOwner, workspaceReviewSettings } from './cycle.js';
@@ -20,9 +20,10 @@ import { CODE_REVIEW_PHASE_AT_REST, type CodeReviewPhase } from '@talyn/shared';
  * # Why the snapshot handler is careful about cost
  *
  * `pr:snapshot` fires on every poll upsert of every tracked pull request, which is
- * the busiest domain event in the app. So the FIRST thing it does is the cheap
- * subject-free check, and the second is a feature check that is cached for thirty
- * seconds. Until this feature is switched on for an account, a snapshot costs one
+ * the busiest domain event in the app. There is no cheap deployment-wide switch to
+ * check first — this feature is gated on PostHog alone — so the first thing it does
+ * is the per-workspace feature check, which the flag service caches for thirty
+ * seconds. Until the feature is switched on for an account, a snapshot costs one
  * cached boolean and nothing else.
  */
 
@@ -56,7 +57,6 @@ export function initCodeReviewTriggers(): void {
    * cycle when the workspace asked for one.
    */
   domainEvents.on('pr:snapshot', (evt) => {
-    if (codeReviewKillSwitchPulled()) return;
     void runWithoutScope(async () => {
       try {
         await onSnapshot(evt.prId, evt.workspaceId, evt.state);

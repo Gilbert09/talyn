@@ -2,7 +2,6 @@ import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
-import { codeReviewKillSwitchPulled } from '../codeReviewAccess.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { appendReviewEvent, loadOrphanedClaims, loadStaleReviews, settleRun } from './store.js';
 import type { CodeReviewPhase } from '@talyn/shared';
@@ -61,9 +60,10 @@ class CodeReviewReconciler {
   }
 
   async tick(): Promise<void> {
-    // The cheap, subject-free check first: with the deployment switched off there
-    // is no account to ask about and no row worth reading.
-    if (codeReviewKillSwitchPulled()) return;
+    // No deployment-wide switch to check — code review is gated on PostHog alone,
+    // so there is no subject-free answer to read here. The sweep is cheap when
+    // there is nothing to do: one indexed lookup over non-terminal reviews, and a
+    // deployment whose accounts are all outside the audience has none.
     if (!this.guard.tryBegin()) return;
     const started = Date.now();
     let ok = true;

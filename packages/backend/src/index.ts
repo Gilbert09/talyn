@@ -38,7 +38,6 @@ import {
   codeReviewReconciler,
   initCodeReviewReconciler,
 } from './services/codeReview/reconciler.js';
-import { codeReviewKillSwitchPulled } from './services/codeReviewAccess.js';
 import { initReviewPrioritySweep } from './services/reviewPriority/sweep.js';
 import {
   featureFlagsEvaluateLocally,
@@ -173,21 +172,15 @@ async function main() {
     initLoopScheduler();
   }
 
-  // Code review reads the same way round as loops: the flag fails CLOSED, so the
-  // interesting log line is the ON one. An armed engine will boot sandboxes on the
-  // workspace's own subscription and can push commits to a branch, and an operator
-  // reading this log should be able to see that without inferring it.
-  if (codeReviewKillSwitchPulled()) {
-    console.log('[code-review] engine NOT armed — CODE_REVIEW_ENABLED=false');
-  } else {
-    console.log('[code-review] engine armed');
-    // Armed whenever the break glass is not pulled, NOT only when some workspace is
-    // in the audience: the flag is per workspace and answered per cycle, and the
-    // sweeps cost one indexed lookup when there is nothing to do.
-    initCodeReviewTriggers();
-    initCodeReviewPoller();
-    initCodeReviewReconciler();
-  }
+  // Code review. Armed unconditionally, like the review-priority sweep below,
+  // because every gate that matters is INSIDE: there is no env override for this
+  // flag at all — PostHog's audience is the only way in — and both sweeps cost one
+  // indexed lookup when no account is in it. A deployment whose accounts are all
+  // outside the audience runs these timers and finds nothing, which is the point.
+  console.log('[code-review] engine armed — gated per workspace by PostHog');
+  initCodeReviewTriggers();
+  initCodeReviewPoller();
+  initCodeReviewReconciler();
 
   // The Reviews tab's ranking model. Armed unconditionally, because every gate
   // that matters is inside: the sweep asks the PostHog flag per workspace

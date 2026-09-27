@@ -6,16 +6,21 @@ import { users as usersTable, workspaces as workspacesTable } from '../db/schema
 /**
  * The code review gate.
  *
- * The polarity is what is under test, and it matches `loops` rather than the
- * `workflows` gate sitting next to it in the nav: absent means OFF. A review
- * spends the workspace's own agent subscription across several sandboxes per
- * pull request, and the fix run it leads to pushes commits to a branch that may
- * not belong to whoever pressed the button. "We could not reach PostHog, so let
- * everybody review and fix" is the expensive kind of outage.
+ * Two things are under test and they are separate claims.
  *
- * Three gates with two different fallbacks living beside each other is why this
- * file exists: a change that collapsed them to one shared default would silently
- * flip this one on.
+ * THE POLARITY: absent means OFF, matching `loops` and `mcpServers` rather than
+ * the `workflows` gate sitting next to it in the nav. A review spends the
+ * workspace's own agent subscription across several sandboxes per pull request,
+ * and the fix run it leads to pushes commits to a branch that may not belong to
+ * whoever pressed the button. "We could not reach PostHog, so let everybody
+ * review and fix" is the expensive kind of outage. Four gates with two different
+ * fallbacks living beside each other is why this matters: a change that collapsed
+ * them to one shared default would silently flip this one on.
+ *
+ * THERE IS NO ENV OVERRIDE: PostHog's audience is the only way in. That is a
+ * stronger claim than the polarity and needs its own cases, because the override
+ * on the other three flags SHORT-CIRCUITS PostHog and is read generously — so one
+ * variable set in production would have handed this to everybody.
  */
 
 let answer: (key: string) => boolean | undefined = () => undefined;
@@ -31,12 +36,9 @@ vi.mock('posthog-node', () => ({
   },
 }));
 
-const {
-  codeReviewKillSwitchPulled,
-  codeReviewRefusalReason,
-  userMayUseCodeReview,
-  workspaceMayUseCodeReview,
-} = await import('../services/codeReviewAccess.js');
+const { codeReviewRefusalReason, userMayUseCodeReview, workspaceMayUseCodeReview } =
+  await import('../services/codeReviewAccess.js');
+const { readFlagOverride } = await import('@talyn/shared');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
 
 const SUBJECT = { distinctId: 'user-1', email: 'tom@example.com' };
@@ -69,22 +71,31 @@ describe('code review access', () => {
     return workspaceId;
   }
 
-  describe('the kill switch', () => {
-    it.each([
-      [undefined, false],
-      ['', false],
-      ['true', false],
-      ['1', false],
-      ['false', true],
-      ['FALSE', true],
-      [' false ', true],
-      ['0', true],
-      ['off', true],
-      ['no', true],
-    ])('CODE_REVIEW_ENABLED=%j → pulled: %s', (value, pulled) => {
-      if (value === undefined) delete process.env.CODE_REVIEW_ENABLED;
-      else process.env.CODE_REVIEW_ENABLED = value as string;
-      expect(codeReviewKillSwitchPulled()).toBe(pulled);
+  describe('there is no env override at all', () => {
+    // The `mcpServers` posture, and the reason is sharper here: an override is read
+    // GENEROUSLY (anything but false/0/off/no reads as on) and it SHORT-CIRCUITS
+    // PostHog — so one env var set in production would hand a feature that pushes
+    // commits to other people's branches to every account at once.
+    it.each(['true', '1', 'yes', 'false', '0', 'off', ''])(
+      'CODE_REVIEW_ENABLED=%j is not read at all',
+      (value) => {
+        process.env.CODE_REVIEW_ENABLED = value;
+        expect(readFlagOverride('codeReview', process.env)).toBeUndefined();
+      }
+    );
+
+    it('proves the assertion can fail: a flag that HAS an override reads it', () => {
+      // Guards the cases above. Without this they would pass just as happily if
+      // `readFlagOverride` were broken for every flag.
+      process.env.LOOPS_ENABLED = 'false';
+      expect(readFlagOverride('loops', process.env)).toBe(false);
+      delete process.env.LOOPS_ENABLED;
+    });
+
+    it('cannot be switched ON by the environment, whatever PostHog says', async () => {
+      // The whole point of dropping it: no env var grants access.
+      process.env.CODE_REVIEW_ENABLED = 'true';
+      expect(await userMayUseCodeReview(SUBJECT)).toBe(false);
     });
   });
 
@@ -119,22 +130,15 @@ describe('code review access', () => {
     });
   });
 
-  describe('the env override wins both ways', () => {
-    it('CODE_REVIEW_ENABLED=true runs with no PostHog — the local-dev path', async () => {
-      // Deliberately unlike `mcpServers`, which has no override at all: a
-      // contributor with no PostHog project has to be able to develop this.
-      process.env.CODE_REVIEW_ENABLED = 'true';
-      expect(await userMayUseCodeReview(SUBJECT)).toBe(true);
-    });
-
-    it('CODE_REVIEW_ENABLED=false beats a PostHog yes — the break glass', async () => {
-      // The override short-circuits rather than outvotes, because break glass
-      // has to work when PostHog is the broken thing.
+  describe('PostHog is the only way in', () => {
+    it('an env var cannot switch it off either, so PostHog stays authoritative', async () => {
+      // The cost of having no break glass, asserted rather than assumed: with
+      // PostHog saying yes, nothing in the environment can say no.
       process.env.TALYN_POSTHOG_KEY = 'phc_test';
       process.env.CODE_REVIEW_ENABLED = 'false';
       resetFeatureFlagsForTests();
-      answer = () => true;
-      expect(await userMayUseCodeReview(SUBJECT)).toBe(false);
+      answer = (key) => key === 'code-review';
+      expect(await userMayUseCodeReview(SUBJECT)).toBe(true);
     });
   });
 
@@ -155,19 +159,20 @@ describe('code review access', () => {
   });
 
   describe('the refusal reason', () => {
-    it('names the break glass when it is pulled', () => {
-      process.env.CODE_REVIEW_ENABLED = 'false';
-      expect(codeReviewRefusalReason()).toContain('CODE_REVIEW_ENABLED=false');
-    });
-
     it('distinguishes "we could not ask" from "you are not in the audience"', () => {
-      // A third case `workflows` does not have, because this flag fails closed:
-      // an unreachable PostHog genuinely produces a refusal, and telling
-      // somebody they are outside the audience sends them to the wrong
-      // dashboard.
+      // Telling somebody they are outside the audience when the real answer is
+      // "we could not ask PostHog" sends them to the wrong dashboard.
       expect(codeReviewRefusalReason()).toContain('no PostHog key');
       process.env.TALYN_POSTHOG_KEY = 'phc_test';
       expect(codeReviewRefusalReason()).toContain('audience');
+    });
+
+    it('never offers a switch that does not exist', () => {
+      // Its siblings can say "set X=true to use it anyway". This one cannot, so it
+      // must not imply one — that is a person sent looking for an env var for an
+      // afternoon.
+      expect(codeReviewRefusalReason()).not.toContain('CODE_REVIEW_ENABLED');
+      expect(codeReviewRefusalReason()).toContain('PostHog alone');
     });
   });
 });

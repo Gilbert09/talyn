@@ -171,9 +171,19 @@ export const FEATURE_FLAGS = {
    * is unreachable, so let every account review and fix" is not a graceful
    * degradation; it is the expensive kind of outage.
    *
-   * An env override, unlike `mcpServers` which deliberately has none, because
-   * the fix run is the thing you will want to stop in a hurry — and because a
-   * contributor with no PostHog project has to be able to develop this at all.
+   * NO env override, matching `mcpServers` rather than its other three siblings.
+   * Tom's call, and the reasoning is sharper here than there: an override is read
+   * generously — anything but `false`/`0`/`off`/`no` reads as ON — and it
+   * SHORT-CIRCUITS PostHog. So one env var set in production would hand a feature
+   * that pushes commits to other people's branches to every account at once.
+   * PostHog's audience is the only way in.
+   *
+   * Two costs, stated rather than discovered. This cannot be run against a
+   * deployment with no PostHog project — the thing `LOOPS_ENABLED=true` exists
+   * for — so developing it locally needs a project. And there is no switch to
+   * reach for if PostHog is the broken thing; `fallback: false` is what answers
+   * then, which turns the feature off rather than on. That is the direction you
+   * would have wanted the switch to go anyway.
    *
    * `availability: 'gated'` while it rolls out, which withholds every
    * `code-review` highlight from EVERYBODY — including the accounts PostHog has
@@ -189,7 +199,6 @@ export const FEATURE_FLAGS = {
    */
   codeReview: {
     posthogKey: 'code-review',
-    envOverride: 'CODE_REVIEW_ENABLED',
     fallback: false,
     description: 'Code review — AI findings on a pull request, shown in the app',
     availability: 'gated',
