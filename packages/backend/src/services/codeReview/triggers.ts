@@ -102,8 +102,19 @@ async function onSnapshot(
   // finished cycle leaves `reviewedHeadSha` equal to the current head, so the next
   // hundred snapshots do nothing.
   const pr = await getPrForReview(prId);
-  const head = (pr?.lastSummary as { headSha?: string } | null)?.headSha ?? '';
+  const summary = (pr?.lastSummary ?? {}) as { headSha?: string; draft?: boolean };
+  const head = summary.headSha ?? '';
   if (!head) return;
+
+  // A draft is still being written. Reviewing one spends the workspace's
+  // subscription on a state its author has not finished making, and then again
+  // on every push until they mark it ready — which is the worst ratio of cost to
+  // usefulness this feature has.
+  //
+  // AUTOMATIC reviews only. Asking for a review of your own draft is a perfectly
+  // good thing to want, and the button still does it; what this refuses is doing
+  // it on your behalf, repeatedly, unasked.
+  if (summary.draft === true) return;
   if (review && review.reviewedHeadSha === head) return;
   if (review && review.targetHeadSha === head && review.phase !== 'idle') return;
 

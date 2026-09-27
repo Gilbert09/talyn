@@ -10,6 +10,7 @@ import {
   type CodeReviewPreset,
   type RawCodeReviewFinding,
   findingsEligibleForAutoFix,
+  filesWorthReviewing,
 } from '@talyn/shared';
 import { eq } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
@@ -193,7 +194,12 @@ async function loadPromptContext(
       body,
       headBranch: summary.headBranch ?? '',
       baseBranch: summary.baseBranch ?? '',
-      files: files.map((f) => ({
+      // Lock files, vendored trees, snapshots and generated output are dropped
+      // before a reviewer ever sees them. They are large, nobody writes them,
+      // and they are noise-dense — a reviewer told to look hard at a thousand
+      // near-identical generated lines will find something to say, which then
+      // costs a judging pass to throw away.
+      files: filesWorthReviewing(files).map((f) => ({
         filename: f.filename,
         status: f.status,
         additions: f.additions,

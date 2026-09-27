@@ -354,6 +354,59 @@ export function resolveReportingBar(
     : CODE_REVIEW_REPORTING_BAR;
 }
 
+/**
+ * Files a review should not spend an agent on.
+ *
+ * Lock files, generated clients, vendored trees, snapshots and minified
+ * bundles. Three reasons, and the third is the one that matters:
+ *
+ * - They are large, so they eat the diff budget a chunk has.
+ * - Nobody writes them, so a finding on one is addressed by regenerating the
+ *   file, which is not what a fix run does.
+ * - They are NOISE-DENSE. A generated client has thousands of near-identical
+ *   lines, and a reviewer told to look hard at a diff will find something to say
+ *   about them — which then costs a judging pass to throw away.
+ *
+ * Matched on the path, not on content: content-sniffing a minified bundle means
+ * reading it first, which is the cost this avoids.
+ *
+ * NOT a setting. A person who wants their lock file reviewed is not somebody the
+ * product should build a knob for, and every knob here is one more thing to get
+ * wrong before the first useful review.
+ */
+const GENERATED_PATH_PATTERNS: readonly RegExp[] = [
+  // Dependency lock files — every ecosystem's, by exact basename.
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|uv\.lock|Pipfile\.lock|flake\.lock)$/,
+  // Vendored or third-party trees nobody in this repo authors.
+  /(^|\/)(node_modules|vendor|third_party|Pods|\.yarn)\//,
+  // Test snapshots: regenerated, never hand-edited.
+  /(^|\/)__snapshots__\//,
+  /\.snap$/,
+  // Generated output, by the conventions that actually appear in repositories.
+  /(^|\/)(dist|build|out|coverage)\//,
+  /\.(min\.js|min\.css|map)$/,
+  /(^|\/).*\.(pb|generated|gen)\.(go|ts|js|py|rb|cs|java)$/,
+  /(^|\/)(generated|__generated__)\//,
+];
+
+/** Whether a review should skip this path. See GENERATED_PATH_PATTERNS. */
+export function isGeneratedPath(filename: string): boolean {
+  return GENERATED_PATH_PATTERNS.some((re) => re.test(filename));
+}
+
+/**
+ * The files a review will actually read.
+ *
+ * Returns everything when the filter would leave nothing: a pull request that
+ * is ONLY a lock-file bump is still a pull request somebody asked to review, and
+ * answering "no files" would report as a failed cycle rather than as a review of
+ * what is there.
+ */
+export function filesWorthReviewing<T extends { filename: string }>(files: readonly T[]): T[] {
+  const kept = files.filter((f) => !isGeneratedPath(f.filename));
+  return kept.length ? kept : [...files];
+}
+
 // ---------- Findings and the public payload ----------
 
 export type CodeReviewDisposition =
