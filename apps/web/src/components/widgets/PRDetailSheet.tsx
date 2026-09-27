@@ -935,7 +935,13 @@ function DetailTabs({
             />
           )}
           {effectiveTab === 'findings' && (
-            <FindingsTab pullRequestId={data.row.id} seedReview={data.row.codeReview ?? null} />
+            <FindingsTab
+              pullRequestId={data.row.id}
+              seedReview={data.row.codeReview ?? null}
+              // Already fetched on open for the Files tab, so an anchored diff
+              // costs no extra request.
+              files={filesState.files}
+            />
           )}
           {effectiveTab === 'checks' && <ChecksTab data={data} detailPending={detailPending} />}
           {effectiveTab === 'reviews' && <ReviewsTab data={data} />}

@@ -37,6 +37,8 @@ import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
 import { Markdown } from '../../../lib/markdown';
+import { PatchDiff } from '@pierre/diffs/react';
+import type { PRFile } from '../../../lib/api';
 
 /**
  * The findings a code review produced, in the app.
@@ -59,10 +61,20 @@ import { Markdown } from '../../../lib/markdown';
 export function FindingsTab({
   pullRequestId,
   seedReview,
+  files = null,
 }: {
   pullRequestId: string;
   /** The row's copy, so the tab paints before its own fetch lands. */
   seedReview?: CodeReviewPublic | null;
+  /**
+   * The pull request's changed files, when the host already has them.
+   *
+   * Passed IN rather than fetched, exactly as the Files tab receives them: the
+   * sheet starts that fetch on open, so an anchored diff costs no request. The
+   * panel has no files and passes none, which is why this is optional and why
+   * every finding still renders without it.
+   */
+  files?: PRFile[] | null;
 }) {
   const [review, setReview] = useState<CodeReviewPublic | null>(seedReview ?? null);
   const [findings, setFindings] = useState<CodeReviewFinding[]>([]);
@@ -443,6 +455,7 @@ export function FindingsTab({
               key={finding.id}
               finding={finding}
               pullRequestId={pullRequestId}
+              files={files}
               stillChecking={running}
               selected={selected.has(finding.id)}
               expanded={expanded.has(finding.id)}
@@ -634,6 +647,7 @@ function headline(review: CodeReviewPublic): string {
 function FindingCard({
   finding,
   pullRequestId,
+  files,
   stillChecking,
   selected,
   expanded,
@@ -643,6 +657,7 @@ function FindingCard({
 }: {
   finding: CodeReviewFinding;
   pullRequestId: string;
+  files: PRFile[] | null;
   /** The cycle is still running, so this finding may yet be withdrawn. */
   stillChecking: boolean;
   selected: boolean;
@@ -737,23 +752,10 @@ function FindingCard({
             </div>
           )}
 
-          {/* The agent's VERBATIM quote of the code it judged, and the single most
-              useful thing on this card when a finding is wrong. A reader can see
-              at a glance that the agent is describing code that is not there —
-              which is precisely the case `anchorVerified: false` is reporting, and
-              which a prose summary hides. */}
-          {full.anchor && (
-            <div className="rounded border bg-muted/30 p-2">
-              <p className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">
-                {full.anchorVerified
-                  ? 'The code it read'
-                  : 'The code it quoted — not found at this location'}
-              </p>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">
-                {full.anchor}
-              </pre>
-            </div>
-          )}
+          {/* The code, as a DIFF where the pull request touched it. A quotation
+              tells you what the agent believed; a hunk tells you what the change
+              actually did, which is what decides whether a finding is right. */}
+          <FindingCode finding={full} files={files} />
 
           {full.suggestion && (
             <div className="rounded bg-muted/50 p-2">
@@ -895,3 +897,97 @@ export function findingsBadge(review: CodeReviewPublic | null | undefined): stri
 }
 
 export type { CodeReviewSeverity };
+
+
+/**
+ * The finding's code, as a diff hunk rather than a quotation.
+ *
+ * Slices the file's OWN patch down to the hunks that contain the finding, and
+ * hands the slice to the same renderer the Files tab uses. A quotation in a
+ * <pre> tells you what the agent believed; a hunk tells you what the pull
+ * request actually did, with the added and removed lines coloured — which is
+ * what you need to decide whether a finding is right.
+ *
+ * Falls back to the verbatim quote when there is no patch to slice: the panel
+ * renders this tab with no files loaded, a finding can name a file the pull
+ * request does not touch, and in both cases the agent's own words are better
+ * than an empty box.
+ */
+function FindingCode({
+  finding,
+  files,
+}: {
+  finding: CodeReviewFinding;
+  files: PRFile[] | null;
+}) {
+  const file = files?.find((f) => f.filename === finding.filePath) ?? null;
+  const sliced = useMemo(
+    () => (file?.patch ? sliceHunksAround(file.patch, finding.lineStart) : null),
+    [file?.patch, finding.lineStart]
+  );
+
+  if (file && sliced) {
+    return (
+      <div className="overflow-x-auto rounded border">
+        <PatchDiff
+          patch={[
+            `diff --git a/${file.filename} b/${file.filename}`,
+            `--- a/${file.filename}`,
+            `+++ b/${file.filename}`,
+            sliced,
+          ].join('\n')}
+          // The card already names the file above, so the library's own header
+          // would repeat it with different truncation — the same reason the
+          // Files tab disables it.
+          options={{ diffStyle: 'unified', disableFileHeader: true }}
+        />
+      </div>
+    );
+  }
+
+  if (!finding.anchor) return null;
+  return (
+    <div className="rounded border bg-muted/30 p-2">
+      <p className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">
+        {finding.anchorVerified
+          ? 'The code it read'
+          : 'The code it quoted — not found at this location'}
+      </p>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">
+        {finding.anchor}
+      </pre>
+    </div>
+  );
+}
+
+/**
+ * The hunks of a patch that cover a line, or the whole patch when none does.
+ *
+ * A finding names a line in the NEW file, and a patch's `@@ -a,b +c,d @@` header
+ * carries exactly that range — so the hunk is found by arithmetic rather than by
+ * searching the text for the code, which is what the anchor check already does
+ * and does not need repeating.
+ *
+ * Returning the whole patch when nothing matches is deliberate: a line outside
+ * every hunk means the finding is about context the pull request did not change,
+ * which is real and worth showing rather than hiding behind an empty result.
+ */
+export function sliceHunksAround(patch: string, line: number | null): string {
+  const lines = patch.split('\n');
+  const hunks: { header: number; start: number; end: number; body: string[] }[] = [];
+  for (const raw of lines) {
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+    if (m) {
+      const start = Number(m[1]);
+      const count = m[2] === undefined ? 1 : Number(m[2]);
+      hunks.push({ header: start, start, end: start + Math.max(count, 1) - 1, body: [raw] });
+    } else if (hunks.length) {
+      hunks[hunks.length - 1]!.body.push(raw);
+    }
+  }
+  if (!hunks.length) return patch;
+  if (line === null) return patch;
+  const hit = hunks.filter((h) => line >= h.start && line <= h.end);
+  if (!hit.length) return patch;
+  return hit.map((h) => h.body.join('\n')).join('\n');
+}
