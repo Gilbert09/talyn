@@ -90,6 +90,15 @@ interface PRDetailSheetProps {
    */
   layout?: 'overlay' | 'inline' | 'contained';
   /**
+   * Which tab to open on.
+   *
+   * For a caller that already knows why you are here — the Code review panel
+   * opens a row on its findings, because that is the thing you clicked. Only
+   * the INITIAL tab: once open, the sheet is yours to navigate, so this must
+   * not fight a tab you then choose yourself.
+   */
+  initialTab?: TabKey;
+  /**
    * The list's already-loaded row for this PR. When supplied, the panel
    * renders the cached summary instantly on switch and refreshes the
    * detail (reviews/files/check rows) in place — no full-panel spinner.
@@ -102,6 +111,7 @@ export function PRDetailSheet({
   onClose,
   layout = 'overlay',
   seedRow = null,
+  initialTab = 'overview',
 }: PRDetailSheetProps) {
   const [data, setData] = useState<{
     row: PRRow;
@@ -118,7 +128,7 @@ export function PRDetailSheet({
    */
   const [cachedBody, setCachedBody] = useState<string | null>(null);
   // Owned here so the header's actions can open a tab — see DetailTabs.
-  const [tab, setTab] = useState<TabKey>('overview');
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const features = useWorkspaceStore((s) => s.features);
   const [refreshing, setRefreshing] = useState(false);
   const [merging, setMerging] = useState(false);
