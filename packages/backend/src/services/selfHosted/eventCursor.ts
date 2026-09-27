@@ -73,10 +73,37 @@ export function assistantText(event: AgentEvent): string | null {
 /**
  * The agent's last word, walking backwards.
  *
- * A `result` event's string is the agent server's own summary and is preferred
- * when present; otherwise the last assistant turn that actually said something.
- * Backwards rather than forwards because the thing every caller wants is at the
- * end: the needs-human sentinel, or the review's JSON block.
+ * The last assistant turn that actually said something, and ONLY if there is no
+ * such turn, a `result` event's string. Backwards rather than forwards because
+ * the thing every caller wants is at the end: the needs-human sentinel, or the
+ * review's JSON block.
+ *
+ * # Why `result` is the fall-back and not the preference
+ *
+ * It used to be preferred, on the reading that a `result` event carries the
+ * agent server's own summary of what the agent said. That is true of the Agent
+ * SDK, where `result.result` IS the final assistant text — so on that path the
+ * two answers agree and the order never mattered.
+ *
+ * It is NOT true of the fleet. fleetd synthesises its own terminal event, whose
+ * string is a description of the RUN rather than anything the agent wrote:
+ * `the harness completed the task (61 agent turn(s))`. Since that event is
+ * necessarily last, preferring it meant the agent's real final message — the
+ * one immediately before it, carrying the sentinel and the JSON block — was
+ * never even looked at.
+ *
+ * The cost was a whole class of silent failure rather than one bug. Every lens
+ * of a review settled `unparseable` no matter what the agent produced, which
+ * reads on screen as "the review did not finish" after several minutes and
+ * several dollars of real work; and a fleet run that stood down with
+ * `TALYN_NEEDS_HUMAN:` in its final message had that sentinel shadowed too, so
+ * a refusal recorded as a failure. Both failure modes are indistinguishable
+ * from the agent having misbehaved, which is where the time goes.
+ *
+ * Flipping the order is safe for the SDK path precisely because the two agree
+ * there: preferring the assistant turn returns the same string `result` would
+ * have. Where they disagree, the agent's own words are the ones every caller
+ * asked for.
  *
  * Returns null for an empty or silent transcript, and null means UNKNOWN. No
  * caller may read it as "the agent had nothing to report" — for the review
@@ -85,15 +112,19 @@ export function assistantText(event: AgentEvent): string | null {
  */
 export function finalTextFromEvents(events: readonly AgentEvent[]): string | null {
   if (!events.length) return null;
+  let summary: string | null = null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
     if (event.type === 'result' && typeof event.result === 'string') {
-      return event.result;
+      // Remembered, not returned: it is the answer only if nothing the agent
+      // said survives below.
+      if (summary === null) summary = event.result;
+      continue;
     }
     if (event.type === 'assistant') {
       const text = assistantText(event);
       if (text) return text;
     }
   }
-  return null;
+  return summary;
 }
