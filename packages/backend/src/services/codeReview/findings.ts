@@ -475,6 +475,35 @@ export async function severityCounts(reviewId: string): Promise<CodeReviewCounts
   return counts;
 }
 
+/**
+ * What became of every candidate this review raised.
+ *
+ * Counts ALL of them regardless of disposition — a rejected finding is the
+ * interesting half. The ratio is the most informative single fact about a
+ * review's quality: on the first real one the judging pass kept one of six, and
+ * without saying so a short list is indistinguishable from a shallow review.
+ */
+export async function funnelCounts(
+  reviewId: string
+): Promise<{ raised: number; kept: number; rejected: number }> {
+  const rows = await getDbClient()
+    .select({
+      verdict: prCodeReviewFindings.verdict,
+      count: sql<number>`cast(count(*) as int)`,
+    })
+    .from(prCodeReviewFindings)
+    .where(eq(prCodeReviewFindings.reviewId, reviewId))
+    .groupBy(prCodeReviewFindings.verdict);
+
+  const funnel = { raised: 0, kept: 0, rejected: 0 };
+  for (const row of rows) {
+    funnel.raised += row.count;
+    if (row.verdict === 'confirmed') funnel.kept += row.count;
+    if (row.verdict === 'rejected') funnel.rejected += row.count;
+  }
+  return funnel;
+}
+
 export async function countDismissed(reviewId: string): Promise<number> {
   const rows = await getDbClient()
     .select({ count: sql<number>`cast(count(*) as int)` })

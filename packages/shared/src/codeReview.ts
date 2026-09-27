@@ -430,6 +430,15 @@ export interface CodeReviewPublic {
   /** At or above the app's reporting bar, and not dismissed. What the badge shows. */
   openCount: number;
   dismissedCount: number;
+  /**
+   * What the review did to its own candidates: raised, kept, thrown out.
+   *
+   * Shown as a sentence rather than left implicit, because the ratio is the
+   * single most informative thing about a review's quality — on the first real
+   * one the judge kept one of six — and without it a short list is
+   * indistinguishable from a shallow review.
+   */
+  funnel: { raised: number; kept: number; rejected: number };
   /** A user-facing sentence. Never a stack, never a host address. */
   failureReason: string | null;
   /** Set while a unit is waiting for a runner the plan will not give it yet. */
@@ -913,6 +922,26 @@ export function findingsEligibleForAutoFix<
       isCodeReviewSeverity(f.severity) &&
       severityAtOrAbove(f.severity, settings.autoFixSeverity)
   );
+}
+
+/**
+ * One row of the Code review panel.
+ *
+ * Carries the pull request's identity alongside the review, because the panel is
+ * a cohort view across pull requests — without the owner, repo and number, every
+ * row would need its own lookup to say what it is about.
+ */
+export interface CodeReviewListItem {
+  review: CodeReviewPublic;
+  pullRequest: {
+    id: string;
+    owner: string;
+    repo: string;
+    number: number;
+    state: string;
+    title: string;
+    author: string | null;
+  };
 }
 
 // ---------- Requests ----------

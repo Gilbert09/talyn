@@ -1,0 +1,113 @@
+import { Router, type Request, type Response } from 'express';
+import { inArray } from 'drizzle-orm';
+import type { ApiResponse, CodeReviewListItem } from '@talyn/shared';
+import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
+import { getDbClient } from '../db/client.js';
+import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { codeReviewRefusalReason, userMayUseCodeReview } from '../services/codeReviewAccess.js';
+import { recentReviewsForWorkspace } from '../services/codeReview/store.js';
+import { codeReviewsForPrs } from '../services/codeReview/public.js';
+
+/**
+ * Every review this workspace has run, newest first.
+ *
+ * A cohort view rather than a per-pull-request one: the sheet's Findings tab
+ * answers "what is wrong with THIS pull request", and this answers "where should
+ * I look first", which previously meant opening each pull request in turn to
+ * find out whether it had anything.
+ *
+ * Mounted BELOW `ownerScope`, like workflows and loops, so the RLS policies are
+ * the second line of defence behind `requireWorkspaceAccess`.
+ *
+ * Gated here as well as in the nav. Hiding a nav item is not a gate — the CLI,
+ * the MCP server and plain `curl` all walk past one.
+ */
+
+/**
+ * How many reviews the panel asks for.
+ *
+ * Not a display cap dressed up as a limit: a review carries severity counts and
+ * a PR identity, and this endpoint builds those in a fixed number of queries
+ * regardless of the row count, so the number is about how far back a person
+ * plausibly scrolls rather than about cost. Anything older is reachable from the
+ * pull request itself, which is where a review belongs once it is history.
+ */
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+export function codeReviewRoutes(): Router {
+  const router = Router();
+
+  router.get('/', async (req: Request, res: Response<ApiResponse<unknown>>) => {
+    const user = assertUser(req);
+    if (!(await userMayUseCodeReview({ distinctId: user.id, email: user.email }))) {
+      return res.status(403).json({
+        success: false,
+        error: `Code review is not available: ${codeReviewRefusalReason()}`,
+        code: 'code_review_unavailable',
+      });
+    }
+
+    const workspaceId = String(req.query.workspaceId ?? '');
+    if (!workspaceId) {
+      return res.status(400).json({ success: false, error: 'workspaceId is required' });
+    }
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+
+    const requested = Number(req.query.limit);
+    const limit =
+      Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_LIMIT) : DEFAULT_LIMIT;
+
+    const reviews = await recentReviewsForWorkspace(workspaceId, limit);
+    if (!reviews.length) return res.json({ success: true, data: { reviews: [] } });
+
+    const prIds = reviews.map((r) => r.pullRequestId);
+    // The same batch builder the pull-request list uses: a fixed number of
+    // queries for the whole page rather than four per row.
+    const [payloads, prRows] = await Promise.all([
+      codeReviewsForPrs(prIds),
+      getDbClient()
+        .select({
+          id: pullRequestsTable.id,
+          owner: pullRequestsTable.owner,
+          repo: pullRequestsTable.repo,
+          number: pullRequestsTable.number,
+          state: pullRequestsTable.state,
+          lastSummary: pullRequestsTable.lastSummary,
+        })
+        .from(pullRequestsTable)
+        .where(inArray(pullRequestsTable.id, prIds)),
+    ]);
+
+    const prById = new Map(prRows.map((p) => [p.id, p]));
+    const items: CodeReviewListItem[] = [];
+    for (const review of reviews) {
+      const payload = payloads.get(review.pullRequestId);
+      const pr = prById.get(review.pullRequestId);
+      // A review whose pull request has gone is not shown. It is not an error —
+      // the row is kept for the audit — but there is nothing to click through to.
+      if (!payload || !pr) continue;
+      const summary = (pr.lastSummary ?? {}) as { title?: string; author?: string };
+      items.push({
+        review: payload,
+        pullRequest: {
+          id: pr.id,
+          owner: pr.owner,
+          repo: pr.repo,
+          number: pr.number,
+          state: pr.state,
+          title: summary.title ?? `#${pr.number}`,
+          author: summary.author ?? null,
+        },
+      });
+    }
+
+    res.json({ success: true, data: { reviews: items } });
+  });
+
+  return router;
+}

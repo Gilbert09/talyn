@@ -10,6 +10,7 @@ import type {
 import type {
   CodeReviewDismissReason,
   CodeReviewFinding,
+  CodeReviewListItem,
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
@@ -2152,6 +2153,23 @@ export const features = {
 // ============================================================================
 // Workflows (user-defined PR automation)
 // ============================================================================
+
+/**
+ * Code review as a COHORT, across pull requests.
+ *
+ * Its own namespace rather than a member of `pullRequests`, because the route is
+ * top-level for the same reason: this answers "where should I look first", while
+ * everything under `pullRequests.codeReview*` answers about one pull request.
+ */
+export const codeReviews = {
+  /** Every review this workspace has run, newest first. */
+  list: (workspaceId: string, limit?: number) =>
+    request<{ reviews: CodeReviewListItem[] }>(
+      'GET',
+      `/code-reviews?workspaceId=${encodeURIComponent(workspaceId)}` +
+        (limit ? `&limit=${limit}` : '')
+    ),
+};
 
 export const workflows = {
   list: (workspaceId: string) =>

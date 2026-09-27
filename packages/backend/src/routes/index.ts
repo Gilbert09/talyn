@@ -14,6 +14,7 @@ import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
 import { loopRoutes } from './loops.js';
+import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
 import { workflowRoutes } from './workflows.js';
 import { billingRoutes } from './billing.js';
@@ -223,6 +224,10 @@ export function setupRoutes(app: Express): void {
   // below ownerScope, and every handler gates on the flag independently of
   // whether the client drew the tab.
   app.use(`${api}/loops`, mount(loopRoutes()));
+  // Code review — every review this workspace has run, as a cohort. Same shape
+  // as the two above: below ownerScope, and the handler gates on the flag
+  // itself rather than trusting that the client drew the nav item.
+  app.use(`${api}/code-reviews`, mount(codeReviewRoutes()));
   // MCP servers — the servers a workspace connects and the fleet wires
   // into every run. Same shape again: below ownerScope, every handler gating
   // on the flag whether or not the client drew the tab.

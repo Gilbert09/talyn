@@ -388,6 +388,29 @@ export async function loadStaleReviews(olderThan: Date, limit: number): Promise<
 }
 
 /** Reviews whose fix run is this task — the `task:status` trigger's lookup. */
+/**
+ * The workspace's recent reviews, newest first.
+ *
+ * Powers the Code review panel, which is a cohort view: every review this
+ * workspace has run, on its own pull requests and on other people's, so triage
+ * does not mean opening each pull request in turn to find out whether it has
+ * findings.
+ *
+ * Ordered by `updatedAt` rather than created, because what somebody wants at the
+ * top is the review that just finished, not the one started first.
+ */
+export async function recentReviewsForWorkspace(
+  workspaceId: string,
+  limit: number
+): Promise<ReviewRow[]> {
+  return getDbClient()
+    .select(REVIEW_COLUMNS)
+    .from(prCodeReviews)
+    .where(eq(prCodeReviews.workspaceId, workspaceId))
+    .orderBy(desc(prCodeReviews.updatedAt))
+    .limit(limit);
+}
+
 export async function reviewsByFixTask(taskId: string): Promise<ReviewRow[]> {
   return getDbClient()
     .select(REVIEW_COLUMNS)

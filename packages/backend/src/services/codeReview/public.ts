@@ -15,7 +15,13 @@ import {
   prCodeReviews,
   pullRequests as pullRequestsTable,
 } from '../../db/schema.js';
-import { ACTIVE_DISPOSITIONS, countDismissed, openCountOf, severityCounts } from './findings.js';
+import {
+  ACTIVE_DISPOSITIONS,
+  countDismissed,
+  funnelCounts,
+  openCountOf,
+  severityCounts,
+} from './findings.js';
 import {
   getPrForReview,
   getReview,
@@ -46,6 +52,7 @@ import { hasDeferredUnit, settledUnitCount } from './decide.js';
 interface ReviewFacts {
   counts: CodeReviewCounts;
   dismissedCount: number;
+  funnel: { raised: number; kept: number; rejected: number };
   runsDone: number;
   deferred: boolean;
   currentHead: string | null;
@@ -74,6 +81,7 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
     counts: facts.counts,
     openCount: openCountOf(facts.counts, CODE_REVIEW_REPORTING_BAR),
     dismissedCount: facts.dismissedCount,
+    funnel: facts.funnel,
     failureReason: review.lastError ?? null,
     // Mirrors `autoMergeState.deferredSince` field for field, so the desktop's
     // existing deferral announcement covers this with no new mechanism.
@@ -94,9 +102,10 @@ export async function toPublicReview(
   review: ReviewRow,
   options: { headSha?: string | null } = {}
 ): Promise<CodeReviewPublic> {
-  const [counts, dismissedCount, runs] = await Promise.all([
+  const [counts, dismissedCount, funnel, runs] = await Promise.all([
     severityCounts(review.id),
     countDismissed(review.id),
+    funnelCounts(review.id),
     runsForCycle(review.id, review.cycle),
   ]);
   const currentHead =
@@ -109,6 +118,7 @@ export async function toPublicReview(
   return shapeReview(review, {
     counts,
     dismissedCount,
+    funnel,
     runsDone: settledUnitCount(runs, review.cycle),
     deferred: hasDeferredUnit(runs, review.cycle),
     currentHead,
@@ -170,6 +180,10 @@ export async function codeReviewsForPrs(
           reviewId: prCodeReviewFindings.reviewId,
           severity: prCodeReviewFindings.severity,
           disposition: prCodeReviewFindings.disposition,
+          // Grouped in here rather than fetched separately: the funnel is a
+          // count over the same rows, so asking for it costs one more GROUP BY
+          // column instead of another query per page.
+          verdict: prCodeReviewFindings.verdict,
           count: sql<number>`cast(count(*) as int)`,
         })
         .from(prCodeReviewFindings)
@@ -177,7 +191,8 @@ export async function codeReviewsForPrs(
         .groupBy(
           prCodeReviewFindings.reviewId,
           prCodeReviewFindings.severity,
-          prCodeReviewFindings.disposition
+          prCodeReviewFindings.disposition,
+          prCodeReviewFindings.verdict
         ),
       db
         .select({
@@ -219,8 +234,15 @@ export async function codeReviewsForPrs(
     for (const review of reviews) {
       const counts = { ...EMPTY_CODE_REVIEW_COUNTS };
       let dismissed = 0;
+      const funnel = { raised: 0, kept: 0, rejected: 0 };
       for (const row of countRows) {
         if (row.reviewId !== review.id) continue;
+        // The funnel counts EVERY candidate, whatever became of it — that is the
+        // whole point of it, and filtering to active dispositions below is why
+        // it has to be tallied before that guard rather than after.
+        funnel.raised += row.count;
+        if (row.verdict === 'confirmed') funnel.kept += row.count;
+        if (row.verdict === 'rejected') funnel.rejected += row.count;
         if (row.disposition === 'dismissed') dismissed += row.count;
         if (
           !ACTIVE_DISPOSITIONS.includes(row.disposition as (typeof ACTIVE_DISPOSITIONS)[number])
@@ -235,6 +257,7 @@ export async function codeReviewsForPrs(
         shapeReview(review, {
           counts,
           dismissedCount: dismissed,
+          funnel,
           runsDone:
             settledRows.find((r) => r.reviewId === review.id && r.cycle === review.cycle)?.count ??
             0,
