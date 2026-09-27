@@ -89,7 +89,7 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
   const preset = input.preset ?? (await workspacePreset(pr.workspaceId));
   const ownerId = await workspaceOwner(pr.workspaceId);
 
-  return withReviewCycleGate(
+  const outcome = await withReviewCycleGate(
     ownerId,
     { excludeReviewId: existing?.id },
     async (): Promise<StartOutcome> => {
@@ -139,10 +139,27 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
           : { ok: false, code: 'busy', message: 'The review changed while it was starting.' };
       }
 
-      scheduleReviewEvaluation(review.id, input.auto ? 'auto' : 'user:start');
       return { ok: true, review: { ...review, cycle: review.cycle + 1, preset }, started: true };
     }
   );
+
+  // Scheduled AFTER the gate, never inside it.
+  //
+  // The gate holds a transaction. `scheduleReviewEvaluation` detaches onto its
+  // own connection, so a pass triggered from inside read the review BEFORE this
+  // transaction committed — saw the phase it had before the transition (`ready`
+  // or `fixed`, both at rest), decided there was nothing to do, and exited. The
+  // review then sat in `queued` until the reconciler noticed, which it only does
+  // after two minutes.
+  //
+  // That is the whole of "why does it take so long to start": not the dispatch,
+  // which takes about two seconds, but a first evaluation that raced a commit and
+  // lost. It updated `last_evaluated_at` on the way past, which is what made it
+  // look like the review HAD been looked at.
+  if (outcome.ok && outcome.started) {
+    scheduleReviewEvaluation(outcome.review.id, input.auto ? 'auto' : 'user:start');
+  }
+  return outcome;
 }
 
 /**
