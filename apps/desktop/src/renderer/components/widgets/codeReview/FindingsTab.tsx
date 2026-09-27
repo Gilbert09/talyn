@@ -19,7 +19,7 @@ import {
   codeReviewLensTally,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
-  CODE_REVIEW_REPORTING_BAR,
+  resolveReportingBar,
   CODE_REVIEW_SEVERITY_GROUP_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
   codeReviewProgress,
@@ -32,6 +32,7 @@ import {
 } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import { trackEvent } from '../../../lib/analytics';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
@@ -82,6 +83,13 @@ export function FindingsTab({
   const [preset, setPreset] = useState<CodeReviewPreset | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // The workspace's display bar, so the list, the bucket and the badge agree
+  // with the `openCount` the backend computed from the same setting.
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const reportingBar = resolveReportingBar(
+    workspaces.find((w) => w.id === currentWorkspaceId)?.settings?.codeReview
+  );
   const [showBucket, setShowBucket] = useState(false);
   const [showDropped, setShowDropped] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,13 +153,13 @@ export function FindingsTab({
     const active = findings.filter(
       (f) =>
         (f.disposition === 'open' || f.disposition === 'selected') &&
-        severityAtOrAbove(f.severity, CODE_REVIEW_REPORTING_BAR)
+        severityAtOrAbove(f.severity, reportingBar)
     );
     return CODE_REVIEW_SEVERITY_ORDER.map((severity) => ({
       severity,
       items: active.filter((f) => f.severity === severity),
     })).filter((g) => g.items.length > 0);
-  }, [findings]);
+  }, [findings, reportingBar]);
 
   // What the checking pass threw out. Kept in its own group rather than hidden:
   // that pass rejected five of six candidates on the first real review, and a
@@ -178,7 +186,7 @@ export function FindingsTab({
         (f) =>
           f.disposition === 'dismissed' ||
           ((f.disposition === 'open' || f.disposition === 'selected') &&
-            !severityAtOrAbove(f.severity, CODE_REVIEW_REPORTING_BAR))
+            !severityAtOrAbove(f.severity, reportingBar))
       ),
     [findings]
   );

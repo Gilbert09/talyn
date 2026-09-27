@@ -15,7 +15,7 @@ import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
-import { Gauge, ScanSearch, ShieldCheck, Wrench } from 'lucide-react';
+import { Filter, Gauge, ScanSearch, ShieldCheck, Wrench } from 'lucide-react';
 import { Card } from '../../ui/card';
 import { cn } from '../../../lib/utils';
 import { toast } from '../../../stores/toast';
@@ -175,6 +175,43 @@ export function CodeReviewSettingsCard() {
 
       <Step
         n={3}
+        icon={Filter}
+        title="What is worth your attention"
+        badge={`${CODE_REVIEW_SEVERITY_LABELS[settings.reportingBar]} and above`}
+      >
+        {/* A DISPLAY bar, and deliberately not the same control as step 5's
+            commit bar. Seeing a minor finding and having Talyn push a commit for
+            one unattended are different risks, and one knob for both forces the
+            cautious answer on the reader. */}
+        <div className="flex flex-wrap gap-1.5">
+          {CODE_REVIEW_SEVERITY_ORDER.map((severity) => (
+            <button
+              key={severity}
+              type="button"
+              disabled={saving || !currentWorkspaceId}
+              onClick={() => void save({ reportingBar: severity }, 'what the list shows')}
+              aria-pressed={settings.reportingBar === severity}
+              data-attr="settings-code-review-reporting-bar"
+              className={cn(
+                'rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-50',
+                settings.reportingBar === severity
+                  ? 'border-primary bg-primary/10 font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {CODE_REVIEW_SEVERITY_LABELS[severity]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          The further right, the fewer findings reach the list and the more each one
+          matters. Anything below the bar is still found and still readable at the foot
+          of the list — it just does not count towards the badge.
+        </p>
+      </Step>
+
+      <Step
+        n={4}
         icon={Wrench}
         title="Fix findings for me"
         badge={settings.autoFix ? 'On' : 'Off'}
@@ -195,7 +232,7 @@ export function CodeReviewSettingsCard() {
           until something is answering it. */}
       {settings.autoFix && (
         <Step
-          n={4}
+          n={5}
           icon={ShieldCheck}
           title="Which findings it may fix"
           badge={`${CODE_REVIEW_SEVERITY_LABELS[settings.autoFixSeverity]} and above`}

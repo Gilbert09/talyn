@@ -333,6 +333,27 @@ export const CODE_REVIEW_BLOCKING_SEVERITY: CodeReviewSeverity = 'blocker';
  */
 export const CODE_REVIEW_REPORTING_BAR: CodeReviewSeverity = 'minor';
 
+/**
+ * How strict this workspace is about what reaches the list.
+ *
+ * The same question the depth preset does NOT answer: depth decides how hard
+ * Talyn looks, this decides how much of what it finds is worth your attention.
+ * A team that wants only the things that would block a merge sets it to
+ * blockers; the default shows everything down to the reporting bar above.
+ *
+ * It is a DISPLAY bar, and deliberately separate from `autoFixSeverity`, which
+ * is a COMMIT bar. Seeing a minor finding and having Talyn push a commit for one
+ * unattended are different risks, and one control for both would force the
+ * cautious answer on the reader.
+ */
+export function resolveReportingBar(
+  settings: CodeReviewSettings | null | undefined
+): CodeReviewSeverity {
+  return isCodeReviewSeverity(settings?.reportingBar)
+    ? settings.reportingBar
+    : CODE_REVIEW_REPORTING_BAR;
+}
+
 // ---------- Findings and the public payload ----------
 
 export type CodeReviewDisposition =
@@ -838,6 +859,12 @@ export interface CodeReviewSettings {
    * for speculation.
    */
   autoFixSeverity?: CodeReviewSeverity;
+  /**
+   * The lowest severity shown in the list. Defaults to the reporting bar.
+   *
+   * A DISPLAY bar, not a commit bar — see `resolveReportingBar`.
+   */
+  reportingBar?: CodeReviewSeverity;
 }
 
 export interface ResolvedCodeReviewSettings {
@@ -847,6 +874,7 @@ export interface ResolvedCodeReviewSettings {
   inlineComments: boolean;
   autoFix: boolean;
   autoFixSeverity: CodeReviewSeverity;
+  reportingBar: CodeReviewSeverity;
 }
 
 /**
@@ -875,6 +903,7 @@ export function resolveCodeReviewSettings(
     autoFixSeverity: isCodeReviewSeverity(settings?.autoFixSeverity)
       ? settings.autoFixSeverity
       : 'blocker',
+    reportingBar: resolveReportingBar(settings),
   };
 }
 
@@ -896,6 +925,7 @@ export function codeReviewSettingsPatch(input: unknown): CodeReviewSettings {
   if (typeof raw.inlineComments === 'boolean') patch.inlineComments = raw.inlineComments;
   if (typeof raw.autoFix === 'boolean') patch.autoFix = raw.autoFix;
   if (isCodeReviewSeverity(raw.autoFixSeverity)) patch.autoFixSeverity = raw.autoFixSeverity;
+  if (isCodeReviewSeverity(raw.reportingBar)) patch.reportingBar = raw.reportingBar;
   return patch;
 }
 

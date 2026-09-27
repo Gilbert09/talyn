@@ -6,8 +6,11 @@ import {
   resolveCodeReviewSettings,
   type CodeReviewPhase,
   type CodeReviewPreset,
+  CODE_REVIEW_REPORTING_BAR,
+  isCodeReviewSeverity,
+  type CodeReviewSeverity,
 } from '@talyn/shared';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { getDbClient } from '../../db/client.js';
 import { workspaces as workspacesTable } from '../../db/schema.js';
 import { withReviewCycleGate } from '../billing/entitlements.js';
@@ -228,6 +231,32 @@ async function readSettings(workspaceId: string) {
     .limit(1);
   const settings = rows[0]?.settings as { codeReview?: unknown } | null;
   return (settings?.codeReview ?? null) as Parameters<typeof resolveCodeReviewSettings>[0];
+}
+
+/**
+ * Each workspace's display bar, in one query.
+ *
+ * Extracts the one scalar with a jsonb accessor and never ships the settings
+ * blob — the egress rule that `getMergeQueueMode` follows for the same reason:
+ * this is read while building a whole page of pull-request payloads, and the
+ * blob it lives in carries every other workspace setting there is.
+ */
+export async function reportingBarsFor(
+  workspaceIds: string[]
+): Promise<Map<string, CodeReviewSeverity>> {
+  const out = new Map<string, CodeReviewSeverity>();
+  if (!workspaceIds.length) return out;
+  const rows = await getDbClient()
+    .select({
+      id: workspacesTable.id,
+      bar: sql<string | null>`${workspacesTable.settings} -> 'codeReview' ->> 'reportingBar'`,
+    })
+    .from(workspacesTable)
+    .where(inArray(workspacesTable.id, workspaceIds));
+  for (const row of rows) {
+    out.set(row.id, isCodeReviewSeverity(row.bar) ? row.bar : CODE_REVIEW_REPORTING_BAR);
+  }
+  return out;
 }
 
 export async function workspaceOwner(workspaceId: string): Promise<string> {

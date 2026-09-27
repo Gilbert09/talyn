@@ -7,6 +7,7 @@ import {
   type CodeReviewCounts,
   type CodeReviewPhase,
   type CodeReviewPublic,
+  type CodeReviewSeverity,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import {
@@ -15,6 +16,7 @@ import {
   prCodeReviews,
   pullRequests as pullRequestsTable,
 } from '../../db/schema.js';
+import { reportingBarsFor } from './cycle.js';
 import {
   ACTIVE_DISPOSITIONS,
   countDismissed,
@@ -53,6 +55,8 @@ interface ReviewFacts {
   counts: CodeReviewCounts;
   dismissedCount: number;
   funnel: { raised: number; kept: number; rejected: number };
+  /** The workspace's display bar, which decides `openCount`. */
+  reportingBar: CodeReviewSeverity;
   runsDone: number;
   deferred: boolean;
   currentHead: string | null;
@@ -80,7 +84,11 @@ function shapeReview(review: ReviewRow, facts: ReviewFacts): CodeReviewPublic {
       review.reviewedHeadSha && facts.currentHead && review.reviewedHeadSha !== facts.currentHead
     ),
     counts: facts.counts,
-    openCount: openCountOf(facts.counts, CODE_REVIEW_REPORTING_BAR),
+    // The WORKSPACE's bar, not the shipped constant. `openCount` is what the
+    // tab badge, the row chip, the nav badge and the sheet header all show, so
+    // applying the bar here rather than in each of them is what stops four
+    // surfaces disagreeing about one number.
+    openCount: openCountOf(facts.counts, facts.reportingBar),
     dismissedCount: facts.dismissedCount,
     funnel: facts.funnel,
     failureReason: review.lastError ?? null,
@@ -103,11 +111,12 @@ export async function toPublicReview(
   review: ReviewRow,
   options: { headSha?: string | null } = {}
 ): Promise<CodeReviewPublic> {
-  const [counts, dismissedCount, funnel, runs] = await Promise.all([
+  const [counts, dismissedCount, funnel, runs, bars] = await Promise.all([
     severityCounts(review.id),
     countDismissed(review.id),
     funnelCounts(review.id),
     runsForCycle(review.id, review.cycle),
+    reportingBarsFor([review.workspaceId]),
   ]);
   const currentHead =
     options.headSha !== undefined
@@ -120,6 +129,7 @@ export async function toPublicReview(
     counts,
     dismissedCount,
     funnel,
+    reportingBar: bars.get(review.workspaceId) ?? CODE_REVIEW_REPORTING_BAR,
     runsDone: settledUnitCount(runs, review.cycle),
     deferred: hasDeferredUnit(runs, review.cycle),
     currentHead,
@@ -175,7 +185,7 @@ export async function codeReviewsForPrs(
 
     const reviewIds = reviews.map((r) => r.id);
 
-    const [countRows, settledRows, deferredRows, heads] = await Promise.all([
+    const [countRows, settledRows, deferredRows, heads, bars] = await Promise.all([
       db
         .select({
           reviewId: prCodeReviewFindings.reviewId,
@@ -226,6 +236,9 @@ export async function codeReviewsForPrs(
         .select({ id: pullRequestsTable.id, lastSummary: pullRequestsTable.lastSummary })
         .from(pullRequestsTable)
         .where(inArray(pullRequestsTable.id, pullRequestIds)),
+      // One query for the page, not one per review — a list usually spans one
+      // workspace, and never enough to be worth a read each.
+      reportingBarsFor([...new Set(reviews.map((r) => r.workspaceId))]),
     ]);
 
     const headById = new Map(
@@ -259,6 +272,7 @@ export async function codeReviewsForPrs(
           counts,
           dismissedCount: dismissed,
           funnel,
+          reportingBar: bars.get(review.workspaceId) ?? CODE_REVIEW_REPORTING_BAR,
           runsDone:
             settledRows.find((r) => r.reviewId === review.id && r.cycle === review.cycle)?.count ??
             0,
