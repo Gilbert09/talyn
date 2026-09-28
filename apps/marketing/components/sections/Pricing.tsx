@@ -7,6 +7,7 @@ import { Reveal } from "@/components/ui/Reveal";
 import { GlowCard } from "@/components/ui/GlowCard";
 import { Badge } from "@/components/ui/badge";
 import { DownloadButton } from "@/components/ui/DownloadButton";
+import { capture } from "@/lib/analytics";
 import { pricing } from "@/lib/content";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,13 @@ function PeriodToggle({
         <button
           key={p}
           type="button"
-          onClick={() => onChange(p)}
+          onClick={() => {
+            // Captured because the toggle DEFAULTS to annual and nobody knew
+            // whether that was right. A visitor who switches to monthly is
+            // telling you the annual commitment is the friction.
+            capture("pricing_period_changed", { from: period, to: p });
+            onChange(p);
+          }}
           className={cn(
             "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
             period === p ? "bg-clay text-white" : "text-ink-600 hover:text-ink"
@@ -101,7 +108,11 @@ export function Pricing() {
                   <DownloadButton
                     size="md"
                     className="w-full"
-                    placement="pricing"
+                    // Was "pricing" for BOTH tiers, so Free and Unlimited
+                    // were the same row in every report. `period` rides along
+                    // because which price somebody was looking at when they
+                    // pressed it is the whole question.
+                    placement={`pricing-${tier.name.toLowerCase()}-${period}`}
                     variant={tier.highlighted ? "primary" : "secondary"}
                   >
                     {tier.cta}

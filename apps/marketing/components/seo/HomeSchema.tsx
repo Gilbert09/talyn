@@ -40,19 +40,18 @@ export function HomeSchema() {
           operatingSystem: "macOS, Windows, Linux, Web",
           url: site.url,
           description: site.description,
+          // The per-tier `Offer` blocks moved to /pricing, where the offer
+          // now lives — a price rich-result should land somebody on the
+          // prices. What stays here is the range and a pointer, so the home
+          // page still says what the product costs without competing with
+          // the pricing page to be the answer.
           offers: {
             "@type": "AggregateOffer",
             priceCurrency: "USD",
             lowPrice: 0,
             highPrice: amount(paid.priceMonthly),
             offerCount: pricing.tiers.length,
-            offers: pricing.tiers.map((tier) => ({
-              "@type": "Offer",
-              name: tier.name,
-              price: amount(tier.priceMonthly),
-              priceCurrency: "USD",
-              description: tier.blurb,
-            })),
+            url: `${site.url}/pricing`,
           },
         },
       ]}

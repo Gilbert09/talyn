@@ -1,15 +1,23 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { DownloadButton } from "@/components/ui/DownloadButton";
+import { DownloadButton, isMobileDevice } from "@/components/ui/DownloadButton";
+import { WebAppButton } from "@/components/ui/WebAppButton";
+import { PlatformNote } from "@/components/ui/PlatformNote";
 import { Badge } from "@/components/ui/badge";
 import { GridBackground } from "@/components/ui/GridBackground";
 import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
-import { site, hero } from "@/lib/content";
+import { hero } from "@/lib/content";
+import { cn } from "@/lib/utils";
 
 export function Hero() {
+  // Resolved after mount, like the download button's own label: the server has
+  // no navigator, so deciding this during render would hydrate-mismatch.
+  // Defaults to false, so the desktop order is what gets server-rendered.
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => setMobile(isMobileDevice()), []);
+
   return (
     <section id="top" className="relative overflow-hidden pt-28 pb-16 sm:pt-32">
       <GridBackground />
@@ -41,20 +49,39 @@ export function Hero() {
             {hero.sub}
           </p>
 
-          <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <DownloadButton size="lg" placement="hero">{hero.primaryCta}</DownloadButton>
-            {/* The browser app is a peer of the download, not a footnote:
-                it is the whole product with nothing to install, and the
-                only option for anyone who can't or won't install one. */}
-            <a href={site.appUrl}>
-              <Button variant="secondary" size="lg">
-                {hero.webCta}
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </a>
+          {/* The browser app is a peer of the download, not a footnote: it is
+              the whole product with nothing to install, and the only option
+              for anyone who can't or won't install one. On a phone it is the
+              ONLY option, so the order flips — 21% of visitors are on iOS or
+              Android and were being offered a desktop binary. */}
+          <div
+            className={cn(
+              "mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row",
+              mobile && "sm:flex-row-reverse"
+            )}
+          >
+            <DownloadButton
+              size="lg"
+              placement="hero"
+              variant={mobile ? "secondary" : "primary"}
+            >
+              {hero.primaryCta}
+            </DownloadButton>
+            <WebAppButton
+              size="lg"
+              placement="hero"
+              variant={mobile ? "primary" : "secondary"}
+            >
+              {hero.webCta}
+            </WebAppButton>
           </div>
 
           <p className="mt-3 font-mono text-xs text-ink-400">{hero.microtrust}</p>
+          {/* What actually happens when you press it: the SmartScreen warning
+              on Windows, the Intel Mac build, the fact that a phone cannot
+              install any of this. All three were true before and stated
+              nowhere near the button. */}
+          <PlatformNote className="mx-auto mt-2 max-w-md" />
 
           <a
             href="#how"

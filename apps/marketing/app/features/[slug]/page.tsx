@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ArrowRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { Nav } from "@/components/layout/Nav";
 import { Footer } from "@/components/layout/Footer";
 import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
 import { PageCta } from "@/components/layout/PageCta";
-import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
 import { FeatureCard } from "@/components/ui/FeatureCard";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 import { Reveal } from "@/components/ui/Reveal";
 import { ScreenshotPlaceholder } from "@/components/ui/ScreenshotPlaceholder";
 import { FaqAccordion } from "@/components/sections/FaqAccordion";
@@ -122,12 +122,10 @@ export default function FeaturePageRoute({ params }: Params) {
                     size="md"
                     placement={`feature-${feature.slug}-hero`}
                   />
-                  <a href={site.appUrl}>
-                    <Button variant="secondary" size="md">
-                      Open in browser
-                      <ArrowRight className="h-4 w-4" />
-                    </Button>
-                  </a>
+                  <WebAppButton
+                    size="md"
+                    placement={`feature-${feature.slug}-hero`}
+                  />
                 </div>
 
                 {feature.planNote && (

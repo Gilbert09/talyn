@@ -72,6 +72,28 @@ export function detectPlatform(): Platform {
   return PLATFORMS.mac;
 }
 
+/**
+ * Is this a phone or a tablet?
+ *
+ * Separate from {@link detectPlatform}, which answers "which installer" and
+ * has no way to say "none of them". 21% of this site's visitors are on iOS or
+ * Android, every CTA was offering them a desktop binary, and because the sniff
+ * above maps Android to Mac — to keep it out of the Linux branch, since
+ * Android UAs contain "Linux" — an Android visitor was specifically offered a
+ * .dmg.
+ *
+ * Coarse on purpose. A false positive costs somebody one extra click to reach
+ * the download; a false negative is exactly the status quo.
+ */
+export function isMobileDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/Android|iPhone|iPod|iPad/i.test(ua)) return true;
+  // iPadOS 13+ reports itself as a Macintosh; the touch-point count is the
+  // documented way to tell a real Mac from an iPad pretending to be one.
+  return /Macintosh/i.test(ua) && (navigator.maxTouchPoints ?? 0) > 1;
+}
+
 function pickAsset(
   release: Release | null | undefined,
   platform: Platform
@@ -91,12 +113,34 @@ function pickAsset(
  * to the newest release of any kind while no stable tag exists yet, then to
  * null so the caller can open the releases page.
  */
-async function resolveLatestAsset(platform: Platform): Promise<string | null> {
+/**
+ * Budget for BOTH calls together.
+ *
+ * There was no timeout at all, and the consequence was not a slow download but
+ * a dead button: the 4s reset that re-enables it is scheduled only after the
+ * `await` resolves, so a hung `api.github.com` left the spinner turning with
+ * no way out except a page reload. The API is also rate-limited to 60 requests
+ * an hour per IP when unauthenticated, which one office behind one NAT can
+ * exhaust — after which every visitor from that building waits for two 403s.
+ *
+ * Eight seconds because the fallback is good: the releases page lists every
+ * artifact for every platform, so giving up early costs one extra click and
+ * waiting costs the download.
+ */
+const RESOLVE_TIMEOUT_MS = 8000;
+
+/** What the resolution actually did, for the `download_resolved` event. */
+type ResolveOutcome = "asset" | "releases_page";
+
+async function resolveLatestAsset(
+  platform: Platform,
+  signal: AbortSignal
+): Promise<string | null> {
   const headers = { Accept: "application/vnd.github+json" };
   try {
     const stable = await fetch(
       `https://api.github.com/repos/${REPO}/releases/latest`,
-      { headers }
+      { headers, signal }
     );
     if (stable.ok) {
       const url = pickAsset((await stable.json()) as Release, platform);
@@ -108,7 +152,7 @@ async function resolveLatestAsset(platform: Platform): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${REPO}/releases?per_page=1`,
-      { headers }
+      { headers, signal }
     );
     if (!res.ok) return null;
     const releases = (await res.json()) as Release[];
@@ -147,7 +191,24 @@ export function DownloadButton({
   // above is written synchronously, so the second click sees it — from any
   // button on the page, which is the part a per-component ref could not do.
   const onClick = async (e: React.MouseEvent) => {
-    if (loading || downloadLatched) return;
+    // Let the browser handle a modified click as an ordinary link: this is an
+    // <a> now, so cmd/ctrl/middle-click opens the releases page in a new tab
+    // rather than doing nothing at all.
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+
+    if (loading || downloadLatched) {
+      // The latch stays — it is what stopped the site counting one press
+      // twice. But a suppression that leaves no trace is indistinguishable
+      // from a press that never happened, and these are exactly the
+      // frustrated repeat-clicks worth seeing. Record it and drop it.
+      capture("download_click_suppressed", {
+        platform: platform.key,
+        placement,
+        trusted: e.isTrusted,
+      });
+      return;
+    }
     downloadLatched = true;
     capture("download_click", {
       // Which CTA earned it — and what makes a duplicate diagnosable rather
@@ -179,11 +240,33 @@ export function DownloadButton({
       seconds_on_page: Math.round(performance.now() / 100) / 10,
     });
     setLoading(true);
-    const url = await resolveLatestAsset(platform);
+
+    // `download_click` says somebody pressed the button; it says nothing about
+    // whether a file arrived, because it fires before any of this runs. A
+    // rate-limited visitor dumped on the releases page and a visitor whose
+    // installer downloaded cleanly were the same event. They are not now.
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RESOLVE_TIMEOUT_MS);
+    let url: string | null = null;
+    try {
+      url = await resolveLatestAsset(platform, controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+    const outcome: ResolveOutcome = url ? "asset" : "releases_page";
+    capture("download_resolved", {
+      platform: platform.key,
+      placement,
+      outcome,
+      timed_out: controller.signal.aborted,
+      resolve_ms: Math.round(performance.now() - startedAt),
+    });
+
     // Navigate to the installer (triggers download). When there's no asset
-    // for this platform — a release that predates cross-platform builds, or
-    // an OS we don't ship — fall back to the releases page, which lists
-    // every artifact.
+    // for this platform — a release that predates cross-platform builds, an
+    // OS we don't ship, a rate limit, or the timeout above — fall back to the
+    // releases page, which lists every artifact for every platform.
     window.location.href = url ?? RELEASES_URL;
     // Leave the spinner up briefly; the navigation takes over. Reset the ref
     // with it — a download often does NOT unload the page, and a latch that
@@ -202,10 +285,16 @@ export function DownloadButton({
       ? children.replace(/\{platform\}/g, platform.label)
       : (children ?? `Download for ${platform.label}`);
 
+  // An <a>, not a <button>. The installer URL is only known after the click,
+  // so the href is the releases page — which makes cmd-click, middle-click and
+  // "copy link address" do something sensible instead of nothing, and gives
+  // the page one crawlable route to the downloads. A plain click is
+  // intercepted above and gets the direct asset.
   return (
-    <button
+    <a
+      href={RELEASES_URL}
       onClick={onClick}
-      disabled={loading}
+      aria-disabled={loading || undefined}
       className={cn(buttonVariants({ variant, size }), className)}
     >
       {loading ? (
@@ -214,6 +303,6 @@ export function DownloadButton({
         <Download className="h-5 w-5" />
       )}
       {label}
-    </button>
+    </a>
   );
 }

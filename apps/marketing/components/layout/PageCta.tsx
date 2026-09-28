@@ -1,6 +1,5 @@
-import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
-import { site } from "@/lib/content";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 
 /**
  * The end-of-page conversion band.
@@ -33,11 +32,7 @@ export function PageCta({
       <p className="mt-1.5 text-[15px] leading-relaxed text-ink-500">{body}</p>
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <DownloadButton size="md" placement={placement} />
-        <a href={site.appUrl}>
-          <Button variant="secondary" size="md">
-            Open in browser
-          </Button>
-        </a>
+        <WebAppButton size="md" placement={placement} showArrow={false} />
       </div>
     </div>
   );

@@ -43,19 +43,48 @@ export const nav: NavItem[] = [
   { label: "Features", href: "features", group: "features" },
   { label: "Agents", href: "features/agents" },
   { label: "Compare", href: "compare" },
-  { label: "Pricing", href: "#pricing" },
+  { label: "Pricing", href: "pricing" },
   { label: "FAQ", href: "#faq" },
 ];
 
+/**
+ * The fold, rewritten against thirty days of real numbers rather than taste.
+ *
+ * Three things the data said, and what each one changed:
+ *
+ * 1. **The median visitor clicks at 27 seconds**, and 29 of 30 real download
+ *    clicks came from the NAV button — the hero got one, all month. So the
+ *    hero's job is not to convert. It is to say what this is, who it is for,
+ *    and the one thing no competitor can say, inside the time somebody takes
+ *    to find the button.
+ * 2. **The subhead was 60 words across four sentences.** At 27 seconds that
+ *    is not a subhead, it is an essay. Two sentences now.
+ * 3. **"It'll merge that PR itself. Overnight included." is gone from the
+ *    fold.** It reads as magic to an early adopter and as a hazard to anybody
+ *    whose employer owns the repository, and the second group is most of the
+ *    market. The claim is still on the page — further down, beside the fact
+ *    that nothing merges unless you flagged it. Losing a careful reader in
+ *    the first eight seconds costs more than the enthusiast it wins.
+ *
+ * What did NOT change: the headline. "Wake up to green PRs." is the brand and
+ * it passes the only test worth applying to one — prefix it with "Now you
+ * can" and it stays both compelling and true.
+ */
 export const hero = {
   badge: "Public beta",
   titleLead: "Wake up to",
   titleAccent: "green PRs.",
-  sub: "Half your pull requests are failing, out of date, or waiting on someone. Talyn puts them all in one list, worst first, and sends an AI agent to fix them \u2014 you pick the PR, it does the work. Trust it with one and it'll merge that PR itself, the moment it's ready. Overnight included.",
+  // Leads with the subscription claim, not the dashboard claim. Every rival
+  // has a list of pull requests; none of them runs on the Claude or ChatGPT
+  // plan you already pay for.
+  sub: "Talyn lists every pull request you have open, worst first, and sends an AI agent at the broken ones to push the fix. It runs on the Claude or ChatGPT subscription you already pay for \u2014 no API key, no second bill.",
   primaryCta: "Download for {platform}",
   secondaryCta: "See how it works",
   webCta: "Open in browser",
-  microtrust: "macOS, Windows & Linux — or run it in your browser",
+  // "For GitHub" is here because a GitLab user could previously read the
+  // entire homepage without discovering the product cannot work for them.
+  // Better to lose them in eight seconds than after an install.
+  microtrust: "For GitHub. macOS, Windows & Linux — or run it in your browser.",
 };
 
 export const poweredBy = {
@@ -244,18 +273,6 @@ export const features = [
     ],
     shot: "skill-picker",
   },
-  {
-    id: "context",
-    eyebrow: "Full context, zero tabs",
-    title: "Know what's blocking. Know what's ready.",
-    body: "See the diff, the check breakdown, the conversation, and the review state for any PR without leaving Talyn. The ones that are good to go go straight into the merge queue.",
-    bullets: [
-      "Diffs, checks, and conversation in one view",
-      "Live review + CI state at a glance",
-      "Queue the ready ones straight to merge",
-    ],
-    shot: "pr-detail",
-  },
 ];
 
 /** Compact CTA band mid-page — the stretch between Features and Pricing had
@@ -411,6 +428,42 @@ export const pricing = {
  * What stays is what somebody deciding whether to download needs: what it is,
  * what runs it, where the code goes, what it costs, what it runs on.
  */
+/**
+ * The four questions that stop somebody paying, answered on `/pricing`.
+ *
+ * Each one came out of auditing what the site already said and finding
+ * nothing. They are not the general "what is Talyn" questions — those are on
+ * the home page — they are the ones a person asks with a card in their hand:
+ * is this priced per person, what is it about to do to my repository, what
+ * does it cost me in agent quota, and can I stop it.
+ */
+export const pricingFaq = [
+  {
+    q: "Is $15 per person, or per account?",
+    a: "Per account. Talyn bills the person who signs in, and the limits — tasks, queued pull requests, workflows, loops — are counted across every workspace that person owns. There are no seats to buy and no per-user maths. There is also no team plan yet: shared workspaces, SSO and admin controls do not exist, so if you need those, Talyn is not ready for you.",
+  },
+  {
+    q: "What does the GitHub App actually get access to?",
+    a: "The repositories you pick, and nothing else — you choose them when you install and can change them later. It needs write access to code, because the whole point is that an agent pushes a fix to your branch. It does not need organisation admin, and it works on a personal private repository with no organisation at all. It never force-pushes, and it never touches a branch you have not pointed it at.",
+  },
+  {
+    q: "How much of my Claude or ChatGPT quota will this burn?",
+    a: "As much as the work takes — Talyn does not meter or cap it for you, and we would rather say that plainly than pretend it is free. A fix run on a small pull request is a few minutes of agent time; a Deep code review on a large one can be an hour across several sandboxes. The free plan's three-concurrent-task limit is the real brake. If your subscription's quota does run out mid-run, Talyn moves that run to your other connected agent, and remembers so the next one does not waste a machine finding out.",
+  },
+  {
+    q: "Can it merge something without me asking?",
+    a: "Only on pull requests you flagged. Auto-keep-mergeable and the merge queue are both opt-in per pull request on every plan — nothing you have not flagged is ever merged, rebased or pushed to. The one setting that changes that is the workspace default that flags every NEW pull request you open automatically, it is part of Unlimited, and it is off unless you switch it on. Everything still goes through GitHub's own merge API, so your branch protection applies exactly as you configured it.",
+  },
+  {
+    q: "Can I cancel, and do I get a refund?",
+    a: "Cancel any time from Settings → Billing in the app; you keep Unlimited until the end of the period you have paid for and then drop back to the free plan, which keeps working. Payments are not refundable — Talyn is in public beta and the free plan exists so you can find out whether it works for you before paying anything.",
+  },
+  {
+    q: "What happens if I go over the free limits?",
+    a: "Nothing breaks and nothing is charged. A fourth concurrent task is refused with an explanation rather than queued silently, and automation that hits the cap — a merge-queue fix, say — is deferred until a slot frees up rather than dropped. You are never billed for going over, because there is nothing to bill: the free plan has no payment method attached.",
+  },
+];
+
 export const faq = [
   {
     q: "What is Talyn, exactly?",
@@ -423,6 +476,14 @@ export const faq = [
   {
     q: "Where does the work actually happen?",
     a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead. Either way, Talyn is the control surface that kicks it off, streams the progress live, and links the resulting PR back onto your dashboard.",
+  },
+  {
+    q: "Does it work with GitLab or Bitbucket?",
+    a: "No. Talyn is GitHub only, and there is no plan to change that soon. It installs as a GitHub App on the repositories you pick, reads their webhooks, and merges through GitHub's own API — none of which has an equivalent we have built elsewhere.",
+  },
+  {
+    q: "Will it merge something without me asking?",
+    a: "Only pull requests you flagged. Keeping a pull request mergeable and adding it to the merge queue are both opt-in, one pull request at a time, on every plan — nothing you have not flagged is merged, rebased or pushed to. The one setting that widens that is the workspace default which flags every new pull request you open, it is part of Unlimited, and it is off unless you turn it on. Everything goes through GitHub's merge API, so your branch protection applies exactly as you set it up.",
   },
   {
     q: "Is my code safe?",
@@ -460,7 +521,7 @@ export const footer = {
         { label: "How it works", href: "/#how" },
         { label: "All features", href: "/features" },
         { label: "Compare", href: "/compare" },
-        { label: "Pricing", href: "/#pricing" },
+        { label: "Pricing", href: "/pricing" },
         { label: "Download", href: "/#download" },
         { label: "Open the web app", href: site.appUrl },
       ],
@@ -468,6 +529,7 @@ export const footer = {
     {
       title: "Company",
       links: [
+        { label: "About", href: "/about" },
         { label: "FAQ", href: "/#faq" },
         { label: "GitHub", href: site.githubUrl },
         { label: "Support", href: site.supportUrl },

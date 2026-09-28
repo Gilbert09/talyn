@@ -655,6 +655,8 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "Yes, as long as it is a repository or workspace skill. A skill that only exists in ~/.claude/skills is refused when you save the rule, because the backend genuinely cannot read your machine — a rule that failed silently at 3am would be worse than one that refuses while you are looking at it.",
       },
     ],
+    planNote:
+      "Free plan: skills themselves are uncapped. Running one is an ordinary cloud task, so the three-concurrent-task limit is the brake.",
     related: ["code-review", "workflows", "fix-pull-requests"],
     relatedGuides: ["claude-code-pull-requests"],
     updated: UPDATED,
@@ -791,6 +793,8 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "Then use it. The sort control cycles Newest, Oldest and Priority, and it remembers what you picked. Priority is the default because most people leave it on, not because the other two are hidden.",
       },
     ],
+    planNote:
+      "Free plan: the Reviews list is uncapped. Running an agent against one of them is an ordinary task and counts toward the three-task limit.",
     related: ["pr-dashboard", "code-review", "skills"],
     updated: UPDATED,
   },
@@ -874,6 +878,8 @@ export const FEATURE_PAGES: FeaturePage[] = [
         a: "Talyn talks to GitHub and your chosen provider over their official APIs using credentials you supply. The run happens in a sandbox that is destroyed afterwards, your subscription token is never inside it, and Talyn never stores your source.",
       },
     ],
+    planNote:
+      "Free plan: connect as many providers as you like — the cap is on tasks running at once, never on agents connected.",
     related: ["fix-pull-requests", "mcp-servers", "loops"],
     relatedCompare: ["devin", "codex-cloud", "cursor-background-agents"],
     updated: UPDATED,

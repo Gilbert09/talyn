@@ -1,8 +1,8 @@
 import { Reveal } from "@/components/ui/Reveal";
-import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 import { OwlMark } from "@/components/brand/Logo";
-import { site, finalCta } from "@/lib/content";
+import { finalCta } from "@/lib/content";
 
 /**
  * The closing conversion section. Carries id="download" (footer links to it).
@@ -37,11 +37,7 @@ export function FinalCta() {
           <p className="mx-auto mt-5 max-w-md text-ink-500">{finalCta.sub}</p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <DownloadButton size="lg" placement="final-cta">{finalCta.cta}</DownloadButton>
-            <a href={site.appUrl}>
-              <Button variant="secondary" size="lg">
-                Open in browser
-              </Button>
-            </a>
+            <WebAppButton size="lg" placement="final-cta" showArrow={false} />
           </div>
         </Reveal>
       </div>

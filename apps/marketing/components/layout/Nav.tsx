@@ -5,6 +5,7 @@ import { ChevronDown, Menu, X } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
+import { WebAppButton } from "@/components/ui/WebAppButton";
 import { nav, site, type NavItem } from "@/lib/content";
 import { listFeaturePages } from "@/lib/features";
 import { isBlogEnabled } from "@/lib/flags";
@@ -154,12 +155,17 @@ export function Nav() {
               GitHub
             </Button>
           </a>
-          <a href={site.appUrl}>
-            <Button variant="secondary" size="sm">
-              Open app
-            </Button>
-          </a>
-          <DownloadButton size="sm" placement="nav">Download</DownloadButton>
+          <WebAppButton size="sm" placement="nav" showArrow={false}>
+            Open app
+          </WebAppButton>
+          {/* No children, so the label resolves to "Download for Windows" and
+              the rest at runtime. It used to be the literal string "Download",
+              which overrode that — and this is the button that matters: 29 of
+              the 30 real download clicks last month came from here, against
+              one from the hero, at a median 27 seconds on the page. People are
+              not reading the hero; they are scanning the bar for the button,
+              and it should say which file they are about to get. */}
+          <DownloadButton size="sm" placement="nav" />
         </div>
 
         <button
@@ -229,11 +235,14 @@ export function Nav() {
               )
             )}
             <div onClick={() => setOpen(false)} className="mt-2 flex flex-col gap-2">
-              <a href={site.appUrl} className="w-full">
-                <Button variant="secondary" size="md" className="w-full">
-                  Open app
-                </Button>
-              </a>
+              <WebAppButton
+                size="md"
+                className="w-full"
+                placement="nav-mobile"
+                showArrow={false}
+              >
+                Open app
+              </WebAppButton>
               {/* No hardcoded platform — DownloadButton resolves it at runtime
                   now that macOS, Windows and Linux all ship. */}
               <DownloadButton size="md" className="w-full" placement="nav-mobile" />

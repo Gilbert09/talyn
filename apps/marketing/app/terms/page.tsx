@@ -60,7 +60,7 @@ export default function TermsPage() {
         up to 3 tasks running at once) and a paid &ldquo;Unlimited&rdquo;
         subscription, billed monthly or annually. Current prices and what each
         plan includes are shown in the app and on our{" "}
-        <a href="/#pricing">pricing page</a>. We may change plan features,
+        <a href="/pricing">pricing page</a>. We may change plan features,
         limits, or prices; price changes take effect from your next billing
         period and we&apos;ll give reasonable notice.
       </p>
