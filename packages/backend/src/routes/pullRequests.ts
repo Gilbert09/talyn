@@ -55,7 +55,7 @@ import {
   listFindings,
   setDisposition,
 } from '../services/codeReview/findings.js';
-import { getReviewForPr, listReviewEvents } from '../services/codeReview/store.js';
+import { getPrForReview, getReviewForPr, listReviewEvents } from '../services/codeReview/store.js';
 import {
   codeReviewRefusalReason,
   userMayUseCodeReview,
@@ -1336,15 +1336,16 @@ export function pullRequestRoutes(): Router {
         },
       });
     }
-    const [payload, findings] = await Promise.all([
+    const [payload, findings, pr] = await Promise.all([
       publicReviewById(review.id),
       listFindings(review.id, { includeInactive: true }),
+      getPrForReview(review.pullRequestId),
     ]);
     res.json({
       success: true,
       data: {
         review: payload,
-        findings: findings.map(serializeFinding),
+        findings: findings.map((f) => serializeFinding(f, pr)),
         defaultPreset: await workspacePreset(workspaceId),
       },
     });
@@ -2110,7 +2111,10 @@ async function publicPrRow(
  * rather than stored: a finding first seen in an earlier cycle is one the previous
  * review already reported, which is exactly what the "still here" marker means.
  */
-function serializeFinding(f: Awaited<ReturnType<typeof listFindings>>[number]) {
+function serializeFinding(
+  f: Awaited<ReturnType<typeof listFindings>>[number],
+  pr?: { owner: string; repo: string } | null
+) {
   return {
     id: f.id,
     severity: f.severity,
@@ -2128,6 +2132,20 @@ function serializeFinding(f: Awaited<ReturnType<typeof listFindings>>[number]) {
     dismissedReason: f.dismissedReason,
     carriedOver: f.firstSeenCycle < f.lastSeenCycle,
     seenCount: f.seenCount,
+    // What happened to a fixed one. Shortened HERE rather than in each fork, the
+    // `headShaShort` rule: two clients would pick two lengths.
+    fixedHeadSha: f.fixedHeadSha,
+    fixedHeadShaShort: f.fixedHeadSha ? f.fixedHeadSha.slice(0, 7) : null,
+    // Built HERE, not in the two front ends. Only the server knows the host a
+    // repository lives on, and a client assembling `github.com/...` from an
+    // owner and a repo is a client that links to the wrong place the day this
+    // works against an enterprise install.
+    fixedCommitUrl:
+      f.fixedHeadSha && pr
+        ? `https://github.com/${pr.owner}/${pr.repo}/commit/${f.fixedHeadSha}`
+        : null,
+    fixedAt: f.fixedAt ? f.fixedAt.toISOString() : null,
+    fixTaskId: f.fixTaskId,
   };
 }
 

@@ -49,6 +49,12 @@ export const FINDING_LIST_COLUMNS = {
   verdictReason: prCodeReviewFindings.verdictReason,
   disposition: prCodeReviewFindings.disposition,
   dismissedReason: prCodeReviewFindings.dismissedReason,
+  // Carried on the LIST for the same reason as `verdictReason`: it is 40 bytes,
+  // and it is the whole of what a fixed finding has to say for itself. Fetching
+  // it per card would be a request per row.
+  fixedHeadSha: prCodeReviewFindings.fixedHeadSha,
+  fixTaskId: prCodeReviewFindings.fixTaskId,
+  fixedAt: prCodeReviewFindings.fixedAt,
   firstSeenCycle: prCodeReviewFindings.firstSeenCycle,
   lastSeenCycle: prCodeReviewFindings.lastSeenCycle,
   seenCount: prCodeReviewFindings.seenCount,
@@ -475,11 +481,19 @@ export async function markSelectedForFix(
   return updated.length;
 }
 
-/** Mark the selected findings provisionally fixed when a fix run completes. */
+/**
+ * Mark the selected findings provisionally fixed when a fix run completes.
+ *
+ * `headSha` is the commit the run produced, and it is optional because a run can
+ * complete without pushing one. Absent means we could not name a commit, never
+ * "there wasn't one" — so the app says nothing rather than linking somewhere
+ * wrong.
+ */
 export async function markFixed(
   reviewId: string,
   findingIds: string[],
-  taskId: string
+  taskId: string,
+  headSha?: string | null
 ): Promise<number> {
   if (!findingIds.length) return 0;
   const updated = await getDbClient()
@@ -488,6 +502,7 @@ export async function markFixed(
       disposition: 'fixed',
       fixTaskId: taskId,
       fixedAt: new Date(),
+      fixedHeadSha: headSha ?? null,
       updatedAt: new Date(),
     })
     .where(
@@ -509,7 +524,13 @@ export async function markFixed(
 export async function unmarkFixed(reviewId: string, taskId: string): Promise<number> {
   const updated = await getDbClient()
     .update(prCodeReviewFindings)
-    .set({ disposition: 'open', fixTaskId: null, fixedAt: null, updatedAt: new Date() })
+    .set({
+      disposition: 'open',
+      fixTaskId: null,
+      fixedAt: null,
+      fixedHeadSha: null,
+      updatedAt: new Date(),
+    })
     .where(
       and(eq(prCodeReviewFindings.reviewId, reviewId), eq(prCodeReviewFindings.fixTaskId, taskId))
     )

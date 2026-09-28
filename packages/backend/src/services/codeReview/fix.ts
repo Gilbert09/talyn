@@ -10,6 +10,7 @@ import { captureWorkspaceEvent } from '../analytics.js';
 import { captureFixSettled } from './analytics.js';
 import { TaskLimitError } from '../billing/entitlements.js';
 import { createCloudTask } from '../taskCreate.js';
+import { githubService } from '../github.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
 import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
@@ -241,7 +242,8 @@ export async function settleFixRun(
   void captureFixSettled(review, status, findingIds.length);
 
   if (status === 'completed') {
-    const fixed = await markFixed(review.id, findingIds, taskId);
+    const pushed = await pushedCommit(review);
+    const fixed = await markFixed(review.id, findingIds, taskId, pushed);
     await casTransition(
       review.id,
       review.version,
@@ -252,7 +254,7 @@ export async function settleFixRun(
         trigger: 'task:terminal',
         code: 'fix_landed',
         message: `${fixed} finding(s) marked fixed, pending the next review.`,
-        detail: { taskId, fixed },
+        detail: { taskId, fixed, headSha: pushed },
       }
     );
     scheduleReviewEvaluation(review.id, 'task:terminal');
@@ -272,6 +274,38 @@ export async function settleFixRun(
       : 'The fix run did not land. The findings are still here.'
   );
   scheduleReviewEvaluation(review.id, 'task:terminal');
+}
+
+/**
+ * The commit the fix run pushed, or null.
+ *
+ * Read from GitHub rather than from the cached summary, because the push and the
+ * task's completion reach Talyn by different routes — the webhook that moves
+ * `last_summary.headSha` routinely has not landed yet when the task reports
+ * done, so the cached head is still the one the review read.
+ *
+ * Answers null on three different "we cannot name a commit" cases, and they are
+ * deliberately the same answer: the head is unchanged (the run completed without
+ * pushing), GitHub would not say, or the pull request has gone. A wrong sha here
+ * is a link to somebody else's commit presented as the fix for a finding, which
+ * is the `findPullRequestUrl` failure in a smaller frame.
+ */
+async function pushedCommit(review: ReviewRow): Promise<string | null> {
+  try {
+    const pr = await getPrForReview(review.pullRequestId);
+    if (!pr) return null;
+    const fresh = await githubService.getPullRequest(
+      review.workspaceId,
+      pr.owner,
+      pr.repo,
+      pr.number
+    );
+    const head = fresh.head?.sha ?? null;
+    return head && head !== review.reviewedHeadSha ? head : null;
+  } catch (err) {
+    console.warn(`[code-review] reading the fix commit for ${review.id} failed:`, err);
+    return null;
+  }
 }
 
 async function fixFindingIds(review: ReviewRow, taskId: string): Promise<string[]> {

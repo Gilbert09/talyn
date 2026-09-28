@@ -1675,6 +1675,16 @@ export const prCodeReviewFindings = pgTable(
       onDelete: 'set null',
     }),
     fixedAt: timestamp('fixed_at', { withTimezone: true }),
+    /**
+     * The commit the fix run produced, when it produced one.
+     *
+     * Null when the run completed without pushing — which happens, and naming
+     * the head it started from instead would claim a change nobody made. Read
+     * from GitHub at settle rather than from the cached summary, because the
+     * push and the task's completion reach us by different routes and the cached
+     * head is routinely still the old one.
+     */
+    fixedHeadSha: text('fixed_head_sha'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

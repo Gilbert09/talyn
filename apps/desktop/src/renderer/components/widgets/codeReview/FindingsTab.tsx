@@ -93,6 +93,7 @@ export function FindingsTab({
   );
   const [showBucket, setShowBucket] = useState(false);
   const [showDropped, setShowDropped] = useState(false);
+  const [showFixed, setShowFixed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -124,6 +125,11 @@ export function FindingsTab({
   // them and cleared when it lands or fails, so this is the live set rather than
   // whatever was ticked in this browser tab.
   const beingFixed = findings.filter((f) => f.disposition === 'selected');
+  // What the last fix dealt with. These used to leave the list the moment they
+  // were marked fixed, so "it's fixed now" and "it went stale" and "somebody
+  // dismissed it" all looked identical: the finding was simply gone. They stay,
+  // in their own collapsed group, each naming the commit that dealt with it.
+  const fixed = findings.filter((f) => f.disposition === 'fixed');
 
   // Poll only while something is happening. The websocket echo keeps the ROW
   // current, but this tab holds the findings, which no echo carries.
@@ -576,6 +582,58 @@ export function FindingsTab({
                 </span>
               ))}
             </p>
+          )}
+        </div>
+      )}
+
+      {fixed.length > 0 && (
+        <div className="rounded-md border">
+          <button
+            type="button"
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => setShowFixed((v) => !v)}
+          >
+            {showFixed ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            Fixed ({fixed.length}) — review again to confirm it held
+          </button>
+          {showFixed && (
+            <div className="space-y-2 border-t p-2">
+              {fixed.map((finding) => (
+                <div key={finding.id} className="rounded px-2 py-1.5 text-[11px]">
+                  <p className="flex items-start gap-1.5 font-medium">
+                    <Check className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    <span>
+                      <Markdown text={finding.title} variant="inline" />
+                    </span>
+                  </p>
+                  <p className="truncate pl-[18px] text-muted-foreground">
+                    <FilePath path={finding.filePath} line={finding.lineStart} />
+                  </p>
+                  {/* The commit, which is the whole point of keeping the row.
+                      Absent when the run completed without pushing one — said
+                      out loud rather than left blank, because a fix that
+                      changed nothing is a thing the reader needs to know. */}
+                  <p className="pl-[18px] text-muted-foreground">
+                    {finding.fixedCommitUrl && finding.fixedHeadShaShort ? (
+                      <a
+                        href={finding.fixedCommitUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        Fixed in <code className="font-mono">{finding.fixedHeadShaShort}</code>
+                      </a>
+                    ) : (
+                      'The fix run reported this done, but pushed no commit for it.'
+                    )}
+                  </p>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

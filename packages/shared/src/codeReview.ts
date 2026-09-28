@@ -628,6 +628,23 @@ export interface CodeReviewFinding {
   /** True when this finding was already present in the previous cycle. */
   carriedOver: boolean;
   seenCount: number;
+  /**
+   * The commit a fix run produced for this finding, pre-shortened for display
+   * beside the full one — `MergeQueuePublic`'s rule, so three components cannot
+   * each pick a different length.
+   *
+   * Null on everything that was not fixed, AND on a fix that completed without
+   * pushing. A fixed finding with no sha says it was fixed and links nowhere,
+   * which is the honest answer: naming the commit the run started from would
+   * point at a change nobody made.
+   */
+  fixedHeadSha?: string | null;
+  fixedHeadShaShort?: string | null;
+  /** Built server-side — only it knows which host the repository lives on. */
+  fixedCommitUrl?: string | null;
+  fixedAt?: string | null;
+  /** The run that fixed it, so the transcript is one click from the finding. */
+  fixTaskId?: string | null;
 }
 
 export type CodeReviewCounts = Record<CodeReviewSeverity, number>;
