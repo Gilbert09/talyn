@@ -49,6 +49,49 @@ export interface DecideState {
   prOpen: boolean;
 }
 
+
+/**
+ * What every reviewer died of, when they all died of the same thing.
+ *
+ * Returns null the moment the causes disagree — a mixed bag is not a diagnosis,
+ * and claiming one would be worse than the generic message it replaces.
+ */
+function sharedFailureCode(state: DecideState): keyof typeof CYCLE_FAILURE_MESSAGES | null {
+  const settled = state.runs.filter((r) => r.cycle === state.cycle && isSettled(r));
+  if (!settled.length) return null;
+  const codes = new Set(settled.map((r) => r.failureCode ?? ''));
+  if (codes.size !== 1) return null;
+  const only = [...codes][0]!;
+  return only in CYCLE_FAILURE_MESSAGES
+    ? (only as keyof typeof CYCLE_FAILURE_MESSAGES)
+    : null;
+}
+
+/**
+ * What a cycle says when every reviewer failed the same way.
+ *
+ * Each of these is a cause a person can act on, or one we have told them is
+ * ours. None of them says "try again" unless trying again would actually help.
+ */
+const CYCLE_FAILURE_MESSAGES = {
+  prompt_too_large:
+    'This change was too large to send to a reviewer in one piece. Talyn now sends less ' +
+    'of the diff inline and asks the reviewer to read the rest from the checkout, so ' +
+    'reviewing again should work.',
+  runner_out_of_space:
+    'The machine running the review ran out of disk, so no reviewer could start. This ' +
+    'is ours to fix rather than yours.',
+  runner_out_of_memory:
+    'The machine running the review ran out of memory, so no reviewer could start. ' +
+    'This is ours to fix rather than yours.',
+  no_provider:
+    'No agent is connected for this workspace, so there was nothing to review with. ' +
+    'Connect one in Settings.',
+  timeout:
+    'Every reviewer ran out of time before finishing. A smaller change, or a lighter ' +
+    'review depth, will usually get through.',
+} as const;
+
 const SETTLED: RunStatus[] = ['succeeded', 'failed', 'cancelled', 'skipped'];
 
 function isSettled(run: RunRow): boolean {
@@ -134,11 +177,18 @@ function decideUnitPhase(
     // for the sweep or the judge it is a degradation we can live with, because
     // the lenses' findings are already recorded.
     if (phase === 'reviewing') {
+      // "Try again" is the right advice only when the failure was transient. It
+      // is actively misleading when every reviewer died for the same structural
+      // reason — a prompt too large to spawn will be too large next time too —
+      // so when the units agree on a cause, the cycle reports THAT.
+      const shared = sharedFailureCode(state);
       return [
         {
           type: 'fail',
-          code: 'no_reviewer_finished',
-          message: 'No reviewer finished, so there is nothing to show yet. Try again.',
+          code: shared ?? 'no_reviewer_finished',
+          message: shared
+            ? CYCLE_FAILURE_MESSAGES[shared]
+            : 'No reviewer finished, so there is nothing to show yet. Try again.',
         },
       ];
     }

@@ -1188,26 +1188,6 @@ export function findingsEligibleForAutoFix<
 }
 
 /**
- * One row of the Code review panel.
- *
- * Carries the pull request's identity alongside the review, because the panel is
- * a cohort view across pull requests — without the owner, repo and number, every
- * row would need its own lookup to say what it is about.
- */
-export interface CodeReviewListItem {
-  review: CodeReviewPublic;
-  pullRequest: {
-    id: string;
-    owner: string;
-    repo: string;
-    number: number;
-    state: string;
-    title: string;
-    author: string | null;
-  };
-}
-
-/**
  * What each reviewer was looking for, in the user's words.
  *
  * A DELIBERATE REVERSAL. The design said lens names were internal vocabulary

@@ -2113,7 +2113,7 @@ function serializeFinding(f: Awaited<ReturnType<typeof listFindings>>[number]) {
   };
 }
 
-function rowToPublicShape(row: PublicShapeRow) {
+export function rowToPublicShape(row: PublicShapeRow) {
   return {
     id: row.id,
     workspaceId: row.workspaceId,

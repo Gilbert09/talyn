@@ -149,7 +149,13 @@ export type RunFailureCode =
   | 'no_provider'
   | 'run_vanished'
   | 'timeout'
-  | 'unparseable';
+  | 'unparseable'
+  // Failures BEFORE the agent ran. Distinct from `unparseable` because that one
+  // means "it answered and we could not read it", and these mean "it never
+  // started" — which is different advice for whoever reads the review.
+  | 'prompt_too_large'
+  | 'runner_out_of_space'
+  | 'runner_out_of_memory';
 
 /** Units that have not settled. The fan-in and the poller both read this set. */
 export const IN_FLIGHT_RUN_STATUSES: RunStatus[] = [

@@ -50,6 +50,7 @@ import {
   runsForCycle,
   settleRun,
   type ReviewRow,
+  type RunFailureCode,
   type RunKind,
   type RunRow,
 } from './store.js';
@@ -565,6 +566,48 @@ export function unitModelTier(preset: CodeReviewPreset, kind: RunKind): 'default
   return 'default';
 }
 
+
+/**
+ * A failure that happened BEFORE the agent ran, read from the harness's words.
+ *
+ * These are not bad output — they are no output, because nothing started. The
+ * difference matters to whoever reads the review: "the reviewer produced
+ * something we could not parse, try again" is reasonable advice for a garbled
+ * reply and useless for a run that cannot begin, where trying again fails the
+ * same way for the same reason every time.
+ *
+ * Matched on the harness's own error text rather than on a status, because
+ * neither provider reports a spawn failure as anything but a completed run with
+ * an error string in it.
+ */
+function harnessFailure(
+  text: string | null
+): { code: RunFailureCode; message: string } | null {
+  if (!text) return null;
+  if (text.includes('E2BIG')) {
+    return {
+      code: 'prompt_too_large',
+      message:
+        'This change is too large to send to a reviewer in one piece. Talyn now sends ' +
+        'less of the diff inline and asks the reviewer to read the rest from the ' +
+        'checkout, so reviewing again should work.',
+    };
+  }
+  if (/\bENOSPC\b/.test(text)) {
+    return {
+      code: 'runner_out_of_space',
+      message: 'The machine running the review ran out of disk. This is ours to fix.',
+    };
+  }
+  if (/\bENOMEM\b/.test(text)) {
+    return {
+      code: 'runner_out_of_memory',
+      message: 'The machine running the review ran out of memory. This is ours to fix.',
+    };
+  }
+  return null;
+}
+
 // ---------- Ingesting a unit's output ----------
 
 /**
@@ -582,16 +625,24 @@ export async function ingestUnitOutput(
 ): Promise<{ parsed: boolean; findings: number }> {
   const parsed = parseCodeReviewFindings(finalText);
   if (!parsed.ok) {
+    // A unit that never STARTED is not a unit that produced bad output, and
+    // calling both "unparseable" told the user to try again — advice that would
+    // fail in exactly the same way, for the same reason, every time. The
+    // harness's own words are the evidence here, so they are what is read.
+    const harness = harnessFailure(finalText);
     await patchRun(run.id, {
       parseAttempts: run.parseAttempts + 1,
       parseError: `${parsed.error}\n---\n${(finalText ?? '').slice(-2000)}`,
     });
-    await settleRun(run.id, { status: 'failed', failureCode: 'unparseable' });
+    await settleRun(run.id, {
+      status: 'failed',
+      failureCode: harness ? harness.code : 'unparseable',
+    });
     await appendReviewEvent(review.id, {
       toPhase: review.phase as CodeReviewPhase,
       trigger: 'poller',
-      code: 'unparseable',
-      message: parsed.error,
+      code: harness ? harness.code : 'unparseable',
+      message: harness ? harness.message : parsed.error,
       detail: { kind: run.kind, lens: run.lens },
     });
     return { parsed: false, findings: 0 };

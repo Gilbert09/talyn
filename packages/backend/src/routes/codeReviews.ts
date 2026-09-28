@@ -1,9 +1,16 @@
 import { Router, type Request, type Response } from 'express';
 import { inArray } from 'drizzle-orm';
-import type { ApiResponse, CodeReviewListItem } from '@talyn/shared';
+import type { ApiResponse } from '@talyn/shared';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { getDbClient } from '../db/client.js';
 import { pullRequests as pullRequestsTable } from '../db/schema.js';
+import { LIST_COLUMNS, rowToPublicShape } from './pullRequests.js';
+import {
+  computeEntryPositions,
+  loadActiveEntriesForWorkspace,
+  rowToEntrySnapshot,
+} from '../services/mergeQueue/store.js';
+import { toPublicMergeQueue } from '../services/mergeQueue/legacy.js';
 import { codeReviewRefusalReason, userMayUseCodeReview } from '../services/codeReviewAccess.js';
 import { recentReviewsForWorkspace } from '../services/codeReview/store.js';
 import { codeReviewsForPrs } from '../services/codeReview/public.js';
@@ -69,40 +76,47 @@ export function codeReviewRoutes(): Router {
     const prIds = reviews.map((r) => r.pullRequestId);
     // The same batch builder the pull-request list uses: a fixed number of
     // queries for the whole page rather than four per row.
-    const [payloads, prRows] = await Promise.all([
+    //
+    // The PR row is serialized in FULL, exactly as the pull-request list
+    // serializes it, so the panel can hand it to the detail sheet as a seed.
+    // Without one the sheet opens blank and spins until its own fetch returns —
+    // which is the whole of "the panel takes a while to load". A narrower shape
+    // would be smaller and would not be a seed.
+    const [payloads, prRows, queueEntries] = await Promise.all([
       codeReviewsForPrs(prIds),
       getDbClient()
-        .select({
-          id: pullRequestsTable.id,
-          owner: pullRequestsTable.owner,
-          repo: pullRequestsTable.repo,
-          number: pullRequestsTable.number,
-          state: pullRequestsTable.state,
-          lastSummary: pullRequestsTable.lastSummary,
-        })
+        .select(LIST_COLUMNS)
         .from(pullRequestsTable)
         .where(inArray(pullRequestsTable.id, prIds)),
+      // One indexed query for the workspace, the same call the list makes.
+      loadActiveEntriesForWorkspace(workspaceId).catch(() => []),
     ]);
 
+    const positions = computeEntryPositions(queueEntries);
+    const queueByPrId = new Map(
+      queueEntries.map((entry) => [
+        entry.pullRequestId,
+        toPublicMergeQueue(rowToEntrySnapshot(entry), positions.get(entry.id) ?? 0),
+      ])
+    );
+
     const prById = new Map(prRows.map((p) => [p.id, p]));
-    const items: CodeReviewListItem[] = [];
+    // Typed structurally rather than against the client's CodeReviewListItem:
+    // the backend must not import the front-end package, and the shape is
+    // asserted by the route's tests instead.
+    const items: { review: unknown; pullRequest: Record<string, unknown> }[] = [];
     for (const review of reviews) {
       const payload = payloads.get(review.pullRequestId);
       const pr = prById.get(review.pullRequestId);
       // A review whose pull request has gone is not shown. It is not an error —
       // the row is kept for the audit — but there is nothing to click through to.
       if (!payload || !pr) continue;
-      const summary = (pr.lastSummary ?? {}) as { title?: string; author?: string };
       items.push({
         review: payload,
         pullRequest: {
-          id: pr.id,
-          owner: pr.owner,
-          repo: pr.repo,
-          number: pr.number,
-          state: pr.state,
-          title: summary.title ?? `#${pr.number}`,
-          author: summary.author ?? null,
+          ...rowToPublicShape(pr),
+          mergeQueue: queueByPrId.get(pr.id) ?? null,
+          codeReview: payload,
         },
       });
     }

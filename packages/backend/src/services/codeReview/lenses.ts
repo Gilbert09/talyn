@@ -109,6 +109,70 @@ export function lensesForPreset(preset: CodeReviewPreset): string[] {
   return REVIEW_LENSES.slice(0, CODE_REVIEW_PRESET_PLAN[preset].lenses).map((l) => l.key);
 }
 
+
+/**
+ * How much diff a prompt may carry inline.
+ *
+ * NOT a taste judgement — an operating-system limit. Linux caps a single argv
+ * entry at MAX_ARG_STRLEN, 32 pages, which is 131072 bytes, and the prompt is
+ * one argument. Exceed it and the sandbox cannot even START the agent: the
+ * spawn fails with E2BIG, every unit settles in eight seconds having produced
+ * nothing, and the review reports "no reviewer finished" with a suggestion to
+ * try again that will fail identically. That is exactly what a 30-file pull
+ * request did.
+ *
+ * 96 KB leaves roughly 32 KB for the instructions, the description, the file
+ * list and the output contract — comfortably inside the limit, and far above
+ * what an ordinary pull request needs.
+ */
+const MAX_INLINE_DIFF_BYTES = 96 * 1024;
+
+/**
+ * The diff, as much of it as can be sent.
+ *
+ * Whole patches until the budget is spent, then the remaining files NAMED with
+ * their line counts and an instruction to open them. Never a patch cut in half:
+ * a truncated hunk is worse than an absent one, because a reviewer cannot tell
+ * that it stops early and will reason about code that is not there.
+ *
+ * Naming what was left out is the point. The repository is checked out at the
+ * pull request, so a file the agent is told about is a file it can read — which
+ * makes this a smaller prompt rather than a smaller review.
+ */
+function renderDiff(files: ReviewPromptContext['files']): string[] {
+  const out: string[] = [];
+  const omitted: ReviewPromptContext['files'] = [];
+  let used = 0;
+
+  for (const f of files) {
+    if (!f.patch) {
+      out.push(`--- ${f.filename}\n(no patch available — read the file in the checkout)`);
+      continue;
+    }
+    const block = `--- ${f.filename}\n${f.patch}`;
+    const size = Buffer.byteLength(block, 'utf8');
+    if (used + size > MAX_INLINE_DIFF_BYTES) {
+      omitted.push(f);
+      continue;
+    }
+    out.push(block);
+    used += size;
+  }
+
+  if (omitted.length) {
+    out.push(
+      '',
+      `(${omitted.length} more changed file(s) are not inlined here because the diff is`,
+      'large. They are part of this change and you are expected to read them in the',
+      'checkout — they are not excluded from the review:',
+      ...omitted.map((f) => `  ${f.filename} (+${f.additions} -${f.deletions})`),
+      ')'
+    );
+  }
+
+  return out;
+}
+
 // ---------- Prompt context ----------
 
 export interface ReviewPromptContext {
@@ -169,11 +233,7 @@ function preamble(ctx: ReviewPromptContext): string {
     '</changed_files>',
     '',
     '<diff>',
-    ...ctx.files.map((f) =>
-      f.patch
-        ? `--- ${f.filename}\n${f.patch}`
-        : `--- ${f.filename}\n(no patch available — read the file in the checkout)`
-    ),
+    ...renderDiff(ctx.files),
     '</diff>',
     '',
     'The repository is checked out at this pull request. Read whatever you need:',

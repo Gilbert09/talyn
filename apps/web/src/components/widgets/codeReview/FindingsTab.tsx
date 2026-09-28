@@ -441,8 +441,12 @@ export function FindingsTab({
       {error && <ErrorNote>{error}</ErrorNote>}
 
       {/* Clean, and said plainly. This is where the restraint is visible, so it
-          must name what was looked at rather than showing a grey dash. */}
-      {!running && grouped.length === 0 && (
+          must name what was looked at rather than showing a grey dash.
+          Gated on the review having actually FINISHED: a cycle that failed has
+          no findings for the same reason it has no result, and claiming it
+          "found no blockers" next to "the review did not finish" is the app
+          contradicting itself on one screen. Same for a cancelled one. */}
+      {!running && review.phase === 'ready' && grouped.length === 0 && (
         <div className="rounded-md border bg-muted/20 p-4 text-xs">
           <p className="font-medium">Nothing to flag.</p>
           <p className="mt-1 text-muted-foreground">

@@ -5,9 +5,8 @@ import {
   CODE_REVIEW_PRESET_LABELS,
   CODE_REVIEW_SEVERITY_LABELS,
   codeReviewProgress,
-  type CodeReviewListItem,
 } from '@talyn/shared';
-import { api } from '../../../lib/api';
+import { api, type CodeReviewListItem } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { openExternal } from '../../../lib/openExternal';
 
@@ -117,6 +116,10 @@ export function CodeReviewsPanel() {
           onClose={() => setSelectedId(null)}
           layout="contained"
           initialTab="findings"
+          // The list's own row, so the sheet paints immediately instead of
+          // opening blank and spinning until its own fetch returns. Exactly what
+          // the pull-request list does, and the whole of why this felt slow.
+          seedRow={(items ?? []).find((i) => i.pullRequest.id === selectedId)?.pullRequest ?? null}
         />
       </Suspense>
     </div>
@@ -189,10 +192,10 @@ function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => v
       <button type="button" onClick={onOpen} className="w-full p-3 text-left">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">{pullRequest.title}</p>
+            <p className="truncate text-xs font-medium">{pullRequest.summary.title}</p>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
               {pullRequest.owner}/{pullRequest.repo}#{pullRequest.number}
-              {pullRequest.author && ` · @${pullRequest.author}`}
+              {pullRequest.summary.author && ` · @${pullRequest.summary.author}`}
               {' · '}
               {CODE_REVIEW_PRESET_LABELS[review.preset]}
               {review.headShaShort && ` of ${review.headShaShort}`}

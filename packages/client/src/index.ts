@@ -11,7 +11,6 @@ import type {
   CodeReviewDismissReason,
   CodeReviewFinding,
   CodeReviewLensStat,
-  CodeReviewListItem,
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
@@ -2154,6 +2153,22 @@ export const features = {
 // ============================================================================
 // Workflows (user-defined PR automation)
 // ============================================================================
+
+/**
+ * One row of the Code review panel.
+ *
+ * The pull request is serialized in FULL, exactly as the pull-request list
+ * serializes it, because the panel hands it to the detail sheet as a seed —
+ * and a sheet with no seed opens blank and spins until its own fetch returns.
+ *
+ * Declared HERE rather than in `shared` because it names `PRRow`, and the wire
+ * contract is this package's job: a type that describes a response belongs
+ * beside the call that returns it.
+ */
+export interface CodeReviewListItem {
+  review: CodeReviewPublic;
+  pullRequest: PRRow;
+}
 
 /**
  * Code review as a COHORT, across pull requests.
