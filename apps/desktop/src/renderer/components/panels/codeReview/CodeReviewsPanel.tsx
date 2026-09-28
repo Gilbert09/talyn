@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, ScanSearch } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ExternalLink, Loader2, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESET_LABELS,
   CODE_REVIEW_SEVERITY_LABELS,
   codeReviewProgress,
+  type TaskStatus,
 } from '@talyn/shared';
 import { api, type CodeReviewListItem } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -13,6 +14,7 @@ import { PRDetailSheet } from '../../widgets/PRDetailSheet';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
+import { activeFixStatus } from './activeFix';
 
 /**
  * Every review this workspace has run, newest first.
@@ -34,6 +36,8 @@ import { cn } from '../../../lib/utils';
 export function CodeReviewsPanel() {
   const workspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
+  const selectTask = useWorkspaceStore((s) => s.selectTask);
+  const tasks = useWorkspaceStore((s) => s.tasks);
   const [items, setItems] = useState<CodeReviewListItem[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +57,28 @@ export function CodeReviewsPanel() {
     void load();
   }, [load]);
 
+  const taskStatusById = useMemo(() => {
+    const m = new Map<string, TaskStatus>();
+    for (const t of tasks) m.set(t.id, t.status);
+    return m;
+  }, [tasks]);
+
+  const fixStatusFor = useCallback(
+    (item: CodeReviewListItem): TaskStatus | null =>
+      activeFixStatus(item.pullRequest.taskId, taskStatusById),
+    [taskStatusById]
+  );
+
   // Only while something is in flight. A list of finished reviews does not
   // change on its own, and polling one would be a request every five seconds
   // for a screen nobody is waiting on.
-  const anyRunning = (items ?? []).some((i) => !CODE_REVIEW_PHASE_AT_REST[i.review.phase]);
+  //
+  // A running FIX counts as in flight too: it is the thing that changes these
+  // rows next — it pushes a commit, which makes the findings stale — and
+  // without it the list sat still until the panel was reopened.
+  const anyRunning = (items ?? []).some(
+    (i) => !CODE_REVIEW_PHASE_AT_REST[i.review.phase] || fixStatusFor(i) !== null
+  );
   useEffect(() => {
     if (!anyRunning) return;
     const timer = setInterval(() => void load(), 5000);
@@ -92,7 +114,14 @@ export function CodeReviewsPanel() {
           <ReviewRow
             key={item.review.id}
             item={item}
+            fixStatus={fixStatusFor(item)}
             onOpen={() => setSelectedId(item.pullRequest.id)}
+            onOpenTask={() => {
+              const id = item.pullRequest.taskId;
+              if (!id) return;
+              selectTask(id);
+              setActivePanel('queue');
+            }}
           />
         ))}
       </div>
@@ -164,11 +193,25 @@ function EmptyState({ onGoToPrs }: { onGoToPrs: () => void }) {
   );
 }
 
-function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => void }) {
+function ReviewRow({
+  item,
+  fixStatus,
+  onOpen,
+  onOpenTask,
+}: {
+  item: CodeReviewListItem;
+  /** The non-terminal task working this pull request, or null. */
+  fixStatus: TaskStatus | null;
+  onOpen: () => void;
+  onOpenTask: () => void;
+}) {
   const { review, pullRequest } = item;
   const running = !CODE_REVIEW_PHASE_AT_REST[review.phase];
   const progress = codeReviewProgress(review);
   const blockers = review.counts.blocker;
+  // The review's own bar already says "Fixing" while the phase is `fixing`, so
+  // showing both would say it twice in two different ways.
+  const showFix = fixStatus !== null && !running;
 
   return (
     <div
@@ -190,7 +233,11 @@ function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => v
             </p>
           </div>
           <span className="shrink-0 text-[11px] text-muted-foreground">
-            {running ? progress.label : outcomeLabel(review.openCount, review.phase)}
+            {running
+              ? progress.label
+              : showFix
+                ? 'Fix running'
+                : outcomeLabel(review.openCount, review.phase)}
           </span>
         </div>
 
@@ -198,6 +245,19 @@ function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => v
           <div className="mt-2">
             <Progress value={progress.fraction} label={progress.label} />
           </div>
+        )}
+
+        {/* An agent is working this pull request right now. Deliberately above
+            the findings: it is the reason they are about to change, and a
+            person scanning this list for "what is already being handled"
+            should not have to read the counts first. */}
+        {showFix && (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            {fixStatus === 'in_progress'
+              ? 'An agent is working on this pull request'
+              : 'An agent is queued for this pull request'}
+          </p>
         )}
 
         {!running && review.funnel.raised > 0 && (
@@ -248,7 +308,7 @@ function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => v
 
       {/* Outside the row's own button — a button inside a button is invalid, and
           this goes somewhere else entirely. */}
-      <div className="border-t px-3 py-1.5">
+      <div className="flex items-center gap-3 border-t px-3 py-1.5">
         <button
           type="button"
           onClick={() =>
@@ -261,6 +321,16 @@ function ReviewRow({ item, onOpen }: { item: CodeReviewListItem; onOpen: () => v
           <ExternalLink className="h-3 w-3" />
           Open on GitHub
         </button>
+        {showFix && (
+          <button
+            type="button"
+            onClick={onOpenTask}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+            Open the run
+          </button>
+        )}
       </div>
     </div>
   );
