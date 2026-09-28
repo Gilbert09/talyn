@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   exhaustedAgentFrom,
+  rateLimitedAgentFrom,
   heldBackReason,
   isHeldBack,
   probeAfter,
@@ -54,6 +55,43 @@ describe('exhaustedAgentFrom', () => {
     ['undefined', undefined],
   ])('leaves %s alone', (_label, detail) => {
     expect(exhaustedAgentFrom(detail)).toBeNull();
+  });
+
+  it.each([
+    ['the fleet\'s own code', "rate_limited: Rate limited by the Anthropic API — the account's limit"],
+    ['the vendor error type', '429 {"type":"rate_limit_error"}'],
+    ['a five-hour window', 'You have reached your usage limit. Your limit resets at 3pm.'],
+  ])('reads %s as a rate limit, which moves ONE hop rather than none', (_label, detail) => {
+    // `exhaustedAgentFrom` still leaves these alone — see the cases above. They
+    // are recognised separately so a run can swap onto the workspace's other
+    // paid-for agent instead of dying, without ever reaching a metered
+    // provider to avoid a wait that ends by itself.
+    expect(exhaustedAgentFrom(detail)).toBeNull();
+    expect(rateLimitedAgentFrom(detail)).toBe('claude');
+  });
+
+  it('names OpenAI as the limited vendor when the message does', () => {
+    expect(rateLimitedAgentFrom('rate_limited: Rate limited by the OpenAI API')).toBe('codex');
+  });
+
+  it.each([
+    ['an exhausted subscription', "You're out of extra usage."],
+    ['a low credit balance', 'Your credit balance is too low to access the API'],
+  ])('leaves %s to the exhaustion path, which may walk the whole chain', (_label, detail) => {
+    // The stronger claim wins: an exhausted subscription does not come back on
+    // its own, so stopping it at the free hop would strand work that a metered
+    // provider could finish.
+    expect(rateLimitedAgentFrom(detail)).toBeNull();
+  });
+
+  it.each([
+    ['an unrelated harness failure', 'harness_no_output: the harness produced no agent turn'],
+    ['a merge conflict', 'could not apply patch: conflict in src/app.ts'],
+    ['an overloaded vendor', '529 {"type":"overloaded_error"}'],
+    ['an empty string', ''],
+    ['null', null],
+  ])('leaves %s alone', (_label, detail) => {
+    expect(rateLimitedAgentFrom(detail)).toBeNull();
   });
 
   it('does not fire on an agent merely DISCUSSING running out of usage', () => {

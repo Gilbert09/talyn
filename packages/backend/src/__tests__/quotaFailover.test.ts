@@ -196,6 +196,80 @@ describe('quota failover', () => {
   const run = (exhausted: FleetAgent = 'claude') =>
     failoverExhaustedRun({ taskId: 't1', workspaceId: 'ws1', exhausted, detail: DETAIL });
 
+  /**
+   * A rate limit is not an exhausted subscription, and moves a different
+   * distance: one hop onto another paid-for agent, and no further.
+   *
+   * `exhaustedQuota.ts` refuses to move for a rate limit at all, and its reason
+   * is sound — the limit clears by waiting, so reaching a metered provider to
+   * avoid the pause spends money for nothing. But that argument is about the
+   * LAST hop. The first one is free, and leaving a connected Codex subscription
+   * idle while a Claude rate limit kills the run is what Tom reported
+   * (2026-09-28).
+   */
+  describe('a rate limit rather than an exhausted subscription', () => {
+    const rateLimited = (exhausted: FleetAgent = 'claude') =>
+      failoverExhaustedRun({
+        taskId: 't1',
+        workspaceId: 'ws1',
+        exhausted,
+        detail: "rate_limited: Rate limited by the Anthropic API — the account's limit",
+        reason: 'rate_limited',
+      });
+
+    it('moves to the other fleet agent, which costs nothing extra', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      expect(await rateLimited()).toBe(true);
+
+      const t = await task();
+      expect(t.status).toBe('queued');
+      expect(t.assignedEnvironmentId).toBe('fleet1');
+      expect(t.metadata.quotaFailover).toMatchObject({ movedTo: 'Codex on Talyn Fleet' });
+    });
+
+    it('never spills to a metered provider — the wait ends on its own', async () => {
+      // The whole distinction. With only one agent connected, an EXHAUSTED run
+      // falls through to PostHog Code; a rate-limited one must not.
+      await connectAgents(db, ['claude']);
+      expect(await rateLimited()).toBeNull();
+
+      const t = await task();
+      // Untouched: the poller settles it the ordinary way, with the rate-limit
+      // message that already says re-running is safe.
+      expect(t.status).not.toBe('queued');
+      expect(t.metadata.quotaFailover).toBeUndefined();
+    });
+
+    it('holds nothing back, so the next task may use that agent again', async () => {
+      // A hold is for a subscription that needs topping up. Writing one here
+      // would keep every later task off an agent that is fine in minutes.
+      await connectAgents(db, ['claude', 'codex']);
+      await rateLimited();
+      expect(await heldBackAgents('ws1')).toEqual({});
+    });
+
+    it('says the subscription is fine, not that it is spent', async () => {
+      await connectAgents(db, ['claude', 'codex']);
+      await rateLimited();
+      const note = String((await task()).metadata.quotaFailover &&
+        ((await task()).metadata.quotaFailover as { note?: string }).note);
+      expect(note).toMatch(/rate limiting/i);
+      expect(note).toMatch(/clears on its own/i);
+      // The exhaustion wording sends the reader to a billing page.
+      expect(note).not.toMatch(/exhausted/i);
+    });
+
+    it('still walks the whole chain for a genuine exhaustion', async () => {
+      // The regression guard: narrowing the rate-limit path must not narrow
+      // the one it was modelled on.
+      await connectAgents(db, ['claude']);
+      expect(await run()).toBe(true);
+      expect((await task()).metadata.quotaFailover).toMatchObject({
+        movedTo: 'PostHog Code',
+      });
+    });
+  });
+
   it('moves an exhausted Claude run to Codex on the fleet, not to PostHog Code', async () => {
     await connectAgents(db, ['claude', 'codex']);
     expect(await run()).toBe(true);

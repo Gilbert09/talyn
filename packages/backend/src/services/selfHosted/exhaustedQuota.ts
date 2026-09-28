@@ -84,6 +84,70 @@ export function exhaustedAgentFrom(detail: string | null | undefined): FleetAgen
 }
 
 /**
+ * Anthropic's and OpenAI's "slow down", as opposed to "top up".
+ *
+ * These are the sentences the exhaustion lists above deliberately exclude, and
+ * they are matched here for a DIFFERENT purpose — see the note below on why a
+ * rate limit is worth moving for after all.
+ *
+ * `rate_limited:` is the fleet's own failure code, which is what a Talyn task
+ * actually shows; the rest are the vendors' wording when it reaches us intact.
+ * Kept narrow for the same reason as the exhaustion lists: a looser rule moves
+ * work off a subscription that was never limited.
+ */
+const RATE_LIMITED = [
+  /\brate_limited\b/i,
+  /\brate_limit_error\b/i,
+  /rate limited by the (anthropic|openai) api/i,
+  /reached your usage limit/i,
+  /usage limit reached/i,
+] as const;
+
+/**
+ * Whether a failure is a rate limit, and on which vendor's API.
+ *
+ * # Why this exists, when "exhausted is not rate-limited" is the rule above
+ *
+ * That rule is still right about what it was written about. A rate limit clears
+ * by waiting, and the comment's own justification for leaving it alone is that
+ * moving "on the last hop means spending metered credits to avoid a
+ * twenty-minute wait". That argument is about the LAST hop — PostHog Code, which
+ * bills per token. It was never true of the FIRST one.
+ *
+ * Swapping to the workspace's other fleet agent costs nothing: it is a
+ * subscription already paid for, sitting connected and idle, and the work
+ * continues now instead of in twenty minutes. Tom asked for exactly that
+ * (2026-09-28) after a Claude rate limit failed a run with a connected Codex
+ * subscription doing nothing.
+ *
+ * So a rate limit moves ONE hop, to another fleet agent, and never spills to a
+ * metered provider. The caller enforces that — see `failoverRateLimitedRun`.
+ *
+ * Returns the agent that was limited, so the caller knows which one not to
+ * retry, or null for anything else.
+ */
+export function rateLimitedAgentFrom(detail: string | null | undefined): FleetAgent | null {
+  if (typeof detail !== 'string' || !detail) return null;
+  // An exhausted quota wins: it is the stronger claim and has its own path,
+  // and some vendor strings mention both a limit and a balance.
+  if (exhaustedAgentFrom(detail)) return null;
+  if (!RATE_LIMITED.some((re) => re.test(detail))) return null;
+  // Which vendor. The fleet's own `rate_limited:` line names the API, and an
+  // OpenAI-worded limit is Codex; everything else that reaches here is Claude,
+  // which is the agent the overwhelming majority of these come from.
+  return /openai/i.test(detail) ? 'codex' : 'claude';
+}
+
+/** How the task explains a move made because one vendor was rate limiting. */
+export function rateLimitFailoverSummary(from: FleetAgent, to: string): string {
+  return (
+    `${agentLabel(from)} was rate limiting this account, so this run moved to ${to}. ` +
+    `Nothing is wrong with either subscription and your default agent is unchanged — ` +
+    `the limit clears on its own.`
+  );
+}
+
+/**
  * How the task explains itself after a move. Names the vendor that ran out AND
  * where the work went, because the alternative — a run that quietly used a
  * different vendor than the one picked — is the kind of thing nobody can

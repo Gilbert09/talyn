@@ -16,6 +16,7 @@ import {
   failoverSummary,
   heldBackAgents,
   noteExhaustedAgent,
+  rateLimitFailoverSummary,
   unconfirmedRefusalSummary,
 } from '../selfHosted/exhaustedQuota.js';
 import { resolveCloudEnvChain } from '../prCloudFix.js';
@@ -62,7 +63,10 @@ type Hop = string;
 interface FailoverState {
   /** Hops tried and exhausted, oldest first. Never re-tried. */
   tried?: Hop[];
-  /** The agent that ran out, for the summary on the final dead end. */
+  /** The agent moved AWAY from, for the summary on the final dead end and for
+   *  the `failedOverFrom` dimension on dispatch. Named for the case it was
+   *  written for; a rate-limited agent lands here too, and is not exhausted.
+   *  What the user reads is `note`, which says which of the two happened. */
   exhausted?: FleetAgent;
   /** Where the work went, in the words the user sees. */
   movedTo?: string;
@@ -106,8 +110,30 @@ export async function failoverExhaustedRun(opts: {
   /** The vendor's own words. Recorded as the task's `error` on a dead end,
    *  and logged on a move — a move leaves `result` null on purpose. */
   detail: string | null;
-}): Promise<boolean> {
+  /**
+   * Why the run is moving, which decides HOW FAR it may move.
+   *
+   * `exhausted` (the default) walks the whole chain, ending at a metered
+   * provider, because a spent subscription does not come back on its own.
+   *
+   * `rate_limited` moves to another FLEET AGENT ONLY. The limit clears by
+   * waiting, so reaching a per-token provider to avoid a pause is the trade
+   * `exhaustedQuota.ts` rightly refuses — but that argument was only ever
+   * about the metered hop. Swapping onto a subscription the workspace has
+   * already paid for costs nothing, and leaving it idle while the run dies
+   * is what Tom reported (2026-09-28). No hold is written either: the
+   * subscription is fine, and holding it would keep the NEXT task off an
+   * agent that is working again in minutes.
+   */
+  reason?: 'exhausted' | 'rate_limited';
+  /**
+   * `null` means "not handled — settle it the ordinary way", which is the
+   * contract the poller already reads for the threw case.
+   */
+}): Promise<boolean | null> {
   const { taskId, workspaceId, exhausted, detail } = opts;
+  const reason = opts.reason ?? 'exhausted';
+  const rateLimited = reason === 'rate_limited';
   const db = getDbClient();
 
   const rows = await db
@@ -134,7 +160,12 @@ export async function failoverExhaustedRun(opts: {
   // the run — the work is wanted and the other agent can do it — but it writes
   // no hold, so the next task asks the first agent again instead of inheriting
   // a claim nothing could verify.
-  const confirmed = await noteExhaustedAgent(workspaceId, exhausted, detail);
+  // Skipped entirely for a rate limit: there is nothing exhausted to remember,
+  // and a hold would keep later tasks off a subscription that is fine again in
+  // minutes. `confirmed` is then vacuously true — nothing was claimed.
+  const confirmed = rateLimited
+    ? true
+    : await noteExhaustedAgent(workspaceId, exhausted, detail);
 
   const state = readState(row.metadata);
   const tried = new Set<Hop>(state.tried ?? []);
@@ -142,8 +173,14 @@ export async function failoverExhaustedRun(opts: {
   // that failed IS the attempt.
   tried.add(FLEET_HOP(exhausted));
 
-  const next = await nextHop(workspaceId, tried);
+  const next = await nextHop(workspaceId, tried, { fleetOnly: rateLimited });
   if (!next) {
+    // A rate limit with nowhere free to go is NOT a dead end of this module's
+    // kind. `settleDeadEnd` tells the user their subscription is spent and to
+    // go and top it up, which is false here — the limit clears by itself, and
+    // the ordinary failure the poller writes already says re-running is safe.
+    // So hand it back rather than replacing a true message with a wrong one.
+    if (rateLimited) return null;
     await settleDeadEnd(taskId, workspaceId, exhausted, detail, [...tried]);
     return false;
   }
@@ -193,9 +230,11 @@ export async function failoverExhaustedRun(opts: {
       tried: [...tried, next.kind === 'fleet' ? FLEET_HOP(next.agent) : next.providerType],
       exhausted,
       movedTo,
-      note: confirmed
-        ? failoverSummary(exhausted, movedTo)
-        : unconfirmedRefusalSummary(exhausted, movedTo),
+      note: rateLimited
+        ? rateLimitFailoverSummary(exhausted, movedTo)
+        : confirmed
+          ? failoverSummary(exhausted, movedTo)
+          : unconfirmedRefusalSummary(exhausted, movedTo),
       at: new Date().toISOString(),
     } satisfies FailoverState;
     return meta;
@@ -232,6 +271,10 @@ export async function failoverExhaustedRun(opts: {
   captureWorkspaceEvent(workspaceId, 'task_quota_failed_over', {
     task_id: taskId,
     exhausted_agent: exhausted,
+    // Which of the two failures moved it. A day of rate limits and a day of
+    // exhausted subscriptions mean completely different things, and without
+    // this they are one number.
+    reason,
     to: next.kind === 'fleet' ? `fleet:${next.agent}` : next.providerType,
     // Whether the vendor stood behind the refusal when asked directly. An
     // unconfirmed one is a fleet-path failure wearing a quota error's words,
@@ -240,8 +283,8 @@ export async function failoverExhaustedRun(opts: {
     quota_confirmed: confirmed,
   });
   console.warn(
-    `[quotaFailover] task ${taskId.slice(0, 8)}: ${agentLabel(exhausted)} usage exhausted — ` +
-      `moving to ${movedTo}`,
+    `[quotaFailover] task ${taskId.slice(0, 8)}: ${agentLabel(exhausted)} ` +
+      `${rateLimited ? 'rate limited' : 'usage exhausted'} — moving to ${movedTo}`,
   );
 
   void taskQueueService.processQueue();
@@ -260,7 +303,11 @@ type NextHop =
  * skipped: its credential exists but the vendor will not renew it, so moving
  * an exhausted run onto it trades one dead end for another.
  */
-async function nextHop(workspaceId: string, tried: Set<Hop>): Promise<NextHop | null> {
+async function nextHop(
+  workspaceId: string,
+  tried: Set<Hop>,
+  opts: { fleetOnly?: boolean } = {},
+): Promise<NextHop | null> {
   const { connectedAgents, reauthAgents } = await fleetAgentStatus(workspaceId).catch(() => ({
     connectedAgents: [] as FleetAgent[],
     reauthAgents: [] as FleetAgent[],
@@ -275,6 +322,13 @@ async function nextHop(workspaceId: string, tried: Set<Hop>): Promise<NextHop | 
     if (held[agent]) continue;
     return { kind: 'fleet', agent };
   }
+
+  // A rate limit stops here. The subscriptions are the free hops; the rest of
+  // the chain bills per token, and paying that to avoid a wait that ends on its
+  // own is the trade `exhaustedQuota.ts` refuses. With no other agent to move
+  // to, the run fails exactly as it did before — and its message already says
+  // re-running is safe.
+  if (opts.fleetOnly) return null;
 
   // Then the rest of the chain, fleet excluded — every fleet agent worth
   // trying has been by now, and re-entering the fleet here would dispatch at

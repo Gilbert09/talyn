@@ -2,6 +2,45 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A rate limit now swaps agents instead of killing the run (2026-09-28)
+
+A Claude rate limit failed a task outright while a connected, paid-for Codex
+subscription sat idle. Tom: it should continue on the other subscription.
+
+**The existing rule was right about the hop it was written for.**
+`exhaustedQuota.ts` deliberately excludes rate limits from failover, and its own
+justification is that moving "on the last hop means spending metered credits to
+avoid a twenty-minute wait". That is an argument about the LAST hop — PostHog
+Code, which bills per token. It was never true of the FIRST one: the fleet's
+other agent is a subscription the workspace already pays for, sitting connected
+and doing nothing.
+
+So a rate limit now moves exactly one hop and no further. `rateLimitedAgentFrom`
+recognises the fleet's own `rate_limited:` code and the vendors' wording — the
+strings the exhaustion lists explicitly exclude — and yields to
+`exhaustedAgentFrom` when both could match, because an exhausted subscription is
+the stronger claim and must keep its longer walk. `failoverExhaustedRun` takes a
+`reason`, and on `rate_limited` it:
+
+- restricts `nextHop` to fleet agents (`fleetOnly`), so it can never reach a
+  metered provider;
+- writes **no** `quotaExhausted` hold — nothing is spent, and a hold would keep
+  the next task off an agent that is fine in minutes;
+- returns **null** rather than `settleDeadEnd` when there is no other agent,
+  because that function tells the user their subscription is spent and to go and
+  top it up. The ordinary failure the poller then writes is already correct and
+  already says re-running is safe. Replacing a true message with a wrong one is
+  worse than not moving.
+
+The guard that matters is the last test in the new block: an exhaustion with one
+agent connected still walks all the way to PostHog Code. Narrowing the new path
+must not narrow the one it was modelled on.
+
+Not covered by a test: the three lines in the poller that choose between the two
+detectors. They read two pure functions whose contract and mutual exclusivity are
+pinned, and building a fleet-poller fixture for them was not worth it — recorded
+here rather than left as an unstated gap.
+
 ## Onboarding showed no Talyn Fleet card, and no OAuth (2026-09-28)
 
 Step 2 of the wizard, "Connect an agent", offered PostHog Code and its personal

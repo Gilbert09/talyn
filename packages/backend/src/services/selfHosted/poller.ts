@@ -22,7 +22,11 @@ import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
 import { FleetRunNotFoundError } from './client.js';
 import type { FleetClient, FleetEvent, FleetSandbox, FleetSandboxTask } from './client.js';
 import { noteWithdrawnModel, withdrawnModelFrom } from './withdrawnModels.js';
-import { clearExhaustedAgent, exhaustedAgentFrom } from './exhaustedQuota.js';
+import {
+  clearExhaustedAgent,
+  exhaustedAgentFrom,
+  rateLimitedAgentFrom,
+} from './exhaustedQuota.js';
 import { failoverExhaustedRun } from '../cloudProviders/quotaFailover.js';
 
 // Re-exported, not redeclared. This module and the other providers' pollers
@@ -647,17 +651,33 @@ class SelfHostedPoller {
     // re-running it somewhere else would throw that away and bill for the
     // privilege. A rate limit is NOT this (exhaustedQuota.ts draws the line).
     if (status === 'failed') {
+      // Two different vendor refusals, moved for two different distances.
+      //
+      // An exhausted subscription walks the whole chain: it does not come back
+      // on its own, so ending at a metered provider is better than not running.
+      //
+      // A rate limit moves ONE hop, onto another connected fleet agent, and no
+      // further. It clears by waiting, so paying per token to avoid the wait is
+      // the trade `exhaustedQuota.ts` refuses — but that was always about the
+      // metered hop, and it left a paid-for Codex subscription sitting idle
+      // while a Claude rate limit killed the run outright.
       const exhausted = exhaustedAgentFrom(failureDetail);
-      if (exhausted) {
-        // `null` is the THREW case, and the only one that falls through: a
-        // failover that breaks must not swallow the failure it was trying to
-        // rescue. Both real answers — moved on, or settled as a dead end —
-        // mean the task is fully accounted for and finalize writes nothing.
+      const limited = exhausted ? null : rateLimitedAgentFrom(failureDetail);
+      const moving = exhausted ?? limited;
+      if (moving) {
+        // `null` is the THREW case AND the "nothing free to move to" case for a
+        // rate limit, and both fall through: a failover that breaks must not
+        // swallow the failure it was trying to rescue, and a rate limit with
+        // nowhere to go deserves its own accurate message rather than a dead
+        // end claiming the subscription is spent. Both real answers — moved on,
+        // or settled as a dead end — mean the task is fully accounted for and
+        // finalize writes nothing.
         const handled = await failoverExhaustedRun({
           taskId,
           workspaceId,
-          exhausted,
+          exhausted: moving,
           detail: failureDetail || null,
+          reason: exhausted ? 'exhausted' : 'rate_limited',
         }).catch((err) => {
           console.error(`[selfhosted] quota failover failed for ${taskId.slice(0, 8)}:`, err);
           return null;
