@@ -201,7 +201,7 @@ export const FEATURE_FLAGS = {
     posthogKey: 'code-review',
     fallback: false,
     description: 'Code review — AI findings on a pull request, shown in the app',
-    availability: 'gated',
+    availability: 'general',
     releaseScopes: ['code-review'],
   },
 
