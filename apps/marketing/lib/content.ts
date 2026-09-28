@@ -38,10 +38,20 @@ export interface NavItem {
   group?: "features";
 }
 
+/**
+ * Five entries, and the count matters — the desktop bar has a logo and three
+ * buttons to fit beside them, and "Download for Windows" is a lot wider than
+ * the "Download" it replaced.
+ *
+ * "Agents" was a sixth and is gone: it pointed at /features/agents, which is
+ * already the ninth item in the Features menu directly to its left. It was the
+ * only top-level link that duplicated a dropdown entry, so it cost width and
+ * bought nothing. The Fleet pitch it was there to promote now leads the hero
+ * instead, which is a better place for it than a nav label.
+ */
 export const nav: NavItem[] = [
   { label: "How it works", href: "#how" },
   { label: "Features", href: "features", group: "features" },
-  { label: "Agents", href: "features/agents" },
   { label: "Compare", href: "compare" },
   { label: "Pricing", href: "pricing" },
   { label: "FAQ", href: "#faq" },

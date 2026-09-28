@@ -67,16 +67,24 @@ export function Nav() {
           : "border-b border-transparent"
       )}
     >
-      <nav className="container relative flex h-16 items-center justify-between">
-        <a href="/#top" aria-label="Talyn home">
+      <nav className="container relative flex h-16 items-center justify-between gap-4">
+        <a href="/#top" aria-label="Talyn home" className="shrink-0">
           <Logo />
         </a>
 
-        {/* lg (not md): the link row is absolutely centered, so at md widths
-            it collides with the right-side buttons — hamburger until lg. */}
+        {/* In FLOW, not absolutely centred.
+            It used to be `absolute left-1/2 -translate-x-1/2`, which takes the
+            row out of the layout entirely — so it could not push the buttons
+            aside, only sit on top of them. The old comment called that a
+            md-width problem and dropped to a hamburger below lg; it was really
+            a content-width problem, and it came back the moment the row grew.
+            Adding "Compare" and widening the button from "Download" to
+            "Download for Windows" was enough to land FAQ on top of GitHub.
+            A flex child with `flex-1 justify-center` looks centred and cannot
+            overlap anything, because it is participating in the layout. */}
         <div
           ref={menuRef}
-          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 lg:flex"
+          className="hidden min-w-0 flex-1 items-center justify-center gap-1 lg:flex"
           // Leaving the whole row closes the menu. Scoped to the row rather
           // than the panel so moving diagonally from the trigger to an item
           // does not shut it mid-travel.
@@ -149,7 +157,7 @@ export function Nav() {
           )}
         </div>
 
-        <div className="hidden items-center gap-2 lg:flex">
+        <div className="hidden shrink-0 items-center gap-2 lg:flex">
           <a href={site.githubUrl} target="_blank" rel="noreferrer">
             <Button variant="ghost" size="sm">
               GitHub
