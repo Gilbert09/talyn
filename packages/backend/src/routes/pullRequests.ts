@@ -1487,9 +1487,27 @@ export function pullRequestRoutes(): Router {
     const reason = isCodeReviewDismissReason(req.body?.reason) ? req.body.reason : null;
     const user = assertUser(req);
     await setDisposition(finding.id, 'dismissed', { reason, userId: user.id });
+    // The ONE emit for a dismissal. Both front ends used to send this as well,
+    // with richer properties and a different shape for a missing reason (`null`
+    // against `'unspecified'`), so every dismissal counted twice and its reason
+    // breakdown split down the middle. This is the authoritative side — a
+    // dismissal is an API call, and a client event can be blocked — so the
+    // properties moved here rather than the emit moving there.
     void captureWorkspaceEvent(workspaceId, 'code_review_finding_dismissed', {
       severity: finding.severity,
-      reason: reason ?? 'unspecified',
+      // Absent when somebody dismissed without picking one. The reasons are
+      // skippable, so no reason is a real answer about the prompt, not a gap.
+      reason,
+      // How many reviewers raised it. Dismissing something two lenses agreed on
+      // is a different signal from dismissing something one of them guessed at.
+      lenses: ((finding.lenses as string[]) ?? []).length,
+      // The first real review's one surviving finding quoted code that was not
+      // where it said. If unverified anchors drive dismissals, this is where it
+      // shows.
+      anchor_verified: finding.anchorVerified,
+      verdict: finding.verdict,
+      seen_count: finding.seenCount,
+      cycle: review.cycle,
     });
     // Dismissing a blocker is one of the two ways a parked merge-queue entry gets
     // released, so tell the queue rather than making it wait for a poll. Not

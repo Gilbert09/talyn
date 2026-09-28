@@ -56,6 +56,7 @@ import {
 } from './store.js';
 import type { Action, UnitKey } from './decide.js';
 import { startFixRun } from './fix.js';
+import { captureCycleFailed, captureCycleFinished } from './analytics.js';
 import { workspaceReviewSettings } from './cycle.js';
 
 /**
@@ -805,6 +806,11 @@ export async function finishCycle(review: ReviewRow): Promise<void> {
     }
   );
 
+  // Fire and forget, and deliberately BEFORE the auto-fix: this event describes
+  // the review, and an auto-fix that takes twenty minutes must not delay it or be
+  // able to lose it by throwing.
+  void captureCycleFinished(review);
+
   await maybeAutoFix(review);
 }
 
@@ -875,6 +881,7 @@ export async function failCycle(
       message,
     }
   );
+  void captureCycleFailed(review, code);
 }
 
 /** Move the review to a new phase, recording why. */

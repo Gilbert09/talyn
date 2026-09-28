@@ -277,14 +277,9 @@ export function FindingsTab({
       next.delete(finding.id);
       return next;
     });
-    trackEvent('code_review_finding_dismissed', {
-      severity: finding.severity,
-      // Absent when somebody dismissed without picking one — the reasons are
-      // skippable, so a missing reason is a real answer about the prompt.
-      reason: reason ?? null,
-      lenses: finding.lenses.length,
-      anchor_verified: finding.anchorVerified,
-    });
+    // No `code_review_finding_dismissed` here. The route emits it, with these
+    // same properties and more — sending it from both sides counted every
+    // dismissal twice and split its reason breakdown in half.
     try {
       await api.pullRequests.dismissCodeReviewFinding(pullRequestId, finding.id, reason);
     } finally {

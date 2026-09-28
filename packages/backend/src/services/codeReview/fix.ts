@@ -7,6 +7,7 @@ import {
   type CodeReviewSeverity,
 } from '@talyn/shared';
 import { captureWorkspaceEvent } from '../analytics.js';
+import { captureFixSettled } from './analytics.js';
 import { TaskLimitError } from '../billing/entitlements.js';
 import { createCloudTask } from '../taskCreate.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
@@ -237,6 +238,7 @@ export async function settleFixRun(
   status: string
 ): Promise<void> {
   const findingIds = await fixFindingIds(review, taskId);
+  void captureFixSettled(review, status, findingIds.length);
 
   if (status === 'completed') {
     const fixed = await markFixed(review.id, findingIds, taskId);
