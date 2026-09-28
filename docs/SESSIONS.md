@@ -24,15 +24,26 @@ by `ConnectAgentStep` for the wizard — never both at once, so no double fetch.
 The test pins the FETCH rather than the markup, because that is where the defect
 was.
 
-**The OAuth half has a second, separate cause that is not in the code.**
-`oauthAvailable` is `isPostHogOAuthEnabled()`, which is true only when BOTH
-`POSTHOG_OAUTH_CLIENT_ID` and `POSTHOG_OAUTH_REDIRECT_URI` are set — deliberately
-all-or-nothing (SETUP §6b), with the personal-API-key path as the documented
-fall-back. Neither appears in the copy of the production environment in this
-repo, so even with the store filled, production will keep offering the key form
-until those two variables are set on Railway. The CIMD document they point at
-(`apps/marketing/app/oauth-client/route.ts`) is in the repo and deploys with the
-marketing site, so the prerequisite is in place.
+**I first blamed the OAuth half on missing configuration, and that was wrong.**
+`oauthAvailable` is `isPostHogOAuthEnabled()`, true only when BOTH
+`POSTHOG_OAUTH_CLIENT_ID` and `POSTHOG_OAUTH_REDIRECT_URI` are set
+(deliberately all-or-nothing, SETUP §6b). Neither appears in this repo's copy of
+the production environment — but `railway variables` shows both set correctly on
+the live service, matching the CIMD document byte for byte. **`.env.prod` in the
+repo is a stale snapshot and is not evidence of what production has**; ask
+Railway. The store-emptiness above was the whole cause.
+
+**And the key path is no longer offered where OAuth works.** Tom's call. It used
+to sit one click behind the OAuth button on every deployment, which made a
+long-lived credential carrying the user's whole project the easier of the two
+for anyone who did not know the difference; the OAuth grant is narrowed to one
+project and `task:read`/`task:write` and is revocable from PostHog's own
+Connected Apps screen. A deployment with no `POSTHOG_OAUTH_*` still gets the key
+form, because that is the documented fall-back and the local-dev default —
+removing it there would leave those deployments no way to connect at all. An
+existing key connection is never broken: the stored key keeps working, and its
+button now offers the move to OAuth instead of a key edit, which replaces the
+credential AND re-picks the project, so it does everything Edit did.
 
 ## A queued stack rung that waited for PRs nobody had queued (2026-09-28)
 

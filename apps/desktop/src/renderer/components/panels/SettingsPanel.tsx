@@ -1773,16 +1773,22 @@ export function cloudProviderOffered(
  *   consent screen, so no credential ever passes through this window and the
  *   grant is narrowed to one project + `task:read`/`task:write`. It's revocable
  *   from PostHog's Connected Apps screen.
- * - **Personal API key** — the original path, still fully supported, and the only
- *   one on a deployment without OAuth configured (self-hosted, local dev). An
- *   existing key install is never migrated or nagged: it keeps this card and its
- *   Edit button exactly as before, with OAuth offered as a quiet alternative
- *   rather than a prompt.
+ * - **Personal API key** — now offered ONLY where OAuth is not configured
+ *   (self-hosted, local dev), which SETUP §6b documents as the fall-back. It
+ *   used to sit one click behind the OAuth button on every deployment; that
+ *   made a long-lived credential carrying the user's whole project a one-click
+ *   default for anyone who did not know the difference.
+ *
+ *   An existing key connection is still never broken — the stored key keeps
+ *   working, and nothing nags. What changed is that its button now offers the
+ *   move to OAuth instead of a key edit, because re-consenting replaces the
+ *   credential and re-picks the project, so it does everything Edit did and
+ *   ends somewhere better.
  *
  * Either way the credential is write-only — the backend returns neither the key
  * nor a token, so this renders connection state and the project id, nothing more.
  */
-function PostHogCodeCard() {
+export function PostHogCodeCard() {
   // Status is preloaded into the store at startup (useSystemStatus), so the
   // card shows the connection state instantly. Mutations below write the fresh
   // status straight back to the store; the OAuth flow finishes in the system
@@ -1914,8 +1920,16 @@ function PostHogCodeCard() {
           </div>
           <p className="text-sm text-muted-foreground mt-1">{description()}</p>
 
-          {/* Not connected, OAuth on the table: lead with it, and keep the key
-              path one click away rather than hidden. */}
+          {/* Not connected, OAuth on the table: it is the ONLY path offered.
+              The key form used to sit one click away here. It is gone wherever
+              OAuth works, because a personal API key is a long-lived credential
+              with the user's whole project behind it, pasted through this
+              window, while the OAuth grant is narrowed to one project and
+              `task:read`/`task:write` and is revocable from PostHog's own
+              Connected Apps screen. Offering both made the weaker one a
+              one-click default for anyone who did not know the difference.
+              A deployment with no POSTHOG_OAUTH_* configured still gets the key
+              form below — see `keyFormOpen`. */}
           {!connected && oauthAvailable && !keyFormOpen && (
             <div className="mt-3 space-y-3">
               <Input
@@ -1934,15 +1948,6 @@ function PostHogCodeCard() {
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={handleConnectOAuth} disabled={isSaving || !currentWorkspaceId}>
                   {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Connect with PostHog'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditing(true)}
-                  disabled={isSaving}
-                >
-                  <KeyRound className="w-4 h-4 mr-1" />
-                  Use a personal API key
                 </Button>
               </div>
             </div>
@@ -2029,6 +2034,18 @@ function PostHogCodeCard() {
               >
                 <RefreshCw className="w-4 h-4 mr-1" />
                 Reconnect
+              </Button>
+            ) : oauthAvailable ? (
+              // A working key connection, on a deployment where OAuth exists.
+              // Offered the move rather than a key edit: re-consenting replaces
+              // the credential AND re-picks the project, so this does everything
+              // Edit did and ends with the narrower grant. Nothing is forced —
+              // the stored key keeps working until this is pressed, because
+              // breaking a connected workspace to tidy up its auth method is
+              // not a trade anybody asked for.
+              <Button variant="outline" size="sm" onClick={handleConnectOAuth} disabled={isSaving}>
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Switch to PostHog sign-in
               </Button>
             ) : (
               <Button variant="outline" size="sm" onClick={() => setEditing(true)} disabled={isSaving}>
