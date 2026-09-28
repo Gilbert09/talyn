@@ -2,6 +2,106 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A conversion pass that the numbers rewrote (2026-09-28)
+
+Ran a public CRO/copywriting method (`coreyhaines31/marketingskills`, MIT —
+read as reference, not installed) over the marketing site, and pulled thirty
+days of PostHog project 459813 first, because a checklist applied without
+numbers produces a checklist-shaped answer. **The data overturned two of the
+framework's own priorities**, which was the useful part.
+
+### What the numbers said
+
+611 visitors (596 human), 783 pageviews — **1.28 pages per visit**. Windows
+254, Mac 203, mobile 128, Linux 26. **30 trusted download clicks from 30
+distinct people** (a further 81 fired `download_click` with no `trusted` flag —
+bots and email link scanners, so the flag is earning its place).
+
+Three findings:
+
+- **The hero CTA is dead and the nav is the conversion surface.** `nav` 29
+  clicks, `hero` 1, nothing else, all month — and the nav button said the
+  literal word "Download", which overrode the runtime platform label. Median
+  press at **27 seconds**: nobody is reading the fold, they are scanning the
+  bar for the button. Every framework spends its effort on the hero; here that
+  would have been effort spent on the one CTA nobody uses.
+- **Windows is 42% of visitors and 90% of download intent** — 27 distinct
+  people, one click each (checked: not a retry loop). Every one met an
+  unsigned-installer warning the site mentioned exactly once, in body prose,
+  most of the way down `/features/pr-dashboard`.
+- **Mac clicks download at a seventh of Windows' rate (1.5% vs 10.6%) and the
+  reason was unaskable**, because `Open in browser` had no event on it
+  anywhere. 40 people used the web app last month against 47 on desktop, so
+  roughly half of everyone who acts on this site was invisible. `app.talyn.dev`
+  also emits no `$pageview` at all — it sends `app_opened` with a `client`
+  property instead, which is why pageview-based analysis reads as zero.
+
+### The constraint worth writing down
+
+**At ~600 visitors and ~30 conversions a month, nothing here is testable.**
+Detecting a 30% relative lift on a 5% base needs thousands per arm. The
+method's own experiment library is 60 items with no sample-size guidance;
+treating it as a roadmap would have burned the quarter. Everything shipped as
+a judgment call, and the honest read is a four-to-six week before/after on
+`download_click` (trusted only) plus the new `open_app_click` — not a
+dashboard check tomorrow.
+
+### What shipped
+
+Measurement first: `WebAppButton` capturing `open_app_click`; both pricing
+CTAs split by tier AND billing period (they shared one `placement`, so Free
+and Unlimited were the same row in every report); the period toggle reporting
+itself; `download_resolved` so a rate-limited visitor dumped on the releases
+page is no longer identical in the data to a successful download; and
+`download_click_suppressed`, because the module-level latch is **right to
+exist** — it is what stopped the site counting one press twice — and wrong to
+swallow frustrated repeat-clicks silently.
+
+Then: the nav button names its platform; `PlatformNote` puts the SmartScreen
+step under the button, offers Intel Macs the x64 build, and stops offering a
+`.dmg` to Android (`detectPlatform` maps Android to Mac, deliberately, to keep
+it out of the Linux branch); the hero subhead drops 60 words to 42 and leads
+with the subscription claim; "For GitHub" enters the microcopy, because a
+GitLab user could previously read the entire homepage before discovering the
+product cannot work for them.
+
+**"It'll merge that PR itself. Overnight included." left the fold.** It reads
+as magic to an early adopter and as a hazard to anybody whose employer owns
+the repository, and the second group is larger. The claim is still on the
+page, beside the fact that nothing merges unless you flagged it — which is now
+answered on the homepage and on `/pricing`.
+
+`/pricing` is a real route. The anchor threw you back to `/` from any of 22
+sub-pages and there was no URL to send anyone. The interesting failure on the
+teardown's machine-readability axis: **the toggle means only ONE price is ever
+in the HTML, and it defaults to annual**, so anything reading the page without
+running it never saw $15. `PlanTable` is the fix — every price and every cap
+as server-rendered text — and it is visible rather than crawler-only, because
+the alternative is cloaking. `Offer` schema moved to the page the offer is on.
+
+Trust, restricted to what a sceptic can check in ten seconds: current build
+and when it shipped, macOS notarization, the sandbox credential design, source
+public. **Not a star count** — at nine it reads as "nobody is here", which is
+worse than silence, and no threshold needed justifying once the card stopped
+needing a number. `/about` answers "who are you", which nothing did.
+
+Also repaired the download path: an 8s `AbortController`, because there was no
+timeout and the 4s re-enable is scheduled *after* the await, so a hung
+`api.github.com` left the button spinning with no way out; and an `<a>` rather
+than a `<button>`, so cmd-click and middle-click do something.
+
+The `img.logo.dev` marks got an error fallback rather than being self-hosted:
+they are the site's only logo wall and were one third-party outage from
+rendering as three broken images, but they are other companies' trademarks and
+keeping copies is a different problem from the one being solved.
+
+### What was deliberately not taken from the method
+
+Urgency, inflated proof, softer caveats, and its "Get Started" CTA family. The
+restraint is the differentiator — the comparisons say when to pick the
+competitor, the code-review page leads with what it refuses to do — and a pass
+that sanded that off would convert worse, not better.
+
 ## The marketing site stops being one page (2026-09-28)
 
 The site was one URL doing every job. Nine features shared one section, each
