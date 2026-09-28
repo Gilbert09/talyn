@@ -30,6 +30,12 @@ vi.mock('../lib/api', () => ({
     },
     repositories: { list: vi.fn().mockResolvedValue([]) },
     workspaces: { list: vi.fn().mockResolvedValue([]), create: vi.fn() },
+    // Step 2 loads the agent credentials itself — `useSystemStatus` does not
+    // run until onboarding is over, which is exactly the bug that made the
+    // Talyn Fleet card invisible on this screen.
+    cloudProviders: { list: vi.fn().mockResolvedValue([]) },
+    posthog: { getStatus: vi.fn().mockResolvedValue({ connected: false }) },
+    ws: { on: vi.fn().mockReturnValue(() => {}) },
   },
 }));
 vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn() }));

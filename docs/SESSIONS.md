@@ -2,6 +2,38 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Onboarding showed no Talyn Fleet card, and no OAuth (2026-09-28)
+
+Step 2 of the wizard, "Connect an agent", offered PostHog Code and its personal
+API key — under its own paragraph inviting the reader to connect Claude or Codex
+to run on **Talyn Fleet**, with no fleet card anywhere on the screen.
+
+**One cause for both halves.** `useSystemStatus` is the only loader of
+`cloudProviders` and `posthogStatus`, and it mounts in `MainLayout`, which
+`App.tsx` renders only when `onboardingComplete`. So the step ran with both
+values `null` for its entire life — and `null` means "still loading, draw
+nothing" everywhere by design, which is what stops cards flashing in and out.
+`SelfHostedFleetCard` therefore rendered nothing at all, and `PostHogCodeCard`
+computed `keyFormOpen = !connected && !oauthAvailable` from a status nobody had
+fetched, so the key form was its landing state.
+
+Neither is a rendering bug, which is why nothing caught it: the components are
+correct and the store was empty. The provider half of `useSystemStatus` moved
+into `useAgentConnections`, mounted by `useSystemStatus` for the app proper and
+by `ConnectAgentStep` for the wizard — never both at once, so no double fetch.
+The test pins the FETCH rather than the markup, because that is where the defect
+was.
+
+**The OAuth half has a second, separate cause that is not in the code.**
+`oauthAvailable` is `isPostHogOAuthEnabled()`, which is true only when BOTH
+`POSTHOG_OAUTH_CLIENT_ID` and `POSTHOG_OAUTH_REDIRECT_URI` are set — deliberately
+all-or-nothing (SETUP §6b), with the personal-API-key path as the documented
+fall-back. Neither appears in the copy of the production environment in this
+repo, so even with the store filled, production will keep offering the key form
+until those two variables are set on Railway. The CIMD document they point at
+(`apps/marketing/app/oauth-client/route.ts`) is in the repo and deploys with the
+marketing site, so the prerequisite is in place.
+
 ## A queued stack rung that waited for PRs nobody had queued (2026-09-28)
 
 PostHog/posthog#107402 sat in the merge queue reading "Ready · QUEUED #1" and

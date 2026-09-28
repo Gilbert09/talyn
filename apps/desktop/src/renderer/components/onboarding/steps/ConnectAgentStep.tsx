@@ -1,3 +1,4 @@
+import { useAgentConnections } from '../../../hooks/useAgentConnections';
 import { ProviderConnectCards } from '../../panels/SettingsPanel';
 
 /**
@@ -23,6 +24,16 @@ import { ProviderConnectCards } from '../../panels/SettingsPanel';
  * PostHog Code needs a PostHog account and bills metered credits on top.
  */
 export function ConnectAgentStep() {
+  // The cards read the store, and NOTHING fills it during onboarding:
+  // `useSystemStatus` mounts in `MainLayout`, which renders only once the
+  // wizard is done. So `cloudProviders` and `posthogStatus` were both null for
+  // this step's whole life — read everywhere as "still loading, draw nothing" —
+  // and the result was a screen inviting you to connect Claude or Codex to
+  // Talyn Fleet with no fleet card on it, above a PostHog Code card that had
+  // fallen back to its API-key form because `oauthAvailable` lives on the
+  // status nobody had fetched.
+  useAgentConnections();
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">

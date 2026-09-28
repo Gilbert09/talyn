@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
 import { useGithubInstallations } from './useGithubInstallations';
+import { useAgentConnections } from './useAgentConnections';
 import { useOnReconnect } from './useOnReconnect';
 
 /**
@@ -37,8 +38,6 @@ export function useSystemStatus(): void {
   const setGitHubStatus = useWorkspaceStore((s) => s.setGitHubStatus);
   const setBackendReachable = useWorkspaceStore((s) => s.setBackendReachable);
   const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
-  const setPostHogStatus = useWorkspaceStore((s) => s.setPostHogStatus);
-  const setCloudProviders = useWorkspaceStore((s) => s.setCloudProviders);
   const setFeatures = useWorkspaceStore((s) => s.setFeatures);
   const features = useWorkspaceStore((s) => s.features);
   const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
@@ -64,66 +63,10 @@ export function useSystemStatus(): void {
     setGitHubUser(user);
   }, [user, setGitHubUser]);
 
-  const refreshPostHogStatus = useCallback(() => {
-    if (!currentWorkspaceId) {
-      setPostHogStatus(null);
-      return;
-    }
-    api.posthog
-      .getStatus(currentWorkspaceId)
-      .then(setPostHogStatus)
-      // Leave the last-known status in place on a transient failure rather than
-      // flashing "Not Connected" at someone who is connected.
-      .catch(() => {});
-  }, [currentWorkspaceId, setPostHogStatus]);
-
-  useEffect(() => {
-    refreshPostHogStatus();
-  }, [refreshPostHogStatus]);
-
-  // The OAuth connect flow leaves the app (a full-page hop to PostHog's consent
-  // screen and back), so re-check on focus as well as on mount — that also covers
-  // the case where it was completed in another tab.
-  useEffect(() => {
-    const onFocus = () => refreshPostHogStatus();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [refreshPostHogStatus]);
-
-  const refreshCloudProviders = useCallback(() => {
-    if (!currentWorkspaceId) {
-      setCloudProviders(null);
-      return;
-    }
-    api.cloudProviders
-      .list(currentWorkspaceId)
-      .then(setCloudProviders)
-      // Leave the last-known list in place on a transient failure rather than
-      // blanking it (which would flash "disconnected").
-      .catch(() => {});
-  }, [currentWorkspaceId, setCloudProviders]);
-
-  // Initial load + whenever the workspace changes.
-  useEffect(() => {
-    setCloudProviders(null); // mark "checking" so cards don't flash "Not Connected"
-    refreshCloudProviders();
-  }, [refreshCloudProviders, setCloudProviders]);
-
-  // Re-check on window focus (a key was added/rotated in another window), on the
-  // env provisioning WS events, and after an outage.
-  useEffect(() => {
-    const onFocus = () => refreshCloudProviders();
-    window.addEventListener('focus', onFocus);
-    const offCreated = api.ws.on('environment:created', refreshCloudProviders);
-    const offStatus = api.ws.on('environment:status', refreshCloudProviders);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      offCreated();
-      offStatus();
-    };
-  }, [refreshCloudProviders]);
-
-  useOnReconnect(refreshCloudProviders);
+  // The agent credentials. Mounted here for the app proper; the onboarding
+  // wizard mounts the same hook itself, because this one does not run until
+  // onboarding is over.
+  useAgentConnections();
 
   // Allow-listed features. Account-level rather than per-workspace, so a
   // workspace switch does not re-fetch them. Left at their last known value on a
