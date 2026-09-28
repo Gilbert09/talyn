@@ -645,9 +645,23 @@ export function PRDetailSheet({
                 state={view.row.state}
               />
             )}
-            {/* Right: write actions — only for PRs you own. */}
+            {/* Right: write actions — only for PRs you own.
+
+                The group packs LEFT, although it sits to the right of the pills
+                — the outer `justify-between` is what puts it there, and it keeps
+                doing so while both halves share a line. `justify-end` here used
+                to right-align every wrapped row as well, so the moment the
+                buttons needed a second line the last one ("Merge stack") sat
+                alone against the right edge, with a gap where the row above it
+                ended. One orphan against a ragged edge reads as a layout bug;
+                the same button packed left reads as a continuation of the row
+                above it.
+
+                `gap-y` is looser than `gap-x` for the same reason: at 4px two
+                rows of 28px buttons run together into one block. It costs
+                nothing until the group actually wraps. */}
             {isOwnPr && (view.row.state === 'open' || canMerge) && (
-              <div className="flex flex-wrap items-center justify-end gap-1">
+              <div className="flex flex-wrap items-center justify-start gap-x-1 gap-y-1.5">
             {/* Findings first: reading what is wrong with a pull request comes
                 before handing it to an agent or queueing it to merge. Opens the
                 tab rather than starting a review — the tab is where the depth
