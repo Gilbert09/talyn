@@ -2,6 +2,82 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The fix run tells you it is running, and knows what the review found (2026-09-28)
+
+Two complaints about the same gap. While a fix was running the Findings tab
+showed nothing about it; and the PR panel's "Fix with agent" button sent an agent
+at a pull request Talyn had already reviewed without mentioning a single finding.
+
+**`fixing` was leaking the review's own copy.** `CODE_REVIEW_PHASE_AT_REST.fixing`
+is `false`, so the tab's one `running` flag was true during a fix and every piece
+of review-in-progress furniture came with it — the "these have not been checked
+yet, and some are usually dropped" banner, the per-finding "not checked yet"
+marker, an indeterminate bar with the review's own subtitle under it. The
+findings had been checked, hours ago. `running` is now three questions:
+`running`, `fixing`, and `reviewRunning = running && !fixing`.
+
+`codeReviewProgress` reached its answer for `fixing` through the *"this phase is
+not in the plan"* escape hatch, which is indeterminate and happened to carry the
+right label. It is explicit now, with the reason: `phasePlan` is the phases a
+REVIEW cycle walks, and a fix is separate work somebody asked for afterwards. An
+agent run reports no step count, so indeterminate is the honest answer — what was
+missing is saying so on purpose.
+
+**`selected` was a disposition nothing ever set.** It was already a member of
+`ACTIVE_DISPOSITIONS` and already rendered, but findings only moved on a *landed*
+fix, so during the run nothing anywhere identified which ones were in flight.
+`markSelectedForFix` runs after the link CAS — never before, or a fix that lost
+the race leaves findings claiming a task that was just cancelled — and
+best-effort, because failing there would report a started fix as a failure. A
+finding in flight shows a wrench where its checkbox was, absent rather than
+disabled (the dismissed-finding rule), and is excluded from `Fix all`:
+`activePrTaskId` allows one task per PR, so offering it is offering a refusal.
+
+**Stop, during a fix, was quietly orphaning an agent.** The button called
+`cancelCodeReview`, which cancels the review's own *units* and moves the phase —
+and during a fix there are no units. It marked the review cancelled and left the
+agent running with commits still to push. It now stops the TASK, which is the
+machinery that cancels a remote run; the `task:status` echo puts the findings back
+and the review back to `ready`, which is where a stopped fix belongs. The findings
+are still true; only the fix was given up on.
+
+**The findings now ride the ordinary mergeable prompt.** Every fix run in the app
+goes through `startPrMergeableRun` — the panel button, the merge queue's
+remediation and the auto-keep watcher — so reading them there is what makes all
+three hand the agent the same list instead of each re-deriving what is wrong from
+GitHub. Two decisions worth keeping:
+
+- **Appended into `issues`, not given a template variable.** `resignRule` and
+  `queueFailureRule` are variables, and a workspace that has overridden the
+  mergeable template would never render a new one — it would silently keep
+  getting fix runs that know nothing about its reviews. `issues` is already the
+  agent's job list, and a finding is a job.
+- **The bar is narrow and every clause earns it** (`codeReview/promptFindings.ts`):
+  a review at rest (a running cycle's findings have not been judged), the current
+  head (a finding names a file and a line, so one read at a commit that has moved
+  points the agent at whatever now occupies those lines — silence is correct),
+  judge-confirmed (`hasOpenBlocker`'s rule), `open` only rather than
+  `ACTIVE_DISPOSITIONS`, and at or above the workspace's reporting bar, because a
+  nitpick the list hides must not become a commit. It returns nothing on any
+  failure and never throws: it decorates a dispatch that must happen either way.
+  The prompt also tells the agent to say a finding is wrong and leave the code
+  alone, which is the lesson of the first real review — the one finding that
+  survived judging quoted code that was not where it said.
+
+**One extraction fell out of it.** `reportingBarsFor` and friends lived in
+`cycle.ts`, next to starting and cancelling a review, so reading a workspace
+setting meant importing the module that starts reviews — which pulls in the
+evaluator, the executor and the fix run, and the fix run imports `prCloudFix`.
+Reading the bar from `prCloudFix` closed that loop. They moved to a leaf
+`codeReview/workspaceSettings.ts`; `cycle.ts` re-exports them, so no call site
+changed.
+
+Tests: `codeReviewPromptFindings` (the bar, against pglite — the gates are a
+WHERE clause, and one that quietly matches too much is what a mocked read cannot
+show), the rendered block and the fix phase's progress in `codeReviewFindings`,
+and the prompt seam in `buildPostHogPrompt`, including that an overriding
+workspace template still carries the findings.
+
 ## A workflow trigger for "the PR went green" (2026-09-28)
 
 Asked for a trigger that fires when CI passes. One already half-existed —

@@ -13,17 +13,20 @@ import {
   talynTaglineRule,
 } from './prMergeable.js';
 import { DEFAULT_REVIEW_FIX_TEMPLATE, renderPromptTemplate } from './promptTemplates.js';
-import { CODE_REVIEW_SEVERITY_LABELS, type CodeReviewSeverity } from './codeReview.js';
+import {
+  CODE_REVIEW_SEVERITY_LABELS,
+  codeReviewFindingLocation,
+  type CodeReviewPromptFinding,
+} from './codeReview.js';
 
-export interface ReviewFixFinding {
-  severity: CodeReviewSeverity;
-  filePath: string;
-  lineStart: number | null;
-  lineEnd: number | null;
-  title: string;
-  body: string;
-  suggestion: string | null;
-}
+/**
+ * The shared shape, under this module's older name.
+ *
+ * It moved to `codeReview.ts` when the ordinary "get this PR mergeable" prompt
+ * started carrying findings too — two prompt families reading one definition,
+ * rather than each holding its own copy of what a finding is.
+ */
+export type ReviewFixFinding = CodeReviewPromptFinding;
 
 export interface ReviewFixPromptInput {
   owner: string;
@@ -54,12 +57,9 @@ export interface ReviewFixPromptInput {
 function renderFindings(findings: ReviewFixFinding[]): string {
   return findings
     .map((f, i) => {
-      const lines = f.lineStart
-        ? `:${f.lineStart}${f.lineEnd && f.lineEnd !== f.lineStart ? `-${f.lineEnd}` : ''}`
-        : '';
       return [
         `### ${i + 1}. ${f.title}`,
-        `${CODE_REVIEW_SEVERITY_LABELS[f.severity]} · \`${f.filePath}${lines}\``,
+        `${CODE_REVIEW_SEVERITY_LABELS[f.severity]} · \`${codeReviewFindingLocation(f)}\``,
         '',
         f.body,
         ...(f.suggestion ? ['', `Suggested change: ${f.suggestion}`] : []),

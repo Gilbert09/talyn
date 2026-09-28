@@ -23,6 +23,7 @@ import { readFailingChecks } from './failingChecks.js';
 import { getCloudProvider } from './cloudProviders/registry.js';
 import { fleetRefusalReason, workspaceMayUseFleet } from './cloudProviders/fleetAccess.js';
 import { createCloudTask } from './taskCreate.js';
+import { findingsForMergeableRun } from './codeReview/promptFindings.js';
 import {
   workspacePromptTemplate,
   workspaceRespondToHumanComments,
@@ -292,6 +293,21 @@ export async function startPrMergeableRun(
   const prTitle = summary.title ?? '';
   const template = await workspacePromptTemplate(row.workspaceId, 'mergeable');
   const respondToHumanComments = await workspaceRespondToHumanComments(row.workspaceId);
+  // What Talyn's own review already knows about this pull request. Read here, on
+  // the one path every fix run in the app goes through, so the panel's Fix button,
+  // the merge queue and the auto-keep watcher all hand the agent the same list
+  // rather than each re-deriving what is wrong from GitHub. Narrow by design —
+  // see `findingsForMergeableRun` — and absent whenever the review has nothing
+  // that still describes the commit this run will start from.
+  const codeReview = await findingsForMergeableRun(
+    row.id,
+    (row.lastSummary as { headSha?: string } | null)?.headSha
+  ).catch((err) => {
+    // Decoration, never a gate: a fix the user asked for must not fail because
+    // the review tables would not answer.
+    console.warn(`[pr-fix] reading review findings for ${ref} failed:`, err);
+    return undefined;
+  });
 
   const task = await createCloudTask({
     workspaceId: row.workspaceId,
@@ -308,6 +324,7 @@ export async function startPrMergeableRun(
       failingChecks,
       template,
       respondToHumanComments,
+      codeReview,
     }),
     repositoryId: row.repositoryId,
     assignedEnvironmentId: envId,

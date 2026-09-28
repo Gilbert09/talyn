@@ -201,7 +201,7 @@ export async function upsertFindings(
 }
 
 /** Drizzle cannot index a readonly tuple in SQL, so rank in SQL instead. */
-function severityRank(column: typeof prCodeReviewFindings.severity) {
+export function severityRank(column: typeof prCodeReviewFindings.severity) {
   return sql`CASE ${column} WHEN 'blocker' THEN 0 WHEN 'major' THEN 1 WHEN 'minor' THEN 2 ELSE 3 END`;
 }
 
@@ -443,6 +443,38 @@ export async function setDisposition(
     .where(eq(prCodeReviewFindings.id, findingId));
 }
 
+/**
+ * Mark the findings a fix run is CURRENTLY working on.
+ *
+ * `selected` was a valid disposition that nothing ever set, so a review in the
+ * `fixing` phase looked identical to one sitting at `ready`: the findings stayed
+ * `open`, and neither the tab nor the row could say which of them the agent was
+ * actually addressing.
+ *
+ * It stays in ACTIVE_DISPOSITIONS on purpose — a finding being fixed is still a
+ * finding, and hiding it mid-run would make the list shrink and then grow back
+ * if the run failed. The fix task id is written here rather than on completion,
+ * so a crashed run can be unwound by task id from either state.
+ */
+export async function markSelectedForFix(
+  reviewId: string,
+  findingIds: string[],
+  taskId: string
+): Promise<number> {
+  if (!findingIds.length) return 0;
+  const updated = await getDbClient()
+    .update(prCodeReviewFindings)
+    .set({ disposition: 'selected', fixTaskId: taskId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(prCodeReviewFindings.reviewId, reviewId),
+        inArray(prCodeReviewFindings.id, findingIds)
+      )
+    )
+    .returning({ id: prCodeReviewFindings.id });
+  return updated.length;
+}
+
 /** Mark the selected findings provisionally fixed when a fix run completes. */
 export async function markFixed(
   reviewId: string,
@@ -468,7 +500,12 @@ export async function markFixed(
   return updated.length;
 }
 
-/** Put them back when a fix run did not land, so nothing claims a fix it lacks. */
+/**
+ * Put them back when a fix run did not land, so nothing claims a fix it lacks.
+ *
+ * Matches on the TASK id, so it unwinds a run that failed while its findings
+ * were still `selected` as well as one that had already marked them `fixed`.
+ */
 export async function unmarkFixed(reviewId: string, taskId: string): Promise<number> {
   const updated = await getDbClient()
     .update(prCodeReviewFindings)

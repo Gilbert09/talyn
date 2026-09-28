@@ -113,7 +113,17 @@ export function FindingsTab({
     void load();
   }, [load]);
 
+  // `running` covers every non-resting phase, INCLUDING `fixing` — which is why
+  // the review-in-progress copy used to appear while an agent was pushing a fix,
+  // telling the reader their findings were provisional when the review had long
+  // since finished. These two are separate questions and now have separate names.
   const running = review ? !CODE_REVIEW_PHASE_AT_REST[review.phase] : false;
+  const fixing = review?.phase === 'fixing';
+  const reviewRunning = running && !fixing;
+  // What the agent is actually addressing. `selected` is set when the fix claims
+  // them and cleared when it lands or fails, so this is the live set rather than
+  // whatever was ticked in this browser tab.
+  const beingFixed = findings.filter((f) => f.disposition === 'selected');
 
   // Poll only while something is happening. The websocket echo keeps the ROW
   // current, but this tab holds the findings, which no echo carries.
@@ -174,8 +184,14 @@ export function FindingsTab({
   // Exactly what the groups below render, flattened. Derived from `grouped`
   // rather than re-filtered, so the button can never act on a finding the list
   // is not showing.
+  // Excludes anything a fix task already owns. `activePrTaskId` allows one task
+  // per pull request, so re-submitting a finding in flight is a refusal rather
+  // than a second fix — and the button would be offering something impossible.
   const fixableAll = useMemo(
-    () => grouped.flatMap((g) => g.items.map((f) => f.id)),
+    () =>
+      grouped.flatMap((g) =>
+        g.items.filter((f) => f.disposition !== 'selected').map((f) => f.id)
+      ),
     [grouped]
   );
 
@@ -367,14 +383,27 @@ export function FindingsTab({
                 onClick={async () => {
                   setBusy(true);
                   try {
-                    setReview(await api.pullRequests.cancelCodeReview(pullRequestId));
+                    // Stopping a FIX stops its task, not the review cycle.
+                    // `cancelCodeReview` cancels the review's own units and moves
+                    // the phase — during a fix there are no units, so it would
+                    // have marked the review cancelled and left the agent running
+                    // with commits still to push. The task route is the machinery
+                    // that cancels a remote run; its `task:status` echo is what
+                    // puts the findings back on the list and the review back to
+                    // `ready`, which is where a stopped fix belongs: the findings
+                    // are still true, only the fix was given up on.
+                    if (fixing && review.fixTaskId) {
+                      await api.tasks.stop(review.fixTaskId);
+                    } else {
+                      setReview(await api.pullRequests.cancelCodeReview(pullRequestId));
+                    }
                   } finally {
                     setBusy(false);
                     await load();
                   }
                 }}
               >
-                Stop
+                {fixing ? 'Stop the fix' : 'Stop'}
               </Button>
             ) : (
               <>
@@ -426,11 +455,30 @@ export function FindingsTab({
           But they have NOT been through the checking pass yet, and that pass threw
           away five of six on the first real review — so presenting them as settled
           would invite somebody to fix something that is about to be withdrawn. */}
-      {running && grouped.length > 0 && (
+      {reviewRunning && grouped.length > 0 && (
         <p className="text-[11px] text-muted-foreground">
           Showing what the reviewers have found so far. These have not been checked yet,
           and some are usually dropped.
         </p>
+      )}
+
+      {/* The fix has its own state, and it is not the review's. Names what is
+          being worked on and how it ends, because the previous version showed an
+          empty indeterminate bar and the review's own subtitle — which read as a
+          review that had stalled. */}
+      {fixing && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <Wrench className="h-3 w-3" />
+            {beingFixed.length
+              ? `Fixing ${beingFixed.length} finding${beingFixed.length === 1 ? '' : 's'}`
+              : 'Fixing'}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            An agent is working on a branch. It pushes one commit when it is done, and the
+            findings it addressed are marked fixed until the next review confirms them.
+          </p>
+        </div>
       )}
 
       {notice && (
@@ -480,7 +528,7 @@ export function FindingsTab({
               finding={finding}
               pullRequestId={pullRequestId}
               files={files}
-              stillChecking={running}
+              stillChecking={reviewRunning}
               selected={selected.has(finding.id)}
               expanded={expanded.has(finding.id)}
               onToggleSelected={() =>
@@ -633,7 +681,7 @@ export function FindingsTab({
       {/* The action bar lives INSIDE the tab, not in the sheet's footer, which the
           merge actions own. Only when something is ticked — a permanently visible
           push button is the thing this screen most needs not to be. */}
-      {selected.size > 0 && (
+      {selected.size > 0 && !fixing && (
         <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-3 border-t bg-background/95 px-4 py-3 backdrop-blur">
           <span className="text-xs text-muted-foreground">
             {selected.size} selected
@@ -720,13 +768,25 @@ function FindingCard({
   return (
     <div className="rounded-md border">
       <div className="flex items-start gap-2 p-2.5">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelected}
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-primary"
-          aria-label={`Select "${finding.title}" to fix`}
-        />
+        {/* A finding already in flight has no checkbox at all, rather than a
+            disabled one: it cannot be added to a second fix run, and a control
+            that looks available and refuses is worse than an absent one. */}
+        {finding.disposition === 'selected' ? (
+          <span
+            className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+            title="An agent is fixing this now"
+          >
+            <Wrench className="h-3 w-3 text-primary" />
+          </span>
+        ) : (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-primary"
+            aria-label={`Select "${finding.title}" to fix`}
+          />
+        )}
         <span
           className={cn(
             'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',

@@ -15,6 +15,7 @@ import {
   CODE_REVIEW_PRESET_PLAN,
   CODE_REVIEW_PHASE_AT_REST,
   codeReviewDedupeKey,
+  codeReviewFindingsIssue,
   codeReviewOutputContract,
   codeReviewPhasePlan,
   codeReviewProgress,
@@ -377,5 +378,100 @@ describe('severityAtOrAbove', () => {
     expect(severityAtOrAbove('major', 'major')).toBe(true);
     expect(severityAtOrAbove('minor', 'major')).toBe(false);
     expect(severityAtOrAbove('nit', 'blocker')).toBe(false);
+  });
+});
+
+describe('codeReviewProgress — the fix phase', () => {
+  // `fixing` is not in any preset's phase plan, because a plan describes what a
+  // REVIEW cycle walks. It used to reach the answer through the "this phase is
+  // not in the plan" escape hatch, which happened to be indeterminate and read on
+  // screen as a review that had stalled.
+  it('is indeterminate and named, on every preset', () => {
+    for (const preset of ['quick', 'standard', 'deep'] as const) {
+      const progress = codeReviewProgress({
+        phase: 'fixing',
+        phasePlan: codeReviewPhasePlan(preset),
+        runsDone: 4,
+        runsTotal: 4,
+      });
+      expect(progress.indeterminate).toBe(true);
+      expect(progress.fraction).toBeNull();
+      expect(progress.label).toBe('Fixing');
+      expect(progress.short).toBe('Fixing');
+    }
+  });
+
+  it('does not treat a fix as a resting review', () => {
+    // The tab reads this to decide whether the findings on screen are provisional.
+    expect(CODE_REVIEW_PHASE_AT_REST.fixing).toBe(false);
+    expect(CODE_REVIEW_PHASE_AT_REST.fixed).toBe(true);
+  });
+});
+
+describe('codeReviewFindingsIssue — findings handed to an ordinary fix run', () => {
+  const blocker = {
+    severity: 'blocker' as const,
+    filePath: 'src/a.ts',
+    lineStart: 41,
+    lineEnd: 44,
+    title: 'getUser can return undefined',
+    body: 'The next line dereferences it.',
+    suggestion: 'Guard the undefined case.',
+  };
+
+  it('is empty when the review found nothing, so the prompt is unchanged', () => {
+    // The block is appended to the prompt's issue list unconditionally, so an
+    // empty string is the only thing that keeps a PR with no review identical to
+    // what it was before this shipped.
+    expect(codeReviewFindingsIssue([], 'abc1234')).toBe('');
+  });
+
+  it('names the commit the findings were read at', () => {
+    // The agent may be about to rebase. Whether it is still looking at the same
+    // code is its own question to answer, and it cannot without the sha.
+    expect(codeReviewFindingsIssue([blocker], 'abc1234')).toContain('`abc1234`');
+  });
+
+  it('carries the severity, the location, the argument and the suggestion', () => {
+    const out = codeReviewFindingsIssue([blocker], 'abc1234');
+    expect(out).toContain('[Must fix]');
+    expect(out).toContain('`src/a.ts:41-44`');
+    expect(out).toContain('getUser can return undefined');
+    expect(out).toContain('The next line dereferences it.');
+    expect(out).toContain('Suggested change: Guard the undefined case.');
+  });
+
+  it('numbers them, so the agent can report back per finding', () => {
+    const out = codeReviewFindingsIssue(
+      [blocker, { ...blocker, title: 'second', severity: 'minor' }],
+      null
+    );
+    expect(out).toContain('1. [Must fix]');
+    expect(out).toContain('2. [Consider]');
+  });
+
+  it('tells the agent to refuse a finding rather than change working code', () => {
+    // The judging pass kept one of six on the first real review, and the one it
+    // kept was wrong about where the code was. An agent that cannot say no turns
+    // that into a commit.
+    expect(codeReviewFindingsIssue([blocker], null)).toContain('leave it alone');
+  });
+
+  it('indents a multi-paragraph body so it cannot read as the next finding', () => {
+    const out = codeReviewFindingsIssue(
+      [{ ...blocker, body: 'First line.\n\nSecond line.' }],
+      null
+    );
+    expect(out).toContain('     First line.');
+    expect(out).toContain('     Second line.');
+  });
+
+  it('drops the line numbers it does not have', () => {
+    expect(
+      codeReviewFindingsIssue([{ ...blocker, lineStart: null, lineEnd: null }], null)
+    ).toContain('`src/a.ts`');
+    expect(
+      codeReviewFindingsIssue([{ ...blocker, lineEnd: null }], null)
+    ).toContain('`src/a.ts:41`');
   });
 });

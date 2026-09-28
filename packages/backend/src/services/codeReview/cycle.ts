@@ -1,18 +1,9 @@
 import { v4 as uuid } from 'uuid';
 import {
   CODE_REVIEW_PHASE_AT_REST,
-  DEFAULT_CODE_REVIEW_PRESET,
-  isCodeReviewPreset,
-  resolveCodeReviewSettings,
   type CodeReviewPhase,
   type CodeReviewPreset,
-  CODE_REVIEW_REPORTING_BAR,
-  isCodeReviewSeverity,
-  type CodeReviewSeverity,
 } from '@talyn/shared';
-import { eq, inArray, sql } from 'drizzle-orm';
-import { getDbClient } from '../../db/client.js';
-import { workspaces as workspacesTable } from '../../db/schema.js';
 import { withReviewCycleGate } from '../billing/entitlements.js';
 import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import { getSelfHostedClient } from '../selfHosted/credentials.js';
@@ -29,6 +20,7 @@ import {
   IN_FLIGHT_RUN_STATUSES,
   type ReviewRow,
 } from './store.js';
+import { workspaceOwner, workspacePreset } from './workspaceSettings.js';
 
 /**
  * Starting and stopping a review cycle.
@@ -209,63 +201,8 @@ export async function cancelReviewCycle(review: ReviewRow): Promise<void> {
   );
 }
 
-/** The workspace's chosen depth, or the default. */
-export async function workspacePreset(workspaceId: string): Promise<CodeReviewPreset> {
-  const settings = await readSettings(workspaceId);
-  const resolved = resolveCodeReviewSettings(settings);
-  return isCodeReviewPreset(resolved.preset) ? resolved.preset : DEFAULT_CODE_REVIEW_PRESET;
-}
-
-/** The workspace's full review posture, for the fix run and the auto sweep. */
-export async function workspaceReviewSettings(workspaceId: string) {
-  return resolveCodeReviewSettings(await readSettings(workspaceId));
-}
-
-async function readSettings(workspaceId: string) {
-  // Projects the settings column alone — `workspaces.logo` is an inline data URL
-  // and must never ship on a dispatch path.
-  const rows = await getDbClient()
-    .select({ settings: workspacesTable.settings })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  const settings = rows[0]?.settings as { codeReview?: unknown } | null;
-  return (settings?.codeReview ?? null) as Parameters<typeof resolveCodeReviewSettings>[0];
-}
-
-/**
- * Each workspace's display bar, in one query.
- *
- * Extracts the one scalar with a jsonb accessor and never ships the settings
- * blob — the egress rule that `getMergeQueueMode` follows for the same reason:
- * this is read while building a whole page of pull-request payloads, and the
- * blob it lives in carries every other workspace setting there is.
- */
-export async function reportingBarsFor(
-  workspaceIds: string[]
-): Promise<Map<string, CodeReviewSeverity>> {
-  const out = new Map<string, CodeReviewSeverity>();
-  if (!workspaceIds.length) return out;
-  const rows = await getDbClient()
-    .select({
-      id: workspacesTable.id,
-      bar: sql<string | null>`${workspacesTable.settings} -> 'codeReview' ->> 'reportingBar'`,
-    })
-    .from(workspacesTable)
-    .where(inArray(workspacesTable.id, workspaceIds));
-  for (const row of rows) {
-    out.set(row.id, isCodeReviewSeverity(row.bar) ? row.bar : CODE_REVIEW_REPORTING_BAR);
-  }
-  return out;
-}
-
-export async function workspaceOwner(workspaceId: string): Promise<string> {
-  const rows = await getDbClient()
-    .select({ ownerId: workspacesTable.ownerId })
-    .from(workspacesTable)
-    .where(eq(workspacesTable.id, workspaceId))
-    .limit(1);
-  const ownerId = rows[0]?.ownerId;
-  if (!ownerId) throw new Error(`workspace ${workspaceId} has no owner`);
-  return ownerId;
-}
+// The workspace's own review settings live in a leaf module — see
+// `workspaceSettings.ts` for why — and are re-exported here so every existing
+// caller keeps its import.
+export { reportingBarsFor, workspaceReviewSettings } from './workspaceSettings.js';
+export { workspaceOwner, workspacePreset };

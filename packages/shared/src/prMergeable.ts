@@ -12,6 +12,7 @@
 
 import type { CloudProviderType } from './index.js';
 import { DEFAULT_MERGEABLE_TEMPLATE, renderPromptTemplate } from './promptTemplates.js';
+import { codeReviewFindingsIssue, type CodeReviewPromptFinding } from './codeReview.js';
 
 export type PRBlockingReason =
   | 'mergeable'
@@ -571,6 +572,23 @@ export interface MergeablePromptInput {
    * what the base already has, and only an agent with a checkout can do it.
    */
   retargetedOnto?: { base: string; parentNumber: number };
+  /**
+   * Open findings from Talyn's own code review of this pull request, when there
+   * are any.
+   *
+   * Every fix run in the app goes through `startPrMergeableRun`, so putting them
+   * here is what makes the PR panel's Fix button, the merge queue's remediation
+   * and the auto-keep watcher all hand the agent the same list. Before this, a
+   * review could have five confirmed problems on record and the run sent to fix
+   * the pull request knew nothing about them — it re-derived what was wrong from
+   * GitHub and started over.
+   *
+   * The caller is responsible for the bar: these must be findings that are still
+   * open and still describe the commit the run will start from. A finding about
+   * code that has since changed is worse than no finding, because the agent will
+   * go looking for it and edit whatever now occupies those lines.
+   */
+  codeReview?: { headShaShort: string | null; findings: CodeReviewPromptFinding[] };
 }
 
 /**
@@ -764,7 +782,13 @@ export function mergeablePromptVariables(
         `That parent was very likely SQUASH-merged, so \`${input.retargetedOnto.base}\` contains its changes as ONE new commit while this branch still carries the parent's original commits. ` +
         `Prefer rebasing this branch onto \`${input.retargetedOnto.base}\` and dropping every commit whose changes are already there, rather than merging the base in — a merge here either conflicts or leaves the parent's changes showing in this PR's diff. ` +
         `When you are done, this PR's diff must contain ONLY its own changes.`
-      : '');
+      : '') +
+    // Appended rather than given its own template variable, deliberately: a
+    // workspace that has overridden the mergeable template would never render a
+    // new variable, and would silently keep getting fix runs that know nothing
+    // about the review. `issues` is already the agent's job list, and a finding
+    // is a job.
+    codeReviewFindingsIssue(input.codeReview?.findings ?? [], input.codeReview?.headShaShort ?? null);
   return {
     'pr.url': s.url,
     'pr.number': String(number),

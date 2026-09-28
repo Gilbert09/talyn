@@ -12,7 +12,12 @@ import { createCloudTask } from '../taskCreate.js';
 import { resolveCloudEnv } from '../prCloudFix.js';
 import { workspacePromptTemplate } from '../promptTemplates.js';
 import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
-import { findingsForFix, markFixed, unmarkFixed } from './findings.js';
+import {
+  findingsForFix,
+  markFixed,
+  markSelectedForFix,
+  unmarkFixed,
+} from './findings.js';
 import { scheduleReviewEvaluation } from './evaluator.js';
 import { onQueueMembershipChanged } from '../mergeQueue/triggers.js';
 import { appendReviewEvent, casTransition, getPrForReview, type ReviewRow } from './store.js';
@@ -198,6 +203,18 @@ export async function startFixRun(
     await cancelUndispatchedTask(task.id);
     return { ok: false, code: 'busy', message: 'The review changed while the fix was starting.' };
   }
+
+  // Only AFTER the link, so a fix that lost the race leaves no finding claiming
+  // to be worked on by a task that was just cancelled. Best-effort: the run is
+  // already going, and failing here would report a started fix as a failure.
+  await markSelectedForFix(
+    review.id,
+    findings.map((f) => f.id),
+    task.id
+  ).catch((err) => {
+    console.warn(`[code-review] marking findings in flight for ${review.id} failed:`, err);
+    return 0;
+  });
 
   return { ok: true, taskId: task.id };
 }

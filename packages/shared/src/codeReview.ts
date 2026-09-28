@@ -746,6 +746,16 @@ export function codeReviewProgress(review: {
   if (phase === 'queued') {
     return { fraction: null, label: CODE_REVIEW_PHASE_LABELS[phase], short, indeterminate: true };
   }
+  // `fixing` is handled here rather than by the plan walk below, because it is
+  // NOT in `phasePlan` — the plan is the phases a REVIEW cycle walks, and a fix
+  // is a separate piece of work a person asked for afterwards. It fell through
+  // to the `index < 0` escape hatch and came out indeterminate with the right
+  // label by accident, which read on screen as a review that had stalled. An
+  // agent run reports no step count, so indeterminate is the honest answer; what
+  // was missing is saying so on purpose.
+  if (phase === 'fixing') {
+    return { fraction: null, label: CODE_REVIEW_PHASE_LABELS[phase], short, indeterminate: true };
+  }
 
   const plan: CodeReviewPhase[] = phasePlan.length ? phasePlan : ['preparing', 'reviewing'];
   const total = plan.reduce((sum, p) => sum + CODE_REVIEW_PHASE_WEIGHTS[p], 0);
@@ -1294,4 +1304,71 @@ export function codeReviewStartProblem(input: unknown): string | null {
  */
 export function codeReviewOffered(features: Features | null | undefined): boolean {
   return features?.codeReview === true;
+}
+
+// ---------- Findings, rendered for an agent ----------
+
+/**
+ * One finding, in the shape a prompt needs.
+ *
+ * Lives here rather than beside either prompt builder because BOTH build from it:
+ * the dedicated fix run (`reviewFixPrompt.ts`) and the ordinary "get this PR
+ * mergeable" run, which carries the findings when a review has produced some. Two
+ * copies of this interface would let the two prompt families disagree about what
+ * a finding is, which is the drift the shared package exists to prevent.
+ */
+export interface CodeReviewPromptFinding {
+  severity: CodeReviewSeverity;
+  filePath: string;
+  lineStart: number | null;
+  lineEnd: number | null;
+  title: string;
+  body: string;
+  suggestion: string | null;
+}
+
+/** `path:41-44`, `path:41`, or just `path` — whatever the finding actually knows. */
+export function codeReviewFindingLocation(f: CodeReviewPromptFinding): string {
+  if (!f.lineStart) return f.filePath;
+  const end = f.lineEnd && f.lineEnd !== f.lineStart ? `-${f.lineEnd}` : '';
+  return `${f.filePath}:${f.lineStart}${end}`;
+}
+
+/**
+ * The findings as one bullet, for a prompt that already presents a bullet list of
+ * what is wrong with the pull request.
+ *
+ * Deliberately a different shape from `reviewFixPrompt`'s renderer, which emits
+ * markdown headings: that one owns a whole section of its own template, and this
+ * one is an item inside somebody else's list. Same facts, same order (most severe
+ * first, which the caller's query provides), same numbering so the agent can
+ * report back per finding.
+ *
+ * The commit is named because that is the claim being made: these findings were
+ * read at that sha, and an agent that has just rebased needs to know whether it
+ * is still looking at the same code.
+ */
+export function codeReviewFindingsIssue(
+  findings: readonly CodeReviewPromptFinding[],
+  headShaShort: string | null
+): string {
+  if (!findings.length) return '';
+  const at = headShaShort ? ` on this exact commit (\`${headShaShort}\`)` : '';
+  const items = findings.map((f, i) => {
+    const suggestion = f.suggestion ? `\n     Suggested change: ${f.suggestion}` : '';
+    // The body is indented as a continuation of its own numbered item so a
+    // multi-paragraph argument cannot read as the start of the next finding.
+    const body = f.body
+      .split('\n')
+      .map((line) => `     ${line}`)
+      .join('\n');
+    return `  ${i + 1}. [${CODE_REVIEW_SEVERITY_LABELS[f.severity]}] \`${codeReviewFindingLocation(f)}\` — ${f.title}\n${body}${suggestion}`;
+  });
+  return (
+    `\n- Talyn's code review found ${findings.length} open finding(s)${at}. ` +
+    'Fix these as part of this run, and say which of them you fixed. ' +
+    'They are numbered so you can refer to them. If one of them is wrong about the code, ' +
+    'say so and leave it alone rather than changing working code to satisfy it.\n' +
+    items.join('\n')
+  );
 }

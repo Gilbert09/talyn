@@ -266,6 +266,62 @@ describe('buildMergeablePrompt — retargeted stack member', () => {
   });
 });
 
+describe('buildMergeablePrompt — the review findings on record', () => {
+  const findings = [
+    {
+      severity: 'blocker' as const,
+      filePath: 'src/a.ts',
+      lineStart: 41,
+      lineEnd: 44,
+      title: 'getUser can return undefined',
+      body: 'The next line dereferences it.',
+      suggestion: 'Guard the undefined case.',
+    },
+  ];
+
+  it('is absent by default, so a PR with no review gets the prompt it always got', () => {
+    for (const provider of ['posthog_code', 'selfhosted'] as CloudProviderType[]) {
+      const prompt = buildMergeablePrompt({
+        owner: 'acme', repo: 'widgets', number: 7, summary, provider,
+      });
+      expect(prompt).not.toMatch(/code review found/i);
+    }
+  });
+
+  it('reaches the prompt on both providers', () => {
+    // Appended into the issue list rather than given a template variable, which is
+    // what makes it reach a workspace that has overridden the mergeable template.
+    for (const provider of ['posthog_code', 'selfhosted'] as CloudProviderType[]) {
+      const prompt = buildMergeablePrompt({
+        owner: 'acme', repo: 'widgets', number: 7, summary, provider,
+        codeReview: { headShaShort: 'abc1234', findings },
+      });
+      expect(prompt).toMatch(/code review found 1 open finding/i);
+      expect(prompt).toContain('`src/a.ts:41-44`');
+      expect(prompt).toContain('abc1234');
+    }
+  });
+
+  it('survives a workspace template that overrides everything else', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme', repo: 'widgets', number: 7, summary, provider: 'posthog_code',
+      template: 'Fix {{repo}}#{{pr.number}}.\n{{issues}}',
+      codeReview: { headShaShort: 'abc1234', findings },
+    });
+    expect(prompt).toContain('getUser can return undefined');
+  });
+
+  it('composes with the issues already on the list rather than replacing them', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme', repo: 'widgets', number: 7, provider: 'posthog_code',
+      summary: { ...summary, mergeable: 'CONFLICTING' } as PRMergeableSummary,
+      codeReview: { headShaShort: 'abc1234', findings },
+    });
+    expect(prompt).toMatch(/merge conflicts/i);
+    expect(prompt).toMatch(/code review found/i);
+  });
+});
+
 describe('prHasFixableIssues vs prNeedsFollowup (manual button vs auto-fire)', () => {
   const base: PRMergeableSummary = {
     url: 'https://github.com/acme/app/pull/1',
