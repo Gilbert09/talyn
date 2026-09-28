@@ -2,6 +2,62 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## What a review actually did, and what happened to a finding (2026-09-28)
+
+Two follow-ups after the fix-run work, and one PostHog dashboard.
+
+**Every event this feature captured was a user ACTION.** Started, viewed,
+expanded, dismissed, fix requested. So the dashboard could say that people press
+the button, and nothing at all about whether the product works. Both questions
+Tom has actually asked of code review — *how long did this take* and *is this
+finding wrong* — were unanswerable from analytics. Three outcome events now come
+out of the engine's own seams: `code_review_completed` on the transition to
+`ready`, `code_review_failed` in `failCycle`, and `code_review_fix_settled`, the
+counterpart `code_review_fix_requested` never had.
+
+`code_review_completed` carries what the arguments actually need: the judging
+funnel (raised / kept / shown), the findings by severity, the units and how each
+ended, the parse retries that answer *"does the JSON contract hold"*, the cost,
+and the wall clock **split into the wait we own and the wait we do not** —
+`queue_seconds` is scheduler latency, which a start race once put two minutes
+into, and `agent_seconds` is time no work of ours shortens. Shape only,
+`loopShape`'s rule and it matters more here, because this pipeline reads private
+source code and its findings quote it.
+
+The aggregate is hand-written SQL and every capture swallows its own errors — so
+a broken query would report nothing and look perfectly healthy. `cycleShape` is
+therefore exported and the suite calls it directly, against pglite, including the
+numeric-`sum`-comes-back-a-string case and the *parse attempts vs parse retries*
+one where the obvious reading makes a healthy review look 100% broken.
+
+**`code_review_finding_dismissed` was emitted three times per dismissal** — once
+by each front end and once by the route — and the two shapes disagreed about a
+missing reason (`null` against `'unspecified'`), so its breakdown was split down
+the middle as well as doubled. Consolidated onto the route, which is the side a
+blocked client cannot silence, and given the properties the clients had plus the
+verdict and the seen count. No data was affected: the feature has produced no
+dismissals at all in ninety days, which is its own finding.
+
+**A fixed finding used to vanish.** `markFixed` moved it out of the active
+dispositions and the list simply stopped showing it — so "an agent fixed this",
+"it went stale" and "somebody dismissed it" were the same event to a reader: the
+row was gone. They stay now, in their own collapsed group, each naming the commit
+that dealt with it.
+
+The sha is read from GitHub at settle, not from the cached summary: the push and
+the task's completion arrive by different routes, so `last_summary.headSha` is
+routinely still the commit the review read. It is stored only when it DIFFERS
+from that head, which is what makes a run that completed without pushing link
+nowhere and say so — naming the head it started from would present somebody
+else's commit as the fix for a finding, `findPullRequestUrl` in a smaller frame.
+The URL is assembled server-side for the adjacent reason: only the server knows
+which host a repository lives on.
+
+**Dashboard**: *Code review* in PostHog (project 459813), fourteen tiles —
+usage, then whether it works, then whether people act on it. Everything fed by
+the new outcome events starts empty and fills from this release, which the
+dashboard's own description says rather than leaving as a mystery.
+
 ## The fix run tells you it is running, and knows what the review found (2026-09-28)
 
 Two complaints about the same gap. While a fix was running the Findings tab
