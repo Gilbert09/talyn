@@ -355,6 +355,7 @@ async function recomputeAndBroadcast(
             )}::jsonb)`
           : sql`jsonb_set(${pullRequestsTable.lastSummary}, '{checks}', ${countsJson}::jsonb)`,
         lastCheckDigest: digest,
+        lastSummaryDigest: null,
         updatedAt: now,
       })
       .where(eq(pullRequestsTable.id, row.id));

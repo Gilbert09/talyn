@@ -1428,7 +1428,7 @@ class PRMonitorService extends EventEmitter {
 
     const rows = await this.db
       .update(pullRequestsTable)
-      .set({ lastSummary: expr, updatedAt: new Date() })
+      .set({ lastSummary: expr, lastSummaryDigest: null, updatedAt: new Date() })
       .where(
         and(
           inArray(pullRequestsTable.repositoryId, repoIds),

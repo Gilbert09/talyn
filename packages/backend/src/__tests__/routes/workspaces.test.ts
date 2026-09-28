@@ -4,6 +4,7 @@ import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { eq } from 'drizzle-orm';
 import {
+  DEFAULT_MERGE_QUEUE_MODE,
   DEFAULT_WORKSPACE_NAME,
   PROMPT_TEMPLATE_MAX_CHARS,
   defaultPromptTemplateHash,
@@ -135,7 +136,7 @@ describe('routes/workspaces', () => {
       const body = await res.json();
       expect(body.data.name).toBe('My Workspace');
       expect(body.data.description).toBe('desc');
-      expect(body.data.settings).toEqual({});
+      expect(body.data.settings).toEqual({ mergeQueueMode: DEFAULT_MERGE_QUEUE_MODE });
       expect(body.data.repos).toEqual([]);
       expect(body.data.integrations).toEqual({});
     });
