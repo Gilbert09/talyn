@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { TaskStatus } from '@talyn/shared';
+import type { CheckBreakdown } from './githubGraphql.js';
 import { debugBus } from './debugBus.js';
 
 export interface DomainTaskStatusEvent {
@@ -39,7 +40,14 @@ export interface DomainPrSnapshotEvent {
  * "checks finished → merge now" signal for the merge-queue v2 evaluator.
  */
 export interface DomainPrChecksEvent {
-  prs: Array<{ prId: string; workspaceId: string; repositoryId: string }>;
+  prs: Array<{ prId: string; workspaceId: string; repositoryId: string; number: number }>;
+  /** `owner/repo` the recompute was for. */
+  repoFullName: string;
+  /** The commit the counts describe. Identifies the "this commit went green"
+   *  moment, so a listener can act once per commit rather than once per flush. */
+  headSha: string;
+  /** The freshly recomputed breakdown these PRs now hold. */
+  checks: CheckBreakdown;
 }
 
 interface DomainEvents {

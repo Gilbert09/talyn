@@ -2,6 +2,54 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A workflow trigger for "the PR went green" (2026-09-28)
+
+Asked for a trigger that fires when CI passes. One already half-existed —
+`pr_checks_completed` plus `checkConclusions: ['success']` — and the reason it
+is only half is written in `fromCheckSuite`'s own comment: **a suite is not the
+PR.** A repo with two CI providers has two suites, so that rule fires while the
+other provider is still running, and fires again when it finishes. For "label
+it ready" that is noise; for "send it to the merge queue" it is wrong.
+
+**GitHub has no event for what was wanted.** The whole picture only exists in
+Talyn's own recomputed check counts — the same signal the merge queue already
+trusts to decide whether a queued head may merge (`domainEvents 'pr:checks'`,
+raised after the `check_run` coalescer flushes). So the new `pr_checks_passed`
+trigger is raised from there rather than from a webhook, via a synthesised
+`WebhookDelivery` with the namespaced type `talyn:checks_green`.
+
+**Once per commit falls out of the existing idempotency rather than new
+machinery.** The engine claims `(workflow_id, delivery_id)` on a unique index
+before it acts, so a delivery id derived from the head SHA
+(`checks-green:<repo>:<sha>`) means the first flush that finds the commit green
+wins and every later one — the second provider finishing, a re-run, the
+reconciler — is a duplicate that returns without acting. A push changes the id,
+which is exactly when the rule should be allowed to fire again.
+
+That is also why it must **not** be written as a transition. "Is green now"
+plus a sha-keyed claim needs no previous state and cannot be defeated by two
+replicas observing the flush in different orders; "was not green and now is"
+needs both.
+
+**`total > 0` is load-bearing, not defensive.** A PR in a repo with no CI has
+an all-zero breakdown, which satisfies "nothing failed and nothing is running"
+while nothing has passed. Without the guard, every such rule arms on every PR
+in the repo. `skipped` deliberately does not disqualify — a path-filtered job
+that correctly did not run is the normal case, not a failure.
+
+`checkConclusions` is deliberately NOT offered on the new trigger: passing is
+what the event means, so "…and the conclusion was failure" would compose a rule
+that can never fire. The validator refuses it for the same reason.
+
+Two smaller things. `pr:checks` grew `repoFullName`, `headSha`, `checks` and a
+per-PR `number` — additive, and the merge queue ignores them. And the old label
+"Checks finished" became **"A check suite finished"**, because sitting next to
+"All checks passed" it read as the same thing; a validator test had pinned the
+old string inside an error message, which is how the rename announced itself.
+The check pair now leads `WORKFLOW_TRIGGER_EVENTS`, since "when my PR goes
+green" is the rule people open that screen to write and it used to be last on a
+scrolling list. No editor change: the dropdown maps the shared array in order.
+
 ## Code review: what running it for real taught us (2026-09-27)
 
 The feature above shipped and was then used on an actual pull request. Almost

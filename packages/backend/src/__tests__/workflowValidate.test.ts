@@ -141,7 +141,7 @@ describe('validateWorkflow — a condition must apply to the workflow’s events
       'checkConclusions',
       { checkConclusions: ['failure'] },
       ['pr_opened'],
-      /only applies to Checks finished/,
+      /only applies to A check suite finished/,
     ],
     ['bodyContains', { bodyContains: 'rebase' }, ['pr_opened'], /only applies to/],
   ])('refuses %s on the wrong event', (_name, conditions, events, message) => {

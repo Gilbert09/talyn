@@ -395,7 +395,14 @@ async function recomputeAndBroadcast(
         prId: r.id,
         workspaceId: r.workspaceId,
         repositoryId: r.repositoryId,
+        number: r.number,
       })),
+      // Carried so a listener can answer "did this COMMIT just go green"
+      // rather than only "something changed". The workflows trigger keys its
+      // idempotency on the sha; the merge queue ignores these and re-reads.
+      repoFullName,
+      headSha,
+      checks: counts,
     });
   }
 }

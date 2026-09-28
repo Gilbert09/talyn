@@ -31,6 +31,7 @@ import { registerCloudProvider } from './services/cloudProviders/registry.js';
 import { workflowsKillSwitchPulled } from './services/workflowsAccess.js';
 import { loopsKillSwitchPulled } from './services/loopsAccess.js';
 import { initWorkflowRetrySweep } from './services/workflows/retrySweep.js';
+import { initChecksGreenTrigger } from './services/workflows/checksGreen.js';
 import { initLoopScheduler, loopScheduler } from './services/loops/scheduler.js';
 import { initCodeReviewTriggers } from './services/codeReview/triggers.js';
 import { codeReviewPoller, initCodeReviewPoller } from './services/codeReview/poller.js';
@@ -156,6 +157,10 @@ async function main() {
     // can never be created. The per-account flag is checked when a run is
     // re-evaluated, not here — a sweep with nothing to do costs nothing.
     initWorkflowRetrySweep();
+    // Raises `pr_checks_passed` off the recomputed check counts — the only
+    // place "every check is green" is known. Gated with the engine for the same
+    // reason the sweep is: no listener for runs that cannot be created.
+    initChecksGreenTrigger();
   }
 
   // Loops reads the opposite way round from workflows: the flag fails CLOSED,

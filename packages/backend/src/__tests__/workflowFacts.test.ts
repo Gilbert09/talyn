@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { workflowFactsFromDelivery } from '../services/workflows/facts.js';
+import { workflowFactsFromDelivery, CHECKS_GREEN_EVENT } from '../services/workflows/facts.js';
 import type { WebhookDelivery } from '../services/webhookPayload.js';
 
 /**
@@ -461,5 +461,57 @@ describe('workflowFactsFromDelivery — everything else', () => {
         delivery({ action: 'opened', repoFullName: '', payload: { pull_request: pr() } })
       )
     ).toEqual([]);
+  });
+});
+
+/**
+ * `pr_checks_passed` — the synthetic trigger. Its payload is built by
+ * services/workflows/checksGreen.ts rather than by GitHub, so what is pinned
+ * here is the contract between those two modules.
+ */
+describe('workflowFactsFromDelivery — all checks passed', () => {
+  const green = (over: Record<string, unknown> = {}) =>
+    delivery({
+      eventType: CHECKS_GREEN_EVENT,
+      action: 'completed',
+      payload: {
+        prs: [{ number: 42 }, { number: 43 }],
+        head_sha: 'abc123',
+        repository: { default_branch: 'main' },
+        ...over,
+      },
+    });
+
+  it('yields one fact per PR on the commit', () => {
+    const facts = workflowFactsFromDelivery(green());
+    expect(facts.map((f) => f.number)).toEqual([42, 43]);
+    expect(facts.every((f) => f.event === 'pr_checks_passed')).toBe(true);
+  });
+
+  it('marks what the emitter could not say as unknown, so conditions fail rather than pass', () => {
+    const [facts] = workflowFactsFromDelivery(green());
+    for (const field of ['title', 'url', 'author', 'baseBranch', 'headBranch', 'draft', 'labels']) {
+      expect(facts?.unknownFields).toContain(field);
+    }
+    // The default branch IS on the payload, so it is not unknown.
+    expect(facts?.unknownFields).not.toContain('defaultBranch');
+    expect(facts?.defaultBranch).toBe('main');
+  });
+
+  it('attributes the event to nobody — CI did it', () => {
+    const [facts] = workflowFactsFromDelivery(green());
+    // Otherwise an `actor is a bot` rule quietly becomes "on every green build".
+    expect(facts?.actor).toEqual({ login: '', isBot: false });
+    expect(facts?.author).toEqual({ login: '', isBot: false });
+  });
+
+  it('skips an entry with no PR number rather than inventing one', () => {
+    const facts = workflowFactsFromDelivery(green({ prs: [{ number: 42 }, { nope: true }] }));
+    expect(facts.map((f) => f.number)).toEqual([42]);
+  });
+
+  it('is inert for an empty or absent PR list', () => {
+    expect(workflowFactsFromDelivery(green({ prs: [] }))).toEqual([]);
+    expect(workflowFactsFromDelivery(green({ prs: undefined }))).toEqual([]);
   });
 });

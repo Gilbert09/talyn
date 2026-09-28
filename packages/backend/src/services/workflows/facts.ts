@@ -109,6 +109,8 @@ export function workflowFactsFromDelivery(delivery: WebhookDelivery): WorkflowEv
       return fromIssueComment(delivery);
     case 'check_suite':
       return fromCheckSuite(delivery);
+    case CHECKS_GREEN_EVENT:
+      return fromChecksGreen(delivery);
     default:
       // `check_run` is deliberately absent: a CI suite fires dozens per commit
       // and the per-run conclusion is not "the checks finished". `check_suite`
@@ -411,4 +413,65 @@ export function workflowFactsFromRun(run: {
     labels: [],
     unknownFields: ['baseBranch', 'defaultBranch', 'headBranch', 'draft', 'labels'],
   };
+}
+
+/**
+ * The synthetic event type for "every check on this PR is now green".
+ *
+ * Namespaced so it can never collide with a GitHub event name. There is no
+ * such webhook: GitHub tells you a *suite* finished, and on a repo with
+ * several CI providers that is one suite of several. The only place the whole
+ * picture exists is Talyn's own recomputed check counts, so the trigger is
+ * raised from there — see services/workflows/checksGreen.ts.
+ */
+export const CHECKS_GREEN_EVENT = 'talyn:checks_green';
+
+/**
+ * `pr_checks_passed` — the PR's whole check set is green, once per commit.
+ *
+ * Stays PURE like every other handler here: the caller has already done the
+ * database work and packed the answer into the payload, so this only reads
+ * what it was given. That is what keeps this module unit-testable without a
+ * database.
+ *
+ * Almost everything about the PR is unknown, exactly as for a check suite —
+ * the emitter knows the number and nothing else about the pull request — and
+ * the engine's enrichment fills it from the tracked row before matching.
+ */
+function fromChecksGreen(delivery: WebhookDelivery): WorkflowEventFacts[] {
+  const { payload, repoFullName } = delivery;
+  const prs = Array.isArray(payload.prs) ? payload.prs : [];
+
+  return prs.flatMap((raw): WorkflowEventFacts[] => {
+    const pr = raw as { number?: unknown };
+    if (typeof pr.number !== 'number') return [];
+    return [
+      {
+        event: 'pr_checks_passed',
+        repoFullName,
+        number: pr.number,
+        title: '',
+        url: '',
+        // CI did this, not a person. Empty rather than the App that owns the
+        // suite, so an `actor: bot` rule does not quietly become "on every
+        // green build" — the same reasoning as fromCheckSuite.
+        author: NOBODY,
+        actor: NOBODY,
+        baseBranch: '',
+        defaultBranch: str((payload.repository as { default_branch?: unknown } | undefined)?.default_branch),
+        headBranch: '',
+        draft: false,
+        labels: [],
+        unknownFields: [
+          'title',
+          'url',
+          'author',
+          'baseBranch',
+          'headBranch',
+          'draft',
+          'labels',
+        ],
+      },
+    ];
+  });
 }

@@ -37,7 +37,14 @@ import type { SkillKey } from './skills.js';
  * ships" are opposite intentions — collapsing them would make the common rule
  * ("comment when it merges") fire on the case the user least wants.
  */
+/**
+ * Order is the order the editors offer them in, so the CI pair leads: "when my
+ * PR goes green" is the rule people come to this screen to write, and it used
+ * to be the last option on a scrolling list.
+ */
 export const WORKFLOW_TRIGGER_EVENTS = [
+  'pr_checks_passed',
+  'pr_checks_completed',
   'pr_opened',
   'pr_reopened',
   'pr_closed',
@@ -56,7 +63,6 @@ export const WORKFLOW_TRIGGER_EVENTS = [
   'pr_review_dismissed',
   'pr_review_comment',
   'pr_comment',
-  'pr_checks_completed',
 ] as const;
 
 export type WorkflowTriggerEvent = (typeof WORKFLOW_TRIGGER_EVENTS)[number];
@@ -84,7 +90,8 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
   pr_review_dismissed: 'Review dismissed',
   pr_review_comment: 'Comment on the diff',
   pr_comment: 'Comment on the PR',
-  pr_checks_completed: 'Checks finished',
+  pr_checks_completed: 'A check suite finished',
+  pr_checks_passed: 'All checks passed',
 };
 
 /**
@@ -101,6 +108,10 @@ export const WORKFLOW_EVENT_LABELS: Record<WorkflowTriggerEvent, string> = {
  */
 export const WORKFLOW_EVENTS_REQUIRING_TRACKED_PR: readonly WorkflowTriggerEvent[] = [
   'pr_checks_completed',
+  // Stronger than the receiver's filter for this one: `pr_checks_passed` is
+  // derived from Talyn's OWN recomputed check counts for the PR row, so an
+  // untracked PR has no counts to go green.
+  'pr_checks_passed',
 ];
 
 /** Events that carry a review, so `reviewStates` means something. */
@@ -120,7 +131,14 @@ const BODY_EVENTS: readonly WorkflowTriggerEvent[] = [
   'pr_review_comment',
   'pr_review_submitted',
 ];
-/** Events that carry a check conclusion. */
+/**
+ * Events that carry a check conclusion.
+ *
+ * `pr_checks_passed` is deliberately NOT here: passing is what the event
+ * already means, so offering "…and the conclusion was failure" next to it
+ * composes a rule that can never fire. The validator refuses the condition on
+ * it for the same reason.
+ */
 const CHECK_EVENTS: readonly WorkflowTriggerEvent[] = ['pr_checks_completed'];
 
 // ============================================================================
