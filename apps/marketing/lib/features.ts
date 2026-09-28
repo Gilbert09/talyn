@@ -43,7 +43,24 @@ export interface FeaturePage {
    * The same split `lib/guides.ts` makes with `navLabel`.
    */
   navLabel: string;
+  /**
+   * The kicker above the `<h1>` on the page itself.
+   *
+   * Deliberately allowed to restate the feature's name — "Workflows" over a
+   * heading about workflows reads fine, because the heading is a sentence.
+   * It is NOT a subtitle, and using it as one produces the menu that shipped
+   * first: "Workflows / Workflows", "Loops / Loops", "Skills / Skills". Use
+   * {@link tagline} anywhere the label is already on screen.
+   */
   eyebrow: string;
+  /**
+   * Three to six words that say something the label does not, for the nav
+   * menu and anywhere else the name appears directly above it.
+   *
+   * The test is simple: if it reads as a rephrasing of `navLabel`, it is
+   * doing no work and the row would be better with nothing under it.
+   */
+  tagline: string;
   /** The `<h1>` — a promise, in the product's voice. */
   title: string;
   /**
@@ -76,6 +93,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "pr-dashboard",
     navLabel: "PR dashboard",
     eyebrow: "Mission control",
+    tagline: "Every PR, worst first",
     title: "Every pull request, triaged. No tabs required.",
     seoTitle: "GitHub pull request dashboard — every PR in one list",
     description:
@@ -156,6 +174,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "code-review",
     navLabel: "Code review",
     eyebrow: "Code review",
+    tagline: "Findings in the app, not on your PR",
     title: "Code review without the comment spam.",
     seoTitle: "AI code review that does not comment on your pull request",
     description:
@@ -245,6 +264,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "merge-queue",
     navLabel: "Merge queue",
     eyebrow: "The merge queue",
+    tagline: "Fixes it, then lands it",
     title: "A merge queue that lands pull requests for you.",
     seoTitle: "A merge queue that fixes pull requests instead of ejecting them",
     description:
@@ -331,6 +351,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "fix-pull-requests",
     navLabel: "Fix a PR with an agent",
     eyebrow: "Delegate the drudgery",
+    tagline: "Failing tests, conflicts, review comments",
     title: "Send a cloud agent. Get back a mergeable pull request.",
     seoTitle: "Fix failing CI and merge conflicts with an AI agent",
     description:
@@ -412,6 +433,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "workflows",
     navLabel: "Workflows",
     eyebrow: "Workflows",
+    tagline: "Rules that run themselves",
     title: "Write the rule once. It runs on every pull request.",
     seoTitle: "GitHub pull request automation without writing YAML",
     description:
@@ -495,6 +517,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "loops",
     navLabel: "Loops",
     eyebrow: "Loops",
+    tagline: "Prompts on a schedule",
     title: "Work that happens on a schedule, not on a trigger.",
     seoTitle: "Run an AI coding agent on a schedule, on your own repository",
     description:
@@ -577,6 +600,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "skills",
     navLabel: "Skills",
     eyebrow: "Skills",
+    tagline: "Your playbooks, on any PR",
     title: "Your playbooks, runnable on any pull request.",
     seoTitle: "Run your Claude SKILL.md playbooks against a pull request",
     description:
@@ -640,6 +664,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "reviews",
     navLabel: "Review requests",
     eyebrow: "Reviews",
+    tagline: "Everything waiting on you",
     title: "Every review request, in one list.",
     seoTitle: "One list of every GitHub pull request waiting on your review",
     description:
@@ -701,6 +726,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "agents",
     navLabel: "Agents & Talyn Fleet",
     eyebrow: "Agents",
+    tagline: "Your own Claude or ChatGPT plan",
     title: "No lock-in. Use the agent you already pay for.",
     seoTitle: "Run Claude or Codex on your own subscription, in a sandbox",
     description:
@@ -784,6 +810,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     slug: "mcp-servers",
     navLabel: "MCP servers",
     eyebrow: "MCP servers",
+    tagline: "Linear, Sentry, Supabase, your own",
     title: "Give the agent your tools, not your keys.",
     seoTitle: "Connect MCP servers to a cloud coding agent, safely",
     description:

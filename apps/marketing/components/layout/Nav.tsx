@@ -114,8 +114,12 @@ export function Nav() {
                             <span className="block text-sm font-medium text-ink">
                               {f.navLabel}
                             </span>
+                            {/* tagline, not eyebrow: the eyebrow is the
+                                page's own kicker and restates the feature
+                                name, which under the name reads "Loops /
+                                Loops". */}
                             <span className="mt-0.5 block text-xs leading-snug text-ink-400">
-                              {f.eyebrow}
+                              {f.tagline}
                             </span>
                           </a>
                         ))}

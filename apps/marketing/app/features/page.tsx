@@ -62,8 +62,12 @@ export default function FeaturesHubPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {features.map((f, i) => (
                 <Reveal key={f.slug} delay={(i % 3) * 0.06}>
+                  {/* The kicker is the tagline, not `eyebrow`. Every card
+                      here is a feature, so there is no category to announce,
+                      and the page's own eyebrow restates the label directly
+                      beneath it — "MCP SERVERS / MCP servers". */}
                   <FeatureCard
-                    eyebrow={f.eyebrow}
+                    eyebrow={f.tagline}
                     title={f.navLabel}
                     body={f.description}
                     href={`/features/${f.slug}`}

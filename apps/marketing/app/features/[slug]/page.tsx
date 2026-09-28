@@ -211,12 +211,16 @@ export default function FeaturePageRoute({ params }: Params) {
                   Keep reading
                 </h2>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* "Feature", not the page's own eyebrow, which restates
+                      the label under it. These cards sit beside Compare and
+                      Guide ones, so the kicker is earning its place by
+                      saying what KIND of link this is. */}
                   {siblings.map((s) => (
                     <FeatureCard
                       key={s.slug}
-                      eyebrow={s.eyebrow}
+                      eyebrow="Feature"
                       title={s.navLabel}
-                      body={s.description}
+                      body={s.tagline}
                       href={`/features/${s.slug}`}
                     />
                   ))}

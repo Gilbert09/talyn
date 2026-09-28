@@ -75,10 +75,13 @@ export default function CompareHubPage() {
                   {group.category}
                 </h2>
                 <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* No eyebrow: the title already reads "Talyn vs X", so
+                      "VS X" above it is the same words twice, and the
+                      category heading directly above the grid has already
+                      said which group this is. */}
                   {group.pages.map((p, i) => (
                     <Reveal key={p.slug} delay={(i % 3) * 0.06}>
                       <FeatureCard
-                        eyebrow={`vs ${p.competitor}`}
                         title={p.title}
                         body={p.description}
                         href={`/compare/${p.slug}`}
@@ -90,7 +93,6 @@ export default function CompareHubPage() {
                   {group.category === "Merge queues" && mergeQueueGuide && (
                     <Reveal delay={0.12}>
                       <FeatureCard
-                        eyebrow="vs GitHub"
                         title={mergeQueueGuide.title}
                         body={mergeQueueGuide.description}
                         href={`/${mergeQueueGuide.slug}`}
