@@ -39,20 +39,20 @@ export interface NavItem {
 }
 
 /**
- * Five entries, and the count matters — the desktop bar has a logo and three
+ * Four entries, and the count matters — the desktop bar has a logo and three
  * buttons to fit beside them, and "Download for Windows" is a lot wider than
  * the "Download" it replaced.
  *
- * "Agents" was a sixth and is gone: it pointed at /features/agents, which is
- * already the ninth item in the Features menu directly to its left. It was the
- * only top-level link that duplicated a dropdown entry, so it cost width and
- * bought nothing. The Fleet pitch it was there to promote now leads the hero
- * instead, which is a better place for it than a nav label.
+ * Two were dropped rather than squeezed. "Agents" pointed at /features/agents,
+ * already the ninth item in the Features menu immediately to its left — the
+ * only top-level link duplicating a dropdown entry. "Compare" went on Tom's
+ * call; the eight comparison pages keep their own footer column, are linked
+ * from the /features hub, and are what a person arrives on from a search
+ * rather than something they go hunting for in a nav bar.
  */
 export const nav: NavItem[] = [
   { label: "How it works", href: "#how" },
   { label: "Features", href: "features", group: "features" },
-  { label: "Compare", href: "compare" },
   { label: "Pricing", href: "pricing" },
   { label: "FAQ", href: "#faq" },
 ];
@@ -438,6 +438,50 @@ export const pricing = {
  * What stays is what somebody deciding whether to download needs: what it is,
  * what runs it, where the code goes, what it costs, what it runs on.
  */
+/**
+ * Teams — a per-seat discount, sold by conversation rather than by page.
+ *
+ * Deliberately quotes no number. Billing today is per account: there is no
+ * seat model in the backend, no shared workspace, no SSO and no admin
+ * console. Publishing "$12 a seat" would be a public commitment against
+ * machinery that does not exist, and the first person to accept it would find
+ * out. "Talk to me" commits to nothing, prices each conversation while the
+ * shape is still being learned, and is the honest version of where this is.
+ *
+ * The copy also has to not oversell what happens after they press send. It
+ * goes to PostHog and nowhere else, which is fine when the person is told
+ * plainly that a human reads it and replies by email.
+ */
+export const teams = {
+  kicker: "Teams",
+  title: "More than one of you?",
+  body: "Talyn is priced per account today, which stops making sense somewhere around the third person on a team paying for their own. There is a per-seat rate for teams — tell me how many of you there are and I will come back with it.",
+  bullets: [
+    "A per-seat price that gets better the more of you there are",
+    "One invoice instead of everybody expensing $15",
+    "Tell me what you need from shared workspaces and I will build toward it",
+  ],
+  cta: "Talk about a team plan",
+  // Said out loud rather than discovered: shared workspaces, SSO and admin
+  // controls do not exist, and a team lead will ask inside two minutes.
+  caveat:
+    "Being straight with you: shared workspaces, SSO and admin controls are not built yet. A team plan today is a price, not a product tier — so tell me what you actually need and it will shape what gets built.",
+
+  modalTitle: "Tell me about your team",
+  modalBody:
+    "Two questions and anything else you want to add. It comes to me directly and I answer them myself.",
+  modalCta: "Send it",
+  modalFootnote:
+    "Your email is used to reply to you and nothing else — no list, no newsletter.",
+
+  sentTitle: "Got it.",
+  sentBody: "I read these myself and I will come back to you at",
+
+  failedTitle: "That did not send.",
+  failedBody:
+    "Something in your browser blocked it — usually an ad blocker or a privacy extension, because the form rides on our analytics. Rather than pretend otherwise: open a GitHub issue and I will pick it up there.",
+};
+
 /**
  * The four questions that stop somebody paying, answered on `/pricing`.
  *

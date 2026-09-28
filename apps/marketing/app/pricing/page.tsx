@@ -5,6 +5,7 @@ import { Breadcrumbs } from "@/components/layout/Breadcrumbs";
 import { PageCta } from "@/components/layout/PageCta";
 import { Pricing } from "@/components/sections/Pricing";
 import { PlanTable } from "@/components/sections/PlanTable";
+import { Teams } from "@/components/sections/Teams";
 import { FaqAccordion } from "@/components/sections/FaqAccordion";
 import { Reveal } from "@/components/ui/Reveal";
 import {
@@ -80,6 +81,10 @@ export default function PricingPage() {
         {/* The cards, with their monthly/annual toggle. `id="pricing"` rides
             along so an old inbound /#pricing link still lands somewhere. */}
         <Pricing />
+
+        {/* Straight after the per-account price, because that is the
+            moment a team lead wonders what four of these cost. */}
+        <Teams />
 
         <PlanTable />
 

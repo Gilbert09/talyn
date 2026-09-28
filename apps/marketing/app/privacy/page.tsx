@@ -11,9 +11,12 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPage() {
-  // The `updated` date moved with the removal of the waitlist-email clause:
-  // §11 promises material changes are reflected by it, and dropping a whole
-  // category of collected data is one.
+  // The `updated` date moves with any change to what we collect: §11 promises
+  // material changes are reflected by it, and a whole category of collected
+  // data is one. It moved down when the waitlist-email clause was removed, and
+  // it moves again now the team-enquiry form puts an email address back —
+  // narrower than the waitlist was (one reply, no list), but still an address
+  // a person hands us, which is exactly what §1 has to say out loud.
   return (
     <LegalPage title="Privacy Policy" updated="September 2026">
       <p>
@@ -52,6 +55,15 @@ export default function PrivacyPage() {
           viewed, clicks (such as &ldquo;Download&rdquo;), approximate location
           derived from IP, browser and device type — collected via PostHog (see
           §4).
+        </li>
+        <li>
+          <strong>Team enquiries.</strong> If you submit the team-pricing form
+          on our <a href="/pricing">pricing page</a>, we collect the email
+          address, team size, and any note you enter. It is recorded as an
+          analytics event in PostHog (§4) — we do not operate a separate
+          mailing list — and it is used to reply to you about team pricing and
+          nothing else. We do not add you to a newsletter, and we do not use it
+          to identify you across the rest of the Service.
         </li>
       </ul>
 

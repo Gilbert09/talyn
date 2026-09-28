@@ -72,19 +72,19 @@ export function Nav() {
           <Logo />
         </a>
 
-        {/* In FLOW, not absolutely centred.
+        {/* In FLOW and right-aligned, so the links sit against the button
+            group rather than floating in the middle.
             It used to be `absolute left-1/2 -translate-x-1/2`, which takes the
             row out of the layout entirely — so it could not push the buttons
             aside, only sit on top of them. The old comment called that a
             md-width problem and dropped to a hamburger below lg; it was really
             a content-width problem, and it came back the moment the row grew.
-            Adding "Compare" and widening the button from "Download" to
-            "Download for Windows" was enough to land FAQ on top of GitHub.
-            A flex child with `flex-1 justify-center` looks centred and cannot
-            overlap anything, because it is participating in the layout. */}
+            A flex child with `flex-1 justify-end` cannot overlap anything,
+            because it is participating in the layout: the worst case is
+            compression, not collision. */}
         <div
           ref={menuRef}
-          className="hidden min-w-0 flex-1 items-center justify-center gap-1 lg:flex"
+          className="hidden min-w-0 flex-1 items-center justify-end gap-1 lg:flex"
           // Leaving the whole row closes the menu. Scoped to the row rather
           // than the panel so moving diagonally from the trigger to an item
           // does not shut it mid-travel.
