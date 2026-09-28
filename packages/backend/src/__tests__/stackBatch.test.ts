@@ -98,22 +98,55 @@ describe('planStackBatch', () => {
     expect(planStackBatch(chain(), 'pr2')?.isSubmitRung).toBe(false);
   });
 
-  it('withholds the submission while any rung has a real blocker', () => {
-    const plan = planStackBatch(chain([{ ready: false }]), 'pr3');
-    expect(plan?.submitNumber).toBeNull();
-    // Still the submit rung — it is just not submittable yet, which is what
-    // keeps the top rung waiting with the others rather than going alone.
-    expect(plan?.isSubmitRung).toBe(true);
+  // Both of these used to return a plan with a null `submitNumber`, which parked
+  // every rung "waiting for the rest of the stack" — a wait nothing ended,
+  // because the park sits above the rule that would fire the fix run. No plan
+  // means the serial drain runs instead: the bottom rung goes to the provider on
+  // its own, lands, and the next rung retargets behind it.
+  it('gives up on batching while any rung has a real blocker', () => {
+    // `stackRungReady` covers conflicts, requested changes, red required checks
+    // and drafts — never anything that clears by waiting. So the blocker needs a
+    // fix run, and the fix run needs the rung not to be parked.
+    for (const id of ['pr1', 'pr2', 'pr3']) {
+      expect(planStackBatch(chain([{ ready: false }]), id)).toBeNull();
+    }
   });
 
   // The submission lands rungs whether or not Talyn is tracking them, so a
   // stack with an unqueued rung would merge a PR the user never asked to merge.
-  it('withholds the submission while any rung is not in the queue', () => {
-    expect(planStackBatch(chain([{ entryStatus: null }]), 'pr3')?.submitNumber).toBeNull();
+  it('gives up on batching while any rung is not in the queue', () => {
+    // And the mirror of that promise: the rung the author DID queue must not be
+    // withheld because of one they left out. PostHog/posthog#107402 sat queued
+    // and mergeable behind two rungs that were never enqueued, and had to be
+    // submitted by hand.
+    expect(planStackBatch(chain([{ entryStatus: null }]), 'pr3')).toBeNull();
+    expect(planStackBatch(chain([{ entryStatus: null }]), 'pr1')).toBeNull();
+  });
+
+  it('still batches when every rung is queued and ready', () => {
+    // The regression guard for the fix above: giving up too eagerly would spend
+    // one full CI cycle per rung for work the provider does once.
+    expect(planStackBatch(chain(), 'pr3')?.submitNumber).toBe(3);
   });
 
   describe('a live submission', () => {
     const submittedTop = () => chain([{}, {}, { submitted: true }]);
+
+    // The giving-up rule above applies only BEFORE anything is submitted.
+    // Once the provider has the batch it owns every rung beneath it, and a push
+    // to any member ejects the lot — so a rung that develops a conflict
+    // mid-test must keep reporting itself covered. Dropping the plan here would
+    // hand it to the serial drain, which would fire a fix run and eject the
+    // submission the rung belongs to.
+    it('keeps reporting coverage when a rung goes unready mid-flight', () => {
+      const chainWithBadRung = chain([{ ready: false }, {}, { submitted: true }]);
+      expect(planStackBatch(chainWithBadRung, 'pr1')?.coveredBy).toBe(3);
+    });
+
+    it('keeps reporting coverage when a rung leaves the queue mid-flight', () => {
+      const chainWithGap = chain([{ entryStatus: null }, {}, { submitted: true }]);
+      expect(planStackBatch(chainWithGap, 'pr1')?.coveredBy).toBe(3);
+    });
 
     it('covers every rung beneath it', () => {
       expect(planStackBatch(submittedTop(), 'pr1')?.coveredBy).toBe(3);

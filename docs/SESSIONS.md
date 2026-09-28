@@ -2,6 +2,51 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A queued stack rung that waited for PRs nobody had queued (2026-09-28)
+
+PostHog/posthog#107402 sat in the merge queue reading "Ready · QUEUED #1" and
+never went to trunk. Tom ran `/trunk merge` by hand. Its entry said why, 479
+times over: `stack_batch_waiting — Waiting for the rest of the stack, all 3 PRs
+go to the merge queue together.`
+
+**It was waiting for two PRs its author had deliberately left out.** The three
+are a GitHub *native* stack, so they take the batch path, and `planStackBatch`
+computed `submitNumber: everyRungQueued && everyRungReady ? top.number : null`.
+Only the bottom rung was enqueued, and one of the others was conflicted, so both
+halves were false — and a null `submitNumber` made `stackBatchHoldsMerge` hold
+EVERY rung, the bottom one included, above the rules that submit, arm or merge.
+Its base is `master`, it was `MERGEABLE`, and handing it to trunk alone is
+exactly right: trunk lands the rung it is given plus everything beneath it,
+which for rung 1 is rung 1.
+
+Neither half of that condition clears while parked. `everyRungQueued` is a fact
+about what the author DID: Talyn's promise never to land a PR nobody enqueued has
+a mirror image, which is not to withhold one somebody did. `everyRungReady`
+covers conflicts, requested changes, red required checks and drafts —
+`stackRungReady` deliberately excludes anything that clears by waiting — and
+while the unready rung does still get its fix run, every ready rung waits out the
+whole of it. So the fix is Tom's call from the two offered: **a stack that cannot
+be batched now produces no plan at all**, and the serial drain runs, which is the
+fallback the function's other refusals already took. `submitNumber` is
+non-nullable now, so the compiler walked the consumers.
+
+**The one thing that must NOT give up is a live submission.** A push to any
+member ejects the whole batch, so a rung that develops a conflict mid-test has to
+keep reporting itself covered rather than firing a fix run that would eject the
+submission it belongs to. My first cut dropped the plan there too and an
+evaluator test caught it — `if (!live && (!everyRungQueued || !everyRungReady))`.
+
+**479 events and 479 CAS writes in 39 minutes, on one PR.** The hold deduped on
+`d.entry.blockedReason !== message`, and `DecisionBuilder.transition` keeps a
+reason only for `blocked` and `blocked_manual` — so on `awaiting_stack` the write
+was discarded, the comparison read `null !== message` every pass, and the entry
+re-transitioned on every `check_run` webhook. posthog/posthog runs ~280 checks per
+PR. The reason was never rendered either: the sheet gates on `blocked`. Deduped on
+the status alone now, with the trap written down where the filter lives — no rule
+may key its idempotence on a field that filter discards. The guard test fails
+against the old comparison and passes against the new one, which is the only
+reason to trust it.
+
 ## What a review actually did, and what happened to a finding (2026-09-28)
 
 Two follow-ups after the fix-run work, and one PostHog dashboard.

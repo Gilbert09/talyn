@@ -730,8 +730,9 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   // rest, rather than draining them.
   //
   // `ctx.stackBatch` is present only when the whole precondition holds (native
-  // stack, gated landing branch, provider has not refused a stack here) — its
-  // absence is the serial drain below, unchanged.
+  // stack, gated landing branch, provider has not refused a stack here, AND
+  // every rung queued and individually ready) — its absence is the serial drain
+  // below, unchanged.
   if (ctx.stackBatch) {
     const batched = decideStackBatch(d, ctx);
     if (batched) return batched;
@@ -1443,31 +1444,41 @@ function decideStackBatch(d: DecisionBuilder, ctx: DecisionContext): Decision | 
  * May this rung take the merge into its own hands?
  *
  * No, whenever a batch submission is the plan and this rung is not the one
- * being submitted — including while the stack is not yet submittable at all
- * (`submitNumber === null`, i.e. some rung is still draft, conflicted, has
- * changes requested, or was never enqueued). Both cases end the same way: the
- * rung waits. What it must NOT do is merge into the rung below it, arm
+ * being submitted. What it must NOT do is merge into the rung below it, arm
  * auto-merge (which is GitHub merging it into the rung below it, later), or
  * submit itself — a second submission of the same stack is a second batch of
  * the same commits.
+ *
+ * It used to hold for a second reason as well: `submitNumber === null`, meaning
+ * the stack was not submittable at all. That state now produces no plan rather
+ * than a plan nobody can act on, so a stack that cannot be batched takes the
+ * serial drain instead of waiting. See `planStackBatch`.
  */
 function stackBatchHoldsMerge(ctx: DecisionContext): boolean {
   const plan = ctx.stackBatch;
   if (!plan) return false;
-  return plan.submitNumber === null || !plan.isSubmitRung;
+  return !plan.isSubmitRung;
 }
 
 /** Park a rung whose stack is being batched but which is not the submit rung. */
 function holdForStackBatch(d: DecisionBuilder, ctx: DecisionContext): Decision {
   const plan = ctx.stackBatch!;
+  // Always names the rung being submitted. The other wording this used to have
+  // — "waiting for the rest of the stack" — described a wait that nothing ended,
+  // and the state it described no longer exists.
   const message =
-    plan.submitNumber === null
-      ? `Waiting for the rest of the stack — all ${plan.size} PRs go to the merge queue together.`
-      : `Waiting for #${plan.submitNumber} to be submitted — the merge queue takes the whole stack at once.`;
-  if (d.entry.status !== 'awaiting_stack' || d.entry.blockedReason !== message) {
+    `Waiting for #${plan.submitNumber} to be submitted — the merge queue takes the whole stack at once.`;
+  // Deduped on the STATUS alone, and it has to be. This used to compare the
+  // stored `blockedReason` against the message — but `transition` keeps a
+  // reason only for `blocked` and `blocked_manual`, so on `awaiting_stack` the
+  // write was discarded, the comparison read `null !== message` on every pass,
+  // and the entry re-transitioned every time it was evaluated. On
+  // PostHog/posthog#107402 that was 479 CAS writes and 479 identical audit rows
+  // in 39 minutes — one per check_run webhook, and that repo runs ~280 checks
+  // per pull request.
+  if (d.entry.status !== 'awaiting_stack') {
     d.transition('awaiting_stack', {
       blockedCode: null,
-      blockedReason: message,
       event: { code: 'stack_batch_waiting', message },
     });
   }
@@ -2693,6 +2704,14 @@ class DecisionBuilder {
       this.actions.push({ kind: 'disarm_automerge' });
       this.entry.automergeArmedBy = null;
     }
+    // Only a BLOCKED status carries a code and a reason; every other status
+    // clears both, so a stale "why" can never outlive the state it explained.
+    //
+    // The consequence for callers, which is not obvious and has bitten once:
+    // passing `blockedReason` alongside any other status is silently dropped,
+    // so no rule may key its idempotence on reading that reason back. See
+    // `holdForStackBatch`, which did exactly that and re-transitioned on every
+    // evaluation for as long as it was parked.
     const blockedCode =
       to === 'blocked' || to === 'blocked_manual' ? (opts.blockedCode ?? null) : null;
     const blockedReason =

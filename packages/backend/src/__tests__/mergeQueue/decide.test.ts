@@ -3450,32 +3450,72 @@ describe('decide — merge stack, batch submission', () => {
     });
   });
 
-  describe('before the stack is submittable', () => {
-    // submitNumber === null means some rung is draft, conflicted, has changes
-    // requested, or was never enqueued. Nothing is submitted until that clears,
-    // and the top rung waits with the rest rather than going alone.
-    it('holds even the top rung', () => {
+  describe('a stack that cannot be batched', () => {
+    // There is no "plan with nothing to submit" any more. `planStackBatch`
+    // returns null when a rung is unready or unqueued, so these entries arrive
+    // here with NO plan and take the serial drain — which is what stops a
+    // queued, mergeable rung waiting on rungs its author never enqueued.
+    // PostHog/posthog#107402 sat in `awaiting_stack` for exactly that reason.
+    const ungated = (o: Partial<DecisionContext> = {}) =>
+      ctx({ externalGate: 'confirmed', ...o });
+
+    it('submits a rung whose own base is the gated branch', () => {
+      const d = decide(entry({ baseBranch: 'main' }), pr({}, { baseBranch: 'main' }), ungated());
+      expect(kinds(d)).toContain('submit_external');
+    });
+
+    // The serial drain's own gate still applies to the rungs above: a child
+    // waits for its parent rather than merging into it.
+    it('still parks a rung that sits on another rung', () => {
       const d = decide(
         rung(),
         rungPr(),
-        gated(batch({ isSubmitRung: true, submitNumber: null }))
+        ungated({
+          stackParent: {
+            number: 43,
+            pullRequestId: 'pr-parent',
+            baseBranch: 'main',
+            state: 'open',
+            entryStatus: 'queued',
+            targetBase: 'main',
+            depth: 1,
+            cycle: false,
+          },
+        })
       );
-      expect(kinds(d)).not.toContain('submit_external');
       expect(kinds(d)).not.toContain('verify_live_then_merge');
-      expect(lastTransition(d)?.to).toBe('awaiting_stack');
-      expect(d.verdict).toBe('advance');
+      expect(kinds(d)).not.toContain('submit_external');
     });
 
-    // …but the rungs still get FIXED. The provider tests the stack as one
-    // unit, so a conflict four deep is real work that has to happen before the
-    // submission, and the serial drain's park would have prevented it.
+    // A rung with a real blocker gets its fix run either way. Under a batch
+    // plan this was already true — the provider tests the stack as one unit,
+    // so a conflict four deep is real work — and it must stay true without one.
     it('still remediates a rung with a real blocker', () => {
       const d = decide(
         rung(),
         rungPr({ blockingReason: 'merge_conflicts', mergeable: 'CONFLICTING' }),
-        gated(batch({ submitNumber: null }))
+        ungated()
       );
       expect(kinds(d)).toContain('fire_fix_run');
+    });
+
+    // The write-amplification guard. This hold is re-decided on every webhook,
+    // and PostHog/posthog runs ~280 checks per PR — so a hold that transitions
+    // each time is hundreds of CAS writes and hundreds of identical audit rows
+    // per PR per CI round. #107402 logged 479 of them in 39 minutes.
+    //
+    // It happened because the guard compared the STORED `blockedReason` against
+    // its message, and `transition` keeps a reason only for the blocked
+    // statuses — so the comparison could never match. Anything keyed on a field
+    // the builder discards is this bug again.
+    it('transitions once while parked, not once per evaluation', () => {
+      const first = decide(rung(), rungPr(), gated(batch()));
+      expect(lastTransition(first)?.to).toBe('awaiting_stack');
+
+      // Second pass, now that the entry IS parked: nothing more to say.
+      const parked = decide(rung({ status: 'awaiting_stack' }), rungPr(), gated(batch()));
+      expect(parked.actions.filter((a) => a.kind === 'transition')).toHaveLength(0);
+      expect(parked.verdict).toBe('advance');
     });
 
     it('never merges a clean lower rung into the rung below it', () => {

@@ -283,12 +283,15 @@ export interface StackBatchPlan {
   targetBase: string;
   /**
    * The rung to hand to the provider — the TOP open rung, because the provider
-   * lands the rung it is given plus everything beneath it. Null when the stack
-   * is not ready to be submitted yet (some rung is draft, conflicted, has
-   * changes requested, or is not in the queue), in which case every rung
-   * remediates and none submits.
+   * lands the rung it is given plus everything beneath it.
+   *
+   * Never null. It used to be, meaning "the stack is not submittable yet", and
+   * every rung was parked until it became a number — which is how a queued,
+   * mergeable bottom rung sat in `awaiting_stack` indefinitely because of two
+   * rungs its author had never enqueued. A stack that cannot be batched now
+   * produces NO plan at all, so the serial drain runs. See `planStackBatch`.
    */
-  submitNumber: number | null;
+  submitNumber: number;
   /** Whether the entry being decided IS that rung. */
   isSubmitRung: boolean;
   /**
@@ -470,9 +473,44 @@ export function planStackBatch(
   const everyRungQueued = members.every((m) => m.entryStatus !== null);
   const everyRungReady = members.every((m) => m.ready);
 
+  // A stack that cannot go as one unit gets NO plan, which hands it to the
+  // serial drain — the behaviour that predates batching, and the fallback this
+  // function's other refusals already take.
+  //
+  // It used to return a plan with a null `submitNumber` instead, which parked
+  // every rung "waiting for the rest of the stack". Neither half of the
+  // condition clears itself while parked, so that wait had no end:
+  //
+  // - `everyRungQueued` is about what the AUTHOR did. Queuing one rung of a
+  //   three-rung stack is a request to land that rung, not an unfinished
+  //   request to land three — and Talyn's promise never to land a PR nobody
+  //   enqueued has a mirror image, which is not to withhold one somebody did.
+  //   PostHog/posthog#107402 sat mergeable and queued behind two PRs its author
+  //   had deliberately left out, and it had to be submitted by hand.
+  // - `everyRungReady` is about conflicts, requested changes, red required
+  //   checks and drafts — `stackRungReady` deliberately excludes anything that
+  //   clears by waiting. The unready rung does still get its fix run under a
+  //   plan, so that wait CAN end; what made it the wrong answer is how long it
+  //   holds everything else. A fix run takes minutes, can fail, and can stand
+  //   down for a person, and every ready rung the author queued was parked for
+  //   all of it. Landing the bottom rung meanwhile costs one CI cycle; the
+  //   batch re-forms as soon as the stack is whole again.
+  //
+  // The cost is real and is the right way round: enqueue a stack rung by rung
+  // and the bottom one may be submitted before the top is in, losing the batch
+  // for that round. That spends CI. The old behaviour spent the feature.
+  //
+  // ONLY before anything is submitted. Once a submission is live the provider
+  // owns every rung beneath it, and a push to ANY member ejects the whole
+  // batch — so a rung that develops a conflict mid-test must keep reporting
+  // itself covered rather than firing a fix run that would eject the very
+  // submission it belongs to. Dropping the plan there would hand the batch
+  // straight back to the serial drain, which knows nothing about it.
+  if (!live && (!everyRungQueued || !everyRungReady)) return null;
+
   return {
     targetBase: chain.targetBase,
-    submitNumber: everyRungQueued && everyRungReady ? top.number : null,
+    submitNumber: top.number,
     isSubmitRung: top.pullRequestId === pullRequestId,
     // A rung is covered by SOMEONE ELSE'S live submission. The submitted rung
     // itself is never "covered" — it tracks the provider through R5b, which is
