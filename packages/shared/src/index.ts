@@ -890,6 +890,53 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === 'string' && value in TASK_STATUS_TERMINAL;
 }
 
+/**
+ * What asked for a run.
+ *
+ * Persisted to `metadata.source` and stamped on every terminal task event. It
+ * exists because "how long do the CI-fix runs take" had no answer: the events
+ * carried a task TYPE, and `pr_response` covers the auto-keep watcher, the
+ * merge queue, the panel's Fix button and a workflow action alike. Answering
+ * it meant matching on the task TITLE in SQL — a display string, overridable
+ * per workspace through the prompt templates, and wrong the day one is renamed.
+ *
+ * Deliberately about the CALLER, not the work. Two sources can build the same
+ * prompt — `auto_keep` and `merge_queue` both run `buildMergeablePrompt` — and
+ * telling those apart is the whole point: their retry budgets, their costs and
+ * their failure modes are separate, and the pair has produced a runaway before.
+ *
+ * Derived from the array rather than declared beside it, so the union and the
+ * runtime list cannot drift apart.
+ */
+export const TASK_SOURCES = [
+  /** A person pressed something. */
+  'user',
+  /** The auto-keep-mergeable watcher. */
+  'auto_keep',
+  /** The merge queue's fix run. */
+  'merge_queue',
+  /** An auto-fix for code review findings. */
+  'code_review',
+  /** A loop firing on its schedule. */
+  'loop',
+  /** A workflow action. */
+  'workflow',
+] as const;
+
+export type TaskSource = (typeof TASK_SOURCES)[number];
+
+/**
+ * True when `value` is a source this build knows about.
+ *
+ * Guards the analytics property: `metadata` is a jsonb blob written by
+ * whichever backend version was running, so it can name a source added after
+ * this build — which should be dropped rather than sent on as a value no
+ * breakdown can explain.
+ */
+export function isTaskSource(value: unknown): value is TaskSource {
+  return typeof value === 'string' && (TASK_SOURCES as readonly string[]).includes(value);
+}
+
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export interface Task {

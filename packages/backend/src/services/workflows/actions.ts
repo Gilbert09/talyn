@@ -655,6 +655,7 @@ async function startTask(
     const task = await createCloudTask({
       workspaceId: ctx.workspaceId,
       type: 'pr_response',
+      source: 'workflow',
       title,
       description: `Started by the "${ctx.workflowId}" workflow on ${ref}.`,
       prompt,

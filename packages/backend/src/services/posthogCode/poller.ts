@@ -10,7 +10,11 @@ import {
   tasks as tasksTable,
   repositories as repositoriesTable,
 } from '../../db/schema.js';
-import { captureWorkspaceEvent } from '../analytics.js';
+import {
+  captureWorkspaceEvent,
+  taskOutcomeEventName,
+  taskOutcomeProperties,
+} from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
@@ -531,36 +535,42 @@ class PostHogCodePoller {
           type: tasksTable.type,
           createdAt: tasksTable.createdAt,
           metadata: tasksTable.metadata,
+          // Joined, not a second round trip. "PostHog/posthog" vs a small repo
+          // is the single strongest predictor of how long one of these runs
+          // takes, because the agent sits through that repo's CI inside the
+          // run — and without it a duration breakdown says only that the
+          // median moved. Left join: `repository_id` is nullable.
+          repository: repositoriesTable.name,
         })
         .from(tasksTable)
+        .leftJoin(repositoriesTable, eq(repositoriesTable.id, tasksTable.repositoryId))
         .where(eq(tasksTable.id, task.id))
         .limit(1);
       const row = rows[0];
       if (!row) return;
       const meta = (row.metadata ?? {}) as Record<string, unknown>;
-      const dispatchedAtMs = Date.parse(String(meta.dispatchedAt ?? ''));
       captureWorkspaceEvent(
         task.workspaceId,
-        // Three-way, not two. Folding a refusal into `task_failed` is what
-        // made this class of stop invisible in the funnels: the rate of
-        // `task_needs_human` is the signal that tells us whether the sentinel
-        // prompt over-triggers, and there is nowhere else to read it.
-        status === 'completed'
-          ? 'task_completed'
-          : status === 'needs_human'
-            ? 'task_needs_human'
-            : 'task_failed',
-        {
-          task_id: task.id,
-          task_type: row.type,
+        taskOutcomeEventName(status),
+        taskOutcomeProperties({
+          taskId: task.id,
+          taskType: row.type,
           provider: 'posthog_code',
-          opened_pr: Boolean(meta.pullRequest || meta.posthogPrUrl),
-          duration_total_ms: finishedAt.getTime() - new Date(row.createdAt).getTime(),
-          ...(Number.isNaN(dispatchedAtMs)
-            ? {}
-            : { duration_run_ms: finishedAt.getTime() - dispatchedAtMs }),
-          ...(result.error ? { error_reason: result.error } : {}),
-        },
+          status,
+          result,
+          createdAt: new Date(row.createdAt),
+          finishedAt,
+          metadata: meta,
+          repository: row.repository,
+          // `posthogModel` is what the provider reported running; `model` is
+          // what we asked for. Prefer the former — a pin the provider declined
+          // would otherwise attribute the run's duration to a model that
+          // never saw it.
+          model:
+            (typeof meta.posthogModel === 'string' ? meta.posthogModel : null) ??
+            (typeof meta.model === 'string' ? meta.model : null),
+          openedPr: Boolean(meta.pullRequest || meta.posthogPrUrl),
+        }),
       );
     } catch {
       // Analytics must never affect task processing.

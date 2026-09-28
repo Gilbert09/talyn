@@ -160,6 +160,7 @@ export async function dispatchRun(
     const task = await createCloudTask({
       workspaceId: loop.workspaceId,
       type: 'code_writing',
+      source: 'loop',
       title: titleFor(loop, scheduledFor),
       description: `Loop: ${loop.name}`,
       prompt: loop.prompt,

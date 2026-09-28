@@ -1,4 +1,10 @@
 import { eq } from 'drizzle-orm';
+import {
+  isTaskSource,
+  type AnyCloudProviderType,
+  type TaskResult,
+  type TaskStatus,
+} from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import { workspaces as workspacesTable } from '../db/schema.js';
 import { debugBus } from './debugBus.js';
@@ -170,4 +176,79 @@ export function captureSignup(user: {
     const msg = err instanceof Error ? err.message : 'unknown error';
     console.warn('[analytics] capture "signup" failed:', msg);
   });
+}
+
+/**
+ * The terminal task event's name. Three-way, not two: folding a refusal into
+ * `task_failed` is what made that class of stop invisible in the funnels.
+ *
+ * Shared by both pollers so the split cannot drift between providers — the
+ * ternary used to be written out twice, identically, with the reasoning
+ * duplicated in both comments.
+ */
+export function taskOutcomeEventName(
+  status: TaskStatus
+): 'task_completed' | 'task_needs_human' | 'task_failed' {
+  if (status === 'completed') return 'task_completed';
+  if (status === 'needs_human') return 'task_needs_human';
+  return 'task_failed';
+}
+
+/**
+ * The property bag every terminal task event carries, whichever provider ran it.
+ *
+ * Pure on purpose. Each poller has already read the task row for its own
+ * reasons (the fleet's clears a stale quota hold off it), so a helper that did
+ * its own read would cost a second round trip per settled task to learn what
+ * the caller is holding.
+ *
+ * `source` and `duration_run_ms` are the two that make this answer questions.
+ * Without `source`, `task_type` is all there is, and `pr_response` covers the
+ * auto-keep watcher, the merge queue, the Fix button and a workflow action
+ * alike — so "how long do the CI-fix runs take" could only be asked of the
+ * task TITLE in SQL. Without `duration_run_ms` the fleet's runs could not be
+ * compared with PostHog Code's at all: `duration_total_ms` includes the queue
+ * wait, and only one provider was sending the run figure.
+ */
+export function taskOutcomeProperties(input: {
+  taskId: string;
+  taskType: string;
+  provider: AnyCloudProviderType;
+  status: TaskStatus;
+  result: TaskResult;
+  createdAt: Date;
+  finishedAt: Date;
+  metadata: Record<string, unknown>;
+  /** `repositories.name` ("PostHog/posthog"), when the row named one. */
+  repository?: string | null;
+  /** The model that actually ran, when the provider records one. */
+  model?: string | null;
+  /** True when the run linked a pull request. */
+  openedPr: boolean;
+  /** Provider-specific extras — the fleet's `cost_usd`, and nothing else today. */
+  extra?: Record<string, unknown>;
+}): Record<string, unknown> {
+  // Written at dispatch, so it is absent on a task that failed before one —
+  // which is exactly when a run duration would be a lie rather than a gap.
+  const dispatchedAtMs = Date.parse(String(input.metadata.dispatchedAt ?? ''));
+  const source = input.metadata.source;
+  return {
+    task_id: input.taskId,
+    task_type: input.taskType,
+    provider: input.provider,
+    // Absent rather than 'unknown' on a row written before sources existed:
+    // a property that is missing can be excluded from a breakdown, whereas a
+    // bucket named "unknown" silently mixes old rows in with genuinely
+    // untagged ones.
+    ...(isTaskSource(source) ? { source } : {}),
+    ...(input.repository ? { repository: input.repository } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    opened_pr: input.openedPr,
+    duration_total_ms: input.finishedAt.getTime() - input.createdAt.getTime(),
+    ...(Number.isNaN(dispatchedAtMs)
+      ? {}
+      : { duration_run_ms: input.finishedAt.getTime() - dispatchedAtMs }),
+    ...(input.result.error ? { error_reason: input.result.error } : {}),
+    ...(input.extra ?? {}),
+  };
 }

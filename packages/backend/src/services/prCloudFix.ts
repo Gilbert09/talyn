@@ -12,6 +12,7 @@ import {
   CLOUD_PROVIDER_ORDER,
   type CloudProviderType,
   type PRMergeableSummary,
+  type TaskSource,
 } from '@talyn/shared';
 import { getDbClient } from '../db/client.js';
 import {
@@ -275,6 +276,13 @@ export async function startPrMergeableRun(
     title?: string;
     description?: string;
     model?: string;
+    /**
+     * What asked for the run. Defaults to `user` because that is what every
+     * caller of THIS helper is today — the watcher and the merge queue build
+     * their own task, since they have prompts and budgets of their own. A
+     * caller that is not a person must say so rather than inherit the default.
+     */
+    source?: TaskSource;
   } = {}
 ): Promise<PrFixResult> {
   const resolved = await resolveCloudEnv(row.workspaceId);
@@ -330,6 +338,7 @@ export async function startPrMergeableRun(
     assignedEnvironmentId: envId,
     pullRequestId: row.id,
     model: opts.model,
+    source: opts.source ?? 'user',
   });
   return { ok: true, task };
 }

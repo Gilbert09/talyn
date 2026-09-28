@@ -148,6 +148,7 @@ export async function startFixRun(
     task = await createCloudTask({
       workspaceId: review.workspaceId,
       type: 'pr_response',
+      source: 'code_review',
       title: `Fix ${findings.length} review finding(s) on ${pr.owner}/${pr.repo}#${pr.number}`,
       description: `Code review fix for ${pr.owner}/${pr.repo}#${pr.number}`,
       prompt,

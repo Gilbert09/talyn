@@ -5,6 +5,7 @@ import {
   type TaskPriority,
   type TaskType,
   type TaskSkillInfo,
+  type TaskSource,
   type PostHogCodeRuntimeAdapter,
   type WorkflowTriggerEvent,
 } from '@talyn/shared';
@@ -36,6 +37,17 @@ export interface CreateCloudTaskInput {
   pullRequestId?: string | null;
   runtimeAdapter?: PostHogCodeRuntimeAdapter;
   model?: string;
+  /**
+   * What asked for this run. Persisted to `metadata.source` and stamped on the
+   * terminal analytics event, which is the only place the cost of an
+   * unattended run can be attributed to the thing that chose to start it.
+   *
+   * Written in `buildTaskMetadata` rather than only on the insert path, for
+   * the reason `loop` is: a reused row (findReusableTask matches on
+   * (workspace, PR, type)) must name what asked for the run happening NOW. A
+   * merge-queue fix that reuses the watcher's row is a merge-queue run.
+   */
+  source?: TaskSource;
   /**
    * The agent skill this task runs, if any. The skill's content is already
    * inlined into `prompt`; this descriptor is persisted to `metadata.skill`
@@ -274,6 +286,7 @@ async function buildTaskMetadata(
   if (input.workflow) metadata.workflow = input.workflow;
   if (input.loop) metadata.loop = input.loop;
   if (input.codeReview) metadata.codeReview = input.codeReview;
+  if (input.source) metadata.source = input.source;
   if (input.internetAccess) metadata.internetAccess = true;
   if (input.skill) {
     metadata.skill = input.skill;

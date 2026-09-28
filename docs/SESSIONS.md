@@ -2,6 +2,60 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Terminal task events learn who asked for the run (2026-09-28)
+
+Tom's instinct that the CI-fix runs had got slower turned out to be right, and
+the more interesting finding was that nothing in the product could have told him
+so. Measuring it meant reading the production database.
+
+**What the numbers said.** Median run time for a "Get … mergeable" task, dispatch
+to completion: 20.6 min in June, then a step up in late July to 45–55 min, flat
+since — not a slide that is still going. p90 sits at 130–200 min, and 10–30% of
+runs take over two hours. Queue wait is a median of FOUR SECONDS, so none of it
+is Talyn's orchestration. It tracks the repository's CI wall-clock instead
+(`PostHog/posthog` p50 46.8 min against `PostHog/hogland`'s 7.0), which is what
+you would expect from a prompt that tells the agent to keep iterating until CI
+is green on the latest commit: most of a run is the agent waiting for a monorepo.
+
+The retry storms are gone. August had a PR take 94 merge-queue runs over 93
+hours; in September 334 of 338 PRs got exactly one run. `causedByOurFixRun` and
+the watcher's attempt accounting are doing their job.
+
+**What was actually missing.** Not the terminal event — `task_completed` /
+`task_needs_human` / `task_failed` have existed in both pollers all along. Two
+things on them:
+
+- **`duration_run_ms` was PostHog Code's only.** The fleet sent
+  `duration_total_ms`, which includes the queue wait, so the one number worth
+  comparing across providers could not be compared across providers.
+- **There was no `source`.** The events carry a task TYPE, and `pr_response`
+  covers the auto-keep watcher, the merge queue, the Fix button and a workflow
+  action alike. Isolating the CI-fix runs meant matching on the task TITLE in
+  SQL — a display string, overridable per workspace through the prompt
+  templates, and wrong the day somebody renames one.
+
+So `TaskSource` (`packages/shared`) is persisted to `metadata.source` by
+`buildTaskMetadata` — written there rather than on the insert path for the
+reason `loop` is: `findReusableTask` matches on (workspace, PR, type), so the
+merge queue routinely takes over the row the watcher created, and a row that
+kept the first caller's source would bill every later run to it. Both pollers
+now build their payload through one pair of helpers (`taskOutcomeEventName` /
+`taskOutcomeProperties`) so the split and the shape cannot drift apart again —
+they were written out twice, identically, which is how only one of them ended up
+with the run duration. `repository` joins onto a read both pollers already do,
+because it is the strongest predictor of how long one of these takes.
+
+`origin` is kept on `task_dispatched` beside the new `source`: it only ever
+answered loop-or-not, but existing insights read it.
+
+**Still open, and the one live risk the numbers exposed:** an ordinary
+`pr_response` task dispatches to the fleet with no `timeoutSec`, no `maxTurns`
+and no `maxBudgetUsd` — only code review sets a budget. PostHog Code's runs stop
+at 2–6 hours because it finalises an idle run; the fleet has no equivalent, and
+in September five fleet runs passed six hours, three passed twenty-four, and the
+longest ran 92 hours and reported success. A 4-hour cap would have ended all
+three and touched nothing else.
+
 ## A rate limit now swaps agents instead of killing the run (2026-09-28)
 
 A Claude rate limit failed a task outright while a connected, paid-for Codex

@@ -261,6 +261,49 @@ describe('createCloudTask', () => {
     expect(task.id).toBe(row.id);
     expect(task.title).toBe('announce me');
   });
+
+  /**
+   * `metadata.source` names what asked for the run. It is what lets a funnel
+   * separate the auto-keep watcher's runs from the merge queue's — both are
+   * `pr_response` on the same PR, built from the same prompt, and before this
+   * the only thing telling them apart was the task TITLE.
+   */
+  describe('source', () => {
+    it.each([
+      'user',
+      'auto_keep',
+      'merge_queue',
+      'code_review',
+      'loop',
+      'workflow',
+    ] as const)('persists source=%s to metadata', async (source) => {
+      const row = await createCloudTask({
+        workspaceId: 'ws1',
+        type: 'pr_response',
+        title: 'Get acme/widgets#42 mergeable',
+        description: 'desc',
+        repositoryId: 'repo1',
+        source,
+      });
+
+      expect((row.metadata as Record<string, unknown>).source).toBe(source);
+    });
+
+    it('leaves source off metadata when the caller names none', async () => {
+      const row = await createCloudTask({
+        workspaceId: 'ws1',
+        type: 'code_writing',
+        title: 'untagged',
+        description: '',
+        repositoryId: 'repo1',
+      });
+
+      // Absent, not defaulted to 'user': a caller that forgot to say should
+      // read as untagged rather than silently claim a person pressed something.
+      // `metadata` is null outright for a task that carries nothing else.
+      expect((row.metadata as Record<string, unknown> | null)?.source).toBeUndefined();
+    });
+  });
 });
 
 /**
@@ -562,5 +605,34 @@ describe('createCloudTask — reusing a task for the same PR', () => {
 
       expect(meta?.cloudTask).toBeUndefined();
     });
+  });
+
+  /**
+   * The reason `source` is written in `buildTaskMetadata` rather than only on
+   * the insert path. `findReusableTask` matches on (workspace, PR, type), so
+   * the merge queue routinely takes over the row the watcher created — and a
+   * row that kept the FIRST caller's source would bill every later run to it.
+   */
+  it('rewrites source when a different caller reuses the row', async () => {
+    const first = await run({ source: 'auto_keep' });
+    expect((first.metadata as Record<string, unknown>).source).toBe('auto_keep');
+    await finish(first.id);
+
+    const second = await run({ source: 'merge_queue' });
+
+    expect(second.id).toBe(first.id);
+    expect((second.metadata as Record<string, unknown>).source).toBe('merge_queue');
+  });
+
+  it('drops a stale source when the reusing caller names none', async () => {
+    const first = await run({ source: 'merge_queue' });
+    await finish(first.id);
+
+    const second = await run();
+
+    expect(second.id).toBe(first.id);
+    // Carrying the old value forward would attribute a manual run to the
+    // merge queue — the same failure as keeping a stale `loop` link.
+    expect((second.metadata as Record<string, unknown>).source).toBeUndefined();
   });
 });

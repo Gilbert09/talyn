@@ -232,6 +232,7 @@ export function taskRoutes(): Router {
       const row = await createCloudTask({
         workspaceId: body.workspaceId,
         type: body.type,
+        source: 'user',
         title: body.title,
         description: body.description,
         prompt: body.prompt,

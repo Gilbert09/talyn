@@ -653,6 +653,7 @@ class PRAutoMergeWatcher {
       created = await createCloudTask({
         workspaceId: row.workspaceId,
         type: 'pr_response',
+        source: 'auto_keep',
         title: `Get ${ref} mergeable`,
         description: `Auto-keep-mergeable: take ${ref} ("${prTitle}") to a clean, mergeable state.`,
         prompt: buildMergeablePrompt({

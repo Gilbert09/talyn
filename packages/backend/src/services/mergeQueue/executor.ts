@@ -1443,6 +1443,7 @@ async function fireFixRun(
     created = await createCloudTask({
       workspaceId: ctx.pr.workspaceId,
       type: 'pr_response',
+      source: 'merge_queue',
       title: queueFailure
         ? `Fix ${ref} after a merge-queue failure`
         : `Get ${ref} mergeable (merge queue)`,

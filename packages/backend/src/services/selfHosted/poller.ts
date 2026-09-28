@@ -8,7 +8,11 @@ import {
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable, repositories as repositoriesTable } from '../../db/schema.js';
-import { captureWorkspaceEvent } from '../analytics.js';
+import {
+  captureWorkspaceEvent,
+  taskOutcomeEventName,
+  taskOutcomeProperties,
+} from '../analytics.js';
 import { patchTaskMetadata } from '../taskMetadataMutex.js';
 import { emitTaskStatus, emitTaskUpdate, emitTaskEvent } from '../websocket.js';
 import { linkTaskToPullRequest } from '../prCache.js';
@@ -760,8 +764,12 @@ class SelfHostedPoller {
           type: tasksTable.type,
           createdAt: tasksTable.createdAt,
           metadata: tasksTable.metadata,
+          // Joined, not a second round trip — see the same read in the
+          // PostHog Code poller for why the repository earns its place here.
+          repository: repositoriesTable.name,
         })
         .from(tasksTable)
+        .leftJoin(repositoriesTable, eq(repositoriesTable.id, tasksTable.repositoryId))
         .where(eq(tasksTable.id, taskId))
         .limit(1);
       const row = rows[0];
@@ -779,33 +787,32 @@ class SelfHostedPoller {
       // actually ran. `completed` only: plenty of failures never reach the
       // model at all, and clearing on those would undo a hold another task had
       // just paid a microVM to discover.
-      if (status === 'completed') {
-        const ranModel = (cloud?.extra as { model?: string } | undefined)?.model;
-        if (ranModel) void clearExhaustedAgent(workspaceId, fleetAgentForModel(ranModel));
+      const ranModel = (cloud?.extra as { model?: string } | undefined)?.model ?? null;
+      if (status === 'completed' && ranModel) {
+        void clearExhaustedAgent(workspaceId, fleetAgentForModel(ranModel));
       }
       captureWorkspaceEvent(
         workspaceId,
-        // Three-way, not two. Folding a refusal into `task_failed` is what
-        // made this class of stop invisible in the funnels: the rate of
-        // `task_needs_human` is the signal that tells us whether the sentinel
-        // prompt over-triggers, and there is nowhere else to read it.
-        status === 'completed'
-          ? 'task_completed'
-          : status === 'needs_human'
-            ? 'task_needs_human'
-            : 'task_failed',
-        {
-          task_id: taskId,
-          task_type: row.type,
+        taskOutcomeEventName(status),
+        taskOutcomeProperties({
+          taskId,
+          taskType: row.type,
           provider: 'selfhosted',
-          opened_pr: Boolean(meta.pullRequest || cloud?.prUrl),
-          duration_total_ms: finishedAt.getTime() - new Date(row.createdAt).getTime(),
-          // The fleet reports what the sandbox actually cost. Note it is the
-          // agent's own client-side estimate, so it is for trend and
-          // attribution, not for billing.
-          ...(sandbox.costUsd ? { cost_usd: sandbox.costUsd } : {}),
-          ...(result.error ? { error_reason: result.error } : {}),
-        },
+          status,
+          result,
+          createdAt: new Date(row.createdAt),
+          finishedAt,
+          metadata: meta,
+          repository: row.repository,
+          model: ranModel,
+          openedPr: Boolean(meta.pullRequest || cloud?.prUrl),
+          extra: {
+            // The fleet reports what the sandbox actually cost. Note it is the
+            // agent's own client-side estimate, so it is for trend and
+            // attribution, not for billing.
+            ...(sandbox.costUsd ? { cost_usd: sandbox.costUsd } : {}),
+          },
+        }),
       );
     } catch {
       // Analytics must never affect task processing.
