@@ -1,13 +1,24 @@
 import { Reveal } from "@/components/ui/Reveal";
 import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
-import { EmailCapture } from "@/components/ui/EmailCapture";
 import { OwlMark } from "@/components/brand/Logo";
 import { site, finalCta } from "@/lib/content";
 
-/** The closing conversion section. Carries id="download" (footer links to it)
- *  and the non-Mac waitlist — both absorbed from the removed Beta section,
- *  which duplicated this one's job. */
+/**
+ * The closing conversion section. Carries id="download" (footer links to it).
+ *
+ * The "want release notes?" email row is gone, and not because nobody used it —
+ * though nobody did: `waitlist_signup` never fired once in the project's
+ * history, and no click ever landed on the field or the button. It is gone
+ * because it lied. Submitting it answered "You're on the list" while the
+ * address went into a PostHog event property and no list at all, and the
+ * privacy policy promised we kept it.
+ *
+ * Bring it back when there is something to send — the changelog is the obvious
+ * trigger — wired to a real provider, and somewhere it can be seen. Below the
+ * FAQ on a page where the median visitor is active for about twenty seconds is
+ * not that place.
+ */
 export function FinalCta() {
   return (
     <section id="download" className="relative overflow-hidden py-28">
@@ -31,10 +42,6 @@ export function FinalCta() {
                 Open in browser
               </Button>
             </a>
-          </div>
-          <div className="mx-auto mt-10 max-w-sm border-t border-line pt-6">
-            <p className="text-sm text-ink-500">{finalCta.emailLabel}</p>
-            <EmailCapture />
           </div>
         </Reveal>
       </div>

@@ -22,8 +22,8 @@ export function initPostHog(): void {
   // visitor and the account they later create merge into one person, carrying
   // the referrer and utm_* that brought them.
   //
-  // Do NOT call posthog.identify() here — not on the waitlist form, not
-  // anywhere. Identifying by email would mint a second *identified* person,
+  // Do NOT call posthog.identify() here — not from any future email capture,
+  // not anywhere. Identifying by email would mint a second *identified* person,
   // and PostHog will not merge one identified person into another, so the
   // app's identify(supabaseUserId) could no longer claim this visit. The
   // anonymous id is the link; leaving it alone is the feature.
@@ -58,6 +58,3 @@ export function capturePageview(): void {
   }
 }
 
-export function captureSignup(email: string): void {
-  capture("waitlist_signup", { email });
-}

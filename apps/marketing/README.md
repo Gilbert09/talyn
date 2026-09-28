@@ -45,8 +45,7 @@ there if the repo moves. A `download_click` event is sent to PostHog.
 `components/analytics/Analytics.tsx` + `lib/analytics.ts`. Set
 `NEXT_PUBLIC_POSTHOG_KEY` (and optionally `NEXT_PUBLIC_POSTHOG_HOST`, default US
 cloud) — see `.env.example`. Inert until the key is set, so safe to deploy
-without it. Captures pageviews, `download_click`, and `waitlist_signup` (the
-email form records the address as a PostHog event).
+without it. Captures pageviews and `download_click`.
 
 ### 2. Product screenshots — currently live HTML mockups
 
@@ -58,11 +57,18 @@ The hero and feature visuals render **in-browser mockups** of the real app (`com
 
 Shot ids: `dashboard`, `task-running`, `merge-queue`, `skill-picker`, `pr-detail`, `onboarding`.
 
-### 3. Email capture — `components/sections/Beta.tsx`
+### 3. Email capture — removed, and worth re-adding deliberately
 
-`EmailCapture` records each signup as a `waitlist_signup` PostHog event (via
-`captureSignup`) and shows a local confirmation. To also pipe signups into a
-dedicated tool (Resend / Loops), add the POST in `onSubmit`.
+There was a "want release notes?" form at the foot of the page. It recorded a
+`waitlist_signup` PostHog event and stored the address nowhere, while telling
+the visitor "You're on the list" — so it was removed rather than left to keep
+making a promise nothing kept. In its whole life it was never submitted once.
+
+If you bring it back: wire it to a real provider (Resend, Loops) BEFORE it goes
+live, and put it somewhere it can be seen — below the FAQ on a page where the
+median visitor is active for about twenty seconds is why the last one had no
+submissions to lose. Re-add the corresponding clause to `/privacy` at the same
+time; it was taken out with the form.
 
 ## Brand quick reference
 

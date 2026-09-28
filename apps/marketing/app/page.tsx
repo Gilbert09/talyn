@@ -36,7 +36,7 @@ export default function Home() {
         <Pricing />
         {/* FinalCta sits above the FAQ (and the Beta card is gone): the two
             sections did the same job, and this is the stronger close. It
-            carries the #download anchor + waitlist the Beta card held. */}
+            carries the #download anchor the Beta card held. */}
         <FinalCta />
         <Faq />
       </main>

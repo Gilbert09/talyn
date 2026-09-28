@@ -11,8 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPage() {
+  // The `updated` date moved with the removal of the waitlist-email clause:
+  // §11 promises material changes are reflected by it, and dropping a whole
+  // category of collected data is one.
   return (
-    <LegalPage title="Privacy Policy" updated="July 2026">
+    <LegalPage title="Privacy Policy" updated="September 2026">
       <p>
         This Privacy Policy explains what information {site.name}
         (&ldquo;Talyn&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) collects when you
@@ -45,10 +48,6 @@ export default function PrivacyPage() {
           links back to your Talyn account.
         </li>
         <li>
-          <strong>Waitlist email.</strong> If you ask to be notified, we keep
-          your email address solely to contact you about availability.
-        </li>
-        <li>
           <strong>Usage &amp; device data.</strong> Standard analytics — pages
           viewed, clicks (such as &ldquo;Download&rdquo;), approximate location
           derived from IP, browser and device type — collected via PostHog (see
@@ -64,15 +63,14 @@ export default function PrivacyPage() {
           your chosen provider.
         </li>
         <li>To understand product usage and improve Talyn.</li>
-        <li>To contact beta and waitlist users about availability and updates.</li>
       </ul>
 
       <h2>3. Legal bases (EEA/UK)</h2>
       <p>
         Where GDPR/UK GDPR applies, we process personal data under: performance
         of a contract (operating the Service you sign in to), our legitimate
-        interests (securing and improving the Service), and consent (waitlist
-        email and non-essential analytics, where required).
+        interests (securing and improving the Service), and consent (non-essential
+        analytics, where required).
       </p>
 
       <h2>4. Analytics &amp; cookies</h2>
@@ -104,7 +102,7 @@ export default function PrivacyPage() {
         We keep personal data only as long as needed for the purposes above or as
         required by law. Billing and transaction records are retained for longer
         where tax and accounting rules require it. You can ask us to delete your
-        account data or waitlist email at any time (see §8).
+        account data at any time (see §8).
       </p>
 
       <h2>7. Security</h2>

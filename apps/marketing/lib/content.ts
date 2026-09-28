@@ -406,10 +406,6 @@ export const finalCta = {
   titleAccent: "Let the talons out.",
   sub: "In public beta. Bring your own agent. Clear your PR backlog tonight.",
   cta: "Download for {platform}",
-  // Waitlist row (absorbed from the removed Beta section).
-  emailLabel: "Want release notes? Get notified.",
-  emailPlaceholder: "you@startup.dev",
-  emailCta: "Notify me",
 };
 
 export const footer = {
