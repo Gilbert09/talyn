@@ -27,6 +27,9 @@ import {
   Plus,
   AtSign,
   Users,
+  ScanSearch,
+  ShieldAlert,
+  CircleDot,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -125,6 +128,7 @@ function Sidebar({
   const items = [
     { id: "prs", label: "My PRs", icon: GitPullRequest, badge: 4 },
     { id: "reviews", label: "Reviews", icon: Eye, badge: 5 },
+    { id: "code-review", label: "Code review", icon: ScanSearch, badge: 3 },
     { id: "queue", label: "Merge Queue", icon: GitMerge, badge: 3 },
     { id: "tasks", label: "Tasks", icon: ListTodo, badge: 2 },
     { id: "workflows", label: "Workflows", icon: Workflow, badge: 3 },
@@ -297,6 +301,126 @@ export function MockDashboard({ filters = true }: MockProps) {
               <span className="w-8 shrink-0 text-right text-[10px] text-ink-400">{r.updated}</span>
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- code review (mirrors panels/codeReview findings) ---------- */
+
+/**
+ * The findings list a code review produces.
+ *
+ * The example findings are the app's OWN — lifted from the onboarding step's
+ * static sample — so this shot cannot drift from what the product describes.
+ * The severity grouping ("Blockers" / "Worth fixing") is the app's too.
+ *
+ * What it deliberately shows: the lens attribution on each row, because two
+ * reviewers independently flagging the same thing is the strongest confidence
+ * signal the pipeline produces; and the dropped-by-the-checker line, because a
+ * short list only means something if you can see what was thrown away.
+ *
+ * What it must never show: anything posted on GitHub. A review writes nothing
+ * to the pull request, and a shot implying otherwise would sell the opposite of
+ * the feature.
+ */
+const findings = [
+  {
+    group: "Blockers",
+    tone: "red" as const,
+    items: [
+      {
+        title: "getUser can return undefined",
+        where: "src/session.ts:41",
+        lenses: "Logic · Reliability",
+        checked: true,
+      },
+    ],
+  },
+  {
+    group: "Worth fixing",
+    tone: "amber" as const,
+    items: [
+      {
+        title: "This query runs once per row",
+        where: "src/dashboard.ts:112",
+        lenses: "Reliability",
+        checked: true,
+      },
+      {
+        title: "The retry swallows the original error",
+        where: "src/client.ts:88",
+        lenses: "Logic",
+        checked: false,
+      },
+    ],
+  },
+];
+
+export function MockCodeReview(_props: MockProps) {
+  return (
+    <div className="flex h-[360px] bg-white text-left">
+      <Sidebar active="code-review" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-ink">
+              fix: retry the flaky checkout webhook
+            </p>
+            <p className="truncate font-mono text-[10px] text-ink-400">
+              sundial/api#418 · reviewed at 4a91c02
+            </p>
+          </div>
+          <StatusPill tone="green" icon={CheckCircle2} label="Ready" />
+        </div>
+
+        <div className="flex-1 overflow-hidden px-4 py-3">
+          {findings.map((group) => (
+            <div key={group.group} className="mb-3">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-ink-400">
+                {group.tone === "red" ? (
+                  <ShieldAlert className="h-3 w-3 text-status-red" />
+                ) : (
+                  <CircleDot className="h-3 w-3 text-status-amber" />
+                )}
+                {group.group}
+                <span className="text-ink-300">{group.items.length}</span>
+              </p>
+              {group.items.map((f) => (
+                <div
+                  key={f.title}
+                  className="mb-1 flex items-start gap-2.5 rounded-lg border border-line bg-white px-2.5 py-2"
+                >
+                  <span
+                    className={cn(
+                      "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+                      f.checked
+                        ? "border-clay bg-clay text-white"
+                        : "border-line-strong bg-paper-100"
+                    )}
+                  >
+                    {f.checked && <CheckCircle2 className="h-2.5 w-2.5" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-ink">{f.title}</p>
+                    <p className="truncate font-mono text-[10px] text-ink-400">
+                      {f.where} · {f.lenses}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 border-t border-line px-4 py-2.5">
+          <span className="rounded-lg bg-clay px-3 py-1.5 text-[11px] font-medium text-white">
+            Fix 2 selected
+          </span>
+          <span className="truncate text-[10px] text-ink-400">
+            Dropped by the checker (5)
+          </span>
         </div>
       </div>
     </div>
@@ -942,6 +1066,7 @@ export function MockLoops(_props: MockProps) {
 export const MOCKS = {
   dashboard: MockDashboard,
   reviews: MockReviews,
+  "code-review": MockCodeReview,
   "task-running": MockTaskRunning,
   "merge-queue": MockMergeQueue,
   "pr-detail": MockPrDetail,

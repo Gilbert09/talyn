@@ -143,6 +143,24 @@ export const features = [
     shot: "reviews",
   },
   {
+    id: "code-review",
+    eyebrow: "Code review",
+    title: "Code review without the comment spam.",
+    // Every claim here is bounded by what the engine actually does. It writes
+    // NOTHING to GitHub during a review — that is enforced in the agent's own
+    // system prompt, and it is the differentiator, so it leads. Do not add
+    // "inline comments": that setting exists in the app and does nothing yet.
+    // Do not say it approves or requests changes; it never does either.
+    body: "Most AI reviewers announce themselves in your pull request. This one writes nothing to GitHub at all. Several reviewers read the change from different angles — logic, security, reliability, tests — then another pass looks for what they all missed, and a checker throws out everything it cannot stand behind. What is left is a short list in the app.",
+    bullets: [
+      "Findings live in Talyn — your pull request stays clean",
+      "Read from several angles at once, then swept again for what they missed",
+      "A checking pass drops the weak ones and records why it dropped them",
+      "Tick what is worth fixing and Talyn pushes one commit, not a thread per finding",
+    ],
+    shot: "code-review",
+  },
+  {
     id: "delegate",
     eyebrow: "Delegate the drudgery",
     title: "Send a cloud agent. Get back a mergeable PR.",
@@ -370,6 +388,21 @@ export const faq = [
   {
     q: "Where does the work actually happen?",
     a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead. Either way, Talyn is the control surface that kicks it off, streams the progress live, and links the resulting PR back onto your dashboard.",
+  },
+  {
+    q: "Does the code review comment on my pull requests?",
+    // The honest answer, and the one people most need: no. A review writes
+    // nothing to GitHub, enforced in the agent's system prompt. The single
+    // exception is the optional summary comment AFTER a fix, which ships off.
+    // Deliberately silent on inline comments — that setting does nothing yet.
+    a: "No. A review writes nothing to your pull request — no comments, no approval, no requested changes. The findings appear in Talyn, grouped by how much they matter, each one saying which reviewers raised it and what it is about. You tick the ones worth fixing and Talyn pushes a single commit. The only thing it can put on GitHub is one short summary comment after a fix, saying what it changed and what it left, and that is off unless you turn it on. Reviewing a pull request is one click on any plan; reviewing every new one automatically is part of Unlimited.",
+  },
+  {
+    q: "How long does a code review take?",
+    // Real measured numbers, and deliberately not flattering ones. A Standard
+    // review on 8 files took 41 minutes. Promising "a few minutes" is how a
+    // working feature comes to feel broken.
+    a: "It depends how deeply you ask it to look. Quick is usually under ten minutes. Standard — the default — typically takes about half an hour, because several reviewers read the change in parallel and then a further pass goes back over the whole thing. Deep can take an hour or more on a large pull request. You pick the depth per review, so a small change does not have to wait for the thorough treatment.",
   },
   {
     q: "What are skills?",
