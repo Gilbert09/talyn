@@ -2,6 +2,94 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The marketing site stops being one page (2026-09-28)
+
+The site was one URL doing every job. Nine features shared one section, each
+with a paragraph and three bullets at identical weight, in a page about
+fifteen viewport-heights long. Outside four guides and two legal pages there
+was nothing for a search result to land on, no structured data anywhere, one
+social card shared by every page, and a single comparison.
+
+**Twenty-two new routes.** Ten feature pages under `/features` plus a hub,
+eight comparisons under `/compare` plus a hub. Tom's calls: that URL shape
+rather than root-level; all four comparison categories; and keep three
+homepage blocks in full rather than collapsing every one.
+
+**Two content pipelines, on purpose.** Feature pages are typed content in
+`lib/features.ts` because the in-app mocks are the best asset the site has and
+a markdown body cannot place a `<MockWorkflows>` halfway down a section.
+Comparisons are markdown on the guides pipeline (`lib/compare.ts`, a near-copy
+of `lib/guides.ts`) because they are prose and
+`content/guides/github-merge-queue-alternative.md` already proved that
+register works. That guide stays at its indexed root URL; `/compare` links it
+and `next.config.mjs` redirects the guessable `/compare/github-merge-queue`.
+
+`lib/compare.ts` adds two build-failing checks the guides loader does not have:
+a comparison with no `sources` is an assertion rather than a comparison, and
+one with no `verdict` — the "use theirs when" line — is an advert. Neither
+failure is visible on the rendered page, so the build is the only place to
+catch it.
+
+**The homepage.** Three spotlights survive — fixing a PR (the core verb), the
+merge queue (the "wake up to green PRs" promise), code review (the clearest
+thing we do that nobody else does) — and the rest became a linking grid. The
+old per-feature anchor ids moved onto the grid cards, so an inbound
+`/#workflows` still lands on something about workflows. Six feature-specific
+FAQ answers moved to the pages that own them, where they also become
+`FAQPage` schema pointing at the page a searcher actually wants; leaving them
+on both would be asking Google to choose between two pages answering one
+question, which it settles by ranking neither.
+
+The subhead counts both the spotlights and the grid rather than saying "three"
+and "six". The file already carried a comment about this — it used to say
+"Seven things" one line above a map over the array — and the trap is now two
+numbers wide.
+
+**SEO.** Every new page sets its own canonical, which `app/layout.tsx` has
+been asking for in a comment since the root stopped carrying one. First
+structured data on the site: `SoftwareApplication` + `Organization` on the
+home page with prices derived from the `pricing` object rather than typed
+again, plus `FAQPage`, `BreadcrumbList` and `Article`. Per-page OG cards.
+
+That last one turned up an existing bug nobody could have seen from the page:
+**the guides have declared `openGraph` metadata since they shipped, so Next
+was not inheriting the root card, and every guide had been unfurling with no
+image at all.** The hub pages would have joined them. Fixed by giving
+`app/[slug]`, `app/blog/[slug]` and both hubs their own `opengraph-image`
+route.
+
+**Linking, which is the part that decides whether any of it ranks.** The nav
+gains a Features menu and the footer two more columns, both generated from
+`listFeaturePages()` / `listComparePages()` for the reason the Guides column
+already was: a hand-kept list is one page behind the first time somebody
+forgets. Every one of the twenty-two is reachable from the home page.
+
+**Four extractions, all at their third copy.** `Prose` (the `[&_h2]:…` block
+written out identically in the guide route, the blog route and `LegalPage`),
+`FaqAccordion` (was a client component hardcoded to the one global `faq`
+array, which made it the only FAQ the site could have), `PageCta`, and the OG
+card body.
+
+**Where the copy came from, and one trap.** Every claim was checked against
+`packages/shared/src/featureFlags.ts` rather than `CLAUDE.md`, and the two
+disagree: CLAUDE.md still calls MCP servers and code review `availability:
+'gated'` and the register says `'general'` for both. So does the JSDoc
+directly above `codeReview`, which describes a rollout that has finished. MCP
+servers had **no mention on the site at all** and is now a page. The two
+genuinely gated flags are `reviewRankingCandidate` and `reviewRankingExport`,
+both internal review-ranking research, and neither appears anywhere. Worth
+restating because it is the easy mistake here: `fallback: false` does not mean
+gated — `fleet`, `loops`, `codeReview` and `mcpServers` all fail closed during
+a PostHog outage while being generally available.
+
+The comparisons cite vendor documentation with the date it was read, and each
+keeps the two sections that make the merge-queue guide credible: what Talyn
+does not do, and when to use theirs instead. Several of those lists are long
+and accurate — Mergify has speculative batching and CI analytics we do not,
+Graphite's whole stacking workflow has no Talyn equivalent, CodeRabbit and
+Greptile both land their findings in front of a team in a way a
+findings-stay-in-the-app design deliberately will not.
+
 ## Terminal task events learn who asked for the run (2026-09-28)
 
 Tom's instinct that the CI-fix runs had got slower turned out to be right, and
