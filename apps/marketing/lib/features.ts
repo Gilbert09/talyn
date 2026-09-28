@@ -686,6 +686,63 @@ export const FEATURE_PAGES: FeaturePage[] = [
         mock: "reviews",
       },
       {
+        // The ordering, and what it is careful NOT to claim.
+        //
+        // Priority is the default sort and generally available
+        // (`reviewPriority`, fallback true). What is NOT established is that
+        // any learned model beats a plain newest-request-first sort:
+        // docs/REVIEW_RANKING.md has the validation-selected CatBoost tying
+        // request recency exactly (85.53% vs 85.53%) on the replay, says "no
+        // new model qualifies for production", and warns in terms against
+        // claiming a gain from those numbers. The candidate model behind
+        // `reviewRankingCandidate` is `availability: 'gated'`.
+        //
+        // So: no accuracy claim, no "smart", no "AI ranking". What these
+        // sections describe instead is the part that is shipped and provable
+        // — the four bands from `PR_PRIORITY_GATE_RANK`, the named terms
+        // inside one, and a reason on every row.
+        //
+        // The per-viewer term IS real and shipped and is described, bounded
+        // exactly as the code bounds it: `learnedCap` 12, deliberately under
+        // the age ramp's 16 so affinity cannot bury a row forever; installed
+        // only past `REVIEW_RANK_MIN_EVENTS` (150) AND a measured held-out
+        // lift. That is a different thing from the gated pooled candidate,
+        // which is the one the research could not separate from recency.
+        heading: "The order explains itself",
+        paragraphs: [
+          "The default sort is Priority, and the thing to know about it is that it is not a mystery score. Every row carries a chip saying why it is where it is — \"Asked directly\", \"Waited 3d\", \"All checks green\", \"Unblocks others\", \"Draft\", \"Conflicts\". Hover it and you get the full arithmetic, every term with its points. If you disagree with a placement you can see exactly what caused it, which is the difference between a ranked list you keep using and one you quietly stop reading.",
+          "Underneath, the list is cut into four bands before anything is scored. Pull requests that other work is stacked on, or that are queued to merge, come first — somebody besides the author is waiting on those. Then everything you could simply review. Then the ones where the ball is back with the author: conflicts, failing checks, changes already requested, because reviewing those now duplicates work they are already doing. Last, the ones that are not ready — drafts, and anything an agent is mid-way through pushing to.",
+          "The bands are a hard partition, and that is the point. Scoring inside a band can never promote a draft above a pull request that needs nothing but your approval, which is exactly what a single additive score does the first time forty small nudges add up.",
+        ],
+        bullets: [
+          "Blocking others — something is stacked on it, or it is queued to merge",
+          "Actionable — you could review it right now",
+          "Waiting on the author — conflicts, failing checks, changes requested",
+          "Not ready — a draft, or an agent is pushing to it",
+        ],
+      },
+      {
+        heading: "What moves a pull request up, and what is capped",
+        paragraphs: [
+          "Inside a band the ordering is ordinary arithmetic on things that are true right now. All checks green, everyone else has approved and only you are left, a human put your name on it rather than a team, the diff is small, you asked for changes and were re-requested — each of those is worth points, and each is nameable, which is why the chip can say one word. Machine-authored pull requests are pushed down hardest of anything that is not a band.",
+          "Waiting counts too, and it stops counting on purpose. The wait bonus climbs for about five days, holds to a fortnight, then drops away — because an ever-growing age bonus turns the list into a graveyard sorted by neglect, where the thing nobody will ever review is permanently first.",
+          "There is a personal term, and it is deliberately small. Talyn learns who you actually review, whose pull requests you tend to be reciprocated on, and which parts of the tree you know — from your own review history, per workspace. It only switches on after about 150 reviews, and only if it measurably beats the default on your own held-out history; until then everyone gets the same hand-set starting point. It is capped at twelve points, which is below the maximum the waiting bonus can reach, and that gap is the whole safety argument: familiarity can reorder your queue but can never bury something indefinitely.",
+        ],
+        bullets: [
+          "Green checks, last approval outstanding, asked directly, small diff, re-review",
+          "Down-weighted: bot authors, unresolved threads somebody else opened, checks still running, very large diffs",
+          "A waiting bonus that peaks and then decays, so neglect cannot pin a row to the top",
+          "A personal term capped below the waiting bonus, off until it is proven on your own history",
+        ],
+      },
+      {
+        heading: "It never reads your code",
+        paragraphs: [
+          "The ranker cannot see a pull request title, its description, its diff, or a single comment. The complete list of what it is allowed to look at is structural: draft or not, author, when it was created, mergeable state, what is blocking it, the review decision, check counts, how many threads are unresolved and who opened them, how many lines changed, whether you were asked directly or through a team, and the top-level directories touched.",
+          "That is not an oversight, it is the design. Ordering that depends on what a pull request says is ordering you cannot predict and cannot argue with — and it would mean shipping your code somewhere to sort a list.",
+        ],
+      },
+      {
         heading: "Who asked matters",
         paragraphs: [
           "Being named as a reviewer and being in a team that was named are different requests with different urgency, and a list that treats them the same is a list you learn to ignore. Talyn shows which it was, and lets you filter to one team when you are doing a review round for a specific area.",
@@ -716,6 +773,22 @@ export const FEATURE_PAGES: FeaturePage[] = [
       {
         q: "Can I review without leaving Talyn?",
         a: "You can read the diff, the checks and the conversation in the app, and run an agent review against it. Submitting the review itself still happens on GitHub.",
+      },
+      {
+        q: "How is the Priority order decided?",
+        a: "By live state, not by guessing. The list is cut into four bands — blocking others, actionable, waiting on the author, not ready — and only then finely ordered inside each band by things like whether you were asked directly, how long it has waited, and whether the checks are green. Every row shows a chip naming the reason it is where it is.",
+      },
+      {
+        q: "Does it learn from me?",
+        a: "A little, late, and within a hard ceiling. Talyn notices whose pull requests you review, who reviews yours, and which directories you know, from your own history in that workspace. It only switches on after about 150 reviews and only if it beats the default on your own held-out history, and it is capped below the waiting bonus so familiarity can reorder your queue but never bury anything indefinitely. Until then you get the same starting point as everyone else.",
+      },
+      {
+        q: "Can it see my code?",
+        a: "No. The ranker never reads a pull request's title, description, diff or comments. It looks only at structural facts — draft state, checks, review decision, unresolved thread counts, lines changed, who requested you, and the top-level directories touched.",
+      },
+      {
+        q: "What if I just want newest first?",
+        a: "Then use it. The sort control cycles Newest, Oldest and Priority, and it remembers what you picked. Priority is the default because most people leave it on, not because the other two are hidden.",
       },
     ],
     related: ["pr-dashboard", "code-review", "skills"],
