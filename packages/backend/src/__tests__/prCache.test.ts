@@ -10,6 +10,8 @@ import {
   DEFAULT_TTL_MS,
   type CursorState,
 } from '../services/prCache.js';
+import { ingestCheckRun } from '../services/checkCounts.js';
+import { prMonitorService } from '../services/prMonitor.js';
 import * as graphqlModule from '../services/githubGraphql.js';
 import type { PRSummary } from '../services/githubGraphql.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
@@ -471,6 +473,47 @@ describe('prCache — DB integration', () => {
       const after = await readFullRow();
       expect(after.lastSummaryDigest).not.toBe(before.lastSummaryDigest);
       expect((after.lastSummary as { title: string }).title).toBe('Changed');
+    });
+
+    it('lets the poll overwrite webhook check counts that GitHub no longer agrees with', async () => {
+      const settled = makeSummary({
+        checks: { total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 },
+        checkDigest: 'sha1:lint=success',
+      });
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: settled });
+      await ingestCheckRun(
+        {
+          repoFullName: 'acme/widgets',
+          owner: 'acme',
+          repo: 'widgets',
+          headSha: 'sha1',
+          name: 'lint',
+          source: 'check_run',
+          externalId: '1',
+          state: 'pending',
+          ts: new Date('2026-01-01T00:00:00Z'),
+        },
+        [{ workspaceId: 'ws1', repositoryId: 'repo1' }],
+        [42],
+        new Map([['repo1', new Set([42])]]),
+      );
+      expect((await readFullRow()).lastSummary).toMatchObject({ checks: { inProgress: 1 } });
+
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: settled });
+
+      expect((await readFullRow()).lastSummary).toMatchObject({ checks: settled.checks });
+    });
+
+    it('lets the poll overwrite a webhook label patch that GitHub no longer agrees with', async () => {
+      const settled = makeSummary({ labels: [] });
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: settled });
+      await prMonitorService.patchOpenPrSummary([{ repositoryId: 'repo1' }], 42, {
+        labels: ['out-of-order'],
+      });
+
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: settled });
+
+      expect((await readFullRow()).lastSummary).toMatchObject({ labels: [] });
     });
 
     it('detects a check-only transition (digest covers the check cursor)', async () => {
