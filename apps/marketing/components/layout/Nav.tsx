@@ -1,25 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Menu, X } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { DownloadButton } from "@/components/ui/DownloadButton";
-import { nav, site } from "@/lib/content";
+import { nav, site, type NavItem } from "@/lib/content";
+import { listFeaturePages } from "@/lib/features";
 import { isBlogEnabled } from "@/lib/flags";
 import { cn } from "@/lib/utils";
 
 export function Nav() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
+  const [menu, setMenu] = useState<string | null>(null);
+  const [mobileGroup, setMobileGroup] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Build-time constant, inlined into this bundle — not a runtime flag and not
-  // a reason to re-render. Every other nav item is an on-page anchor, so this
-  // is appended rather than living in `nav` in content.ts, which the homepage
-  // scroll-spy also reads.
-  const links = isBlogEnabled()
+  // a reason to re-render. Every other nav item is defined in content.ts, so
+  // this is appended rather than living there.
+  const links: NavItem[] = isBlogEnabled()
     ? [...nav, { label: "Writing", href: "blog" }]
     : nav;
+
+  // Read from lib/features.ts rather than a list typed into content.ts, for
+  // the reason the footer already reads its Guides column from listGuides():
+  // a hand-kept copy is one page behind the first time somebody forgets. The
+  // module is plain data with a type-only import, so pulling it into the
+  // client bundle costs nothing at runtime.
+  const features = listFeaturePages();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);
@@ -27,6 +37,25 @@ export function Nav() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  // Escape closes the open menu, and a click anywhere outside it does too.
+  // Without the first, a keyboard user who opens the menu has no way back out
+  // except tabbing through every item in it.
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onClick);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onClick);
+    };
+  }, [menu]);
 
   return (
     <header
@@ -44,16 +73,75 @@ export function Nav() {
 
         {/* lg (not md): the link row is absolutely centered, so at md widths
             it collides with the right-side buttons — hamburger until lg. */}
-        <div className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 lg:flex">
-          {links.map((item) => (
-            <a
-              key={item.href}
-              href={`/${item.href}`}
-              className="whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
-            >
-              {item.label}
-            </a>
-          ))}
+        <div
+          ref={menuRef}
+          className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-1 lg:flex"
+          // Leaving the whole row closes the menu. Scoped to the row rather
+          // than the panel so moving diagonally from the trigger to an item
+          // does not shut it mid-travel.
+          onMouseLeave={() => setMenu(null)}
+        >
+          {links.map((item) =>
+            item.group === "features" ? (
+              <div key={item.href} className="relative">
+                <button
+                  className="flex items-center gap-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
+                  aria-expanded={menu === item.href}
+                  aria-haspopup="true"
+                  onMouseEnter={() => setMenu(item.href)}
+                  onClick={() => setMenu(menu === item.href ? null : item.href)}
+                >
+                  {item.label}
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 transition-transform",
+                      menu === item.href && "rotate-180"
+                    )}
+                  />
+                </button>
+
+                {menu === item.href && (
+                  <div className="absolute left-1/2 top-full z-50 w-[36rem] -translate-x-1/2 pt-2">
+                    <div className="rounded-2xl border border-line bg-paper/95 p-2 shadow-soft backdrop-blur-xl">
+                      <div className="grid grid-cols-2 gap-0.5">
+                        {features.map((f) => (
+                          <a
+                            key={f.slug}
+                            href={`/features/${f.slug}`}
+                            onClick={() => setMenu(null)}
+                            className="rounded-xl px-3 py-2.5 transition-colors hover:bg-ink/[0.04]"
+                          >
+                            <span className="block text-sm font-medium text-ink">
+                              {f.navLabel}
+                            </span>
+                            <span className="mt-0.5 block text-xs leading-snug text-ink-400">
+                              {f.eyebrow}
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                      <a
+                        href={`/${item.href}`}
+                        onClick={() => setMenu(null)}
+                        className="mt-1 block border-t border-line px-3 py-2.5 text-sm text-clay-600 transition-colors hover:text-clay"
+                      >
+                        Everything Talyn does →
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <a
+                key={item.href}
+                href={`/${item.href}`}
+                onMouseEnter={() => setMenu(null)}
+                className="whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-600 transition-colors hover:text-ink"
+              >
+                {item.label}
+              </a>
+            )
+          )}
         </div>
 
         <div className="hidden items-center gap-2 lg:flex">
@@ -80,18 +168,62 @@ export function Nav() {
       </nav>
 
       {open && (
-        <div className="border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl lg:hidden">
+        <div className="max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-line bg-paper/95 px-6 py-4 backdrop-blur-xl lg:hidden">
           <div className="flex flex-col gap-1">
-            {links.map((item) => (
-              <a
-                key={item.href}
-                href={`/${item.href}`}
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2.5 text-sm text-ink-600 hover:bg-ink/[0.04]"
-              >
-                {item.label}
-              </a>
-            ))}
+            {links.map((item) =>
+              item.group === "features" ? (
+                <div key={item.href}>
+                  {/* Expandable rather than a link, because a tap that both
+                      navigates and reveals is a tap that does the wrong one
+                      of the two. The section link sits inside, once open. */}
+                  <button
+                    onClick={() =>
+                      setMobileGroup(mobileGroup === item.href ? null : item.href)
+                    }
+                    aria-expanded={mobileGroup === item.href}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-sm text-ink-600 hover:bg-ink/[0.04]"
+                  >
+                    {item.label}
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 transition-transform",
+                        mobileGroup === item.href && "rotate-180"
+                      )}
+                    />
+                  </button>
+                  {mobileGroup === item.href && (
+                    <div className="ml-3 border-l border-line pl-3">
+                      {features.map((f) => (
+                        <a
+                          key={f.slug}
+                          href={`/features/${f.slug}`}
+                          onClick={() => setOpen(false)}
+                          className="block rounded-lg px-3 py-2 text-sm text-ink-500 hover:bg-ink/[0.04]"
+                        >
+                          {f.navLabel}
+                        </a>
+                      ))}
+                      <a
+                        href={`/${item.href}`}
+                        onClick={() => setOpen(false)}
+                        className="block rounded-lg px-3 py-2 text-sm text-clay-600"
+                      >
+                        Everything Talyn does →
+                      </a>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <a
+                  key={item.href}
+                  href={`/${item.href}`}
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-3 py-2.5 text-sm text-ink-600 hover:bg-ink/[0.04]"
+                >
+                  {item.label}
+                </a>
+              )
+            )}
             <div onClick={() => setOpen(false)} className="mt-2 flex flex-col gap-2">
               <a href={site.appUrl} className="w-full">
                 <Button variant="secondary" size="md" className="w-full">

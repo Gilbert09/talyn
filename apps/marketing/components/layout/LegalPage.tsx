@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Nav } from "@/components/layout/Nav";
 import { Footer } from "@/components/layout/Footer";
+import { Prose } from "@/components/ui/Prose";
 
 /** Shared shell + prose styling for the Privacy / Terms pages. */
 export function LegalPage({
@@ -27,18 +28,7 @@ export function LegalPage({
         </h1>
         <p className="mt-2 text-sm text-ink-400">Last updated {updated}</p>
 
-        <div
-          className="
-            mt-10 space-y-5 text-ink-600 leading-relaxed
-            [&_h2]:mt-10 [&_h2]:font-display [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-ink
-            [&_p]:text-[15px]
-            [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6 [&_ul]:text-[15px]
-            [&_a]:text-clay-600 [&_a]:underline [&_a]:underline-offset-2
-            [&_strong]:font-semibold [&_strong]:text-ink
-          "
-        >
-          {children}
-        </div>
+        <Prose className="mt-10">{children}</Prose>
       </main>
       <Footer />
     </>

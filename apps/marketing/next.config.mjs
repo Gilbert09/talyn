@@ -12,6 +12,19 @@ const nextConfig = {
   images: {
     remotePatterns: [{ protocol: "https", hostname: "img.logo.dev" }],
   },
+  async redirects() {
+    return [
+      {
+        // The GitHub merge queue comparison predates /compare and is indexed
+        // at the site root, so it stays there. This is the URL somebody
+        // guesses once the section exists — pointing it at the real page
+        // beats a 404 and beats publishing the same words twice.
+        source: "/compare/github-merge-queue",
+        destination: "/github-merge-queue-alternative",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

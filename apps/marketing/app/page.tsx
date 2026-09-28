@@ -10,6 +10,7 @@ import { Providers } from "@/components/sections/Providers";
 import { Pricing } from "@/components/sections/Pricing";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
+import { HomeSchema } from "@/components/seo/HomeSchema";
 import type { Metadata } from "next";
 
 /** Moved off the root layout — see the note there on inherited canonicals. */
@@ -41,6 +42,9 @@ export default function Home() {
         <Faq />
       </main>
       <Footer />
+      {/* FAQPage schema is emitted by <Faq /> itself, from the same array it
+          renders. This carries the rest. */}
+      <HomeSchema />
     </>
   );
 }

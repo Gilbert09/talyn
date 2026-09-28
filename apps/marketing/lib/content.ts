@@ -18,10 +18,31 @@ export const site = {
   supportUrl: "https://github.com/Gilbert09/talyn/issues",
 };
 
-export const nav = [
+/**
+ * Top-level navigation.
+ *
+ * `href` is written WITHOUT a leading slash and the component prefixes one,
+ * which is how the same array holds both a homepage anchor (`#how` → `/#how`)
+ * and a real route (`compare` → `/compare`).
+ *
+ * The Features entry has no `href` of its own in the sense the others do: it
+ * is a `group`, and the component draws it as a menu built from
+ * `listFeaturePages()` rather than from a list typed out here. A hand-kept
+ * copy would be one page behind from the first time somebody forgot.
+ */
+export interface NavItem {
+  label: string;
+  /** Path relative to the root, with no leading slash. */
+  href: string;
+  /** Draw as a menu of the feature pages, headed by a link to `href`. */
+  group?: "features";
+}
+
+export const nav: NavItem[] = [
   { label: "How it works", href: "#how" },
-  { label: "Features", href: "#features" },
-  { label: "Agents", href: "#providers" },
+  { label: "Features", href: "features", group: "features" },
+  { label: "Agents", href: "features/agents" },
+  { label: "Compare", href: "compare" },
   { label: "Pricing", href: "#pricing" },
   { label: "FAQ", href: "#faq" },
 ];
@@ -376,6 +397,20 @@ export const pricing = {
   ],
 };
 
+/**
+ * The homepage FAQ.
+ *
+ * Deliberately the GENERAL questions only. It used to carry twelve, six of
+ * which were "what are workflows", "what are loops", "what are skills", "how
+ * does auto-keep-mergeable work" and two on code review — each of which is
+ * now answered at length on that feature's own page, where the answer also
+ * becomes `FAQPage` structured data pointing at the page a searcher wants.
+ * Repeating them here would be asking Google to choose between two pages
+ * answering one question, which it resolves by ranking neither.
+ *
+ * What stays is what somebody deciding whether to download needs: what it is,
+ * what runs it, where the code goes, what it costs, what it runs on.
+ */
 export const faq = [
   {
     q: "What is Talyn, exactly?",
@@ -388,37 +423,6 @@ export const faq = [
   {
     q: "Where does the work actually happen?",
     a: "On Talyn Fleet, each task runs in its own Firecracker microVM on our hardware, using your agent subscription. The VM reaches your repository and your agent through a proxy that attaches the credentials from outside, so no token is ever inside the machine running the code, and the VM is destroyed when the task ends. With PostHog Code the run happens in their cloud under your account instead. Either way, Talyn is the control surface that kicks it off, streams the progress live, and links the resulting PR back onto your dashboard.",
-  },
-  {
-    q: "Does the code review comment on my pull requests?",
-    // The honest answer, and the one people most need: no. A review writes
-    // nothing to GitHub, enforced in the agent's system prompt. The single
-    // exception is the optional summary comment AFTER a fix, which ships off.
-    // Deliberately silent on inline comments — that setting does nothing yet.
-    a: "No. A review writes nothing to your pull request — no comments, no approval, no requested changes. The findings appear in Talyn, grouped by how much they matter, each one saying which reviewers raised it and what it is about. You tick the ones worth fixing and Talyn pushes a single commit. The only thing it can put on GitHub is one short summary comment after a fix, saying what it changed and what it left, and that is off unless you turn it on. Reviewing a pull request is one click on any plan; reviewing every new one automatically is part of Unlimited.",
-  },
-  {
-    q: "How long does a code review take?",
-    // Real measured numbers, and deliberately not flattering ones. A Standard
-    // review on 8 files took 41 minutes. Promising "a few minutes" is how a
-    // working feature comes to feel broken.
-    a: "It depends how deeply you ask it to look. Quick is usually under ten minutes. Standard — the default — typically takes about half an hour, because several reviewers read the change in parallel and then a further pass goes back over the whole thing. Deep can take an hour or more on a large pull request. You pick the depth per review, so a small change does not have to wait for the thorough treatment.",
-  },
-  {
-    q: "What are skills?",
-    a: "Saved instructions you can re-run \u2014 a review checklist, a security pass, a changelog writer. Write one once and run it on any PR with a click. Talyn finds the ones already in your project or on your machine (the standard SKILL.md format), so if you use Claude you likely have some already. The agent follows the playbook and posts the result back to the PR.",
-  },
-  {
-    q: "What are workflows?",
-    a: "Rules you set up once that run on their own: when this happens on a pull request, do these things. Pick the trigger (opened, checks failed, review requested, approved, commented, merged), narrow it with conditions (this repo, this base branch, this label, this author), and pick the actions \u2014 add labels, request reviewers, post a comment, add it to your list, run a skill or a prompt, or send it to the merge queue. They watch every PR in the repos you connect, including ones you didn't open, and they keep running with the app closed. The free plan keeps 3; Unlimited keeps as many as you like.",
-  },
-  {
-    q: "What are loops?",
-    a: "Prompts that run on a schedule instead of waiting for something to happen. Pick a repository, write what you want done, and say when \u2014 hourly, daily, weekdays, weekly, or a cron expression \u2014 and an agent runs it on its own, opening a pull request when the work warrants one. Sweep yesterday's failing checks every weekday morning; keep dependencies current every Monday; draft the release notes every Friday at five. Schedules run in your own timezone and keep their time when the clocks change, every run is logged with what it did, and you can start one by hand without waiting for its next turn. The free plan keeps 3; Unlimited keeps as many as you like.",
-  },
-  {
-    q: "How does auto-keep-mergeable work?",
-    a: "Flag a PR and Talyn watches it. The moment it goes out of date, clashes with someone else's work, or a test starts failing, Talyn sends an agent to fix it. Once it's green again, the merge queue lands it in order. Flagging PRs one at a time is free; having every new PR flagged automatically is an Unlimited feature.",
   },
   {
     q: "Is my code safe?",
@@ -446,13 +450,16 @@ export const footer = {
   madeBy: "Made by night owls who were tired of babysitting CI.",
   columns: [
     {
+      // The per-feature links used to be homepage anchors (`/#workflows`).
+      // They now point at the pages, because the anchors survive only as ids
+      // on a grid card — a link that lands you on a one-line summary of the
+      // thing you clicked is a worse answer than the page about it. The
+      // Features column below is generated and carries the full list.
       title: "Product",
       links: [
         { label: "How it works", href: "/#how" },
-        { label: "Features", href: "/#features" },
-        { label: "Workflows", href: "/#workflows" },
-        { label: "Loops", href: "/#loops" },
-        { label: "Agents", href: "/#providers" },
+        { label: "All features", href: "/features" },
+        { label: "Compare", href: "/compare" },
         { label: "Pricing", href: "/#pricing" },
         { label: "Download", href: "/#download" },
         { label: "Open the web app", href: site.appUrl },
