@@ -29,8 +29,19 @@ import { trackEvent } from '../lib/analytics';
 
 const SEEN_KEY = 'talyn:codeReviewIntro:seen';
 
-/** Bump only if the introduction itself changes enough to be worth re-showing. */
-const INTRO_VERSION = '1';
+/**
+ * Bump only if the introduction itself changes enough to be worth re-showing.
+ *
+ * '2' (2026-09-28): the introduction's copy changed — the posting-policy line
+ * came out and the primary button was relabelled — and the feature behind it
+ * gained its own nav panel, a settings flow and automatic fixing. Somebody who
+ * dismissed '1' declined a different thing from the one on offer now.
+ *
+ * Costs nobody a second nag: an account that has never seen it holds no stamp,
+ * so it was always going to open for them. Only an account that saw '1' is
+ * affected, and until today the feature was switched on for exactly one.
+ */
+export const INTRO_VERSION = '2';
 
 function readSeen(): string | null {
   try {

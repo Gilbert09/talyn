@@ -7,7 +7,7 @@
  * ago, showing it twice, or showing it with no pull request to offer.
  */
 import { describe, expect, it } from 'vitest';
-import { shouldShowCodeReviewIntro } from '../hooks/useCodeReviewIntro';
+import { INTRO_VERSION, shouldShowCodeReviewIntro } from '../hooks/useCodeReviewIntro';
 
 const base = {
   offered: true,
@@ -48,12 +48,16 @@ describe('shouldShowCodeReviewIntro', () => {
     // Unlike the deferred-runs announcement next door, which repeats because the
     // degradation it reports is ongoing. This has nothing new to say the second
     // time, and re-nagging is how people learn to dismiss modals unread.
-    expect(shouldShowCodeReviewIntro({ ...base, seen: '1' })).toBe(false);
+    //
+    // Asserted against the CURRENT version rather than a literal: the rule is
+    // "a stamp matching the introduction on offer suppresses it", and pinning
+    // the string made every legitimate bump look like a regression.
+    expect(shouldShowCodeReviewIntro({ ...base, seen: INTRO_VERSION })).toBe(false);
   });
 
   it('shows it again if the introduction itself is versioned forward', () => {
     // A stamp from an older version is not the current introduction, so somebody
     // who saw the old one is eligible for a materially different new one.
-    expect(shouldShowCodeReviewIntro({ ...base, seen: '0' })).toBe(true);
+    expect(shouldShowCodeReviewIntro({ ...base, seen: 'older' })).toBe(true);
   });
 });
