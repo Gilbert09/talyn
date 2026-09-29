@@ -305,6 +305,25 @@ export const FEATURE_FLAGS = {
     availability: 'general',
     releaseScopes: ['fleet'],
   },
+
+  /**
+   * Team plan — one buyer pays for seats, and each seat gives a GitHub account
+   * Unlimited on its own account. Consolidated billing only; nothing is shared.
+   *
+   * Fallback OFF and gated while it rolls out: this surface takes money, and
+   * during a PostHog outage it must not offer a checkout to accounts nobody
+   * chose. A seat already paid for does NOT depend on this flag — the
+   * entitlement reads the team row directly, so an outage can hide the team
+   * settings but can never take someone's paid plan away.
+   */
+  teams: {
+    posthogKey: 'teams',
+    envOverride: 'TEAMS_ENABLED',
+    fallback: false,
+    description: 'Team plan — seats paid for by one buyer',
+    availability: 'gated',
+    releaseScopes: ['teams'],
+  },
 } as const satisfies Record<string, FeatureFlagDefinition>;
 
 /** The literal union of flag keys. */
@@ -427,6 +446,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewPriority',
   'reviewRankingCandidate',
   'reviewRankingExport',
+  'teams',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];

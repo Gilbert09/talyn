@@ -942,6 +942,18 @@ POSTHOG_HOST=https://us.i.posthog.com
 # POLAR_PRODUCT_ID_MONTHLY=<uuid of the $15/mo product>
 # POLAR_PRODUCT_ID_ANNUAL=<uuid of the $150/yr product>
 # POLAR_SUCCESS_URL=https://www.talyn.dev/checkout-success   # optional
+#
+# Team plan (seat billing). A second optional group ON TOP of the one above —
+# both set, or neither; one alone, or either without Polar billing, is a boot
+# error. In the Polar dashboard: turn on seat-based pricing for the org, then
+# create one product with a SEAT-BASED price (volume tiers, minimum 2 seats)
+# per period. Team subscriptions arrive on the same webhook; they are told
+# apart by the customer's `team_<id>` external id and by these product ids.
+# The in-app picker reads the tiers from Polar, so a price change here needs
+# no deploy. The UI is behind the `teams` PostHog flag (TEAMS_ENABLED=true to
+# run it locally).
+# POLAR_PRODUCT_ID_TEAM_MONTHLY=<uuid of the seat-based monthly team product>
+# POLAR_PRODUCT_ID_TEAM_ANNUAL=<uuid of the seat-based annual team product>
 
 # Release notes ("What's new" modal). The nightly publish workflow POSTs each
 # release's generated highlights to <backend>/api/v1/release-notes with this

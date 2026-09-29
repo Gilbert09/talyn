@@ -2,11 +2,16 @@ import type { Request, Response } from 'express';
 import { and, eq } from 'drizzle-orm';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks';
 import { getPoolDbClient } from '../../db/client.js';
-import { billingEvents as billingEventsTable, users as usersTable } from '../../db/schema.js';
+import {
+  billingEvents as billingEventsTable,
+  teams as teamsTable,
+  users as usersTable,
+} from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
 import { emitSubscriptionUpdated } from '../websocket.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
-import { polarWebhookSecret } from './polar.js';
+import { isTeamProductId, polarWebhookSecret, teamIdFromCustomerExternalId } from './polar.js';
+import { seatCreatorOnFirstActivation, teamAudienceUserIds } from './teams.js';
 import { notifyTodiex, type TodiexLevel } from '../todiex.js';
 import {
   compactMetadata,
@@ -66,12 +71,20 @@ export interface PolarSubscription {
   /** 'month' | 'year'. */
   recurringInterval?: string | null;
   product?: { name?: string | null } | null;
+  /** Routes a team subscription even when its customer lacks our external id. */
+  productId?: string | null;
+  /** Seat count on a seat-based (team) subscription; absent on a personal one. */
+  seats?: number | null;
 }
 
 export interface ApplyResult {
   applied: boolean;
-  reason?: 'no_user' | 'stale' | 'ignored_type';
+  reason?: 'no_user' | 'no_team' | 'stale' | 'ignored_type';
   userId?: string;
+  /** Set instead of `userId` when the event was a team subscription's. */
+  teamId?: string;
+  /** The team's first subscription ever — the moment its creator is seated. */
+  firstActivation?: boolean;
   /**
    * Was THIS subscription already granting paid access before this event?
    *
@@ -228,11 +241,122 @@ export function summarizeSubscription(sub: PolarSubscription): string {
   return [plan ? `${plan}.` : null, `${state}.`].filter(Boolean).join(' ');
 }
 
+/**
+ * A team subscription is recognised by its customer's `team_` external id OR
+ * by its product. Either is enough, and neither ever falls through to the
+ * user lookup: a team event applied to a users row would give the BUYER
+ * Unlimited on the team's money and then take it away on the team's cancel.
+ */
+export function isTeamSubscription(sub: PolarSubscription): boolean {
+  return (
+    teamIdFromCustomerExternalId(sub.customer?.externalId) !== null ||
+    isTeamProductId(sub.productId)
+  );
+}
+
+async function resolveTeamId(sub: PolarSubscription): Promise<string | null> {
+  const db = getPoolDbClient();
+  const fromExternal = teamIdFromCustomerExternalId(sub.customer?.externalId);
+  if (fromExternal) {
+    const rows = await db
+      .select({ id: teamsTable.id })
+      .from(teamsTable)
+      .where(eq(teamsTable.id, fromExternal))
+      .limit(1);
+    if (rows[0]) return rows[0].id;
+  }
+  const customerId = sub.customerId ?? sub.customer?.id;
+  if (customerId) {
+    const rows = await db
+      .select({ id: teamsTable.id })
+      .from(teamsTable)
+      .where(eq(teamsTable.polarCustomerId, customerId))
+      .limit(1);
+    if (rows[0]) return rows[0].id;
+  }
+  return null;
+}
+
+function periodEndOf(sub: PolarSubscription): Date | null {
+  return sub.currentPeriodEnd == null
+    ? null
+    : sub.currentPeriodEnd instanceof Date
+      ? sub.currentPeriodEnd
+      : new Date(sub.currentPeriodEnd);
+}
+
+/**
+ * Apply one team subscription event to the `teams` row — the same state
+ * machine as a personal subscription (granting statuses, `revoked` ends it
+ * now, the per-subscription stale guard), writing `plan` = 'team' | 'none'
+ * and the seat count Polar bills for.
+ *
+ * `seats_purchased` is only ever written from here. A count lowered below the
+ * seats already assigned (in the Polar portal, say) is stored as it is: the
+ * admin sees the team as over-allocated and nobody is un-seated silently.
+ */
+export async function applyTeamSubscriptionEvent(
+  eventType: string,
+  sub: PolarSubscription,
+  occurredAt: Date
+): Promise<ApplyResult> {
+  const db = getPoolDbClient();
+  const teamId = await resolveTeamId(sub);
+  if (!teamId) return { applied: false, reason: 'no_team' };
+
+  const [current] = await db
+    .select({
+      subscriptionId: teamsTable.polarSubscriptionId,
+      eventAt: teamsTable.subscriptionEventAt,
+      status: teamsTable.subscriptionStatus,
+    })
+    .from(teamsTable)
+    .where(eq(teamsTable.id, teamId))
+    .limit(1);
+  const sameSubscription = current?.subscriptionId === sub.id;
+  const previouslyGranting = sameSubscription && GRANTING_STATUSES.has(current?.status ?? '');
+  if (sameSubscription && current?.eventAt && occurredAt < current.eventAt) {
+    return { applied: false, reason: 'stale', teamId };
+  }
+
+  const grants = eventType !== 'subscription.revoked' && GRANTING_STATUSES.has(sub.status);
+  const seats =
+    typeof sub.seats === 'number' && Number.isInteger(sub.seats) && sub.seats >= 0
+      ? sub.seats
+      : null;
+
+  await db
+    .update(teamsTable)
+    .set({
+      plan: grants ? 'team' : 'none',
+      ...(seats !== null ? { seatsPurchased: seats } : {}),
+      polarSubscriptionId: sub.id,
+      ...(sub.customerId ?? sub.customer?.id
+        ? { polarCustomerId: (sub.customerId ?? sub.customer?.id)! }
+        : {}),
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: periodEndOf(sub),
+      cancelAtPeriodEnd: sub.cancelAtPeriodEnd ?? false,
+      subscriptionEventAt: occurredAt,
+      updatedAt: new Date(),
+    })
+    .where(eq(teamsTable.id, teamId));
+
+  return {
+    applied: true,
+    teamId,
+    previouslyGranting,
+    firstActivation: grants && !current?.subscriptionId,
+  };
+}
+
 export async function applySubscriptionEvent(
   eventType: string,
   sub: PolarSubscription,
   occurredAt: Date
 ): Promise<ApplyResult> {
+  if (isTeamSubscription(sub)) return applyTeamSubscriptionEvent(eventType, sub, occurredAt);
+
   const db = getPoolDbClient();
 
   const userId = await resolveUserId(sub);
@@ -263,13 +387,7 @@ export async function applySubscriptionEvent(
   // `subscription.revoked` means benefits end NOW regardless of the status
   // field; otherwise the status decides.
   const grants = eventType !== 'subscription.revoked' && GRANTING_STATUSES.has(sub.status);
-
-  const periodEnd =
-    sub.currentPeriodEnd == null
-      ? null
-      : sub.currentPeriodEnd instanceof Date
-        ? sub.currentPeriodEnd
-        : new Date(sub.currentPeriodEnd);
+  const periodEnd = periodEndOf(sub);
 
   await db
     .update(usersTable)
@@ -288,6 +406,68 @@ export async function applySubscriptionEvent(
     .where(eq(usersTable.id, userId));
 
   return { applied: true, userId, previouslyGranting };
+}
+
+/**
+ * What an applied team event sets off: the creator's seat on the team's first
+ * activation, a fresh billing status to every account the team touches, and
+ * the same one-line notification a personal subscription gets. Best-effort
+ * after the write — Polar has its answer either way, and a push that fails is
+ * healed by the next status poll.
+ */
+async function afterTeamEvent(
+  result: ApplyResult,
+  sub: PolarSubscription,
+  eventType: string,
+  eventId: string,
+  occurredAt: Date
+): Promise<void> {
+  const teamId = result.teamId!;
+  try {
+    if (result.firstActivation) await seatCreatorOnFirstActivation(teamId);
+    for (const userId of await teamAudienceUserIds(teamId)) {
+      emitSubscriptionUpdated(userId, await buildBillingStatus(userId));
+    }
+  } catch (err) {
+    console.error(`[billing] follow-up for team ${teamId} failed:`, err);
+  }
+
+  const described = describeSubscriptionEvent(eventType, sub.status, {
+    ...(result.previouslyGranting !== undefined
+      ? { previouslyGranting: result.previouslyGranting }
+      : {}),
+  });
+  if (!described) return;
+  notifyTodiex(async () => {
+    const [team] = await getPoolDbClient()
+      .select({ name: teamsTable.name })
+      .from(teamsTable)
+      .where(eq(teamsTable.id, teamId))
+      .limit(1);
+    const seats = typeof sub.seats === 'number' ? `${sub.seats} seats` : null;
+    const label = [team?.name ?? null, seats].filter(Boolean).join(', ');
+    return {
+      kind: `team.${described.kind}`,
+      level: described.level,
+      title: `${described.title} (team)${label ? ` — ${label}` : ''}`,
+      message: summarizeSubscription(sub),
+      metadata: compactMetadata({
+        team_id: teamId,
+        team_name: team?.name ?? null,
+        seats: typeof sub.seats === 'number' ? sub.seats : null,
+        customer_email: sub.customer?.email ?? null,
+        customer_name: sub.customer?.name ?? null,
+        product: sub.product?.name ?? null,
+        price: formatSubscriptionPrice(sub.amount, sub.currency),
+        billing_interval: sub.recurringInterval ?? null,
+        status: sub.status,
+        subscription_id: sub.id,
+        polar_event_type: eventType,
+      }),
+      dedupeKey: `polar:${eventId}`,
+      occurredAt: occurredAt.toISOString(),
+    };
+  });
 }
 
 /** Express handler for POST /api/v1/webhooks/polar (raw body). */
@@ -359,7 +539,11 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
 
   await db
     .update(billingEventsTable)
-    .set({ applied: result.applied, userId: result.userId ?? null })
+    .set({
+      applied: result.applied,
+      userId: result.userId ?? null,
+      teamId: result.teamId ?? null,
+    })
     .where(and(eq(billingEventsTable.eventId, eventId)));
 
   debugBus.recordEvent({
@@ -369,6 +553,10 @@ export async function handlePolarWebhook(req: Request, res: Response): Promise<v
       result.applied ? 'applied' : `skipped (${result.reason})`
     }`,
   });
+
+  if (result.applied && result.teamId && sub) {
+    await afterTeamEvent(result, sub, event.type, eventId, occurredAt);
+  }
 
   if (result.applied && result.userId) {
     emitSubscriptionUpdated(result.userId, await buildBillingStatus(result.userId));

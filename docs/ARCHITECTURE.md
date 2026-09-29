@@ -50,6 +50,11 @@ Nothing executes on the user's machine. Every task is delegated to a **cloud pro
 ### Workspaces
 Groups related repositories and integrations. Example: a "PostHog" workspace with `posthog/posthog`, `posthog/posthog.com`, `posthog/charts`. Strictly single-owner; per-workspace provider credentials are AES-GCM-encrypted on the `integrations` row.
 
+### Teams
+Seat billing, and nothing else. A team pays Polar for N seats. Each seat gives one GitHub account the Unlimited plan on that person's own account. **A team never shares a workspace.** Each member keeps their own workspaces, GitHub connection and agent subscription (Tom's call, September 2026: sharing is not planned).
+
+A seat binds to the numeric GitHub user id, never to the login, which can be renamed. So an admin can assign a seat before the person signs up, and the seat goes live at their first sign-in. The id comes from the Supabase identity record through the admin API (`services/githubIdentity.ts`), never from the JWT's `user_metadata`, because a user can rewrite `user_metadata`. The tables (`teams`, `team_admins`, `team_seats`) are backend-only, like `billing_events`.
+
 ### Environments
 A secret-free **marker row**, one auto-provisioned per connected cloud provider. Its `type` is how a task resolves its provider — nothing more. (The daemon/SSH-backed execution environments this concept once described were removed in the June 2026 cloud-only refactor.)
 

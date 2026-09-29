@@ -482,6 +482,7 @@ describe('featuresForUser', () => {
       'reviewPriorityMode',
       'reviewRankingCandidate',
       'reviewRankingExport',
+      'teams',
       'workflows',
     ]);
   });
@@ -497,6 +498,7 @@ describe('featuresForUser', () => {
       reviewPriorityMode: true,
       reviewRankingCandidate: false,
       reviewRankingExport: false,
+      teams: false,
     });
   });
 
@@ -507,6 +509,7 @@ describe('featuresForUser', () => {
     // MCP servers stay OFF because that page stores third-party credentials, and
     // code review stays OFF because it spends an agent subscription and pushes
     // commits — collapsing these to one default would silently flip three of them.
+    // Teams stays OFF because it offers a checkout.
     expect(await featuresForUser(SUBJECT)).toEqual({
       workflows: true,
       loops: false,
@@ -516,6 +519,7 @@ describe('featuresForUser', () => {
       reviewPriorityMode: true,
       reviewRankingCandidate: false,
       reviewRankingExport: false,
+      teams: false,
     });
   });
 

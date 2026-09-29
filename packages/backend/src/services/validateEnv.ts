@@ -76,6 +76,23 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
       `Polar billing is partially configured (${setPolarVars.join(', ')} set) — also set ${missing.join(', ')}`
     );
   }
+  // The team plan is its own optional group on top of billing: a deployment
+  // may bill personally without selling teams, but one team product id alone
+  // offers a checkout period that 500s. And a team product with no billing
+  // behind it could never be sold at all.
+  const teamVars = ['POLAR_PRODUCT_ID_TEAM_MONTHLY', 'POLAR_PRODUCT_ID_TEAM_ANNUAL'];
+  const setTeamVars = teamVars.filter((name) => Boolean(env[name]));
+  if (setTeamVars.length > 0 && setTeamVars.length < teamVars.length) {
+    const missing = teamVars.filter((name) => !env[name]);
+    errors.push(
+      `The Polar team plan is partially configured (${setTeamVars.join(', ')} set) — also set ${missing.join(', ')}`
+    );
+  }
+  if (setTeamVars.length > 0 && setPolarVars.length === 0) {
+    errors.push(
+      `The Polar team plan is configured (${setTeamVars.join(', ')}) but Polar billing is not — set ${polarVars.join(', ')}`
+    );
+  }
   // The cross-product inbox is optional as a whole (absent → notifyTodiex is
   // a no-op), but half of it is always a mistake: a URL without a token posts
   // nothing but a 401, and a token without a URL posts nothing at all — both

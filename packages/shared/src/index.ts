@@ -1498,6 +1498,20 @@ export const REVIEW_CYCLE_LIMIT_ERROR_CODE = 'code_review_limit_reached';
  */
 export const AUTO_REVIEW_ERROR_CODE = 'auto_review_requires_unlimited';
 
+/** ApiResponse.code when a team admin assigns more seats than the team pays for. */
+export const TEAM_SEATS_FULL_ERROR_CODE = 'team_seats_full';
+
+/**
+ * ApiResponse.code when a seat change would leave more people seated than the
+ * team pays for, or when the team is already in that state (a seat count
+ * lowered in the billing portal). Nobody is un-seated silently; the admin
+ * removes seats until the numbers agree.
+ */
+export const TEAM_OVER_ALLOCATED_ERROR_CODE = 'team_over_allocated';
+
+/** The smallest team a checkout will sell. One person is the personal plan. */
+export const TEAM_MIN_SEATS = 2;
+
 /**
  * The user's billing state as served by `GET /billing/status` and pushed on
  * the `subscription:updated` WS event.
@@ -1506,8 +1520,13 @@ export interface BillingStatus {
   /** False when the backend has no Polar env configured — limits are off. */
   billingEnabled: boolean;
   plan: Plan;
-  /** 'override' = manually comped (plan_override); 'billing_disabled' when unconfigured. */
-  planSource: 'default' | 'subscription' | 'override' | 'billing_disabled';
+  /**
+   * 'override' = manually comped (plan_override); 'team' = a team seat pays;
+   * 'billing_disabled' when unconfigured.
+   */
+  planSource: 'default' | 'subscription' | 'override' | 'team' | 'billing_disabled';
+  /** The team this user holds a seat on or administers, if any. */
+  team?: BillingTeamMembership;
   /** Raw provider subscription status, when a subscription exists. */
   subscriptionStatus?: 'active' | 'past_due' | 'canceled' | 'revoked' | string;
   cancelAtPeriodEnd: boolean;
@@ -1536,6 +1555,109 @@ export interface BillingStatus {
 
 export interface CreateCheckoutRequest {
   period: 'monthly' | 'annual';
+}
+
+// ---------- Team plan ----------
+//
+// A team is consolidated billing and nothing else: it pays for seats, and a
+// seat gives one GitHub account the Unlimited plan on that person's own
+// account. No workspace is ever shared. A seat binds to the numeric GitHub
+// user id (a login can be renamed), so it can be assigned before the person
+// has signed up and becomes live the first time they sign in.
+
+export type TeamSeatSource = 'named' | 'org';
+
+/** What a user's billing status says about their team. */
+export interface BillingTeamMembership {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  /** False for an admin who pays but does not hold a seat. */
+  hasSeat: boolean;
+  seatSource?: TeamSeatSource;
+  /** Whether the team's plan is live — a lapsed team still shows, unpaid. */
+  active: boolean;
+  /**
+   * The user also pays for a personal subscription. The app warns; it never
+   * cancels someone's payment for them.
+   */
+  paidPersonallyToo: boolean;
+}
+
+export interface TeamSeat {
+  id: string;
+  githubUserId: number;
+  githubLogin: string;
+  avatarUrl: string | null;
+  source: TeamSeatSource;
+  /** Whether that GitHub account has signed in to Talyn yet. */
+  signedUp: boolean;
+  createdAt: string;
+}
+
+export interface TeamAdmin {
+  userId: string;
+  githubUsername: string | null;
+  email: string;
+}
+
+/** The admin's view of a team, served by `GET /billing/team/:id`. */
+export interface TeamDetail {
+  id: string;
+  name: string;
+  /** Whether the team currently grants its seats Unlimited. */
+  active: boolean;
+  planSource: 'none' | 'subscription' | 'override';
+  seatsPurchased: number;
+  seatsUsed: number;
+  /** More people seated than paid for — assignment is refused until fixed. */
+  overAllocated: boolean;
+  subscriptionStatus?: string;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd?: string;
+  seats: TeamSeat[];
+  admins: TeamAdmin[];
+}
+
+export interface CreateTeamRequest {
+  name: string;
+}
+
+export interface TeamCheckoutRequest {
+  period: 'monthly' | 'annual';
+  seats: number;
+}
+
+export interface AssignTeamSeatsRequest {
+  /** GitHub logins. Resolved to numeric ids server-side. */
+  logins: string[];
+}
+
+export interface AssignTeamSeatsResponse {
+  assigned: TeamSeat[];
+  failed: Array<{ login: string; reason: string }>;
+}
+
+export interface TeamSeatTier {
+  minSeats: number;
+  maxSeats: number | null;
+  /** Price per seat in the smallest currency unit (cents). */
+  pricePerSeat: number;
+}
+
+export interface TeamPriceTiers {
+  currency: string;
+  /** 'volume': every seat costs the tier price. 'graduated': each band is priced separately. */
+  tierType: 'volume' | 'graduated';
+  minimumSeats: number;
+  maximumSeats: number | null;
+  tiers: TeamSeatTier[];
+}
+
+/** Served by `GET /billing/team/pricing`. Null when that period is not sold. */
+export interface TeamPricing {
+  monthly: TeamPriceTiers | null;
+  annual: TeamPriceTiers | null;
 }
 
 export interface CheckoutSessionResponse {

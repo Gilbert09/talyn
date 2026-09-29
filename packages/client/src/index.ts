@@ -41,6 +41,12 @@ import type {
   BillingStatus,
   CheckoutSessionResponse,
   CreateCheckoutRequest,
+  AssignTeamSeatsRequest,
+  AssignTeamSeatsResponse,
+  CreateTeamRequest,
+  TeamCheckoutRequest,
+  TeamDetail,
+  TeamPricing,
   WSEvent,
   DebugEvent,
   DebugCategory,
@@ -1894,6 +1900,36 @@ export const billing = {
   orders: () => request<BillingOrder[]>('GET', '/billing/orders'),
   invoice: (orderId: string) =>
     request<CheckoutSessionResponse>('POST', `/billing/orders/${orderId}/invoice`),
+  // Team plan — seats one buyer pays for. Admin-only except create, pricing
+  // and leave; a non-admin gets 404 for a team id.
+  team: {
+    pricing: () => request<TeamPricing>('GET', '/billing/team/pricing'),
+    create: (data: CreateTeamRequest) => request<TeamDetail>('POST', '/billing/team', data),
+    get: (teamId: string) => request<TeamDetail>('GET', `/billing/team/${teamId}`),
+    rename: (teamId: string, name: string) =>
+      request<TeamDetail>('PATCH', `/billing/team/${teamId}`, { name }),
+    checkout: (teamId: string, data: TeamCheckoutRequest) =>
+      request<CheckoutSessionResponse>('POST', `/billing/team/${teamId}/checkout`, data),
+    assignSeats: (teamId: string, data: AssignTeamSeatsRequest) =>
+      request<AssignTeamSeatsResponse>('POST', `/billing/team/${teamId}/seats`, data),
+    removeSeat: (teamId: string, seatId: string) =>
+      request<void>('DELETE', `/billing/team/${teamId}/seats/${seatId}`),
+    setSeatCount: (teamId: string, seats: number) =>
+      request<void>('POST', `/billing/team/${teamId}/seat-count`, { seats }),
+    addAdmin: (teamId: string, login: string) =>
+      request<TeamDetail>('POST', `/billing/team/${teamId}/admins`, { login }),
+    removeAdmin: (teamId: string, userId: string) =>
+      request<void>('DELETE', `/billing/team/${teamId}/admins/${userId}`),
+    portal: (teamId: string) =>
+      request<CheckoutSessionResponse>('POST', `/billing/team/${teamId}/portal`),
+    orders: (teamId: string) => request<BillingOrder[]>('GET', `/billing/team/${teamId}/orders`),
+    invoice: (teamId: string, orderId: string) =>
+      request<CheckoutSessionResponse>(
+        'POST',
+        `/billing/team/${teamId}/orders/${orderId}/invoice`
+      ),
+    leave: () => request<void>('POST', '/billing/team/leave'),
+  },
 };
 
 // Release notes — the "What's new" feed. Global content, not workspace-scoped:

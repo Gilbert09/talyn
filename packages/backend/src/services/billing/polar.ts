@@ -1,5 +1,10 @@
 import { Polar } from '@polar-sh/sdk';
-import type { BillingOrder } from '@talyn/shared';
+import {
+  TEAM_MIN_SEATS,
+  type BillingOrder,
+  type TeamPriceTiers,
+  type TeamPricing,
+} from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { billingEnabled } from './entitlements.js';
 
@@ -17,6 +22,9 @@ import { billingEnabled } from './entitlements.js';
  *   POLAR_PRODUCT_ID_ANNUAL   — the annual product
  * Optional:
  *   POLAR_SUCCESS_URL         — browser landing page after checkout
+ * Optional group (all-or-nothing) — the team plan:
+ *   POLAR_PRODUCT_ID_TEAM_MONTHLY — seat-based team product, monthly
+ *   POLAR_PRODUCT_ID_TEAM_ANNUAL  — seat-based team product, annual
  */
 
 let client: Polar | null = null;
@@ -65,7 +73,7 @@ async function timed<T>(method: string, label: string, fn: () => Promise<T>): Pr
       url: `polar:${label}`,
       durationMs: Date.now() - startedAt,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: err,
     });
     throw err;
   }
@@ -117,9 +125,13 @@ export async function createPortalUrl(userId: string): Promise<string> {
  * and filtered out.
  */
 export async function listOrdersForUser(userId: string): Promise<BillingOrder[]> {
+  return listOrdersForCustomer(userId);
+}
+
+async function listOrdersForCustomer(externalCustomerId: string): Promise<BillingOrder[]> {
   const page = await timed('GET', 'orders.list', () =>
     getPolarClient().orders.list({
-      externalCustomerId: userId,
+      externalCustomerId,
       limit: 50,
       sorting: ['-created_at'],
     })
@@ -146,9 +158,16 @@ export async function listOrdersForUser(userId: string): Promise<BillingOrder[]>
  * Polar's side, so poll briefly before giving up.
  */
 export async function getInvoiceUrlForUser(userId: string, orderId: string): Promise<string> {
+  return getInvoiceUrlForCustomer(userId, orderId);
+}
+
+async function getInvoiceUrlForCustomer(
+  externalCustomerId: string,
+  orderId: string
+): Promise<string> {
   const polar = getPolarClient();
   const order = await timed('GET', 'orders.get', () => polar.orders.get({ id: orderId }));
-  if (order.customer?.externalId !== userId) {
+  if (order.customer?.externalId !== externalCustomerId) {
     throw new OrderNotFoundError(orderId);
   }
 
@@ -173,6 +192,173 @@ export async function getInvoiceUrlForUser(userId: string, orderId: string): Pro
   }
   console.error(`[billing] invoice for order ${orderId} not ready after polling:`, lastError);
   throw new Error('The invoice is still being generated — try again in a moment.');
+}
+
+// ---------- Team plan ----------
+//
+// A team is its OWN Polar customer, addressed by `team_<id>` as the external
+// id. That prefix is what keeps a team's billing apart from its buyer's: the
+// buyer's personal customer carries their user id, so a team checkout can
+// never land on, or be read back as, the person who paid for it. The webhook
+// routes on the same prefix.
+//
+// Polar sells the QUANTITY only. Who holds a seat is ours (`team_seats`,
+// keyed by GitHub id); Polar's own seat-assignment API is deliberately not
+// used, because it binds seats to email addresses.
+
+const TEAM_CUSTOMER_PREFIX = 'team_';
+
+export function teamCustomerExternalId(teamId: string): string {
+  return `${TEAM_CUSTOMER_PREFIX}${teamId}`;
+}
+
+/** The team id behind a Polar external customer id, or null for a personal one. */
+export function teamIdFromCustomerExternalId(externalId: string | null | undefined): string | null {
+  if (!externalId || !externalId.startsWith(TEAM_CUSTOMER_PREFIX)) return null;
+  const teamId = externalId.slice(TEAM_CUSTOMER_PREFIX.length);
+  return teamId.length > 0 ? teamId : null;
+}
+
+function teamProductId(period: 'monthly' | 'annual'): string | undefined {
+  return period === 'annual'
+    ? process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL
+    : process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY;
+}
+
+/**
+ * Whether the team plan can be sold here. Its product ids are their own
+ * all-or-nothing group (validateEnv), so a deployment can bill personally
+ * without selling teams.
+ */
+export function teamBillingConfigured(): boolean {
+  return (
+    billingEnabled() &&
+    Boolean(process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY) &&
+    Boolean(process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL)
+  );
+}
+
+export function isTeamProductId(productId: string | null | undefined): boolean {
+  if (!productId) return false;
+  return (
+    productId === process.env.POLAR_PRODUCT_ID_TEAM_MONTHLY ||
+    productId === process.env.POLAR_PRODUCT_ID_TEAM_ANNUAL
+  );
+}
+
+/** Hosted checkout for `seats` seats of the team product. */
+export async function createTeamCheckoutUrl(
+  teamId: string,
+  period: 'monthly' | 'annual',
+  seats: number
+): Promise<string> {
+  const productId = teamProductId(period);
+  if (!productId) throw new Error(`Polar team product id for ${period} is not set`);
+  const checkout = await timed('POST', 'checkouts.create', () =>
+    getPolarClient().checkouts.create({
+      products: [productId],
+      externalCustomerId: teamCustomerExternalId(teamId),
+      seats,
+      minSeats: TEAM_MIN_SEATS,
+      ...(process.env.POLAR_SUCCESS_URL ? { successUrl: process.env.POLAR_SUCCESS_URL } : {}),
+    })
+  );
+  return checkout.url;
+}
+
+/**
+ * Change the seat count on a live team subscription. Polar prorates it; the
+ * new count comes back through the `subscription.updated` webhook, which is
+ * the only writer of `teams.seats_purchased`.
+ */
+export async function updateTeamSubscriptionSeats(
+  subscriptionId: string,
+  seats: number
+): Promise<void> {
+  await timed('PATCH', 'subscriptions.update', () =>
+    getPolarClient().subscriptions.update({
+      id: subscriptionId,
+      subscriptionUpdate: { seats },
+    })
+  );
+}
+
+export async function createTeamPortalUrl(teamId: string): Promise<string> {
+  const session = await timed('POST', 'customerSessions.create', () =>
+    getPolarClient().customerSessions.create({
+      externalCustomerId: teamCustomerExternalId(teamId),
+    })
+  );
+  return session.customerPortalUrl;
+}
+
+export async function listOrdersForTeam(teamId: string): Promise<BillingOrder[]> {
+  return listOrdersForCustomer(teamCustomerExternalId(teamId));
+}
+
+export async function getInvoiceUrlForTeam(teamId: string, orderId: string): Promise<string> {
+  return getInvoiceUrlForCustomer(teamCustomerExternalId(teamId), orderId);
+}
+
+interface SeatBasedPriceLike {
+  amountType?: string;
+  isArchived?: boolean;
+  priceCurrency?: string;
+  seatTiers?: {
+    seatTierType?: string;
+    tiers: Array<{ minSeats: number; maxSeats?: number | null; pricePerSeat: number }>;
+    minimumSeats: number;
+    maximumSeats: number | null;
+  };
+}
+
+/** The seat tiers of a product's live seat-based price. Pure, for tests. */
+export function seatTiersFromPrices(prices: readonly unknown[]): TeamPriceTiers | null {
+  const price = (prices as SeatBasedPriceLike[]).find(
+    (p) => p.amountType === 'seat_based' && !p.isArchived && p.seatTiers
+  );
+  if (!price?.seatTiers) return null;
+  return {
+    currency: price.priceCurrency ?? 'usd',
+    tierType: price.seatTiers.seatTierType === 'graduated' ? 'graduated' : 'volume',
+    minimumSeats: price.seatTiers.minimumSeats,
+    maximumSeats: price.seatTiers.maximumSeats,
+    tiers: price.seatTiers.tiers.map((t) => ({
+      minSeats: t.minSeats,
+      maxSeats: t.maxSeats ?? null,
+      pricePerSeat: t.pricePerSeat,
+    })),
+  };
+}
+
+const TEAM_PRICING_TTL_MS = 10 * 60 * 1000;
+let teamPricingCache: { at: number; value: TeamPricing } | null = null;
+
+/**
+ * The team product's seat tiers, read from Polar and cached for ten minutes.
+ * Read rather than hard-coded so a price change in the Polar dashboard is the
+ * whole price change — the personal UpgradeModal hard-codes $15/$150 in three
+ * places, and that is not a pattern to copy.
+ */
+export async function getTeamPricing(): Promise<TeamPricing> {
+  if (teamPricingCache && Date.now() - teamPricingCache.at < TEAM_PRICING_TTL_MS) {
+    return teamPricingCache.value;
+  }
+  const read = async (period: 'monthly' | 'annual'): Promise<TeamPriceTiers | null> => {
+    const id = teamProductId(period);
+    if (!id) return null;
+    const product = await timed('GET', 'products.get', () => getPolarClient().products.get({ id }));
+    return seatTiersFromPrices(product.prices);
+  };
+  const [monthly, annual] = await Promise.all([read('monthly'), read('annual')]);
+  const value = { monthly, annual };
+  teamPricingCache = { at: Date.now(), value };
+  return value;
+}
+
+/** Test hook. */
+export function resetTeamPricingCacheForTests(): void {
+  teamPricingCache = null;
 }
 
 export class OrderNotFoundError extends Error {

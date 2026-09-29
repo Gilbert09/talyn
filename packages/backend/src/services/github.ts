@@ -1488,6 +1488,30 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * A GitHub account by login, for assigning a team seat. Returns null when no
+   * such account exists (404); anything else throws. Only a `User` is
+   * returned — an organization or a bot cannot hold a seat.
+   */
+  async getAccountByLogin(
+    workspaceId: string,
+    login: string
+  ): Promise<{ id: number; login: string; avatarUrl: string | null } | null> {
+    try {
+      const account = await this.apiRequest<{
+        id: number;
+        login: string;
+        avatar_url?: string | null;
+        type?: string;
+      }>(workspaceId, `/users/${encodeURIComponent(login)}`);
+      if (account.type && account.type !== 'User') return null;
+      return { id: account.id, login: account.login, avatarUrl: account.avatar_url ?? null };
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
    * The authenticated user's team slugs as `org/team` (combinedSlug form),
    * across every org. Cached for an hour — teams change rarely and the poll's
    * review-request derivation asks for them constantly. Returns an empty set

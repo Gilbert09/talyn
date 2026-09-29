@@ -7,6 +7,7 @@ import { githubService } from '../services/github.js';
 import { getSupabaseServiceClient, isSupabaseConfigured } from '../services/supabase.js';
 import { billingEnabled } from '../services/billing/entitlements.js';
 import { revokeSubscriptionBestEffort } from '../services/billing/polar.js';
+import { soleAdminOfPayingTeam } from '../services/billing/teams.js';
 
 /**
  * Account-level routes for the calling user. Mounted BEFORE the owner-scope
@@ -26,6 +27,17 @@ export function userRoutes(): Router {
   router.delete('/me', async (req, res) => {
     const userId = req.user!.id;
     const db = getDbClient();
+
+    // The last admin of a team that still pays cannot go: the team's
+    // subscription would keep billing with nobody left able to manage or
+    // cancel it. Refused BEFORE anything is revoked or deleted.
+    const stranded = await soleAdminOfPayingTeam(userId);
+    if (stranded) {
+      return res.status(409).json({
+        success: false,
+        error: `You are the only admin of the team "${stranded.name}", which still pays for seats. Add another admin or cancel the team's subscription first.`,
+      });
+    }
 
     const owned = await db
       .select({ id: workspacesTable.id })

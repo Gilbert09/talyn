@@ -58,6 +58,12 @@ export const users = pgTable(
     id: text('id').primaryKey(), // == auth.users.id (uuid)
     email: text('email').notNull(),
     githubUsername: text('github_username'),
+    // The numeric GitHub account id from the sign-in (Supabase's
+    // `provider_id`). A team seat binds to this, never to the login, which can
+    // be renamed. Indexed but NOT unique: this is written by the auth upsert on
+    // every request, and a stale row holding the same id must never be able to
+    // make that upsert fail and lock somebody out.
+    githubUserId: bigint('github_user_id', { mode: 'number' }),
     reviewRankingOptOut: boolean('review_ranking_opt_out').notNull().default(false),
     // Gates the developer Debug panel + its WS stream, which expose backend
     // internals across all accounts. Off by default.
@@ -82,6 +88,7 @@ export const users = pgTable(
   (t) => ({
     // Fallback webhook→user mapping when an event lacks our external id.
     polarCustomerIdx: index('idx_users_polar_customer').on(t.polarCustomerId),
+    githubUserIdx: index('idx_users_github_user_id').on(t.githubUserId),
   })
 );
 
@@ -100,10 +107,96 @@ export const billingEvents = pgTable('billing_events', {
   eventType: text('event_type').notNull(),
   subscriptionId: text('subscription_id'),
   userId: text('user_id'),
+  // Set instead of `user_id` for a team subscription's events. No FK, for
+  // the same reason as `user_id`.
+  teamId: text('team_id'),
   occurredAt: timestamp('occurred_at', { withTimezone: true }),
   applied: boolean('applied').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------- Teams (seat billing) ----------
+//
+// A team is consolidated billing and NOTHING else. It pays for a number of
+// seats; a seat gives one GitHub account the Unlimited plan on that person's
+// own account. No workspace is shared through a team, and nothing here is
+// read by a workspace query.
+//
+// Backend-pool-only surface, like `billing_events`: RLS on with no policy.
+// The entitlement reads these on the pool even from an owner-scoped request —
+// "does this owner hold a seat" is a server-side fact, never user data.
+//
+// The billing columns mirror `users` so the webhook applies a team event with
+// the same rules it applies a personal one: `plan` is written only by Polar
+// webhooks, `plan_override` only by the operator console, and the override
+// wins.
+export const teams = pgTable(
+  'teams',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    createdByUserId: text('created_by_user_id'),
+    plan: text('plan').notNull().default('none'), // 'none' | 'team'
+    planOverride: text('plan_override'), // 'none' | 'team' | null
+    // Seats Polar bills for. Written by the webhook from `subscription.seats`.
+    seatsPurchased: integer('seats_purchased').notNull().default(0),
+    polarCustomerId: text('polar_customer_id'),
+    polarSubscriptionId: text('polar_subscription_id'),
+    subscriptionStatus: text('subscription_status'),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+    subscriptionEventAt: timestamp('subscription_event_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    polarCustomerIdx: index('idx_teams_polar_customer').on(t.polarCustomerId),
+  })
+);
+
+// Who may manage a team. An admin need not hold a seat — somebody can pay for
+// their team without using Talyn themselves.
+export const teamAdmins = pgTable(
+  'team_admins',
+  {
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.teamId, t.userId] }),
+    userIdx: index('idx_team_admins_user').on(t.userId),
+  })
+);
+
+// One row per seat. Keyed by the numeric GitHub id so a seat can be assigned
+// before its holder signs up, and survives a login rename. UNIQUE on that id:
+// one team per person, so nobody is paid for twice and "who pays for me" has
+// exactly one answer.
+export const teamSeats = pgTable(
+  'team_seats',
+  {
+    id: text('id').primaryKey(),
+    teamId: text('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    githubUserId: bigint('github_user_id', { mode: 'number' }).notNull(),
+    // Display only, captured at assignment. The id is the identity.
+    githubLogin: text('github_login').notNull(),
+    avatarUrl: text('avatar_url'),
+    source: text('source').notNull().default('named'), // 'named' | 'org'
+    assignedByUserId: text('assigned_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    githubUserUq: uniqueIndex('uq_team_seats_github_user').on(t.githubUserId),
+    teamIdx: index('idx_team_seats_team').on(t.teamId),
+  })
+);
 
 // ---------- Admin audit log (operator console) ----------
 //

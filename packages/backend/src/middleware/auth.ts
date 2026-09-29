@@ -17,6 +17,7 @@ import {
   repositories as repositoriesTable,
 } from '../db/schema.js';
 import { getSupabaseServiceClient } from '../services/supabase.js';
+import { ensureGithubUserId } from '../services/githubIdentity.js';
 import { captureSignup } from '../services/analytics.js';
 import { notifyTodiex } from '../services/todiex.js';
 import { personMetadata } from '../services/todiexContext.js';
@@ -232,6 +233,7 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
     })
     .returning({
       isAdmin: usersTable.isAdmin,
+      githubUserId: usersTable.githubUserId,
       // Did this statement INSERT, or did it take the ON CONFLICT branch?
       // `xmax = 0` is the canonical one-round-trip answer: a freshly
       // inserted tuple carries no updating transaction id, a
@@ -240,6 +242,13 @@ export async function verifyTokenAndGetUser(token: string): Promise<AuthUser | n
       // anyone drops the explicit `createdAt` and leans on defaultNow().
       inserted: sql<boolean>`xmax = 0`,
     });
+
+  // The GitHub id a team seat binds to. Deliberately NOT read from the
+  // token's user_metadata, which the user can rewrite — see githubIdentity.ts.
+  // Fire-and-forget: it must never slow or fail a sign-in.
+  if (row && row.githubUserId === null) {
+    void ensureGithubUserId(identity.id);
+  }
 
   // First insert == the account came into existence. See captureSignup.
   if (row?.inserted) {

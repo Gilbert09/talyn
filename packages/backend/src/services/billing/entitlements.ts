@@ -15,6 +15,7 @@ import {
   LOOP_LIMIT_ERROR_CODE,
   WORKFLOW_LIMIT_ERROR_CODE,
   type BillingStatus,
+  type BillingTeamMembership,
 } from '@talyn/shared';
 import {
   getDbClient,
@@ -25,6 +26,9 @@ import {
 import {
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
+  teamAdmins as teamAdminsTable,
+  teamSeats as teamSeatsTable,
+  teams as teamsTable,
   users as usersTable,
   loops as loopsTable,
   prCodeReviews as prCodeReviewsTable,
@@ -61,7 +65,7 @@ export type EffectivePlan = 'free' | 'unlimited';
 
 export interface Entitlement {
   plan: EffectivePlan;
-  source: 'default' | 'subscription' | 'override' | 'billing_disabled';
+  source: 'default' | 'subscription' | 'override' | 'team' | 'billing_disabled';
 }
 
 /** Thrown by the gate when a free owner is at their active-task limit. */
@@ -203,31 +207,148 @@ export function billingEnabled(): boolean {
   return Boolean(process.env.POLAR_ACCESS_TOKEN);
 }
 
-/** Pure entitlement derivation from a users-row billing projection. */
+/** The billing columns of the team whose seat a user holds. */
+export interface TeamBillingRow {
+  plan: string;
+  planOverride: string | null;
+}
+
+/**
+ * Whether a team currently pays for its seats. The operator override wins in
+ * both directions, exactly as a user's does; otherwise the webhook-driven plan.
+ */
+export function teamGrantsSeats(team: TeamBillingRow | null | undefined): boolean {
+  if (!team) return false;
+  if (team.planOverride === 'team') return true;
+  if (team.planOverride === 'none') return false;
+  return team.plan === 'team';
+}
+
+/**
+ * Pure entitlement derivation from a users-row billing projection and, when
+ * the user holds a seat, that seat's team.
+ *
+ * Order: the user's own override, the user's own subscription, a paid team
+ * seat, then free. A personal override of 'free' beats a team seat on purpose
+ * — it is how an operator blocks one account, and a team must not undo that.
+ */
 export function deriveEntitlement(
-  row: { plan: string; planOverride: string | null } | undefined
+  row: { plan: string; planOverride: string | null } | undefined,
+  team?: TeamBillingRow | null
 ): Entitlement {
   if (!row) return { plan: 'free', source: 'default' };
   if (row.planOverride === 'unlimited' || row.planOverride === 'free') {
     return { plan: row.planOverride, source: 'override' };
   }
   if (row.plan === 'unlimited') return { plan: 'unlimited', source: 'subscription' };
+  if (teamGrantsSeats(team)) return { plan: 'unlimited', source: 'team' };
   return { plan: 'free', source: 'default' };
 }
 
 /**
+ * The query behind {@link resolveEntitlement}: the user's billing columns and,
+ * through the seat bound to their GitHub id, that seat's team. Exported
+ * unexecuted for the egress test.
+ *
+ * Read on the POOL even from an owner-scoped request: the team tables are
+ * backend-only (RLS on, no policy), and "does this owner hold a seat" is a
+ * server-side fact about the owner, not data the caller is reading.
+ */
+export function entitlementQuery(ownerId: string) {
+  return getPoolDbClient()
+    .select({
+      plan: usersTable.plan,
+      planOverride: usersTable.planOverride,
+      teamPlan: teamsTable.plan,
+      teamPlanOverride: teamsTable.planOverride,
+    })
+    .from(usersTable)
+    .leftJoin(teamSeatsTable, eq(teamSeatsTable.githubUserId, usersTable.githubUserId))
+    .leftJoin(teamsTable, eq(teamsTable.id, teamSeatsTable.teamId))
+    .where(eq(usersTable.id, ownerId))
+    .limit(1);
+}
+
+function teamFromRow(row: {
+  teamPlan: string | null;
+  teamPlanOverride: string | null;
+}): TeamBillingRow | null {
+  return row.teamPlan === null ? null : { plan: row.teamPlan, planOverride: row.teamPlanOverride };
+}
+
+/**
  * Resolve the effective plan for an owner: manual override first (the comp
- * flag — set via SQL, never by webhooks), then the webhook-driven plan.
+ * flag — set via SQL, never by webhooks), then the webhook-driven plan, then
+ * a paid team seat.
  */
 export async function resolveEntitlement(ownerId: string): Promise<Entitlement> {
   if (!billingEnabled()) return { plan: 'unlimited', source: 'billing_disabled' };
 
-  const rows = await getDbClient()
-    .select({ plan: usersTable.plan, planOverride: usersTable.planOverride })
+  const rows = await entitlementQuery(ownerId);
+  const row = rows[0];
+  return deriveEntitlement(row, row ? teamFromRow(row) : null);
+}
+
+/**
+ * The team a user holds a seat on, or else the one they administer. At most
+ * one of each exists: a GitHub id is unique across `team_seats`, and team
+ * creation refuses a second team to somebody who already administers one.
+ * Read on the pool, like {@link entitlementQuery}.
+ */
+async function loadBillingTeam(ownerId: string): Promise<{
+  seatTeam: TeamBillingRow | null;
+  membership: Omit<BillingTeamMembership, 'paidPersonallyToo'>;
+} | null> {
+  const db = getPoolDbClient();
+  const [seat] = await db
+    .select({
+      id: teamsTable.id,
+      name: teamsTable.name,
+      plan: teamsTable.plan,
+      planOverride: teamsTable.planOverride,
+      source: teamSeatsTable.source,
+    })
     .from(usersTable)
+    .innerJoin(teamSeatsTable, eq(teamSeatsTable.githubUserId, usersTable.githubUserId))
+    .innerJoin(teamsTable, eq(teamsTable.id, teamSeatsTable.teamId))
     .where(eq(usersTable.id, ownerId))
     .limit(1);
-  return deriveEntitlement(rows[0]);
+  const adminRows = await db
+    .select({
+      id: teamsTable.id,
+      name: teamsTable.name,
+      plan: teamsTable.plan,
+      planOverride: teamsTable.planOverride,
+    })
+    .from(teamAdminsTable)
+    .innerJoin(teamsTable, eq(teamsTable.id, teamAdminsTable.teamId))
+    .where(eq(teamAdminsTable.userId, ownerId));
+
+  if (seat) {
+    return {
+      seatTeam: seat,
+      membership: {
+        id: seat.id,
+        name: seat.name,
+        isAdmin: adminRows.some((a) => a.id === seat.id),
+        hasSeat: true,
+        seatSource: seat.source === 'org' ? 'org' : 'named',
+        active: teamGrantsSeats(seat),
+      },
+    };
+  }
+  const admin = adminRows[0];
+  if (!admin) return null;
+  return {
+    seatTeam: null,
+    membership: {
+      id: admin.id,
+      name: admin.name,
+      isAdmin: true,
+      hasSeat: false,
+      active: teamGrantsSeats(admin),
+    },
+  };
 }
 
 /**
@@ -271,12 +392,20 @@ export async function buildBillingStatus(ownerId: string): Promise<BillingStatus
     .where(eq(usersTable.id, ownerId))
     .limit(1);
   const row = rows[0];
-  const entitlement = deriveEntitlement(row);
+  const teamContext = await loadBillingTeam(ownerId);
+  const entitlement = deriveEntitlement(row, teamContext?.seatTeam ?? null);
+  const team = teamContext
+    ? {
+        ...teamContext.membership,
+        paidPersonallyToo: teamContext.membership.hasSeat && row?.plan === 'unlimited',
+      }
+    : undefined;
 
   return {
     billingEnabled: true,
     plan: entitlement.plan,
     planSource: entitlement.source,
+    ...(team ? { team } : {}),
     ...(row?.subscriptionStatus ? { subscriptionStatus: row.subscriptionStatus } : {}),
     cancelAtPeriodEnd: row?.cancelAtPeriodEnd ?? false,
     ...(row?.currentPeriodEnd ? { currentPeriodEnd: row.currentPeriodEnd.toISOString() } : {}),

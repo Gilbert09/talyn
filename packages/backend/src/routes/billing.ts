@@ -15,6 +15,7 @@ import {
   listOrdersForUser,
   OrderNotFoundError,
 } from '../services/billing/polar.js';
+import { teamRoutes } from './teams.js';
 
 /**
  * Billing surface for the calling user. Mounted BEFORE the owner-scope
@@ -25,6 +26,8 @@ import {
  */
 export function billingRoutes(): Router {
   const router = Router();
+
+  router.use('/team', teamRoutes());
 
   // Current plan + usage. Also the desktop's post-checkout poll target.
   router.get('/status', async (req, res) => {
