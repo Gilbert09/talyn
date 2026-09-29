@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Loader2, ScanSearch } from 'lucide-react';
+import { Loader2, ScanSearch } from 'lucide-react';
 import {
   CODE_REVIEW_PHASE_AT_REST,
   CODE_REVIEW_PRESET_LABELS,
@@ -9,12 +9,12 @@ import {
 } from '@talyn/shared';
 import { api, type CodeReviewListItem } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
-import { openExternal } from '../../../lib/openExternal';
 import { PRDetailSheet } from '../../widgets/PRDetailSheet';
 import { Button } from '../../ui/button';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
 import { activeFixStatus } from './activeFix';
+import { reviewStage, reviewStageChipClass, reviewStageEdgeClass } from './reviewStage';
 
 /**
  * Every review this workspace has run, newest first.
@@ -208,16 +208,24 @@ function ReviewRow({
   const { review, pullRequest } = item;
   const running = !CODE_REVIEW_PHASE_AT_REST[review.phase];
   const progress = codeReviewProgress(review);
-  const blockers = review.counts.blocker;
   // The review's own bar already says "Fixing" while the phase is `fixing`, so
   // showing both would say it twice in two different ways.
   const showFix = fixStatus !== null && !running;
+  const stage = reviewStage({
+    prState: pullRequest.state,
+    phase: review.phase,
+    openCount: review.openCount,
+    blockers: review.counts.blocker,
+    fixStatus,
+    progressLabel: progress.label,
+  });
 
   return (
     <div
+      data-stage={stage.stage}
       className={cn(
-        'rounded-md border transition-colors hover:border-muted-foreground/40',
-        blockers > 0 && !running && 'border-amber-500/40 bg-amber-500/5'
+        'rounded-md border border-l-4 transition-colors hover:border-muted-foreground/40',
+        reviewStageEdgeClass(stage.tone)
       )}
     >
       <button type="button" onClick={onOpen} className="w-full p-3 text-left">
@@ -232,12 +240,13 @@ function ReviewRow({
               {review.headShaShort && ` of ${review.headShaShort}`}
             </p>
           </div>
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {running
-              ? progress.label
-              : showFix
-                ? 'Fix running'
-                : outcomeLabel(review.openCount, review.phase)}
+          <span
+            className={cn(
+              'shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium',
+              reviewStageChipClass(stage.tone)
+            )}
+          >
+            {stage.label}
           </span>
         </div>
 
@@ -307,21 +316,10 @@ function ReviewRow({
       </button>
 
       {/* Outside the row's own button — a button inside a button is invalid, and
-          this goes somewhere else entirely. */}
-      <div className="flex items-center gap-3 border-t px-3 py-1.5">
-        <button
-          type="button"
-          onClick={() =>
-            void openExternal(
-              `https://github.com/${pullRequest.owner}/${pullRequest.repo}/pull/${pullRequest.number}`
-            )
-          }
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-        >
-          <ExternalLink className="h-3 w-3" />
-          Open on GitHub
-        </button>
-        {showFix && (
+          this goes somewhere else entirely. The GitHub link that used to sit
+          here is gone: the row opens the detail sheet, which links out. */}
+      {showFix && (
+        <div className="flex items-center gap-3 border-t px-3 py-1.5">
           <button
             type="button"
             onClick={onOpenTask}
@@ -330,17 +328,8 @@ function ReviewRow({
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
             Open the run
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
-}
-
-/** What the row says when the review is at rest. */
-function outcomeLabel(openCount: number, phase: string): string {
-  if (phase === 'failed') return 'Did not finish';
-  if (phase === 'cancelled') return 'Stopped';
-  if (phase === 'fixed') return 'Fix pushed';
-  if (openCount === 0) return 'Nothing to flag';
-  return `${openCount} finding${openCount === 1 ? '' : 's'}`;
 }
