@@ -28,9 +28,10 @@ Consolidated billing only. No workspace is shared, and none is planned (Tom's ca
 - [ ] **Polar setup (Tom):** turn on seat-based pricing, create the team product (monthly + annual, volume tiers), and set `POLAR_PRODUCT_ID_TEAM_*`. Sandbox first.
 - [ ] **Spike:** does the production GitHub App grant org **Members: read**? `docs/SETUP.md` says yes and `github.ts` says no. Org-linked seats depend on the answer.
 - [ ] Org-linked seats: link a GitHub org, auto-seat verified members while seats remain, opt-in auto-grow up to a cap, daily re-verification sweep (with debugBus poller).
-- [ ] UpgradeModal: "Buying for a team?" link, and "your team has no free seats" when an org seat is full.
+- [x] UpgradeModal: a "Buying for a team?" link to Settings → Billing, behind the flag.
+- [ ] UpgradeModal: "your team has no free seats" when an org seat is full (comes with org-linked seats).
 - [ ] Operator console: teams list, comp a team through `teams.plan_override` with an audit reason.
-- [ ] Analytics: `team_created`, `team_checkout_started`, `team_seat_assigned`, `team_seat_removed`, `team_seat_count_changed`.
+- [x] Analytics: `team_created`, `team_checkout_started`, `team_seats_assigned`, `team_seat_removed`, `team_seat_count_changed`, `team_left`, `team_offer_opened`.
 - [ ] Launch: flip `teams` to `availability: 'general'`, then publish prices on the pricing page (Teams band CTA to checkout, a Team column in `PlanTable`, `OfferSchema`).
 
 ### Code review — shipped behind a flag (2026-09-27)
