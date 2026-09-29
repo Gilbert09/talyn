@@ -44,10 +44,29 @@ Talyn closes that loop. You pick the PR; the agent does the work; the merge queu
 
 ### 📊 Every PR, triaged — no tabs required
 
-A live dashboard sorts your work into **Needs attention**, **Mine**, and **Review**, so the pull
-request that actually blocks you is always on top. Check rollups, review state, stacked PRs grouped
-under their parent, and a detail sheet with the diff, the checks, and the conversation. Updates
-arrive webhook-first, so it tracks GitHub in near real time.
+**My PRs** is every pull request you have open, across every repo you connect, with a
+**Needs-attention** filter that pulls the blocked ones to the front. Check rollups, review state,
+stacked PRs grouped under their parent, and a detail sheet with the diff, the checks, and the
+conversation. Updates arrive webhook-first, so it tracks GitHub in near real time.
+
+### 👀 Reviews — every request waiting on you, in one list
+
+Every open PR where you are a requested reviewer and have not reviewed yet, with whether you were
+asked **directly or through a team** — and a filter and saved filters for it. The default
+**Priority** order is not a mystery score: the list is cut into four bands (blocking others,
+actionable, waiting on the author, not ready) before anything is scored, and every row carries a
+chip naming the reason it sits where it does. Hover it for the full arithmetic.
+
+### 🔍 Code review — findings in the app, not comments on your PR
+
+Most AI reviewers announce themselves in your pull request. This one **writes nothing to GitHub at
+all** — no comments, no approval, no requested changes, enforced in the reviewing agent's own system
+prompt. Several reviewers read the change from different angles, a sweep looks for what they all
+missed, and a judging pass throws out everything it cannot stand behind. What survives is a short
+list in the app; tick what is worth fixing and Talyn pushes **one commit**, not a thread per finding.
+
+Depth is a per-review choice with honest timings: Quick usually under ten minutes, Standard about
+half an hour, Deep an hour or more on a large PR.
 
 ### 🤖 Delegate to a cloud agent
 
@@ -85,6 +104,14 @@ checklist, a changelog writer. Talyn discovers them wherever they already live �
 repo (`.claude/skills/`), on your machine (`~/.claude/skills`), or saved to your workspace. Pick one
 on any PR and an agent runs it, posting the review or pushing the fix.
 
+### 🔌 MCP servers — give the agent your tools, not your keys
+
+Connect Linear, Sentry, Supabase, Stripe or your own remote MCP server and every Talyn Fleet run can
+use it. **Talyn holds the credential, not the sandbox**: the guest is configured with a plain URL
+carrying no token, and the host's proxy attaches the secret per request — so an agent that has just
+read a hostile repo has nothing in its environment to exfiltrate. Per-server tool allow-lists, no cap
+on servers per run, and uncapped on every plan including free.
+
 ## Getting started
 
 1. **Get Talyn.** [Download the desktop app](https://talyn.dev) — macOS (Apple silicon and Intel),
@@ -114,23 +141,26 @@ The VM is destroyed when the task ends.
 
 ### PostHog Code
 
-Already at PostHog? Connect a personal API key and project id in **Settings → Integrations** and it
-powers the lot — fixes, conflicts, and review replies, end to end. Runs happen in PostHog's cloud,
-under your account.
+Already at PostHog? Connect it in **Settings → Integrations** — with OAuth where that is available,
+or a personal API key and project id — and it powers the lot: fixes, conflicts, and review replies,
+end to end. Runs happen in PostHog's cloud, under your account.
 
 More providers are on the way; each is a self-contained module behind the same interface. See
 [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md).
 
 ## Pricing
 
-**Free** — the whole dashboard, every repo, all providers, skills, and the merge queue, with up to
-3 tasks running, 3 PRs queued, 3 workflows, and 3 loops at a time.
+**Free** — the whole dashboard, every repo, all providers, skills, MCP servers, and the merge queue,
+with up to 3 tasks running, 3 PRs queued, 3 workflows, 3 loops, and 1 code-review cycle at a time.
 
-**Unlimited — $15/month** (or $150/year) — removes all four caps, keeps every new PR green
-automatically, and never makes automation wait for a slot. Cancel any time, in app.
+**Unlimited — $15/month** (or $150/year) — removes the caps, keeps every new PR green automatically,
+reviews every new PR, and never makes automation wait for a slot. Cancel any time, in app.
+
+More than one of you? There is a per-seat rate for teams — ask on the
+[pricing page](https://talyn.dev/pricing).
 
 Either plan, you bring your own agent: runs execute on the subscription or provider account you
-connect, not on Talyn's. Full details at [talyn.dev](https://talyn.dev/#pricing).
+connect, not on Talyn's. Full details at [talyn.dev/pricing](https://talyn.dev/pricing).
 
 ---
 
@@ -181,7 +211,9 @@ packages/shared   Shared TypeScript types
 | [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) | The cloud task provider abstraction |
 | [`docs/SETUP.md`](./docs/SETUP.md) | Environment variables and account setup |
 | [`docs/TESTING.md`](./docs/TESTING.md) | Testing strategy and coverage |
+| [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md) | The `@talyn/mcp-server` package |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | Phased TODO, backlog, known gaps |
+| [`docs/SESSIONS.md`](./docs/SESSIONS.md) | Chronological build notes, newest first — including what did not work |
 | [`claude.md`](./claude.md) | Orientation for coding agents working on Talyn |
 
 Contributions are welcome — see [`CONTRIBUTING.md`](./CONTRIBUTING.md) and our
@@ -190,11 +222,23 @@ Contributions are welcome — see [`CONTRIBUTING.md`](./CONTRIBUTING.md) and our
 
 ## Status
 
-Talyn is in **public beta** and under active development. Shipped: webhook-first PR monitoring, the
-PR dashboard, the merge queue and auto-keep-mergeable self-fix runs, cloud task delegation behind a
-pluggable provider abstraction with two live providers (Talyn Fleet and PostHog Code), workflows,
-loops, skills on PRs, live transcript streaming, and signed and notarized macOS builds with
-auto-update.
+Talyn is in **public beta** and under active development.
+
+**Shipped:** webhook-first PR monitoring; My PRs, Reviews and the Merge Queue; auto-keep-mergeable
+self-fix runs; multi-lens code review with findings in the app; cloud task delegation behind a
+pluggable provider abstraction with two live providers (Talyn Fleet and PostHog Code); workflows;
+loops; skills on PRs; MCP servers wired into fleet runs; live transcript streaming; and signed and
+notarized macOS builds with auto-update.
+
+**Known rough edges**, so you meet them here rather than on first run:
+
+- **Windows installers are not code-signed yet**, so SmartScreen warns on first install. The build
+  is fine; the certificate has not been bought.
+- The download button serves the **Apple-silicon** macOS build. On an Intel Mac, take the x64 one
+  from the [releases page](https://github.com/Gilbert09/talyn/releases).
+- **GitHub only** — no GitLab, Bitbucket or Azure DevOps.
+- **No teams yet.** Billing is per account; shared workspaces, SSO and admin controls do not exist.
+- The fleet is finite hardware. It paces itself and spills to the fall-back provider when full.
 
 ## License
 
