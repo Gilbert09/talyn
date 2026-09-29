@@ -166,7 +166,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     ],
     related: ["reviews", "fix-pull-requests", "merge-queue"],
     relatedGuides: ["claude-code-pull-requests"],
-    relatedCompare: ["graphite", "conductor"],
+    relatedCompare: ["graphite", "conductor", "t3-code"],
     updated: UPDATED,
   },
 
@@ -425,7 +425,7 @@ export const FEATURE_PAGES: FeaturePage[] = [
     planNote: "Free plan: three tasks running at once, across all your workspaces.",
     related: ["merge-queue", "agents", "code-review"],
     relatedGuides: ["fix-failing-github-actions-with-ai"],
-    relatedCompare: ["devin", "cursor-background-agents"],
+    relatedCompare: ["devin", "cursor-background-agents", "t3-code"],
     updated: UPDATED,
   },
 
