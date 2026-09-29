@@ -5,7 +5,6 @@ import {
   batchPullRequestsByNumber,
   _resetByNumberCache,
   computeBlockingReason,
-  reconcileBlockingReason,
   computeCheckDigest,
   deriveEffectiveReviewDecision,
   decodeBatchResponse,
@@ -354,45 +353,6 @@ describe('computeBlockingReason', () => {
         checks: { ...baseChecks, total: 3, passed: 1, failed: 2 },
       })
     ).toBe('merge_conflicts');
-  });
-});
-
-describe('reconcileBlockingReason', () => {
-  // The bug this guards: an incremental {checks}-only update advances `failed`
-  // while a stale `mergeable` verdict still reads "Ready" — a green pill next
-  // to N failing checks.
-  it.each([
-    ['UNSTABLE', 'checks_failed_optional'],
-    ['unstable', 'checks_failed_optional'], // case-insensitive
-    ['BLOCKED', 'checks_failed'],
-    ['CLEAN', 'checks_failed'],
-    [undefined, 'checks_failed'],
-    [null, 'checks_failed'],
-  ])('stale mergeable + failures with mergeStateStatus=%s → %s', (mss, expected) => {
-    expect(
-      reconcileBlockingReason('mergeable', { failed: 26 }, mss as string | null | undefined)
-    ).toBe(expected);
-  });
-
-  it.each([
-    ['checks_failed' as const],
-    ['checks_failed_optional' as const],
-  ])('stale %s with zero failures → mergeable', (reason) => {
-    expect(reconcileBlockingReason(reason, { failed: 0 }, 'CLEAN')).toBe('mergeable');
-  });
-
-  it.each([
-    // Consistent verdicts are returned untouched — no precision loss.
-    ['mergeable' as const, 0],
-    ['checks_failed' as const, 3],
-    ['checks_failed_optional' as const, 3],
-    ['merge_conflicts' as const, 5],
-    ['changes_requested' as const, 0],
-    ['blocked' as const, 0],
-    ['blocked' as const, 2], // blocked can legitimately co-exist with non-required failures
-    ['unknown' as const, 4],
-  ])('leaves a consistent %s (failed=%s) untouched', (reason, failed) => {
-    expect(reconcileBlockingReason(reason, { failed }, 'UNSTABLE')).toBe(reason);
   });
 });
 
@@ -1204,10 +1164,13 @@ describe('decodeBatchResponse', () => {
     // fetch surfaces these to the desktop Checks tab).
     // required is null here: this by-branch fixture carries no isRequired.
     expect(pr.checkContexts).toEqual([
-      { name: 'lint', state: 'success', url: null, required: null },
-      { name: 'test', state: 'failure', url: null, required: null },
-      { name: 'ci/external', state: 'pending', url: null, required: null },
+      { name: 'lint', state: 'success', url: null, required: null, rawState: 'SUCCESS', ts: 0 },
+      { name: 'test', state: 'failure', url: null, required: null, rawState: 'FAILURE', ts: 0 },
+      { name: 'ci/external', state: 'pending', url: null, required: null, rawState: 'PENDING', ts: 0 },
     ]);
+    expect(pr.checkContextsComplete).toBe(true);
+    expect(pr.ciStatus).toBe('failing_required');
+    expect(pr.humanGates).toEqual([]);
   });
 
   it('treats a PR with no statusCheckRollup as zero checks (early-PR case)', () => {
@@ -1840,5 +1803,280 @@ describe('decodeReviewDetail', () => {
       })
     );
     expect(out.comments.map((c) => c.id)).toEqual(['early', 'late']);
+  });
+});
+
+// The PostHog/posthog shapes behind the "required failures read green" and
+// "no Needs human" reports. posthog is MERGEABLE + BLOCKED + REVIEW_REQUIRED on
+// every open PR, which is exactly the verdict the old pill read as "every
+// failure is non-required".
+describe('rawToSummary — the CI verdict on posthog-shaped PRs', () => {
+  type Ctx = Record<string, unknown>;
+  const run = (name: string, conclusion: string, isRequired: boolean | null): Ctx => ({
+    __typename: 'CheckRun',
+    id: name,
+    name,
+    status: 'COMPLETED',
+    conclusion,
+    ...(isRequired === null ? {} : { isRequired }),
+  });
+  const status = (context: string, state: string, isRequired: boolean): Ctx => ({
+    __typename: 'StatusContext',
+    id: context,
+    context,
+    state,
+    targetUrl: 'https://us.posthog.com/visual_review/runs/1',
+    isRequired,
+  });
+  const decode = (contexts: Ctx[], rollupState = 'FAILURE', extra: Record<string, unknown> = {}) =>
+    decodeBatchByNumberResponse(
+      [108150],
+      {
+        repository: {
+          [aliasForBranch(0)]: {
+            number: 108150,
+            title: 't',
+            body: '',
+            url: 'https://github.com/PostHog/posthog/pull/108150',
+            isDraft: false,
+            state: 'OPEN',
+            mergedAt: null,
+            closedAt: null,
+            updatedAt: '2026-09-29T00:00:00Z',
+            mergeable: 'MERGEABLE',
+            mergeStateStatus: 'BLOCKED',
+            reviewDecision: 'REVIEW_REQUIRED',
+            author: { login: 'someone' },
+            headRefName: 'feat',
+            baseRefName: 'master',
+            headRefOid: 'sha',
+            reviews: { nodes: [] },
+            reviewThreads: { nodes: [] },
+            comments: { nodes: [] },
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: rollupState,
+                      contexts: { nodes: contexts, pageInfo: { hasNextPage: false, endCursor: null } },
+                    },
+                  },
+                },
+              ],
+            },
+            ...extra,
+          },
+        },
+      } as never,
+      'PostHog',
+      'posthog'
+    )[0].pr!;
+
+  const VR_CHANGES = [
+    status('PostHog Visual Review / storybook', 'FAILURE', false),
+    run('Complete Visual Review run', 'FAILURE', false),
+    run('Visual regression tests pass', 'FAILURE', true),
+    run('Django Tests Pass', 'SUCCESS', true),
+  ];
+
+  it.each([
+    {
+      name: 'a timed-out optional job and the REQUIRED gate that fails after it (semgrep)',
+      contexts: [
+        run('semgrep-devex', 'TIMED_OUT', false),
+        run('Semgrep Checks Pass', 'FAILURE', true),
+        run('shellcheck', 'SUCCESS', true),
+      ],
+      ciStatus: 'failing_required',
+      blockingReason: 'checks_failed',
+      gates: 0,
+    },
+    {
+      name: 'only a non-required job failing',
+      contexts: [run('semgrep-devex', 'TIMED_OUT', false), run('Semgrep Checks Pass', 'SUCCESS', true)],
+      ciStatus: 'failing_optional',
+      blockingReason: 'blocked',
+      gates: 0,
+    },
+    {
+      name: 'a failing check whose required-ness is unknown (never guessed green)',
+      contexts: [run('mystery', 'FAILURE', null)],
+      ciStatus: 'failing_required',
+      blockingReason: 'checks_failed',
+      gates: 0,
+    },
+    {
+      name: 'Visual Review changes and the required check that fails because of them (#108150)',
+      contexts: VR_CHANGES,
+      ciStatus: 'needs_human',
+      blockingReason: 'needs_human',
+      gates: 1,
+    },
+    {
+      name: 'Visual Review changes plus a real required failure',
+      contexts: [...VR_CHANGES, run('Frontend Tests Pass', 'FAILURE', true)],
+      ciStatus: 'failing_required',
+      blockingReason: 'checks_failed',
+      gates: 1,
+    },
+    {
+      name: 'a Visual Review that ERRORED (CI broke, not a person needed)',
+      contexts: [
+        status('PostHog Visual Review / storybook', 'ERROR', false),
+        run('Visual regression tests pass', 'FAILURE', true),
+      ],
+      ciStatus: 'failing_required',
+      blockingReason: 'checks_failed',
+      gates: 0,
+    },
+    {
+      name: 'a tracking-only Visual Review status',
+      contexts: [
+        status('PostHog Visual Review / storybook (tracking)', 'FAILURE', false),
+        run('Django Tests Pass', 'SUCCESS', true),
+      ],
+      ciStatus: 'failing_optional',
+      blockingReason: 'blocked',
+      gates: 0,
+    },
+  ])('$name → $ciStatus / $blockingReason', ({ contexts, ciStatus, blockingReason, gates }) => {
+    const pr = decode(contexts);
+    expect(pr.ciStatus).toBe(ciStatus);
+    expect(pr.blockingReason).toBe(blockingReason);
+    expect(pr.humanGates).toHaveLength(gates);
+  });
+
+  it('names the gate and links where to approve it', () => {
+    expect(decode(VR_CHANGES).humanGates).toEqual([
+      {
+        id: 'posthog_visual_review',
+        label: 'Visual review',
+        name: 'PostHog Visual Review / storybook',
+        url: 'https://us.posthog.com/visual_review/runs/1',
+      },
+    ]);
+  });
+
+  it('lets conflicts outrank a human gate', () => {
+    expect(decode(VR_CHANGES, 'FAILURE', { mergeable: 'CONFLICTING' }).blockingReason).toBe(
+      'merge_conflicts'
+    );
+  });
+
+  it('skips a context GitHub nulled instead of throwing, and says the list is incomplete', () => {
+    const pr = decode([run('lint', 'SUCCESS', true), null as unknown as Ctx], 'SUCCESS');
+    expect(pr.checks.total).toBe(1);
+    expect(pr.checkContextsComplete).toBe(false);
+  });
+});
+
+describe('batchPullRequests — a context tail that could not be read', () => {
+  const ctx = (over: Record<string, unknown>) => ({ __typename: 'CheckRun', status: 'COMPLETED', ...over });
+  const firstPage = (rollupState: string) => ({
+    repository: {
+      [aliasForBranch(0)]: {
+        nodes: [
+          {
+            number: 42,
+            title: 'big',
+            body: '',
+            url: 'https://github.com/acme/widgets/pull/42',
+            isDraft: false,
+            state: 'OPEN',
+            mergedAt: null,
+            closedAt: null,
+            updatedAt: '2026-01-01T00:00:00Z',
+            mergeable: 'MERGEABLE',
+            mergeStateStatus: 'BLOCKED',
+            reviewDecision: 'APPROVED',
+            author: { login: 'alice' },
+            headRefName: 'feature/x',
+            baseRefName: 'main',
+            headRefOid: 'abc',
+            reviews: { nodes: [] },
+            reviewThreads: { nodes: [] },
+            comments: { nodes: [] },
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: rollupState,
+                      contexts: {
+                        nodes: [ctx({ id: '1', name: 'a', conclusion: 'SUCCESS' })],
+                        pageInfo: { hasNextPage: true, endCursor: 'C1' },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  });
+  const tails = {
+    throws: async () => {
+      throw new Error('Resource not accessible by integration');
+    },
+    'answers a nulled rollup': async () => ({
+      repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: null } }] } } },
+    }),
+  };
+
+  it.each([
+    ['throws', 'FAILURE', 'failing_required', 'checks_failed', 1, 0],
+    ['answers a nulled rollup', 'FAILURE', 'failing_required', 'checks_failed', 1, 0],
+    ['throws', 'PENDING', 'running', 'blocked', 0, 1],
+    ['throws', 'SUCCESS', 'passing', 'blocked', 0, 0],
+  ] as const)(
+    'tail %s on a %s rollup → %s / %s, never green over an unseen failure',
+    async (tail, rollupState, ciStatus, blockingReason, failed, inProgress) => {
+      vi.spyOn(githubService, 'executeGraphql').mockImplementation(async (_ws, query: string) => {
+        if (query.includes('ContextsPage')) return (await tails[tail]()) as never;
+        return firstPage(rollupState) as never;
+      });
+      const pr = (
+        await batchPullRequests({ workspaceId: 'ws1', owner: 'acme', repo: 'widgets', branches: ['feature/x'] })
+      )[0].pr!;
+      expect(pr.checkContextsComplete).toBe(false);
+      expect(pr.ciStatus).toBe(ciStatus);
+      expect(pr.blockingReason).toBe(blockingReason);
+      expect(pr.checks.failed).toBe(failed);
+      expect(pr.checks.inProgress).toBe(inProgress);
+    }
+  );
+
+  it('stamps when the fetch started, for the ledger reseed', async () => {
+    vi.spyOn(githubService, 'executeGraphql').mockImplementation(async (_ws, query: string) =>
+      query.includes('ContextsPage')
+        ? ({
+            repository: {
+              pullRequest: {
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        statusCheckRollup: {
+                          contexts: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          } as never)
+        : (firstPage('SUCCESS') as never)
+    );
+    const before = Date.now();
+    const pr = (
+      await batchPullRequests({ workspaceId: 'ws1', owner: 'acme', repo: 'widgets', branches: ['feature/x'] })
+    )[0].pr!;
+    expect(pr.checkContextsComplete).toBe(true);
+    expect(pr.fetchStartedAt).toBeGreaterThanOrEqual(before);
+    expect(pr.fetchStartedAt).toBeLessThanOrEqual(Date.now());
   });
 });

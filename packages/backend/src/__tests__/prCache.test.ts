@@ -8,6 +8,7 @@ import {
   linkTaskToPullRequest,
   attachTaskToPullRequestRow,
   DEFAULT_TTL_MS,
+  _awaitCheckLedgerReseeds,
   type CursorState,
 } from '../services/prCache.js';
 import { ingestCheckRun } from '../services/checkCounts.js';
@@ -21,6 +22,7 @@ import {
   repositories as repositoriesTable,
   pullRequests as pullRequestsTable,
   tasks as tasksTable,
+  prCheckStates,
 } from '../db/schema.js';
 import * as websocketModule from '../services/websocket.js';
 
@@ -502,6 +504,68 @@ describe('prCache — DB integration', () => {
       await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: settled });
 
       expect((await readFullRow()).lastSummary).toMatchObject({ checks: settled.checks });
+    });
+
+    // PostHog/posthog#104122: the full fetch fixed the pill, the NEXT check
+    // webhook on the commit recounted from the stale ledger and put "1/232
+    // running" back. The fetch must now correct the ledger itself.
+    it('keeps the full fetch\'s counts through the next check webhook on the same commit', async () => {
+      const lintEvent = (name: string, state: 'pending' | 'success', iso: string) => ({
+        repoFullName: 'acme/widgets',
+        owner: 'acme',
+        repo: 'widgets',
+        headSha: 'sha1',
+        name,
+        source: 'check_run' as const,
+        externalId: name,
+        state,
+        ts: new Date(iso),
+      });
+      const target = [{ workspaceId: 'ws1', repositoryId: 'repo1' }];
+      const tracked = new Map([['repo1', new Set([42])]]);
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: makeSummary() });
+      await _awaitCheckLedgerReseeds();
+      // The completion of `lint` never arrives: the ledger holds it pending.
+      await ingestCheckRun(lintEvent('lint', 'pending', '2026-01-01T00:00:00Z'), target, [42], tracked);
+      expect((await readFullRow()).lastSummary).toMatchObject({ checks: { inProgress: 1 } });
+
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({
+          checks: { total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 },
+          checkDigest: 'sha1:lint=success',
+          checkContexts: [
+            { name: 'lint', state: 'success', url: null, required: true, ts: Date.parse('2026-01-01T00:05:00Z') },
+          ],
+          checkContextsComplete: true,
+          ciStatus: 'passing',
+          humanGates: [],
+          fetchStartedAt: Date.now(),
+        }),
+      });
+      await _awaitCheckLedgerReseeds();
+
+      // A review-triggered workflow reports on the same commit later.
+      await ingestCheckRun(lintEvent('notify-reviewed', 'success', '2026-01-01T01:00:00Z'), target, [42], tracked);
+
+      expect((await readFullRow()).lastSummary).toMatchObject({
+        checks: { total: 2, passed: 2, inProgress: 0 },
+        ciStatus: 'passing',
+      });
+    });
+
+    it('does not reseed from an incomplete context list', async () => {
+      await upsertFromBatchResult({
+        workspaceId: 'ws1',
+        repositoryId: 'repo1',
+        summary: makeSummary({
+          checkContexts: [{ name: 'lint', state: 'success', url: null, required: true }],
+          checkContextsComplete: false,
+        }),
+      });
+      await _awaitCheckLedgerReseeds();
+      expect(await db.select().from(prCheckStates)).toHaveLength(0);
     });
 
     it('lets the poll overwrite a webhook label patch that GitHub no longer agrees with', async () => {

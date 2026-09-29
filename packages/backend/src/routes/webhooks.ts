@@ -49,8 +49,9 @@ export function verifyGithubSignature(
   return timingSafeEqual(a, b) ? 'valid' : 'invalid';
 }
 
-/** The head SHA a `check_run`/`check_suite` payload is for (the dedupe/match key). */
+/** The head SHA a `check_run`/`check_suite`/`status` payload is for (the dedupe/match key). */
 function checkHeadSha(eventType: string, payload: Record<string, unknown>): string | undefined {
+  if (eventType === 'status') return typeof payload.sha === 'string' ? payload.sha : undefined;
   const node = (eventType === 'check_run' ? payload.check_run : payload.check_suite) as
     | { head_sha?: unknown }
     | undefined;
@@ -142,11 +143,13 @@ export async function handleGithubWebhook(req: Request, res: Response): Promise<
     await noteHeadSha(repoFullName, headSha);
   }
 
-  // The firehose: drop `check_run`/`check_suite` whose commit is not the head of
-  // any tracked OPEN PR — they could never change a pill count, and this spares
-  // both the stream slot and the ~1-2 DB round-trips a no-op would have cost.
-  // Fails OPEN (never drops) when the repo isn't authoritatively seeded yet.
-  if (eventType === 'check_run' || eventType === 'check_suite') {
+  // The firehose: drop `check_run`/`check_suite`/`status` whose commit is not
+  // the head of any tracked OPEN PR — they could never change a pill count, and
+  // this spares both the stream slot and the ~1-2 DB round-trips a no-op would
+  // have cost. `status` fires for every commit on every branch, PR or not, so
+  // it needs the filter most. Fails OPEN (never drops) when the repo isn't
+  // authoritatively seeded yet.
+  if (eventType === 'check_run' || eventType === 'check_suite' || eventType === 'status') {
     const headSha = checkHeadSha(eventType, payload);
     if (await shouldDropByHeadSha(repoFullName, headSha)) {
       whTrace(

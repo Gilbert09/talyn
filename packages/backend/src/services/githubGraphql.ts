@@ -1,6 +1,10 @@
 import {
+  deriveCiVerdict,
   externalQueueStatusFromLabels,
+  type CiVerdict,
   type PRBlockingReason,
+  type PRCiStatus,
+  type PRHumanGate,
   type PRStackInfo,
 } from '@talyn/shared';
 import { githubService } from './github.js';
@@ -208,7 +212,29 @@ export interface PRSummary {
     /** Whether GitHub marks this check required for the PR. null when the
      *  fetch didn't carry per-check required-ness (by-branch path). */
     required: boolean | null;
+    /** GitHub's own conclusion/state before normalisation (`TIMED_OUT`,
+     *  `ERROR`, …). Absent on summaries built without it. */
+    rawState?: string | null;
+    /** Newest activity on the run, epoch ms — the check ledger's ordering key. */
+    ts?: number;
   }>;
+  /**
+   * Whether {@link checkContexts} is EVERY context on the head. False when a
+   * page of a >100-check rollup could not be read. An incomplete list must
+   * never reseed the check ledger, and never read as "nothing failing".
+   * Absent on summaries read back from the cache (no contexts at all).
+   */
+  checkContextsComplete?: boolean;
+  /**
+   * When the request that produced this summary was sent (epoch ms). The check
+   * ledger reseed trusts the snapshot over any row older than this, and defers
+   * to a webhook that landed after it. Transient — never persisted.
+   */
+  fetchStartedAt?: number;
+  /** The CI picture alone — see `deriveCiVerdict` in `@talyn/shared`. */
+  ciStatus?: PRCiStatus;
+  /** Failing gates only a person can clear (PostHog Visual Review). */
+  humanGates?: PRHumanGate[];
   /** Rolling hash of `headSha + sorted(check.state per name)` — used by
    *  the cursor logic to detect "checks changed" without diffing the
    *  whole rollup payload. */
@@ -302,6 +328,7 @@ export async function batchPullRequests(opts: {
       const { branches: chunkBranches, numbers: chunkNumbers } = chunks[idx];
       const chunk = chunkBranches;
       const query = makeBatchPullRequestsQuery(chunk, chunkNumbers);
+      const fetchStartedAt = Date.now();
       const data = await githubService.executeGraphql<BatchPullRequestsResponse>(
         workspaceId,
         query,
@@ -312,7 +339,7 @@ export async function batchPullRequests(opts: {
         owner,
         repo,
       });
-      results.push(...decodeBatchResponse(chunk, data, owner, repo));
+      results.push(...stampFetchStart(decodeBatchResponse(chunk, data, owner, repo), fetchStartedAt));
     }
   }
   const workers = Array.from(
@@ -320,6 +347,11 @@ export async function batchPullRequests(opts: {
     () => worker()
   );
   await Promise.all(workers);
+  return results;
+}
+
+function stampFetchStart<T extends { pr: PRSummary | null }>(results: T[], at: number): T[] {
+  for (const r of results) if (r.pr) r.pr.fetchStartedAt = at;
   return results;
 }
 
@@ -415,6 +447,7 @@ export async function batchPullRequestsByNumber(opts: {
         const idx = cursor++;
         const chunk = chunks[idx];
         const query = makeBatchPullRequestsByNumberQuery(chunk);
+        const fetchStartedAt = Date.now();
         const data = await githubService.executeGraphql<BatchByNumberResponse>(
           workspaceId,
           query,
@@ -425,7 +458,9 @@ export async function batchPullRequestsByNumber(opts: {
           owner,
           repo,
         });
-        fetched.push(...decodeBatchByNumberResponse(chunk, data, owner, repo));
+        fetched.push(
+          ...stampFetchStart(decodeBatchByNumberResponse(chunk, data, owner, repo), fetchStartedAt)
+        );
       }
     };
     const workers = Array.from(
@@ -514,7 +549,7 @@ async function fetchRemainingCheckContexts(
   repo: string,
   number: number,
   startCursor: string
-): Promise<RawCheckContext[]> {
+): Promise<{ nodes: RawCheckContext[]; complete: boolean }> {
   const out: RawCheckContext[] = [];
   const query = makeContextsPageQuery();
   let after: string | null = startCursor;
@@ -531,11 +566,14 @@ async function fetchRemainingCheckContexts(
     const conn =
       data.repository?.pullRequest?.commits.nodes[0]?.commit.statusCheckRollup
         ?.contexts;
-    if (!conn) break;
+    // A nulled rollup on a later page (GitHub answers partial data under
+    // `repository`) used to just end the walk, so the tail vanished without a
+    // word and a failure past #100 read as green. Report it as incomplete.
+    if (!conn) return { nodes: out, complete: false };
     out.push(...conn.nodes);
     after = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   }
-  return out;
+  return { nodes: out, complete: after === null };
 }
 
 /**
@@ -556,7 +594,12 @@ async function topUpCheckContexts(
   for (const pr of prs) {
     const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
     const pageInfo = rollup?.contexts.pageInfo;
-    if (!rollup || !pageInfo?.hasNextPage || !pageInfo.endCursor) continue;
+    if (!rollup || !pageInfo?.hasNextPage) continue;
+    if (!pageInfo.endCursor) {
+      rollup.contexts.incomplete = true;
+      rollup.contexts.pageInfo = { hasNextPage: false, endCursor: null };
+      continue;
+    }
     try {
       const remaining = await fetchRemainingCheckContexts(
         ctx.workspaceId,
@@ -565,8 +608,10 @@ async function topUpCheckContexts(
         pr.number,
         pageInfo.endCursor
       );
-      rollup.contexts.nodes.push(...remaining);
+      rollup.contexts.nodes.push(...remaining.nodes);
+      if (!remaining.complete) rollup.contexts.incomplete = true;
     } catch (err) {
+      rollup.contexts.incomplete = true;
       // The first 100 contexts already fetched fine; only the tail failed —
       // most often "Resource not accessible by integration" when the App lacks
       // (or hasn't had approved) Commit-statuses/Checks read for a later
@@ -582,7 +627,8 @@ async function topUpCheckContexts(
         );
       }
     }
-    // Either way, stop advertising more pages so downstream treats it as complete.
+    // Either way, stop advertising more pages. Completeness is `incomplete`'s
+    // job — `rawToSummary` reads it rather than guessing from the count.
     rollup.contexts.pageInfo = { hasNextPage: false, endCursor: null };
   }
 }
@@ -724,6 +770,13 @@ export function computeBlockingReason(input: {
    *  of every failing check — lets us decide authoritatively whether a
    *  failure blocks, rather than inferring it from `mergeStateStatus`. */
   requiredDataAvailable?: boolean;
+  /**
+   * The per-check verdict from `deriveCiVerdict`. When present it is the whole
+   * answer to "do the failures block": it already weighed each check's
+   * required-ness (unknown reads as blocking) and attributed the failures a
+   * human gate explains. The two fields above remain for callers without it.
+   */
+  ci?: Pick<CiVerdict, 'blockingFailing' | 'ciStatus'>;
 }): BlockingReason {
   if (input.mergeable === 'CONFLICTING') return 'merge_conflicts';
   if (input.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
@@ -740,11 +793,16 @@ export function computeBlockingReason(input: {
   //     GitHub surfaces "mergeable but with non-passing checks" as UNSTABLE,
   //     so those failures aren't required; any other state with failures is
   //     conservatively treated as a red required check.
-  const failuresBlock = input.requiredDataAvailable
-    ? (input.requiredFailing ?? 0) > 0
-    : input.checks.failed > 0 &&
-      !(input.mergeable === 'MERGEABLE' && upper === 'UNSTABLE');
+  const failuresBlock = input.ci
+    ? input.ci.blockingFailing > 0
+    : input.requiredDataAvailable
+      ? (input.requiredFailing ?? 0) > 0
+      : input.checks.failed > 0 &&
+        !(input.mergeable === 'MERGEABLE' && upper === 'UNSTABLE');
   if (failuresBlock) return 'checks_failed';
+  // Only a person can clear what is left — ahead of a missing review, because
+  // approving the PR will not merge it while the gate is red.
+  if (input.ci?.ciStatus === 'needs_human') return 'needs_human';
 
   // A required review that hasn't landed yet → "Review". Checked before
   // the mergeable branch because GitHub computes `mergeable` lazily and
@@ -778,40 +836,6 @@ export function computeBlockingReason(input: {
   // job). Surface as `unknown` so the UI can show a spinner rather
   // than guessing.
   return 'unknown';
-}
-
-/**
- * Reconcile a previously-derived {@link computeBlockingReason} verdict against a
- * *fresher* check breakdown when the two were computed at different times.
- *
- * The incremental check-count path ({@link file://./checkCounts.ts}) advances
- * `checks` on each `check_run` webhook WITHOUT re-running the full verdict, so a
- * held `blockingReason` can contradict the live counts — the bug where a PR
- * shows a green "Ready" pill while 26 checks are failing (`mergeable` is stale,
- * `checks.failed` is fresh). `computeBlockingReason` provably never returns
- * `mergeable` with failures, nor `checks_failed[_optional]` with zero failures,
- * so ONLY those two combinations are stale and get corrected; an authoritative
- * verdict (e.g. a required `checks_failed` that knows each check's
- * `isRequired`) is left untouched, so there's no precision loss. UNSTABLE ⇒ the
- * failing checks aren't required, mirroring the no-per-check-data heuristic.
- */
-export function reconcileBlockingReason(
-  blockingReason: BlockingReason,
-  checks: Pick<CheckBreakdown, 'failed'>,
-  mergeStateStatus: string | null | undefined,
-): BlockingReason {
-  if (blockingReason === 'mergeable' && checks.failed > 0) {
-    return mergeStateStatus?.toUpperCase() === 'UNSTABLE'
-      ? 'checks_failed_optional'
-      : 'checks_failed';
-  }
-  if (
-    (blockingReason === 'checks_failed' || blockingReason === 'checks_failed_optional') &&
-    checks.failed === 0
-  ) {
-    return 'mergeable';
-  }
-  return blockingReason;
 }
 
 /**
@@ -951,6 +975,8 @@ interface NormalizedCheck {
   state: CheckState;
   url: string | null;
   required: boolean | null;
+  rawState: string | null;
+  ts: number;
 }
 
 /**
@@ -989,11 +1015,18 @@ interface NormalizedCheck {
  * Either way our verdict matches the single field GitHub's UI is derived from.
  */
 export function summarizeCheckContexts(
-  contexts: Array<NormalizedCheck & { ts: number }>,
+  contexts: Array<Omit<NormalizedCheck, 'rawState'> & { rawState?: string | null }>,
   rollupState: string | null | undefined
 ): { normalized: NormalizedCheck[]; checks: CheckBreakdown } {
   let normalized: NormalizedCheck[] = dedupeLatestCheckByName(contexts).map(
-    ({ name, state, url, required }) => ({ name, state, url, required })
+    ({ name, state, url, required, rawState, ts }) => ({
+      name,
+      state,
+      url,
+      required,
+      rawState: rawState ?? null,
+      ts,
+    })
   );
   const rollupFailed = rollupState === 'FAILURE' || rollupState === 'ERROR';
   const dedupedFailed = normalized.some((c) => c.state === 'failure');
@@ -1011,19 +1044,20 @@ export function summarizeCheckContexts(
       const prev = latestSuccessTsByName.get(c.name);
       if (prev === undefined || c.ts > prev) latestSuccessTsByName.set(c.name, c.ts);
     }
-    const failingUrlByName = new Map<string, string | null>();
+    const failingByName = new Map<string, { url: string | null; rawState: string | null }>();
     for (const c of contexts) {
-      if (c.state !== 'failure' || failingUrlByName.has(c.name)) continue;
+      if (c.state !== 'failure' || failingByName.has(c.name)) continue;
       const supersededAt = latestSuccessTsByName.get(c.name);
       if (supersededAt !== undefined && supersededAt > c.ts) continue;
-      failingUrlByName.set(c.name, c.url);
+      failingByName.set(c.name, { url: c.url, rawState: c.rawState ?? null });
     }
-    if (failingUrlByName.size > 0) {
-      normalized = normalized.map((c) =>
-        failingUrlByName.has(c.name)
-          ? { ...c, state: 'failure', url: failingUrlByName.get(c.name) ?? c.url }
-          : c
-      );
+    if (failingByName.size > 0) {
+      normalized = normalized.map((c) => {
+        const failing = failingByName.get(c.name);
+        return failing
+          ? { ...c, state: 'failure', url: failing.url ?? c.url, rawState: failing.rawState }
+          : c;
+      });
     }
   } else if (rollupState === 'SUCCESS' && dedupedFailed) {
     // Mirror image: GitHub's rollup is green, yet latest-per-name still holds a
@@ -1036,16 +1070,49 @@ export function summarizeCheckContexts(
       c.state === 'failure' ? { ...c, state: 'skipped' } : c
     );
   }
-  const checks: CheckBreakdown = {
-    total: normalized.length,
-    passed: normalized.filter((c) => c.state === 'success').length,
-    failed: normalized.filter((c) => c.state === 'failure').length,
-    inProgress: normalized.filter(
-      (c) => c.state === 'in_progress' || c.state === 'pending'
-    ).length,
-    skipped: normalized.filter((c) => c.state === 'skipped').length,
+  return { normalized, checks: breakdownOf(normalized) };
+}
+
+/** Roll per-check states into the pill's {@link CheckBreakdown}. The one definition. */
+export function breakdownOf(contexts: ReadonlyArray<{ state: CheckState }>): CheckBreakdown {
+  return {
+    total: contexts.length,
+    passed: contexts.filter((c) => c.state === 'success').length,
+    failed: contexts.filter((c) => c.state === 'failure').length,
+    inProgress: contexts.filter((c) => c.state === 'in_progress' || c.state === 'pending').length,
+    skipped: contexts.filter((c) => c.state === 'skipped').length,
   };
-  return { normalized, checks };
+}
+
+/** Name of the stand-in for contexts a failed page read left out. */
+export const UNFETCHED_CHECKS_NAME = 'Checks Talyn could not read';
+
+/**
+ * A context list with pages missing can hold none of the failures GitHub's
+ * rollup reports — they may all be past #100. Counting what we have would read
+ * a FAILURE rollup as green. So when the rollup says something the list cannot
+ * account for, add one stand-in with unknown required-ness: a failure then
+ * reads as blocking (red), a pending rollup as running.
+ */
+function withUnfetchedTail(
+  normalized: NormalizedCheck[],
+  rollupState: string | null | undefined
+): NormalizedCheck[] {
+  const upper = rollupState?.toUpperCase();
+  let state: CheckState | null = null;
+  if ((upper === 'FAILURE' || upper === 'ERROR') && !normalized.some((c) => c.state === 'failure')) {
+    state = 'failure';
+  } else if (
+    (upper === 'PENDING' || upper === 'EXPECTED') &&
+    !normalized.some((c) => c.state === 'pending' || c.state === 'in_progress')
+  ) {
+    state = 'pending';
+  }
+  if (!state) return normalized;
+  return [
+    ...normalized,
+    { name: UNFETCHED_CHECKS_NAME, state, url: null, required: null, rawState: upper ?? null, ts: 0 },
+  ];
 }
 
 // ---------- GraphQL query construction ----------
@@ -1398,6 +1465,9 @@ interface RawPullRequest {
           contexts: {
             nodes: Array<RawCheckContext>;
             pageInfo?: { hasNextPage: boolean; endCursor: string | null };
+            /** Ours, not GitHub's: set when a page of the tail could not be
+             *  read, so the node list is not every context on the head. */
+            incomplete?: boolean;
           };
         } | null;
       };
@@ -1478,7 +1548,12 @@ function nativeStackOf(raw: RawPullRequest): PRStackInfo | null {
 
 function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSummary {
   const rollup = raw.commits.nodes[0]?.commit.statusCheckRollup;
-  const contexts = rollup?.contexts.nodes ?? [];
+  // A context GitHub could not resolve comes back as `null` (the field is
+  // non-null in its schema, so one refused `isRequired` nulls the whole node).
+  // Skip it rather than throw, and say the list is not complete.
+  const rawNodes = rollup?.contexts.nodes ?? [];
+  const contexts = rawNodes.filter((c): c is RawCheckContext => c != null);
+  const contextsComplete = !rollup?.contexts.incomplete && contexts.length === rawNodes.length;
   const contextsWithTs = contexts.map((c) => {
     const isCheckRun = c.__typename === 'CheckRun';
     return {
@@ -1486,6 +1561,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
       state: normalizeCheckState(
         isCheckRun ? { status: c.status, conclusion: c.conclusion } : { state: c.state }
       ),
+      rawState: (isCheckRun ? (c.conclusion ?? c.status) : c.state) ?? null,
       url: (isCheckRun ? c.detailsUrl : c.targetUrl) ?? null,
       // `isRequired` is only in the response when the query carried a PR
       // number; normalise missing → null ("unknown").
@@ -1499,24 +1575,21 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
   // Collapse same-name re-runs to GitHub's latest-per-name view, but defer to
   // GitHub's authoritative rollup state so a superseded-but-still-counted
   // failure can't read as "Ready" (see summarizeCheckContexts).
-  const { normalized: normalizedContexts, checks } = summarizeCheckContexts(
-    contextsWithTs,
-    rollup?.state
-  );
-  // Required-ness is authoritative only if we know it for every failing
-  // check (a partially-paginated by-branch fetch could mix known + null);
-  // otherwise fall back to the mergeStateStatus heuristic.
-  const failingContexts = normalizedContexts.filter((c) => c.state === 'failure');
-  const requiredDataAvailable =
-    failingContexts.length === 0 || failingContexts.every((c) => c.required !== null);
-  const requiredFailing = failingContexts.filter((c) => c.required === true).length;
+  const summarized = summarizeCheckContexts(contextsWithTs, rollup?.state);
+  const normalizedContexts = contextsComplete
+    ? summarized.normalized
+    : withUnfetchedTail(summarized.normalized, rollup?.state);
+  const checks = contextsComplete ? summarized.checks : breakdownOf(normalizedContexts);
+  const ci = deriveCiVerdict(normalizedContexts, {
+    mergeable: raw.mergeable,
+    mergeStateStatus: raw.mergeStateStatus,
+  });
   const blockingReason = computeBlockingReason({
     mergeable: raw.mergeable,
     mergeStateStatus: raw.mergeStateStatus,
     reviewDecision: raw.reviewDecision,
     checks,
-    requiredFailing,
-    requiredDataAvailable,
+    ci,
     labels: (raw.labels?.nodes ?? []).map((l) => l.name),
   });
   // Split by who OPENED the thread. The distinction is load-bearing, not
@@ -1620,6 +1693,9 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     unresolvedBotReviewThreads,
     reviewRequests,
     checkContexts: normalizedContexts,
+    checkContextsComplete: contextsComplete,
+    ciStatus: ci.ciStatus,
+    humanGates: ci.humanGates,
     checkDigest: computeCheckDigest(raw.headRefOid, normalizedContexts),
     failingChecksDigest: computeFailingChecksDigest(normalizedContexts),
     recentReviews,

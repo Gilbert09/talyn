@@ -175,6 +175,54 @@ describe('prMonitor — poll orchestration', () => {
     expect(rows.find((r) => r.id === 'repo1')?.name).toBe('acme/widgets');
   });
 
+  // A failed search used to skip the whole refetch, and with no periodic poll a
+  // tracked PR's stuck check pill then waited on a sweep that never reached it.
+  it.each([
+    ['a rate-limited search', new Error('API rate limit exceeded for user')],
+    ['a transient search failure', new Error('502 Bad Gateway')],
+  ])('still refreshes TRACKED rows after %s, leaving relationship flags alone', async (_l, err) => {
+    const stale = new Date(Date.now() - 60 * 60_000);
+    await db.insert(pullRequestsTable).values({
+      id: 'pr-tracked',
+      workspaceId: 'ws1',
+      repositoryId: 'repo1',
+      owner: 'acme',
+      repo: 'widgets',
+      number: 9,
+      state: 'open',
+      authored: true,
+      reviewRequested: false,
+      lastPolledAt: stale,
+      lastSummary: { headSha: 'sha1', checks: { total: 2, passed: 1, failed: 0, inProgress: 1, skipped: 0 } },
+      createdAt: stale,
+      updatedAt: stale,
+    });
+    vi.spyOn(githubService, 'searchPullRequestNumbers').mockRejectedValue(err);
+    vi.spyOn(githubService, 'getRepository').mockResolvedValue({
+      id: 1,
+      name: 'widgets',
+      full_name: 'acme/widgets',
+      private: false,
+      html_url: 'https://github.com/acme/widgets',
+      default_branch: 'main',
+      owner: { login: 'acme', avatar_url: 'x' },
+    } as Awaited<ReturnType<typeof githubService.getRepository>>);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const batch = vi.spyOn(graphqlModule, 'batchPullRequestsByNumber').mockResolvedValue([
+      {
+        number: 9,
+        pr: fakeSummary({ number: 9, checks: { total: 2, passed: 2, failed: 0, inProgress: 0, skipped: 0 } }),
+      },
+    ]);
+
+    await prMonitorService.forcePoll();
+
+    expect(batch).toHaveBeenCalledWith(expect.objectContaining({ numbers: [9] }));
+    const [row] = await db.select().from(pullRequestsTable).where(eq(pullRequestsTable.id, 'pr-tracked'));
+    expect((row.lastSummary as { checks: { inProgress: number } }).checks.inProgress).toBe(0);
+    expect(row.authored).toBe(true);
+  });
+
   it('does nothing when there are no connected workspaces', async () => {
     vi.spyOn(githubService, 'getConnectedWorkspaces').mockReturnValue([]);
     const searchSpy = vi.spyOn(githubService, 'searchPullRequestNumbers');

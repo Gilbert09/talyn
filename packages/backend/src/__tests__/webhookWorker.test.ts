@@ -742,6 +742,37 @@ describe('processWebhookDelivery (fan-out + coalescing)', () => {
     });
   });
 
+  it('buffers a commit status (Visual Review) into the same ledger — status was ignored before', async () => {
+    await seedTrackedPr('rA', 'wsA', 7, 'sha-1');
+    const n = await processWebhookDelivery(
+      delivery({
+        eventType: 'status',
+        payload: {
+          id: 5,
+          sha: 'sha-1',
+          context: 'PostHog Visual Review / storybook',
+          state: 'failure',
+          target_url: 'https://us.posthog.com/vr/1',
+          updated_at: '2026-09-29T10:00:00Z',
+          repository: { owner: { login: 'acme' }, name: 'widget' },
+        },
+      }),
+      1_000,
+    );
+    expect(n).toBe(0);
+    await checkCountCoalescer.flushAllNow();
+    expect(refreshSpy).not.toHaveBeenCalled();
+    const rows = await db
+      .select({ ls: pullRequestsTable.lastSummary })
+      .from(pullRequestsTable)
+      .where(eq(pullRequestsTable.id, 'pr-rA-7'));
+    const ls = rows[0].ls as { checks: { failed: number }; humanGates: Array<{ name: string; url: string }> };
+    expect(ls.checks.failed).toBe(1);
+    expect(ls.humanGates).toEqual([
+      expect.objectContaining({ name: 'PostHog Visual Review / storybook', url: 'https://us.posthog.com/vr/1' }),
+    ]);
+  });
+
   it('coalesces a burst of check_runs for one sha into a single count update', async () => {
     // Three checks for the same (repo, sha) arrive in one window. They buffer and
     // flush ONCE — the final counts reflect all three (2 passed, 1 in-progress).

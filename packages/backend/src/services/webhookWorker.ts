@@ -10,6 +10,7 @@ import { debugBus } from './debugBus.js';
 import {
   checkCountCoalescer,
   parseCheckRunPayload,
+  parseStatusPayload,
   pruneChecksForSha,
 } from './checkCounts.js';
 import { noteIssueComment } from './externalQueueState.js';
@@ -284,6 +285,19 @@ export async function processWebhookDelivery(
     checkCountCoalescer.enqueue(ev);
     whTrace(`  check_run ${delivery.repoFullName} ${ev.name}=${ev.state} → buffered (coalesced)`);
     return 0; // the count update is accounted at flush time, not per delivery
+  }
+
+  // A commit `status` — PostHog Visual Review reports this way, and its
+  // approval turning green arrives ONLY here. It names a commit, not a PR, so it
+  // goes straight into the same coalescer (which matches the commit to the PRs
+  // whose head it is). Replays too: the payload is one state with its own time,
+  // and the ledger's ordering guard keeps an older one from winning.
+  if (delivery.eventType === 'status') {
+    const ev = parseStatusPayload(delivery.payload, delivery.repoFullName);
+    if (!ev) return 0;
+    checkCountCoalescer.enqueue(ev);
+    whTrace(`  status ${delivery.repoFullName} ${ev.name}=${ev.state} → buffered (coalesced)`);
+    return 0;
   }
 
   // This checks current user access before workflows or any payload-derived write.

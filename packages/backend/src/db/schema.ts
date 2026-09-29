@@ -559,7 +559,9 @@ export const pullRequests = pgTable(
      *     mergeable, mergeStateStatus, reviewDecision,
      *     blockingReason: 'mergeable' | 'merge_conflicts'
      *                   | 'changes_requested' | 'checks_failed'
-     *                   | 'checks_failed_optional' | 'blocked' | 'unknown',
+     *                   | 'checks_failed_optional' | 'blocked' | 'behind'
+     *                   | 'needs_human' | 'unknown',
+     *     ciStatus, humanGates,   (the CI picture alone — see checkVerdict.ts)
      *     checksTotal, checksPassed, checksFailed,
      *     checksInProgress, checksSkipped
      *   }
@@ -704,11 +706,17 @@ export const prCheckStates = pgTable(
     headSha: text('head_sha').notNull(),
     /** Check / status context name — the dedupe key (re-runs of a name win). */
     name: text('name').notNull(),
-    source: text('source').notNull(), // 'check_run' | 'status'
+    source: text('source').notNull(), // 'check_run' | 'status' | 'snapshot' (a full-fetch reseed)
     /** GitHub check_run id / status context id — debugging only. */
     externalId: text('external_id'),
-    /** Normalized CheckState: success | failure | pending | in_progress | skipped | cancelled. */
+    /** Normalized CheckState: success | failure | pending | in_progress | skipped. */
     state: text('state').notNull(),
+    /** GitHub's per-PR required-ness, from the last full fetch. NULL = not known. */
+    required: boolean('required'),
+    /** GitHub's own conclusion / state before normalisation (FAILURE, ERROR, TIMED_OUT…). */
+    rawState: text('raw_state'),
+    /** detailsUrl / targetUrl — where a person goes to act on the check. */
+    url: text('url'),
     /** Latest activity time for this check — guards against out-of-order events. */
     ts: timestamp('ts', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

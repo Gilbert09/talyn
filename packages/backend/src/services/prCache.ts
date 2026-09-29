@@ -11,6 +11,7 @@ import { readWorkspaceSettings } from './workspaceSettings.js';
 import { emitPullRequestUpdated } from './websocket.js';
 import { captureWorkspaceEvent } from './analytics.js';
 import { domainEvents } from './events.js';
+import { debugBus, describeError } from './debugBus.js';
 import {
   batchPullRequests,
   type CheckBreakdown,
@@ -814,7 +815,9 @@ async function upsertRow(
     repo: opts.summary.repo,
     number: opts.summary.number,
     state: opts.summary.state,
-    lastSummary,
+    // `checksAt` rides the broadcast only — persisting it would change the
+    // digest on every write and defeat the skip-unchanged guard above.
+    lastSummary: { ...lastSummary, checksAt: now.getTime() },
     ...(opts.reviewRequested === undefined ? {} : { reviewRequested: opts.reviewRequested }),
     ...(stamps.reviewRequestedFirstSeenAt
       ? { reviewRequestedFirstSeenAt: stamps.reviewRequestedFirstSeenAt.toISOString() }
@@ -839,7 +842,61 @@ async function upsertRow(
     state: opts.summary.state,
     trigger: 'prcache:upsert',
   });
+  reseedLedgerFrom(opts.summary, opts.repositoryId);
   return id;
+}
+
+// Reseeds in flight, so a test can wait for them — they are deliberately not
+// awaited by the write that starts them (see reseedLedgerFrom).
+const pendingReseeds = new Set<Promise<void>>();
+
+/** Test helper — settle every ledger reseed started so far. */
+export async function _awaitCheckLedgerReseeds(): Promise<void> {
+  while (pendingReseeds.size > 0) await Promise.all([...pendingReseeds]);
+}
+
+/**
+ * Make the check ledger agree with a COMPLETE fresh fetch of an open PR.
+ *
+ * Without this the ledger was never corrected: this write replaced
+ * `last_summary.checks`, the next check webhook on the commit recounted from the
+ * stale ledger, and the pill went back to "1/232 running" (PostHog/posthog
+ * #104122, and the reason ab6fe35b83 only helped until the next event).
+ *
+ * NOT awaited, and not on `db`. This write may be inside a request's
+ * transaction, which holds this PR's row lock until it commits. The reseed takes
+ * the commit's advisory lock and then touches that row; a webhook flush holding
+ * the advisory lock may be waiting on the same row. Awaiting here would make the
+ * request wait on the flush that waits on the request. Detached, the request
+ * commits, the flush proceeds, and the reseed runs after both — reading this
+ * write's committed facts, because it takes the row `FOR UPDATE`.
+ */
+function reseedLedgerFrom(summary: PRSummary, repositoryId: string): void {
+  if (summary.state !== 'open' || summary.checkContextsComplete !== true || !summary.headSha) {
+    return;
+  }
+  const fetchStartedAt = new Date(summary.fetchStartedAt ?? Date.now());
+  const run = import('./checkCounts.js')
+    .then(({ reseedCheckLedger }) =>
+      reseedCheckLedger({
+        owner: summary.owner,
+        repo: summary.repo,
+        headSha: summary.headSha,
+        contexts: summary.checkContexts,
+        fetchStartedAt,
+        repositoryId,
+      }),
+    )
+    .catch((err: unknown) => {
+      debugBus.recordEvent({
+        service: 'check_counts',
+        action: 'reseed',
+        ok: false,
+        summary: `reseed ${summary.owner}/${summary.repo}#${summary.number} failed: ${describeError(err)}`,
+      });
+    })
+    .finally(() => pendingReseeds.delete(run));
+  pendingReseeds.add(run);
 }
 
 async function readRowTaskId(db: Database, id: string): Promise<string | null> {
@@ -937,6 +994,11 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     effectiveReviewDecision: s.effectiveReviewDecision,
     blockingReason: s.blockingReason,
     checks: s.checks,
+    // The CI picture on its own, and the gates only a person can clear. The
+    // pill draws `ciStatus` instead of inferring required-ness from the verdict
+    // — that inference is what drew a red required check as "non-required".
+    ciStatus: s.ciStatus,
+    humanGates: s.humanGates,
     // One integer, so it rides in the summary rather than in a column of its
     // own the way `body` had to. It is what numbers the detail panel's Files
     // tab before that tab's REST file list has landed.
@@ -1062,6 +1124,8 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     // Left undefined (not '') on rows cached before it shipped: the merge
     // queue reads absent as "unknown", and '' would claim "nothing failing".
     failingChecksDigest: meta.failingChecksDigest as string | undefined,
+    ciStatus: meta.ciStatus,
+    humanGates: meta.humanGates,
     checkContexts: [], // not cached — only the live detail fetch carries per-check rows
     checkDigest: row.lastCheckDigest ?? '',
     recentReviews: [],

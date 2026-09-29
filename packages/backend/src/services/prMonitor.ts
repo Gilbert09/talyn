@@ -387,9 +387,83 @@ class PRMonitorService extends EventEmitter {
     currentUserLogin: string
   ): Promise<void> {
     const full = `${repo.owner}/${repo.repo}`;
-    // Keep searches serial for GitHub's per-account search limit.
-    // A prior review clears a lingering team request. An active direct request
-    // still needs attention, including a request made after an earlier review.
+    // The searches share a 30/min budget per account and are the likeliest
+    // step to throw. They used to sit outside every try, so one failed search
+    // skipped the whole refetch — and with no periodic poll any more, a stuck
+    // check pill on a TRACKED PR then waited for a sweep that never reached it.
+    // A tracked row needs no search to be refreshed, so refresh those and then
+    // report the failure.
+    let searches: Awaited<ReturnType<typeof this.searchRelationships>>;
+    try {
+      searches = await this.searchRelationships(workspaceId, full, currentUserLogin);
+    } catch (searchError) {
+      const tracked = await this.getTrackedOpenNumbers(workspaceId, repo.id);
+      const stale = tracked.length
+        ? await this.filterStale(workspaceId, repo.id, tracked, new Set())
+        : [];
+      if (stale.length > 0) {
+        // Relationship flags stay as they are — only a search knows them.
+        await this.refetchAndUpsert(workspaceId, repo, stale, null).catch(() => undefined);
+      }
+      throw searchError;
+    }
+    const { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet } = searches;
+    // Watch everything we have any relationship with — incl. reviewed
+    // review-requested PRs, so their summary stays fresh and the reconcile
+    // pass below sees them — but only pendingSet drives the review flag.
+    const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums, ...directRequestedNums]));
+    const watchedSet = new Set(watchedNumbers);
+
+    // Tracked-open rows that have fallen out of all three searches (e.g. a PR
+    // we were review-requested on, then reviewed, that's still open on
+    // GitHub). They never reappear in the search, so without folding them in
+    // here their summary — CI, mergeable, title — would freeze forever while
+    // the row stays visible on the GitHub page. Refresh them too, on the
+    // slacker UNTRACKED TTL (focus still overrides via `filterStale`).
+    const untrackedOpen = (await this.getTrackedOpenNumbers(workspaceId, repo.id)).filter(
+      (n) => !watchedSet.has(n)
+    );
+    const untrackedSet = new Set(untrackedOpen);
+    const candidateNumbers = [...watchedNumbers, ...untrackedOpen];
+
+    // Determine which PRs are actually stale enough to need a refetch
+    // (saves the GraphQL call when nothing has aged past the TTL).
+    const staleNumbers = candidateNumbers.length
+      ? await this.filterStale(workspaceId, repo.id, candidateNumbers, untrackedSet)
+      : [];
+
+    // The summary refetch is the heaviest, most failure-prone step of the tick
+    // (one big GraphQL call per chunk — the one that catches a 502 or a
+    // rate-limit gate). It is NOT allowed to take the close-out down with it:
+    // the searches above already told us which PRs are still open, and the
+    // close-out is what drops a merged PR off the list. Hold the error, sweep,
+    // then rethrow so the tick still reports as failed.
+    let refetchError: unknown = null;
+    if (staleNumbers.length > 0) {
+      try {
+        await this.refetchAndUpsert(workspaceId, repo, staleNumbers, { authoredSet, pendingSet });
+      } catch (err) {
+        refetchError = err;
+      }
+    }
+
+    await this.sweepClosed(workspaceId, repo, watchedNumbers);
+    // Reconcile relationship flags against the authoritative search results
+    // for EVERY tracked-open row — not just the freshly-upserted ones — so a
+    // PR whose flag should change but which didn't need a summary refetch
+    // (e.g. it fell out of review-requested, or the user just reviewed it)
+    // still flips. Without this an approved PR lingers on the Review list.
+    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet);
+    if (refetchError) throw refetchError;
+  }
+
+  /**
+   * Who the viewer is to each open PR in `full`. Serial, for GitHub's
+   * per-account search limit. A prior review clears a lingering team request;
+   * an active direct request still needs attention, including one made after an
+   * earlier review.
+   */
+  private async searchRelationships(workspaceId: string, full: string, currentUserLogin: string) {
     const authoredNums = await githubService.searchPullRequestNumbers(
       workspaceId,
       `repo:${full} is:pr is:open author:${currentUserLogin}`
@@ -419,80 +493,47 @@ class PRMonitorService extends EventEmitter {
         pendingSet.add(n);
       }
     }
-    // Watch everything we have any relationship with — incl. reviewed
-    // review-requested PRs, so their summary stays fresh and the reconcile
-    // pass below sees them — but only pendingSet drives the review flag.
-    const watchedNumbers = Array.from(new Set([...authoredNums, ...requestedNums, ...directRequestedNums]));
+    return { authoredNums, requestedNums, directRequestedNums, authoredSet, pendingSet };
+  }
 
-    // Tracked-open rows that have fallen out of all three searches (e.g. a PR
-    // we were review-requested on, then reviewed, that's still open on
-    // GitHub). They never reappear in the search, so without folding them in
-    // here their summary — CI, mergeable, title — would freeze forever while
-    // the row stays visible on the GitHub page. Refresh them too, on the
-    // slacker UNTRACKED TTL (focus still overrides via `filterStale`).
-    const watchedSet = new Set(watchedNumbers);
-    const untrackedOpen = (await this.getTrackedOpenNumbers(workspaceId, repo.id)).filter(
-      (n) => !watchedSet.has(n)
+  /** Refetch `numbers` and upsert them; `flags` null leaves relationship columns alone. */
+  private async refetchAndUpsert(
+    workspaceId: string,
+    repo: WatchedRepo,
+    numbers: number[],
+    flags: { authoredSet: Set<number>; pendingSet: Set<number> } | null
+  ): Promise<void> {
+    const results = await this.resolveUnknownMergeable(
+      workspaceId,
+      repo,
+      await batchPullRequestsByNumber({
+        workspaceId,
+        owner: repo.owner,
+        repo: repo.repo,
+        numbers,
+        // Many workspaces track one big shared org. Where they use the SAME
+        // credential, one fetch answers all of them — identical token,
+        // identical permissions, so no response crosses a tenant boundary.
+        // Window <= the poll's own freshness tolerance.
+        dedupeWindowMs: BULK_POLL_DEDUPE_MS,
+        dedupeIdentity: githubService.credentialIdentityFor(workspaceId),
+      })
     );
-    const untrackedSet = new Set(untrackedOpen);
-    const candidateNumbers = [...watchedNumbers, ...untrackedOpen];
-
-    // Determine which PRs are actually stale enough to need a refetch
-    // (saves the GraphQL call when nothing has aged past the TTL).
-    const staleNumbers = candidateNumbers.length
-      ? await this.filterStale(workspaceId, repo.id, candidateNumbers, untrackedSet)
-      : [];
-
-    // The summary refetch is the heaviest, most failure-prone step of the tick
-    // (one big GraphQL call per chunk — the one that catches a 502 or a
-    // rate-limit gate). It is NOT allowed to take the close-out down with it:
-    // the searches above already told us which PRs are still open, and the
-    // close-out is what drops a merged PR off the list. Hold the error, sweep,
-    // then rethrow so the tick still reports as failed.
-    let refetchError: unknown = null;
-    if (staleNumbers.length > 0) {
-      try {
-        const results = await this.resolveUnknownMergeable(
-          workspaceId,
-          repo,
-          await batchPullRequestsByNumber({
-            workspaceId,
-            owner: repo.owner,
-            repo: repo.repo,
-            numbers: staleNumbers,
-            // Many workspaces track one big shared org. Where they use the SAME
-            // credential, one fetch answers all of them — identical token,
-            // identical permissions, so no response crosses a tenant boundary.
-            // Window <= the poll's own freshness tolerance.
-            dedupeWindowMs: BULK_POLL_DEDUPE_MS,
-            dedupeIdentity: githubService.credentialIdentityFor(workspaceId),
-          })
-        );
-
-        for (const result of results) {
-          if (!result.pr) continue;
-          await this.annotateReviewRequest(workspaceId, result.pr);
-          await upsertFromBatchResult({
-            workspaceId,
-            repositoryId: repo.id,
-            summary: result.pr,
-            reviewRequested: pendingSet.has(result.pr.number),
-            authored: authoredSet.has(result.pr.number),
-          });
-        }
-      } catch (err) {
-        refetchError = err;
-      }
+    for (const result of results) {
+      if (!result.pr) continue;
+      if (flags) await this.annotateReviewRequest(workspaceId, result.pr);
+      await upsertFromBatchResult({
+        workspaceId,
+        repositoryId: repo.id,
+        summary: result.pr,
+        ...(flags
+          ? {
+              reviewRequested: flags.pendingSet.has(result.pr.number),
+              authored: flags.authoredSet.has(result.pr.number),
+            }
+          : {}),
+      });
     }
-
-    await this.sweepClosed(workspaceId, repo, watchedNumbers);
-    // Reconcile relationship flags against the authoritative search results
-    // for EVERY tracked-open row — not just the freshly-upserted ones — so a
-    // PR whose flag should change but which didn't need a summary refetch
-    // (e.g. it fell out of review-requested, or the user just reviewed it)
-    // still flips. Without this an approved PR lingers on the Review list.
-    await this.reconcileRelationshipFlags(workspaceId, repo.id, authoredSet, pendingSet);
-    if (refetchError) throw refetchError;
   }
 
   /**
