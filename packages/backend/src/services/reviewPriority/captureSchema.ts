@@ -31,6 +31,7 @@ const trace = z.object({
       viewerLatestReview: previous.nullish(),
       reviewRequestVia: z.object({ direct: z.boolean(), teams: z.array(text).max(100) }).nullish(),
       autoMergeBy: text.nullish(), prAuthorIsBot: z.boolean().optional(),
+      authorAssociation: text.optional(),
       stack: z.object({
         parentPrId: text.nullish(), childPrIds: z.array(text).max(2500).optional(),
         rootPrId: text.optional(), depth: number.optional(), size: number.optional(), position: number.optional(),
@@ -50,6 +51,7 @@ const candidate = z.object({
   affinity_features: z.array(number.nullable()).max(64).nullable(), affinity_features_source: text,
   direct_request: z.boolean().nullable(), requested_team_count: number.nullable(),
   requested_teams: z.array(text).max(100).nullable(), bot_author: z.boolean().nullable(),
+  author_association: text.nullish(),
   draft: z.boolean().nullable(), additions: number.nullable(), deletions: number.nullable(),
   checks: checks.nullable(), mergeable: text.nullable(), review_decision: text.nullable(),
   previous_review: previous.nullable(), human_threads: number.nullable(),

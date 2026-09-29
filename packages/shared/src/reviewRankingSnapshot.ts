@@ -61,6 +61,7 @@ export function reviewRankingCandidate(
     requested_team_count: teams?.length ?? null,
     requested_teams: teams,
     bot_author: s.prAuthorIsBot ?? null,
+    author_association: s.authorAssociation ?? null,
     draft: s.draft ?? null,
     additions: s.additions ?? null,
     deletions: s.deletions ?? null,

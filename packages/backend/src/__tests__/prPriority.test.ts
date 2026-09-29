@@ -21,6 +21,43 @@ import {
 const NOW = Date.parse('2026-09-20T12:00:00.000Z');
 const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
 
+describe('external contributors', () => {
+  it.each(['CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'NONE'])(
+    'reduces %s priority in both scoring arms', (authorAssociation) => {
+      for (const pooledScore of [undefined, 0.5]) {
+        const context = { now: NOW, pooledScore };
+        const internal = scorePRForReview(row({ authorAssociation: 'MEMBER' }), context);
+        const external = scorePRForReview(row({ authorAssociation }), context);
+        expect(external.score).toBe(internal.score + PR_PRIORITY_WEIGHTS.externalAuthor);
+        expect(external.gate).toBe(internal.gate);
+        expect(external.terms).toContainEqual({ reason: 'external_author', points: -8 });
+      }
+    },
+  );
+
+  it.each(['OWNER', 'MEMBER', 'COLLABORATOR', 'MANNEQUIN', 'UNRECOGNIZED', undefined])(
+    'keeps %s neutral', (authorAssociation) => {
+      const verdict = scorePRForReview(row({ authorAssociation }), { now: NOW });
+      expect(verdict.terms.some((term) => term.reason === 'external_author')).toBe(false);
+    },
+  );
+
+  it('keeps blocking work first and lets waiting time offset the penalty', () => {
+    const blocker = row({ id: 'blocking', authorAssociation: 'NONE', stack: { size: 2, position: 1 } });
+    const internal = row({ id: 'internal', authorAssociation: 'MEMBER' });
+    const priorities = buildPRPriorityMap([blocker, internal], { now: NOW });
+    expect(comparePRByPriority(blocker, internal, priorities)).toBeLessThan(0);
+    const waiting = scorePRForReview(row({ authorAssociation: 'NONE', waitedHours: 24 * 5 }), { now: NOW });
+    expect(waiting.score).toBeGreaterThan(scorePRForReview(internal, { now: NOW }).score);
+  });
+
+  it('keeps the existing bot penalty without another external-author penalty', () => {
+    const verdict = scorePRForReview(row({ authorAssociation: 'NONE', prAuthorIsBot: true }), { now: NOW });
+    expect(verdict.terms.some((term) => term.reason === 'bot_author')).toBe(true);
+    expect(verdict.terms.some((term) => term.reason === 'external_author')).toBe(false);
+  });
+});
+
 type RowOpts = Partial<PRPriorityTarget['summary']> & {
   id?: string;
   taskId?: string | null;
@@ -339,6 +376,7 @@ describe('the reason vocabulary', () => {
       ['human_threads', row({ unresolvedHumanReviewThreads: 1 }), ctx],
       ['bot_threads', row({ unresolvedBotReviewThreads: 1 }), ctx],
       ['bot_author', row({ author: 'renovate[bot]' }), ctx],
+      ['external_author', row({ authorAssociation: 'NONE' }), ctx],
       ['size', row({ additions: 10, deletions: 2 }), ctx],
       [
         're_review',

@@ -29,6 +29,17 @@ const row: PRPriorityTarget = {
 };
 
 describe('production scoring traces', () => {
+  it('records author association and preserves older scorer behavior', () => {
+    const target = { ...row, summary: { ...row.summary, authorAssociation: 'NONE' } };
+    const verdict = scorePRForReview(target, { now, captureTrace: { source: 'server' } });
+    const trace = JSON.parse(JSON.stringify(verdict.trace));
+    expect(trace.scorerVersion).toBe('priority-3');
+    expect(trace.target.summary.authorAssociation).toBe('NONE');
+    expect(replayPRPriorityTrace(trace).score).toBe(verdict.score);
+    for (const scorerVersion of ['priority-1', 'priority-2']) {
+      expect(replayPRPriorityTrace({ ...trace, scorerVersion }).score).toBe(verdict.score + 8);
+    }
+  });
   it.each([
     {},
     { draft: true },

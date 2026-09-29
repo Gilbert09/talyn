@@ -489,6 +489,7 @@ describe('makeBatchPullRequestsQuery', () => {
     expect(q).toContain('mergeable');
     expect(q).toContain('mergeStateStatus');
     expect(q).toContain('reviewDecision');
+    expect(q).toContain('authorAssociation');
   });
 
   it('omits isRequired when no PR numbers are supplied (no number to query)', () => {
@@ -598,6 +599,7 @@ describe('decodeBatchByNumberResponse', () => {
       mergeStateStatus: 'BLOCKED',
       reviewDecision: 'REVIEW_REQUIRED',
       author: { login: 'gilbert' },
+      authorAssociation: 'CONTRIBUTOR',
       headRefName: 'cloudflare-skip-forbidden-zones',
       baseRefName: 'master',
       headRefOid: 'sha',
@@ -644,6 +646,7 @@ describe('decodeBatchByNumberResponse', () => {
       'posthog'
     )[0].pr!;
     expect(pr.checks.failed).toBe(1);
+    expect(pr.authorAssociation).toBe('CONTRIBUTOR');
     // The failure is non-required → the PR reads as blocked-on-review, not
     // a red failing-checks verdict.
     expect(pr.blockingReason).toBe('blocked');

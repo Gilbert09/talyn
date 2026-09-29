@@ -1,5 +1,20 @@
 # Review ranking: experiments and release gates
 
+## External contributors (2026-09-29)
+
+Scorer `priority-3` subtracts eight points for known external human contributors within each readiness group.
+GitHub supplies the author's repository association during the existing PR fetch.
+`CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`, and `NONE` receive this penalty.
+`OWNER`, `MEMBER`, and `COLLABORATOR` remain neutral. Missing, unknown, and placeholder associations also remain neutral.
+See [GitHub's association definitions](https://docs.github.com/en/graphql/reference/issues#commentauthorassociation).
+The existing bot penalty applies instead of an additional external-contributor penalty.
+Blocking work keeps its readiness precedence. Waiting points can offset the external-contributor penalty.
+
+This is an explicit priority rule, not a learned effect or evidence of improved review outcomes.
+It applies to both experiment arms. The shared candidate artifact and its eight inputs remain unchanged.
+Snapshots and scoring traces retain the association. Older traces replay under their original behavior.
+Freeze `priority-3` for the new feasibility window. Do not mix earlier scorer versions into that comparison.
+
 ## Scoring and capture repair (2026-09-29)
 
 The first production audit found no candidate assignments across five participating users.

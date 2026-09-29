@@ -25,7 +25,7 @@ describe('central ranking collection', () => {
       id: 'pr-1', workspaceId: 'ranking-ws', owner: 'org', repo: 'repo', number: 1,
       createdAt: new Date(now - 3600_000).toISOString(),
       reviewRequestedFirstSeenAt: new Date(now - 3600_000).toISOString(),
-      summary: { draft: false, stack: { position: 1, size: 2 } as ReviewRankingRow['summary']['stack'] },
+      summary: { draft: false, authorAssociation: 'CONTRIBUTOR', stack: { position: 1, size: 2 } as ReviewRankingRow['summary']['stack'] },
     };
     row.priority = scorePRForReview(row, { now, pooledScore: 0.5, captureTrace: { source: 'server' } });
     const recorder = new ReviewRankingRecorder((event, properties) => events.push({
@@ -43,6 +43,10 @@ describe('central ranking collection', () => {
     const input = JSON.parse(JSON.stringify(b));
     input.events[0].properties.candidates[0].body = 'private PR text';
     expect(JSON.stringify(rankingBatchSchema.parse(input))).not.toContain('private PR text');
+    expect(b.events[0].properties).toMatchObject({ candidates: [{
+      author_association: 'CONTRIBUTOR',
+      priority_trace: { scorerVersion: 'priority-3', target: { summary: { authorAssociation: 'CONTRIBUTOR' } } },
+    }] });
   });
 
   it('deduplicates retries and rejects a different viewer or workspace', async () => {

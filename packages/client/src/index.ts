@@ -837,6 +837,7 @@ export interface PRSummaryShape {
    * never "a person wrote this".
    */
   prAuthorIsBot?: boolean;
+  authorAssociation?: string;
   /** Unresolved review threads (capped at the first 100). Optional for
    *  rows cached before this field was tracked. */
   unresolvedReviewThreads?: number;

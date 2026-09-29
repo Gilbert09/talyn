@@ -1191,7 +1191,7 @@ describe('prCache.getOrFetchPRSummary — TTL', () => {
     await upsertFromBatchResult({
       workspaceId: 'ws1',
       repositoryId: 'repo1',
-      summary: makeSummary({ failingChecksDigest: 'digest-abc' }),
+      summary: makeSummary({ failingChecksDigest: 'digest-abc', authorAssociation: 'CONTRIBUTOR' }),
     });
     const result = await getOrFetchPRSummary({
       workspaceId: 'ws1',
@@ -1203,6 +1203,7 @@ describe('prCache.getOrFetchPRSummary — TTL', () => {
     });
     expect(result?.cacheMiss).toBe(false);
     expect(result?.summary.failingChecksDigest).toBe('digest-abc');
+    expect(result?.summary.authorAssociation).toBe('CONTRIBUTOR');
   });
 
   it('leaves failingChecksDigest undefined rather than empty when it is absent', async () => {

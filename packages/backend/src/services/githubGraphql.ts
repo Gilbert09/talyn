@@ -121,6 +121,7 @@ export interface PRSummary {
    * cached before this shipped, and absent means UNKNOWN, never "human".
    */
   prAuthorIsBot?: boolean;
+  authorAssociation?: string;
   /**
    * The top-level directories the PR touches, derived from a 20-file sample.
    *
@@ -1221,6 +1222,7 @@ function prFieldsSelection(numberExpr: string | null): string {
   # Organization account), and a Mannequin from an import. Free — a scalar on a
   # node already being fetched.
   author { login __typename }
+  authorAssociation
   labels(first: 30) { nodes { name } }
   reviewRequests(first: 50) {
     nodes {
@@ -1399,6 +1401,7 @@ interface RawPullRequest {
     mergeMethod: string | null;
   } | null;
   author: { login: string; __typename?: string } | null;
+  authorAssociation?: string;
   labels?: { nodes: Array<{ name: string }> } | null;
   reviewRequests: {
     nodes: Array<{
@@ -1669,6 +1672,7 @@ function rawToSummary(raw: RawPullRequest, owner: string, repo: string): PRSumma
     url: raw.url,
     author: raw.author?.login ?? '',
     prAuthorIsBot: raw.author ? !isHumanAuthor(raw.author) : undefined,
+    authorAssociation: raw.authorAssociation,
     labels: (raw.labels?.nodes ?? []).map((l) => l.name),
     draft: raw.isDraft,
     state,

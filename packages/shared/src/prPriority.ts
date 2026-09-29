@@ -51,7 +51,7 @@ import {
   type ReviewRankFeatureStats,
 } from './reviewRank.js';
 
-export const PR_PRIORITY_SCORER_VERSION = 'priority-2';
+export const PR_PRIORITY_SCORER_VERSION = 'priority-3';
 
 export interface PRPriorityRankInputs {
   features: number[];
@@ -123,6 +123,7 @@ export type PRPriorityReason =
   | 'human_threads'
   | 'bot_threads'
   | 'bot_author'
+  | 'external_author'
   | 'size'
   | 're_review'
   | 'your_threads'
@@ -161,6 +162,7 @@ export const PR_PRIORITY_REASON_LABEL: Record<PRPriorityReason, string> = {
   human_threads: 'Author replying',
   bot_threads: 'Bot comments open',
   bot_author: 'Bot author',
+  external_author: 'External contributor',
   size: 'Quick',
   re_review: 'Re-review',
   your_threads: 'Your comments open',
@@ -265,6 +267,8 @@ export interface PRPriorityTarget {
     autoMergeBy?: string | null;
     /** Whether a MACHINE opened this PR. Absent = unknown, never "human". */
     prAuthorIsBot?: boolean;
+    /** GitHub's repository association. Absent or unrecognized values stay neutral. */
+    authorAssociation?: string;
     /** Top-level directories the PR touches, for path familiarity. */
     topDirs?: string[];
     stack?: { size: number; position: number } | null;
@@ -361,6 +365,7 @@ function scoringTrace(
       reviewRequestVia: s.reviewRequestVia ? { direct: s.reviewRequestVia.direct, teams: [] } : null,
       autoMergeBy: s.autoMergeBy ? 'armed' : null,
       prAuthorIsBot: s.prAuthorIsBot ?? /\[bot\]$/i.test(s.author ?? ''),
+      authorAssociation: s.authorAssociation,
       stack: s.stack,
     },
   };
@@ -378,7 +383,7 @@ function scoringTrace(
 }
 
 export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict {
-  if (trace.schemaVersion !== 1 || ![PR_PRIORITY_SCORER_VERSION, 'priority-1'].includes(trace.scorerVersion) ||
+  if (trace.schemaVersion !== 1 || ![PR_PRIORITY_SCORER_VERSION, 'priority-2', 'priority-1'].includes(trace.scorerVersion) ||
       !Number.isFinite(trace.scoredAt)) {
     throw new Error('Unsupported scoring trace');
   }
@@ -395,7 +400,10 @@ export function replayPRPriorityTrace(trace: PRPriorityTrace): PRPriorityVerdict
         inputs.stats.sd.some((value) => value < 0))))) {
     throw new Error('Invalid scoring inputs');
   }
-  return scorePRForReview(trace.target, {
+  const target = trace.scorerVersion === PR_PRIORITY_SCORER_VERSION ? trace.target : {
+    ...trace.target, summary: { ...trace.target.summary, authorAssociation: undefined },
+  };
+  return scorePRForReview(target, {
     now: trace.scoredAt,
     pooledScore: trace.pooledScore,
     isTaskActive: () => trace.taskActive,
@@ -421,6 +429,8 @@ export const PR_PRIORITY_WEIGHTS = {
    * a bot PR that is blocking a stack should still surface.
    */
   botAuthor: -16,
+  /** Prefer repository members within the same readiness group. Age can offset this. */
+  externalAuthor: -8,
   /** Per PR stacked above this one, capped by {@link unblocksStackCap}. */
   unblocksStack: 4,
   unblocksStackCap: 12,
@@ -669,6 +679,8 @@ export function scorePRForReview(
   const machineAuthored = s.prAuthorIsBot ?? /\[bot\]$/i.test(s.author ?? '');
   if (machineAuthored) {
     push('bot_author', PR_PRIORITY_WEIGHTS.botAuthor);
+  } else if (['CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'NONE'].includes(s.authorAssociation ?? '')) {
+    push('external_author', PR_PRIORITY_WEIGHTS.externalAuthor);
   }
 
   // Real diff size, when the row has been refreshed since it started being

@@ -18,6 +18,11 @@ Reports now expose missing model traces and exclude opted-out accounts from hist
 An audit-only mode supports coverage checks before activation. Monitoring must check collection health while flags remain pending.
 The candidate model, allocation, and original private pilot remain unchanged.
 
+Tom also requested lower priority for external authors. GitHub's repository association now survives the cache and capture paths.
+Scorer `priority-3` subtracts eight points for known external human contributors in both arms.
+Members, owners, collaborators, and unknown associations remain neutral. Blocking work keeps precedence, and waiting points can offset the penalty.
+Bot PRs retain their existing penalty. Historical traces still replay under their previous scorer behavior.
+
 ## A team plan you can buy: seats tied to GitHub accounts (2026-09-29)
 
 The pricing page had a Teams band with no price and an enquiry form. Nothing

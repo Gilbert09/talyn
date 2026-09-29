@@ -6,7 +6,7 @@ type Snapshot = Parameters<ConstructorParameters<typeof ReviewRankingRecorder>[0
   candidate_count: number; chunk_count: number; chunk_index: number; candidates: Array<{
     pr_id: string; repo: string; pr_number: number; displayed_rank: number; gate: string;
     request_first_seen_at?: string | null;
-    priority_trace?: { source: string } | null;
+    priority_trace?: { source: string; scorerVersion?: string } | null;
     experiment?: { assigned: string; served: string; fallback: string | null; modelVersion: string; latencyMs: number } | null;
   }>;
 };
@@ -27,6 +27,7 @@ export function summarizeRankingExperiment(
   const audit = { incompleteSnapshots: 0, mixedAssignments: 0, unknownReviewStart: 0,
     missingCandidate: 0, noPrecedingSnapshot: 0, fallbackRows: 0, candidateRows: 0,
     missingExperimentRows: 0, clientScoredRows: 0, missingScoringTraceRows: 0,
+    scorerVersions: {} as Record<string, number>, modelVersions: {} as Record<string, number>,
     maximumReportedUploadLoss: 0, conflictingChunks: 0, incompleteSessions: 0 };
   for (const event of events) {
     if (event.receivedAt > asOf || event.event !== 'pr_review_queue_snapshot') continue;
@@ -58,6 +59,10 @@ export function summarizeRankingExperiment(
       audit.missingExperimentRows += Number(!row.experiment);
       audit.clientScoredRows += Number(row.priority_trace?.source === 'client');
       audit.missingScoringTraceRows += Number(!row.priority_trace);
+      const scorer = row.priority_trace?.scorerVersion;
+      if (scorer) audit.scorerVersions[scorer] = (audit.scorerVersions[scorer] ?? 0) + 1;
+      const model = row.experiment?.modelVersion;
+      if (model) audit.modelVersions[model] = (audit.modelVersions[model] ?? 0) + 1;
     }
     return [{ ...event, ...p, candidates: rows, at: Date.parse(p.recorded_at) }];
   }).sort((a, b) => a.at - b.at);

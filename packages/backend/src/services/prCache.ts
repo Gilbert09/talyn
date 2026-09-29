@@ -1063,6 +1063,7 @@ function summaryToJsonb(s: PRSummary): Record<string, unknown> {
     // login — which misses an App with no `[bot]` suffix and an Organization
     // account entirely.
     prAuthorIsBot: s.prAuthorIsBot,
+    authorAssociation: s.authorAssociation,
     // Whether the viewer has already looked, and when. Distinguishes a
     // re-review from a PR nobody has opened — different work, and until now
     // indistinguishable on the list.
@@ -1167,6 +1168,7 @@ function rowToSummary(row: PullRequestRow, owner: string, repo: string): PRSumma
     deletions: meta.deletions as number | undefined,
     topDirs: meta.topDirs as string[] | undefined,
     prAuthorIsBot: meta.prAuthorIsBot as boolean | undefined,
+    authorAssociation: meta.authorAssociation as string | undefined,
     viewerLatestReview: (meta.viewerLatestReview as PRSummary['viewerLatestReview']) ?? null,
     reviewRequestVia: meta.reviewRequestVia as PRSummary['reviewRequestVia'],
     // Left undefined (not '') on rows cached before it shipped: the merge
