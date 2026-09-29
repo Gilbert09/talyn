@@ -18,6 +18,21 @@ Active priorities live in [`CLAUDE.md`](../CLAUDE.md); the active build-out plan
 4. **Auth polish (Phase 18.2 leftovers)** — proper `talyn login` PKCE flow, CLI refresh-token rotation, and the invite flow (`workspaces_users` join table + invitation tokens). Without invites it isn't really multi-tenant, just `TALYN_ALLOWED_EMAILS`.
 5. **Desktop test coverage** — `QUALITY_PARITY.md` Tier 1: ~3 trivial renderer test files vs 240+ backend tests; UI regressions go uncaught.
 
+### Team plan — seat billing, behind the `teams` flag (2026-09-29)
+
+Consolidated billing only. No workspace is shared, and none is planned (Tom's call). This does not replace the invite flow above, which is about workspace access.
+
+- [x] Seats bound to the numeric GitHub id, one team per person. Named seats are assigned by GitHub username.
+- [x] Polar seat-based checkout, seat-count changes, team portal and invoices. Webhook routing that never touches the buyer's `users.plan`.
+- [x] Settings → Billing → Team on web and desktop.
+- [ ] **Polar setup (Tom):** turn on seat-based pricing, create the team product (monthly + annual, volume tiers), and set `POLAR_PRODUCT_ID_TEAM_*`. Sandbox first.
+- [ ] **Spike:** does the production GitHub App grant org **Members: read**? `docs/SETUP.md` says yes and `github.ts` says no. Org-linked seats depend on the answer.
+- [ ] Org-linked seats: link a GitHub org, auto-seat verified members while seats remain, opt-in auto-grow up to a cap, daily re-verification sweep (with debugBus poller).
+- [ ] UpgradeModal: "Buying for a team?" link, and "your team has no free seats" when an org seat is full.
+- [ ] Operator console: teams list, comp a team through `teams.plan_override` with an audit reason.
+- [ ] Analytics: `team_created`, `team_checkout_started`, `team_seat_assigned`, `team_seat_removed`, `team_seat_count_changed`.
+- [ ] Launch: flip `teams` to `availability: 'general'`, then publish prices on the pricing page (Teams band CTA to checkout, a Team column in `PlanTable`, `OfferSchema`).
+
 ### Code review — shipped behind a flag (2026-09-27)
 
 AI review of a pull request with the findings in the app, and a fix you choose.

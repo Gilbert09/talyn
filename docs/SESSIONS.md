@@ -2,6 +2,53 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A team plan you can buy: seats tied to GitHub accounts (2026-09-29)
+
+The pricing page had a Teams band with no price and an enquiry form. Nothing
+in the backend could sell it: the plan lived on one `users` row, and no
+concept of team, seat or quantity existed. Tom's calls: a team is **billing
+only**, no workspace is ever shared, the purchase is self-serve, and seats go
+to **GitHub accounts** (by username, and later by GitHub org), not to email
+addresses.
+
+That last choice made the design smaller than the usual invite flow. Every
+Talyn sign-in is GitHub OAuth, so a seat binds to the numeric GitHub id, which
+survives a rename. An admin can seat someone before they sign up, and the
+seat goes live at their first sign-in. No invite emails, tokens or claim links.
+
+What turned out to matter:
+
+- **The GitHub id cannot come from the JWT.** The obvious source,
+  `user_metadata.provider_id`, is writable by the user
+  (`auth.updateUser({ data })`), so it would have let anyone claim another
+  person's paid seat. `services/githubIdentity.ts` reads the Supabase identity
+  record through the admin API instead: once per account, fire-and-forget off
+  the auth path. `users.github_user_id` is deliberately not unique, because the
+  auth upsert writes it, and a stale duplicate must never lock anyone out.
+- **Polar already sells seats** (SDK 0.48.1: seat-based prices with volume and
+  graduated tiers, `seats` on checkout, prorated `subscriptions.update`). Its
+  own seat-assignment API binds seats to email addresses, so it is unused.
+  Polar sells the quantity; `team_seats` says who holds a seat.
+- **A team event must never touch `users.plan`.** A team is its own Polar
+  customer (`team_<id>`). The webhook routes on that prefix OR the team
+  product id, with no fall-through to the user lookup.
+- **The entitlement reads the team tables on the pool.** The gates run inside
+  RLS-scoped transactions, and the new tables are backend-only like
+  `billing_events`. Granting `talyn_backend` access would have widened the
+  Data API boundary for a server-side fact.
+- **Nobody is un-seated by a number.** A seat count lowered in the Polar
+  portal marks the team over-allocated and refuses new seats, rather than
+  choosing whom to drop.
+
+Also fixed on the way: the pricing FAQ still said "there is also no team plan
+yet" directly under the Teams band. The username field is a textarea, because
+an input joins a pasted column of names into one.
+
+Not done yet, and listed in ROADMAP: the Polar product itself, the GitHub App
+Members-permission spike that org-linked seats depend on, org seats, the
+operator console, analytics, and publishing prices on the pricing page. Until
+the flag flips, the routes answer 403, and only a seated member sees anything.
+
 ## A fix run that chased master (2026-09-29)
 
 PostHog/posthog#107906: one manual "Get mergeable" run (fleet, Codex) merged
