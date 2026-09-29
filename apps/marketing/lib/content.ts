@@ -494,7 +494,7 @@ export const teams = {
 export const pricingFaq = [
   {
     q: "Is $15 per person, or per account?",
-    a: "Per account. Talyn bills the person who signs in, and the limits — tasks, queued pull requests, workflows, loops — are counted across every workspace that person owns. There are no seats to buy and no per-user maths. There is also no team plan yet: shared workspaces, SSO and admin controls do not exist, so if you need those, Talyn is not ready for you.",
+    a: "Per account. Talyn bills the person who signs in, and the limits — tasks, queued pull requests, workflows, loops — are counted across every workspace that person owns. If several of you want it, the team rate above is per seat and comes on one invoice. What a team plan does not add is sharing: every person keeps their own workspaces, and there is no SSO, so if you need those, Talyn is not ready for you.",
   },
   {
     q: "What does the GitHub App actually get access to?",
