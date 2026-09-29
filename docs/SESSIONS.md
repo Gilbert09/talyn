@@ -2,6 +2,23 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A fix run that chased master (2026-09-29)
+
+PostHog/posthog#107906: one manual "Get mergeable" run (fleet, Codex) merged
+master three times in 80 minutes, the last two onto heads whose checks were
+already green. Condition 3 of the mergeable prompt said "not behind", and the
+loop rules said to keep going until every condition held on the latest commit.
+posthog's master moves every few minutes and its CI takes ~40, so each green CI
+found the branch behind again. GitHub only refuses a merge over this when the
+repo requires an up-to-date branch (`mergeStateStatus: BEHIND`), and posthog
+merges through trunk, which tests against the current base itself.
+
+The prompt now updates from the base only on CONFLICTING/DIRTY or GitHub's own
+`BEHIND`, never because the base moved and never once CI is green, and the loop
+stops when the conditions hold even if the base has moved. The rule lives in the
+`baseUpdateFlow` and `loopRules` variables, so workspaces with an overridden
+template get it too.
+
 ## Checks you can trust: one ledger, one verdict, a real "Needs human" (2026-09-29)
 
 Charles reported (again) that his PostHog PRs never left blue "1/N running",

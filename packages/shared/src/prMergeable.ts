@@ -721,12 +721,30 @@ export function githubToolsHint(_provider: CloudProviderType): string {
   return '`gh` (or the GitHub API)';
 }
 
+/**
+ * When bringing the base in is actually required — and, as important, when it
+ * is not.
+ *
+ * "Not behind" read as `git rev-list HEAD..origin/<base>` is never true for
+ * long on a busy repo. PostHog/posthog's master moves every few minutes and its
+ * CI takes ~40, so an agent told to finish "not behind" merged master, waited
+ * for green, found master had moved, and merged again — three merges of master
+ * in one run on #107906, each one restarting CI on a head that was already
+ * green. GitHub only refuses a merge over this when the repo requires an
+ * up-to-date branch, and it says so as `mergeStateStatus: BEHIND`. A merge
+ * queue (trunk) tests against the current base itself.
+ */
+export function baseUpdateWhenRule(baseBranch: string): string {
+  return `   - Update from ${baseBranch} ONLY when GitHub says it is needed: the PR is CONFLICTING / DIRTY, or \`mergeStateStatus\` is \`BEHIND\` (the repo requires an up-to-date branch before merging). Being some commits behind ${baseBranch} is otherwise NOT a problem — on a busy repo the base moves every few minutes, and the merge button or merge queue tests against the current base anyway. Never merge ${baseBranch} in just because it moved, and never once CI is green: every update restarts CI, and chasing a moving base never ends.`;
+}
+
 export function postHogCodeBaseUpdateFlow(baseBranch: string, number: number): string {
   return `   - Check mergeability via \`gh pr view ${number} --json mergeable,mergeStateStatus\`.
+${baseUpdateWhenRule(baseBranch)}
    - BEFORE updating anything, record the exact set of files this PR owns:
        git fetch origin ${baseBranch}
        git diff --name-only origin/${baseBranch}...HEAD   # save this "before" list
-   - If the branch is BEHIND or CONFLICTING / DIRTY, first call \`git_signed_merge\` (per the git rules above). If it succeeds, the base is now merged in server-side as a true two-parent merge commit and your local checkout is synced — skip to the verification step.
+   - If GitHub reports \`mergeStateStatus: BEHIND\`, or the PR is CONFLICTING / DIRTY, first call \`git_signed_merge\` (per the git rules above). If it succeeds, the base is now merged in server-side as a true two-parent merge commit and your local checkout is synced — skip to the verification step.
    - ONLY if \`git_signed_merge\` reports a CONFLICT, resolve it with the rebase flow:
        git fetch origin ${baseBranch}
        git rebase origin/${baseBranch}
@@ -756,10 +774,11 @@ export function postHogCodeBaseUpdateFlow(baseBranch: string, number: number): s
  */
 export function fleetBaseUpdateFlow(baseBranch: string, number: number): string {
   return `   - Check mergeability via \`gh pr view ${number} --json mergeable,mergeStateStatus\` (or the equivalent GitHub API read).
+${baseUpdateWhenRule(baseBranch)}
    - BEFORE updating anything, record the exact set of files this PR owns (local read, safe):
        git fetch origin ${baseBranch}
        git diff --name-only origin/${baseBranch}...HEAD   # save this "before" list
-   - If the branch is BEHIND or CONFLICTING, try these IN ORDER and stop at the first that works:
+   - If GitHub reports \`mergeStateStatus: BEHIND\`, or the PR is CONFLICTING / DIRTY, try these IN ORDER and stop at the first that works:
        1. \`PUT /repos/{owner}/{repo}/pulls/${number}/update-branch\`
        2. \`POST /repos/{owner}/{repo}/merges\`, merging ${baseBranch} into the head branch
      Both make GitHub perform the merge server-side, so the result is signed, and both REFUSE when the merge is not clean. A refusal means there is a real conflict — not that you used them wrongly. If one succeeds, \`git fetch\` and continue to the verification step.
@@ -783,8 +802,9 @@ export function fleetBaseUpdateFlow(baseBranch: string, number: number): string 
 
 export function postHogCodeLoopRules(ref: string): string {
   return `Loop discipline:
-  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability.
+  - After every publish, wait for CI to finish, then re-check all of: (1) review comments, (2) check status, and (3) mergeability — conflicts, or GitHub's own \`BEHIND\`; NOT how many commits the base has gained since.
   - Do not stop, do not declare victory, and do not hand control back until ALL conditions are simultaneously true on the latest commit.
+  - When they are, STOP — even if the base branch has moved on while CI ran. Updating a green branch only to chase the base restarts CI and starts the loop again.
   - If you genuinely get stuck, do NOT keep grinding — follow the stopping rule below.
 
 ${talynNeedsHumanRule()}

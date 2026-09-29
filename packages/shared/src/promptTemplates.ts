@@ -284,7 +284,7 @@ Your job is to keep iterating on this PR until ALL of the following are true and
    - Flaky tests: re-run them once to confirm they're actually flaky; if they are, document it briefly in a PR comment, but otherwise still try to fix the root cause rather than ignoring it.
    - Do not bypass checks (no --no-verify, no skipping required checks). Fix the real issue.
 
-3. The branch merges cleanly into its base branch (no merge conflicts, not behind).
+3. The branch merges cleanly into its base branch: no merge conflicts, and not BEHIND where GitHub requires an up-to-date branch. The base simply moving on is not a problem — see below.
 {{baseUpdateFlow}}
 
 {{loopRules}}`;

@@ -619,3 +619,33 @@ describe('fixBlockedMessage', () => {
     expect(new Set(REASONS.map(fixBlockedMessage)).size).toBe(REASONS.length);
   });
 });
+
+// PostHog/posthog#107906: one "Get mergeable" run merged master three times.
+// Condition 3 read "not behind", master moves every few minutes and CI takes
+// ~40, so every green CI found the branch behind again and the agent merged
+// master, restarting CI on a head that was already green.
+describe('buildMergeablePrompt — updating from the base only when GitHub requires it', () => {
+  it.each(['posthog_code', 'selfhosted'] as const)('%s: says when to update, and when not to', (provider) => {
+    const prompt = buildMergeablePrompt({ owner: 'acme', repo: 'widgets', number: 7, summary, provider });
+    expect(prompt).toContain('Update from main ONLY when GitHub says it is needed');
+    expect(prompt).toContain('`mergeStateStatus` is `BEHIND`');
+    expect(prompt).toContain('Never merge main in just because it moved, and never once CI is green');
+    expect(prompt).toContain('If GitHub reports `mergeStateStatus: BEHIND`, or the PR is CONFLICTING / DIRTY');
+    // The loop's stopping point no longer depends on the base standing still.
+    expect(prompt).toContain('STOP — even if the base branch has moved on while CI ran');
+    expect(prompt).not.toContain('(no merge conflicts, not behind)');
+  });
+
+  it('reaches workspaces with an overridden template, through the flow and loop variables', () => {
+    const prompt = buildMergeablePrompt({
+      owner: 'acme',
+      repo: 'widgets',
+      number: 7,
+      summary,
+      provider: 'selfhosted',
+      template: 'Old override. 3. not behind.\n{{baseUpdateFlow}}\n{{loopRules}}',
+    });
+    expect(prompt).toContain('Update from main ONLY when GitHub says it is needed');
+    expect(prompt).toContain('STOP — even if the base branch has moved on while CI ran');
+  });
+});
