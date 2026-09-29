@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
+import { TeamBilling } from './TeamBilling';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
 import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
@@ -2972,6 +2973,8 @@ function BillingSettings() {
   }
 
   const comped = status.planSource === 'override';
+  // A team seat pays: there is no personal subscription to manage or renew.
+  const teamPaid = status.planSource === 'team';
   const free = status.plan === 'free';
   const pastDue = status.subscriptionStatus === 'past_due';
   const limit = status.activeTaskLimit ?? 0;
@@ -2993,6 +2996,11 @@ function BillingSettings() {
                   Complimentary plan — unlimited tasks, nothing to pay.
                 </p>
               )}
+              {teamPaid && status.team && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  Paid for by your team, {status.team.name}.
+                </p>
+              )}
               {free && (
                 <p className="text-sm text-muted-foreground mt-1">
                   Up to {limit} tasks running, {status.mergeQueueLimit ?? limit} PRs in the
@@ -3000,7 +3008,7 @@ function BillingSettings() {
                   {status.loopLimit ?? limit} loops, across all your workspaces.
                 </p>
               )}
-              {!free && !comped && status.currentPeriodEnd && (
+              {!free && !comped && !teamPaid && status.currentPeriodEnd && (
                 <p className="text-sm text-muted-foreground mt-1">
                   {status.cancelAtPeriodEnd
                     ? `Unlimited until ${formatRenewalDate(status.currentPeriodEnd)}, then Free.`
@@ -3041,7 +3049,7 @@ function BillingSettings() {
             </div>
           )}
 
-          {!comped && !free && (
+          {!comped && !free && !teamPaid && (
             <Button
               variant="outline"
               onClick={openPortal}
@@ -3062,6 +3070,8 @@ function BillingSettings() {
           {!free && error && <p className="text-sm text-destructive">{error}</p>}
         </Card>
       </div>
+
+      <TeamBilling status={status} />
 
       {free && (
         <div>

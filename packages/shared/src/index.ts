@@ -1660,6 +1660,35 @@ export interface TeamPricing {
   annual: TeamPriceTiers | null;
 }
 
+/**
+ * What `seats` seats cost per period under `tiers`, in cents. Null when the
+ * count is outside what the product sells.
+ *
+ * 'volume': one tier — the one the count falls in — prices every seat.
+ * 'graduated': each tier prices only the seats inside its own band, so the
+ * first tier covers seats 1..its max whatever its stated minimum.
+ */
+export function teamPriceFor(tiers: TeamPriceTiers, seats: number): number | null {
+  if (!Number.isInteger(seats) || seats < tiers.minimumSeats) return null;
+  if (tiers.maximumSeats !== null && seats > tiers.maximumSeats) return null;
+  const sorted = [...tiers.tiers].sort((a, b) => a.minSeats - b.minSeats);
+  if (tiers.tierType === 'volume') {
+    const tier = sorted.find(
+      (t) => seats >= t.minSeats && (t.maxSeats === null || seats <= t.maxSeats)
+    );
+    return tier ? tier.pricePerSeat * seats : null;
+  }
+  let total = 0;
+  let covered = 0;
+  for (const tier of sorted) {
+    if (covered >= seats) break;
+    const upper = tier.maxSeats === null ? seats : Math.min(seats, tier.maxSeats);
+    if (upper > covered) total += (upper - covered) * tier.pricePerSeat;
+    covered = Math.max(covered, upper);
+  }
+  return covered >= seats ? total : null;
+}
+
 export interface CheckoutSessionResponse {
   url: string;
 }

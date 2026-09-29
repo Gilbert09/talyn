@@ -51,6 +51,7 @@ import {
   parseGithubUserId,
 } from '../services/githubIdentity.js';
 import { validateEnv } from '../services/validateEnv.js';
+import { teamPriceFor } from '@talyn/shared';
 
 vi.mock('@polar-sh/sdk/webhooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@polar-sh/sdk/webhooks')>();
@@ -620,6 +621,49 @@ describe('team billing helpers', () => {
       ],
     });
     expect(seatTiersFromPrices([{ amountType: 'fixed' }])).toBeNull();
+  });
+});
+
+describe('teamPriceFor', () => {
+  const tiers = (tierType: 'volume' | 'graduated', maximumSeats: number | null = null) => ({
+    currency: 'usd',
+    tierType,
+    minimumSeats: 2,
+    maximumSeats,
+    tiers: [
+      { minSeats: 10, maxSeats: null, pricePerSeat: 1000 },
+      { minSeats: 2, maxSeats: 9, pricePerSeat: 1200 },
+    ],
+  });
+
+  it.each([
+    // volume: the tier the count lands in prices every seat
+    ['volume', 2, 2 * 1200],
+    ['volume', 9, 9 * 1200],
+    ['volume', 10, 10 * 1000],
+    ['volume', 25, 25 * 1000],
+    // graduated: the first band covers seats 1..9 whatever its stated minimum
+    ['graduated', 2, 2 * 1200],
+    ['graduated', 9, 9 * 1200],
+    ['graduated', 10, 9 * 1200 + 1000],
+    ['graduated', 25, 9 * 1200 + 16 * 1000],
+    // outside what is sold
+    ['volume', 1, null],
+    ['volume', 0, null],
+    ['volume', 2.5, null],
+  ] as const)('%s × %s seats → %s', (type, seats, expected) => {
+    expect(teamPriceFor(tiers(type), seats)).toBe(expected);
+  });
+
+  it('refuses a count above the product maximum', () => {
+    expect(teamPriceFor(tiers('volume', 20), 21)).toBeNull();
+    expect(teamPriceFor(tiers('volume', 20), 20)).toBe(20 * 1000);
+  });
+
+  it('is null when no volume tier covers the count', () => {
+    const gap = { ...tiers('volume'), tiers: [{ minSeats: 2, maxSeats: 5, pricePerSeat: 1200 }] };
+    expect(teamPriceFor(gap, 6)).toBeNull();
+    expect(teamPriceFor({ ...gap, tierType: 'graduated' }, 6)).toBeNull();
   });
 });
 
