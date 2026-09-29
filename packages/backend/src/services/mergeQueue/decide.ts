@@ -15,6 +15,7 @@
 import {
   mergeableBlockerSignature,
   prBlocksMerge,
+  prNeedsHuman,
   mergeBlockerReason,
   externalQueueProviderLabel,
   externalQueueReason,
@@ -1275,7 +1276,38 @@ export function decide(entry: EntrySnapshot, pr: PrSnapshot, ctx: DecisionContex
   if (ctx.visualReview !== undefined && ctx.visualReview !== null) {
     const verdict = decideVisualReview(d, ctx.visualReview, ctx);
     if (verdict) return verdict;
-  } else if (ctx.visualReview === null && d.entry.blockedCode === 'awaiting_human_check') {
+  } else if (prNeedsHuman(pr.summary)) {
+    // The PR's own checks say only a person can clear what is left. This needs
+    // no PostHog credentials and no `settings.visualReview`: the gate is read
+    // off the commit status every fetch already carries. It used to be asked
+    // of the Visual Review API alone — off unless a setting no UI sets was
+    // present, and silently off again when the token lacked the scope.
+    if (d.entry.blockedCode !== 'awaiting_human_check') {
+      const gate = pr.summary.humanGates?.[0];
+      d.transition('blocked', {
+        blockedCode: 'awaiting_human_check',
+        blockedReason: humanGateReason(pr.summary),
+        event: {
+          code: 'awaiting_human_check',
+          message: `Waiting on a person: ${gate?.name ?? 'a check only a person can clear'}.`,
+          detail: { gate: gate?.name ?? null, url: gate?.url ?? null },
+        },
+      });
+      d.act({ kind: 'notify_blocked' });
+    }
+    return d.done('advance');
+  } else if (
+    d.entry.blockedCode === 'awaiting_human_check' &&
+    // Released by a POSITIVE reading that nothing gates: the API answering
+    // "nothing", or the checks listing their human gates and naming none. A
+    // lookup that failed (`undefined`) on a summary too old to carry
+    // `humanGates` says neither, and must not un-park every gated PR on a
+    // PostHog blip.
+    (ctx.visualReview === null ||
+      (ctx.visualReview === undefined &&
+        Array.isArray(pr.summary.humanGates) &&
+        pr.summary.humanGates.length === 0))
+  ) {
     // Nothing is gating any more — approved by hand, superseded, or the check
     // went green. Same shape as the stack self-heal: the verdict was derived
     // from a live reading, so it dies with the reading.
@@ -1994,6 +2026,15 @@ function decideVisualReview(
     d.act({ kind: 'notify_blocked' });
   }
   return d.done('advance');
+}
+
+function humanGateReason(summary: PRMergeableSummary): string {
+  const gate = summary.humanGates?.[0];
+  const where = gate?.url ? ` Review it at ${gate.url}.` : '';
+  return (
+    `${gate?.label ?? 'A check'} is holding this PR and only a person can clear it — ` +
+    `no fix run can green it.${where}`
+  );
 }
 
 function visualReviewReason(vr: VisualReviewContext): string {

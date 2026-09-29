@@ -916,6 +916,70 @@ describe('prAutoMergeWatcher', () => {
     expect(await countTasks(db)).toBe(2);
   });
 
+  // The same stand-down, read off the PR's own checks BEFORE any run is spent.
+  // The sentinel path above only learns it after ~14 minutes of agent time.
+  describe('a human gate on the checks (Visual Review)', () => {
+    const humanSummary = (over: Record<string, unknown> = {}) => ({
+      ...blockedSummary(),
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+      blockingReason: 'needs_human',
+      ciStatus: 'needs_human',
+      humanGates: [
+        {
+          id: 'posthog_visual_review',
+          label: 'Visual review',
+          name: 'PostHog Visual Review / storybook',
+          url: 'https://us.posthog.com/vr/1',
+        },
+      ],
+      ...over,
+    });
+
+    it('stands down without dispatching a single run', async () => {
+      const prId = await insertPr(db, { summary: humanSummary() });
+      await prAutoMergeWatcher.runOnce();
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(0);
+      const state = (await getPr(db, prId)).autoMergeState as {
+        attempts: number;
+        needsHuman?: { reason: string; taskId: string };
+      };
+      expect(state.attempts).toBe(0);
+      expect(state.needsHuman?.reason).toBe('Visual review needs a person to approve it');
+      expect(state.needsHuman?.taskId).toBe('');
+    });
+
+    it('clears once the gate is approved and the PR is clean', async () => {
+      const prId = await insertPr(db, { summary: humanSummary() });
+      await prAutoMergeWatcher.runOnce();
+      await db
+        .update(pullRequestsTable)
+        .set({ lastSummary: cleanSummary(), lastPolledAt: new Date() })
+        .where(eq(pullRequestsTable.id, prId));
+      await prAutoMergeWatcher.runOnce();
+
+      expect(((await getPr(db, prId)).autoMergeState as { needsHuman?: unknown }).needsHuman).toBeFalsy();
+      expect(await countTasks(db)).toBe(0);
+    });
+
+    it('fires once a real failure replaces the gate', async () => {
+      const prId = await insertPr(db, { summary: humanSummary() });
+      await prAutoMergeWatcher.runOnce();
+      await db
+        .update(pullRequestsTable)
+        .set({
+          lastSummary: { ...blockedSummary(), failingChecksDigest: 'django' },
+          lastPolledAt: new Date(),
+        })
+        .where(eq(pullRequestsTable.id, prId));
+      await prAutoMergeWatcher.runOnce();
+
+      expect(await countTasks(db)).toBe(1);
+    });
+  });
+
   describe('a run that stopped for a human', () => {
     const REASON = 'Approve the 6 Visual Review snapshot baselines.';
 

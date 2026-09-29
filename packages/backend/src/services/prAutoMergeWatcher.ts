@@ -1,6 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import {
   prNeedsFollowup,
+  prNeedsHuman,
+  mergeBlockerReason,
   buildMergeablePrompt,
   mergeableBlockerSignature,
   externalQueueProviderLabel,
@@ -589,6 +591,28 @@ class PRAutoMergeWatcher {
       }
       state.accounted = true;
       await this.persist(row, state);
+    }
+
+    // 3b. A gate only a person can clear, read off the PR's own checks (PostHog
+    //     Visual Review holding changed snapshots). Stand down BEFORE spending
+    //     a run, not after one: the sentinel path above only learns this once
+    //     an agent has run for ~14 minutes and said so. Same record, same
+    //     re-arm test — the signature changes when the gate is approved or
+    //     something else starts failing.
+    if (prNeedsHuman(summary)) {
+      const signature = mergeableBlockerSignature(summary);
+      if (state.needsHuman?.signature !== signature) {
+        const reason = mergeBlockerReason(summary);
+        state.needsHuman = {
+          reason: reason.charAt(0).toUpperCase() + reason.slice(1),
+          // No run was spent — that is the point of this branch.
+          taskId: '',
+          at: new Date().toISOString(),
+          signature,
+        };
+        await this.persist(row, state);
+      }
+      return;
     }
 
     // 4. Re-arm on clean — nothing to fix; reset the guard so a later problem

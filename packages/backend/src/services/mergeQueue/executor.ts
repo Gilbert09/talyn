@@ -17,6 +17,7 @@ import {
   buildMergeablePrompt,
   externalQueueProviderLabel,
   prNeedsFollowup,
+  prNeedsHuman,
   type PRMergeableSummary,
   type VisualReviewSettings,
 } from '@talyn/shared';
@@ -330,7 +331,12 @@ async function buildBaseContext(
   // settled blocker (a green PR is not gated by anything) and the workspace has
   // PostHog credentials — otherwise this would be a PostHog round-trip on every
   // evaluation of every PR in every repo.
-  const visualReview = prNeedsFollowup(pr.lastSummary as PRMergeableSummary)
+  // A human gate is a settled blocker too — and the one the auto-approve path
+  // exists for, so it must still be asked about now that prNeedsFollowup
+  // excludes it.
+  const visualReview =
+    prNeedsFollowup(pr.lastSummary as PRMergeableSummary) ||
+    prNeedsHuman(pr.lastSummary as PRMergeableSummary)
     ? await resolveVisualReviewContext(pr).catch((err) => {
         console.warn(
           `[mergeQueueV2] visual-review lookup failed for ${pr.owner}/${pr.repo}#${pr.number}:`,

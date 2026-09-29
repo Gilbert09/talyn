@@ -2938,6 +2938,66 @@ describe('decide — visual review gate', () => {
     expect(transitions(d).map((t) => t.event.code)).not.toContain('human_check_cleared');
   });
 
+  // The gate read off the PR's own checks — no PostHog credentials, no
+  // `settings.visualReview`. That lookup was off by default and silently off
+  // again without the `visual_review:read` scope, so the queue used to fire
+  // fix runs at Visual Review for almost everybody.
+  describe('read from the checks (needs_human)', () => {
+    const gate = {
+      id: 'posthog_visual_review',
+      label: 'Visual review',
+      name: 'PostHog Visual Review / storybook',
+      url: 'https://us.posthog.com/vr/1',
+    };
+    const humanPr = () =>
+      pr(
+        { mergeStateStatus: 'BLOCKED' },
+        {
+          blockingReason: 'needs_human',
+          ciStatus: 'needs_human',
+          humanGates: [gate],
+          checks: { total: 280, failed: 3, inProgress: 12 },
+        }
+      );
+
+    it.each([
+      ['with no Visual Review settings', undefined],
+      ['when the API says nothing gates', null],
+    ])('parks without a fix run %s — even with CI still running', (_l, visualReview) => {
+      const d = decide(entry(), humanPr(), ctx({ visualReview }));
+      const t = lastTransition(d)!;
+      expect(t.to).toBe('blocked');
+      expect(t.blockedCode).toBe('awaiting_human_check');
+      expect(t.blockedReason).toContain('Visual review');
+      expect(t.blockedReason).toContain('https://us.posthog.com/vr/1');
+      expect(kinds(d)).toContain('notify_blocked');
+      expect(kinds(d)).not.toContain('fire_fix_run');
+    });
+
+    it('stays parked silently', () => {
+      const d = decide(
+        entry({ status: 'blocked', blockedCode: 'awaiting_human_check' }),
+        humanPr(),
+        ctx({ visualReview: undefined })
+      );
+      expect(d.actions).toEqual([]);
+    });
+
+    it('lets the auto-approve path take it when the workspace opted in', () => {
+      const d = decide(entry(), humanPr(), ctx({ visualReview: vr({ autoApprove: true }) }));
+      expect(kinds(d)).toContain('resolve_visual_review');
+    });
+
+    it('releases once the checks name no human gate', () => {
+      const d = decide(
+        entry({ status: 'blocked', blockedCode: 'awaiting_human_check', blockedReason: 'x' }),
+        pr({ mergeStateStatus: 'CLEAN' }, { blockingReason: 'mergeable', humanGates: [], checks: { total: 280, failed: 0, inProgress: 0 } }),
+        ctx({ visualReview: undefined })
+      );
+      expect(transitions(d).map((t) => t.event.code)).toContain('human_check_cleared');
+    });
+  });
+
   describe('auto-approve opted in', () => {
     it('finalizes the run rather than parking or firing a fix run', () => {
       const d = decide(entry(), gatedPr(), ctx({ visualReview: vr({ autoApprove: true }) }));
