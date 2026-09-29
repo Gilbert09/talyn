@@ -22,6 +22,7 @@ import {
   type ReviewRankProfile,
 } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
+import { readProfileStats } from './profileStats.js';
 import { reviewHistory, reviewRankModels } from '../../db/schema.js';
 import { invalidateReviewRankProfile } from './score.js';
 
@@ -384,9 +385,7 @@ export async function readReviewRankPayload(
     teamAffinity: profile.teamAffinity ?? {},
     dirAffinity: profile.dirAffinity ?? {},
     repoAffinity: profile.repoAffinity ?? {},
-    featureStats: (row.featureStats ?? profile.featureStats ?? null) as
-      | { mean: number[]; sd: number[] }
-      | null,
+    featureStats: readProfileStats(row.featureStats ?? profile.featureStats),
     model: {
       installed: row.installed === true,
       nEvents,

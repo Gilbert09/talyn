@@ -6,6 +6,7 @@ type Snapshot = Parameters<ConstructorParameters<typeof ReviewRankingRecorder>[0
   candidate_count: number; chunk_count: number; chunk_index: number; candidates: Array<{
     pr_id: string; repo: string; pr_number: number; displayed_rank: number; gate: string;
     request_first_seen_at?: string | null;
+    priority_trace?: { source: string } | null;
     experiment?: { assigned: string; served: string; fallback: string | null; modelVersion: string; latencyMs: number } | null;
   }>;
 };
@@ -24,7 +25,9 @@ export function summarizeRankingExperiment(
 ) {
   const groups = new Map<string, { event: RankingReportEvent; chunks: Snapshot[] }>();
   const audit = { incompleteSnapshots: 0, mixedAssignments: 0, unknownReviewStart: 0,
-    missingCandidate: 0, noPrecedingSnapshot: 0, fallbackRows: 0, candidateRows: 0, maximumReportedUploadLoss: 0, conflictingChunks: 0, incompleteSessions: 0 };
+    missingCandidate: 0, noPrecedingSnapshot: 0, fallbackRows: 0, candidateRows: 0,
+    missingExperimentRows: 0, clientScoredRows: 0, missingScoringTraceRows: 0,
+    maximumReportedUploadLoss: 0, conflictingChunks: 0, incompleteSessions: 0 };
   for (const event of events) {
     if (event.receivedAt > asOf || event.event !== 'pr_review_queue_snapshot') continue;
     const p = event.payload as Snapshot;
@@ -52,6 +55,9 @@ export function summarizeRankingExperiment(
     for (const row of rows) {
       audit.candidateRows++;
       audit.fallbackRows += Number(!!row.experiment?.fallback);
+      audit.missingExperimentRows += Number(!row.experiment);
+      audit.clientScoredRows += Number(row.priority_trace?.source === 'client');
+      audit.missingScoringTraceRows += Number(!row.priority_trace);
     }
     return [{ ...event, ...p, candidates: rows, at: Date.parse(p.recorded_at) }];
   }).sort((a, b) => a.at - b.at);
@@ -161,6 +167,7 @@ export function summarizeRankingExperiment(
       'A PR open measures navigation, not review start.',
       'Incomplete sessions are excluded. Overdue means a ready request observed at least seven days ago.',
       'Upload loss is a maximum reported counter, not a total across devices.',
+      'Missing experiment traces cannot establish model fallback rates or candidate exposure.',
       'Account submissions can include agent work. Useful review quality needs separate assessment.',
       'Webhook outcomes need an independent completeness audit before model training.'] };
 }

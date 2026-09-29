@@ -138,6 +138,7 @@ describe('Data API database boundary', () => {
       review_ranking_participants: crud,
       review_ranking_events: crud,
       review_ranking_outcomes: crud,
+      review_rank_models: ['SELECT'],
       pr_code_reviews: crud,
       pr_code_review_runs: crud,
       pr_code_review_findings: crud,

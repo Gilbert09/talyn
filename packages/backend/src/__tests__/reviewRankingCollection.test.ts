@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { ReviewRankingRecorder, scorePRForReview, type ReviewRankingRow } from '@talyn/shared';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import { workspaces, reviewRankingEvents, reviewRankingOutcomes } from '../db/schema.js';
+import { workspaces, reviewRankingEvents, reviewRankingOutcomes, reviewRankingParticipants, users } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { loadRankingReportData } from '../services/reviewPriority/reportData.js';
 import { disableRankingCollection, recordRankingOutcome, reconcileRankingOutcomes, resumeRankingCollection, storeRankingEvents } from '../services/reviewPriority/collection.js';
 import { rankingBatchSchema } from '../services/reviewPriority/captureSchema.js';
 import { githubService } from '../services/github.js';
@@ -96,5 +98,22 @@ describe('central ranking collection', () => {
           relrowsecurity AS rls FROM pg_class WHERE relname = '${table}'`);
       expect(result.rows[0]).toEqual({ backend: true, browser: false, rls: true });
     }
+  });
+
+  it.each(['account', 'participant'] as const)('excludes earlier records after %s opt-out', async (level) => {
+    await resumeRankingCollection(testDb.db, TEST_USER_ID);
+    await storeRankingEvents(testDb.db, 'ranking-ws', TEST_USER_ID, 'viewer', batch());
+    const start = new Date(0);
+    const end = new Date(Date.now() + 1000);
+    const before = await loadRankingReportData(testDb.db, start, end);
+    expect(before.events.length).toBeGreaterThan(0);
+    expect(before.outcomes.length).toBeGreaterThan(0);
+    if (level === 'account') {
+      await testDb.db.update(users).set({ reviewRankingOptOut: true }).where(eq(users.id, TEST_USER_ID));
+    } else {
+      await testDb.db.update(reviewRankingParticipants).set({ enabled: false })
+        .where(eq(reviewRankingParticipants.userId, TEST_USER_ID));
+    }
+    expect(await loadRankingReportData(testDb.db, start, end)).toEqual({ events: [], outcomes: [] });
   });
 });

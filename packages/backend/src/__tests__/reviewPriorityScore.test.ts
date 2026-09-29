@@ -50,10 +50,12 @@ function row(over: Partial<ScorableRow> = {}): ScorableRow {
 describe('scoreReviewRows', () => {
   let db: Database;
   let cleanup: () => Promise<void>;
+  let pglite: Awaited<ReturnType<typeof createTestDb>>['pglite'];
 
   beforeEach(async () => {
     const testDb = await createTestDb();
     db = testDb.db;
+    pglite = testDb.pglite;
     cleanup = testDb.cleanup;
     _resetReviewPriorityCache();
     await seedUser(db, { id: TEST_USER_ID });
@@ -78,6 +80,38 @@ describe('scoreReviewRows', () => {
     ]);
     expect([...out.keys()]).toEqual(['theirs']);
   });
+
+  it.each(['control', 'candidate'] as const)('scores %s under the production role and isolates model reads', async (arm) => {
+    await seedUser(db, { id: 'other-owner' });
+    await db.insert(workspacesTable).values({ id: 'other-ws', ownerId: 'other-owner', name: 'other' });
+    await db.insert(reviewRankModelsTable).values([
+      { workspaceId: 'ws1', viewerLogin: 'me', profile: { authorAffinity: { sarah: { gave: 60, got: 60 } } },
+        featureStats: { mean: [0, 0, 0, 0, 0, 0], sd: [1, 1, 1, 1, 1, 1] } },
+      { workspaceId: 'other-ws', viewerLogin: 'me', profile: {} },
+    ]);
+    await pglite.query("SELECT set_config('request.jwt.claim.sub', $1, false)", [TEST_USER_ID]);
+    await pglite.exec('SET ROLE talyn_backend');
+    try {
+      const out = await scoreReviewRows(db, 'ws1', 'me', [row()], arm);
+      expect(out.get('pr-1')?.trace?.source).toBe('server');
+      expect(out.get('pr-1')?.experiment).toMatchObject({ assigned: arm, served: arm, fallback: null });
+      if (arm === 'control') expect(out.get('pr-1')?.terms.map((term) => term.reason)).toContain('known_author');
+      expect((await db.select({ workspaceId: reviewRankModelsTable.workspaceId }).from(reviewRankModelsTable)))
+        .toEqual([{ workspaceId: 'ws1' }]);
+      await expect(pglite.query('UPDATE review_rank_models SET installed = true')).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await pglite.exec('RESET ROLE');
+    }
+  });
+
+  it.each([{}, { mean: [] }, { mean: [0], sd: [] }, { mean: [0], sd: [-1] }])(
+    'serves a replayable score when stored statistics are incomplete: %j', async (featureStats) => {
+      await db.insert(reviewRankModelsTable).values({ workspaceId: 'ws1', viewerLogin: 'me', featureStats });
+      const verdict = (await scoreReviewRows(db, 'ws1', 'me', [row()])).get('pr-1');
+      expect(verdict?.trace?.rankInputs?.stats).toBeNull();
+      expect(replayPRPriorityTrace(verdict!.trace!).score).toBe(verdict!.score);
+    },
+  );
 
   it('translates the DB row rather than casting it', async () => {
     // The trap this exists for: the column is `last_summary` carrying `Date`s,

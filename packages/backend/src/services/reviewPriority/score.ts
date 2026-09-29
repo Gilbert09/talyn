@@ -1,4 +1,5 @@
 import sharedCandidate from './sharedCandidate.json';
+import { readProfileStats } from './profileStats.js';
 import { predictSharedRanking, sharedRankingFeatures, REVIEW_RANKING_EXPERIMENT } from '@talyn/shared';
 // Score the Reviews list SERVER-SIDE, so the ranking can change without a release.
 //
@@ -104,10 +105,7 @@ async function readProfile(
         teamAffinity: stored.teamAffinity ?? {},
         dirAffinity: stored.dirAffinity ?? {},
         repoAffinity: stored.repoAffinity ?? {},
-        featureStats:
-          (row.featureStats as ReviewRankProfile['featureStats']) ??
-          stored.featureStats ??
-          null,
+        featureStats: readProfileStats(row.featureStats ?? stored.featureStats),
         model: {
           installed: row.installed === true,
           nEvents: row.nEvents ?? 0,

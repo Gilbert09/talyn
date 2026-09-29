@@ -139,6 +139,27 @@ describe('prospective review snapshots', () => {
     expect(capture).toHaveBeenCalledTimes(2);
     expect(capture.mock.calls[1][1].candidates[0].priority_trace.scoredAt).toBe(now + 1);
   });
+
+  it('ignores inference timing changes but records a changed model or fallback', () => {
+    const capture = vi.fn();
+    const recorder = new ReviewRankingRecorder(capture, () => 'snapshot');
+    const queue = rows(1);
+    queue[0].priority = scorePRForReview(queue[0], { now, captureTrace: { source: 'server' } });
+    queue[0].priority.experiment = {
+      experiment: 'priority-shared-v1', assigned: 'control', served: 'control',
+      modelVersion: 'fixed', baselineScore: queue[0].priority.score,
+      candidateScore: null, features: null, fallback: null, latencyMs: 1,
+    };
+    recorder.record(queue, context, now);
+    queue[0].priority.experiment.latencyMs = 2;
+    recorder.record(queue, context, now + 1);
+    expect(capture).toHaveBeenCalledTimes(1);
+    queue[0].priority.experiment.fallback = 'missing_or_future_timestamp';
+    recorder.record(queue, context, now + 2);
+    queue[0].priority.experiment.modelVersion = 'other';
+    recorder.record(queue, context, now + 3);
+    expect(capture).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('local review log', () => {

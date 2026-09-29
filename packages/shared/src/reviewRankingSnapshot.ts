@@ -116,6 +116,7 @@ export class ReviewRankingRecorder {
         priority_trace: candidate.priority_trace
           ? { ...candidate.priority_trace, scoredAt: 0 }
           : null,
+        experiment: candidate.experiment ? { ...candidate.experiment, latencyMs: 0 } : null,
       })), clientModel, scope, context.assignedArm,
     ]);
     if (fingerprint === this.fingerprint && now - this.recordedAt < 300_000 && this.snapshotId) {

@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Repair production review scoring and capture (2026-09-29)
+
+An audit found five participants and 315 submissions, but no candidate assignments or server scoring traces.
+The backend role lacked read access to `review_rank_models`. Earlier tests used the privileged connection and missed this failure.
+Migration `0072` grants read access through an owner policy. Tests now score both arms under `talyn_backend`.
+They also check workspace isolation and refuse model writes. Empty database statistics no longer break scoring.
+
+The uploader previously sent one batch per timer and could evict individual snapshot chunks.
+It now drains its bounded queue, removes whole snapshot groups, and splits rejected batches to preserve valid records.
+Persisted loss counters survive restarts. Tests cover retries, rejection isolation, overflow, and opt-out during a request.
+The recorder ignores inference timing changes when deciding whether a queue changed.
+
+Reports now expose missing model traces and exclude opted-out accounts from historical data.
+An audit-only mode supports coverage checks before activation. Monitoring must check collection health while flags remain pending.
+The candidate model, allocation, and original private pilot remain unchanged.
+
 ## A team plan you can buy: seats tied to GitHub accounts (2026-09-29)
 
 The pricing page had a Teams band with no price and an enquiry form. Nothing

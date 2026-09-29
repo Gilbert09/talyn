@@ -1,5 +1,30 @@
 # Review ranking: experiments and release gates
 
+## Scoring and capture repair (2026-09-29)
+
+The first production audit found no candidate assignments across five participating users.
+Server scoring failed because `talyn_backend` could not read `review_rank_models`.
+Available scoring traces came from the client fallback. These records cannot establish candidate performance.
+Migration `0072` gives the backend role read access through a workspace owner policy.
+Model writes remain on the training connection. Empty stored statistics now mean that statistics are unavailable.
+
+Uploads now drain pending batches during each flush. Rejected records do not discard unrelated snapshots.
+Size eviction removes whole snapshot groups. Loss counters survive a client restart.
+Inference timing alone no longer creates a new snapshot.
+These capture changes require an updated web or desktop client. Lost observations cannot be recovered from central storage.
+
+Check production health and collection coverage even while candidate activation remains pending.
+Report missing model traces separately from recorded model fallbacks. Missing traces do not mean zero fallbacks.
+Use this command for coverage checks before activation:
+
+```sh
+npx tsx scripts/report-review-ranking.mts START_ISO END_ISO --audit-only
+```
+
+Reports exclude disabled participants and accounts that opted out, including their earlier records.
+Keep candidate allocation and the model fixed. Confirm flag configuration and server traces before starting the pilot clock.
+Historical client fallback records remain separate from the repaired experiment.
+
 ## Controlled production rollout (2026-09-22)
 
 Priority becomes the default review sort for every user on the new web and desktop builds.

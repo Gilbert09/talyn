@@ -16,6 +16,17 @@ const outcome = (id: string, number = 1, offset = 60000): RankingReportOutcome =
 });
 
 describe('production ranking report', () => {
+  it('reports missing model traces separately from recorded model fallbacks', () => {
+    const event = snapshot('one', 'one');
+    const payload = event.payload as { candidates: Array<Record<string, unknown>> };
+    payload.candidates[0].priority_trace = { source: 'client' };
+    const report = summarizeRankingExperiment([event], [], at(2 * 86_400_000));
+    expect(report.audit).toMatchObject({
+      candidateRows: 4, missingExperimentRows: 4, clientScoredRows: 1,
+      missingScoringTraceRows: 3, fallbackRows: 0,
+    });
+    expect(report.arms.control.inferenceP95Ms).toBeNull();
+  });
   it('includes sessions with zero reviews and counts a repeated submission once', () => {
     const report = summarizeRankingExperiment([snapshot('one', 'one'), snapshot('two', 'two', 3600_000)],
       [outcome('review'), outcome('review')], at(2 * 86_400_000));
