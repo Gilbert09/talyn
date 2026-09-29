@@ -228,6 +228,7 @@ describe('workflow routes', () => {
         reviewPriorityMode: true,
         reviewRankingCandidate: false,
         reviewRankingExport: false,
+        teams: false,
       });
     });
 
@@ -250,6 +251,7 @@ describe('workflow routes', () => {
         reviewPriorityMode: true,
         reviewRankingCandidate: false,
         reviewRankingExport: false,
+        teams: false,
       });
     });
   });
