@@ -5,6 +5,8 @@ import {
 } from './config.js';
 import type {
   PRBlockingReason as SharedPRBlockingReason,
+  PRCiStatus,
+  PRHumanGate,
   PRPriorityVerdict,
 } from '@talyn/shared';
 import type {
@@ -685,6 +687,7 @@ export type {
 } from '@talyn/shared';
 
 export type PRBlockingReason = SharedPRBlockingReason;
+export type { PRCiStatus, PRHumanGate };
 
 export type PRMergeable = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
 export type PRReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
@@ -765,6 +768,20 @@ export interface PRSummaryShape {
   effectiveReviewDecision?: PRReviewDecision;
   blockingReason: PRBlockingReason;
   checks: PRChecks;
+  /**
+   * The CI picture alone, derived by the backend from per-check required-ness.
+   * The status pill draws THIS when approval has its own column — it must
+   * never re-derive required-ness from `blockingReason`. Absent on rows
+   * written before it shipped.
+   */
+  ciStatus?: PRCiStatus;
+  /** Failing gates only a person can clear (PostHog Visual Review). */
+  humanGates?: PRHumanGate[];
+  /**
+   * When the checks above were last written (epoch ms). A partial `{checks}`
+   * broadcast carries it too, so a store can drop one older than what it holds.
+   */
+  checksAt?: number;
   /** How many files the PR touches — numbers the detail panel's Files tab
    *  before its (separate, REST) file list has loaded. Absent on rows cached
    *  before this field shipped, which must read as "no count yet" and never

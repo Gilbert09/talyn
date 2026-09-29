@@ -573,7 +573,9 @@ export function scorePRForReview(
 
   // ---- gate: waiting_on_author --------------------------------------------
   const conflicts = s.mergeable === 'CONFLICTING';
-  const checksFailed = s.blockingReason === 'checks_failed';
+  // A human gate is still red CI from a reviewer's seat — the author has work
+  // before this lands — so it ranks where a failing required check always did.
+  const checksFailed = s.blockingReason === 'checks_failed' || s.blockingReason === 'needs_human';
   const changesRequested = decision === 'CHANGES_REQUESTED';
 
   let gate: PRPriorityGate;

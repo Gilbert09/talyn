@@ -8,6 +8,10 @@ import type { CodeReviewSettings } from './codeReview.js';
 // PR mergeable helpers (shared by the desktop button + backend watcher).
 export * from './prMergeable.js';
 
+// The CI verdict — required-ness, human gates and the pill's CI status —
+// derived once from per-check facts so no front end re-derives it.
+export * from './checkVerdict.js';
+
 // External merge queues (trunk.io / GitHub native) — label vocabulary shared by
 // the backend pipeline and the desktop badges.
 export * from './externalMergeQueue.js';

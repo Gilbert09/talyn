@@ -13,6 +13,7 @@
 import type { CloudProviderType } from './index.js';
 import { DEFAULT_MERGEABLE_TEMPLATE, renderPromptTemplate } from './promptTemplates.js';
 import { codeReviewFindingsIssue, type CodeReviewPromptFinding } from './codeReview.js';
+import type { PRCiStatus, PRHumanGate } from './checkVerdict.js';
 
 export type PRBlockingReason =
   | 'mergeable'
@@ -33,6 +34,14 @@ export type PRBlockingReason =
    * to be done — see the gate rule in `computeBlockingReason`.
    */
   | 'behind'
+  /**
+   * Every failing check that blocks the merge is a gate only a PERSON can
+   * clear — PostHog Visual Review holding changed snapshots for approval, with
+   * the required check that fails because of it. No fix run can green it, so
+   * this is a merge blocker (the queue must not submit) that no automation may
+   * spend a run on. See `checkVerdict.ts`.
+   */
+  | 'needs_human'
   | 'unknown';
 
 export type PRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
@@ -124,6 +133,13 @@ export interface PRMergeableSummary {
    * summary cached before the field shipped; `null` on a standalone PR.
    */
   stack?: PRStackInfo | null;
+  /**
+   * The CI picture alone — see {@link PRCiStatus}. Absent on rows written
+   * before it shipped; readers fall back to the older inference then.
+   */
+  ciStatus?: PRCiStatus;
+  /** Failing gates only a person can clear. Absent = not known, [] = none. */
+  humanGates?: PRHumanGate[];
 }
 
 /**
@@ -149,8 +165,19 @@ export function prLandingBranch(s: PRMergeableSummary): string {
  */
 export function prNeedsFollowup(s: PRMergeableSummary): boolean {
   // Unresolved BOT threads only, and only when we actually know the split —
-  // see the note below. Everything else is in the merge-queue variant.
-  return prBlocksMerge(s) || (s.unresolvedBotReviewThreads ?? 0) > 0;
+  // see the note below. Everything else is in the merge-queue variant. A human
+  // gate blocks the merge but is never agent work: a run cannot approve a
+  // Visual Review, and every one it spends pushes a commit that re-runs CI and
+  // re-raises the same gate (PostHog/posthog#83850 went round 11 times).
+  return (prBlocksMerge(s) && !prNeedsHuman(s)) || (s.unresolvedBotReviewThreads ?? 0) > 0;
+}
+
+/**
+ * The only thing blocking the merge is a gate a PERSON has to clear. It blocks
+ * (see {@link prBlocksMerge}) and no automation should dispatch a run for it.
+ */
+export function prNeedsHuman(s: PRMergeableSummary): boolean {
+  return s.blockingReason === 'needs_human';
 }
 
 /**
@@ -178,6 +205,9 @@ export function prBlocksMerge(s: PRMergeableSummary): boolean {
     // We deliberately don't AUTO-fire on raw `checks.failed > 0`: a
     // non-required failing check is not worth an unattended paid run.
     s.blockingReason === 'checks_failed' ||
+    // Blocks the merge exactly like a red required check — the queue must not
+    // submit it — but callers that dispatch runs ask `prNeedsHuman` first.
+    s.blockingReason === 'needs_human' ||
     s.mergeable === 'CONFLICTING' ||
     s.reviewDecision === 'CHANGES_REQUESTED'
   );
@@ -264,6 +294,10 @@ export function mergeBlockerReason(s: PRMergeableSummary): string {
   }
   if (s.blockingReason === 'checks_failed') {
     return 'failing CI checks';
+  }
+  if (s.blockingReason === 'needs_human') {
+    const gate = s.humanGates?.[0];
+    return gate ? `${gate.label.toLowerCase()} needs a person to approve it` : 'a check needs a person';
   }
   // The one blocker whose fix is a free REST call rather than a cloud run —
   // GitHub's own "Update branch" button, which the merge queue already presses
