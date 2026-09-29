@@ -2,6 +2,77 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Checks you can trust: one ledger, one verdict, a real "Needs human" (2026-09-29)
+
+Charles reported (again) that his PostHog PRs never left blue "1/N running",
+and that opening the detail sheet fixed them. Tom added two more that had come
+back week after week: required checks that time out or fail showed as green
+"non-required" (`semgrep-devex` → required `Semgrep Checks Pass`), and a Visual
+Review that needs a person showed no "Needs human" tag. Each had been patched
+before (Sessions 89 and 98, bf176740ad, ab6fe35b83 last week). They kept coming
+back because three places guessed the same fact — the webhook count path, the
+backend `reconcileBlockingReason`, and the front-end pill — and the webhook path
+could not be corrected.
+
+**Verified causes, from live data.**
+
+- #104122 had 308 check runs, all `completed`; Talyn said 1/232 running. The
+  webhook table `pr_check_states` was never corrected. The full fetch replaced
+  `last_summary.checks` but not the rows, so the next check event on the commit
+  (PostHog runs review/label-triggered workflows long after CI) recounted from a
+  stale `pending` row. ab6fe35b83 only let the poll win until that next event.
+  The flush also read the rows and wrote the PR with no lock, so two flushes
+  could land the older count last — "exactly 1" is that race's signature. There
+  is no periodic poll any more, and the sweep skipped a repo's refetch whenever a
+  search call threw.
+- PostHog reports `BLOCKED` + `REVIEW_REQUIRED` on every PR, so the held verdict
+  is `'blocked'`. The webhook path never re-derived it, and the pill read
+  `'blocked'` as "every failure is non-required". `Semgrep Checks Pass` is
+  `isRequired: true`.
+- Visual Review changes fail three contexts together (#108150): the status
+  `PostHog Visual Review / storybook`, `Complete Visual Review run`, and the
+  REQUIRED `Visual regression tests pass`. The only detection was merge-queue
+  R8b, off unless `settings.visualReview` was set (no UI sets it) and the
+  PostHog token had `visual_review:read` (the OAuth grant does not ask for it).
+  `status` webhooks were subscribed and ignored.
+
+**What changed.**
+
+- `pr_check_states` is now the check **ledger** (migration 0070 adds
+  `required`, `raw_state`, `url`). Every complete full fetch reseeds it
+  (`reseedCheckLedger`, detached from `upsertRow` so a request transaction
+  cannot deadlock against a flush). Every write + recompute for a commit runs
+  under one advisory lock.
+- One derivation, `deriveCiVerdict` in `@talyn/shared`, used by `rawToSummary`
+  and the ledger recompute. Unknown required-ness reads as blocking.
+  `reconcileBlockingReason` is gone. The summary carries `ciStatus` and
+  `humanGates`; the pill draws `ciStatus` when approval has its own column.
+- `needs_human` is a new `PRBlockingReason`: a human gate is failing and it
+  explains every blocking failure. It blocks the merge but `prNeedsFollowup`
+  excludes it. The queue parks `awaiting_human_check` without the VR API, and
+  auto-keep stands down before spending a run. The API path stays for
+  `autoApprove`.
+- `status` events feed the ledger (VR approval now turns green without a sweep).
+  A 90 s quiet-period **settle refresh** per commit guarantees one authoritative
+  fetch after CI finishes. A failing check the ledger has no required-ness for
+  fires the recheck under any verdict, not only `checks_failed_optional`.
+- A lost pagination tail no longer reads as green: the list is marked
+  incomplete, does not reseed, and a `FAILURE` rollup adds a stand-in failure.
+- The sweep refreshes tracked rows even when a relationship search throws.
+- Front ends (both): "Needs human" pill and row chip for any PR with a failing
+  gate, gate rows tagged in the Checks tab, the Merge Queue page stops telling a
+  VR-parked PR it "self-heals on a new push", and partial summary broadcasts
+  carry `checksAt` so an older one cannot overwrite a newer one.
+
+**Checked against live data.** Replaying today's GraphQL through the new
+derivation: #108150 → `needs_human` with the gate named; #104122 and #104123
+(Charles's) → `passing`. The new ledger test reproduces #104122 and fails with
+the reseed switched off.
+
+**Not done.** Tracked rows whose last write was incremental are not moved to the
+front of the sweep — the settle refresh made it unnecessary. The GitHub App must
+keep its `status` subscription (it is in SETUP.md and was already on).
+
 ## A conversion pass that the numbers rewrote (2026-09-28)
 
 Ran a public CRO/copywriting method (`coreyhaines31/marketingskills`, MIT —

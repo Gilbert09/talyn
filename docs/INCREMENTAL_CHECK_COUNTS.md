@@ -1,152 +1,113 @@
-# Incremental check counts from webhooks
+# The check ledger
 
-**Status:** SHIPPED (check_run path). `pr_check_states` table (migration 0027),
-`services/checkCounts.ts`, worker cutover (`check_run` → incremental, no GraphQL;
-`check_suite` → no-op), close/merge/force-push pruning, and a TTL safety-net
-prune in the reconcile sweep are all live. Desktop merges partial `{ checks }`
-echoes (`stores/pullRequests.ts`, `PRDetailSheet.tsx`).
+**Status:** SHIPPED. `pr_check_states` (migrations 0027, 0070), `services/checkCounts.ts`,
+`packages/shared/src/checkVerdict.ts`. This replaced the webhook-only "incremental
+check counts" design, whose table nothing ever corrected (see "Why it was rebuilt").
 
-**Deferred** (don't fire / aren't needed yet): legacy `status` events (posthog
-uses check_runs; needs the subscription anyway), the `blockingReason` heuristic
-on check events (counts-only for now; PR/push events + the sweep keep the
-blocking colour authoritative), and a Debug tile for incremental-vs-sweep drift.
+## What it is
 
-**Goal:** keep the PR pill's check **counts** (`total / passed / failed / inProgress / skipped`)
-live from `check_run` / `check_suite` / `status` webhooks **without a GraphQL
-`refreshPr` per event**, and **without bloating `pull_requests.lastSummary`
-egress**. Full PR data (mergeable, reviews, authoritative blocking reason) is
-fetched on demand when the detail overlay opens, and the 5-min reconcile sweep
-remains the correctness backstop.
+`pr_check_states` holds one row per **(repo, head sha, check name)**. It is the
+per-commit record of every check run and commit status Talyn knows about:
 
-## Why
+| column | notes |
+|---|---|
+| `repo_full_name`, `head_sha`, `name` | the unique key — a re-run of a name updates its row |
+| `state` | normalized: `success` \| `failure` \| `pending` \| `in_progress` \| `skipped` |
+| `raw_state` | GitHub's own value (`FAILURE`, `ERROR`, `TIMED_OUT`, …) |
+| `required` | GitHub's per-PR required-ness from the last full fetch; NULL = not known |
+| `url` | detailsUrl / targetUrl |
+| `source` | `check_run` \| `status` \| `snapshot` (a full-fetch reseed) |
+| `ts` | the event's own time — the ordering key |
 
-Today every check event on a tracked PR triggers `refreshPr` →
-`batchPullRequestsByNumber` → GitHub's `statusCheckRollup`, which is ~1–2s for a
-big PR (100+ contexts, `isRequired` branch-protection resolution). On a busy repo
-the worker can't keep up. But a check event only changes **one check's state** —
-recomputing the *counts* needs only the set of checks for the PR's head commit,
-which we can maintain ourselves.
+Nothing per-check leaves the backend. The front ends see only the summary fields
+derived from it: `checks`, `ciStatus`, `humanGates`, `blockingReason`.
 
-## Principles
+## Two writers, one lock
 
-- **The webhook is the source of truth for the fast path.** A `check_run` payload
-  carries everything we need to update one check: `name`, `head_sha`, `status`,
-  `conclusion`, `pull_requests[]`.
-- **Counts ship; per-check rows never do.** Per-check state lives in a dedicated
-  table, queried with a `GROUP BY` aggregate (~5 rows). The desktop only ever
-  sees the small counts object (already in `lastSummary.checks`).
-- **Approximate fast, exact slow.** Incremental updates the counts immediately;
-  the sweep and the detail-overlay fetch reconcile to GitHub's authoritative
-  rollup. Drift self-heals within 5 min.
+1. **Webhooks.** `check_run` and `status` deliveries are parsed and buffered by
+   the coalescer (keyed by repo + sha, 750 ms window). A flush upserts the rows
+   (an older event never overwrites a newer one) and re-derives the verdict.
+2. **Every complete full fetch.** `prCache.upsertRow` starts
+   `reseedCheckLedger` for the PR's head. The snapshot replaces every row that no
+   webhook touched since the fetch started, and deletes rows GitHub no longer
+   lists. A webhook that landed during the fetch keeps the usual newest-wins rule.
+   `required` comes from the snapshot when it knows, and is kept when it does not
+   (the by-branch path cannot ask).
 
-## Data model — new table `pr_check_states`
+Both run under `pg_advisory_xact_lock('checks:<repo>:<sha>')`, so two flushes
+(same process, another replica, or a deploy overlap) cannot interleave their read
+and write. Without the lock, the older read could land last and write "N-1 done,
+1 running".
 
-Per-check state, keyed to a **GitHub repo + head commit** (workspace-independent —
-checks belong to a commit, shared by every workspace tracking that PR).
+The reseed is **not awaited** by `upsertRow`. That write can be inside a request
+transaction that holds the PR row lock. A flush that holds the advisory lock can
+be waiting for that row. If the request waited for the reseed, each would wait
+for the other. The reseed reads the PR row `FOR UPDATE`, so it sees the committed
+facts.
 
-| column        | type      | notes |
-|---------------|-----------|-------|
-| `id`          | text pk   | uuid |
-| `repo_full_name` | text   | `owner/repo`, lowercased |
-| `head_sha`    | text      | commit the check ran on |
-| `name`        | text      | check/context name — the dedupe key (re-runs of a name supersede) |
-| `source`      | text      | `check_run` \| `status` |
-| `external_id` | text null | GitHub `check_run.id` / status context id (debug only) |
-| `state`       | text      | normalized: `success` \| `failure` \| `pending` \| `skipped` (matches `normalizeCheckState`) |
-| `updated_at`  | timestamptz |
-| `created_at`  | timestamptz |
+An incomplete context list (a page of a >100-check rollup could not be read) never
+reseeds, and adds a stand-in context so a `FAILURE` rollup cannot read as green.
 
-Indexes:
-- `UNIQUE (repo_full_name, head_sha, name)` — one row per check name (re-runs
-  upsert in place; the table is therefore *already* deduped, replacing
-  `dedupeLatestCheckByName` at read time).
-- `INDEX (repo_full_name, head_sha)` — drives the count aggregate.
+## One verdict
 
-Rows are tiny text records. **Nothing here is a jsonb blob and nothing here is
-shipped to the desktop** — it's purely backend-derived state.
+`deriveCiVerdict` (shared) takes per-check facts and returns:
 
-## Webhook update flow
+- `ciStatus`: `none` | `passing` | `running` | `failing_optional` |
+  `failing_required` | `needs_human`.
+- `humanGates`: failing gates only a person can clear.
+- Counts of blocking, unknown and optional failures.
 
-On `check_run` (and later `status`):
+A failing check with **unknown** required-ness counts as blocking. The one
+exception is `MERGEABLE + UNSTABLE` read in the same fetch — GitHub itself saying
+the failures are optional. The webhook path never uses that exception, because
+the row's `mergeStateStatus` is from before the failure.
 
-1. Extract `{ repoFullName, headSha, name, state, externalId }`.
-   `state = normalizeCheckState(status, conclusion)` (reuse the existing helper).
-2. **Upsert** into `pr_check_states` on `(repo_full_name, head_sha, name)` —
-   set `state`, `external_id`, `updated_at`. Last-writer-wins; out-of-order
-   events are rare and the sweep corrects them.
-3. For each PR in `check_run.pull_requests` that we **track** (reuse
-   `filterTrackedOpenAcross`):
-   - Resolve the PR's **current** `head_sha` from `lastSummary.headSha`.
-   - **Only if `check_run.head_sha === current head_sha`** recompute (checks on a
-     superseded sha — post-force-push — must not count, matching GitHub's rollup).
-   - Recompute counts in SQL:
-     `SELECT state, count(*) FROM pr_check_states WHERE repo_full_name=? AND head_sha=? GROUP BY state`
-     → `{ total, passed, failed, inProgress, skipped }`.
-   - Write each tracked workspace row with `jsonb_set(last_summary, '{checks}', …)`
-     (no need to read the blob back), bump `last_check_digest`, and
-     `emitPullRequestUpdated` with the new counts (existing small public shape).
+`computeBlockingReason` takes the verdict. The full fetch (`rawToSummary`) and the
+ledger recompute (`recomputeVerdicts` → `verdictFor`) use the same functions, so
+they can disagree only about inputs.
 
-`check_suite/completed` is a checkpoint signal — optionally trigger a recount /
-log a diff, but the per-`check_run` upserts already carry the state.
+The ledger recompute writes `checks`, `blockingReason`, `ciStatus`, `humanGates`
+and `failingChecksDigest` with one `||` jsonb merge, and skips the UPDATE when
+none of them changed.
 
-## What incremental does *not* recompute (phase 1)
+## Human gates
 
-`blockingReason` depends on `mergeable` + `reviewDecision` + required-ness, none
-of which a check event carries. Phase 1 updates **counts only**; `blockingReason`
-stays as last computed and is refreshed by `pull_request`/`push` events and the
-sweep. (Counts are "the main thing on the pill" — the explicit priority.) Phase 2
-can apply the `mergeStateStatus` heuristic from cached `mergeable` for a
-best-effort colour.
+`HUMAN_GATES` in `checkVerdict.ts`. The first entry is PostHog Visual Review:
 
-## Cleanup / wipe triggers
+- the gate: status context `PostHog Visual Review / <type>` in raw state
+  `FAILURE` (not `ERROR`; ` (tracking)` / ` (partial)` never gate);
+- its consequences: `Visual regression tests pass` (required) and
+  `Complete Visual Review run`, which fail because the gate fails.
 
-- **PR closed/merged** (`pull_request` closed): delete `pr_check_states` for that
-  PR's `head_sha`.
-- **Force-push / new head** (`pull_request` synchronize): delete rows for the
-  *previous* `head_sha` (the pre-update `lastSummary.headSha`); the new sha's rows
-  accrue as checks arrive.
-- **TTL safety net**: the 5-min sweep prunes rows whose `head_sha` matches no
-  tracked open PR, so the table can't grow unbounded (it only ever holds checks
-  for currently-open, currently-tracked PRs).
+If a gate fails and every blocking failure is the gate or one of its
+consequences, the verdict is `needs_human`. `prBlocksMerge` is true (the queue
+must not submit). `prNeedsFollowup` is false (no automation spends a run). The
+merge queue parks `awaiting_human_check`, and auto-keep stands down, both before
+any run.
 
-## Correctness backstops
+## Healing
 
-- **5-min reconcile sweep**: full GraphQL → authoritative counts → overwrites
-  `lastSummary.checks`. Any incremental drift heals within a tick.
-- **Detail overlay**: opening a PR runs the full PR GraphQL query (mergeable,
-  reviews, full rollup) — always accurate, never reads `pr_check_states`.
+- **Settle refresh.** Every buffered event re-arms a per-commit timer. 90 s after
+  the last event, one authoritative refresh runs for the PRs on that head (one
+  fetch per GitHub account). That reseeds the ledger after CI goes quiet.
+- **Required-ness recheck.** A failing row with `required = null` fires a
+  targeted by-number refresh (leading + trailing 15 s debounce).
+- **The reconcile sweep** (5 min) still refetches every tracked PR, and now
+  refreshes tracked rows even when the relationship searches fail.
+- **Pruning.** Rows for a closed PR's head and a force-pushed PR's old head are
+  deleted; rows idle for 24 h are pruned by the sweep.
 
-## Edge cases
+## Why it was rebuilt (2026-09-29)
 
-- **Unknown head_sha** (a check arrives before any `pull_request` event for the
-  PR): do a single `refreshPr` to establish `headSha` + counts, then incremental
-  thereafter. Most PRs get a `pull_request` event first.
-- **Legacy `status` events** (commit statuses): needed for repos that use them
-  (GitHub-Actions repos like posthog generally don't). `status` payloads carry a
-  `sha` but no PR numbers → map `sha → tracked PR` via `lastSummary.headSha`.
-  Requires subscribing to the `status` event. **Phase 2.**
-- **Cross-fork junk**: `check_run.pull_requests` sometimes lists unrelated PRs —
-  already filtered out by `filterTrackedOpenAcross` (we only touch tracked PRs).
+PostHog/posthog#104122 had 308 completed check runs and showed "1/232 running".
+Opening the detail sheet fixed it until the next check event. The cause: the
+webhook table was never corrected. The full fetch replaced `last_summary.checks`
+but left the rows, so the next `check_run` on the commit (PostHog runs review- and
+label-triggered workflows long after CI) recounted from a stale `pending` row.
+The unlocked read-then-write between flushes produced the same "exactly 1"
+symptom. And there is no periodic poll any more, so nothing else repaired it.
 
-## Phasing
-
-1. **Phase 1 — shadow mode.** Add the table + `check_run` handler. Compute counts
-   incrementally but keep `refreshPr` on check events too; log
-   `incremental vs GraphQL` count diffs to the debug bus. No behaviour change —
-   just validate accuracy.
-2. **Phase 2 — cut over.** Once diffs are clean, drop the per-check-event
-   `refreshPr`: check events go incremental-only. Add `status` handling +
-   `blockingReason` heuristic + force-push pruning.
-3. **Phase 3 — polish.** Tune TTLs, add a Debug tile for incremental-vs-sweep
-   drift.
-
-## Egress summary (the explicit constraint)
-
-- New rows are tiny text records — no jsonb blobs.
-- Counts via `GROUP BY` aggregate — ~5 rows per recompute.
-- `lastSummary` updated via `jsonb_set` — the blob is never read back into the
-  backend.
-- Broadcast uses the existing small counts shape — no per-check data leaves the
-  backend.
-- The table is pruned on close/merge/force-push + TTL — bounded to open,
-  tracked PRs.
+The same week, a held `'blocked'` verdict (PostHog reports `BLOCKED` on every PR)
+survived a required `Semgrep Checks Pass` going red, because the webhook path
+patched `checks` only, and the pill read `'blocked'` as "every failure is
+non-required". The pill now draws `ciStatus`.
