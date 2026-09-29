@@ -18,6 +18,7 @@ import { api } from '../../lib/api';
 import { openExternal } from '../../lib/openExternal';
 import { trackEvent } from '../../lib/analytics';
 import { useBillingStore } from '../../stores/billing';
+import { useWorkspaceStore } from '../../stores/workspace';
 
 type Period = 'monthly' | 'annual';
 
@@ -38,6 +39,8 @@ export function UpgradeModal({
   const status = useBillingStore((s) => s.status);
   const upgradeReason = useBillingStore((s) => s.upgradeReason);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
+  const teamsOffered = useWorkspaceStore((s) => s.features?.teams === true);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
   // Monthly by default: the paywall interrupts someone mid-task, and the
   // smaller commitment is the one they can say yes to without thinking about
   // it. Annual keeps its "2 months free" hint for anyone who wants it.
@@ -231,6 +234,22 @@ export function UpgradeModal({
                 <Check className="h-4 w-4" /> Cancel anytime from Settings
               </li>
             </ul>
+            {teamsOffered && (
+              <p className="text-sm text-muted-foreground">
+                Buying for a team?{' '}
+                <button
+                  type="button"
+                  className="text-primary underline-offset-2 hover:underline"
+                  onClick={() => {
+                    trackEvent('team_offer_opened', { placement: 'upgrade_modal' });
+                    handleClose(false);
+                    openSettings('billing');
+                  }}
+                >
+                  Pay for everyone on one invoice
+                </button>
+              </p>
+            )}
             {waiting && (
               <p className="text-sm text-muted-foreground">
                 <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />

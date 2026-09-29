@@ -19,6 +19,7 @@ const { team, state, refresh } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { billing: { team } } }));
 vi.mock('../lib/openExternal', () => ({ openExternal: vi.fn() }));
+vi.mock('../lib/analytics', () => ({ trackEvent: vi.fn() }));
 vi.mock('../stores/workspace', () => ({
   useWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({ features: { teams: state.teamsOffered } }),

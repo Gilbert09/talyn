@@ -9,6 +9,7 @@ import {
   type TeamPricing,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
+import { trackEvent } from '../../lib/analytics';
 import { openExternal } from '../../lib/openExternal';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkspaceStore } from '../../stores/workspace';
@@ -81,6 +82,7 @@ function TeamMemberCard({
     setError(null);
     try {
       await api.billing.team.leave();
+      trackEvent('team_left');
       setConfirming(false);
       await refresh();
     } catch (err) {
@@ -145,6 +147,7 @@ function StartTeamCard() {
     setError(null);
     try {
       await api.billing.team.create({ name });
+      trackEvent('team_created');
       await refresh();
     } catch (err) {
       setError(errorText(err, 'Could not create the team'));
@@ -261,6 +264,7 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
               onChangeSeats={(seats) =>
                 run(async () => {
                   await api.billing.team.setSeatCount(teamId, seats);
+                  trackEvent('team_seat_count_changed', { from: team.seatsPurchased, to: seats });
                   startCheckoutPollBurst();
                 }, 'Could not change the seat count')
               }
@@ -299,7 +303,10 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
           team={team}
           onAssigned={load}
           onRemove={(seatId) =>
-            run(() => api.billing.team.removeSeat(teamId, seatId), 'Could not remove the seat')
+            run(async () => {
+              await api.billing.team.removeSeat(teamId, seatId);
+              trackEvent('team_seat_removed');
+            }, 'Could not remove the seat')
           }
         />
       )}
@@ -429,6 +436,7 @@ function BuySeats({
     setError(null);
     try {
       const { url } = await api.billing.team.checkout(teamId, { period, seats });
+      trackEvent('team_checkout_started', { seats, period });
       await openExternal(url);
       onStarted();
       setWaiting(true);
@@ -531,6 +539,10 @@ function SeatList({
     setFailed([]);
     try {
       const result = await api.billing.team.assignSeats(team.id, { logins: parseLogins(input) });
+      trackEvent('team_seats_assigned', {
+        assigned: result.assigned.length,
+        failed: result.failed.length,
+      });
       setFailed(result.failed);
       setInput(result.failed.map((f) => f.login).join(', '));
       await onAssigned();
