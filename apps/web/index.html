@@ -29,6 +29,14 @@
       pays off again here. 'unsafe-inline' on style-src is unavoidable (React
       inline styles); img-src data: is required by the base64 provider logos.
 
+      connect-src needs BOTH PostHog hosts. posthog-js fetches its remote config
+      (which says whether session replay is on) from
+      us-assets.i.posthog.com/array/<token>/config, not from the ingestion
+      host. With only us.i.posthog.com allowed that fetch was blocked, the SDK
+      never learned replay was enabled, and every web event reported
+      $recording_status "disabled" — so the web app had no recordings at all
+      while the desktop (connect-src https:) recorded fine.
+
       connect-src lists BOTH localhost and 127.0.0.1: `supabase start` serves
       on 127.0.0.1:54321 while Vite serves on localhost, and the two are
       distinct origins to CSP. Allowing only localhost silently broke local
@@ -37,7 +45,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.githubusercontent.com; font-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https://*.supabase.co wss://*.supabase.co https://prod.talyn.dev wss://prod.talyn.dev https://us.i.posthog.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.githubusercontent.com; font-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:* https://*.supabase.co wss://*.supabase.co https://prod.talyn.dev wss://prod.talyn.dev https://us.i.posthog.com https://us-assets.i.posthog.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'"
     />
   </head>
   <body class="bg-background text-foreground">
