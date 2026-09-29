@@ -73,4 +73,32 @@ describe('prSummaryCache', () => {
     wsHandler!({ id: 'pr-d', lastSummary: summary('conflicts') });
     expect(getCachedPRStatus('pr-d')).toEqual(status('conflicts', 'open'));
   });
+
+  it('merges a partial checks echo into the held summary instead of replacing it', () => {
+    // An incremental echo carries only `{ checks }`. Replacing the summary with
+    // it left the task-header pill with no verdict at all.
+    prime('pr-e', status('checks_failed'));
+    wsHandler!({ id: 'pr-e', lastSummary: { checks: { total: 3, failed: 0 } } });
+    const held = getCachedPRStatus('pr-e')!.summary;
+    expect(held.blockingReason).toBe('checks_failed');
+    expect(held.checks).toEqual({ total: 3, failed: 0 });
+  });
+
+  it.each([
+    ['drops an older checks slice', 100, 'checks_failed'],
+    ['takes a newer checks slice', 300, 'mergeable'],
+  ])('%s', (_label, checksAt, expected) => {
+    prime('pr-f', {
+      summary: { ...summary('checks_failed'), checksAt: 200 } as PRSummaryShape,
+      state: 'open',
+    });
+    wsHandler!({
+      id: 'pr-f',
+      lastSummary: { blockingReason: 'mergeable', checks: {}, checksAt, title: 'renamed' },
+    });
+    const held = getCachedPRStatus('pr-f')!.summary;
+    expect(held.blockingReason).toBe(expected);
+    // Keys outside the checks slice always land.
+    expect(held.title).toBe('renamed');
+  });
 });

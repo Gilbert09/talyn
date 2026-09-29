@@ -220,3 +220,107 @@ describe('PRStatusPill — a behind head', () => {
     expect(screen.queryByText('Behind')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The CI picture comes from the backend's `ciStatus`, decided per check. The
+ * pill used to infer it: a held 'blocked' verdict was read as "every failure is
+ * non-required", and PostHog reports BLOCKED on every PR — so a red required
+ * `Semgrep Checks Pass` drew as a green "2 non-required".
+ */
+describe('PRStatusPill — ciStatus', () => {
+  const failing = checks({ total: 200, passed: 190, failed: 2, inProgress: 0, skipped: 8 });
+  const running = checks({ total: 200, passed: 150, failed: 0, inProgress: 50 });
+
+  it.each([
+    ['failing_required', failing, '2/200 failing', 'red-500'],
+    ['failing_optional', failing, '2 non-required', 'emerald-500'],
+    ['failing_optional', { ...running, failed: 1 }, '50/200 running', 'blue-500'],
+    ['running', running, '50/200 running', 'blue-500'],
+    // An optional failure while CI runs is still "running", never red.
+    ['running', { ...running, failed: 1 }, '50/200 running', 'blue-500'],
+    ['passing', checks({ total: 3, passed: 3 }), 'Ready', 'emerald-500'],
+    ['none', checks(), 'Ready', 'emerald-500'],
+    ['needs_human', failing, 'Needs human', 'amber-500'],
+  ] as const)('draws ciStatus %s with the right label and tone', (ciStatus, c, label, tone) => {
+    render(
+      <PRStatusPill blockingReason="blocked" checks={c} hideReviewState ciStatus={ciStatus} />
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain(tone);
+  });
+
+  it.each(['merge_conflicts', 'behind'] as const)(
+    'keeps the PR-level %s pill over the CI picture',
+    (blockingReason) => {
+      render(
+        <PRStatusPill
+          blockingReason={blockingReason}
+          checks={failing}
+          hideReviewState
+          ciStatus="failing_required"
+        />
+      );
+      expect(screen.queryByText('2/200 failing')).not.toBeInTheDocument();
+    }
+  );
+
+  it('reads a blocked verdict with failures as red when ciStatus is absent', () => {
+    // A row written before ciStatus shipped. Without per-check data the pill
+    // must not guess green.
+    render(<PRStatusPill blockingReason="blocked" checks={failing} hideReviewState />);
+    expect(screen.getByText('2/200 failing')).toBeInTheDocument();
+    expect(screen.queryByText('2 non-required')).not.toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('red-500');
+  });
+});
+
+describe('PRStatusPill — needs a human', () => {
+  const gates = [
+    {
+      id: 'posthog_visual_review',
+      label: 'Visual review',
+      name: 'PostHog Visual Review / storybook',
+      url: 'https://us.posthog.com/visual_review/runs/1',
+    },
+  ];
+
+  it.each([[false], [true]])('says "Needs human" in amber (hideReviewState=%s)', (hide) => {
+    render(
+      <PRStatusPill
+        blockingReason="needs_human"
+        checks={checks({ total: 5, passed: 3, failed: 2 })}
+        hideReviewState={hide}
+        humanGates={gates}
+      />
+    );
+    expect(screen.getByText('Needs human')).toBeInTheDocument();
+    expect(screen.getByRole('button').className).toContain('amber-500');
+  });
+
+  it('names the gate and where to approve it in the tooltip', () => {
+    render(
+      <PRStatusPill
+        blockingReason="needs_human"
+        checks={checks({ total: 5, passed: 3, failed: 2 })}
+        humanGates={gates}
+      />
+    );
+    const title = screen.getByRole('button').getAttribute('title') ?? '';
+    expect(title).toContain('Visual review');
+    expect(title).toContain('PostHog Visual Review / storybook');
+    expect(title).toContain('https://us.posthog.com/visual_review/runs/1');
+  });
+
+  it('keeps the needs-human pill under an external queue waiting on the PR', () => {
+    render(
+      <PRStatusPill
+        blockingReason="needs_human"
+        checks={checks({ total: 5, passed: 5 })}
+        state="open"
+        externalQueueState="not_ready"
+        humanGates={gates}
+      />
+    );
+    expect(screen.getByText('Needs human')).toBeInTheDocument();
+  });
+});

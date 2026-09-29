@@ -109,4 +109,50 @@ describe('pull request store — applyPullRequestUpdate', () => {
     usePullRequestStore.getState().removeRow('p1');
     expect(usePullRequestStore.getState().rows.map((r) => r.id)).toEqual(['p2']);
   });
+
+  // Broadcasts cross replicas through Redis, so a partial checks echo from one
+  // replica can land after a newer full write from another. The older one must
+  // not paint "1 running" back over settled checks.
+  describe('checksAt ordering', () => {
+    const held = {
+      title: 'PR p1',
+      blockingReason: 'mergeable',
+      ciStatus: 'passing',
+      checks: { total: 3, passed: 3, failed: 0, inProgress: 0, skipped: 0 },
+      checksAt: 200,
+    };
+    const stale = {
+      blockingReason: 'blocked',
+      ciStatus: 'running',
+      humanGates: [],
+      checks: { total: 3, passed: 2, failed: 0, inProgress: 1, skipped: 0 },
+    };
+
+    it.each([
+      ['drops an older checks slice', 100, 'passing', 0],
+      ['applies an equal-age slice', 200, 'running', 1],
+      ['applies a newer slice', 300, 'running', 1],
+    ])('%s', (_label, checksAt, ciStatus, inProgress) => {
+      usePullRequestStore.setState({
+        rows: [makeRow('p1', { summary: held as never })],
+      });
+      usePullRequestStore.getState().applyPullRequestUpdate(
+        makePayload({ id: 'p1', lastSummary: { ...stale, checksAt, title: 'renamed' } as never })
+      );
+      const summary = usePullRequestStore.getState().rows[0].summary;
+      expect(summary.ciStatus).toBe(ciStatus);
+      expect(summary.checks.inProgress).toBe(inProgress);
+      // Everything outside the checks slice still lands.
+      expect(summary.title).toBe('renamed');
+    });
+
+    it('applies a slice with no checksAt, as before the field existed', () => {
+      usePullRequestStore.setState({ rows: [makeRow('p1', { summary: held as never })] });
+      usePullRequestStore
+        .getState()
+        .applyPullRequestUpdate(makePayload({ id: 'p1', lastSummary: stale as never }));
+      expect(usePullRequestStore.getState().rows[0].summary.ciStatus).toBe('running');
+    });
+  });
 });
+

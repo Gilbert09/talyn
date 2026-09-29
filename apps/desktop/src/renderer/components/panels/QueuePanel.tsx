@@ -988,6 +988,7 @@ function PRStatusPillForTask({
       // approved-but-protection-held PR from reading as "Review".
       reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision}
       labels={summary.labels}
+      humanGates={summary.humanGates}
     />
   );
 }

@@ -6,6 +6,7 @@ import type {
   PRSummaryShape,
   PRState,
 } from '../lib/api';
+import { mergeSummaryPatch } from '../lib/summaryPatch';
 
 /**
  * Shared open-PR state, lifted out of the old single GitHub panel so the
@@ -135,7 +136,8 @@ export const usePullRequestStore = create<PullRequestState>((set, get) => ({
       // Merge, don't replace: an incremental echo carries only the changed slice
       // (e.g. `{ checks }`), and full echoes carry every field so merging is a
       // no-op for them. Keeps title/mergeable/etc. when only counts changed.
-      summary: { ...next[idx].summary, ...p.lastSummary },
+      // A checks slice older than the one held is dropped (see mergeSummaryPatch).
+      summary: mergeSummaryPatch(next[idx].summary, p.lastSummary),
       // Preserve a known link if the echo omits it; adopt a new one when the
       // backend reports it (e.g. just-started fix task).
       taskId: p.taskId ?? next[idx].taskId,

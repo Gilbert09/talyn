@@ -5,6 +5,7 @@ import {
   fixBlockedReason,
   fixBlockedMessage,
   TASK_STATUS_TERMINAL,
+  humanGatesIn,
 } from '@talyn/shared';
 import {
   ExternalLink,
@@ -635,6 +636,8 @@ export function PRDetailSheet({
                   state={view.row.state}
                   hideReviewState
                   labels={view.row.summary.labels}
+                  ciStatus={view.row.summary.ciStatus}
+                  humanGates={view.row.summary.humanGates}
                 />
               </div>
             ) : (
@@ -1347,9 +1350,20 @@ function ChecksTab({
   const failuresOptional =
     (data.fresh ?? data.row.summary).blockingReason === 'checks_failed_optional' ||
     allFailuresNonRequired;
+  // Failing checks only a person can clear (Visual Review), plus the required
+  // checks that fail because of them. Tagged, and listed first among failures,
+  // since they are the one red on the list no agent run can fix.
+  const { attributed: humanGated } = humanGatesIn(
+    contexts.map((c) => ({ name: c.name, state: c.state, required: c.required ?? null, url: c.url }))
+  );
+  const needsHuman = (c: PRCheckContext) => c.state === 'failure' && humanGated.has(c.name);
   const sorted = contexts
     .slice()
-    .sort((a, b) => (CHECK_STATE_ORDER[a.state] ?? 99) - (CHECK_STATE_ORDER[b.state] ?? 99));
+    .sort(
+      (a, b) =>
+        (CHECK_STATE_ORDER[a.state] ?? 99) - (CHECK_STATE_ORDER[b.state] ?? 99) ||
+        Number(needsHuman(b)) - Number(needsHuman(a))
+    );
   const visible = filter
     ? sorted.filter((c) => FILTER_STATES[filter].includes(c.state))
     : sorted;
@@ -1398,6 +1412,7 @@ function ChecksTab({
                 key={`${c.name}-${c.url ?? ''}`}
                 check={c}
                 failuresOptional={failuresOptional}
+                needsHuman={needsHuman(c)}
               />
             ))}
           </ul>
@@ -1436,9 +1451,11 @@ function ChecksTab({
 function CheckRow({
   check,
   failuresOptional = false,
+  needsHuman = false,
 }: {
   check: PRCheckContext;
   failuresOptional?: boolean;
+  needsHuman?: boolean;
 }) {
   // A non-required failing check reads amber, not red, and carries a
   // "not required" tag so it's clear it isn't blocking the merge. Trust the
@@ -1454,10 +1471,19 @@ function CheckRow({
       <span className="min-w-0 flex-1 truncate text-xs" title={check.name}>
         {check.name}
       </span>
-      {optionalFail && (
-        <span className="shrink-0 rounded bg-amber-500/10 px-1 py-px text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
-          not required
+      {needsHuman ? (
+        <span
+          className="shrink-0 rounded bg-amber-500/10 px-1 py-px text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+          title="A person has to approve this — no agent run can clear it"
+        >
+          needs human
         </span>
+      ) : (
+        optionalFail && (
+          <span className="shrink-0 rounded bg-amber-500/10 px-1 py-px text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+            not required
+          </span>
+        )
       )}
       <span className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
         {check.state.replace('_', ' ')}

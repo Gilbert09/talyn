@@ -10,6 +10,7 @@ import {
   ShieldAlert,
   Clock,
   ArrowDownToLine,
+  UserRound,
 } from 'lucide-react';
 import {
   externalQueueProviderLabel,
@@ -18,7 +19,13 @@ import {
   type ExternalQueueState,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
-import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
+import type {
+  PRBlockingReason,
+  PRChecks,
+  PRCiStatus,
+  PRHumanGate,
+  PRState,
+} from '../../lib/api';
 
 /**
  * One-glance status badge for a task's PR. Mirrors supacode's
@@ -29,6 +36,8 @@ import type { PRBlockingReason, PRChecks, PRState } from '../../lib/api';
  *   merge_conflicts        → red, "Conflicts"
  *   changes_requested      → amber, "N changes requested" (use review count)
  *   checks_failed          → red, "N/M failing"
+ *   needs_human            → amber, "Needs human" (only a person can clear
+ *                            the failing gate, e.g. PostHog Visual Review)
  *   checks_failed_optional → green, "N non-required" (mergeable; the failures
  *                            don't block, so it reads as ready — the rollup bar
  *                            still shows the non-required reds in amber)
@@ -91,6 +100,17 @@ interface PRStatusPillProps {
    * whatever the labels say, and is often the only channel there is.
    */
   externalQueueState?: ExternalQueueState;
+  /**
+   * The CI picture alone, derived by the backend from per-check required-ness.
+   * With `hideReviewState` the pill draws THIS instead of inferring
+   * required-ness from `blockingReason` — PostHog reports BLOCKED on every PR,
+   * and reading 'blocked' as "the failures are non-required" drew a red
+   * required check as a green "2 non-required". Absent on rows written before
+   * the field shipped.
+   */
+  ciStatus?: PRCiStatus;
+  /** Failing gates only a person can clear — named in the tooltip. */
+  humanGates?: PRHumanGate[];
   className?: string;
 }
 
@@ -102,7 +122,16 @@ interface PillVariant {
   spin?: boolean;
   /** Failing checks are non-required → draw the rollup's fail bar amber. */
   optionalFailures?: boolean;
+  /** The pill is saying "a person must act" — the tooltip names the gate. */
+  needsHuman?: boolean;
 }
+
+const NEEDS_HUMAN: PillVariant = {
+  icon: UserRound,
+  label: 'Needs human',
+  tone: 'amber',
+  needsHuman: true,
+};
 
 export function PRStatusPill({
   blockingReason,
@@ -115,6 +144,8 @@ export function PRStatusPill({
   reviewDecision,
   labels,
   externalQueueState,
+  ciStatus,
+  humanGates,
   className,
 }: PRStatusPillProps) {
   const terminal = terminalVariant(state);
@@ -125,7 +156,14 @@ export function PRStatusPill({
   const variant =
     terminal ??
     external?.variant ??
-    pickVariant(blockingReason, checks, hideReviewState, mergeStateStatus, reviewDecision);
+    pickVariant(
+      blockingReason,
+      checks,
+      hideReviewState,
+      mergeStateStatus,
+      reviewDecision,
+      ciStatus
+    );
   const Icon = variant.icon;
   // A merged/closed PR's check rollup is no longer meaningful.
   const showRollup = !terminal && !compact && checks.total > 0;
@@ -137,7 +175,13 @@ export function PRStatusPill({
       title={
         terminal
           ? terminal.label
-          : (external?.title ?? titleFor(blockingReason, checks, reviewDecision))
+          : (external?.title ??
+            titleFor(
+              variant.needsHuman ? 'needs_human' : blockingReason,
+              checks,
+              reviewDecision,
+              humanGates
+            ))
       }
       className={cn(
         'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
@@ -235,7 +279,8 @@ function externalQueueVariant(
         own.checks.inProgress > 0 ||
         own.checks.failed > 0 ||
         own.blockingReason === 'merge_conflicts' ||
-        own.blockingReason === 'changes_requested';
+        own.blockingReason === 'changes_requested' ||
+        own.blockingReason === 'needs_human';
       if (prSaysWhy) return null;
       return {
         variant: { ...base, icon: Clock, tone: 'amber' },
@@ -312,16 +357,59 @@ function CheckRollupBar({
   );
 }
 
+/**
+ * The CI picture from the backend's own `ciStatus`. Required-ness was decided
+ * per check where the data is, so nothing here guesses it.
+ */
+function ciVariant(ciStatus: PRCiStatus, checks: PRChecks): PillVariant {
+  switch (ciStatus) {
+    case 'failing_required':
+      return pickVariant('checks_failed', checks);
+    case 'failing_optional':
+      return pickVariant('checks_failed_optional', checks);
+    case 'needs_human':
+      return NEEDS_HUMAN;
+    case 'running':
+      // Running never includes a blocking failure, but can include an optional
+      // one — draw that as the running spinner with the amber marks, not the
+      // red the 'mergeable' stale-verdict guard would pick for `failed > 0`.
+      return pickVariant(checks.failed > 0 ? 'checks_failed_optional' : 'mergeable', checks);
+    case 'passing':
+    case 'none':
+    default:
+      // 'mergeable' draws the running spinner while checks run and Ready once
+      // they are done — the CI half of what this pill says.
+      return pickVariant('mergeable', checks);
+  }
+}
+
+// Verdicts that describe CI or reviews, which `ciStatus` answers better when
+// approval has its own column. Conflicts, behind and unknown still describe
+// the PR itself, so they keep their own pills.
+const CI_DESCRIBED: ReadonlySet<PRBlockingReason> = new Set<PRBlockingReason>([
+  'mergeable',
+  'checks_failed',
+  'checks_failed_optional',
+  'changes_requested',
+  'blocked',
+]);
+
 function pickVariant(
   blockingReason: PRBlockingReason,
   checks: PRChecks,
   hideReviewState = false,
   mergeStateStatus?: string,
-  reviewDecision?: string | null
+  reviewDecision?: string | null,
+  ciStatus?: PRCiStatus
 ): PillVariant {
+  if (blockingReason === 'needs_human') return NEEDS_HUMAN;
+  if (hideReviewState && ciStatus && CI_DESCRIBED.has(blockingReason)) {
+    return ciVariant(ciStatus, checks);
+  }
   // When approval lives in its own column, the review-related verdicts
   // ('changes_requested', 'blocked'-on-review) shouldn't drive this pill
-  // — fall back to the conflicts/CI/mergeability picture instead.
+  // — fall back to the conflicts/CI/mergeability picture instead. This is
+  // the path for rows written before `ciStatus` existed.
   if (
     hideReviewState &&
     (blockingReason === 'changes_requested' || blockingReason === 'blocked')
@@ -330,11 +418,11 @@ function pickVariant(
     if (checks.failed === 0) {
       ciReason = 'mergeable';
     } else if (blockingReason === 'blocked') {
-      // 'blocked' is only returned once we've ruled out a failing *required*
-      // check (checks_failed is decided first), so any failure here is
-      // non-required — e.g. a PR held on a pending review with one
-      // non-required check red. Don't paint it as a blocking CI failure.
-      ciReason = 'checks_failed_optional';
+      // 'blocked' does NOT mean the failures are non-required: a held verdict
+      // is not re-derived when a check fails later, and PostHog reports
+      // BLOCKED on every PR. Without per-check data, draw it red — a wrong
+      // red costs a click, a wrong green hides a broken required check.
+      ciReason = 'checks_failed';
     } else {
       // changes_requested masks the CI verdict (it short-circuits before
       // checks are weighed), so we can't tell required from not — fall back
@@ -451,7 +539,8 @@ function pickVariant(
 function titleFor(
   blockingReason: PRBlockingReason,
   checks: PRChecks,
-  reviewDecision?: string | null
+  reviewDecision?: string | null,
+  humanGates?: PRHumanGate[]
 ): string {
   const checkSummary =
     checks.total === 0
@@ -460,8 +549,17 @@ function titleFor(
   const reason =
     blockingReason === 'blocked' && reviewDecision === 'APPROVED'
       ? 'Approved, but held by branch protection (required signatures / merge restrictions)'
-      : humanReason(blockingReason);
+      : blockingReason === 'needs_human'
+        ? humanGateReason(humanGates)
+        : humanReason(blockingReason);
   return `${reason} · ${checkSummary}`;
+}
+
+function humanGateReason(gates: PRHumanGate[] | undefined): string {
+  if (!gates || gates.length === 0) return 'A check needs a person to approve it';
+  const names = gates.map((g) => `${g.label} (${g.name})`).join(', ');
+  const url = gates.find((g) => g.url)?.url;
+  return `Needs a person: ${names} — an agent cannot approve it${url ? `. Approve at ${url}` : ''}`;
 }
 
 function humanReason(b: PRBlockingReason): string {
@@ -476,6 +574,8 @@ function humanReason(b: PRBlockingReason): string {
       return 'Required CI checks failing';
     case 'checks_failed_optional':
       return 'Mergeable — only non-required checks failing';
+    case 'needs_human':
+      return 'A check needs a person to approve it';
     case 'blocked':
       return 'Waiting on required review';
     case 'behind':

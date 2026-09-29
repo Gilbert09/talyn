@@ -1,4 +1,5 @@
 import { api, type PRState, type PRSummaryShape } from './api';
+import { mergeSummaryPatch } from './summaryPatch';
 
 /**
  * Process-lifetime stale-while-revalidate cache for PR status summaries,
@@ -61,7 +62,9 @@ api.ws.on('pull_request:updated', (payload) => {
   if (!p?.id || p.lastSummary == null) return;
   const prev = cache.get(p.id);
   prime(p.id, {
-    summary: p.lastSummary as PRSummaryShape,
+    // Merge: an incremental echo is only `{ checks }`, and replacing the held
+    // summary with it left the task-header pill with no verdict at all.
+    summary: mergeSummaryPatch(prev?.summary, p.lastSummary as Partial<PRSummaryShape>),
     state: p.state ?? prev?.state ?? 'open',
   });
 });

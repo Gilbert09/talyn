@@ -24,7 +24,7 @@ import {
   Square,
   PauseCircle,
 } from 'lucide-react';
-import type { PRRow, PRSummaryShape } from '../../../lib/api';
+import type { PRHumanGate, PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
 import {
   stackAncestors,
@@ -436,6 +436,10 @@ function PRTableRow({
   // Stopped for a person. Actionable like a failure — the badge must show —
   // but styled and worded as a question, not a breakage.
   const taskNeedsHuman = taskStatus === 'needs_human';
+  // A failing check only a person can clear (PostHog Visual Review). Read off
+  // the PR's own checks, so it shows on every open PR — not only on one the
+  // queue, auto-keep or a linked task happens to be looking at.
+  const humanGates = row.state === 'open' ? (summary.humanGates ?? []) : [];
   // The badge only shows while there's something actionable: a run in
   // flight or a failure to look at. A cleanly completed task (or one not
   // loaded in the store, which in practice means it's long done) renders
@@ -777,6 +781,23 @@ function PRTableRow({
                   )}
                 </button>
               )}
+              {humanGates.length > 0 && (
+                <button
+                  type="button"
+                  data-attr="pr-row-needs-human"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = humanGates.find((g) => g.url)?.url;
+                    if (url) void openExternal(url);
+                    else onSelect();
+                  }}
+                  className="inline-flex items-center gap-1 rounded bg-amber-200 px-1 py-0.5 text-[10px] uppercase text-amber-800 hover:bg-amber-300 dark:bg-amber-900 dark:text-amber-200 dark:hover:bg-amber-800"
+                  title={humanGateTitle(humanGates)}
+                >
+                  <UserRoundCheck className="h-2.5 w-2.5" />
+                  Needs human
+                </button>
+              )}
               {/* Auto-keep-mergeable watcher indicator. "Watching" while armed,
                   "Paused" once it's given up after 3 attempts, "Waiting" while
                   a fix run it wanted could not start because the free plan's
@@ -876,6 +897,11 @@ function PRTableRow({
                   // snapshots was reported as one that had been given up on
                   // after three failed attempts. See queueBlockNeedsHuman.
                   const needsHuman = queueBlockNeedsHuman(row.mergeQueue?.blockedCode);
+                  // The Needs human chip above already says this, and says
+                  // where to go. One chip per fact.
+                  const gateChipSaysIt =
+                    humanGates.length > 0 &&
+                    row.mergeQueue?.blockedCode === 'awaiting_human_check';
                   return (
                     <span className="inline-flex items-center gap-1">
                       <span
@@ -895,6 +921,7 @@ function PRTableRow({
                         </span>
                       )}
                       {qs === 'blocked' &&
+                        !gateChipSaysIt &&
                         (needsHuman ? (
                           // Amber and worded as a request. Nothing was tried and
                           // nothing failed; the queue picks this PR back up by
@@ -1017,6 +1044,8 @@ function PRTableRow({
               reviewDecision={summary.effectiveReviewDecision ?? summary.reviewDecision}
               labels={summary.labels}
               externalQueueState={row.mergeQueue?.external?.state}
+              ciStatus={summary.ciStatus}
+              humanGates={summary.humanGates}
             />
           </td>
         </>
@@ -1036,6 +1065,8 @@ function PRTableRow({
               hideReviewState
               labels={summary.labels}
               externalQueueState={row.mergeQueue?.external?.state}
+              ciStatus={summary.ciStatus}
+              humanGates={summary.humanGates}
             />
             {row.state === 'open' && unresolved > 0 && (
               <span
@@ -1559,6 +1590,23 @@ function QueueCell({
             </span>
           );
         case 'blocked':
+          // A park on a gate only a person can clear is a request, not a
+          // failure — and "self-heals on a new push" is false for it: a push
+          // re-runs CI and raises the same gate again.
+          if (queueBlockNeedsHuman(row.mergeQueue?.blockedCode)) {
+            return (
+              <span
+                className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                title={
+                  (v2.reason ?? 'The merge queue is waiting on you.') +
+                  ' It picks this PR back up on its own once that clears.'
+                }
+              >
+                <UserRoundCheck className="h-3 w-3" />
+                Needs you
+              </span>
+            );
+          }
           return (
             <span
               className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
@@ -1637,6 +1685,8 @@ export function isNeedsAttention(r: PRRow): boolean {
     r.summary.blockingReason === 'changes_requested' ||
     r.summary.blockingReason === 'checks_failed' ||
     r.summary.blockingReason === 'merge_conflicts' ||
+    // Only a person can clear it — the most literal "needs attention" there is.
+    r.summary.blockingReason === 'needs_human' ||
     // A behind head is the author's to move, and it has to land in SOME
     // bucket: it is no longer "ready to merge" (GitHub would refuse the
     // click), so without this it would leave both lists and the PR would
@@ -1703,6 +1753,17 @@ export function isHeldOnlyByBranchProtection(s: PRSummaryShape): boolean {
     !['CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(
       s.effectiveReviewDecision ?? s.reviewDecision ?? ''
     )
+  );
+}
+
+/** Tooltip for the Needs human chip: which gate, and where to clear it. */
+function humanGateTitle(gates: PRHumanGate[]): string {
+  const names = gates.map((g) => `${g.label} (${g.name})`).join(', ');
+  const url = gates.find((g) => g.url)?.url;
+  return (
+    `Needs a person: ${names} is waiting for someone to approve it. ` +
+    `No agent run can clear this.` +
+    (url ? ` Click to open ${url}` : '')
   );
 }
 
