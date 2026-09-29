@@ -76,19 +76,20 @@ export function Hero() {
             </WebAppButton>
           </div>
 
-          <p className="mt-3 font-mono text-xs text-ink-400">{hero.microtrust}</p>
-          {/* What actually happens when you press it: the SmartScreen warning
-              on Windows, the Intel Mac build, the fact that a phone cannot
-              install any of this. All three were true before and stated
-              nowhere near the button. */}
-          <PlatformNote className="mx-auto mt-2 max-w-md" />
+          {/* ONE line under the buttons, not four.
+              It was the microtrust line, then PlatformNote, then a "See how it
+              works" link — three stacked greys competing with the thing they
+              sit under, plus the badge above the headline. The comparison that
+              made it obvious: t3.codes puts a single line here.
 
-          <a
-            href="#how"
-            className="mt-4 inline-block text-sm text-ink-500 underline underline-offset-4 hover:text-ink"
-          >
-            {hero.secondaryCta}
-          </a>
+              PlatformNote survives because it is the one that changes by
+              platform and carries real consequence (the SmartScreen warning on
+              Windows, the Intel Mac build). It renders nothing until the sniff
+              resolves, so the fold is quieter still on first paint. The "see
+              how it works" link goes: the section is two screens down and the
+              page scrolls. */}
+          <p className="mt-3 font-mono text-xs text-ink-400">{hero.microtrust}</p>
+          <PlatformNote className="mx-auto mt-1.5 max-w-md" />
         </motion.div>
 
         {/* mt-10 (was 16): keep the top of the screenshot above the fold on a

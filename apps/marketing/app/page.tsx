@@ -8,7 +8,7 @@ import { HowItWorks } from "@/components/sections/HowItWorks";
 import { Features } from "@/components/sections/Features";
 import { MidCta } from "@/components/sections/MidCta";
 import { Providers } from "@/components/sections/Providers";
-import { Pricing } from "@/components/sections/Pricing";
+import { PricingBand } from "@/components/sections/PricingBand";
 import { Faq } from "@/components/sections/Faq";
 import { FinalCta } from "@/components/sections/FinalCta";
 import { HomeSchema } from "@/components/seo/HomeSchema";
@@ -37,7 +37,7 @@ export default function Home() {
             feel long and repetitive (Lizzie's feedback, Jul 2026). The
             component + `why` copy remain for a future standalone page. */}
         <Providers />
-        <Pricing />
+        <PricingBand />
         {/* FinalCta sits above the FAQ (and the Beta card is gone): the two
             sections did the same job, and this is the stronger close. It
             carries the #download anchor the Beta card held. */}
