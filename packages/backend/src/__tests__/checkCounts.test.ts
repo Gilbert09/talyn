@@ -28,6 +28,7 @@ import {
   parseCheckRunPayload,
   parseStatusPayload,
   pruneChecksForSha,
+  pruneStaleCheckStates,
   reseedCheckLedger,
   runSettleRefresh,
   verdictFor,
@@ -39,6 +40,7 @@ import {
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import * as dbClient from '../db/client.js';
+import { debugBus } from '../services/debugBus.js';
 import type { Database } from '../db/client.js';
 import {
   workspaces as workspacesTable,
@@ -519,6 +521,46 @@ describe('checkCounts', () => {
       expect((other.ls as Summary).checks).toEqual({ total: 1, passed: 1, failed: 0, inProgress: 0, skipped: 0 });
     });
 
+    // Every tracked PR is fetched once per watching workspace per sweep; an
+    // unchanged snapshot must cost one aggregate read and no writes.
+    it('writes nothing when the ledger already matches the snapshot', async () => {
+      await seedPr(7, 'sha-A', { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' });
+      const snap = [ctx('lint', 'success'), ctx('e2e', 'skipped', false)];
+      await reseed(snap);
+      const stamp = async () =>
+        (await db.select({ u: prCheckStates.updatedAt, n: prCheckStates.name }).from(prCheckStates))
+          .map((r) => `${r.n}@${r.u.toISOString()}`)
+          .sort();
+      const [{ u: prBefore }] = await db
+        .select({ u: pullRequestsTable.updatedAt })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, 'pr-7'));
+      const before = await stamp();
+      const events = vi.spyOn(debugBus, 'recordEvent');
+      await new Promise((r) => setTimeout(r, 5));
+      // Same checks, listed in a different order — the hash must not care.
+      await reseed([...snap].reverse(), new Date(Date.now() + 1000));
+      expect(await stamp()).toEqual(before);
+      // The hash gate short-circuited: no reseed was recorded as done.
+      expect(events.mock.calls.filter(([e]) => e.action === 'reseed')).toHaveLength(0);
+      const [{ u: prAfter }] = await db
+        .select({ u: pullRequestsTable.updatedAt })
+        .from(pullRequestsTable)
+        .where(eq(pullRequestsTable.id, 'pr-7'));
+      expect(prAfter).toEqual(prBefore);
+    });
+
+    it('rewrites only the rows that changed', async () => {
+      await seedPr(7, 'sha-A');
+      await reseed([ctx('lint', 'success'), ctx('e2e', 'pending')]);
+      const lintBefore = (await db.select().from(prCheckStates).where(eq(prCheckStates.name, 'lint')))[0].updatedAt;
+      await new Promise((r) => setTimeout(r, 5));
+      await reseed([ctx('lint', 'success'), ctx('e2e', 'success', true, { ts: at(9).getTime() })], new Date(Date.now() + 1000));
+      const rows = await db.select().from(prCheckStates);
+      expect(rows.find((r) => r.name === 'e2e')?.state).toBe('success');
+      expect(rows.find((r) => r.name === 'lint')?.updatedAt).toEqual(lintBefore);
+    });
+
     it('leaves PRs on another head alone', async () => {
       await seedPr(7, 'sha-B');
       await reseed([ctx('lint', 'failure')]);
@@ -611,6 +653,24 @@ describe('checkCounts', () => {
       await expect(checkCountCoalescer.flushAllNow()).resolves.toBeUndefined();
       // The flush failed, but the commit still has a settle refresh armed.
       expect(_armedSettleRefreshes()).toEqual(['acme/widget sha-A']);
+    });
+  });
+
+  describe('pruneStaleCheckStates', () => {
+    it('drops idle rows for a commit no open PR is on, and keeps a quiet PR\'s ledger', async () => {
+      await seedPr(7, 'sha-A');
+      await ingest({ name: 'lint' });
+      await db.insert(prCheckStates).values({
+        id: 'orphan',
+        repoFullName: 'acme/widget',
+        headSha: 'sha-GONE',
+        name: 'lint',
+        source: 'check_run',
+        state: 'success',
+      });
+      await db.update(prCheckStates).set({ updatedAt: new Date('2020-01-01T00:00:00Z') });
+      expect(await pruneStaleCheckStates()).toBe(1);
+      expect((await db.select().from(prCheckStates)).map((r) => r.headSha)).toEqual(['sha-A']);
     });
   });
 

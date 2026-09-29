@@ -45,6 +45,14 @@ be waiting for that row. If the request waited for the reseed, each would wait
 for the other. The reseed reads the PR row `FOR UPDATE`, so it sees the committed
 facts.
 
+Most reseeds change nothing: every tracked PR is fetched once per watching
+workspace each sweep, and PostHog/posthog has ~17. So a reseed first compares an
+md5 of the ledger (one aggregate row) with the same hash of the snapshot, and
+stops if they match. When they differ, it rewrites only the rows that differ.
+Reseeds run two at a time, and repeat requests for a commit merge into the
+newest snapshot. The 24 h prune only removes rows for a commit that is no open
+PR's head, because an unchanged ledger is no longer touched.
+
 An incomplete context list (a page of a >100-check rollup could not be read) never
 reseeds, and adds a stand-in context so a `FAILURE` rollup cannot read as green.
 

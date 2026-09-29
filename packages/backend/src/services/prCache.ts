@@ -875,18 +875,32 @@ function reseedLedgerFrom(summary: PRSummary, repositoryId: string): void {
   if (summary.state !== 'open' || summary.checkContextsComplete !== true || !summary.headSha) {
     return;
   }
-  const fetchStartedAt = new Date(summary.fetchStartedAt ?? Date.now());
-  const run = import('./checkCounts.js')
-    .then(({ reseedCheckLedger }) =>
-      reseedCheckLedger({
-        owner: summary.owner,
-        repo: summary.repo,
-        headSha: summary.headSha,
-        contexts: summary.checkContexts,
-        fetchStartedAt,
-        repositoryId,
-      }),
-    )
+  const key = `${summary.owner}/${summary.repo}`.toLowerCase() + ` ${summary.headSha}`;
+  // Coalesce: a commit already waiting gets the NEWER snapshot, not a second
+  // job. A sweep fetches one PR once per workspace watching it.
+  const waiting = reseedWaiting.get(key);
+  if (waiting && (waiting.summary.fetchStartedAt ?? 0) <= (summary.fetchStartedAt ?? 0)) {
+    waiting.summary = summary;
+    waiting.repositoryId = repositoryId;
+    return;
+  }
+  if (waiting) return;
+  reseedWaiting.set(key, { summary, repositoryId });
+  const run = reseedSlots
+    .run(async () => {
+      const job = reseedWaiting.get(key);
+      reseedWaiting.delete(key);
+      if (!job) return;
+      const { reseedCheckLedger } = await import('./checkCounts.js');
+      await reseedCheckLedger({
+        owner: job.summary.owner,
+        repo: job.summary.repo,
+        headSha: job.summary.headSha,
+        contexts: job.summary.checkContexts,
+        fetchStartedAt: new Date(job.summary.fetchStartedAt ?? Date.now()),
+        repositoryId: job.repositoryId,
+      });
+    })
     .catch((err: unknown) => {
       debugBus.recordEvent({
         service: 'check_counts',
@@ -898,6 +912,40 @@ function reseedLedgerFrom(summary: PRSummary, repositoryId: string): void {
     .finally(() => pendingReseeds.delete(run));
   pendingReseeds.add(run);
 }
+
+/**
+ * Reseeds are detached from the write that asks for them, so nothing else
+ * bounds them — and a sweep asks for hundreds in a few seconds, each holding a
+ * pooled connection for its lock. Two at a time keeps them from starving the
+ * sweep that is producing them.
+ */
+const RESEED_CONCURRENCY = 2;
+const reseedWaiting = new Map<string, { summary: PRSummary; repositoryId: string }>();
+const reseedSlots = (() => {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= RESEED_CONCURRENCY) return;
+    const start = queue.shift();
+    if (start) start();
+  };
+  return {
+    run<T>(fn: () => Promise<T>): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        queue.push(() => {
+          active++;
+          fn()
+            .then(resolve, reject)
+            .finally(() => {
+              active--;
+              next();
+            });
+        });
+        next();
+      });
+    },
+  };
+})();
 
 async function readRowTaskId(db: Database, id: string): Promise<string | null> {
   const rows = await db

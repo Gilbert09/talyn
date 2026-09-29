@@ -555,6 +555,23 @@ describe('prCache — DB integration', () => {
       });
     });
 
+    it('merges repeat reseeds of one commit into the newest snapshot', async () => {
+      const complete = (state: 'pending' | 'success', at: number) =>
+        makeSummary({
+          checkContexts: [{ name: 'lint', state, url: null, required: true, ts: at }],
+          checkContextsComplete: true,
+          fetchStartedAt: at,
+        });
+      // The sweep fetches one PR once per watching workspace, back to back.
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: complete('pending', 1) });
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: complete('pending', 2) });
+      await upsertFromBatchResult({ workspaceId: 'ws1', repositoryId: 'repo1', summary: complete('success', 3) });
+      await _awaitCheckLedgerReseeds();
+      const rows = await db.select().from(prCheckStates);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].state).toBe('success');
+    });
+
     it('does not reseed from an incomplete context list', async () => {
       await upsertFromBatchResult({
         workspaceId: 'ws1',

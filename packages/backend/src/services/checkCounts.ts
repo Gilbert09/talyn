@@ -23,6 +23,7 @@
 // `->>`-extracted scalars, never the `last_summary` blob; the UPDATE is skipped
 // when nothing it would write has changed.
 
+import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { deriveCiVerdict, type CheckFact, type CiVerdict } from '@talyn/shared';
@@ -291,6 +292,40 @@ async function upsertCheckStates(states: CheckEventInput[]): Promise<void> {
 export type LedgerSnapshot = PRSummary['checkContexts'];
 
 /**
+ * One line per check, in the byte order Postgres's `COLLATE "C"` uses, so the
+ * same ledger hashes the same on both sides. JS compares UTF-16 code units,
+ * which is code-point order outside the surrogate range — a PR with an astral
+ * character in a check name just reseeds when it did not need to.
+ */
+function ledgerLine(name: string, state: string, required: boolean | null, rawState: string | null): string {
+  return `${name}=${state}:${required === null ? '?' : String(required)}:${rawState ?? ''}`;
+}
+
+function snapshotHash(snapshot: LedgerSnapshot): string {
+  const lines = snapshot
+    .map((c) => ledgerLine(c.name, c.state, c.required, c.rawState ?? null))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return createHash('md5').update(lines.join('|')).digest('hex');
+}
+
+/** The same hash over what the ledger holds for a commit — one 32-char row back. */
+async function ledgerHash(repoFullName: string, headSha: string): Promise<string | null> {
+  const db = getPoolDbClient();
+  const rows = await db
+    .select({
+      hash: sql<string | null>`md5(string_agg(
+        ${prCheckStates.name} || '=' || ${prCheckStates.state} || ':' ||
+        COALESCE(${prCheckStates.required}::text, '?') || ':' || COALESCE(${prCheckStates.rawState}, ''),
+        '|' ORDER BY ${prCheckStates.name} || '=' || ${prCheckStates.state} || ':' ||
+        COALESCE(${prCheckStates.required}::text, '?') || ':' || COALESCE(${prCheckStates.rawState}, '') COLLATE "C"
+      ))`,
+    })
+    .from(prCheckStates)
+    .where(and(eq(prCheckStates.repoFullName, repoFullName), eq(prCheckStates.headSha, headSha)));
+  return rows[0]?.hash ?? null;
+}
+
+/**
  * Make the ledger for `headSha` say what a COMPLETE full fetch said.
  *
  * A row no webhook has touched since `fetchStartedAt` is overwritten outright —
@@ -323,7 +358,16 @@ export async function reseedCheckLedger(opts: {
   for (const c of opts.contexts) byName.set(c.name, c);
   const snapshot = [...byName.values()];
 
+  let changed = false;
   await withShaLock(repoFullName, headSha, async () => {
+    // The common case by far: the ledger already says what this fetch says
+    // (every tracked PR is fetched once PER WORKSPACE each sweep, and
+    // PostHog/posthog is watched by ~17). One aggregate answers it, and the
+    // reseed then writes nothing at all.
+    if ((await ledgerHash(repoFullName, headSha)) === (snapshot.length > 0 ? snapshotHash(snapshot) : null)) {
+      return;
+    }
+    changed = true;
     const db = getPoolDbClient();
     if (snapshot.length > 0) {
       await db
@@ -354,7 +398,16 @@ export async function reseedCheckLedger(opts: {
             ts: sql`excluded.ts`,
             updatedAt: sql`now()`,
           },
-          setWhere: sql`${prCheckStates.updatedAt} < ${fetchStartedAt.toISOString()}::timestamptz OR ${prCheckStates.ts} <= excluded.ts`,
+          // Only rows that differ: rewriting an unchanged row is a TOAST-free
+          // but still real write, times ~300 checks, times every fetch.
+          setWhere: sql`(${prCheckStates.updatedAt} < ${fetchStartedAt.toISOString()}::timestamptz OR ${prCheckStates.ts} <= excluded.ts)
+            AND (
+              (${prCheckStates.state}, COALESCE(excluded.required, ${prCheckStates.required}), ${prCheckStates.rawState})
+                IS DISTINCT FROM (excluded.state, ${prCheckStates.required}, excluded.raw_state)
+              -- A row the snapshot supersedes but whose ts disagrees would keep
+              -- outranking real events; align it once, then it is stable.
+              OR (${prCheckStates.updatedAt} < ${fetchStartedAt.toISOString()}::timestamptz AND ${prCheckStates.ts} <> excluded.ts)
+            )`,
         });
     }
     const names = snapshot.map((c) => c.name);
@@ -374,6 +427,7 @@ export async function reseedCheckLedger(opts: {
     if (affected.length === 0) return;
     await recomputeVerdicts(repoFullName, headSha, affected, { announceUnchanged: false });
   });
+  if (!changed) return;
   debugBus.recordEvent({
     service: 'check_counts',
     action: 'reseed',
@@ -882,10 +936,12 @@ export async function pruneChecksForSha(repoFullName: string, headSha: string): 
 
 /**
  * Safety-net TTL prune (run from the reconcile sweep): drop check state untouched
- * for `olderThanMs`. Close/merge/force-push prune precisely; this only catches
- * rows orphaned by a *missed* delivery, so the table can't grow unbounded.
- * Every full fetch of an open PR touches its rows, so a live PR's ledger is
- * never idle for a day. Returns the number of rows deleted.
+ * for `olderThanMs` on a commit that is no open PR's head. Close/merge/force-push
+ * prune precisely; this only catches rows orphaned by a *missed* delivery, so
+ * the table can't grow unbounded. The head test matters: a reseed that finds
+ * nothing changed writes nothing, so a quiet PR's ledger IS idle for a day, and
+ * deleting it would make the next webhook recount from half a ledger.
+ * Returns the number of rows deleted.
  */
 export async function pruneStaleCheckStates(
   olderThanMs = 24 * 60 * 60_000,
@@ -894,7 +950,16 @@ export async function pruneStaleCheckStates(
   const cutoff = new Date(Date.now() - olderThanMs);
   const deleted = await db
     .delete(prCheckStates)
-    .where(lt(prCheckStates.updatedAt, cutoff))
+    .where(
+      and(
+        lt(prCheckStates.updatedAt, cutoff),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${pullRequestsTable}
+          WHERE ${pullRequestsTable.state} = 'open'
+            AND ${pullRequestsTable.lastSummary} ->> 'headSha' = ${prCheckStates.headSha}
+        )`,
+      ),
+    )
     .returning({ id: prCheckStates.id });
   return deleted.length;
 }
