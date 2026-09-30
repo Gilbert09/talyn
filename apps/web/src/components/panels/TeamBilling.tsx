@@ -428,8 +428,10 @@ function BuySeats({
   const [error, setError] = useState<string | null>(null);
 
   const tiers = pricing?.[period] ?? null;
-  const price = tiers ? teamPriceFor(tiers, seats) : null;
-  const minimum = tiers?.minimumSeats ?? TEAM_MIN_SEATS;
+  // The larger of the two floors: Polar's product may allow one seat, but a
+  // team starts at TEAM_MIN_SEATS and the backend refuses fewer.
+  const minimum = Math.max(TEAM_MIN_SEATS, tiers?.minimumSeats ?? 0);
+  const price = tiers && seats >= minimum ? teamPriceFor(tiers, seats) : null;
 
   const checkout = async () => {
     setBusy(true);

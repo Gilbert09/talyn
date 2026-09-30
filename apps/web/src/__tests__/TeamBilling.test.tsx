@@ -186,4 +186,22 @@ describe('TeamBilling', () => {
     // No annual price is sold here, so no annual option is drawn.
     expect(screen.queryByRole('button', { name: 'Annual' })).toBeNull();
   });
+
+  it('holds a team to two seats even when the Polar product allows one', async () => {
+    team.get.mockResolvedValue(detail({ active: false, planSource: 'none', seatsPurchased: 0, seatsUsed: 0, seats: [] }));
+    team.pricing.mockResolvedValue({
+      monthly: {
+        currency: 'usd',
+        tierType: 'volume',
+        minimumSeats: 1,
+        maximumSeats: null,
+        tiers: [{ minSeats: 1, maxSeats: null, pricePerSeat: 1500 }],
+      },
+      annual: null,
+    });
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false, active: false })} />);
+    fireEvent.change(await screen.findByLabelText('Seats'), { target: { value: '1' } });
+    expect(await screen.findByText(/Choose at least 2 seats/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Buy 1 seats/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });
