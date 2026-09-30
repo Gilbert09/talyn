@@ -1136,7 +1136,7 @@ function SelfHostedFleetCard() {
  * vendor named in the body and leaves the other alone, which is what makes
  * these two rows independent without a second endpoint.
  */
-function FleetAgentRow({
+export function FleetAgentRow({
   agent,
   connected,
   needsReauth,
@@ -1384,8 +1384,7 @@ function FleetAgentRow({
             <><div className="space-y-2">
               <p className="text-xs text-muted-foreground">
                 Run <code>codex login</code> on your machine, then paste the contents of{' '}
-                <code>~/.codex/auth.json</code>. (The desktop app can do this in one click — a
-                browser cannot, because OpenAI’s sign-in redirects to a local address.)
+                <code>~/.codex/auth.json</code>. (The desktop app can do this in one click.)
               </p>
               <textarea
                 className="w-full h-24 rounded-md border bg-background p-2 font-mono text-xs"

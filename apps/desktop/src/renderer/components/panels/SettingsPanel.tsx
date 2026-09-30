@@ -1139,7 +1139,7 @@ function SelfHostedFleetCard() {
  * vendor named in the body and leaves the other alone, which is what makes
  * these two rows independent without a second endpoint.
  */
-function FleetAgentRow({
+export function FleetAgentRow({
   agent,
   connected,
   needsReauth,
