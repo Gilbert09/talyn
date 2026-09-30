@@ -428,8 +428,8 @@ function BuySeats({
   const [error, setError] = useState<string | null>(null);
 
   const tiers = pricing?.[period] ?? null;
-  // The larger of the two floors: Polar's product may allow one seat, but a
-  // team starts at TEAM_MIN_SEATS and the backend refuses fewer.
+  // The larger of the two floors: the backend refuses fewer than
+  // TEAM_MIN_SEATS, and Polar refuses fewer than its product's own minimum.
   const minimum = Math.max(TEAM_MIN_SEATS, tiers?.minimumSeats ?? 0);
   const price = tiers && seats >= minimum ? teamPriceFor(tiers, seats) : null;
 
@@ -498,7 +498,7 @@ function BuySeats({
       )}
       <Button onClick={() => void checkout()} disabled={busy || waiting || price === null} className="gap-2">
         {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
-        Buy {seats} seats
+        Buy {seats} seat{seats === 1 ? '' : 's'}
       </Button>
       {waiting && (
         <p className="text-sm text-muted-foreground">

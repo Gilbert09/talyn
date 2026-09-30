@@ -25,7 +25,7 @@ Consolidated billing only. No workspace is shared, and none is planned (Tom's ca
 - [x] Seats bound to the numeric GitHub id, one team per person. Named seats are assigned by GitHub username.
 - [x] Polar seat-based checkout, seat-count changes, team portal and invoices. Webhook routing that never touches the buyer's `users.plan`.
 - [x] Settings → Billing → Team on web and desktop.
-- [x] **Polar setup** (2026-09-30): "Talyn Team - Monthly" and "Talyn Team - Annual" exist in the production Polar org as volume-tier seat prices: 1–4 seats $15, 5–9 $14, 10–24 $13, 25+ $12 a seat a month (annual is 10×). `POLAR_PRODUCT_ID_TEAM_*` is set on Railway production. Polar allows 1 seat; Talyn still sells 2 or more.
+- [x] **Polar setup** (2026-09-30): "Talyn Team - Monthly" and "Talyn Team - Annual" exist in the production Polar org as volume-tier seat prices: 1–4 seats $15, 5–9 $14, 10–24 $13, 25+ $12 a seat a month (annual is 10×). `POLAR_PRODUCT_ID_TEAM_*` is set on Railway production. A one-seat team is allowed (Tom's call), at the same price as the personal plan.
 - [ ] **Spike:** does the production GitHub App grant org **Members: read**? `docs/SETUP.md` says yes and `github.ts` says no. Org-linked seats depend on the answer.
 - [ ] Org-linked seats: link a GitHub org, auto-seat verified members while seats remain, opt-in auto-grow up to a cap, daily re-verification sweep (with debugBus poller).
 - [x] UpgradeModal: a "Buying for a team?" link to Settings → Billing, behind the flag.

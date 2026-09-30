@@ -1509,8 +1509,11 @@ export const TEAM_SEATS_FULL_ERROR_CODE = 'team_seats_full';
  */
 export const TEAM_OVER_ALLOCATED_ERROR_CODE = 'team_over_allocated';
 
-/** The smallest team a checkout will sell. One person is the personal plan. */
-export const TEAM_MIN_SEATS = 2;
+/**
+ * The smallest team a checkout will sell. One is allowed (Tom's call): a
+ * company may buy a single seat to get a company invoice, at the same price.
+ */
+export const TEAM_MIN_SEATS = 1;
 
 /**
  * The user's billing state as served by `GET /billing/status` and pushed on

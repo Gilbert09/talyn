@@ -116,6 +116,15 @@ export async function createTeam(userId: string, rawName: string): Promise<{ id:
   return { id };
 }
 
+function assertValidSeatCount(seats: number): void {
+  if (!Number.isInteger(seats) || seats < TEAM_MIN_SEATS) {
+    throw new TeamError(
+      400,
+      `A team has at least ${TEAM_MIN_SEATS} seat${TEAM_MIN_SEATS === 1 ? '' : 's'}.`
+    );
+  }
+}
+
 export async function renameTeam(teamId: string, rawName: string): Promise<void> {
   const name = rawName.trim();
   if (!name) throw new TeamError(400, 'Give the team a name.');
@@ -134,9 +143,7 @@ export async function renameTeam(teamId: string, rawName: string): Promise<void>
  * a live team changes its seat count instead.
  */
 export async function assertTeamCanCheckout(teamId: string, seats: number): Promise<void> {
-  if (!Number.isInteger(seats) || seats < TEAM_MIN_SEATS) {
-    throw new TeamError(400, `A team has at least ${TEAM_MIN_SEATS} seats.`);
-  }
+  assertValidSeatCount(seats);
   const team = await loadTeamRow(teamId);
   if (team.plan === 'team') {
     throw new TeamError(409, 'This team already has a subscription. Change its seat count instead.');
@@ -409,9 +416,7 @@ export async function leaveTeam(userId: string): Promise<void> {
  * nobody is un-seated as a side effect of a number.
  */
 export async function prepareSeatCountChange(teamId: string, seats: number): Promise<string> {
-  if (!Number.isInteger(seats) || seats < TEAM_MIN_SEATS) {
-    throw new TeamError(400, `A team has at least ${TEAM_MIN_SEATS} seats.`);
-  }
+  assertValidSeatCount(seats);
   const team = await loadTeamRow(teamId);
   if (!team.polarSubscriptionId || !teamGrantsSeats(team)) {
     throw new TeamError(409, 'The team has no active subscription to change.');

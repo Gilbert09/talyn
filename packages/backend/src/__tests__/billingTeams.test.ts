@@ -418,12 +418,21 @@ describe('team administration', () => {
   });
 
   it.each([
-    [1, 400],
+    [0, 400],
+    [-1, 400],
     [2.5, 400],
     [Number.NaN, 400],
   ])('refuses a seat count of %s', async (seats, status) => {
     const teamId = await makeTeam();
-    await expect(prepareSeatCountChange(teamId, seats)).rejects.toMatchObject({ status });
+    await expect(prepareSeatCountChange(teamId, seats)).rejects.toMatchObject({
+      status,
+      message: 'A team has at least 1 seat.',
+    });
+  });
+
+  it('allows a one-seat team', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await expect(prepareSeatCountChange(teamId, 1)).resolves.toBe('sub-t');
   });
 
   it('refuses going below the seats assigned, and allows it at the line', async () => {
@@ -445,7 +454,8 @@ describe('team administration', () => {
     await expect(assertTeamCanCheckout(paying, 3)).rejects.toMatchObject({ status: 409 });
     await db.update(teamsTable).set({ plan: 'none' }).where(eq(teamsTable.id, paying));
     await expect(assertTeamCanCheckout(paying, 3)).resolves.toBeUndefined();
-    await expect(assertTeamCanCheckout(paying, 1)).rejects.toMatchObject({ status: 400 });
+    await expect(assertTeamCanCheckout(paying, 1)).resolves.toBeUndefined();
+    await expect(assertTeamCanCheckout(paying, 0)).rejects.toMatchObject({ status: 400 });
   });
 });
 

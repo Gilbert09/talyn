@@ -187,21 +187,34 @@ describe('TeamBilling', () => {
     expect(screen.queryByRole('button', { name: 'Annual' })).toBeNull();
   });
 
-  it('holds a team to two seats even when the Polar product allows one', async () => {
+  function pricedAt(minimumSeats: number) {
     team.get.mockResolvedValue(detail({ active: false, planSource: 'none', seatsPurchased: 0, seatsUsed: 0, seats: [] }));
     team.pricing.mockResolvedValue({
       monthly: {
         currency: 'usd',
         tierType: 'volume',
-        minimumSeats: 1,
+        minimumSeats,
         maximumSeats: null,
         tiers: [{ minSeats: 1, maxSeats: null, pricePerSeat: 1500 }],
       },
       annual: null,
     });
+  }
+
+  it('sells a one-seat team', async () => {
+    pricedAt(1);
     render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false, active: false })} />);
     fireEvent.change(await screen.findByLabelText('Seats'), { target: { value: '1' } });
-    expect(await screen.findByText(/Choose at least 2 seats/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: /Buy 1 seats/ }) as HTMLButtonElement).disabled).toBe(true);
+    // One seat: the total and the per-seat price are the same $15.00.
+    expect((await screen.findAllByText(/15\.00/)).length).toBeGreaterThan(0);
+    expect((screen.getByRole('button', { name: 'Buy 1 seat' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('holds to the Polar product minimum when it is the higher floor', async () => {
+    pricedAt(3);
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false, active: false })} />);
+    fireEvent.change(await screen.findByLabelText('Seats'), { target: { value: '2' } });
+    expect(await screen.findByText(/Choose at least 3 seats/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Buy 2 seats' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

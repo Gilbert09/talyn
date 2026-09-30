@@ -929,7 +929,7 @@ POSTHOG_HOST=https://us.i.posthog.com
 # Team plan (seat billing). A second optional group ON TOP of the one above —
 # both set, or neither; one alone, or either without Polar billing, is a boot
 # error. In the Polar dashboard: turn on seat-based pricing for the org, then
-# create one product with a SEAT-BASED price (volume tiers, minimum 2 seats)
+# create one product with a SEAT-BASED price (volume tiers, minimum 1 seat)
 # per period. Team subscriptions arrive on the same webhook; they are told
 # apart by the customer's `team_<id>` external id and by these product ids.
 # The in-app picker reads the tiers from Polar, so a price change here needs
