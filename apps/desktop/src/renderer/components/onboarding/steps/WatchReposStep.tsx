@@ -36,11 +36,13 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const [availableRepos, setAvailableRepos] = useState<GitHubRepo[]>([]);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [search, setSearch] = useState('');
 
   const refreshRepos = useCallback(async () => {
     setReposLoading(true);
+    setLoadFailed(false);
     try {
       const repos = await api.github.listAllRepos(workspaceId);
       const now = Date.now();
@@ -49,6 +51,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
       writeRepoCache(workspaceId, repos, now);
     } catch {
       // Keep whatever the cache gave us.
+      setLoadFailed(true);
     } finally {
       setReposLoading(false);
     }
@@ -97,6 +100,11 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
     .sort((a, b) => a.full_name.toLowerCase().localeCompare(b.full_name.toLowerCase()));
   const filtered = matched.slice(0, REPO_LIST_CAP);
   const truncated = matched.length > REPO_LIST_CAP;
+  // Loading until the first answer arrives, not only while a request is in
+  // flight: before the effect starts the fetch, an empty list otherwise reads
+  // as "No repositories found" to somebody who has not seen any yet.
+  const firstLoad =
+    availableRepos.length === 0 && !loadFailed && (reposLoading || fetchedAt === null);
 
   return (
     <div className="space-y-4">
@@ -165,10 +173,19 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
         {reposLoading ? 'Refreshing…' : fetchedAt ? `Updated ${formatAge(fetchedAt)}.` : ''}
       </p>
 
-      {reposLoading && availableRepos.length === 0 ? (
-        <p className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
-          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-          Loading repositories…
+      {firstLoad ? (
+        <div className="flex items-start gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+          <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+          <div>
+            <p>Loading your repositories from GitHub…</p>
+            <p className="text-xs">
+              This includes every organisation you belong to, so it can take a moment.
+            </p>
+          </div>
+        </div>
+      ) : loadFailed && availableRepos.length === 0 ? (
+        <p className="p-2 text-sm text-muted-foreground">
+          Could not load your repositories from GitHub. Try Refresh.
         </p>
       ) : filtered.length > 0 ? (
         <div className="max-h-56 overflow-y-auto rounded-md border">
