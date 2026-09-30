@@ -70,6 +70,25 @@ Members-permission spike that org-linked seats depend on, org seats, the
 operator console, analytics, and publishing prices on the pricing page. Until
 the flag flips, the routes answer 403, and only a seated member sees anything.
 
+## The check ledger's lock took production down (2026-09-30)
+
+At 09:39 and again at 09:42 the DB watchdog restarted the backend: every probe
+exceeded 3 s. `pg_stat_activity` showed 19 connections idle in transaction on
+`select pg_advisory_xact_lock(...)` — the per-commit lock added to the check
+ledger the day before. `withBlockingAdvisoryLock` takes its lock on one pooled
+connection and runs the callback's queries through the pool, on OTHER
+connections. A burst of check flushes and reseeds took every connection for lock
+holders, each then waiting for a free connection to do its work: a pool
+deadlock. The lock was removed (e0f6321); connections and probes recovered
+immediately. The lost update it guarded is repaired by the reseed and the settle
+refresh.
+
+The outage also showed users "GitHub OAuth isn't configured — set
+GITHUB_CLIENT_ID": `useGithubConnection` mapped every non-network failure to
+`configured: false`. Both apps now track backend health (ok / offline /
+degraded), show "Talyn is having trouble on our side" for 5xx/timeouts, never
+synthesize "not configured", and re-probe every 30 s while unhealthy.
+
 ## Code review never finished on PostHog Code (2026-09-30)
 
 sakce (Jovan) reported every review failing, with "the sessions keep running".

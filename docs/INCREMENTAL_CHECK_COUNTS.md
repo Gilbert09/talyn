@@ -34,10 +34,11 @@ derived from it: `checks`, `ciStatus`, `humanGates`, `blockingReason`.
    `required` comes from the snapshot when it knows, and is kept when it does not
    (the by-branch path cannot ask).
 
-Both run under `pg_advisory_xact_lock('checks:<repo>:<sha>')`, so two flushes
-(same process, another replica, or a deploy overlap) cannot interleave their read
-and write. Without the lock, the older read could land last and write "N-1 done,
-1 running".
+There is no lock. A per-commit `pg_advisory_xact_lock` shipped first and was
+removed the next day: `withBlockingAdvisoryLock` holds the lock on one pooled
+connection and runs the work on others, so a burst of flushes took the whole pool
+and deadlocked it (2026-09-30). Two flushes of one commit can still interleave
+and write an older count last; the settle refresh and the next reseed correct it.
 
 The reseed is **not awaited** by `upsertRow`. That write can be inside a request
 transaction that holds the PR row lock. A flush that holds the advisory lock can
