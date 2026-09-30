@@ -2,6 +2,24 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Hosted MCP server: full product coverage (2026-09-30)
+
+An audit compared the hosted MCP tools with every backend route. The server had 17 tools, for PRs and tasks only.
+It had no tools for code review, workflows, loops, skills, MCP servers, repositories or billing status.
+It now has 65 tools, with one module per area in `packages/backend/src/mcp/tools/`.
+
+Four defects were fixed:
+- The merge tool reported "Not merged: unknown reason" when the route handed the PR to an external merge queue (`submitted: true`).
+- `callApi` dropped the error `code`, so an agent could not tell a free-plan limit (402) from a failure.
+- Tools for a disabled feature were still listed. ListTools now reads `GET /features` and hides them. If that read fails, it lists every tool, because each route enforces its own gate.
+- No tool had MCP annotations, so clients could not auto-approve reads or warn before destructive calls.
+
+Credential entry is deliberately not exposed. This includes provider keys, Claude sign-in and API-key MCP servers.
+A secret passed as a tool argument stays in the AI transcript. `talyn_create_mcp_server` refuses any field outside its schema, and it accepts only OAuth or unauthenticated servers.
+Account wipe, token minting, admin, debug, fleet, teams and checkout are also excluded. The list is at the top of `mcp/tools/index.ts`.
+
+The legacy stdio package `packages/mcp-server` was removed. Nothing had started it since the cloud-only refactor.
+
 ## Repair production review scoring and capture (2026-09-29)
 
 An audit found five participants and 315 submissions, but no candidate assignments or server scoring traces.

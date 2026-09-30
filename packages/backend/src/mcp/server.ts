@@ -1,10 +1,20 @@
+import type { Features } from '@talyn/shared';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { debugBus } from '../services/debugBus.js';
-import { TOOLS } from './tools.js';
+import { callApi } from './api.js';
+import { TOOLS } from './tools/index.js';
+
+export function listToolsFor(features: Features | null) {
+  return TOOLS.filter((tool) => !tool.feature || features?.[tool.feature] !== false).map(
+    (tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema as { type: 'object'; properties?: Record<string, unknown> },
+      annotations: tool.annotations,
+    })
+  );
+}
 
 /**
  * Build an MCP `Server` bound to a single owner. The CallTool handler runs the
@@ -13,18 +23,19 @@ import { TOOLS } from './tools.js';
  * panel's event stream stays honest.
  */
 export function buildMcpServer(ownerId: string): Server {
-  const server = new Server(
-    { name: 'talyn', version: '0.1.0' },
-    { capabilities: { tools: {} } }
-  );
+  const server = new Server({ name: 'talyn', version: '0.1.0' }, { capabilities: { tools: {} } });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema as { type: 'object'; properties?: Record<string, unknown> },
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    let features: Features | null = null;
+    if (TOOLS.some((tool) => tool.feature)) {
+      try {
+        features = await callApi<Features>(ownerId, 'GET', '/features');
+      } catch {
+        // A temporary failure must not hide tools. Each route still checks access.
+      }
+    }
+    return { tools: listToolsFor(features) };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const tool = TOOLS.find((t) => t.name === req.params.name);

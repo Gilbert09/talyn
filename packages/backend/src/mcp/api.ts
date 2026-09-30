@@ -1,4 +1,4 @@
-import type { ApiResponse } from '@talyn/shared';
+import type { ApiResponse, PRCiStatus, PRHumanGate, ExternalQueueState } from '@talyn/shared';
 import { internalProxyHeaders } from '../middleware/auth.js';
 
 /**
@@ -14,7 +14,11 @@ function apiBase(): string {
 }
 
 export class McpApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string
+  ) {
     super(message);
     this.name = 'McpApiError';
   }
@@ -39,15 +43,22 @@ export async function callApi<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  let payload: ApiResponse<T> | null = null;
+  let payload: (ApiResponse<T> & { code?: string }) | null = null;
   try {
     payload = (await res.json()) as ApiResponse<T>;
   } catch {
     if (res.status === 204) return undefined as T;
     throw new McpApiError(`Invalid JSON from ${method} ${path}`, res.status);
   }
-  if (!payload || payload.success !== true) {
-    throw new McpApiError(payload?.error || `${method} ${path} failed`, res.status);
+  if (!res.ok || !payload || payload.success !== true) {
+    const code = typeof payload?.code === 'string' ? payload.code : undefined;
+    const message =
+      (payload?.error || `${method} ${path} failed`) +
+      (code ? ` (code: ${code})` : '') +
+      (res.status === 402
+        ? ' — this is a free-plan limit; upgrade in the Talyn app (Settings → Billing).'
+        : '');
+    throw new McpApiError(message, res.status, code);
   }
   return payload.data as T;
 }
@@ -76,6 +87,8 @@ export interface PrSummary {
   blockingReason: string;
   checks: PrChecks;
   unresolvedReviewThreads: number;
+  ciStatus?: PRCiStatus;
+  humanGates?: PRHumanGate[];
 }
 
 export interface PublicPr {
@@ -89,6 +102,8 @@ export interface PublicPr {
   state: string;
   reviewRequested: boolean;
   authored: boolean;
+  watching?: boolean;
+  reviewHiddenAt?: string | null;
   summary: PrSummary;
   autoKeepMergeable: boolean;
   mergeQueued: boolean;
@@ -105,5 +120,36 @@ export interface PublicPr {
     position: number;
     reason?: string;
     blockedCode?: string | null;
+    fixKind?: 'blockers' | 'resign';
+    headShaShort?: string;
+    budgets?: {
+      fixRuns: [number, number];
+      checkReruns: [number, number];
+      resigns: [number, number];
+    };
+    autoMerge?: { armed: boolean; armedBy?: 'talyn' | 'user' };
+    stackParentNumber?: number | null;
+    stackCoveredBy?: number | null;
+    external?: {
+      via?: 'auto_merge' | 'label' | 'comment';
+      submits?: [number, number];
+      state?: ExternalQueueState;
+    };
   } | null;
+}
+
+export interface WatchedRepo {
+  id: string;
+  workspaceId: string;
+  owner: string;
+  repo: string;
+  fullName: string;
+  defaultBranch: string;
+}
+
+export interface GitHubRepo {
+  id: number;
+  full_name: string;
+  private: boolean;
+  html_url: string;
 }
