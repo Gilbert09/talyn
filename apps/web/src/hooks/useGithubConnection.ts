@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ApiNetworkError, api, type GitHubStatus, type GitHubUser } from '../lib/api';
+import { ApiError, ApiNetworkError, api, type GitHubStatus, type GitHubUser } from '../lib/api';
+
+/**
+ * What the last status check says about the BACKEND, apart from GitHub.
+ * `offline`: no answer at all. `degraded`: it answered, with a server error or
+ * a timeout — up, but not well. `null`: not checked yet.
+ */
+export type BackendHealth = 'ok' | 'offline' | 'degraded' | null;
+
+/** While the backend is unhealthy, re-check this often instead of only on focus. */
+const UNHEALTHY_RECHECK_MS = 30_000;
 
 /**
  * Tracks GitHub connection state for a workspace and detects OAuth
@@ -12,14 +22,13 @@ import { ApiNetworkError, api, type GitHubStatus, type GitHubUser } from '../lib
 export function useGithubConnection(workspaceId: string | null) {
   const [status, setStatus] = useState<GitHubStatus | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
-  /** null until the first attempt resolves; false when the backend is unreachable. */
-  const [reachable, setReachable] = useState<boolean | null>(null);
+  const [health, setHealth] = useState<BackendHealth>(null);
 
   const refresh = useCallback(async () => {
     if (!workspaceId) return;
     try {
       const s = await api.github.getStatus(workspaceId);
-      setReachable(true);
+      setHealth('ok');
       setStatus(s);
       if (s.connected) {
         try {
@@ -31,17 +40,19 @@ export function useGithubConnection(workspaceId: string | null) {
         setUser(null);
       }
     } catch (err) {
-      // A transport failure means we never got an answer — it is NOT the
-      // backend telling us GitHub is unconfigured. Reporting it as
-      // `configured: false` is what produced the misleading "set
-      // GITHUB_CLIENT_ID" banner whenever the network dropped. Leave the last
-      // known status alone and report unreachability instead.
+      // No failure is the backend saying GitHub is unconfigured — only a 200
+      // with `configured: false` says that. This used to record any non-network
+      // failure as `{ configured: false }`, so when production's database pool
+      // wedged (2026-09-30) and every request 500'd, the app told users to set
+      // GITHUB_CLIENT_ID. Keep the last known status and report the backend's
+      // health instead.
       if (err instanceof ApiNetworkError) {
-        setReachable(false);
-        return;
+        setHealth('offline');
+      } else if (err instanceof ApiError && (err.status >= 500 || err.status === 408 || err.status === 429)) {
+        setHealth('degraded');
       }
-      setReachable(true);
-      setStatus({ configured: false, connected: false });
+      // Anything else (a 401 mid-refresh, a 404 for a workspace just deleted)
+      // says nothing about the backend's health; leave everything as it was.
     }
   }, [workspaceId]);
 
@@ -61,5 +72,13 @@ export function useGithubConnection(workspaceId: string | null) {
     };
   }, [refresh]);
 
-  return { status, user, reachable, refresh, setStatus, setUser };
+  // "Retrying automatically" has to be true: focus alone never fires for
+  // someone looking at the window the whole time.
+  useEffect(() => {
+    if (health !== 'offline' && health !== 'degraded') return;
+    const timer = setInterval(() => void refresh(), UNHEALTHY_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [health, refresh]);
+
+  return { status, user, health, refresh, setStatus, setUser };
 }

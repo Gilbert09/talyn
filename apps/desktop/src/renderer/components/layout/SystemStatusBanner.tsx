@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Github, Loader2, Plus, Settings, WifiOff } from 'lucide-react';
+import { AlertTriangle, Github, Loader2, Plus, ServerCrash, Settings, WifiOff } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { openGithubAppFlow, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
@@ -9,6 +9,24 @@ import { openGithubAppFlow, uncoveredOwners, formatOwnerList } from '../../lib/g
  * losing the network is transient and usually nothing the user did wrong, so
  * it should read as informational rather than as a misconfiguration.
  */
+/**
+ * The backend answered, but with server errors or timeouts. A different fact
+ * from offline — the user's connection is fine, and nothing on their side will
+ * fix it — and it must not be dressed up as a GitHub configuration problem,
+ * which is what a wedged database pool used to look like here.
+ */
+function DegradedRow() {
+  return (
+    <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
+      <ServerCrash className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 flex-1">
+        Talyn is having trouble on our side. What you see may be out of date — retrying
+        automatically, nothing for you to do.
+      </span>
+    </div>
+  );
+}
+
 function OfflineRow() {
   const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
   return (
@@ -47,7 +65,7 @@ export function SystemStatusBanner() {
     githubInstallations,
     repositories,
     setActivePanel,
-    backendReachable,
+    backendHealth,
   } = useWorkspaceStore();
   const [connecting, setConnecting] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -84,10 +102,10 @@ export function SystemStatusBanner() {
   // row below describes remote state we could not read, so rendering them
   // would be guessing — which is how a dropped connection used to surface as
   // "GitHub OAuth isn't configured on the backend".
-  if (backendReachable === false) {
+  if (backendHealth === 'offline' || backendHealth === 'degraded') {
     return (
       <div className="shrink-0">
-        <OfflineRow />
+        {backendHealth === 'offline' ? <OfflineRow /> : <DegradedRow />}
       </div>
     );
   }
@@ -99,7 +117,7 @@ export function SystemStatusBanner() {
       githubStatus.configured === false ? (
         <BannerRow
           key="gh-unconfigured"
-          message="GitHub OAuth isn't configured on the backend — PR tracking is unavailable until GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set."
+          message="GitHub sign-in isn't set up on this Talyn server, so PR tracking is off. If you run this server, set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."
         />
       ) : (
         <BannerRow

@@ -36,14 +36,14 @@ import { useOnReconnect } from './useOnReconnect';
 export function useSystemStatus(): void {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const setGitHubStatus = useWorkspaceStore((s) => s.setGitHubStatus);
-  const setBackendReachable = useWorkspaceStore((s) => s.setBackendReachable);
+  const setBackendHealth = useWorkspaceStore((s) => s.setBackendHealth);
   const setGitHubUser = useWorkspaceStore((s) => s.setGitHubUser);
   const setFeatures = useWorkspaceStore((s) => s.setFeatures);
   const features = useWorkspaceStore((s) => s.features);
   const setEnabledWorkflowCount = useWorkspaceStore((s) => s.setEnabledWorkflowCount);
   const setEnabledLoopCount = useWorkspaceStore((s) => s.setEnabledLoopCount);
   const setEnabledMcpServerCount = useWorkspaceStore((s) => s.setEnabledMcpServerCount);
-  const { status, user, reachable } = useGithubConnection(currentWorkspaceId);
+  const { status, user, health } = useGithubConnection(currentWorkspaceId);
   // Load which orgs/accounts have the App installed (kept fresh on focus), so
   // the banner + Settings can flag watched repos whose owner lacks an install.
   useGithubInstallations(currentWorkspaceId, Boolean(status?.connected));
@@ -56,8 +56,8 @@ export function useSystemStatus(): void {
   // load + every focus), so it doubles as the reachability probe the banner
   // reads. No extra request.
   useEffect(() => {
-    setBackendReachable(reachable);
-  }, [reachable, setBackendReachable]);
+    setBackendHealth(health);
+  }, [health, setBackendHealth]);
 
   useEffect(() => {
     setGitHubUser(user);

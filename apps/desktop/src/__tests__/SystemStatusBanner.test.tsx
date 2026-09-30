@@ -10,6 +10,7 @@ function setState(currentWorkspaceId: string | null, githubStatus: GitHubStatus 
     githubStatus,
     githubInstallations: null,
     repositories: [],
+    backendHealth: null,
   });
 }
 
@@ -55,8 +56,21 @@ describe('SystemStatusBanner', () => {
   it('warns without a Connect action when GitHub OAuth is not configured', () => {
     setState('ws1', { configured: false, connected: false });
     render(<SystemStatusBanner />);
-    expect(screen.getByText(/isn't configured on the backend/i)).toBeInTheDocument();
+    expect(screen.getByText(/isn't set up on this Talyn server/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Connect GitHub/i })).not.toBeInTheDocument();
+  });
+
+  // A wedged backend 500s every request. It must read as the backend being
+  // unwell, never as GitHub being unconfigured (2026-09-30).
+  it.each([
+    ['degraded', /having trouble on our side/],
+    ['offline', /Can't reach Talyn|You're offline/],
+  ] as const)('shows only the %s row, and no GitHub rows', (health, message) => {
+    setState('ws1', { configured: false, connected: false });
+    useWorkspaceStore.setState({ backendHealth: health });
+    render(<SystemStatusBanner />);
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/GITHUB_CLIENT_ID|isn't set up|GitHub isn't connected/i)).not.toBeInTheDocument();
   });
 
   it('warns to install the app when a watched repo’s org has no installation', () => {

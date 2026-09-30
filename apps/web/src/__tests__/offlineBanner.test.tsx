@@ -32,13 +32,13 @@ beforeEach(() => {
     githubStatus: null,
     githubInstallations: null,
     repositories: [],
-    backendReachable: null,
+    backendHealth: null,
   });
 });
 
 describe('backend unreachable', () => {
   it('says it cannot reach Talyn, and never blames GitHub config', () => {
-    useWorkspaceStore.setState({ backendReachable: false });
+    useWorkspaceStore.setState({ backendHealth: 'offline' });
     render(<SystemStatusBanner />);
     expect(text()).toMatch(/Can't reach Talyn|You're offline/);
     expect(text()).not.toMatch(/GITHUB_CLIENT_ID/);
@@ -47,7 +47,7 @@ describe('backend unreachable', () => {
 
   it('suppresses the GitHub rows entirely — that state is unknown, not false', () => {
     useWorkspaceStore.setState({
-      backendReachable: false,
+      backendHealth: 'offline',
       // A stale "disconnected" left over from before the outage must not be
       // presented as current.
       githubStatus: { configured: true, connected: false },
@@ -61,7 +61,7 @@ describe('backend unreachable', () => {
 describe('backend reachable', () => {
   it('still reports a genuinely unconfigured backend', () => {
     useWorkspaceStore.setState({
-      backendReachable: true,
+      backendHealth: 'ok',
       githubStatus: { configured: false, connected: false },
     });
     render(<SystemStatusBanner />);
@@ -70,7 +70,7 @@ describe('backend reachable', () => {
 
   it('still reports a genuinely disconnected workspace', () => {
     useWorkspaceStore.setState({
-      backendReachable: true,
+      backendHealth: 'ok',
       githubStatus: { configured: true, connected: false },
     });
     render(<SystemStatusBanner />);
@@ -79,12 +79,26 @@ describe('backend reachable', () => {
 
   it('renders nothing when everything is healthy', () => {
     useWorkspaceStore.setState({
-      backendReachable: true,
+      backendHealth: 'ok',
       githubStatus: { configured: true, connected: true },
       githubInstallations: [],
     });
     const { container } = render(<SystemStatusBanner />);
     expect(container.textContent).toBe('');
+  });
+});
+
+// A wedged backend answers every request with a 500. That is the backend
+// being unwell, not GitHub being unconfigured (2026-09-30).
+describe('backend degraded', () => {
+  it('says the problem is on our side, and never blames GitHub config', () => {
+    useWorkspaceStore.setState({
+      backendHealth: 'degraded',
+      githubStatus: { configured: true, connected: false },
+    });
+    render(<SystemStatusBanner />);
+    expect(text()).toMatch(/having trouble on our side/);
+    expect(text()).not.toMatch(/GITHUB_CLIENT_ID|isn't configured|isn't set up|GitHub isn't connected/);
   });
 });
 
