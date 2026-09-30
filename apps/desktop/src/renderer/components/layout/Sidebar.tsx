@@ -31,11 +31,18 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { FleetAgentMark, ProviderIcon } from '../../lib/providerMeta';
-import { useWorkspaceStore } from '../../stores/workspace';
+import { useWorkspaceStore, type ActivePanel } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { visibleReviewCohort } from '../panels/github/reviewHidden';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { useAuth } from '../auth/AuthProvider';
+
+interface NavItem {
+  id: ActivePanel;
+  icon: typeof ListTodo;
+  label: string;
+  badge?: number;
+}
 
 interface SidebarProps {
   className?: string;
@@ -49,9 +56,6 @@ export function Sidebar({ className }: SidebarProps) {
     setActivePanel,
     tasks,
     features,
-    enabledWorkflowCount,
-    enabledLoopCount,
-    enabledMcpServerCount,
   } = useWorkspaceStore();
 
   const { user } = useAuth();
@@ -72,27 +76,13 @@ export function Sidebar({ className }: SidebarProps) {
   const codeReviewCount = prRows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length;
   const queueCount = prRows.filter((r) => r.mergeQueued).length;
 
-  /**
-   * The two kinds of number in this nav, which used to look identical.
-   *
-   * `work` counts things happening TO you — PRs with your name on them, a
-   * queue draining, runs in flight. It moves without you and a jump in it is
-   * news. `inventory` counts things you MADE: workflows, loops, MCP servers.
-   * It changes only when you change it, so it is a fact about your setup
-   * rather than a call to look.
-   *
-   * Drawn as the same pill, seven numbers read as seven demands — Tom's word
-   * was "overwhelming" — and the loudest of them (84 review requests) is the
-   * one least likely to mean "do something now". So inventory keeps its count
-   * and gives up the pill: same information, a quarter of the weight.
-   */
-  const navItems = [
+  // Things happening to you: PRs, the queue, runs in flight.
+  const workNavItems: NavItem[] = [
     {
       id: 'my_prs' as const,
       icon: GitPullRequest,
       label: 'My PRs',
       badge: myPrCount > 0 ? myPrCount : undefined,
-      badgeKind: 'work' as const,
     },
     {
       id: 'reviews' as const,
@@ -103,7 +93,6 @@ export function Sidebar({ className }: SidebarProps) {
       // `reviews` so remembered state and existing deep links keep working.
       label: 'Review requests',
       badge: reviewCount > 0 ? reviewCount : undefined,
-      badgeKind: 'work' as const,
     },
     // Code review sits with the two PR cohorts above rather than with the
     // definition lists below, because that is what it is: pull requests waiting
@@ -120,7 +109,6 @@ export function Sidebar({ className }: SidebarProps) {
             // from the PR store rather than set when the panel loads, so the
             // badge is right before you have ever opened it.
             badge: codeReviewCount > 0 ? codeReviewCount : undefined,
-            badgeKind: 'work' as const,
           },
         ]
       : []),
@@ -129,15 +117,19 @@ export function Sidebar({ className }: SidebarProps) {
       icon: GitMerge,
       label: 'Merge Queue',
       badge: queueCount > 0 ? queueCount : undefined,
-      badgeKind: 'work' as const,
     },
     {
       id: 'queue' as const,
       icon: ListTodo,
       label: 'Tasks',
       badge: runningTasksCount > 0 ? runningTasksCount : undefined,
-      badgeKind: 'work' as const,
     },
+  ];
+
+  // Things you set up: automation rules, schedules and tool connections. No
+  // count, because it changes only when you change it, and a number next to
+  // it reads as one more thing to look at.
+  const setupNavItems: NavItem[] = [
     // Workflows is allow-listed. `features === null` is STILL LOADING and must
     // render nothing, exactly like `cloudProviderOffered` — treating it as
     // "off" and then flipping would flash the item in on every launch.
@@ -147,12 +139,6 @@ export function Sidebar({ className }: SidebarProps) {
             id: 'workflows' as const,
             icon: Workflow,
             label: 'Workflows',
-            // Enabled rules only — a disabled workflow is not automation that
-            // is running, so counting it would overstate what the app is doing
-            // on the user's behalf. `null` is not yet counted and draws
-            // nothing, so the badge never flashes in at 0 and then corrects.
-            badge: enabledWorkflowCount ? enabledWorkflowCount : undefined,
-            badgeKind: 'inventory' as const,
           },
         ]
       : []),
@@ -164,11 +150,6 @@ export function Sidebar({ className }: SidebarProps) {
             id: 'loops' as const,
             icon: Repeat,
             label: 'Loops',
-            // Enabled loops only: a paused loop is not a schedule that is
-            // running, and counting it would overstate what the app is doing
-            // unattended — which is the one thing this feature does.
-            badge: enabledLoopCount ? enabledLoopCount : undefined,
-            badgeKind: 'inventory' as const,
           },
         ]
       : []),
@@ -182,14 +163,35 @@ export function Sidebar({ className }: SidebarProps) {
             id: 'mcp_servers' as const,
             icon: Plug,
             label: 'MCP servers',
-            // Enabled only: a switched-off server is not one the agents have,
-            // and counting it would overstate what a run can reach.
-            badge: enabledMcpServerCount ? enabledMcpServerCount : undefined,
-            badgeKind: 'inventory' as const,
           },
         ]
       : []),
   ];
+
+  const renderNavItem = (item: NavItem) => (
+    <Button
+      key={item.id}
+      data-attr={`nav-${item.id}`}
+      variant={activePanel === item.id ? 'secondary' : 'ghost'}
+      className={cn(
+        'w-full justify-start gap-3',
+        sidebarCollapsed && 'justify-center px-2'
+      )}
+      onClick={() => setActivePanel(item.id)}
+    >
+      <item.icon className="w-4 h-4 flex-shrink-0" />
+      {!sidebarCollapsed && (
+        <>
+          <span className="flex-1 text-left">{item.label}</span>
+          {item.badge !== undefined && (
+            <Badge variant="secondary" className="ml-auto">
+              {item.badge}
+            </Badge>
+          )}
+        </>
+      )}
+    </Button>
+  );
 
   return (
     <div
@@ -212,40 +214,14 @@ export function Sidebar({ className }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-2 space-y-1">
-        {navItems.map((item) => (
-          <Button
-            key={item.id}
-            data-attr={`nav-${item.id}`}
-            variant={activePanel === item.id ? 'secondary' : 'ghost'}
-            className={cn(
-              'w-full justify-start gap-3',
-              sidebarCollapsed && 'justify-center px-2'
-            )}
-            onClick={() => setActivePanel(item.id)}
-          >
-            <item.icon className="w-4 h-4 flex-shrink-0" />
-            {!sidebarCollapsed && (
-              <>
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.badge !== undefined &&
-                  (item.badgeKind === 'work' ? (
-                    <Badge variant="secondary" className="ml-auto">
-                      {item.badge}
-                    </Badge>
-                  ) : (
-                    // No pill, no background, one size down and the muted
-                    // foreground: it reads as a label on the row rather than
-                    // as a count demanding to be cleared. `tabular-nums` so a
-                    // count going 9 → 10 does not shift the row.
-                    <span className="ml-auto text-xs tabular-nums text-muted-foreground/70">
-                      {item.badge}
-                    </span>
-                  ))}
-              </>
-            )}
-          </Button>
-        ))}
+      <nav className="flex-1 p-2">
+        <div className="space-y-1">{workNavItems.map(renderNavItem)}</div>
+        {setupNavItems.length > 0 && (
+          <>
+            <div role="separator" className="my-2 border-t" />
+            <div className="space-y-1">{setupNavItems.map(renderNavItem)}</div>
+          </>
+        )}
       </nav>
 
       {/* Footer */}

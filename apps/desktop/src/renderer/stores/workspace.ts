@@ -254,20 +254,6 @@ interface WorkspaceState {
    * the engine itself. This only decides what to draw.
    */
   features: Features | null;
-  /**
-   * Enabled workflows in the current workspace, for the sidebar's nav badge.
-   * `null` means not yet counted, which draws no badge — same discipline as
-   * `features`, so the number never flashes in at zero and then corrects.
-   *
-   * Lives here, not in `useWorkflows`, because the badge must be right before
-   * anybody opens the Workflows page — but `useWorkflows` writes to it too, so
-   * toggling a rule off updates the badge without a round trip.
-   */
-  enabledWorkflowCount: number | null;
-  /** Enabled loops, for the nav badge. `null` is not yet counted. */
-  enabledLoopCount: number | null;
-  /** Enabled MCP servers, for the nav badge. `null` is not yet counted. */
-  enabledMcpServerCount: number | null;
   // "Connect an agent" modal. Task buttons render even with no provider
   // connected (so first-run users can reach them); clicking one with nothing
   // connected opens this instead of silently no-oping. `pendingCloudTask` is
@@ -307,9 +293,6 @@ interface WorkspaceState {
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
   setFeatures: (features: Features | null) => void;
-  setEnabledWorkflowCount: (count: number | null) => void;
-  setEnabledLoopCount: (count: number | null) => void;
-  setEnabledMcpServerCount: (count: number | null) => void;
   /** Open the "connect an agent" modal, optionally stashing a task to auto-run
    *  the instant a provider connects. */
   openConnectAgent: (pending?: PendingCloudTask | null, source?: ConnectAgentSource) => void;
@@ -379,9 +362,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   posthogStatus: null,
   cloudProviders: null,
   features: null,
-  enabledWorkflowCount: null,
-  enabledLoopCount: null,
-  enabledMcpServerCount: null,
   connectAgentOpen: false,
   pendingCloudTask: null,
   connectAgentSource: null,
@@ -426,9 +406,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setCloudProviders: (cloudProviders) => set({ cloudProviders }),
 
   setFeatures: (features) => set({ features }),
-  setEnabledWorkflowCount: (enabledWorkflowCount) => set({ enabledWorkflowCount }),
-  setEnabledLoopCount: (enabledLoopCount) => set({ enabledLoopCount }),
-  setEnabledMcpServerCount: (enabledMcpServerCount) => set({ enabledMcpServerCount }),
 
   openConnectAgent: (pending = null, source = 'unknown') =>
     set({ connectAgentOpen: true, pendingCloudTask: pending, connectAgentSource: source }),
