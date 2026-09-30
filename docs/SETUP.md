@@ -845,33 +845,16 @@ install command. Uses a Railway account token (same one you minted in #5).
 Lets Claude Code create projects, deploy services, read logs, and manage
 variables without leaving the editor.
 
-### Talyn MCP (local)
+### Talyn MCP (hosted)
 
-Exposes Talyn's own task + backlog operations as Claude tools. Useful for letting a Claude Code session (or a child agent running inside a Talyn task) create tasks, sync backlog sources, and kick the Continuous Build scheduler without dropping to a shell.
+Talyn serves its own MCP server from the backend at `/api/v1/mcp`. There is nothing to build or run locally. Mint a personal token in the app (**Settings → MCP server**), then:
 
 ```bash
-# build first
-npm run build -w @talyn/shared -w @talyn/mcp-server
-
-# register
-claude mcp add fastowl -- node "$(pwd)/packages/mcp-server/dist/index.js"
+claude mcp add --transport http talyn http://localhost:4747/api/v1/mcp \
+  --header "Authorization: Bearer <your-token>"
 ```
 
-Or add to `~/.claude/mcp_servers.json` manually:
-
-```jsonc
-{
-  "mcpServers": {
-    "fastowl": {
-      "command": "node",
-      "args": ["/absolute/path/to/fastowl/packages/mcp-server/dist/index.js"],
-      "env": { "TALYN_API_URL": "http://localhost:4747" }
-    }
-  }
-}
-```
-
-No external account needed — it talks to your local Talyn backend. For agents Talyn spawns, parent-injected env vars (`TALYN_WORKSPACE_ID`, `TALYN_TASK_ID`) mean the tools work argument-free.
+See [`docs/MCP_SERVER.md`](./MCP_SERVER.md) for the tool list and the production URL.
 
 After adding any MCP server, restart Claude Code. Verify with `/mcp` in the prompt.
 

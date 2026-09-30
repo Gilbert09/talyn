@@ -199,7 +199,6 @@ apps/marketing    talyn.dev — the marketing site (Next.js)
 packages/backend  Express + WebSocket + Postgres (Drizzle); webhooks, merge queue, providers
 packages/client   The single definition of the backend contract, shared by every front end
 packages/cli      The `talyn` CLI
-packages/mcp-server  stdio MCP surface for agents
 packages/shared   Shared TypeScript types
 ```
 
@@ -211,7 +210,7 @@ packages/shared   Shared TypeScript types
 | [`docs/CLOUD_PROVIDERS.md`](./docs/CLOUD_PROVIDERS.md) | The cloud task provider abstraction |
 | [`docs/SETUP.md`](./docs/SETUP.md) | Environment variables and account setup |
 | [`docs/TESTING.md`](./docs/TESTING.md) | Testing strategy and coverage |
-| [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md) | The `@talyn/mcp-server` package |
+| [`docs/MCP_SERVER.md`](./docs/MCP_SERVER.md) | The hosted MCP server (`/api/v1/mcp`) and its tools |
 | [`docs/ROADMAP.md`](./docs/ROADMAP.md) | Phased TODO, backlog, known gaps |
 | [`docs/SESSIONS.md`](./docs/SESSIONS.md) | Chronological build notes, newest first — including what did not work |
 | [`claude.md`](./claude.md) | Orientation for coding agents working on Talyn |

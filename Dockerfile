@@ -25,7 +25,6 @@ COPY packages/shared/package.json ./packages/shared/
 # present or it refuses to install against the lockfile.
 COPY packages/client/package.json ./packages/client/
 COPY packages/cli/package.json ./packages/cli/
-COPY packages/mcp-server/package.json ./packages/mcp-server/
 COPY apps/desktop/package.json ./apps/desktop/
 COPY apps/web/package.json ./apps/web/
 
@@ -90,7 +89,6 @@ COPY --from=builder /app/packages/backend/package.json ./packages/backend/
 COPY --from=builder /app/packages/shared/package.json ./packages/shared/
 COPY --from=builder /app/packages/client/package.json ./packages/client/
 COPY --from=builder /app/packages/cli/package.json ./packages/cli/
-COPY --from=builder /app/packages/mcp-server/package.json ./packages/mcp-server/
 COPY --from=builder /app/apps/desktop/package.json ./apps/desktop/
 COPY --from=builder /app/apps/web/package.json ./apps/web/
 

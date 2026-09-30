@@ -23,7 +23,7 @@
     "package": "npm run package -w @talyn/desktop",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run build -w @talyn/shared && npm run build -w @talyn/client && tsc --noEmit -p packages/backend/tsconfig.json && tsc --noEmit -p packages/cli/tsconfig.json && tsc --noEmit -p packages/mcp-server/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/admin/tsconfig.json",
+    "typecheck": "npm run build -w @talyn/shared && npm run build -w @talyn/client && tsc --noEmit -p packages/backend/tsconfig.json && tsc --noEmit -p packages/cli/tsconfig.json && tsc --noEmit -p apps/desktop/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && tsc --noEmit -p apps/admin/tsconfig.json",
     "prepare": "husky",
     "build:web": "npm run build -w @talyn/web",
     "dev:web": "npm run dev -w @talyn/web",

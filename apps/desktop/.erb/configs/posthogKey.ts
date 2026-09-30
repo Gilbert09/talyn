@@ -3,8 +3,7 @@
  *
  * Committed on purpose. A project write key is public by design — it is the
  * same string any web page ships in its PostHog snippet, it can only write
- * events into one project, and it reads nothing. `packages/mcp-server` already
- * commits this exact key, for this exact reason.
+ * events into one project, and it reads nothing.
  *
  * It used to default to `''` here, with the real value injected only by
  * publish.yml (`vars.TALYN_POSTHOG_KEY` — a repo VARIABLE, not a secret, which
@@ -28,7 +27,7 @@
 export const DEFAULT_POSTHOG_KEY = 'phc_n7cmPaZ8BZkgnBV9seBGqaJTtcjd9NYbKTUhcLXTohwX';
 
 /**
- * The opt-out, spelled the same way `packages/mcp-server` spells it.
+ * The opt-out, `TALYN_ANALYTICS_DISABLED`.
  *
  * It is a SEPARATE flag rather than "leave the key blank" because those two
  * states are not the same intent and cannot be told apart. `apps/desktop/.env`
