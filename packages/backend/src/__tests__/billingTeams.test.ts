@@ -304,7 +304,11 @@ describe('seat assignment', () => {
     const err = await assignNamedSeats(teamId, BUYER, ['carol', 'dave'], resolve).catch((e) => e);
     expect(err).toBeInstanceOf(TeamError);
     expect(err.code).toBe('team_seats_full');
-    expect((await getTeamDetail(teamId)).seatsUsed).toBe(1);
+    // Only the member was added; reading the team also seats its admin.
+    expect((await getTeamDetail(teamId)).seats.map((s) => s.githubLogin).sort()).toEqual([
+      'buyer',
+      'member',
+    ]);
   });
 
   it('refuses a team with no seats paid for yet', async () => {
@@ -318,11 +322,12 @@ describe('seat assignment', () => {
     const teamId = await makeTeam({ seats: 3 });
     await assignNamedSeats(teamId, BUYER, ['member', 'carol', 'dave'], resolve);
     await db.update(teamsTable).set({ seatsPurchased: 2 }).where(eq(teamsTable.id, teamId));
+    // Three members plus the admin's own seat, against two paid for.
     const detail = await getTeamDetail(teamId);
     expect(detail.overAllocated).toBe(true);
     await expect(assignNamedSeats(teamId, BUYER, ['erin'], resolve)).rejects.toMatchObject({
       code: 'team_over_allocated',
-      message: expect.stringContaining('Remove 1'),
+      message: expect.stringContaining('Remove 2'),
     });
   });
 
@@ -344,7 +349,7 @@ describe('seat assignment', () => {
     const teamId = await makeTeam();
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
     await leaveTeam(MEMBER);
-    expect((await getTeamDetail(teamId)).seatsUsed).toBe(0);
+    expect((await getTeamDetail(teamId)).seats.map((s) => s.githubLogin)).toEqual(['buyer']);
     await expect(leaveTeam(MEMBER)).rejects.toMatchObject({ status: 404 });
   });
 
@@ -353,7 +358,7 @@ describe('seat assignment', () => {
     const { assigned } = await assignNamedSeats(teamId, BUYER, ['member'], resolve);
     await expect(removeSeat('another-team', assigned[0]!.id)).rejects.toMatchObject({ status: 404 });
     await removeSeat(teamId, assigned[0]!.id);
-    expect((await getTeamDetail(teamId)).seats).toEqual([]);
+    expect((await getTeamDetail(teamId)).seats.map((s) => s.githubLogin)).toEqual(['buyer']);
   });
 
   it.each([
@@ -382,17 +387,28 @@ describe('admins are members, and a team always keeps one', () => {
     return detail.seats.find((s) => s.githubLogin === login)!;
   }
 
-  it('marks the seat of an admin, and lists an admin without a seat as seatless', async () => {
+  it('every admin holds a seat: reading the team seats one that has none', async () => {
     const teamId = await makeTeam({ seats: 3 });
     await assignNamedSeats(teamId, BUYER, ['member'], resolve);
-    let detail = await getTeamDetail(teamId);
-    expect(detail.seats.map((s) => [s.githubLogin, s.isAdmin])).toEqual([['member', false]]);
-    expect(detail.admins).toEqual([expect.objectContaining({ userId: BUYER, hasSeat: false })]);
-
-    await assignSelfSeat(teamId, BUYER);
-    detail = await getTeamDetail(teamId);
-    expect((await seatOf(teamId, 'buyer')).isAdmin).toBe(true);
+    const detail = await getTeamDetail(teamId);
+    expect(detail.seats.map((s) => [s.githubLogin, s.isAdmin]).sort()).toEqual([
+      ['buyer', true],
+      ['member', false],
+    ]);
     expect(detail.admins).toEqual([expect.objectContaining({ userId: BUYER, hasSeat: true })]);
+  });
+
+  it('seats an admin even past the seats paid for, and shows the team over-allocated', async () => {
+    const teamId = await makeTeam({ seats: 1 });
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    const detail = await getTeamDetail(teamId);
+    expect(detail.seatsUsed).toBe(2);
+    expect(detail.overAllocated).toBe(true);
+  });
+
+  it('does not seat anyone on a team that is not paying', async () => {
+    const teamId = await makeTeam({ seats: 3, plan: 'none' });
+    expect((await getTeamDetail(teamId)).seats).toEqual([]);
   });
 
   it('makes a seated member an admin, and takes the role back', async () => {
@@ -644,8 +660,9 @@ describe('team subscription webhook', () => {
     await db.delete(teamSeatsTable).where(eq(teamSeatsTable.teamId, teamId));
     await assignNamedSeats(teamId, BUYER, ['member', 'carol', 'dave'], resolve);
     await applySubscriptionEvent('subscription.updated', teamSub(teamId, { seats: 2 }), new Date(2_000));
+    // Three members and the admin's own seat, against two paid for.
     const detail = await getTeamDetail(teamId);
-    expect(detail.seatsUsed).toBe(3);
+    expect(detail.seatsUsed).toBe(4);
     expect(detail.overAllocated).toBe(true);
   });
 
@@ -697,13 +714,14 @@ describe('team subscription webhook', () => {
       expect(emit).toHaveBeenCalledWith(BUYER, expect.objectContaining({ planSource: 'team' }));
     });
 
-    it('does not re-seat a creator who removed their own seat', async () => {
+    it('gives an admin whose seat has gone a seat again on the next team event', async () => {
       vi.spyOn(websocketModule, 'emitSubscriptionUpdated').mockImplementation(() => {});
       const { id: teamId } = await createTeam(BUYER, 'Acme');
       await post('evt-a', { type: 'subscription.created', data: teamSub(teamId) }, 1_780_000_000);
       await db.delete(teamSeatsTable).where(eq(teamSeatsTable.teamId, teamId));
       await post('evt-b', { type: 'subscription.updated', data: teamSub(teamId, { seats: 6 }) }, 1_780_000_100);
-      expect(await db.select().from(teamSeatsTable).where(eq(teamSeatsTable.teamId, teamId))).toEqual([]);
+      const seats = await db.select().from(teamSeatsTable).where(eq(teamSeatsTable.teamId, teamId));
+      expect(seats.map((s) => s.githubUserId)).toEqual([BUYER_GH]);
     });
   });
 });

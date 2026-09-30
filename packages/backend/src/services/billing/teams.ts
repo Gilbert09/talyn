@@ -191,6 +191,9 @@ async function loadTeamRow(teamId: string) {
 /** The admin's view of a team. */
 export async function getTeamDetail(teamId: string): Promise<TeamDetail> {
   const db = getPoolDbClient();
+  // Repairs a team from before "every admin holds a seat", so the list never
+  // shows an admin who is not a member.
+  await seatAllAdmins(teamId);
   const team = await loadTeamRow(teamId);
   const seatRows = await db
     .select({
@@ -689,40 +692,51 @@ export async function teamAudienceUserIds(teamId: string): Promise<string[]> {
 }
 
 /**
- * Seat the team's creator the first time the team is paid for, when they
- * have a GitHub id and no seat anywhere. Most buyers use Talyn themselves;
- * one who does not removes the seat in one click, which costs less than every
- * other buyer finding they paid for a team and still hit the free limits.
- * Only while no seat has been assigned yet, so it never returns after an
- * admin removed it on purpose.
+ * Every admin holds a seat — Tom's rule: the people listed on a team are its
+ * members, and an admin is a member with extra rights. This makes it true.
+ *
+ * Runs when a team is first paid for (the buyer, its first admin, is seated
+ * then: there are no seats to hold before payment) and whenever the team is
+ * read, which repairs a team from before the rule. Nothing else can produce a
+ * seatless admin: only a seated account can be made an admin, and losing the
+ * seat takes the role with it.
+ *
+ * An admin's seat is seated even past `seats_purchased`. The team then reads
+ * as over-allocated, which refuses new seats until an admin fixes it — the
+ * visible, recoverable failure, rather than an admin who silently pays and
+ * gets nothing.
  */
-export async function seatCreatorOnFirstActivation(teamId: string): Promise<void> {
+export async function seatAllAdmins(teamId: string): Promise<void> {
   await withTeamSeatLock(teamId, async () => {
     const db = getPoolDbClient();
     const team = await loadTeamRow(teamId);
-    if (!team.createdByUserId || team.seatsPurchased < 1) return;
-    if ((await countSeats(teamId)) > 0) return;
-    const [creator] = await db
-      .select({ githubUserId: usersTable.githubUserId, githubUsername: usersTable.githubUsername })
-      .from(usersTable)
-      .where(eq(usersTable.id, team.createdByUserId))
-      .limit(1);
-    // The id is normally stored at sign-in, but that is best-effort: read it
-    // now rather than leave the buyer without the seat they paid for.
-    const githubUserId =
-      creator?.githubUserId ?? (await ensureGithubUserId(team.createdByUserId));
-    if (!githubUserId || !creator?.githubUsername) return;
-    await db
-      .insert(teamSeatsTable)
-      .values({
-        id: uuid(),
-        teamId,
-        githubUserId,
-        githubLogin: creator.githubUsername,
-        avatarUrl: githubAvatarUrl(githubUserId),
-        source: 'named',
-        assignedByUserId: team.createdByUserId,
+    if (!teamGrantsSeats(team)) return;
+    const admins = await db
+      .select({
+        userId: usersTable.id,
+        githubUserId: usersTable.githubUserId,
+        githubUsername: usersTable.githubUsername,
       })
-      .onConflictDoNothing({ target: teamSeatsTable.githubUserId });
+      .from(teamAdminsTable)
+      .innerJoin(usersTable, eq(usersTable.id, teamAdminsTable.userId))
+      .where(eq(teamAdminsTable.teamId, teamId));
+    for (const admin of admins) {
+      // The id is normally stored at sign-in, but that is best-effort: read it
+      // now rather than leave an admin without the seat they paid for.
+      const githubUserId = admin.githubUserId ?? (await ensureGithubUserId(admin.userId));
+      if (!githubUserId || !admin.githubUsername) continue;
+      await db
+        .insert(teamSeatsTable)
+        .values({
+          id: uuid(),
+          teamId,
+          githubUserId,
+          githubLogin: admin.githubUsername,
+          avatarUrl: githubAvatarUrl(githubUserId),
+          source: 'named',
+          assignedByUserId: admin.userId,
+        })
+        .onConflictDoNothing({ target: teamSeatsTable.githubUserId });
+    }
   });
 }

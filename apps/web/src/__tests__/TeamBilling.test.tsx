@@ -300,24 +300,6 @@ describe('admins on seats', () => {
     fireEvent.click(makeAdmin[0]!);
     await waitFor(() => expect(team.setSeatAdmin).toHaveBeenCalledWith('team-1', 's-member', true));
   });
-
-  it('lists an admin without a seat, with Give a seat', async () => {
-    team.get.mockResolvedValue(
-      detail({
-        admins: [
-          { userId: 'u1', githubUsername: 'buyer', email: 'b@example.test', hasSeat: false },
-          { userId: 'u2', githubUsername: 'octocat', email: 'o@example.test', hasSeat: true },
-        ],
-      })
-    );
-    team.assignSeats.mockResolvedValue({ assigned: [], failed: [] });
-    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
-    expect(await screen.findByText('No seat')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Give a seat' }));
-    await waitFor(() =>
-      expect(team.assignSeats).toHaveBeenCalledWith('team-1', { logins: ['buyer'] })
-    );
-  });
 });
 
 describe('BillingTeamNotice', () => {

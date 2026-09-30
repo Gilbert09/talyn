@@ -11,7 +11,7 @@ import { debugBus } from '../debugBus.js';
 import { emitSubscriptionUpdated } from '../websocket.js';
 import { billingEnabled, buildBillingStatus } from './entitlements.js';
 import { isTeamProductId, polarWebhookSecret, teamIdFromCustomerExternalId } from './polar.js';
-import { seatCreatorOnFirstActivation, teamAudienceUserIds } from './teams.js';
+import { seatAllAdmins, teamAudienceUserIds } from './teams.js';
 import { notifyTodiex, type TodiexLevel } from '../todiex.js';
 import {
   compactMetadata,
@@ -424,7 +424,7 @@ async function afterTeamEvent(
 ): Promise<void> {
   const teamId = result.teamId!;
   try {
-    if (result.firstActivation) await seatCreatorOnFirstActivation(teamId);
+    await seatAllAdmins(teamId);
     for (const userId of await teamAudienceUserIds(teamId)) {
       emitSubscriptionUpdated(userId, await buildBillingStatus(userId));
     }

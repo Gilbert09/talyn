@@ -368,14 +368,6 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
             />
           )}
 
-          {team.active && status?.team && !status.team.hasSeat && (
-            <SelfSeatNotice
-              teamId={teamId}
-              seatsFree={team.seatsPurchased - team.seatsUsed}
-              onSeated={load}
-            />
-          )}
-
           {team.overAllocated && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
@@ -408,78 +400,10 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
               await refresh();
             }, 'Could not change the admin role')
           }
-          onGiveSeat={(login) =>
-            run(async () => {
-              const result = await api.billing.team.assignSeats(teamId, { logins: [login] });
-              if (result.failed.length > 0) throw new Error(result.failed[0]!.reason);
-              await refresh();
-            }, 'Could not give a seat')
-          }
-          onRemoveAdmin={(userId) =>
-            run(async () => {
-              await api.billing.team.removeAdmin(teamId, userId);
-              await refresh();
-            }, 'Could not remove the admin')
-          }
         />
       )}
 
       {orders.length > 0 && <TeamOrders teamId={teamId} orders={orders} />}
-    </div>
-  );
-}
-
-/**
- * An admin who pays for the team but holds no seat is on the Free plan
- * themselves, which is rarely what they meant. The buyer is seated
- * automatically on the first payment; this covers an admin who was added
- * later, one who removed their own seat, and a first payment that could not
- * seat the buyer.
- */
-function SelfSeatNotice({
-  teamId,
-  seatsFree,
-  onSeated,
-}: {
-  teamId: string;
-  seatsFree: number;
-  onSeated: () => Promise<void>;
-}) {
-  const refresh = useBillingStore((s) => s.refresh);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const take = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await api.billing.team.assignSelfSeat(teamId);
-      if (result.failed.length > 0) setError(result.failed[0]!.reason);
-      trackEvent('team_seats_assigned', { assigned: result.assigned.length, failed: result.failed.length, self: true });
-      await Promise.all([onSeated(), refresh()]);
-    } catch (err) {
-      setError(errorText(err, 'Could not give you a seat'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-        <div className="text-sm">
-          <p>You manage this team but do not hold a seat, so your own account is on the Free plan.</p>
-          {seatsFree <= 0 && (
-            <p className="text-muted-foreground">Every seat is taken. Add a seat first.</p>
-          )}
-          {error && <p className="text-destructive mt-1">{error}</p>}
-        </div>
-      </div>
-      <Button size="sm" className="shrink-0" disabled={busy || seatsFree <= 0} onClick={() => void take()}>
-        {busy && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-        Take a seat
-      </Button>
     </div>
   );
 }
@@ -907,26 +831,22 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
 const LAST_ADMIN_HINT = 'A team always needs at least one admin. Make someone else an admin first.';
 
 /**
- * The people on the team. Admins are members: the role is set on a seat, and
- * the team's last admin cannot lose it — not by losing the seat, and not by
- * giving the role up — because a team with no admin is a subscription nobody
- * can manage or cancel. An admin who holds no seat (a buyer who pays but does
- * not use Talyn, or an older team) is listed after the seats.
+ * The people on the team. Everyone listed holds a seat, admins included: an
+ * admin is a member with extra rights, and the backend seats every admin. The
+ * team's last admin cannot lose the role — not by losing the seat, and not by
+ * giving it up — because a team with no admin is a subscription nobody can
+ * manage or cancel.
  */
 function SeatList({
   team,
   onAssigned,
   onRemove,
   onSetAdmin,
-  onGiveSeat,
-  onRemoveAdmin,
 }: {
   team: TeamDetail;
   onAssigned: () => Promise<void>;
   onRemove: (seatId: string) => Promise<void>;
   onSetAdmin: (seatId: string, admin: boolean) => Promise<void>;
-  onGiveSeat: (login: string) => Promise<void>;
-  onRemoveAdmin: (userId: string) => Promise<void>;
 }) {
   const [removing, setRemoving] = useState<{ id: string; login: string; isAdmin: boolean } | null>(
     null
@@ -934,9 +854,7 @@ function SeatList({
   const [removeBusy, setRemoveBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
 
-  const lastAdmin = team.admins.length === 1;
-  const seatlessAdmins = team.admins.filter((a) => !a.hasSeat);
-  const free = team.seatsPurchased - team.seatsUsed;
+  const lastAdmin = team.seats.filter((s) => s.isAdmin).length === 1;
 
   const busyFor = async (key: string, action: () => Promise<void>) => {
     setRowBusy(key);
@@ -953,7 +871,7 @@ function SeatList({
       <Card className="p-4 space-y-4">
         <SeatPicker team={team} onAssigned={onAssigned} />
 
-        {(team.seats.length > 0 || seatlessAdmins.length > 0) && (
+        {team.seats.length > 0 && (
           <div className="divide-y rounded-md border">
             {team.seats.map((seat) => {
               const locked = seat.isAdmin && lastAdmin;
@@ -1005,47 +923,6 @@ function SeatList({
                       }
                     >
                       <X className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              );
-            })}
-            {seatlessAdmins.map((admin) => {
-              const locked = lastAdmin;
-              const name = admin.githubUsername ? `@${admin.githubUsername}` : admin.email;
-              return (
-                <div key={admin.userId} className="flex items-center gap-3 px-3 py-2">
-                  <div className="w-6 h-6 rounded-full bg-muted" />
-                  <span className="text-sm font-medium">{name}</span>
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-                    Admin
-                  </span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    No seat
-                  </span>
-                  <div className="ml-auto flex items-center gap-1">
-                    {admin.githubUsername && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={free <= 0 || rowBusy !== null}
-                        title={free <= 0 ? 'Every seat is taken.' : undefined}
-                        onClick={() =>
-                          void busyFor(admin.userId, () => onGiveSeat(admin.githubUsername!))
-                        }
-                      >
-                        {rowBusy === admin.userId && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
-                        Give a seat
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={locked || rowBusy !== null}
-                      title={locked ? LAST_ADMIN_HINT : undefined}
-                      onClick={() => void busyFor(admin.userId, () => onRemoveAdmin(admin.userId))}
-                    >
-                      Remove admin
                     </Button>
                   </div>
                 </div>
