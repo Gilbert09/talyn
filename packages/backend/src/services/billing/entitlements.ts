@@ -324,14 +324,26 @@ async function loadBillingTeam(ownerId: string): Promise<{
     .innerJoin(teamsTable, eq(teamsTable.id, teamAdminsTable.teamId))
     .where(eq(teamAdminsTable.userId, ownerId));
 
+  // Whether this user is the ONLY admin of a team: they cannot leave it, or
+  // give up the role, until somebody else holds it.
+  const isSoleAdminOf = async (teamId: string): Promise<boolean> => {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(teamAdminsTable)
+      .where(eq(teamAdminsTable.teamId, teamId));
+    return Number(row?.n ?? 0) === 1;
+  };
+
   if (seat) {
+    const isAdmin = adminRows.some((a) => a.id === seat.id);
     return {
       seatTeam: seat,
       membership: {
         id: seat.id,
         name: seat.name,
-        isAdmin: adminRows.some((a) => a.id === seat.id),
+        isAdmin,
         hasSeat: true,
+        soleAdmin: isAdmin && (await isSoleAdminOf(seat.id)),
         seatSource: seat.source === 'org' ? 'org' : 'named',
         active: teamGrantsSeats(seat),
       },
@@ -346,6 +358,7 @@ async function loadBillingTeam(ownerId: string): Promise<{
       name: admin.name,
       isAdmin: true,
       hasSeat: false,
+      soleAdmin: await isSoleAdminOf(admin.id),
       active: teamGrantsSeats(admin),
     },
   };

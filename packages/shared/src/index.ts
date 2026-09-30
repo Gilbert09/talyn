@@ -1577,6 +1577,11 @@ export interface BillingTeamMembership {
   isAdmin: boolean;
   /** False for an admin who pays but does not hold a seat. */
   hasSeat: boolean;
+  /**
+   * The user is the team's only admin. A team always keeps one, so this user
+   * cannot leave or give up the admin role until somebody else has it.
+   */
+  soleAdmin: boolean;
   seatSource?: TeamSeatSource;
   /** Whether the team's plan is live — a lapsed team still shows, unpaid. */
   active: boolean;
@@ -1595,6 +1600,8 @@ export interface TeamSeat {
   source: TeamSeatSource;
   /** Whether that GitHub account has signed in to Talyn yet. */
   signedUp: boolean;
+  /** Whether the holder is also an admin. Only a signed-up account can be. */
+  isAdmin: boolean;
   createdAt: string;
 }
 
@@ -1602,6 +1609,8 @@ export interface TeamAdmin {
   userId: string;
   githubUsername: string | null;
   email: string;
+  /** False for an admin who pays but does not hold a seat. */
+  hasSeat: boolean;
 }
 
 /** The admin's view of a team, served by `GET /billing/team/:id`. */

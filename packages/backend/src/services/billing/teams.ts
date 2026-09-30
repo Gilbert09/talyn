@@ -50,6 +50,14 @@ const MAX_TEAM_NAME_LENGTH = 80;
 // pasted URL or an "@name" is refused with a sentence, not a GitHub 404.
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
+/**
+ * A GitHub account's avatar by numeric id. GitHub serves it for any account
+ * without an API call, and unlike a login-based URL it survives a rename.
+ */
+export function githubAvatarUrl(githubUserId: number): string {
+  return `https://avatars.githubusercontent.com/u/${githubUserId}?v=4`;
+}
+
 /** Normalise one login a person typed: trim, drop a leading "@". */
 export function normaliseGithubLogin(raw: string): string {
   return raw.trim().replace(/^@/, '');
@@ -198,7 +206,7 @@ export async function getTeamDetail(teamId: string): Promise<TeamDetail> {
     .orderBy(asc(teamSeatsTable.createdAt));
   const signedUp = seatRows.length
     ? await db
-        .select({ githubUserId: usersTable.githubUserId })
+        .select({ id: usersTable.id, githubUserId: usersTable.githubUserId })
         .from(usersTable)
         .where(
           inArray(
@@ -207,26 +215,39 @@ export async function getTeamDetail(teamId: string): Promise<TeamDetail> {
           )
         )
     : [];
-  const signedUpIds = new Set(signedUp.map((u) => u.githubUserId));
-  const admins = await db
+  const accountByGithubId = new Map(signedUp.map((u) => [u.githubUserId, u.id]));
+  const adminRows = await db
     .select({
       userId: usersTable.id,
       githubUsername: usersTable.githubUsername,
+      githubUserId: usersTable.githubUserId,
       email: usersTable.email,
     })
     .from(teamAdminsTable)
     .innerJoin(usersTable, eq(usersTable.id, teamAdminsTable.userId))
     .where(eq(teamAdminsTable.teamId, teamId))
     .orderBy(asc(teamAdminsTable.createdAt));
+  const adminIds = new Set(adminRows.map((a) => a.userId));
+  const seatedGithubIds = new Set(seatRows.map((s) => s.githubUserId));
 
-  const seats: TeamSeat[] = seatRows.map((s) => ({
-    id: s.id,
-    githubUserId: s.githubUserId,
-    githubLogin: s.githubLogin,
-    avatarUrl: s.avatarUrl,
-    source: s.source === 'org' ? 'org' : 'named',
-    signedUp: signedUpIds.has(s.githubUserId),
-    createdAt: s.createdAt.toISOString(),
+  const seats: TeamSeat[] = seatRows.map((s) => {
+    const userId = accountByGithubId.get(s.githubUserId);
+    return {
+      id: s.id,
+      githubUserId: s.githubUserId,
+      githubLogin: s.githubLogin,
+      avatarUrl: s.avatarUrl,
+      source: s.source === 'org' ? 'org' : 'named',
+      signedUp: userId !== undefined,
+      isAdmin: userId !== undefined && adminIds.has(userId),
+      createdAt: s.createdAt.toISOString(),
+    };
+  });
+  const admins = adminRows.map((a) => ({
+    userId: a.userId,
+    githubUsername: a.githubUsername,
+    email: a.email,
+    hasSeat: a.githubUserId !== null && seatedGithubIds.has(a.githubUserId),
   }));
 
   return {
@@ -363,11 +384,22 @@ export async function assignNamedSeats(
     }
     const signedUp = insertedIds.size
       ? await db
-          .select({ githubUserId: usersTable.githubUserId })
+          .select({ id: usersTable.id, githubUserId: usersTable.githubUserId })
           .from(usersTable)
           .where(inArray(usersTable.githubUserId, [...insertedIds]))
       : [];
     const signedUpIds = new Set(signedUp.map((u) => u.githubUserId));
+    const adminIds = new Set(
+      (
+        await db
+          .select({ userId: teamAdminsTable.userId })
+          .from(teamAdminsTable)
+          .where(eq(teamAdminsTable.teamId, teamId))
+      ).map((a) => a.userId)
+    );
+    const adminGithubIds = new Set(
+      signedUp.filter((u) => adminIds.has(u.id)).map((u) => u.githubUserId)
+    );
 
     return {
       assigned: rows
@@ -379,6 +411,7 @@ export async function assignNamedSeats(
           avatarUrl: r.avatarUrl,
           source: 'named' as const,
           signedUp: signedUpIds.has(r.githubUserId),
+          isAdmin: adminGithubIds.has(r.githubUserId),
           createdAt: now.toISOString(),
         })),
       failed,
@@ -415,20 +448,48 @@ export async function assignSelfSeat(
   return assignNamedSeats(teamId, userId, [login], async () => ({
     id: githubUserId,
     login,
-    avatarUrl: null,
+    avatarUrl: githubAvatarUrl(githubUserId),
   }));
 }
 
-/** Take a seat back. The holder drops to their own plan at once. */
-export async function removeSeat(teamId: string, seatId: string): Promise<void> {
-  const deleted = await getPoolDbClient()
-    .delete(teamSeatsTable)
-    .where(and(eq(teamSeatsTable.teamId, teamId), eq(teamSeatsTable.id, seatId)))
-    .returning({ id: teamSeatsTable.id });
-  if (deleted.length === 0) throw new TeamError(404, 'Seat not found');
+const LAST_ADMIN_MESSAGE =
+  'A team always needs at least one admin. Make someone else an admin first.';
+
+async function teamAdminIds(teamId: string): Promise<string[]> {
+  const rows = await getPoolDbClient()
+    .select({ userId: teamAdminsTable.userId })
+    .from(teamAdminsTable)
+    .where(eq(teamAdminsTable.teamId, teamId));
+  return rows.map((r) => r.userId);
 }
 
-/** Give up your own seat. */
+/** The Talyn accounts behind a GitHub id — usually one, never trusted to be. */
+async function accountIdsForGithubId(githubUserId: number): Promise<string[]> {
+  const rows = await getPoolDbClient()
+    .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.githubUserId, githubUserId));
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Remove someone from the team: their seat and, if they had it, the admin
+ * role, because an admin is a member with extra rights. The holder drops to
+ * their own plan at once. Refused for the team's only admin — a team with no
+ * admin is a subscription nobody can manage or cancel.
+ */
+export async function removeSeat(teamId: string, seatId: string): Promise<void> {
+  const db = getPoolDbClient();
+  const [seat] = await db
+    .select({ githubUserId: teamSeatsTable.githubUserId })
+    .from(teamSeatsTable)
+    .where(and(eq(teamSeatsTable.teamId, teamId), eq(teamSeatsTable.id, seatId)))
+    .limit(1);
+  if (!seat) throw new TeamError(404, 'Seat not found');
+  await dropMember(teamId, seat.githubUserId);
+}
+
+/** Give up your own seat, and the admin role with it. */
 export async function leaveTeam(userId: string): Promise<void> {
   const db = getPoolDbClient();
   const [user] = await db
@@ -437,11 +498,80 @@ export async function leaveTeam(userId: string): Promise<void> {
     .where(eq(usersTable.id, userId))
     .limit(1);
   if (!user?.githubUserId) throw new TeamError(404, 'You do not hold a team seat.');
-  const deleted = await db
-    .delete(teamSeatsTable)
+  const [seat] = await db
+    .select({ teamId: teamSeatsTable.teamId })
+    .from(teamSeatsTable)
     .where(eq(teamSeatsTable.githubUserId, user.githubUserId))
-    .returning({ id: teamSeatsTable.id });
-  if (deleted.length === 0) throw new TeamError(404, 'You do not hold a team seat.');
+    .limit(1);
+  if (!seat) throw new TeamError(404, 'You do not hold a team seat.');
+  await dropMember(seat.teamId, user.githubUserId);
+}
+
+async function dropMember(teamId: string, githubUserId: number): Promise<void> {
+  const db = getPoolDbClient();
+  const admins = await teamAdminIds(teamId);
+  const accounts = await accountIdsForGithubId(githubUserId);
+  const theirAdminIds = admins.filter((id) => accounts.includes(id));
+  if (theirAdminIds.length > 0 && theirAdminIds.length === admins.length) {
+    throw new TeamError(409, LAST_ADMIN_MESSAGE);
+  }
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(teamSeatsTable)
+      .where(and(eq(teamSeatsTable.teamId, teamId), eq(teamSeatsTable.githubUserId, githubUserId)));
+    if (theirAdminIds.length > 0) {
+      await tx
+        .delete(teamAdminsTable)
+        .where(
+          and(eq(teamAdminsTable.teamId, teamId), inArray(teamAdminsTable.userId, theirAdminIds))
+        );
+    }
+  });
+}
+
+/**
+ * Make a seat's holder an admin, or take the role away. Admins are members:
+ * the role is set on a seat, and only a holder who has signed in can have it,
+ * because an admin is an account and a GitHub login alone has none.
+ */
+export async function setSeatAdmin(teamId: string, seatId: string, admin: boolean): Promise<void> {
+  const db = getPoolDbClient();
+  const [seat] = await db
+    .select({ githubUserId: teamSeatsTable.githubUserId, githubLogin: teamSeatsTable.githubLogin })
+    .from(teamSeatsTable)
+    .where(and(eq(teamSeatsTable.teamId, teamId), eq(teamSeatsTable.id, seatId)))
+    .limit(1);
+  if (!seat) throw new TeamError(404, 'Seat not found');
+  const accounts = await accountIdsForGithubId(seat.githubUserId);
+
+  if (!admin) {
+    const admins = await teamAdminIds(teamId);
+    const theirs = admins.filter((id) => accounts.includes(id));
+    if (theirs.length === 0) return;
+    if (theirs.length === admins.length) throw new TeamError(409, LAST_ADMIN_MESSAGE);
+    await db
+      .delete(teamAdminsTable)
+      .where(and(eq(teamAdminsTable.teamId, teamId), inArray(teamAdminsTable.userId, theirs)));
+    return;
+  }
+
+  if (accounts.length === 0) {
+    throw new TeamError(
+      409,
+      `@${seat.githubLogin} has not signed in to Talyn yet, so they cannot be an admin.`
+    );
+  }
+  if (accounts.length > 1) {
+    throw new TeamError(409, `More than one Talyn account uses @${seat.githubLogin}. Contact support.`);
+  }
+  const userId = accounts[0]!;
+  const elsewhere = await db
+    .select({ teamId: teamAdminsTable.teamId })
+    .from(teamAdminsTable)
+    .where(and(eq(teamAdminsTable.userId, userId), ne(teamAdminsTable.teamId, teamId)))
+    .limit(1);
+  if (elsewhere[0]) throw new TeamError(409, `@${seat.githubLogin} already manages another team.`);
+  await db.insert(teamAdminsTable).values({ teamId, userId }).onConflictDoNothing();
 }
 
 /**
@@ -503,9 +633,7 @@ export async function removeTeamAdmin(teamId: string, userId: string): Promise<v
     .from(teamAdminsTable)
     .where(eq(teamAdminsTable.teamId, teamId));
   if (!admins.some((a) => a.userId === userId)) throw new TeamError(404, 'Admin not found');
-  if (admins.length === 1) {
-    throw new TeamError(409, 'A team needs at least one admin. Add another before leaving.');
-  }
+  if (admins.length === 1) throw new TeamError(409, LAST_ADMIN_MESSAGE);
   await db
     .delete(teamAdminsTable)
     .where(and(eq(teamAdminsTable.teamId, teamId), eq(teamAdminsTable.userId, userId)));
@@ -591,6 +719,7 @@ export async function seatCreatorOnFirstActivation(teamId: string): Promise<void
         teamId,
         githubUserId,
         githubLogin: creator.githubUsername,
+        avatarUrl: githubAvatarUrl(githubUserId),
         source: 'named',
         assignedByUserId: team.createdByUserId,
       })

@@ -38,7 +38,7 @@ export function TeamBilling({ status }: { status: BillingStatus }) {
 
   if (team?.isAdmin && teamsOffered) return <TeamAdminPanel teamId={team.id} />;
   if (team?.hasSeat) {
-    return <TeamMemberCard name={team.name} active={team.active} paidPersonallyToo={team.paidPersonallyToo} />;
+    return <TeamMemberCard name={team.name} active={team.active} paidPersonallyToo={team.paidPersonallyToo} isAdmin={team.isAdmin} soleAdmin={team.soleAdmin} />;
   }
   if (!team && teamsOffered) return <StartTeamCard />;
   return null;
@@ -83,7 +83,7 @@ export function BillingTeamNotice({ status }: { status: BillingStatus }) {
 
   if (team?.hasSeat) {
     return (
-      <TeamMemberCard name={team.name} active={team.active} paidPersonallyToo={team.paidPersonallyToo} />
+      <TeamMemberCard name={team.name} active={team.active} paidPersonallyToo={team.paidPersonallyToo} isAdmin={team.isAdmin} soleAdmin={team.soleAdmin} />
     );
   }
   if (!team && !teamsOffered) return null;
@@ -131,10 +131,14 @@ function TeamMemberCard({
   name,
   active,
   paidPersonallyToo,
+  isAdmin,
+  soleAdmin,
 }: {
   name: string;
   active: boolean;
   paidPersonallyToo: boolean;
+  isAdmin: boolean;
+  soleAdmin: boolean;
 }) {
   const refresh = useBillingStore((s) => s.refresh);
   const [confirming, setConfirming] = useState(false);
@@ -172,10 +176,23 @@ function TeamMemberCard({
               </p>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => setConfirming(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            disabled={soleAdmin}
+            title={soleAdmin ? LAST_ADMIN_HINT : undefined}
+            onClick={() => setConfirming(true)}
+          >
             Leave team
           </Button>
         </div>
+        {soleAdmin && (
+          <p className="text-xs text-muted-foreground">
+            You are the team’s only admin, so you cannot leave it. Make someone else an admin in
+            Team settings first.
+          </p>
+        )}
         {paidPersonallyToo && active && (
           <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
             <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
@@ -190,7 +207,9 @@ function TeamMemberCard({
       <ConfirmDialog
         open={confirming}
         title={`Leave ${name}?`}
-        description="You lose the team’s Unlimited plan straight away, and your account goes back to your own plan: Free, unless you pay for Unlimited yourself. Your seat is freed for someone else. Your workspaces are not touched. Only a team admin can give you a seat again."
+        description={`You lose the team’s Unlimited plan straight away, and your account goes back to your own plan: Free, unless you pay for Unlimited yourself. ${
+          isAdmin ? 'You also stop being an admin of the team. ' : ''
+        }Your seat is freed for someone else. Your workspaces are not touched. Only a team admin can give you a seat again.`}
         confirmLabel="Leave team"
         busy={busy}
         onConfirm={() => void leave()}
@@ -255,6 +274,7 @@ function StartTeamCard() {
 
 function TeamAdminPanel({ teamId }: { teamId: string }) {
   const status = useBillingStore((s) => s.status);
+  const refresh = useBillingStore((s) => s.refresh);
   const startCheckoutPollBurst = useBillingStore((s) => s.startCheckoutPollBurst);
   const [team, setTeam] = useState<TeamDetail | null>(null);
   const [pricing, setPricing] = useState<TeamPricing | null>(null);
@@ -378,18 +398,31 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
             run(async () => {
               await api.billing.team.removeSeat(teamId, seatId);
               trackEvent('team_seat_removed');
+              await refresh();
             }, 'Could not remove the seat')
+          }
+          onSetAdmin={(seatId, admin) =>
+            run(async () => {
+              await api.billing.team.setSeatAdmin(teamId, seatId, admin);
+              trackEvent('team_admin_changed', { admin });
+              await refresh();
+            }, 'Could not change the admin role')
+          }
+          onGiveSeat={(login) =>
+            run(async () => {
+              const result = await api.billing.team.assignSeats(teamId, { logins: [login] });
+              if (result.failed.length > 0) throw new Error(result.failed[0]!.reason);
+              await refresh();
+            }, 'Could not give a seat')
+          }
+          onRemoveAdmin={(userId) =>
+            run(async () => {
+              await api.billing.team.removeAdmin(teamId, userId);
+              await refresh();
+            }, 'Could not remove the admin')
           }
         />
       )}
-
-      <AdminList
-        team={team}
-        onAdd={(login) => run(() => api.billing.team.addAdmin(teamId, login), 'Could not add the admin')}
-        onRemove={(userId) =>
-          run(() => api.billing.team.removeAdmin(teamId, userId), 'Could not remove the admin')
-        }
-      />
 
       {orders.length > 0 && <TeamOrders teamId={teamId} orders={orders} />}
     </div>
@@ -808,7 +841,7 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
             }
             disabled={room <= 0}
             aria-label="Search GitHub users"
-            className="min-w-[10rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-muted-foreground"
+            className="min-w-[10rem] flex-1 border-0 bg-transparent p-0 py-1 text-sm shadow-none outline-none placeholder:text-muted-foreground focus:border-0 focus:outline-none focus:ring-0"
           />
           {searching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
@@ -871,17 +904,48 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
   );
 }
 
+const LAST_ADMIN_HINT = 'A team always needs at least one admin. Make someone else an admin first.';
+
+/**
+ * The people on the team. Admins are members: the role is set on a seat, and
+ * the team's last admin cannot lose it — not by losing the seat, and not by
+ * giving the role up — because a team with no admin is a subscription nobody
+ * can manage or cancel. An admin who holds no seat (a buyer who pays but does
+ * not use Talyn, or an older team) is listed after the seats.
+ */
 function SeatList({
   team,
   onAssigned,
   onRemove,
+  onSetAdmin,
+  onGiveSeat,
+  onRemoveAdmin,
 }: {
   team: TeamDetail;
   onAssigned: () => Promise<void>;
   onRemove: (seatId: string) => Promise<void>;
+  onSetAdmin: (seatId: string, admin: boolean) => Promise<void>;
+  onGiveSeat: (login: string) => Promise<void>;
+  onRemoveAdmin: (userId: string) => Promise<void>;
 }) {
-  const [removing, setRemoving] = useState<{ id: string; login: string } | null>(null);
+  const [removing, setRemoving] = useState<{ id: string; login: string; isAdmin: boolean } | null>(
+    null
+  );
   const [removeBusy, setRemoveBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+
+  const lastAdmin = team.admins.length === 1;
+  const seatlessAdmins = team.admins.filter((a) => !a.hasSeat);
+  const free = team.seatsPurchased - team.seatsUsed;
+
+  const busyFor = async (key: string, action: () => Promise<void>) => {
+    setRowBusy(key);
+    try {
+      await action();
+    } finally {
+      setRowBusy(null);
+    }
+  };
 
   return (
     <div>
@@ -889,40 +953,119 @@ function SeatList({
       <Card className="p-4 space-y-4">
         <SeatPicker team={team} onAssigned={onAssigned} />
 
-        {team.seats.length > 0 && (
+        {(team.seats.length > 0 || seatlessAdmins.length > 0) && (
           <div className="divide-y rounded-md border">
-            {team.seats.map((seat) => (
-              <div key={seat.id} className="flex items-center gap-3 px-3 py-2">
-                {seat.avatarUrl ? (
-                  <img src={seat.avatarUrl} alt="" className="w-6 h-6 rounded-full" />
-                ) : (
+            {team.seats.map((seat) => {
+              const locked = seat.isAdmin && lastAdmin;
+              return (
+                <div key={seat.id} className="flex items-center gap-3 px-3 py-2">
+                  {/* By numeric id when the seat stored no URL: it survives a
+                      rename, which a login-based URL does not. */}
+                  <img
+                    src={
+                      seat.avatarUrl ??
+                      `https://avatars.githubusercontent.com/u/${seat.githubUserId}?size=48`
+                    }
+                    alt=""
+                    className="w-6 h-6 rounded-full bg-muted"
+                  />
+                  <span className="text-sm font-medium">@{seat.githubLogin}</span>
+                  {seat.isAdmin && (
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      Admin
+                    </span>
+                  )}
+                  {!seat.signedUp && (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                      Not signed in yet
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-1">
+                    {seat.signedUp && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={locked || rowBusy !== null}
+                        title={locked ? LAST_ADMIN_HINT : undefined}
+                        onClick={() =>
+                          void busyFor(seat.id, () => onSetAdmin(seat.id, !seat.isAdmin))
+                        }
+                      >
+                        {rowBusy === seat.id && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                        {seat.isAdmin ? 'Remove admin' : 'Make admin'}
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={locked}
+                      title={locked ? LAST_ADMIN_HINT : 'Remove from the team'}
+                      onClick={() =>
+                        setRemoving({ id: seat.id, login: seat.githubLogin, isAdmin: seat.isAdmin })
+                      }
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {seatlessAdmins.map((admin) => {
+              const locked = lastAdmin;
+              const name = admin.githubUsername ? `@${admin.githubUsername}` : admin.email;
+              return (
+                <div key={admin.userId} className="flex items-center gap-3 px-3 py-2">
                   <div className="w-6 h-6 rounded-full bg-muted" />
-                )}
-                <span className="text-sm font-medium">@{seat.githubLogin}</span>
-                {!seat.signedUp && (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    Not signed in yet
+                  <span className="text-sm font-medium">{name}</span>
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                    Admin
                   </span>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto"
-                  title="Remove this seat"
-                  onClick={() => setRemoving({ id: seat.id, login: seat.githubLogin })}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            ))}
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    No seat
+                  </span>
+                  <div className="ml-auto flex items-center gap-1">
+                    {admin.githubUsername && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={free <= 0 || rowBusy !== null}
+                        title={free <= 0 ? 'Every seat is taken.' : undefined}
+                        onClick={() =>
+                          void busyFor(admin.userId, () => onGiveSeat(admin.githubUsername!))
+                        }
+                      >
+                        {rowBusy === admin.userId && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />}
+                        Give a seat
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={locked || rowBusy !== null}
+                      title={locked ? LAST_ADMIN_HINT : undefined}
+                      onClick={() => void busyFor(admin.userId, () => onRemoveAdmin(admin.userId))}
+                    >
+                      Remove admin
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
+        <p className="text-xs text-muted-foreground">
+          Admins manage seats and billing. Only someone who has signed in to Talyn can be an admin.
+        </p>
       </Card>
       <ConfirmDialog
         open={removing !== null}
-        title={removing ? `Remove @${removing.login}'s seat?` : ''}
-        description="They go back to their own plan straight away. Their workspaces are not touched."
-        confirmLabel="Remove seat"
+        title={removing ? `Remove @${removing.login} from the team?` : ''}
+        description={
+          removing?.isAdmin
+            ? 'They lose their seat and stop being an admin. They go back to their own plan straight away. Their workspaces are not touched.'
+            : 'They go back to their own plan straight away. Their workspaces are not touched.'
+        }
+        confirmLabel="Remove"
         busy={removeBusy}
         onConfirm={async () => {
           if (!removing) return;
@@ -933,69 +1076,6 @@ function SeatList({
         }}
         onCancel={() => setRemoving(null)}
       />
-    </div>
-  );
-}
-
-function AdminList({
-  team,
-  onAdd,
-  onRemove,
-}: {
-  team: TeamDetail;
-  onAdd: (login: string) => Promise<void>;
-  onRemove: (userId: string) => Promise<void>;
-}) {
-  const [login, setLogin] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  return (
-    <div>
-      <h3 className="text-lg font-semibold mb-4">Admins</h3>
-      <Card className="p-4 space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Admins manage seats and billing. An admin does not need a seat.
-        </p>
-        <div className="divide-y rounded-md border">
-          {team.admins.map((admin) => (
-            <div key={admin.userId} className="flex items-center gap-3 px-3 py-2">
-              <span className="text-sm">
-                {admin.githubUsername ? `@${admin.githubUsername}` : admin.email}
-              </span>
-              {team.admins.length > 1 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto"
-                  title="Remove this admin"
-                  onClick={() => void onRemove(admin.userId)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-        <form
-          className="flex gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setBusy(true);
-            await onAdd(login);
-            setLogin('');
-            setBusy(false);
-          }}
-        >
-          <Input
-            value={login}
-            onChange={(e) => setLogin(e.target.value)}
-            placeholder="GitHub username of someone who uses Talyn"
-          />
-          <Button type="submit" variant="outline" disabled={busy || !login.trim()} className="shrink-0">
-            Add admin
-          </Button>
-        </form>
-      </Card>
     </div>
   );
 }

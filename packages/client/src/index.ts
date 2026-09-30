@@ -1921,6 +1921,8 @@ export const billing = {
       ),
     assignSelfSeat: (teamId: string) =>
       request<AssignTeamSeatsResponse>('POST', `/billing/team/${teamId}/seats/me`),
+    setSeatAdmin: (teamId: string, seatId: string, admin: boolean) =>
+      request<TeamDetail>('POST', `/billing/team/${teamId}/seats/${seatId}/admin`, { admin }),
     removeSeat: (teamId: string, seatId: string) =>
       request<void>('DELETE', `/billing/team/${teamId}/seats/${seatId}`),
     setSeatCount: (teamId: string, seats: number) =>

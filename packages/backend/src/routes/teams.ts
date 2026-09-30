@@ -41,6 +41,7 @@ import {
   removeSeat,
   removeTeamAdmin,
   renameTeam,
+  setSeatAdmin,
   TeamError,
   type ResolveGithubAccount,
 } from '../services/billing/teams.js';
@@ -225,6 +226,18 @@ export function teamRoutes(): Router {
     try {
       const result = await assignSelfSeat(req.params.id!, assertUser(req).id);
       res.json({ success: true, data: result } as ApiResponse<AssignTeamSeatsResponse>);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // Make a seat's holder an admin, or take the role away.
+  router.post('/:id/seats/:seatId/admin', async (req, res) => {
+    if (!(await adminGate(req, res))) return;
+    try {
+      const admin = (req.body as { admin?: unknown })?.admin === true;
+      await setSeatAdmin(req.params.id!, req.params.seatId!, admin);
+      res.json({ success: true, data: await getTeamDetail(req.params.id!) } as ApiResponse<TeamDetail>);
     } catch (err) {
       sendError(res, err);
     }

@@ -13,6 +13,9 @@ const { team, state, refresh } = vi.hoisted(() => ({
     leave: vi.fn(),
     assignSeats: vi.fn(),
     assignSelfSeat: vi.fn(),
+    setSeatAdmin: vi.fn(),
+    removeSeat: vi.fn(),
+    removeAdmin: vi.fn(),
     searchGithubUsers: vi.fn(),
     checkout: vi.fn(),
   },
@@ -58,6 +61,7 @@ const MEMBERSHIP = {
   hasSeat: true,
   active: true,
   paidPersonallyToo: false,
+  soleAdmin: false,
 } as const;
 
 function detail(overrides: Partial<TeamDetail> = {}): TeamDetail {
@@ -78,10 +82,11 @@ function detail(overrides: Partial<TeamDetail> = {}): TeamDetail {
         avatarUrl: null,
         source: 'named',
         signedUp: false,
+        isAdmin: false,
         createdAt: '2026-09-29T00:00:00.000Z',
       },
     ],
-    admins: [{ userId: 'u1', githubUsername: 'buyer', email: 'b@example.test' }],
+    admins: [{ userId: 'u1', githubUsername: 'buyer', email: 'b@example.test', hasSeat: false }],
     ...overrides,
   };
 }
@@ -257,7 +262,77 @@ describe('TeamBilling', () => {
   });
 });
 
+describe('admins on seats', () => {
+  const seat = (over: Partial<TeamDetail['seats'][number]>) => ({
+    id: 'seat-x',
+    githubUserId: 7,
+    githubLogin: 'x',
+    avatarUrl: null,
+    source: 'named' as const,
+    signedUp: true,
+    isAdmin: false,
+    createdAt: '2026-09-29T00:00:00.000Z',
+    ...over,
+  });
+
+  it('badges the admin, offers Make admin to a signed-in member, and locks the last admin', async () => {
+    team.get.mockResolvedValue(
+      detail({
+        seatsUsed: 3,
+        seats: [
+          seat({ id: 's-admin', githubLogin: 'boss', isAdmin: true }),
+          seat({ id: 's-member', githubLogin: 'dev' }),
+          seat({ id: 's-new', githubLogin: 'newbie', signedUp: false }),
+        ],
+        admins: [{ userId: 'u1', githubUsername: 'boss', email: 'b@example.test', hasSeat: true }],
+      })
+    );
+    team.setSeatAdmin.mockResolvedValue(detail());
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, soleAdmin: true })} />);
+
+    expect(await screen.findByText('Admin')).toBeTruthy();
+    const removeAdmin = screen.getByRole('button', { name: 'Remove admin' }) as HTMLButtonElement;
+    expect(removeAdmin.disabled).toBe(true);
+    expect(removeAdmin.title).toMatch(/at least one admin/);
+    // Only the signed-in member can be made an admin.
+    const makeAdmin = screen.getAllByRole('button', { name: 'Make admin' });
+    expect(makeAdmin).toHaveLength(1);
+    fireEvent.click(makeAdmin[0]!);
+    await waitFor(() => expect(team.setSeatAdmin).toHaveBeenCalledWith('team-1', 's-member', true));
+  });
+
+  it('lists an admin without a seat, with Give a seat', async () => {
+    team.get.mockResolvedValue(
+      detail({
+        admins: [
+          { userId: 'u1', githubUsername: 'buyer', email: 'b@example.test', hasSeat: false },
+          { userId: 'u2', githubUsername: 'octocat', email: 'o@example.test', hasSeat: true },
+        ],
+      })
+    );
+    team.assignSeats.mockResolvedValue({ assigned: [], failed: [] });
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+    expect(await screen.findByText('No seat')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Give a seat' }));
+    await waitFor(() =>
+      expect(team.assignSeats).toHaveBeenCalledWith('team-1', { logins: ['buyer'] })
+    );
+  });
+});
+
 describe('BillingTeamNotice', () => {
+  it('does not let the only admin leave, and says why', () => {
+    render(<BillingTeamNotice status={status({ ...MEMBERSHIP, isAdmin: true, soleAdmin: true })} />);
+    expect((screen.getByRole('button', { name: 'Leave team' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/You are the team’s only admin, so you cannot leave it/)).toBeTruthy();
+  });
+
+  it('tells an admin who can leave that they also stop being an admin', () => {
+    render(<BillingTeamNotice status={status({ ...MEMBERSHIP, isAdmin: true, soleAdmin: false })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Leave team' }));
+    expect(screen.getByText(/You also stop being an admin of the team/)).toBeTruthy();
+  });
+
   it('tells a seated member the team controls their billing, and confirms before leaving', () => {
     render(<BillingTeamNotice status={status(MEMBERSHIP)} />);
     expect(screen.getByText(/The team’s admins manage its billing/)).toBeTruthy();

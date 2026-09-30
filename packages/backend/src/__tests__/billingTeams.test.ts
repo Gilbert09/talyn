@@ -30,6 +30,7 @@ import {
   assertTeamCanCheckout,
   assignNamedSeats,
   assignSelfSeat,
+  setSeatAdmin,
   createTeam,
   getTeamDetail,
   isValidGithubLogin,
@@ -260,6 +261,7 @@ describe('billing status', () => {
       name: 'Acme',
       isAdmin: false,
       hasSeat: true,
+      soleAdmin: false,
       seatSource: 'named',
       active: true,
       paidPersonallyToo: true,
@@ -371,6 +373,88 @@ describe('seat assignment', () => {
 
   it('normalises a typed login', () => {
     expect(normaliseGithubLogin('  @octocat ')).toBe('octocat');
+  });
+});
+
+describe('admins are members, and a team always keeps one', () => {
+  async function seatOf(teamId: string, login: string) {
+    const detail = await getTeamDetail(teamId);
+    return detail.seats.find((s) => s.githubLogin === login)!;
+  }
+
+  it('marks the seat of an admin, and lists an admin without a seat as seatless', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    let detail = await getTeamDetail(teamId);
+    expect(detail.seats.map((s) => [s.githubLogin, s.isAdmin])).toEqual([['member', false]]);
+    expect(detail.admins).toEqual([expect.objectContaining({ userId: BUYER, hasSeat: false })]);
+
+    await assignSelfSeat(teamId, BUYER);
+    detail = await getTeamDetail(teamId);
+    expect((await seatOf(teamId, 'buyer')).isAdmin).toBe(true);
+    expect(detail.admins).toEqual([expect.objectContaining({ userId: BUYER, hasSeat: true })]);
+  });
+
+  it('makes a seated member an admin, and takes the role back', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    const seat = await seatOf(teamId, 'member');
+    await setSeatAdmin(teamId, seat.id, true);
+    expect((await seatOf(teamId, 'member')).isAdmin).toBe(true);
+    await setSeatAdmin(teamId, seat.id, false);
+    expect((await seatOf(teamId, 'member')).isAdmin).toBe(false);
+  });
+
+  it('refuses the admin role to somebody who has not signed in', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignNamedSeats(teamId, BUYER, ['carol'], resolve);
+    await expect(setSeatAdmin(teamId, (await seatOf(teamId, 'carol')).id, true)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('has not signed in'),
+    });
+  });
+
+  it.each([
+    ['removing the seat', 'remove'],
+    ['leaving', 'leave'],
+    ['dropping the admin role', 'demote'],
+  ] as const)('the only admin cannot lose the role by %s', async (_name, action) => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignSelfSeat(teamId, BUYER);
+    const seat = await seatOf(teamId, 'buyer');
+    const attempt =
+      action === 'remove'
+        ? removeSeat(teamId, seat.id)
+        : action === 'leave'
+          ? leaveTeam(BUYER)
+          : setSeatAdmin(teamId, seat.id, false);
+    await expect(attempt).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('at least one admin'),
+    });
+    expect((await seatOf(teamId, 'buyer')).isAdmin).toBe(true);
+  });
+
+  it('removing an admin who is not the last takes the seat and the role together', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignSelfSeat(teamId, BUYER);
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    await setSeatAdmin(teamId, (await seatOf(teamId, 'member')).id, true);
+
+    await leaveTeam(BUYER);
+    const detail = await getTeamDetail(teamId);
+    expect(detail.seats.map((s) => s.githubLogin)).toEqual(['member']);
+    expect(detail.admins.map((a) => a.userId)).toEqual([MEMBER]);
+  });
+
+  it('reports the sole admin in the billing status, and nobody else', async () => {
+    const teamId = await makeTeam({ seats: 3 });
+    await assignSelfSeat(teamId, BUYER);
+    await assignNamedSeats(teamId, BUYER, ['member'], resolve);
+    expect((await buildBillingStatus(BUYER)).team?.soleAdmin).toBe(true);
+    expect((await buildBillingStatus(MEMBER)).team?.soleAdmin).toBe(false);
+    await setSeatAdmin(teamId, (await seatOf(teamId, 'member')).id, true);
+    expect((await buildBillingStatus(BUYER)).team?.soleAdmin).toBe(false);
   });
 });
 
