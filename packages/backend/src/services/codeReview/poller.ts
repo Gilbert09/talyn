@@ -8,6 +8,11 @@ import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { isFleetSandboxTerminal } from '../selfHosted/poller.js';
 import { finalTextFromEvents, toAgentEvent } from '../selfHosted/eventCursor.js';
 import { getPostHogCodeClient } from '../posthogCode/credentials.js';
+import {
+  finalAgentMessageText,
+  lastFlowEventIsTurnComplete,
+} from '../posthogCode/poller.js';
+import type { PostHogCodeClient } from '../posthogCode/client.js';
 import { ingestUnitOutput } from './executor.js';
 import {
   getReview,
@@ -47,8 +52,24 @@ const BATCH = 25;
 const DEADLINE_GRACE_MS = 5 * 60_000;
 const MAX_UNIT_LIFETIME_MS = 25 * 60_000;
 
+/**
+ * How often to read a PostHog Code unit's session log while its run still says
+ * `in_progress`, and how far back from the run's last activity to read.
+ *
+ * PostHog leaves a background run `in_progress` after the agent has finished
+ * its turn — it idles, waiting for a follow-up that a review never sends. So
+ * the run's status alone never says "done", and until this existed every
+ * PostHog Code review unit sat there until the 30-minute reaper failed it
+ * (12 of 12, all sakce's, 2026-09-28/29), while the sessions stayed open on
+ * PostHog's side. The log ending on `turn_complete` is the real signal.
+ */
+const POSTHOG_LOG_CHECK_MS = 45_000;
+const POSTHOG_LOG_TAIL_MS = 5 * 60_000;
+
 class CodeReviewPoller {
   private timer: NodeJS.Timeout | null = null;
+  /** Per-run throttle for the PostHog Code session-log read (run id → ms). */
+  private readonly lastLogCheck = new Map<string, number>();
   private readonly guard = new TickGuard('code_review_poller', 5 * 60_000);
 
   init(): void {
@@ -120,6 +141,9 @@ class CodeReviewPoller {
     const age = Date.now() - (run.dispatchedAt?.getTime() ?? Date.now());
     if (age < MAX_UNIT_LIFETIME_MS + DEADLINE_GRACE_MS) return false;
     await settleRun(run.id, { status: 'failed', failureCode: 'timeout' });
+    // The fleet stops its own sandbox at `timeoutSec`; PostHog Code has no such
+    // budget, so a unit we gave up on keeps its session open until told.
+    await this.releasePostHogRun(run);
     void scheduleReviewEvaluation(run.reviewId, 'poller:timeout');
     return true;
   }
@@ -198,8 +222,10 @@ class CodeReviewPoller {
     const latest = task.latest_run;
     if (!latest) return;
     if (latest.status !== 'completed' && latest.status !== 'failed' && latest.status !== 'cancelled') {
+      await this.settleIfTurnEnded(run, client, latest);
       return;
     }
+    this.lastLogCheck.delete(run.id);
     if (latest.status !== 'completed') {
       await settleRun(run.id, { status: 'failed', failureCode: 'dispatch_failed' });
       void scheduleReviewEvaluation(run.reviewId, 'poller:unit_settled');
@@ -211,6 +237,62 @@ class CodeReviewPoller {
     const finalMessage =
       typeof output.final_message === 'string' ? output.final_message : null;
     await this.settleWithOutput(run, finalMessage);
+  }
+
+  /**
+   * Settle a unit whose run is still `in_progress` but whose agent has ended
+   * its turn — see {@link POSTHOG_LOG_CHECK_MS}. A review unit is ONE turn: the
+   * agent reads the diff, writes its findings, and stops. Then release the run,
+   * so the session does not stay open on PostHog's side.
+   */
+  private async settleIfTurnEnded(
+    run: RunRow,
+    client: PostHogCodeClient,
+    latest: { updated_at?: string | null; output?: unknown }
+  ): Promise<void> {
+    if (!run.remoteTaskId || !run.remoteRunId) return;
+    const last = this.lastLogCheck.get(run.id) ?? 0;
+    if (Date.now() - last < POSTHOG_LOG_CHECK_MS) return;
+    this.lastLogCheck.set(run.id, Date.now());
+
+    const updatedAtMs = latest.updated_at ? Date.parse(latest.updated_at) : NaN;
+    const from = Number.isNaN(updatedAtMs)
+      ? run.dispatchedAt ?? new Date(Date.now() - MAX_UNIT_LIFETIME_MS)
+      : new Date(updatedAtMs - POSTHOG_LOG_TAIL_MS);
+    let entries;
+    try {
+      ({ entries } = await client.getSessionLogs(run.remoteTaskId, run.remoteRunId, {
+        after: from.toISOString(),
+        limit: 5000,
+      }));
+    } catch (err) {
+      console.warn(`[code-review] reading the session log for ${run.id} failed:`, err);
+      return;
+    }
+    if (!lastFlowEventIsTurnComplete(entries)) return;
+
+    // The structured field when PostHog wrote it, else the message rebuilt from
+    // the log — streamed as chunks, so the findings block spans several entries.
+    const output = (latest.output ?? {}) as { final_message?: unknown };
+    const finalMessage =
+      typeof output.final_message === 'string' && output.final_message.trim()
+        ? output.final_message
+        : finalAgentMessageText(entries);
+    this.lastLogCheck.delete(run.id);
+    await this.settleWithOutput(run, finalMessage);
+    await this.releasePostHogRun(run);
+  }
+
+  /** Best-effort cancel of a PostHog Code run we no longer need. */
+  private async releasePostHogRun(run: RunRow): Promise<void> {
+    this.lastLogCheck.delete(run.id);
+    if (run.provider !== 'posthog_code' || !run.remoteTaskId || !run.remoteRunId) return;
+    try {
+      const client = await getPostHogCodeClient(run.workspaceId);
+      await client?.cancelRun(run.remoteTaskId, run.remoteRunId);
+    } catch (err) {
+      console.warn(`[code-review] releasing PostHog Code run for ${run.id} failed:`, err);
+    }
   }
 
   private async settleWithOutput(run: RunRow, finalText: string | null): Promise<void> {

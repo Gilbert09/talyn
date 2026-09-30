@@ -70,6 +70,23 @@ Members-permission spike that org-linked seats depend on, org seats, the
 operator console, analytics, and publishing prices on the pricing page. Until
 the flag flips, the routes answer 403, and only a seated member sees anything.
 
+## Code review never finished on PostHog Code (2026-09-30)
+
+sakce (Jovan) reported every review failing, with "the sessions keep running".
+All 12 PostHog Code review units ever dispatched — all his — failed `timeout` at
+exactly 30.1 minutes with `event_cursor` 0, while 65 fleet units succeeded in
+3-15 minutes. The review poller settled a PostHog Code unit only on a terminal
+run status, and PostHog leaves a background run `in_progress` once the agent ends
+its turn, idling for a follow-up a review never sends. The task poller learned
+this long ago (`maybeFinalizeIdle`); the review poller never did.
+
+It now reads the session log (at most every 45 s per unit) and settles the unit
+when the log ends on `turn_complete`, taking `output.final_message` or the
+message rebuilt from the log. It then cancels the remote run, as it also does
+when the reaper times a unit out, so sessions no longer stay open on PostHog's
+side. Bumping the timeout, as suggested, would not have helped: nothing was ever
+read.
+
 ## A fix run that chased master (2026-09-29)
 
 PostHog/posthog#107906: one manual "Get mergeable" run (fleet, Codex) merged
