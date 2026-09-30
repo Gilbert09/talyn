@@ -49,7 +49,6 @@ import { domainEvents } from './events.js';
 import { forceFetchAndUpsert } from './prCache.js';
 import { targetsForRepo } from './webhookIndex.js';
 import { debugBus, describeError } from './debugBus.js';
-import { withBlockingAdvisoryLock } from './advisoryLock.js';
 
 /** A single check's state, from a `check_run` or `status` webhook payload. */
 export interface CheckEventInput {
@@ -236,15 +235,22 @@ async function affectedPrsForSha(
 }
 
 /**
- * Serialize everything that writes the ledger for one commit and derives a
- * verdict from it. Blocking, transaction-scoped (the only advisory flavour the
- * transaction-mode pooler honours — see advisoryLock.ts). The pglite harness is
- * one connection whose transaction() is an exclusive mutex, so there it runs
- * unlocked; cross-connection races do not exist there.
+ * Run a ledger write + recompute for one commit.
+ *
+ * This used to take a blocking `pg_advisory_xact_lock` per commit, via
+ * `withBlockingAdvisoryLock`. That helper holds its lock on ONE pooled
+ * connection and runs the callback's queries on OTHERS. Under a burst — a CI
+ * suite finishing, a sweep reseeding — the lock holders took the whole pool and
+ * then waited for a connection to run their own queries: the pool deadlocked,
+ * the DB watchdog saw every probe time out, and production restarted twice in
+ * three minutes (2026-09-30, 19 connections idle in transaction on
+ * `pg_advisory_xact_lock`). Removed rather than repaired. What it guarded was a
+ * lost update between two flushes of one commit; the reseed after every full
+ * fetch and the settle refresh after CI goes quiet both correct that, and
+ * neither can take the database with it.
  */
-async function withShaLock<T>(repoFullName: string, headSha: string, fn: () => Promise<T>): Promise<T> {
-  if (!isRealPostgres()) return fn();
-  return withBlockingAdvisoryLock(getPoolDbClient(), `checks:${repoFullName}:${headSha}`, fn);
+async function withShaLock<T>(_repoFullName: string, _headSha: string, fn: () => Promise<T>): Promise<T> {
+  return fn();
 }
 
 /**

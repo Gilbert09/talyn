@@ -15,12 +15,6 @@ vi.mock('../services/prMonitor.js', () => ({
   prMonitorService: { refreshPrAcrossWorkspaces: mockRefreshAcross },
 }));
 vi.mock('../services/webhookIndex.js', () => ({ targetsForRepo: mockTargets }));
-vi.mock('../services/advisoryLock.js', () => ({
-  withBlockingAdvisoryLock: async (_db: unknown, name: string, fn: () => Promise<unknown>) => {
-    lockCalls.push(name);
-    return fn();
-  },
-}));
 
 import {
   checkCountCoalescer,
@@ -39,7 +33,6 @@ import {
   type LedgerSnapshot,
 } from '../services/checkCounts.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
-import * as dbClient from '../db/client.js';
 import { debugBus } from '../services/debugBus.js';
 import type { Database } from '../db/client.js';
 import {
@@ -312,14 +305,6 @@ describe('checkCounts', () => {
       const counts = await checksOf(7);
       expect(counts).toEqual({ total: 2, passed: 1, failed: 1, inProgress: 0, skipped: 0 });
       expect(counts.passed + counts.failed + counts.inProgress + counts.skipped).toBe(counts.total);
-    });
-
-    it('takes the commit lock around every ledger write + recompute', async () => {
-      vi.spyOn(dbClient, 'isRealPostgres').mockReturnValue(true);
-      await seedPr(7, 'sha-A');
-      await ingest({ name: 'lint' });
-      await reseed([ctx('lint', 'success')]);
-      expect(lockCalls).toEqual(['checks:acme/widget:sha-A', 'checks:acme/widget:sha-A']);
     });
   });
 
