@@ -225,12 +225,6 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           Showing first {REPO_LIST_CAP} of {matched.length}. Type to narrow.
         </p>
       )}
-
-      {repositories.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          You can skip this and add repositories later in Settings.
-        </p>
-      )}
     </div>
   );
 }
