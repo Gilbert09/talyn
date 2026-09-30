@@ -22,7 +22,17 @@ END $$;
 -- The migration connection is also the backend pool connection. Rotating
 -- DATABASE_URL to a different user later breaks `set local role talyn_backend`
 -- on every owner-scoped request — re-run this grant for the new user first.
-GRANT talyn_backend TO CURRENT_USER;
+--
+-- The role is named through format(), not the CURRENT_USER keyword. On the
+-- local Supabase image (Postgres 17.6, aarch64) `GRANT … TO CURRENT_USER`
+-- segfaults the server, and a fresh local database could not be migrated.
+-- The grant is the same. Production applied the old text long ago, and
+-- drizzle never re-runs an applied migration, so this only changes fresh
+-- databases.
+DO $$
+BEGIN
+  EXECUTE format('GRANT talyn_backend TO %I', current_user);
+END $$;
 --> statement-breakpoint
 DO $$
 DECLARE
