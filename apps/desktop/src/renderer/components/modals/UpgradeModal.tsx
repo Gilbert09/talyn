@@ -243,7 +243,7 @@ export function UpgradeModal({
                   onClick={() => {
                     trackEvent('team_offer_opened', { placement: 'upgrade_modal' });
                     handleClose(false);
-                    openSettings('billing');
+                    openSettings('teams');
                   }}
                 >
                   Pay for everyone on one invoice

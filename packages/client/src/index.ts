@@ -44,6 +44,7 @@ import type {
   AssignTeamSeatsRequest,
   AssignTeamSeatsResponse,
   CreateTeamRequest,
+  GitHubAccountSuggestion,
   TeamCheckoutRequest,
   TeamDetail,
   TeamPricing,
@@ -1913,6 +1914,13 @@ export const billing = {
       request<CheckoutSessionResponse>('POST', `/billing/team/${teamId}/checkout`, data),
     assignSeats: (teamId: string, data: AssignTeamSeatsRequest) =>
       request<AssignTeamSeatsResponse>('POST', `/billing/team/${teamId}/seats`, data),
+    searchGithubUsers: (teamId: string, q: string) =>
+      request<GitHubAccountSuggestion[]>(
+        'GET',
+        `/billing/team/${teamId}/github-users?q=${encodeURIComponent(q)}`
+      ),
+    assignSelfSeat: (teamId: string) =>
+      request<AssignTeamSeatsResponse>('POST', `/billing/team/${teamId}/seats/me`),
     removeSeat: (teamId: string, seatId: string) =>
       request<void>('DELETE', `/billing/team/${teamId}/seats/${seatId}`),
     setSeatCount: (teamId: string, seats: number) =>

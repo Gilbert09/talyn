@@ -90,6 +90,7 @@ export type SettingsSection =
   | 'codeReview'
   | 'account'
   | 'billing'
+  | 'teams'
   | 'appearance'
   | 'developer'
   | 'mcp'

@@ -29,6 +29,7 @@ import {
   assertTeamAdmin,
   assertTeamCanCheckout,
   assignNamedSeats,
+  assignSelfSeat,
   createTeam,
   getTeamDetail,
   isValidGithubLogin,
@@ -49,6 +50,7 @@ import {
 import {
   githubUserIdFromIdentities,
   parseGithubUserId,
+  resetGithubIdentityCacheForTests,
 } from '../services/githubIdentity.js';
 import { validateEnv } from '../services/validateEnv.js';
 import { teamPriceFor } from '@talyn/shared';
@@ -369,6 +371,35 @@ describe('seat assignment', () => {
 
   it('normalises a typed login', () => {
     expect(normaliseGithubLogin('  @octocat ')).toBe('octocat');
+  });
+});
+
+describe('an admin taking their own seat', () => {
+  it('seats the admin from their stored GitHub id, with no GitHub lookup', async () => {
+    const teamId = await makeTeam({ seats: 2 });
+    const result = await assignSelfSeat(teamId, BUYER);
+    expect(result.assigned.map((s) => [s.githubUserId, s.githubLogin])).toEqual([[BUYER_GH, 'buyer']]);
+    expect(await resolveEntitlement(BUYER)).toEqual({ plan: 'unlimited', source: 'team' });
+    // A second press is reported, not doubled.
+    expect((await assignSelfSeat(teamId, BUYER)).failed).toEqual([
+      { login: 'buyer', reason: 'Already has a seat on this team.' },
+    ]);
+  });
+
+  it('respects the seat cap like any other assignment', async () => {
+    const teamId = await makeTeam({ seats: 1 });
+    await assignNamedSeats(teamId, BUYER, ['carol'], resolve);
+    await expect(assignSelfSeat(teamId, BUYER)).rejects.toMatchObject({ code: 'team_seats_full' });
+  });
+
+  it('refuses with a way forward when the GitHub id is unknown', async () => {
+    resetGithubIdentityCacheForTests();
+    const teamId = await makeTeam({ seats: 2 });
+    await db.update(usersTable).set({ githubUserId: null }).where(eq(usersTable.id, BUYER));
+    await expect(assignSelfSeat(teamId, BUYER)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('Sign out and sign in again'),
+    });
   });
 });
 

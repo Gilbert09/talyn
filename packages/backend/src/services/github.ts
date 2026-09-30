@@ -1488,6 +1488,27 @@ class GitHubService extends EventEmitter {
   }
 
   /**
+   * GitHub user accounts whose login starts with or contains `query`, for the
+   * team seat picker. The search API has its own budget (30 requests a minute
+   * per user), so callers debounce, and a failure here only empties the
+   * suggestions — typing an exact login still works through
+   * {@link getAccountByLogin}.
+   */
+  async searchUsers(
+    workspaceId: string,
+    query: string,
+    limit = 8
+  ): Promise<Array<{ id: number; login: string; avatarUrl: string | null }>> {
+    const q = encodeURIComponent(`${query} in:login type:user`);
+    const result = await this.apiRequest<{
+      items?: Array<{ id: number; login: string; avatar_url?: string | null; type?: string }>;
+    }>(workspaceId, `/search/users?q=${q}&per_page=${limit}`);
+    return (result.items ?? [])
+      .filter((u) => !u.type || u.type === 'User')
+      .map((u) => ({ id: u.id, login: u.login, avatarUrl: u.avatar_url ?? null }));
+  }
+
+  /**
    * A GitHub account by login, for assigning a team seat. Returns null when no
    * such account exists (404); anything else throws. Only a `User` is
    * returned — an organization or a bot cannot hold a seat.

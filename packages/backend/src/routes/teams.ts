@@ -7,6 +7,7 @@ import type {
   BillingOrder,
   CheckoutSessionResponse,
   CreateTeamRequest,
+  GitHubAccountSuggestion,
   TeamCheckoutRequest,
   TeamDetail,
   TeamPricing,
@@ -31,9 +32,11 @@ import {
   assertTeamAdmin,
   assertTeamCanCheckout,
   assignNamedSeats,
+  assignSelfSeat,
   createTeam,
   getTeamDetail,
   leaveTeam,
+  normaliseGithubLogin,
   prepareSeatCountChange,
   removeSeat,
   removeTeamAdmin,
@@ -99,7 +102,7 @@ export function teamRoutes(): Router {
    * accounts. A token is needed at all because GitHub's anonymous API allows
    * 60 requests an hour per IP, which every tenant on this host shares.
    */
-  async function resolverFor(userId: string): Promise<ResolveGithubAccount> {
+  async function connectedWorkspaceFor(userId: string): Promise<string> {
     const owned = await getPoolDbClient()
       .select({ id: workspacesTable.id })
       .from(workspacesTable)
@@ -108,8 +111,34 @@ export function teamRoutes(): Router {
     if (!connected) {
       throw new TeamError(409, 'Connect GitHub to one of your workspaces to add people by username.');
     }
-    return (login) => githubService.getAccountByLogin(connected.id, login);
+    return connected.id;
   }
+
+  async function resolverFor(userId: string): Promise<ResolveGithubAccount> {
+    const workspaceId = await connectedWorkspaceFor(userId);
+    return (login) => githubService.getAccountByLogin(workspaceId, login);
+  }
+
+  // GitHub accounts matching what the admin is typing, for the seat picker.
+  router.get('/:id/github-users', async (req, res) => {
+    if (!(await adminGate(req, res))) return;
+    const q = normaliseGithubLogin(String(req.query.q ?? ''));
+    // Only characters a login can hold: this goes into GitHub's search syntax,
+    // and a qualifier smuggled in ("x type:org") must not change the search.
+    if (!q || q.length > 39 || !/^[A-Za-z0-9-]+$/.test(q)) {
+      return res.json({ success: true, data: [] } as ApiResponse<GitHubAccountSuggestion[]>);
+    }
+    try {
+      const workspaceId = await connectedWorkspaceFor(assertUser(req).id);
+      const users = await githubService.searchUsers(workspaceId, q);
+      res.json({ success: true, data: users } as ApiResponse<GitHubAccountSuggestion[]>);
+    } catch (err) {
+      if (err instanceof TeamError) return sendError(res, err);
+      // A search failure (rate limit, GitHub outage) only empties the list.
+      console.warn('[teams] GitHub user search failed:', err);
+      res.json({ success: true, data: [] } as ApiResponse<GitHubAccountSuggestion[]>);
+    }
+  });
 
   // Live seat tiers for the purchase picker.
   router.get('/pricing', async (req, res) => {
@@ -183,6 +212,18 @@ export function teamRoutes(): Router {
         logins,
         await resolverFor(user.id)
       );
+      res.json({ success: true, data: result } as ApiResponse<AssignTeamSeatsResponse>);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  // The admin taking a seat for themselves. Registered before
+  // `/:id/seats/:seatId` so "me" is never read as a seat id.
+  router.post('/:id/seats/me', async (req, res) => {
+    if (!(await adminGate(req, res))) return;
+    try {
+      const result = await assignSelfSeat(req.params.id!, assertUser(req).id);
       res.json({ success: true, data: result } as ApiResponse<AssignTeamSeatsResponse>);
     } catch (err) {
       sendError(res, err);

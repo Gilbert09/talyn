@@ -1631,6 +1631,13 @@ export interface TeamCheckoutRequest {
   seats: number;
 }
 
+/** A GitHub account suggested by the seat picker, `GET /billing/team/:id/github-users`. */
+export interface GitHubAccountSuggestion {
+  id: number;
+  login: string;
+  avatarUrl: string | null;
+}
+
 export interface AssignTeamSeatsRequest {
   /** GitHub logins. Resolved to numeric ids server-side. */
   logins: string[];

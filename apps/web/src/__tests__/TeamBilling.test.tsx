@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import type { BillingStatus, TeamDetail } from '@talyn/shared';
-import { TeamBilling } from '../components/panels/TeamBilling';
+import { BillingTeamNotice, TeamBilling } from '../components/panels/TeamBilling';
 
 const { team, state, refresh } = vi.hoisted(() => ({
   team: {
@@ -12,6 +12,8 @@ const { team, state, refresh } = vi.hoisted(() => ({
     create: vi.fn(),
     leave: vi.fn(),
     assignSeats: vi.fn(),
+    assignSelfSeat: vi.fn(),
+    searchGithubUsers: vi.fn(),
     checkout: vi.fn(),
   },
   state: { teamsOffered: true },
@@ -100,7 +102,7 @@ describe('TeamBilling', () => {
     state.teamsOffered = false;
     render(<TeamBilling status={status(MEMBERSHIP)} />);
     expect(screen.getByText('Acme')).toBeTruthy();
-    expect(screen.getByText('Your team pays for your Unlimited plan.')).toBeTruthy();
+    expect(screen.getByText(/Your team pays for your Unlimited plan. The team’s admins manage its billing/)).toBeTruthy();
   });
 
   it('warns a member who is also paying for themselves', () => {
@@ -130,28 +132,64 @@ describe('TeamBilling', () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  it('shows an admin the seats, and splits pasted usernames on commas, spaces and lines', async () => {
-    team.get.mockResolvedValue(detail());
+  it('shows an admin the seats, and turns a pasted list into chips', async () => {
+    team.get.mockResolvedValue(detail({ seatsPurchased: 5 }));
     team.assignSeats.mockResolvedValue({
       assigned: [],
       failed: [{ login: 'ghost', reason: 'No GitHub user has this username.' }],
     });
-    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false })} />);
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
 
-    expect(await screen.findByText('1 of 3 seats used')).toBeTruthy();
+    expect(await screen.findByText('1 of 5 seats used')).toBeTruthy();
     expect(screen.getByText('@octocat')).toBeTruthy();
     expect(screen.getByText('Not signed in yet')).toBeTruthy();
 
-    fireEvent.change(screen.getByPlaceholderText(/GitHub usernames/), {
-      target: { value: 'alice, bob\nghost  carol' },
+    fireEvent.paste(screen.getByLabelText('Search GitHub users'), {
+      clipboardData: { getData: () => 'alice, @bob\nghost  carol' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+    for (const login of ['alice', 'bob', 'ghost', 'carol']) {
+      expect(screen.getByText(`@${login}`)).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Add 4 people' }));
     await waitFor(() =>
       expect(team.assignSeats).toHaveBeenCalledWith('team-1', {
         logins: ['alice', 'bob', 'ghost', 'carol'],
       })
     );
     expect(await screen.findByText(/@ghost: No GitHub user has this username/)).toBeTruthy();
+  });
+
+  it('never picks more people than there are free seats', async () => {
+    team.get.mockResolvedValue(detail({ seatsPurchased: 3, seatsUsed: 1 }));
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+    fireEvent.paste(await screen.findByLabelText('Search GitHub users'), {
+      clipboardData: { getData: () => 'alice bob carol' },
+    });
+    expect(screen.getByText('@alice')).toBeTruthy();
+    expect(screen.getByText('@bob')).toBeTruthy();
+    expect(screen.queryByText('@carol')).toBeNull();
+    expect((screen.getByLabelText('Search GitHub users') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('suggests GitHub accounts as you type, and picks one', async () => {
+    team.get.mockResolvedValue(detail());
+    team.searchGithubUsers.mockResolvedValue([
+      { id: 1, login: 'octocat', avatarUrl: null },
+      { id: 9, login: 'dana', avatarUrl: null },
+    ]);
+    team.assignSeats.mockResolvedValue({ assigned: [], failed: [] });
+    render(<TeamBilling status={status({ ...MEMBERSHIP, isAdmin: true })} />);
+
+    fireEvent.change(await screen.findByLabelText('Search GitHub users'), { target: { value: 'da' } });
+    const option = await screen.findByRole('option', {}, { timeout: 2000 });
+    // octocat already holds a seat, so only dana is offered.
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(team.searchGithubUsers).toHaveBeenCalledWith('team-1', 'da');
+    fireEvent.click(option.querySelector('button')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(team.assignSeats).toHaveBeenCalledWith('team-1', { logins: ['dana'] })
+    );
   });
 
   it('blocks adding when every seat is taken', async () => {
@@ -216,5 +254,30 @@ describe('TeamBilling', () => {
     fireEvent.change(await screen.findByLabelText('Seats'), { target: { value: '2' } });
     expect(await screen.findByText(/Choose at least 3 seats/)).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Buy 2 seats' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('BillingTeamNotice', () => {
+  it('tells a seated member the team controls their billing, and confirms before leaving', () => {
+    render(<BillingTeamNotice status={status(MEMBERSHIP)} />);
+    expect(screen.getByText(/The team’s admins manage its billing/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave team' }));
+    // Leaving is confirmed first, and the dialog says what is lost.
+    expect(screen.getByText(/You lose the team’s Unlimited plan straight away/)).toBeTruthy();
+    expect(team.leave).not.toHaveBeenCalled();
+  });
+
+  it('points an admin without a seat at the Team section', () => {
+    render(<BillingTeamNotice status={status({ ...MEMBERSHIP, isAdmin: true, hasSeat: false })} />);
+    expect(screen.getByText(/You manage the team Acme/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open team settings' })).toBeTruthy();
+  });
+
+  it('offers a team to others only behind the flag', () => {
+    const { rerender } = render(<BillingTeamNotice status={status()} />);
+    expect(screen.getByRole('button', { name: 'Set up a team' })).toBeTruthy();
+    state.teamsOffered = false;
+    rerender(<BillingTeamNotice status={status()} />);
+    expect(screen.queryByRole('button', { name: 'Set up a team' })).toBeNull();
   });
 });

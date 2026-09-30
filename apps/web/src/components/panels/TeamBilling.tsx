@@ -7,6 +7,7 @@ import {
   type BillingStatus,
   type TeamDetail,
   type TeamPricing,
+  type GitHubAccountSuggestion,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { trackEvent } from '../../lib/analytics';
@@ -17,16 +18,19 @@ import { Button } from '../ui/button';
 import { Card } from '../ui/card';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Input } from '../ui/input';
-import { Textarea } from '../ui/textarea';
+import { cn } from '../../lib/utils';
 
 /**
- * The team plan in Settings → Billing: seats one buyer pays for, each giving a
- * GitHub account Unlimited on its own account. Nothing is shared.
+ * The team plan: seats one buyer pays for, each giving a GitHub account
+ * Unlimited on its own account. Nothing is shared.
  *
- * Three views. A seated member always sees who pays for them — that is a fact
- * about their plan, not a feature, so it does not wait on the `teams` flag. An
- * admin sees the team; everybody else sees the offer to start one. Those two
- * are behind the flag, and the backend refuses them without it anyway.
+ * It has its own Settings section (Team). Billing keeps only what a team means
+ * for this account's own bill — see {@link BillingTeamNotice}.
+ *
+ * Three views here. A seated member always sees who pays for them: that is a
+ * fact about their plan, not a feature, so it does not wait on the `teams`
+ * flag. An admin sees the team; everybody else sees the offer to start one.
+ * Those two are behind the flag, and the backend refuses them without it.
  */
 export function TeamBilling({ status }: { status: BillingStatus }) {
   const teamsOffered = useWorkspaceStore((s) => s.features?.teams === true);
@@ -38,6 +42,66 @@ export function TeamBilling({ status }: { status: BillingStatus }) {
   }
   if (!team && teamsOffered) return <StartTeamCard />;
   return null;
+}
+
+/** Settings → Team. */
+export function TeamSettings() {
+  const status = useBillingStore((s) => s.status);
+  const refresh = useBillingStore((s) => s.refresh);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!status) {
+    return (
+      <Card className="p-4">
+        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      </Card>
+    );
+  }
+  if (!status.billingEnabled) {
+    return (
+      <Card className="p-4">
+        <p className="text-sm text-muted-foreground">
+          Billing is not configured on this backend, so there is no team plan to manage.
+        </p>
+      </Card>
+    );
+  }
+  return <TeamBilling status={status} />;
+}
+
+/**
+ * What the team plan means for this account's own billing, shown in
+ * Settings → Billing. A seated member is told the team controls their plan,
+ * and can leave it. Anybody else gets a pointer to the Team section.
+ */
+export function BillingTeamNotice({ status }: { status: BillingStatus }) {
+  const teamsOffered = useWorkspaceStore((s) => s.features?.teams === true);
+  const openSettings = useWorkspaceStore((s) => s.openSettings);
+  const team = status.team;
+
+  if (team?.hasSeat) {
+    return (
+      <TeamMemberCard name={team.name} active={team.active} paidPersonallyToo={team.paidPersonallyToo} />
+    );
+  }
+  if (!team && !teamsOffered) return null;
+  return (
+    <Card className="p-4 flex items-center justify-between gap-4">
+      <div className="flex items-start gap-3">
+        <Users className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+        <p className="text-sm text-muted-foreground">
+          {team
+            ? `You manage the team ${team.name}. Its seats, billing and invoices are in Team settings.`
+            : 'Buying for a team? Pay for everyone on one invoice.'}
+        </p>
+      </div>
+      <Button variant="outline" size="sm" className="shrink-0" onClick={() => openSettings('teams')}>
+        {team ? 'Open team settings' : 'Set up a team'}
+      </Button>
+    </Card>
+  );
 }
 
 function formatMoney(cents: number, currency: string): string {
@@ -94,7 +158,7 @@ function TeamMemberCard({
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">Team</h3>
+      <h3 className="text-lg font-semibold mb-4">Team plan</h3>
       <Card className="p-4 space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -103,7 +167,7 @@ function TeamMemberCard({
               <p className="font-medium">{name}</p>
               <p className="text-sm text-muted-foreground">
                 {active
-                  ? 'Your team pays for your Unlimited plan.'
+                  ? 'Your team pays for your Unlimited plan. The team’s admins manage its billing, so there is nothing for you to pay.'
                   : 'Your team is not paying for seats at the moment, so your own plan applies.'}
               </p>
             </div>
@@ -126,7 +190,7 @@ function TeamMemberCard({
       <ConfirmDialog
         open={confirming}
         title={`Leave ${name}?`}
-        description="Your seat is freed for someone else, and your account goes back to your own plan."
+        description="You lose the team’s Unlimited plan straight away, and your account goes back to your own plan: Free, unless you pay for Unlimited yourself. Your seat is freed for someone else. Your workspaces are not touched. Only a team admin can give you a seat again."
         confirmLabel="Leave team"
         busy={busy}
         onConfirm={() => void leave()}
@@ -284,6 +348,14 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
             />
           )}
 
+          {team.active && status?.team && !status.team.hasSeat && (
+            <SelfSeatNotice
+              teamId={teamId}
+              seatsFree={team.seatsPurchased - team.seatsUsed}
+              onSeated={load}
+            />
+          )}
+
           {team.overAllocated && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
@@ -320,6 +392,61 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
       />
 
       {orders.length > 0 && <TeamOrders teamId={teamId} orders={orders} />}
+    </div>
+  );
+}
+
+/**
+ * An admin who pays for the team but holds no seat is on the Free plan
+ * themselves, which is rarely what they meant. The buyer is seated
+ * automatically on the first payment; this covers an admin who was added
+ * later, one who removed their own seat, and a first payment that could not
+ * seat the buyer.
+ */
+function SelfSeatNotice({
+  teamId,
+  seatsFree,
+  onSeated,
+}: {
+  teamId: string;
+  seatsFree: number;
+  onSeated: () => Promise<void>;
+}) {
+  const refresh = useBillingStore((s) => s.refresh);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const take = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.billing.team.assignSelfSeat(teamId);
+      if (result.failed.length > 0) setError(result.failed[0]!.reason);
+      trackEvent('team_seats_assigned', { assigned: result.assigned.length, failed: result.failed.length, self: true });
+      await Promise.all([onSeated(), refresh()]);
+    } catch (err) {
+      setError(errorText(err, 'Could not give you a seat'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+      <div className="flex items-start gap-2">
+        <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+        <div className="text-sm">
+          <p>You manage this team but do not hold a seat, so your own account is on the Free plan.</p>
+          {seatsFree <= 0 && (
+            <p className="text-muted-foreground">Every seat is taken. Add a seat first.</p>
+          )}
+          {error && <p className="text-destructive mt-1">{error}</p>}
+        </div>
+      </div>
+      <Button size="sm" className="shrink-0" disabled={busy || seatsFree <= 0} onClick={() => void take()}>
+        {busy && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+        Take a seat
+      </Button>
     </div>
   );
 }
@@ -512,11 +639,236 @@ function BuySeats({
 }
 
 /** Split what somebody pasted into logins: commas, spaces and new lines all separate. */
-function parseLogins(raw: string): string[] {
+export function parseLogins(raw: string): string[] {
   return raw
     .split(/[\s,]+/)
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/^@/, ''))
     .filter(Boolean);
+}
+
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+/** A person picked in the seat picker, before they are sent to the backend. */
+interface PickedAccount {
+  login: string;
+  avatarUrl: string | null;
+}
+
+/**
+ * Pick people to seat: search GitHub by username, pick from the results, and
+ * each pick becomes a chip. An exact username can also be typed and entered,
+ * or several pasted at once. The backend resolves every login again, so a
+ * chip is a request, never a guarantee.
+ */
+function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => Promise<void> }) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<GitHubAccountSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const [picked, setPicked] = useState<PickedAccount[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState<Array<{ login: string; reason: string }>>([]);
+
+  const free = Math.max(0, team.seatsPurchased - team.seatsUsed);
+  const room = free - picked.length;
+  const taken = (login: string) =>
+    team.seats.some((s) => s.githubLogin.toLowerCase() === login.toLowerCase()) ||
+    picked.some((p) => p.login.toLowerCase() === login.toLowerCase());
+
+  // Debounced: GitHub's search API allows 30 requests a minute per user.
+  useEffect(() => {
+    const q = query.trim().replace(/^@/, '');
+    if (q.length < 2 || !GITHUB_LOGIN.test(q)) {
+      setSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      setSearching(true);
+      api.billing.team
+        .searchGithubUsers(team.id, q)
+        .then((rows) => {
+          if (!cancelled) {
+            setSuggestions(rows);
+            setHighlight(0);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSuggestions([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, team.id]);
+
+  const visible = suggestions.filter((s) => !taken(s.login));
+
+  const pick = (accounts: PickedAccount[]) => {
+    const fresh = accounts.filter((a, i) => !taken(a.login) && accounts.findIndex((b) => b.login.toLowerCase() === a.login.toLowerCase()) === i);
+    setPicked((current) => [...current, ...fresh.slice(0, Math.max(0, free - current.length))]);
+    setQuery('');
+    setSuggestions([]);
+  };
+
+  const pickTyped = (raw: string) => {
+    const logins = parseLogins(raw).filter((l) => GITHUB_LOGIN.test(l));
+    if (logins.length > 0) pick(logins.map((login) => ({ login, avatarUrl: null })));
+  };
+
+  const assign = async () => {
+    setBusy(true);
+    setError(null);
+    setFailed([]);
+    try {
+      const result = await api.billing.team.assignSeats(team.id, {
+        logins: picked.map((p) => p.login),
+      });
+      trackEvent('team_seats_assigned', {
+        assigned: result.assigned.length,
+        failed: result.failed.length,
+      });
+      setFailed(result.failed);
+      const failedLogins = new Set(result.failed.map((f) => f.login.toLowerCase()));
+      setPicked((current) => current.filter((p) => failedLogins.has(p.login.toLowerCase())));
+      await onAssigned();
+    } catch (err) {
+      setError(errorText(err, 'Could not add those people'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="relative">
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-background px-2 py-1.5 focus-within:ring-2 focus-within:ring-ring">
+          {picked.map((p) => (
+            <span
+              key={p.login}
+              className="flex items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-2 text-sm"
+            >
+              <img
+                src={p.avatarUrl ?? `https://avatars.githubusercontent.com/${encodeURIComponent(p.login)}?size=40`}
+                alt=""
+                className="h-5 w-5 rounded-full"
+              />
+              @{p.login}
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground"
+                title={`Remove @${p.login}`}
+                onClick={() => setPicked((current) => current.filter((c) => c.login !== p.login))}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (/[\s,]/.test(text.trim())) {
+                e.preventDefault();
+                pickTyped(text);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlight((h) => Math.min(h + 1, Math.max(visible.length - 1, 0)));
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlight((h) => Math.max(h - 1, 0));
+              } else if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const chosen = visible[highlight];
+                if (chosen) pick([{ login: chosen.login, avatarUrl: chosen.avatarUrl }]);
+                else pickTyped(query);
+              } else if (e.key === 'Backspace' && query === '' && picked.length > 0) {
+                setPicked((current) => current.slice(0, -1));
+              } else if (e.key === 'Escape') {
+                setSuggestions([]);
+              }
+            }}
+            placeholder={
+              room <= 0
+                ? free === 0
+                  ? 'Every seat is taken'
+                  : 'Every free seat is picked'
+                : picked.length === 0
+                  ? 'Search GitHub by username'
+                  : 'Add another'
+            }
+            disabled={room <= 0}
+            aria-label="Search GitHub users"
+            className="min-w-[10rem] flex-1 bg-transparent py-1 text-sm outline-none placeholder:text-muted-foreground"
+          />
+          {searching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        </div>
+        {visible.length > 0 && query.trim() && (
+          <ul
+            role="listbox"
+            className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+          >
+            {visible.map((s, i) => (
+              <li key={s.id} role="option" aria-selected={i === highlight}>
+                <button
+                  type="button"
+                  onMouseEnter={() => setHighlight(i)}
+                  onClick={() => pick([{ login: s.login, avatarUrl: s.avatarUrl }])}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm',
+                    i === highlight && 'bg-secondary'
+                  )}
+                >
+                  {s.avatarUrl ? (
+                    <img src={s.avatarUrl} alt="" className="h-6 w-6 rounded-full" />
+                  ) : (
+                    <div className="h-6 w-6 rounded-full bg-muted" />
+                  )}
+                  @{s.login}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {free === 0
+            ? 'Every seat is taken. Add seats above, or remove someone.'
+            : `${free} seat${free === 1 ? '' : 's'} free. A seat works the moment that person signs in to Talyn with GitHub.`}
+        </p>
+        <Button
+          onClick={() => void assign()}
+          disabled={busy || picked.length === 0}
+          className="gap-2 shrink-0"
+        >
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+          {picked.length > 1 ? `Add ${picked.length} people` : 'Add'}
+        </Button>
+      </div>
+
+      {failed.length > 0 && (
+        <ul className="text-sm text-destructive space-y-0.5">
+          {failed.map((f) => (
+            <li key={f.login}>
+              @{f.login}: {f.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
+  );
 }
 
 function SeatList({
@@ -528,75 +880,14 @@ function SeatList({
   onAssigned: () => Promise<void>;
   onRemove: (seatId: string) => Promise<void>;
 }) {
-  const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [failed, setFailed] = useState<Array<{ login: string; reason: string }>>([]);
   const [removing, setRemoving] = useState<{ id: string; login: string } | null>(null);
   const [removeBusy, setRemoveBusy] = useState(false);
-
-  const assign = async () => {
-    setBusy(true);
-    setError(null);
-    setFailed([]);
-    try {
-      const result = await api.billing.team.assignSeats(team.id, { logins: parseLogins(input) });
-      trackEvent('team_seats_assigned', {
-        assigned: result.assigned.length,
-        failed: result.failed.length,
-      });
-      setFailed(result.failed);
-      setInput(result.failed.map((f) => f.login).join(', '));
-      await onAssigned();
-    } catch (err) {
-      setError(errorText(err, 'Could not add those people'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const free = Math.max(0, team.seatsPurchased - team.seatsUsed);
 
   return (
     <div>
       <h3 className="text-lg font-semibold mb-4">Seats</h3>
       <Card className="p-4 space-y-4">
-        {/* A textarea, not an input: an input strips the newlines out of a
-            pasted column of usernames and joins them into one. */}
-        <form
-          className="flex items-start gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void assign();
-          }}
-        >
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="GitHub usernames, separated by commas, spaces or new lines"
-            rows={2}
-            disabled={free === 0}
-          />
-          <Button type="submit" disabled={busy || free === 0 || !input.trim()} className="gap-2 shrink-0">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-            Add
-          </Button>
-        </form>
-        <p className="text-xs text-muted-foreground">
-          {free === 0
-            ? 'Every seat is taken. Add seats above, or remove someone.'
-            : `${free} seat${free === 1 ? '' : 's'} free. A seat works the moment that person signs in to Talyn with GitHub.`}
-        </p>
-        {failed.length > 0 && (
-          <ul className="text-sm text-destructive space-y-0.5">
-            {failed.map((f) => (
-              <li key={f.login}>
-                @{f.login}: {f.reason}
-              </li>
-            ))}
-          </ul>
-        )}
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        <SeatPicker team={team} onAssigned={onAssigned} />
 
         {team.seats.length > 0 && (
           <div className="divide-y rounded-md border">

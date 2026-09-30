@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FileText,
+  Users,
   Settings,
   FolderKanban,
   Github,
@@ -37,7 +38,7 @@ import {
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
-import { TeamBilling } from './TeamBilling';
+import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
 import { toast } from '../../stores/toast';
@@ -113,6 +114,7 @@ export function SettingsPanel() {
   const activeSection = useWorkspaceStore((s) => s.settingsSection);
   const setActiveSection = useWorkspaceStore((s) => s.setSettingsSection);
   const features = useWorkspaceStore((s) => s.features);
+  const billingStatus = useBillingStore((s) => s.status);
 
   const sections = [
     { id: 'workspace' as const, icon: FolderKanban, label: 'Workspace' },
@@ -128,6 +130,12 @@ export function SettingsPanel() {
 
     { id: 'account' as const, icon: User, label: 'Account' },
     { id: 'billing' as const, icon: CreditCard, label: 'Billing' },
+    // Drawn for anyone the flag offers teams to, and for anyone already on a
+    // team whatever the flag says: a seated member must always be able to
+    // see who pays for them, and leave.
+    ...(features?.teams === true || billingStatus?.team
+      ? [{ id: 'teams' as const, icon: Users, label: 'Team' }]
+      : []),
     { id: 'appearance' as const, icon: Palette, label: 'Appearance' },
     { id: 'developer' as const, icon: Bug, label: 'Developer' },
     { id: 'mcp' as const, icon: Plug, label: 'Talyn MCP server' },
@@ -169,6 +177,7 @@ export function SettingsPanel() {
             {activeSection === 'instructions' && <InstructionsSettings />}
             {activeSection === 'account' && <AccountSettings />}
             {activeSection === 'billing' && <BillingSettings />}
+            {activeSection === 'teams' && <TeamSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'developer' && <DeveloperSettings />}
             {activeSection === 'codeReview' && <CodeReviewSettingsCard />}
@@ -2987,7 +2996,7 @@ function BillingSettings() {
         </Card>
       </div>
 
-      <TeamBilling status={status} />
+      <BillingTeamNotice status={status} />
 
       {free && (
         <div>

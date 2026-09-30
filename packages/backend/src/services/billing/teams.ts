@@ -16,6 +16,7 @@ import {
   users as usersTable,
 } from '../../db/schema.js';
 import { withBlockingAdvisoryLock } from '../advisoryLock.js';
+import { ensureGithubUserId } from '../githubIdentity.js';
 import { teamGrantsSeats } from './entitlements.js';
 
 /**
@@ -385,6 +386,39 @@ export async function assignNamedSeats(
   });
 }
 
+/**
+ * Give the calling admin a seat on their own team.
+ *
+ * The admin's GitHub id is already on their account (the sign-in stored it),
+ * so this needs no GitHub lookup: it goes through `assignNamedSeats` with a
+ * resolver that answers from the users row. That keeps one code path for the
+ * seat cap and the one-team-per-person rule. An account whose GitHub id is not
+ * known yet gets one more attempt to read it before the refusal.
+ */
+export async function assignSelfSeat(
+  teamId: string,
+  userId: string
+): Promise<AssignTeamSeatsResponse> {
+  const [user] = await getPoolDbClient()
+    .select({ githubUserId: usersTable.githubUserId, githubUsername: usersTable.githubUsername })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+  const githubUserId = user?.githubUserId ?? (await ensureGithubUserId(userId));
+  const login = user?.githubUsername;
+  if (!githubUserId || !login) {
+    throw new TeamError(
+      409,
+      'Talyn does not know your GitHub account yet. Sign out and sign in again with GitHub, then try again.'
+    );
+  }
+  return assignNamedSeats(teamId, userId, [login], async () => ({
+    id: githubUserId,
+    login,
+    avatarUrl: null,
+  }));
+}
+
 /** Take a seat back. The holder drops to their own plan at once. */
 export async function removeSeat(teamId: string, seatId: string): Promise<void> {
   const deleted = await getPoolDbClient()
@@ -545,13 +579,17 @@ export async function seatCreatorOnFirstActivation(teamId: string): Promise<void
       .from(usersTable)
       .where(eq(usersTable.id, team.createdByUserId))
       .limit(1);
-    if (!creator?.githubUserId || !creator.githubUsername) return;
+    // The id is normally stored at sign-in, but that is best-effort: read it
+    // now rather than leave the buyer without the seat they paid for.
+    const githubUserId =
+      creator?.githubUserId ?? (await ensureGithubUserId(team.createdByUserId));
+    if (!githubUserId || !creator?.githubUsername) return;
     await db
       .insert(teamSeatsTable)
       .values({
         id: uuid(),
         teamId,
-        githubUserId: creator.githubUserId,
+        githubUserId,
         githubLogin: creator.githubUsername,
         source: 'named',
         assignedByUserId: team.createdByUserId,
