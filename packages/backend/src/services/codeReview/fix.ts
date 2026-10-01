@@ -168,7 +168,7 @@ export async function startFixRun(
       // findings stay actionable, reported as a visible wait rather than a
       // refusal, and retried when a task finishes. Exactly what the merge queue
       // does with the same collision.
-      await rollBackToReady(review, 'deferred_task_limit', 'Waiting for a task slot.');
+      await rollBackToReady(review, review.version + 1, 'deferred_task_limit', 'Waiting for a task slot.');
       void captureWorkspaceEvent(review.workspaceId, 'paywall_deferred', {
         source: 'code_review',
         gate: 'task_limit',
@@ -182,7 +182,12 @@ export async function startFixRun(
           'Your other tasks are using every slot on the free plan. This fix will start when one finishes.',
       };
     }
-    await rollBackToReady(review, 'fix_failed', err instanceof Error ? err.message : String(err));
+    await rollBackToReady(
+      review,
+      review.version + 1,
+      'fix_failed',
+      err instanceof Error ? err.message : String(err)
+    );
     throw err;
   }
 
@@ -239,6 +244,12 @@ export async function settleFixRun(
   taskId: string,
   status: string
 ): Promise<void> {
+  // Only the run the review is WAITING on. The review keeps `fixTaskId` after it
+  // settles, and task rows are reused per PR, so the next "Fix with agent" press
+  // or merge-queue fix ends on this same id. Settling again on that run's failure
+  // put every finding this fix had landed back on the list.
+  if (review.phase !== 'fixing' || review.fixTaskId !== taskId) return;
+
   const findingIds = await fixFindingIds(review, taskId);
   void captureFixSettled(review, status, findingIds.length);
 
@@ -269,6 +280,7 @@ export async function settleFixRun(
   await unmarkFixed(review.id, taskId);
   await rollBackToReady(
     review,
+    review.version,
     status === 'needs_human' ? 'fix_needs_human' : 'fix_failed',
     status === 'needs_human'
       ? 'The fix run stopped and needs a person.'
@@ -323,14 +335,21 @@ async function fixFindingIds(review: ReviewRow, taskId: string): Promise<string[
   return Array.isArray(link.findingIds) ? link.findingIds.filter((id): id is string => typeof id === 'string') : [];
 }
 
+/**
+ * `expectedVersion` is the version the row has NOW. `startFixRun` holds the row
+ * from before its own claim bumped it, so it passes `version + 1`; the settle path
+ * loads it fresh and passes `version` — it used to pass `+ 1` too, so a failed fix
+ * never left `fixing`.
+ */
 async function rollBackToReady(
   review: ReviewRow,
+  expectedVersion: number,
   code: string,
   message: string
 ): Promise<void> {
   const moved = await casTransition(
     review.id,
-    review.version + 1,
+    expectedVersion,
     { phase: 'ready', phaseStartedAt: new Date(), fixTaskId: null, lastError: message, lastErrorAt: new Date() },
     { fromPhase: 'fixing', toPhase: 'ready', trigger: 'executor', code, message }
   );

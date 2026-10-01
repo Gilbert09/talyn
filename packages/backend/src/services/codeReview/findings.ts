@@ -518,8 +518,9 @@ export async function markFixed(
 /**
  * Put them back when a fix run did not land, so nothing claims a fix it lacks.
  *
- * Matches on the TASK id, so it unwinds a run that failed while its findings
- * were still `selected` as well as one that had already marked them `fixed`.
+ * Only `selected` rows: a failed run never got as far as marking anything fixed.
+ * A `fixed` row with this task id belongs to an EARLIER run on the same reused
+ * task row, and its fix did land.
  */
 export async function unmarkFixed(reviewId: string, taskId: string): Promise<number> {
   const updated = await getDbClient()
@@ -532,7 +533,11 @@ export async function unmarkFixed(reviewId: string, taskId: string): Promise<num
       updatedAt: new Date(),
     })
     .where(
-      and(eq(prCodeReviewFindings.reviewId, reviewId), eq(prCodeReviewFindings.fixTaskId, taskId))
+      and(
+        eq(prCodeReviewFindings.reviewId, reviewId),
+        eq(prCodeReviewFindings.fixTaskId, taskId),
+        eq(prCodeReviewFindings.disposition, 'selected')
+      )
     )
     .returning({ id: prCodeReviewFindings.id });
   return updated.length;

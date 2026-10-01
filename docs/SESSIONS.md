@@ -2,6 +2,20 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Code review: landed fixes reopened by a later run (2026-10-01)
+
+A review on PostHog/posthog#109062 said "Fix pushed", but all nine findings were still open. The code at the PR head had fixed them.
+
+`settleFixRun` had no phase check. A review keeps `fixTaskId` after it settles, and task rows are reused per PR (`findReusableTask`).
+So a later "Fix with agent" press or a merge-queue fix ended on the same task id and settled the review again.
+If that run failed, was cancelled or needed a person, `unmarkFixed` reopened every finding that the review fix had landed. The rollback CAS then failed, so the phase stayed `fixed`.
+
+The same rollback also had a version bug. `settleFixRun` loads the review fresh, but `rollBackToReady` expected `version + 1`. So a failed review fix never left `fixing`.
+
+Fixes: settle only while the review is `fixing` on that task. `unmarkFixed` now resets only `selected` rows. The rollback takes the expected version from its caller.
+`codeReviewFixSettle.test.ts` covers both bugs; the old code fails 7 of its 8 tests.
+Findings that were already reopened stay open. A new review cycle on the current head corrects them.
+
 ## Hosted MCP server: full product coverage (2026-09-30)
 
 An audit compared the hosted MCP tools with every backend route. The server had 17 tools, for PRs and tasks only.

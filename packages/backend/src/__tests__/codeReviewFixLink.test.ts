@@ -103,23 +103,24 @@ describe('markFixed / unmarkFixed — the commit link', () => {
     expect(row.fixedHeadSha).toBeNull();
   });
 
-  it('clears the commit when the fix is unwound', async () => {
-    // A finding put back on the list must not still claim a commit fixed it.
+  it('leaves a finding an earlier run fixed alone', async () => {
+    // Task rows are reused per PR, so a later failed run can carry this task id.
+    // Its failure says nothing about a fix that already landed.
     await markFixed('rev-1', ['f-1'], 'task-1', PUSHED);
-    expect(await unmarkFixed('rev-1', 'task-1')).toBe(1);
+    expect(await unmarkFixed('rev-1', 'task-1')).toBe(0);
     const row = await only();
-    expect(row.disposition).toBe('open');
-    expect(row.fixedHeadSha).toBeNull();
-    expect(row.fixTaskId).toBeNull();
+    expect(row.disposition).toBe('fixed');
+    expect(row.fixedHeadSha).toBe(PUSHED);
   });
 
   it('unwinds a run that never got as far as marking anything fixed', async () => {
     // `selected` is the in-flight state, set when the fix claims the finding. A
-    // run that died there must release it too, which is why unmarkFixed matches
-    // on the task rather than on the disposition.
+    // run that died there must release it.
     await testDb.db.update(prCodeReviewFindings).set({ fixTaskId: 'task-1' });
     expect(await unmarkFixed('rev-1', 'task-1')).toBe(1);
-    expect((await only()).disposition).toBe('open');
+    const row = await only();
+    expect(row.disposition).toBe('open');
+    expect(row.fixTaskId).toBeNull();
   });
 
   it('leaves a fixed finding readable, so the app can say what happened to it', async () => {
