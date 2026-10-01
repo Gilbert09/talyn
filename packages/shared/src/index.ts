@@ -266,8 +266,8 @@ export const FLEET_MODELS = [
   { id: 'claude-opus-5-5', label: 'Opus 5.5', provider: 'anthropic', blurb: 'Newest Opus.' },
   { id: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic', blurb: 'The previous Opus — 1M context.' },
   { id: 'claude-fable-5', label: 'Fable 5', provider: 'anthropic', blurb: 'The previous Fable.' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', blurb: 'Newest Sonnet.' },
-  { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', provider: 'anthropic', blurb: 'Strong and fast — the default.' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', provider: 'anthropic', blurb: 'The previous Sonnet.' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', provider: 'anthropic', blurb: 'The previous Opus flagship.' },
   { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', provider: 'anthropic', blurb: 'Cheapest of the Claude set.' },
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', provider: 'openai', blurb: 'Newest and most capable.' },
@@ -289,7 +289,7 @@ export type FleetModelId = (typeof FLEET_MODELS)[number]['id'];
  * merge-queue `queue_failure` kind), and a workspace that wants it back can
  * pick it in Settings → Talyn Fleet.
  */
-export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5';
+export const DEFAULT_FLEET_MODEL_ID: FleetModelId = 'claude-sonnet-5-5';
 
 /**
  * Default model for a fleet run on a CODEX credential.

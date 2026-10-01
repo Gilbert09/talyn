@@ -26,7 +26,7 @@ import {
  */
 describe('fleet model choice', () => {
   it('defaults to Sonnet 5, not Opus', () => {
-    expect(DEFAULT_FLEET_MODEL_ID).toBe('claude-sonnet-5');
+    expect(DEFAULT_FLEET_MODEL_ID).toBe('claude-sonnet-5-5');
   });
 
   it('defaults a Codex-only workspace to a Codex model', () => {
