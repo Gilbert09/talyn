@@ -65,7 +65,8 @@ import {
 import { GithubInstallStatus } from '../widgets/GithubInstallStatus';
 import { useGithubInstallations } from '../../hooks/useGithubInstallations';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
-import { isOwnerCovered } from '../../lib/githubInstall';
+import { isOwnerCovered, parseRepoInput } from '../../lib/githubInstall';
+import { PollingOnlyBadge } from '../widgets/PollingOnlyBadge';
 import { openExternal } from '../../lib/openExternal';
 import { openGithubAppFlow } from '../../lib/githubInstall';
 import { APP_VERSION } from '../../lib/env';
@@ -294,6 +295,7 @@ function WorkspaceSettings() {
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [showRepoSelector, setShowRepoSelector] = useState(false);
   const [repoSearch, setRepoSearch] = useState('');
+  const [addRepoError, setAddRepoError] = useState<string | null>(null);
   // App-installation coverage for the watched repos' orgs.
   const {
     installations,
@@ -356,19 +358,20 @@ function WorkspaceSettings() {
     loadRepos();
   }, [loadRepos]);
 
-  const handleAddRepo = async (repo: GitHubRepo) => {
+  // Takes owner/name rather than a picker entry, so a repo the user does not
+  // belong to (an open-source repo they contribute to) can be added by name.
+  const handleAddRepo = async (owner: string, repoName: string) => {
     if (!currentWorkspaceId) return;
     setLoadingRepos(true);
+    setAddRepoError(null);
     try {
-      const watched = await api.repositories.add(
-        currentWorkspaceId,
-        repo.owner.login,
-        repo.name
-      );
+      const watched = await api.repositories.add(currentWorkspaceId, owner, repoName);
       setRepositories([...watchedRepos, watched]);
       void refreshWorkspaces();
       setShowRepoSelector(false);
       setRepoSearch('');
+    } catch (err) {
+      setAddRepoError(err instanceof Error ? err.message : `Could not add ${owner}/${repoName}`);
     } finally {
       setLoadingRepos(false);
     }
@@ -407,6 +410,13 @@ function WorkspaceSettings() {
     .sort((a, b) =>
       a.full_name.toLowerCase().localeCompare(b.full_name.toLowerCase())
     );
+  // A typed `owner/name` or URL that the picker does not list yet: the user's
+  // repo list only covers their own account and orgs.
+  const typedRepo = parseRepoInput(repoSearch);
+  const typedRepoAddable =
+    typedRepo !== null &&
+    !watchedRepos.some((w) => w.fullName.toLowerCase() === `${typedRepo.owner}/${typedRepo.repo}`.toLowerCase()) &&
+    !matchedRepos.some((r) => r.full_name.toLowerCase() === `${typedRepo.owner}/${typedRepo.repo}`.toLowerCase());
   const REPO_LIST_CAP = 500;
   const filteredRepos = matchedRepos.slice(0, REPO_LIST_CAP);
   const reposTruncated = matchedRepos.length > REPO_LIST_CAP;
@@ -521,11 +531,7 @@ function WorkspaceSettings() {
                       <div className="flex items-center gap-2 min-w-0">
                         <Github className="w-4 h-4 text-muted-foreground shrink-0" />
                         <span className="text-sm truncate">{repo.fullName}</span>
-                        {installsChecked && !isOwnerCovered(repo.owner, installations) && (
-                          <Badge variant="warning" className="shrink-0 text-xs">
-                            App not installed
-                          </Badge>
-                        )}
+                        <PollingOnlyBadge owner={repo.owner} />
                       </div>
                       <Button
                         variant="ghost"
@@ -559,9 +565,12 @@ function WorkspaceSettings() {
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Input
-                    placeholder="Search all your repositories…"
+                    placeholder="Search your repositories, or type owner/name…"
                     value={repoSearch}
-                    onChange={(e) => setRepoSearch(e.target.value)}
+                    onChange={(e) => {
+                      setRepoSearch(e.target.value);
+                      setAddRepoError(null);
+                    }}
                     autoFocus
                   />
                   <Button
@@ -575,13 +584,38 @@ function WorkspaceSettings() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Your repos + every org you belong to.{' '}
+                  Your repos + every org you belong to. For any other repo, type its
+                  owner/name or paste its URL.{' '}
                   {reposLoading
                     ? 'Refreshing…'
                     : reposFetchedAt
                       ? `Updated ${formatAge(reposFetchedAt)}.`
                       : ''}
                 </p>
+
+                {typedRepo && typedRepoAddable && (
+                  <button
+                    data-attr="settings-add-repo-by-name"
+                    className="w-full flex items-center gap-2 rounded-md border p-2 hover:bg-secondary text-left text-sm"
+                    onClick={() => void handleAddRepo(typedRepo.owner, typedRepo.repo)}
+                    disabled={loadingRepos}
+                  >
+                    <Plus className="w-4 h-4 text-muted-foreground" />
+                    <span>
+                      Add <span className="font-medium">{typedRepo.owner}/{typedRepo.repo}</span>
+                    </span>
+                    {installsChecked && !isOwnerCovered(typedRepo.owner, installations) && (
+                      <Badge
+                        variant="outline"
+                        className="ml-auto text-xs"
+                        title={`The Talyn GitHub App isn't installed on @${typedRepo.owner}. A public repo there is polled every few minutes instead of updated live.`}
+                      >
+                        Polled
+                      </Badge>
+                    )}
+                  </button>
+                )}
+                {addRepoError && <p className="text-sm text-destructive">{addRepoError}</p>}
 
                 {reposLoading && availableRepos.length === 0 ? (
                   <p className="text-sm text-muted-foreground p-2 flex items-center gap-2">
@@ -594,14 +628,20 @@ function WorkspaceSettings() {
                       <button
                         key={repo.id}
                         className="w-full flex items-center gap-2 p-2 hover:bg-secondary text-left text-sm"
-                        onClick={() => handleAddRepo(repo)}
+                        onClick={() => void handleAddRepo(repo.owner.login, repo.name)}
                         disabled={loadingRepos}
                       >
                         <Github className="w-4 h-4 text-muted-foreground" />
                         <span>{repo.full_name}</span>
                         <span className="ml-auto flex items-center gap-1">
                           {installsChecked && !isOwnerCovered(repo.owner.login, installations) && (
-                            <Badge variant="warning" className="text-xs">App not installed</Badge>
+                            <Badge
+                              variant="outline"
+                              className="text-xs"
+                              title={`The Talyn GitHub App isn't installed on @${repo.owner.login}. Talyn polls this repo every few minutes instead of getting live updates.`}
+                            >
+                              App not installed
+                            </Badge>
                           )}
                           {repo.private && (
                             <Badge variant="outline" className="text-xs">Private</Badge>
@@ -610,10 +650,10 @@ function WorkspaceSettings() {
                       </button>
                     ))}
                   </div>
-                ) : (
+                ) : typedRepoAddable ? null : (
                   <p className="text-sm text-muted-foreground p-2">
                     {repoSearch
-                      ? 'No matching repositories. Try Refresh if a repo is missing.'
+                      ? 'No matching repositories. Try Refresh, or type owner/name to add any repo.'
                       : 'No repositories found. Try Refresh.'}
                   </p>
                 )}
@@ -628,6 +668,7 @@ function WorkspaceSettings() {
                   onClick={() => {
                     setShowRepoSelector(false);
                     setRepoSearch('');
+                    setAddRepoError(null);
                   }}
                 >
                   Cancel

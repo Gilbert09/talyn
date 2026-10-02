@@ -155,7 +155,9 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly code?: string
+    readonly code?: string,
+    /** The whole error envelope, for routes that send fields beside `code`. */
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'ApiError';
@@ -242,7 +244,12 @@ async function request<T>(
   }
 
   if (!data.success) {
-    throw new ApiError(data.error || 'Request failed', response.status, data.code);
+    throw new ApiError(
+      data.error || 'Request failed',
+      response.status,
+      data.code,
+      data as unknown as Record<string, unknown>
+    );
   }
 
   return data.data as T;
@@ -295,15 +302,17 @@ async function rawRequest(
     // An error body here IS the JSON envelope — only the success path is raw.
     const text = await response.text().catch(() => '');
     let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     let message = `Request failed (HTTP ${response.status})`;
     try {
       const parsed = JSON.parse(text) as ApiResponse<never>;
       if (parsed.error) message = parsed.error;
       code = parsed.code;
+      details = parsed as unknown as Record<string, unknown>;
     } catch {
       if (text) message = text.slice(0, 200);
     }
-    throw new ApiError(message, response.status, code);
+    throw new ApiError(message, response.status, code, details);
   }
 
   return response;

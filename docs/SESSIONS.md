@@ -2,6 +2,22 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Watch repos where the GitHub App is not installed (2026-10-02)
+
+A user wants to watch PRs on an open-source repo that they do not own, for example ClickHouse/ClickHouse.
+The backend never required an App installation to add a repo. GitHub documents that a user access token for a GitHub App can read public resources through REST and GraphQL, also where the App is not installed. Live behavior with our token is not verified yet.
+GitHub sends no webhooks for such a repo. The 5-minute reconcile sweep already polls every watched repo: searches, summary refetch, check-ledger reseed and close-out. So no new poller was added.
+
+Changes:
+- `addWatchedRepo` turns a 403 or 404 from GitHub into `RepoNotReadableError`. Both add routes answer it as 404 `repo_not_accessible` with a clear message. A rate limit stays a 503. Before, a refused private repo came back as a raw 500.
+- The watch route's 409 `repo_not_watched` now carries `appInstalled`. It comes from `appInstalledOnOwner`, which asks with the App JWT and caches per owner for 5 minutes. The user's budget is still not touched. `ApiError` now keeps the whole error envelope as `details`.
+- The watch modal says that a repo without the App gets polled every few minutes, not live.
+- PR rows and the PR detail header show a "Polling" badge. The data source is the banner's `/github/coverage` answer, now published to the workspace store. Only `not_installed` and `suspended` get the badge. `sso_required` and `not_accessible` mean that the App is installed, and the banner already reports them. The badge is owner-level, so a repo left out of a "selected repositories" install gets no badge.
+- The banner's "not installed" row is now a calm notice: polled, not live, install for live updates. The user can dismiss it per owner (localStorage). Suspended and SSO rows stay warnings.
+- Settings accepts a typed `owner/name` or URL, because the picker lists only the user's own account and orgs.
+
+Known gap: a fix run on such a PR will likely fail. The sandbox works in a clone of the base repo, and a fork's head branch is not there. The user's token also has no write permission on an owner without the App, so comments and pushes to the base repo are refused. Nothing guards this yet.
+
 ## Diagnose GitHub access for watched owners (2026-10-02)
 
 The banner treated an installation missing from the user's list as an App that was not installed.

@@ -62,6 +62,9 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
   // Set once the server (or the local list) says the repo needs adding. Holds
   // the coordinates so the copy can name the repo the user is agreeing to.
   const [needsRepo, setNeedsRepo] = useState<{ owner: string; repo: string } | null>(null);
+  // From the same 409: false when the owner has no active App install, so the
+  // repo gets no webhooks. null when the server could not tell.
+  const [appInstalled, setAppInstalled] = useState<boolean | null>(null);
 
   const preview = previewRepo(url);
   const previewUnwatched =
@@ -78,6 +81,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
   // Editing the URL invalidates a confirmation given for a different repo.
   useEffect(() => {
     setNeedsRepo(null);
+    setAppInstalled(null);
     setError(null);
   }, [url]);
 
@@ -85,6 +89,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
     setUrl('');
     setError(null);
     setNeedsRepo(null);
+    setAppInstalled(null);
   }
 
   function handleClose(next: boolean) {
@@ -134,6 +139,8 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
       if (err instanceof ApiError && err.code === 'repo_not_watched') {
         // Not an error the user has to fix — a decision they have to make.
         setNeedsRepo(preview);
+        const installed = err.details?.appInstalled;
+        setAppInstalled(typeof installed === 'boolean' ? installed : null);
         setError(null);
       } else {
         setError(err instanceof Error ? err.message : 'Could not watch this PR');
@@ -196,6 +203,13 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
                   Watching this PR adds the repo to this workspace, which also surfaces
                   your own PRs and review requests there.
                 </p>
+                {needsRepo && appInstalled === false && (
+                  <p data-attr="watch-pr-polling-note" className="text-muted-foreground">
+                    The Talyn GitHub App isn&apos;t installed on @{pendingRepo.owner}, so
+                    Talyn gets no live updates for this repo. It checks for changes every
+                    few minutes instead.
+                  </p>
+                )}
               </div>
             </div>
           )}

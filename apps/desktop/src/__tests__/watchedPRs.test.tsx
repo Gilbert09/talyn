@@ -239,6 +239,33 @@ describe('WatchPRModal', () => {
     expect(info.mock.calls[0][0]).toContain('already in your list');
   });
 
+  it.each([
+    [false, true],
+    [true, false],
+    [undefined, false],
+  ])('after a 409 with appInstalled=%s, shows the polling note: %s', async (appInstalled, shown) => {
+    spy(api.pullRequests, 'watch').mockRejectedValueOnce(
+      new ApiError('nope', 409, 'repo_not_watched', {
+        code: 'repo_not_watched',
+        ...(appInstalled === undefined ? {} : { appInstalled }),
+      })
+    );
+    render(<WatchPRModal open onOpenChange={fn()} />);
+    await type('https://github.com/ClickHouse/ClickHouse/pull/120046');
+    // Before the server answers, nothing claims to know about the App.
+    expect(document.querySelector('[data-attr="watch-pr-polling-note"]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /add repo & watch pr/i }));
+    await waitFor(() => expect(api.pullRequests.watch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(warning()!.textContent).toContain('ClickHouse/ClickHouse'));
+    const note = document.querySelector('[data-attr="watch-pr-polling-note"]');
+    if (shown) {
+      expect(note!.textContent).toContain('@ClickHouse');
+      expect(note!.textContent).toContain('every few minutes');
+    } else {
+      expect(note).toBeNull();
+    }
+  });
+
   it('surfaces any other failure inline and stays open', async () => {
     spy(api.pullRequests, 'watch').mockRejectedValue(
       new ApiError("acme/app#9 doesn't exist", 404, 'pr_not_found')
@@ -322,5 +349,64 @@ describe('the watch toggle in the PR row', () => {
   it('says the queue entry survives when stopping tracking on a queued PR', () => {
     renderRow({ watching: true, mergeQueued: true }, 'mine');
     expect(unwatchBtn()!.getAttribute('title')).toContain('merge queue entry stays active');
+  });
+});
+
+describe('the polling badge in the PR row', () => {
+  function renderRow(owner: string) {
+    render(
+      <PRTable
+        rows={[tableRow({ owner, authored: true })]}
+        variant="mine"
+        viewerLogin="octocat"
+        selectedId={null}
+        onSelect={fn()}
+        onOpenTask={fn()}
+        onMerge={fn()}
+        onSetMergeQueue={fn()}
+        onStopTask={fn()}
+        onCreatePostHogTask={fn()}
+        taskStatusById={new Map()}
+      />
+    );
+  }
+  const badge = () => document.querySelector('[data-attr="pr-polling-only"]');
+
+  afterEach(() => {
+    cleanup();
+    useWorkspaceStore.setState({ githubInstallations: null, githubCoverage: null });
+  });
+
+  it.each([
+    ['not_installed', true],
+    ['suspended', true],
+    ['sso_required', false],
+    ['not_accessible', false],
+    ['unknown', false],
+  ] as const)('a %s owner shows the badge: %s', (state, shown) => {
+    useWorkspaceStore.setState({
+      githubInstallations: [],
+      githubCoverage: [{ owner: 'ClickHouse', state }],
+    });
+    renderRow('ClickHouse');
+    if (shown) {
+      expect(badge()!.textContent).toMatch(/polling/i);
+      expect(badge()!.getAttribute('title')).toContain('@ClickHouse');
+    } else {
+      expect(badge()).toBeNull();
+    }
+  });
+
+  it('shows nothing before the diagnosis loads, or for an owner with the App', () => {
+    useWorkspaceStore.setState({ githubInstallations: [], githubCoverage: null });
+    renderRow('ClickHouse');
+    expect(badge()).toBeNull();
+    cleanup();
+    useWorkspaceStore.setState({
+      githubInstallations: [{ accountLogin: 'acme', accountType: 'Organization', suspended: false, repositorySelection: 'all' }],
+      githubCoverage: [{ owner: 'acme', state: 'not_installed' }],
+    });
+    renderRow('acme');
+    expect(badge()).toBeNull();
   });
 });

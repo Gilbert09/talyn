@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AlertTriangle, Github, Loader2, Plus, ServerCrash, Settings, WifiOff } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, Github, Info, Loader2, Plus, ServerCrash, Settings, WifiOff, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { openGithubAppFlow, openGithubExternalUrl, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
@@ -55,6 +55,54 @@ function BannerRow({ message, action }: { message: string; action?: React.ReactN
 }
 
 /**
+ * A calm row for a choice with a consequence, not a fault. Dismissible,
+ * because the user may have added the repo on purpose.
+ */
+function NoticeRow({
+  message,
+  action,
+  onDismiss,
+}: {
+  message: string;
+  action?: React.ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-border bg-muted px-4 py-2 text-sm text-muted-foreground">
+      <Info className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 flex-1">{message}</span>
+      <div className="flex shrink-0 items-center gap-1">
+        {action}
+        <Button size="sm" variant="ghost" onClick={onDismiss} title="Dismiss" aria-label="Dismiss">
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+const DISMISSED_KEY_PREFIX = 'talyn.pollingNotice.dismissed.';
+
+function readDismissedOwners(workspaceId: string | null): string[] {
+  if (!workspaceId) return [];
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_KEY_PREFIX + workspaceId);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeDismissedOwners(workspaceId: string, owners: string[]): void {
+  try {
+    window.localStorage.setItem(DISMISSED_KEY_PREFIX + workspaceId, JSON.stringify(owners));
+  } catch {
+    // Storage blocked: the dismissal lasts for this session only.
+  }
+}
+
+/**
  * App-wide banner surfacing missing core functionality — currently a
  * disconnected GitHub, which silently pauses PR tracking, reviews, and the
  * merge queue. Renders nothing when everything's healthy. Designed to be
@@ -76,6 +124,24 @@ export function SystemStatusBanner() {
     ? uncoveredOwners(repositories.map((r) => r.owner), githubInstallations)
     : [];
   const coverage = useGithubCoverage(currentWorkspaceId, uncovered);
+  // Owners whose "polled, not live" notice the user closed. Per workspace and
+  // per owner, so a newly added owner without the App still gets one notice.
+  const [dismissed, setDismissed] = useState<{ workspaceId: string | null; owners: string[] }>(
+    () => ({ workspaceId: currentWorkspaceId, owners: readDismissedOwners(currentWorkspaceId) })
+  );
+  useEffect(() => {
+    setDismissed({ workspaceId: currentWorkspaceId, owners: readDismissedOwners(currentWorkspaceId) });
+  }, [currentWorkspaceId]);
+  const dismissedOwners = new Set(
+    dismissed.workspaceId === currentWorkspaceId ? dismissed.owners : []
+  );
+
+  function dismissOwners(owners: string[]) {
+    if (!currentWorkspaceId) return;
+    const next = [...new Set([...dismissedOwners, ...owners.map((o) => o.toLowerCase())])];
+    writeDismissedOwners(currentWorkspaceId, next);
+    setDismissed({ workspaceId: currentWorkspaceId, owners: next });
+  }
 
   async function handleConnect() {
     if (!currentWorkspaceId) return;
@@ -159,7 +225,9 @@ export function SystemStatusBanner() {
 
   // App-installation coverage — only meaningful once GitHub is connected and the
   // installation list has actually loaded (null = not checked). A watched repo
-  // whose owner has no active install is silently never tracked, so surface it.
+  // whose owner has no active install gets no webhooks: a public one is still
+  // polled, so that case reads as a notice, while suspension and sign-in
+  // problems stay warnings with an action.
   if (currentWorkspaceId && githubStatus?.connected && githubInstallations) {
     // Wait for the diagnosis rather than flash a guess that may be wrong.
     if (uncovered.length > 0 && coverage !== undefined) {
@@ -230,10 +298,17 @@ export function SystemStatusBanner() {
           );
           continue;
         }
+        // `not_installed`, and also `unknown` or a failed diagnosis, where the
+        // install is the likeliest cause.
+        const shown = group.map((problem) => problem.owner)
+          .filter((owner) => !dismissedOwners.has(owner.toLowerCase()));
+        if (shown.length === 0) continue;
+        const shownList = formatOwnerList(shown);
         rows.push(
-          <BannerRow
+          <NoticeRow
             key={`gh-app-${state}`}
-            message={`The Talyn GitHub App isn't installed on ${owners} — watched repos there aren't being tracked until you install it.`}
+            message={`Talyn's GitHub App isn't installed on ${shownList}, so watched repos there are polled every few minutes, not updated live. Install the App on ${shownList} for live updates.`}
+            onDismiss={() => dismissOwners(shown)}
             action={
               <>
                 <Button size="sm" onClick={handleInstallApp} disabled={installing}>

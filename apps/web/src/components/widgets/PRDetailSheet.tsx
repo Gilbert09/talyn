@@ -56,6 +56,7 @@ import { prime } from '../../lib/prSummaryCache';
 import { useOnReconnect } from '../../hooks/useOnReconnect';
 import { PRStatusPill } from './PRStatusPill';
 import { PRReviewPill } from './PRReviewPill';
+import { PollingOnlyBadge } from './PollingOnlyBadge';
 import { toast } from '../../stores/toast';
 import { trackEvent } from '../../lib/analytics';
 import { usePullRequestStore } from '../../stores/pullRequests';
@@ -602,6 +603,7 @@ export function PRDetailSheet({
                 {view.row.owner}/{view.row.repo}#{view.row.number} · by @
                 {view.row.summary.author}
               </span>
+              <PollingOnlyBadge owner={view.row.owner} />
             </div>
             <BranchRef
               head={view.row.summary.headBranch}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type GitHubOwnerCoverage } from '../lib/api';
+import { useWorkspaceStore } from '../stores/workspace';
 
 export function useGithubCoverage(workspaceId: string | null, uncovered: string[]) {
   const key = JSON.stringify([workspaceId, uncovered]);
@@ -32,5 +33,14 @@ export function useGithubCoverage(workspaceId: string | null, uncovered: string[
   }, [workspaceId, enabled, key]);
 
   // undefined while the answer for this set of owners is loading, null when it failed.
-  return result?.key === key ? result.coverage : undefined;
+  const coverage = result?.key === key ? result.coverage : undefined;
+
+  // Publish the same answer the banner renders, so PR rows label polled repos
+  // without a second request.
+  const setGitHubCoverage = useWorkspaceStore((s) => s.setGitHubCoverage);
+  useEffect(() => {
+    setGitHubCoverage(coverage ?? null);
+  }, [coverage, setGitHubCoverage]);
+
+  return coverage;
 }

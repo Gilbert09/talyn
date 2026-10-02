@@ -71,7 +71,7 @@ import { classifyAutoMergeActor } from '../services/githubAutoMerge.js';
 import { getExternalMergeGate, markExternalMergeGate } from '../services/repoMergeGate.js';
 import { submitToExternalQueue } from '../services/externalQueueSubmit.js';
 import { isExternalMergeGateError } from '../services/mergeQueue/decide.js';
-import { prMonitorService } from '../services/prMonitor.js';
+import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
 import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import {
   applyQueueMembership,
@@ -396,9 +396,9 @@ export function pullRequestRoutes(): Router {
   // should agree to first (the poller then also surfaces THEIR PRs in that
   // repo, at three search queries per tick). Hence the two-phase confirm:
   // answer 409 `repo_not_watched`, and let the client re-POST with
-  // `confirmAddRepo`. The check runs before any GitHub call, so the refusal
-  // costs one DB query and zero API budget — which is why there's no separate
-  // preflight endpoint duplicating it.
+  // `confirmAddRepo`. The check runs before any call on the user's token, so
+  // the refusal costs one DB query and zero user API budget — which is why
+  // there's no separate preflight endpoint duplicating it.
   router.post('/watch', async (req, res) => {
     const { workspaceId, url, confirmAddRepo } = req.body ?? {};
     if (!workspaceId || !url) {
@@ -432,11 +432,16 @@ export function pullRequestRoutes(): Router {
       let repoAdded = false;
       if (!repo) {
         if (!confirmAddRepo) {
+          // The one GitHub call on this path, made with the App's JWT and
+          // cached per owner. It lets the client say up front that a repo
+          // whose owner has no App install gets polled, not live updates.
+          const appInstalled = await githubService.appInstalledOnOwner(ref.owner);
           return res.status(409).json({
             success: false,
             code: 'repo_not_watched',
             owner: ref.owner,
             repo: ref.repo,
+            appInstalled,
             error:
               `Talyn isn't watching ${ref.owner}/${ref.repo} yet — ` +
               'watching this PR will add the repo to this workspace.',
@@ -502,6 +507,13 @@ export function pullRequestRoutes(): Router {
         },
       });
     } catch (err: unknown) {
+      if (err instanceof RepoNotReadableError) {
+        return res.status(404).json({
+          success: false,
+          code: 'repo_not_accessible',
+          error: err.message,
+        });
+      }
       if (err instanceof GitHubRateLimitError) {
         // Transient and retryable — a 500 would tell the user to give up.
         const retryAfterMs = err.retryAfterMs;

@@ -351,10 +351,20 @@ interface ResolvedAuth {
   accessToken: string;
 }
 
-class GitHubApiError extends Error {
+export class GitHubApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
   }
+}
+
+/**
+ * GitHub answered 403 or 404 for a read: the credential cannot see the
+ * resource. A rate limit is a different class (`GitHubRateLimitError`), so a
+ * caller that checks this never tells the user to wait for something that
+ * will not clear by waiting.
+ */
+export function isGitHubAccessRefusal(err: unknown): boolean {
+  return err instanceof GitHubApiError && (err.status === 403 || err.status === 404);
 }
 
 class GitHubNotConnectedError extends Error {
@@ -469,6 +479,7 @@ class GitHubService extends EventEmitter {
     expiresAt: number;
     result: Promise<GitHubOwnerCoverage[]>;
   }>();
+  private ownerInstallCache = new Map<string, { expiresAt: number; installed: boolean }>();
   // Authenticated user's login per workspace. Resolved once via /user
   // and reused — callers (e.g. the rate-limit poller) read it hot, so
   // we can't afford an API round-trip each time.
@@ -989,6 +1000,27 @@ class GitHubService extends EventEmitter {
     } catch (err) {
       if (this.ownerCoverageCache.get(workspaceId) === entry) this.ownerCoverageCache.delete(workspaceId);
       throw err;
+    }
+  }
+
+  /**
+   * Whether the Talyn App has an active installation on `owner`, which is what
+   * decides whether GitHub sends us webhooks for its repos. Asked with the
+   * App's own JWT, so it spends no user budget. Null when nobody can say: the
+   * App is not configured here, or GitHub failed to answer.
+   */
+  async appInstalledOnOwner(owner: string): Promise<boolean | null> {
+    if (!isGitHubAppConfigured()) return null;
+    const key = owner.toLowerCase();
+    const cached = this.ownerInstallCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.installed;
+    try {
+      const installation = await fetchOwnerInstallation(owner);
+      const installed = Boolean(installation && !installation.suspended);
+      this.ownerInstallCache.set(key, { expiresAt: Date.now() + 5 * 60_000, installed });
+      return installed;
+    } catch {
+      return null;
     }
   }
 

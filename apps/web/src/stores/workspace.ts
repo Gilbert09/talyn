@@ -21,6 +21,7 @@ import type {
   GitHubStatus,
   GitHubUser,
   GitHubInstallation,
+  GitHubOwnerCoverage,
   PostHogCodeStatus,
   CloudProviderInfo,
   PRRow,
@@ -224,6 +225,10 @@ interface WorkspaceState {
   // Settings can tell which watched repos lack an active App install. null = not
   // yet checked (don't flash a "not installed" warning before the first load).
   githubInstallations: GitHubInstallation[] | null;
+  // The banner's `/github/coverage` diagnosis for watched owners that are missing
+  // from `githubInstallations`. Shared so PR rows can label a repo that is
+  // polled rather than live. null = not loaded, failed, or nothing uncovered.
+  githubCoverage: GitHubOwnerCoverage[] | null;
   posthogStatus: PostHogCodeStatus | null;
   // Connected cloud providers for the current workspace, preloaded + kept fresh
   // by useSystemStatus (one source of truth, so the Settings cards, the default
@@ -277,6 +282,7 @@ interface WorkspaceState {
   setBackendHealth: (health: 'ok' | 'offline' | 'degraded' | null) => void;
   setGitHubUser: (user: GitHubUser | null) => void;
   setGitHubInstallations: (installations: GitHubInstallation[] | null) => void;
+  setGitHubCoverage: (coverage: GitHubOwnerCoverage[] | null) => void;
   setPostHogStatus: (status: PostHogCodeStatus | null) => void;
   setCloudProviders: (providers: CloudProviderInfo[] | null) => void;
   setFeatures: (features: Features | null) => void;
@@ -346,6 +352,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   backendHealth: null,
   githubUser: null,
   githubInstallations: null,
+  githubCoverage: null,
   posthogStatus: null,
   cloudProviders: null,
   features: null,
@@ -387,6 +394,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setGitHubUser: (githubUser) => set({ githubUser }),
 
   setGitHubInstallations: (githubInstallations) => set({ githubInstallations }),
+
+  setGitHubCoverage: (githubCoverage) => set({ githubCoverage }),
 
   setPostHogStatus: (posthogStatus) => set({ posthogStatus }),
 

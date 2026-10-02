@@ -30,6 +30,8 @@ function install(accountLogin: string, suspended = false): GitHubInstallation {
 afterEach(() => {
   cleanup();
   setState(null, null);
+  useWorkspaceStore.setState({ githubCoverage: null });
+  window.localStorage.clear();
   jest.restoreAllMocks();
 });
 
@@ -237,5 +239,64 @@ describe('owner coverage diagnosis', () => {
     await act(async () => { resolve([{ owner: 'PostHog', state: 'suspended' }]); });
     expect(screen.queryByText(/is suspended/)).not.toBeInTheDocument();
     await waitFor(() => expect(api.github.coverage).toHaveBeenLastCalledWith('ws2'));
+  });
+});
+
+describe('polling notice for owners without the App', () => {
+  beforeEach(() => {
+    setState('ws1', { configured: true, connected: true });
+    useWorkspaceStore.setState({
+      githubInstallations: [],
+      repositories: [repo('ClickHouse', 'ClickHouse')],
+    });
+  });
+
+  it('says the repos are polled, not live, and offers the install', async () => {
+    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'ClickHouse', state: 'not_installed' }]);
+    await act(async () => { render(<SystemStatusBanner />); });
+    expect(screen.getByText(/polled every few minutes, not updated live/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install app' })).toBeInTheDocument();
+  });
+
+  it('publishes the diagnosis to the store for the PR rows', async () => {
+    const coverage = [{ owner: 'ClickHouse', state: 'not_installed' as const }];
+    jest.mocked(api.github.coverage).mockResolvedValue(coverage);
+    await act(async () => { render(<SystemStatusBanner />); });
+    expect(useWorkspaceStore.getState().githubCoverage).toEqual(coverage);
+  });
+
+  it('stays dismissed for that owner, and still shows for a new one', async () => {
+    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'ClickHouse', state: 'not_installed' }]);
+    await act(async () => { render(<SystemStatusBanner />); });
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/polled every few minutes/)).not.toBeInTheDocument();
+
+    cleanup();
+    await act(async () => { render(<SystemStatusBanner />); });
+    expect(screen.queryByText(/polled every few minutes/)).not.toBeInTheDocument();
+
+    jest.mocked(api.github.coverage).mockResolvedValue([
+      { owner: 'ClickHouse', state: 'not_installed' },
+      { owner: 'Other', state: 'not_installed' },
+    ]);
+    await act(async () => {
+      useWorkspaceStore.setState({ repositories: [repo('ClickHouse', 'ClickHouse'), repo('Other', 'x')] });
+    });
+    expect(await screen.findByText(/isn't installed on @Other, so/)).toBeInTheDocument();
+    expect(screen.queryByText(/@ClickHouse/)).not.toBeInTheDocument();
+  });
+
+  it('never hides the suspended warning behind a dismissal', async () => {
+    window.localStorage.setItem('talyn.pollingNotice.dismissed.ws1', JSON.stringify(['clickhouse']));
+    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'ClickHouse', state: 'suspended' }]);
+    await act(async () => { render(<SystemStatusBanner />); });
+    expect(screen.getByText(/is suspended on @ClickHouse/)).toBeInTheDocument();
+  });
+
+  it('survives unreadable storage', async () => {
+    window.localStorage.setItem('talyn.pollingNotice.dismissed.ws1', '{not json');
+    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'ClickHouse', state: 'not_installed' }]);
+    await act(async () => { render(<SystemStatusBanner />); });
+    expect(screen.getByText(/polled every few minutes/)).toBeInTheDocument();
   });
 });

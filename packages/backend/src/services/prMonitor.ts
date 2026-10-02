@@ -7,7 +7,7 @@ import {
   pullRequests as pullRequestsTable,
   workspaces as workspacesTable,
 } from '../db/schema.js';
-import { githubService } from './github.js';
+import { githubService, isGitHubAccessRefusal } from './github.js';
 import { parseRepoUrl } from './repoIdentity.js';
 import {
   batchPullRequestsByNumber,
@@ -66,6 +66,21 @@ export interface RefreshPrOptions {
 export interface RestSweepCache {
   openLists: Map<string, Promise<Set<number> | null>>;
   prLookups: Map<string, Promise<{ state: 'open' | 'closed'; mergedAt: string | null } | null>>;
+}
+
+/**
+ * The user's GitHub sign-in cannot read the repo. Public repos are readable
+ * whether or not the Talyn App is installed on their owner, so this almost
+ * always means a private repo the App was not given, or a typo.
+ */
+export class RepoNotReadableError extends Error {
+  constructor(readonly owner: string, readonly repo: string) {
+    super(
+      `Talyn can't read ${owner}/${repo} with your GitHub account. Check the name. ` +
+        `If the repo is private, install the Talyn GitHub App on @${owner} and give it access to the repo.`
+    );
+    this.name = 'RepoNotReadableError';
+  }
 }
 
 export function createRestSweepCache(): RestSweepCache {
@@ -208,8 +223,16 @@ class PRMonitorService extends EventEmitter {
     if (!identity || identity.fullName.toLowerCase() !== fullName.toLowerCase()) {
       throw new Error('Repository URL must match owner/repo');
     }
-    // Do not use the default-branch cache as an authorization check.
-    const accessible = await githubService.getRepository(workspaceId, owner, repo);
+    // Do not use the default-branch cache as an authorization check. No App
+    // installation is required: a public repo is readable with the user's
+    // token anyway, and it is then kept fresh by polling instead of webhooks.
+    let accessible: Awaited<ReturnType<typeof githubService.getRepository>>;
+    try {
+      accessible = await githubService.getRepository(workspaceId, owner, repo);
+    } catch (err) {
+      if (isGitHubAccessRefusal(err)) throw new RepoNotReadableError(owner, repo);
+      throw err;
+    }
     if (accessible.full_name?.toLowerCase() !== fullName.toLowerCase()) {
       throw new Error('Repository is not accessible to this GitHub user');
     }

@@ -16,7 +16,7 @@ import {
 } from '../../db/schema.js';
 import * as githubGraphql from '../../services/githubGraphql.js';
 import type { PRSummary } from '../../services/githubGraphql.js';
-import { githubService } from '../../services/github.js';
+import { githubService, GitHubApiError } from '../../services/github.js';
 import { prMonitorService } from '../../services/prMonitor.js';
 import { GitHubRateLimitError } from '../../services/githubRateGate.js';
 
@@ -197,6 +197,7 @@ describe('POST /pull-requests/watch', () => {
   });
 
   it('refuses an unwatched repo with 409 and spends no GitHub budget', async () => {
+    vi.spyOn(githubService, 'appInstalledOnOwner').mockResolvedValue(null);
     const res = await watch({ workspaceId: 'ws1', url: 'https://github.com/x/y/pull/1' });
     expect(res.status).toBe(409);
     const body = await res.json();
@@ -207,6 +208,41 @@ describe('POST /pull-requests/watch', () => {
     expect(batchSpy).not.toHaveBeenCalled();
     const repos = await db.select().from(repositoriesTable);
     expect(repos).toHaveLength(1);
+  });
+
+  it.each([true, false, null])(
+    'tells the client whether the owner has the App installed (%s), without the user token',
+    async (appInstalled) => {
+      const installSpy = vi.spyOn(githubService, 'appInstalledOnOwner').mockResolvedValue(appInstalled);
+      const repoSpy = vi.spyOn(githubService, 'getRepository');
+      const res = await watch({ workspaceId: 'ws1', url: 'https://github.com/ClickHouse/ClickHouse/pull/120046' });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe('repo_not_watched');
+      expect(body.appInstalled).toBe(appInstalled);
+      expect(installSpy).toHaveBeenCalledWith('ClickHouse');
+      expect(repoSpy).not.toHaveBeenCalled();
+      expect(batchSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['404', new GitHubApiError('GitHub API error 404 Not Found', 404)],
+    ['403 without rate-limit headers', new GitHubApiError('GitHub API error 403: Resource not accessible by integration', 403)],
+  ])('answers a repo GitHub refuses (%s) as not accessible, not as a rate limit', async (_label, error) => {
+    vi.spyOn(githubService, 'getRepository').mockRejectedValue(error);
+    const res = await watch({
+      workspaceId: 'ws1',
+      url: 'https://github.com/x/private/pull/1',
+      confirmAddRepo: true,
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.code).toBe('repo_not_accessible');
+    expect(body.error).toContain('x/private');
+    expect(body.error).toContain('@x');
+    expect(batchSpy).not.toHaveBeenCalled();
+    expect(await db.select().from(repositoriesTable)).toHaveLength(1);
   });
 
   it('adds the repo when confirmed, with GitHub’s real default branch', async () => {

@@ -192,3 +192,33 @@ describe('owner coverage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('appInstalledOnOwner', () => {
+  it.each([
+    { name: 'an active install', fixture: { installed: true }, expected: true },
+    { name: 'no install', fixture: { installed: false }, expected: false },
+    { name: 'a suspended install', fixture: { suspended: true }, expected: false },
+    { name: 'a personal account with an install', fixture: { personal: true }, expected: true },
+    { name: 'a GitHub failure', fixture: { error: 500 }, expected: null },
+  ])('answers $expected for $name', async ({ fixture, expected }) => {
+    const owner = `Owner${Math.random().toString(36).slice(2, 8)}`;
+    mockGithub({ [owner]: fixture });
+    expect(await githubService.appInstalledOnOwner(owner)).toBe(expected);
+  });
+
+  it('caches an answer per owner, case-insensitively', async () => {
+    const owner = `Cached${Math.random().toString(36).slice(2, 8)}`;
+    const fetchSpy = mockGithub({ [owner]: { installed: false }, [owner.toLowerCase()]: { installed: false } });
+    expect(await githubService.appInstalledOnOwner(owner)).toBe(false);
+    const calls = fetchSpy.mock.calls.length;
+    expect(await githubService.appInstalledOnOwner(owner.toLowerCase())).toBe(false);
+    expect(fetchSpy.mock.calls.length).toBe(calls);
+  });
+
+  it('answers null without calling GitHub when the App is not configured', async () => {
+    vi.stubEnv('GITHUB_APP_ID', '');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    expect(await githubService.appInstalledOnOwner('ClickHouse')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

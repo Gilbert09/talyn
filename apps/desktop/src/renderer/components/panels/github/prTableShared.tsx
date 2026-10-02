@@ -52,6 +52,7 @@ import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
 import { CodeReviewRowChip } from '../../widgets/codeReview/CodeReviewRowChip';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
+import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
 import { cn } from '../../../lib/utils';
 import { openExternal, isOpenInBrowserClick } from '../../../lib/openExternal';
 import { toast } from '../../../stores/toast';
@@ -715,6 +716,7 @@ function PRTableRow({
                   Watched
                 </span>
               )}
+              <PollingOnlyBadge owner={row.owner} />
               {/* Suppressed on the Reviews tab, where being a requested
                   reviewer is the ENTRY CONDITION: the badge would sit on every
                   row and separate nothing, which is noise with the colour of

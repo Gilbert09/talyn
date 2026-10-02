@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { prMonitorService } from '../services/prMonitor.js';
-import { githubService } from '../services/github.js';
+import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
+import { githubService, GitHubApiError } from '../services/github.js';
+import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { createTestDb, seedUser, TEST_USER_ID } from './helpers/testDb.js';
 import type { Database } from '../db/client.js';
 import {
@@ -38,6 +39,29 @@ describe('prMonitorService — repo CRUD', () => {
       vi.mocked(githubService.getRepository).mockRejectedValue(new Error(message));
       await expect(prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets')).rejects.toThrow(message);
       expect(await db.select({ id: repositoriesTable.id }).from(repositoriesTable)).toEqual([]);
+    });
+
+    it.each([
+      { status: 404, readable: false },
+      { status: 403, readable: false },
+      { status: 500, readable: true },
+      { status: 422, readable: true },
+    ])('maps a $status from GitHub (refusal: $readable === false)', async ({ status, readable }) => {
+      vi.mocked(githubService.getRepository).mockRejectedValue(
+        new GitHubApiError(`GitHub API error ${status}`, status)
+      );
+      const attempt = prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets');
+      if (readable) {
+        await expect(attempt).rejects.toThrow(`GitHub API error ${status}`);
+      } else {
+        await expect(attempt).rejects.toBeInstanceOf(RepoNotReadableError);
+      }
+      expect(await db.select({ id: repositoriesTable.id }).from(repositoriesTable)).toEqual([]);
+    });
+
+    it('passes a rate limit through untouched, so the caller can say "try again"', async () => {
+      vi.mocked(githubService.getRepository).mockRejectedValue(new GitHubRateLimitError('gated', 1000));
+      await expect(prMonitorService.addWatchedRepo('ws1', 'acme', 'widgets')).rejects.toBeInstanceOf(GitHubRateLimitError);
     });
 
     it('refuses a URL that names a different repository before checking access', async () => {

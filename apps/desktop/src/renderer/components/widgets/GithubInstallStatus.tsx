@@ -27,7 +27,8 @@ interface GithubInstallStatusProps {
  *
  * - Lists the accounts/orgs the App is installed on (feedback: "installed on @x").
  * - Warns when no install exists yet, or when a watched repo's owner has no
- *   active install — those repos won't be tracked until the App is added there.
+ *   active install. Talyn still polls public repos there, but gets no live
+ *   updates for them until the App is added there.
  * The install flow opens on GitHub; the parent's focus-refresh picks up the
  * result when the user returns.
  */
@@ -107,12 +108,8 @@ export function GithubInstallStatus({
           <div className="min-w-0 flex-1 space-y-2">
             <p>
               {noInstalls
-                ? 'The Talyn GitHub App isn’t installed on any account yet. Install it on the org or account whose repositories you want to track.'
-                : `The Talyn GitHub App isn’t installed on ${formatOwnerList(uncovered)}. ${
-                    watchedOwners.length === 1 || uncovered.length === 1
-                      ? 'That repository won’t'
-                      : 'Those repositories won’t'
-                  } be tracked until you install it there.`}
+                ? 'The Talyn GitHub App isn’t installed on any account yet. Install it on the org or account whose repositories you want to track. Without it, Talyn can only poll public repositories, and gets no live updates.'
+                : `The Talyn GitHub App isn’t installed on ${formatOwnerList(uncovered)}, or your GitHub account can’t reach it. Talyn polls public repositories there every few minutes instead of getting live updates. Install it there for live updates.`}
             </p>
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={() => void startInstall(installMode)} disabled={opening}>

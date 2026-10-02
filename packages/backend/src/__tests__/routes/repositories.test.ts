@@ -3,7 +3,8 @@ import express from 'express';
 import { createServer, type Server } from 'http';
 import { AddressInfo } from 'net';
 import { repositoryRoutes } from '../../routes/repositories.js';
-import { githubService } from '../../services/github.js';
+import { githubService, GitHubApiError } from '../../services/github.js';
+import { GitHubRateLimitError } from '../../services/githubRateGate.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
@@ -172,6 +173,27 @@ describe('routes/repositories', () => {
       expect(res.status).toBe(404);
     });
 
+    it.each([
+      { name: 'a 404 (private or missing repo)', error: new GitHubApiError('GitHub API error 404 Not Found', 404), status: 404, code: 'repo_not_accessible' },
+      { name: 'a 403 that is not a rate limit', error: new GitHubApiError('GitHub API error 403: Resource not accessible by integration', 403), status: 404, code: 'repo_not_accessible' },
+      { name: 'a rate limit', error: new GitHubRateLimitError('gated', 30_000), status: 503, code: 'rate_limited' },
+      { name: 'a server error', error: new GitHubApiError('GitHub API error 502', 502), status: 500, code: undefined },
+    ])('answers $name with $status and adds nothing', async ({ error, status, code }) => {
+      vi.mocked(githubService.getRepository).mockRejectedValue(error);
+      const res = await fetch(`${serverUrl}/repositories`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ workspaceId: 'ws1', owner: 'ClickHouse', repo: 'ClickHouse' }),
+      });
+      expect(res.status).toBe(status);
+      const body = await res.json();
+      expect(body.code).toBe(code);
+      if (code === 'repo_not_accessible') {
+        expect(body.error).toContain('ClickHouse/ClickHouse');
+        expect(body.error).not.toMatch(/rate/i);
+      }
+      expect(await db.select().from(repositoriesTable)).toHaveLength(0);
+    });
   });
 
   describe('DELETE /repositories/:id', () => {

@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { prMonitorService } from '../services/prMonitor.js';
+import { prMonitorService, RepoNotReadableError } from '../services/prMonitor.js';
+import { GitHubRateLimitError } from '../services/githubRateGate.js';
 import { refreshWebhookIndex } from '../services/webhookIndex.js';
 import {
   assertUser,
@@ -45,6 +46,16 @@ export function repositoryRoutes(): Router {
       void refreshWebhookIndex().catch(() => undefined);
       res.json({ success: true, data: watched });
     } catch (err: unknown) {
+      if (err instanceof RepoNotReadableError) {
+        return res.status(404).json({ success: false, code: 'repo_not_accessible', error: err.message });
+      }
+      if (err instanceof GitHubRateLimitError) {
+        return res.status(503).json({
+          success: false,
+          code: 'rate_limited',
+          error: 'GitHub is rate-limiting Talyn right now — try again in a moment.',
+        });
+      }
       const msg = err instanceof Error ? err.message : 'unknown error';
       res.status(500).json({ success: false, error: msg });
     }
