@@ -181,9 +181,15 @@ export function Sidebar({ className }: SidebarProps) {
       <item.icon className="w-4 h-4 flex-shrink-0" />
       {!sidebarCollapsed && (
         <>
-          <span className="flex-1 text-left">{item.label}</span>
+          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
           {item.badge !== undefined && (
-            <Badge variant="secondary" className="ml-auto">
+            // Fixed min width + tabular figures so 1- and 2-digit counts share a
+            // right edge. A tint darker than bg-secondary, because that is also
+            // the active row's background and the pill vanished into it.
+            <Badge
+              variant="secondary"
+              className="ml-auto min-w-[1.75rem] shrink-0 justify-center bg-foreground/10 px-1.5 tabular-nums hover:bg-foreground/10"
+            >
               {item.badge}
             </Badge>
           )}
