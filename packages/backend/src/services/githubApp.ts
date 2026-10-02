@@ -217,6 +217,103 @@ export async function fetchInstallation(installationId: string): Promise<Install
   };
 }
 
+export async function fetchOwnerInstallation(
+  owner: string,
+  ownerType?: 'Organization' | 'User',
+): Promise<{
+  installationId: string;
+  accountLogin: string;
+  suspended: boolean;
+  repositorySelection: 'all' | 'selected';
+} | null> {
+  const jwt = signAppJwt();
+  for (const kind of ownerType === 'User' ? ['users'] : ['orgs', 'users']) {
+    const url = `${GITHUB_API_URL}/${kind}/${encodeURIComponent(owner)}/installation`;
+    const startedAt = Date.now();
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${jwt}`,
+        'User-Agent': 'Talyn',
+      },
+    });
+    debugBus.recordHttp({
+      service: 'github',
+      method: 'GET',
+      url,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: response.ok,
+      ...(response.ok ? {} : { error: `fetch owner installation: ${response.statusText}` }),
+    });
+    if (response.status === 404) continue;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch installation for ${owner}: ${response.status} ${response.statusText}`);
+    }
+    const data = JSON.parse(response.bodyText) as {
+      id: number;
+      account?: { login?: string };
+      suspended_at?: string | null;
+      repository_selection?: 'all' | 'selected';
+    };
+    return {
+      installationId: String(data.id),
+      accountLogin: data.account?.login ?? owner,
+      suspended: Boolean(data.suspended_at),
+      repositorySelection: data.repository_selection ?? 'all',
+    };
+  }
+  return null;
+}
+
+export async function probeOrgSso(
+  userToken: string,
+  owner: string,
+): Promise<{ required: true; url: string | null } | { required: false }> {
+  const responses = await Promise.all(['', '/repos?per_page=1'].map(async (suffix) => {
+    const url = `${GITHUB_API_URL}/orgs/${encodeURIComponent(owner)}${suffix}`;
+    const startedAt = Date.now();
+    const response = await fetchWithTimeout(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${userToken}`,
+        'User-Agent': 'Talyn',
+      },
+    });
+    debugBus.recordHttp({
+      service: 'github',
+      method: 'GET',
+      url,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      ok: response.ok,
+      ...(response.ok ? {} : { error: `probe org SSO: ${response.statusText}` }),
+    });
+    return response;
+  }));
+
+  let required = false;
+  for (const response of responses) {
+    const header = response.headers.get('x-github-sso');
+    if (!header) continue;
+    const [status] = header.split(';');
+    if (status.trim().toLowerCase() === 'required') {
+      required = true;
+      const url = /;\s*url=([^;]+)/i.exec(header)?.[1].trim();
+      // The client opens this link, so accept only a GitHub page.
+      if (url?.startsWith('https://github.com/')) return { required: true, url };
+    } else if (status.trim().toLowerCase() === 'partial-results') {
+      required = true;
+    }
+  }
+  if (required) return { required: true, url: null };
+
+  // A 403 or 404 can mean no access, or a personal account instead of an organization.
+  const failed = responses.find((r) => !r.ok && r.status !== 403 && r.status !== 404);
+  if (failed) throw new Error(`Failed to probe org SSO: ${failed.status} ${failed.statusText}`);
+  return { required: false };
+}
+
 /**
  * Every repo full-name the installation can access (the App's selected-repo
  * allowlist), via the installation token. Paginated.

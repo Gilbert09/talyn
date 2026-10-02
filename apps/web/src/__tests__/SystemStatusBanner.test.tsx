@@ -1,12 +1,13 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react';
-import { SystemStatusBanner } from '../renderer/components/layout/SystemStatusBanner';
-import { useWorkspaceStore, type WatchedRepo } from '../renderer/stores/workspace';
-import { api, type GitHubStatus, type GitHubInstallation, type GitHubOwnerCoverageState } from '../renderer/lib/api';
-import * as githubInstall from '../renderer/lib/githubInstall';
+import { SystemStatusBanner } from '../components/layout/SystemStatusBanner';
+import { useWorkspaceStore, type WatchedRepo } from '../stores/workspace';
+import { api, type GitHubStatus, type GitHubInstallation, type GitHubOwnerCoverageState } from '../lib/api';
+import * as githubInstall from '../lib/githubInstall';
 
 beforeEach(() => {
-  jest.spyOn(api.github, 'coverage').mockImplementation(() => new Promise(() => {}));
+  vi.spyOn(api.github, 'coverage').mockImplementation(() => new Promise(() => {}));
 });
 
 function setState(currentWorkspaceId: string | null, githubStatus: GitHubStatus | null) {
@@ -30,7 +31,7 @@ function install(accountLogin: string, suspended = false): GitHubInstallation {
 afterEach(() => {
   cleanup();
   setState(null, null);
-  jest.restoreAllMocks();
+  vi.restoreAllMocks();
 });
 
 describe('SystemStatusBanner', () => {
@@ -81,7 +82,7 @@ describe('SystemStatusBanner', () => {
   });
 
   it('warns to install the app when a watched repo’s org has no installation', async () => {
-    jest.spyOn(api.github, 'coverage').mockResolvedValue([{ owner: 'posthog', state: 'not_installed' }]);
+    vi.spyOn(api.github, 'coverage').mockResolvedValue([{ owner: 'posthog', state: 'not_installed' }]);
     useWorkspaceStore.setState({
       currentWorkspaceId: 'ws1',
       githubStatus: { configured: true, connected: true },
@@ -116,7 +117,7 @@ describe('SystemStatusBanner', () => {
   });
 
   it('treats a suspended installation as not covered', async () => {
-    jest.spyOn(api.github, 'coverage').mockResolvedValue([{ owner: 'acme', state: 'not_installed' }]);
+    vi.spyOn(api.github, 'coverage').mockResolvedValue([{ owner: 'acme', state: 'not_installed' }]);
     useWorkspaceStore.setState({
       currentWorkspaceId: 'ws1',
       githubStatus: { configured: true, connected: true },
@@ -155,7 +156,7 @@ describe('owner coverage diagnosis', () => {
     ['sso_required', /@PostHog uses single sign-on.*authorize it and reconnect GitHub/, 'Reconnect GitHub'],
     ['not_accessible', /is installed on @PostHog, but your GitHub account can't reach it.*give you access/, 'Reconnect GitHub'],
   ])('shows the %s message and action', async (state, message, button) => {
-    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state }]);
+    vi.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state }]);
     await act(async () => { render(<SystemStatusBanner />); });
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: button })).toBeInTheDocument();
@@ -167,9 +168,9 @@ describe('owner coverage diagnosis', () => {
 
   it('opens the SSO URL and reconnects through the existing flow', async () => {
     const ssoUrl = 'https://github.com/orgs/PostHog/sso';
-    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'sso_required', ssoUrl }]);
-    const open = jest.spyOn(githubInstall, 'openGithubExternalUrl').mockResolvedValue();
-    const connect = jest.spyOn(githubInstall, 'openGithubAppFlow').mockResolvedValue();
+    vi.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'sso_required', ssoUrl }]);
+    const open = vi.spyOn(githubInstall, 'openGithubExternalUrl').mockResolvedValue();
+    const connect = vi.spyOn(githubInstall, 'openGithubAppFlow').mockResolvedValue();
     await act(async () => { render(<SystemStatusBanner />); });
     fireEvent.click(screen.getByRole('button', { name: 'Authorize SSO' }));
     expect(open).toHaveBeenCalledWith(ssoUrl);
@@ -178,14 +179,14 @@ describe('owner coverage diagnosis', () => {
   });
 
   it('omits the authorize action when SSO has no URL', async () => {
-    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'sso_required', ssoUrl: null }]);
+    vi.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'sso_required', ssoUrl: null }]);
     await act(async () => { render(<SystemStatusBanner />); });
     expect(screen.getByText(/uses single sign-on/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Authorize SSO' })).not.toBeInTheDocument();
   });
 
   it('falls back to the install message when coverage fails', async () => {
-    jest.mocked(api.github.coverage).mockRejectedValue(new Error('offline'));
+    vi.mocked(api.github.coverage).mockRejectedValue(new Error('offline'));
     await act(async () => { render(<SystemStatusBanner />); });
     expect(screen.getByText(/isn't installed on @PostHog/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install app' })).toBeInTheDocument();
@@ -193,7 +194,7 @@ describe('owner coverage diagnosis', () => {
 
   it('groups owners by state and retains every SSO link', async () => {
     useWorkspaceStore.setState({ repositories: ['PostHog', 'Acme', 'Other', 'Last'].map((owner) => repo(owner, 'web')) });
-    jest.mocked(api.github.coverage).mockResolvedValue([
+    vi.mocked(api.github.coverage).mockResolvedValue([
       { owner: 'PostHog', state: 'sso_required', ssoUrl: 'https://github.com/orgs/PostHog/sso' },
       { owner: 'Acme', state: 'sso_required', ssoUrl: 'https://github.com/orgs/Acme/sso' },
       { owner: 'Other', state: 'suspended' },
@@ -207,7 +208,7 @@ describe('owner coverage diagnosis', () => {
   });
 
   it('refreshes on focus and when the uncovered owners change', async () => {
-    jest.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'suspended' }]);
+    vi.mocked(api.github.coverage).mockResolvedValue([{ owner: 'PostHog', state: 'suspended' }]);
     await act(async () => { render(<SystemStatusBanner />); });
     expect(api.github.coverage).toHaveBeenCalledTimes(1);
     await act(async () => { fireEvent(window, new Event('focus')); });
@@ -223,7 +224,7 @@ describe('owner coverage diagnosis', () => {
   });
 
   it('removes the warning when the diagnosis reports no problems', async () => {
-    jest.mocked(api.github.coverage).mockResolvedValue([]);
+    vi.mocked(api.github.coverage).mockResolvedValue([]);
     let container: HTMLElement;
     await act(async () => { ({ container } = render(<SystemStatusBanner />)); });
     expect(container!).toBeEmptyDOMElement();
@@ -231,7 +232,7 @@ describe('owner coverage diagnosis', () => {
 
   it('ignores a late response from a previous workspace', async () => {
     let resolve!: (value: Awaited<ReturnType<typeof api.github.coverage>>) => void;
-    jest.mocked(api.github.coverage).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    vi.mocked(api.github.coverage).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
     render(<SystemStatusBanner />);
     await act(async () => { useWorkspaceStore.setState({ currentWorkspaceId: 'ws2' }); });
     await act(async () => { resolve([{ owner: 'PostHog', state: 'suspended' }]); });

@@ -17,6 +17,10 @@ export async function openGithubAppFlow(
 ): Promise<void> {
   const { installUrl, manageUrl } = await api.github.installViaApp(workspaceId);
   const url = mode === 'manage' ? manageUrl : installUrl;
+  await openGithubExternalUrl(url);
+}
+
+export async function openGithubExternalUrl(url: string): Promise<void> {
   if (window.electron?.auth?.openExternal) {
     await window.electron.auth.openExternal(url);
   } else {

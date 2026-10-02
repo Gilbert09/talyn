@@ -2,11 +2,13 @@ import { EventEmitter } from 'events';
 import { createHash } from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import type { GitHubOwnerCoverage } from '@talyn/shared';
 import { getDbClient, type Database } from '../db/client.js';
 import {
   integrations as integrationsTable,
   workspaces as workspacesTable,
   users as usersTable,
+  repositories as repositoriesTable,
 } from '../db/schema.js';
 import {
   encryptString,
@@ -27,8 +29,11 @@ import {
   isGitHubAppConfigured,
   refreshUserToken,
   fetchUserInstallations,
+  fetchOwnerInstallation,
+  probeOrgSso,
   UserTokenRefreshError,
 } from './githubApp.js';
+import { parseRepoUrl } from './repoIdentity.js';
 
 // Classic-OAuth-app credentials. Still read for the check-token (token-health)
 // forensic path; the connect flow itself is now the GitHub App (see githubApp.ts).
@@ -460,6 +465,10 @@ function readAccessToken(config: GitHubIntegrationConfig): string | null {
 
 class GitHubService extends EventEmitter {
   private tokens: Map<string, StoredToken> = new Map();
+  private ownerCoverageCache = new Map<string, {
+    expiresAt: number;
+    result: Promise<GitHubOwnerCoverage[]>;
+  }>();
   // Authenticated user's login per workspace. Resolved once via /user
   // and reused — callers (e.g. the rate-limit poller) read it hot, so
   // we can't afford an API round-trip each time.
@@ -776,6 +785,7 @@ class GitHubService extends EventEmitter {
    */
   private forgetResolvedAuth(workspaceId: string): void {
     this.deadCredentials.delete(workspaceId);
+    this.ownerCoverageCache.delete(workspaceId);
     // Access entries are keyed by credential, so the old token's entries can
     // never answer for the new one. They age out on their own.
   }
@@ -966,6 +976,55 @@ class GitHubService extends EventEmitter {
       suspended: i.suspended,
       repositorySelection: i.repositorySelection,
     }));
+  }
+
+  async diagnoseOwnerCoverage(workspaceId: string): Promise<GitHubOwnerCoverage[]> {
+    const cached = this.ownerCoverageCache.get(workspaceId);
+    if (cached && cached.expiresAt > Date.now()) return cached.result;
+    const result = this.fetchOwnerCoverage(workspaceId);
+    const entry = { expiresAt: Date.now() + 60_000, result };
+    this.ownerCoverageCache.set(workspaceId, entry);
+    try {
+      return await result;
+    } catch (err) {
+      if (this.ownerCoverageCache.get(workspaceId) === entry) this.ownerCoverageCache.delete(workspaceId);
+      throw err;
+    }
+  }
+
+  private async fetchOwnerCoverage(workspaceId: string): Promise<GitHubOwnerCoverage[]> {
+    const repos = await this.db.select({ url: repositoriesTable.url })
+      .from(repositoriesTable).where(eq(repositoriesTable.workspaceId, workspaceId));
+    const owners = new Map<string, string>();
+    for (const repo of repos) {
+      const owner = parseRepoUrl(repo.url)?.owner;
+      if (owner && !owners.has(owner.toLowerCase())) owners.set(owner.toLowerCase(), owner);
+    }
+    if (owners.size === 0) return [];
+    const installations = await this.listInstallations(workspaceId);
+    const covered = new Set(installations.filter((i) => !i.suspended).map((i) => i.accountLogin.toLowerCase()));
+    const auth = await this.resolveAuth(workspaceId);
+    const problems: GitHubOwnerCoverage[] = [];
+    for (const [key, owner] of owners) {
+      if (covered.has(key)) continue;
+      try {
+        if (!auth) throw new GitHubNotConnectedError();
+        const installation = await fetchOwnerInstallation(owner);
+        if (!installation) {
+          problems.push({ owner, state: 'not_installed' });
+        } else if (installation.suspended) {
+          problems.push({ owner, state: 'suspended' });
+        } else {
+          const sso = await probeOrgSso(auth.accessToken, owner);
+          problems.push(sso.required
+            ? { owner, state: 'sso_required', ssoUrl: sso.url }
+            : { owner, state: 'not_accessible' });
+        }
+      } catch {
+        problems.push({ owner, state: 'unknown' });
+      }
+    }
+    return problems;
   }
 
   /**

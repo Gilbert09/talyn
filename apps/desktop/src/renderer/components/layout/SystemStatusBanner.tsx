@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { AlertTriangle, Github, Loader2, Plus, ServerCrash, Settings, WifiOff } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { openGithubAppFlow, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
+import { openGithubAppFlow, openGithubExternalUrl, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
+import { useGithubCoverage } from '../../hooks/useGithubCoverage';
+import type { GitHubOwnerCoverage, GitHubOwnerCoverageState } from '../../lib/api';
 
 /**
  * A connectivity row. Deliberately styled apart from the amber warning rows:
@@ -69,6 +71,11 @@ export function SystemStatusBanner() {
   } = useWorkspaceStore();
   const [connecting, setConnecting] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const uncovered = currentWorkspaceId && githubStatus?.connected && githubInstallations
+    && backendHealth !== 'offline' && backendHealth !== 'degraded'
+    ? uncoveredOwners(repositories.map((r) => r.owner), githubInstallations)
+    : [];
+  const coverage = useGithubCoverage(currentWorkspaceId, uncovered);
 
   async function handleConnect() {
     if (!currentWorkspaceId) return;
@@ -154,41 +161,104 @@ export function SystemStatusBanner() {
   // installation list has actually loaded (null = not checked). A watched repo
   // whose owner has no active install is silently never tracked, so surface it.
   if (currentWorkspaceId && githubStatus?.connected && githubInstallations) {
-    const uncovered = uncoveredOwners(
-      repositories.map((r) => r.owner),
-      githubInstallations
-    );
-    if (uncovered.length > 0) {
-      rows.push(
-        <BannerRow
-          key="gh-app-uncovered"
-          message={`The Talyn GitHub App isn't installed on ${formatOwnerList(
-            uncovered
-          )} — watched repos there aren't being tracked until you install it.`}
-          action={
-            <>
-              <Button size="sm" onClick={handleInstallApp} disabled={installing}>
-                {installing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Plus className="mr-1 h-4 w-4" />
-                    Install app
-                  </>
-                )}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setActivePanel('settings')}
-                title="GitHub settings"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-            </>
-          }
-        />
-      );
+    // Wait for the diagnosis rather than flash a guess that may be wrong.
+    if (uncovered.length > 0 && coverage !== undefined) {
+      const problems = coverage ?? uncovered.map((owner): GitHubOwnerCoverage => ({
+        owner, state: 'not_installed',
+      }));
+      const groups = new Map<GitHubOwnerCoverageState, GitHubOwnerCoverage[]>();
+      const ownerSet = new Set(uncovered.map((owner) => owner.toLowerCase()));
+      for (const problem of problems) {
+        if (!ownerSet.has(problem.owner.toLowerCase())) continue;
+        const group = groups.get(problem.state) ?? [];
+        group.push(problem);
+        groups.set(problem.state, group);
+      }
+      for (const [state, group] of groups) {
+        const owners = formatOwnerList(group.map((problem) => problem.owner));
+        if (state === 'suspended') {
+          rows.push(
+            <BannerRow
+              key={`gh-app-${state}`}
+              message={`The Talyn GitHub App is suspended on ${owners}. An owner of ${owners} must unsuspend it in GitHub before watched repos there are tracked.`}
+              action={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setActivePanel('settings')}
+                  title="GitHub settings"
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              }
+            />
+          );
+          continue;
+        }
+        if (state === 'sso_required' || state === 'not_accessible') {
+          rows.push(
+            <BannerRow
+              key={`gh-app-${state}`}
+              message={state === 'sso_required'
+                ? `${owners} uses single sign-on, and your GitHub sign-in isn't authorized for it. Watched repos there aren't tracked until you authorize it and reconnect GitHub.`
+                : `The Talyn GitHub App is installed on ${owners}, but your GitHub account can't reach it. Reconnect GitHub. If that doesn't help, ask an owner of ${owners} to give you access.`}
+              action={
+                <>
+                  {state === 'sso_required' && group.map(({ owner, ssoUrl }) => ssoUrl && (
+                    <Button
+                      key={owner}
+                      size="sm"
+                      title={`Authorize SSO for @${owner}`}
+                      onClick={() => void openGithubExternalUrl(ssoUrl).catch(() => undefined)}
+                    >
+                      Authorize SSO
+                    </Button>
+                  ))}
+                  <Button size="sm" onClick={handleConnect} disabled={connecting}>
+                    {connecting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Github className="mr-1 h-4 w-4" />
+                        Reconnect GitHub
+                      </>
+                    )}
+                  </Button>
+                </>
+              }
+            />
+          );
+          continue;
+        }
+        rows.push(
+          <BannerRow
+            key={`gh-app-${state}`}
+            message={`The Talyn GitHub App isn't installed on ${owners} — watched repos there aren't being tracked until you install it.`}
+            action={
+              <>
+                <Button size="sm" onClick={handleInstallApp} disabled={installing}>
+                  {installing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Plus className="mr-1 h-4 w-4" />
+                      Install app
+                    </>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setActivePanel('settings')}
+                  title="GitHub settings"
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </>
+            }
+          />
+        );
+      }
     }
   }
 

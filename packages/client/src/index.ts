@@ -45,6 +45,7 @@ import type {
   AssignTeamSeatsResponse,
   CreateTeamRequest,
   GitHubAccountSuggestion,
+  GitHubOwnerCoverage,
   TeamCheckoutRequest,
   TeamDetail,
   TeamPricing,
@@ -479,6 +480,8 @@ export interface GitHubInstallation {
   repositorySelection: 'all' | 'selected';
 }
 
+export type { GitHubOwnerCoverage, GitHubOwnerCoverageState } from '@talyn/shared';
+
 // GitHub OAuth + repo discovery only. Every PR-management surface
 // (list / get / create / merge / review / comment) was removed in
 // Phase 7 — the new pull_requests client (see below) replaces the
@@ -513,6 +516,8 @@ export const github = {
       'GET',
       `/github/installations?workspaceId=${workspaceId}`
     ),
+  coverage: (workspaceId: string) =>
+    request<GitHubOwnerCoverage[]>('GET', `/github/coverage?workspaceId=${workspaceId}`),
   listRepos: (workspaceId: string) =>
     request<GitHubRepo[]>('GET', `/github/repos?workspaceId=${workspaceId}`),
   // User's own repos + all their orgs' repos, merged. Expensive — the

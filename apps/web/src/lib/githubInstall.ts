@@ -47,6 +47,11 @@ export async function openGithubAppFlow(
   }
 }
 
+export async function openGithubExternalUrl(url: string): Promise<void> {
+  const opened = window.open(url, '_blank', 'noopener=no');
+  if (!opened) window.location.assign(url);
+}
+
 /** Lowercased account logins with an active (non-suspended) installation. */
 export function installedAccounts(installations: GitHubInstallation[]): Set<string> {
   return new Set(

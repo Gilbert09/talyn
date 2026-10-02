@@ -154,6 +154,19 @@ export interface GitHubIntegration {
   watchedRepos: string[];
 }
 
+export type GitHubOwnerCoverageState =
+  | 'not_installed'
+  | 'suspended'
+  | 'sso_required'
+  | 'not_accessible'
+  | 'unknown';
+
+export interface GitHubOwnerCoverage {
+  owner: string;
+  state: GitHubOwnerCoverageState;
+  ssoUrl?: string | null;
+}
+
 export interface PostHogIntegration {
   enabled: boolean;
   apiKey?: string;

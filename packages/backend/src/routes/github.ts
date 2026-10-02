@@ -418,6 +418,18 @@ export function githubRoutes(): Router {
     }
   });
 
+  router.get('/coverage', async (req, res) => {
+    const workspaceId = await gateWorkspace(req, res);
+    if (!workspaceId) return;
+    try {
+      const coverage = await githubService.diagnoseOwnerCoverage(workspaceId);
+      res.json({ success: true, data: coverage });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
   router.get('/repos', async (req, res) => {
     const workspaceId = await gateWorkspace(req, res);
     if (!workspaceId) return;

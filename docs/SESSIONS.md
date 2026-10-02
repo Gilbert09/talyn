@@ -2,6 +2,16 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Diagnose GitHub access for watched owners (2026-10-02)
+
+The banner treated an installation missing from the user's list as an App that was not installed.
+That list can omit an installed App when the user lacks organization access or SSO authorization.
+The new workspace coverage endpoint checks installation status with an App JWT, then probes SSO with the user's token.
+It caches results for 60 seconds. Storing a token clears the cache. Each failed owner lookup returns `unknown`.
+Both banners now show actions for installation, suspension, SSO authorization, or reconnecting GitHub.
+The existing installations endpoint stays unchanged. `fetchWithTimeout` already exposes the response headers.
+The builds, type checks, lint checks, and 70 tests passed. Live GitHub App token behavior under SSO remains unverified.
+
 ## Code review: landed fixes reopened by a later run (2026-10-01)
 
 A review on PostHog/posthog#109062 said "Fix pushed", but all nine findings were still open. The code at the PR head had fixed them.
