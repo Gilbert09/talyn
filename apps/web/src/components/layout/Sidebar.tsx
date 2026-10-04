@@ -202,7 +202,7 @@ export function Sidebar({ className }: SidebarProps) {
     <div
       className={cn(
         'flex flex-col h-full bg-card border-r transition-all duration-200',
-        sidebarCollapsed ? 'w-16' : 'w-56',
+        sidebarCollapsed ? 'w-16' : 'w-64',
         className
       )}
     >
