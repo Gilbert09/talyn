@@ -2,6 +2,21 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Delete the scratch branch a conflict run publishes to (2026-10-05)
+
+Tom noticed `PostHog/posthog` collecting `talyn/*` branches — three pushed within two minutes of each other, each drawing GitHub's "Compare & pull request" banner. There were **116** of them.
+
+They come from rung 3 of the fleet's base-update ladder. A fleet run cannot `git push` (the repo requires verified signatures and the microVM holds no signing key by design), so it publishes through `fleet-publish`, which asks the credential proxy to make the commit through GitHub's `createCommitOnBranch` mutation. **That mutation must commit onto a ref.** So resolving a conflict locally means publishing the result to a scratch branch and then force-moving the PR head onto it — and nothing had ever deleted the scratch branch. One dead ref per conflicted PR, forever. The names read like agent prose (`talyn/109300-conflict-resolution`, `talyn/96495-rebase-master`) because the agent picks them: no prefix appears anywhere in either codebase.
+
+Fixed in `talyn-fleet` (`internal/proxy/commit.go`, `runner/src/publish.ts`, `runner/src/mcp.ts`) plus the prompts here.
+
+- **`--drop` rides on the move, and is not a route of its own.** A separate `/commit/delete` was the alternative and is worse twice over: it is a step the agent can forget, which it would do on exactly the runs that matter, and it is a general deletion primitive the guest can aim at any ref. This one can only ever finish the job the same request started. Nothing runs unless the move already succeeded, so a move that FAILED leaves the work on the scratch branch where it is.
+- **Deleting the wrong ref closes somebody's pull request**, so `dropRefusal` is pure and tested without GitHub. Not the default branch (read from the API, never assumed to be `main`), not the branch just moved (that would undo the move), and — the real guard — **only a ref currently sitting at the oid the move landed on**. That is what a scratch branch *is*, and no unrelated branch has the property; any other ref at that oid holds the identical tree and loses nothing. It is called twice, once on the name alone before the ref is read, so the first call cannot refuse for want of evidence it does not have yet.
+- **A failed cleanup is reported, never fatal.** The move has landed by then; answering it as an error sends the agent to redo a force-update that worked.
+- The prompt half is the one that can rot, so `buildPostHogPrompt.test.ts` asserts there are at least as many `--drop`s as `--move-branch`es. A later edit cannot add a force-update that forgets to tidy up after it.
+
+The 116 branches already on `PostHog/posthog` were checked against every PR in the repo, open and closed, by two independent methods: none is the head branch of any PR, and the 57 whose tip commit *is* a PR's head commit are scratch refs by definition (the PR's own branch holds that commit). They are safe to delete and the deletion is still pending.
+
 ## Watch repos where the GitHub App is not installed (2026-10-02)
 
 A user wants to watch PRs on an open-source repo that they do not own, for example ClickHouse/ClickHouse.
