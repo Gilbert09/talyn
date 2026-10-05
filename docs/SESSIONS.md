@@ -2,6 +2,54 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The reconcile sweep was restarting production (2026-10-05)
+
+Tom sent a screenshot of the in-app banner: *"Talyn is having trouble on our
+side."* That row means one thing — `GET /github/status` answered 5xx/408/429 —
+and the backend was healthy when asked directly (`/health` 200 in 120ms). What
+it was, was a **restart**: `dbWatchdog` probe failed 8 times running from
+15:21:59 UTC and exited the process at 15:24:09 so Railway would bring up a fresh
+pool. Every request in that window 5xx'd, which is the banner.
+
+What wedged the pool was `prReconcileSweep`, which had blown its 600s ceiling at
+14:49, 15:05 and 15:20 — every tick. The mechanism is two safety devices
+combining into a hazard, and neither is wrong on its own:
+
+- the lock watchdog **abandons** an overrunning tick, which stops waiting for the
+  work but does not stop the work (`withDeadline`, advisoryLock.ts);
+- `TickGuard` **force-releases** at the same ceiling, so the next tick may start.
+
+So a second sweep began on top of a first that was still running. Orphans
+accumulated, each holding connections out of a pool of 20, until there were none
+left. The trigger underneath it was GitHub budget exhaustion across several
+accounts (403s on `richardsolomou/*`, `PostHog/*`), which turned every one of the
+44 serial per-workspace refreshes slow.
+
+This is the third instance of one shape in one day — `cloudPoller`, then
+`taskQueue:dispatch`, now the sweep. **A serial loop over N remote calls inside a
+watchdogged lock, with nothing bounding any single call.** Worth saying plainly
+because the next one will look like the previous three.
+
+The sweep now ends on time by construction, with no ceiling of its own to tune:
+
+- **each refresh gets what is LEFT of the tick's budget**, never more, so the
+  watchdog never has to fire and nothing is ever orphaned;
+- **the loop stops when the budget is gone**, and says how many it did not reach;
+- **the close-out and the final prune are inside the budget**, not appended to
+  it — they are network calls like any other;
+- **a cursor carries the remainder to the next tick.** Without it a sweep that
+  cannot finish re-polls the head of the list for ever and the tail never gets
+  its safety net at all. A tick that DOES finish wraps to the front, which is
+  correct: there is no remainder.
+
+Pinned in `prReconcileSweepBudget.test.ts`: the tick returns even when a refresh
+never settles, and a starved workspace is the next tick's first.
+
+**Not fixed, and the thing actually underneath it:** several GitHub accounts are
+running out of REST and GraphQL budget outright. The sweep no longer melts the
+pool when that happens, but it is still happening, and it is why the sweep went
+from comfortable to over-budget in the first place.
+
 ## The vanished-run retry loop, closed for the second time (2026-10-05)
 
 Tom: "All tasks are getting stuck as queued on the fleet."
