@@ -2,6 +2,70 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## The vanished-run retry loop, closed for the second time (2026-10-05)
+
+Tom: "All tasks are getting stuck as queued on the fleet."
+
+The trigger was transient — the host spent 13:00–13:08 UTC refusing every boot
+(`golden … advertised [events,heartbeat,cancel,resume] at HELLO and not "sandbox"`,
+a base golden from before sandbox mode; a redeploy rebaked it) and then a
+`PostHog/posthog` dependency-drift rebake. While that lasted, fleet creates hung,
+and `taskQueue:dispatch` — a strictly serial loop with no per-task budget inside a
+300s-watchdogged lock — spent an entire tick on the task at the head of the queue
+and was abandoned with 21 tasks behind it untouched. That recovered on its own.
+
+What did NOT recover, and is the actual finding: **`cloudPoller:tick` was
+exceeding its 300s budget on every single tick**, so no pass over the live tasks
+ever finished. Fourteen tasks were re-failed 26–28 times in a seventeen-minute
+window — three quarters of the backend's entire log volume, one fleet round trip
+each per tick, for ever.
+
+It is the 2026-08-06 loop again, by a route that did not exist in August. The
+detection added then (`FleetRunNotFoundError` → `failVanishedRun`, terminal, not
+retryable) was working perfectly. What changed underneath it is that the generic
+poller grew a **third** selection branch: every terminal task whose `updatedAt` is
+inside a 30-minute window and whose transcript is not yet marked final. So it can
+now hand a terminal task back to a provider — and two things met there:
+
+- the fleet's `reconcileTask` had **no terminal guard**, so it re-asked the host
+  about a run it had already given up on and got the same 404;
+- `failVanishedRun` writes `updatedAt: now`, which is the column that window is
+  bounded by.
+
+**The row re-armed the window that selected it.** No exit. The branch's own
+comment says "the provider must therefore not re-finalise a task that is already
+terminal — PostHog's reconcile returns early on one", and PostHog's does; the
+fleet's never did. The guard was written as a property of one provider instead of
+a requirement the branch places on all of them, so adding the branch silently
+owed a change to a file nobody was looking at.
+
+Three changes, all in `services/selfHosted/poller.ts`:
+
+- **A terminal guard in `reconcileTask`.** For a finished task the backfill is the
+  only work owed: sync the transcript, mark it final, stop following, return.
+  Everything below ends in `finalize`, which re-emits status and re-files outcome
+  analytics, and the `getSandbox` catch below it is the loop itself.
+- **`failVanishedRun` marks the transcript final.** The host has no such sandbox;
+  there is no event log left to fetch and no later tick can change that. Saying so
+  is what takes the row out of the window permanently.
+- **`failUndispatched` likewise** — a task that never reached a host has no
+  transcript coming either. It self-limited on its `!== 'in_progress'` guard, so it
+  was only wasting a read per tick, but it is the same fact.
+
+Pinned in `fleetVanishedRunLoop.test.ts`, on the property that kills the loop
+whichever way it is entered: a terminal task leaves a reconcile with the marker
+set and **`updatedAt` untouched**. The third case guards the guard — a task that
+went terminal by another route (cancelled from the API, failed by a watcher) still
+has a log worth storing, and still gets backfilled exactly once.
+
+**Left undone, deliberately:** `dispatchQueuedTasks` still walks its queue
+serially with no time budget, so one slow dispatch costs the whole tick and every
+task behind it. That is what converted a fifteen-minute host wobble into a
+total queue stall. Bounding it needs a defensible answer to "how long may one
+dispatch take", and the honest one is not obvious: the fleet client caps each HTTP
+call at 20s, but the credential leg can sit on `pg_advisory_xact_lock`, which has
+no bound at all. Logged here rather than guessed at a number.
+
 ## Delete the scratch branch a conflict run publishes to (2026-10-05)
 
 Tom noticed `PostHog/posthog` collecting `talyn/*` branches — three pushed within two minutes of each other, each drawing GitHub's "Compare & pull request" banner. There were **116** of them.

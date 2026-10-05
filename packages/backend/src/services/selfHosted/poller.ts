@@ -5,6 +5,7 @@ import {
   parseNeedsHumanSentinel,
   readCloudTaskMeta,
   readCloudTaskProvider,
+  TASK_STATUS_TERMINAL,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
 import { tasks as tasksTable, repositories as repositoriesTable } from '../../db/schema.js';
@@ -174,6 +175,36 @@ class SelfHostedPoller {
 
     const client = await getSelfHostedClient(row.workspaceId);
     if (!client) return; // credentials removed mid-run; leave the task as-is.
+
+    // The LOCAL task has already finished. The generic scheduler still hands us
+    // a terminal task for TRANSCRIPT_BACKFILL_WINDOW_MS while its stored
+    // transcript is not yet the run's record, so the backfill is the ONLY work
+    // owed here — and once it is done, saying so is what drops the row out of
+    // that window.
+    //
+    // Nothing below this may run for a finished task. Two separate things go
+    // wrong if it does, and the second one has no exit:
+    //
+    //   - the tail of this method ends in `finalize`, which re-emits the task's
+    //     status and re-files its outcome analytics on every tick;
+    //   - the `getSandbox` catch below calls `failVanishedRun`, which WRITES
+    //     `updatedAt: now`. That is the same column the backfill window is
+    //     bounded by, so a vanished run re-armed the window that selected it,
+    //     every tick, for ever.
+    //
+    // On 2026-10-05 fourteen tasks sat in that second loop: one fleet round
+    // trip each per poll, three quarters of the backend's entire log volume,
+    // and a `cloudPoller:tick` that blew its 300s budget on every single tick
+    // and so never finished a pass over the genuinely live tasks. The
+    // vanished-run detection added after 2026-08-06 was working perfectly; the
+    // loop came back through the backfill branch, which did not exist then.
+    // PostHog Code's reconcile has carried the equivalent guard from the start.
+    if (TASK_STATUS_TERMINAL[row.status]) {
+      await this.syncTranscript(row, client, runId, true);
+      await markTranscriptFinal(row.id);
+      this.stopFollow(row.id);
+      return;
+    }
 
     // Any error here (including the capacity/throttle types) propagates to the
     // generic poller, which logs it and retries next tick. A failed poll must
@@ -567,6 +598,10 @@ class SelfHostedPoller {
       return { ...existing, cloudTask: { ...(prev ?? {}), status: 'failed' } };
     });
 
+    // Same reason as `failVanishedRun`: this task never reached a host, so no
+    // transcript is coming and the backfill window has nothing to wait for.
+    await markTranscriptFinal(row.id);
+
     emitTaskStatus(row.workspaceId, row.id, 'failed', result);
     console.warn(
       `[selfhosted] task ${row.id.slice(0, 8)}: in_progress with no fleet run — failing it`,
@@ -617,6 +652,15 @@ class SelfHostedPoller {
         cloudTask: { ...(prev ?? {}), status: 'failed' },
       };
     });
+
+    // Whatever is stored IS the record now, so the generic poller's
+    // transcript-backfill window has no reason to hand this row back. The host
+    // has no such sandbox: there is no event log left to fetch, and no later
+    // tick can change that answer. Without this the row keeps qualifying for
+    // the window — and because the write above refreshes `updatedAt`, which is
+    // what bounds the window, it re-qualifies for ever. See the terminal guard
+    // in `reconcileTask` for the incident.
+    await markTranscriptFinal(row.id);
 
     emitTaskStatus(row.workspaceId, row.id, 'failed', result);
     console.warn(
