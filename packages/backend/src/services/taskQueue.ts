@@ -56,6 +56,62 @@ export const MAX_DISPATCH_ATTEMPTS = 40;
 const DISPATCH_BACKOFF_BASE_MS = 10_000;
 const DISPATCH_BACKOFF_CAP_MS = 10 * 60_000;
 
+/**
+ * Ceiling on ONE task's dispatch.
+ *
+ * The queue walks its due tasks SERIALLY inside a single advisory lock whose
+ * whole-tick budget is 300s. Without a per-task bound the first task can spend
+ * that entire budget and every task behind it simply never gets attempted — the
+ * tick is then abandoned by the lock watchdog, the next tick starts from the
+ * same head task, and the queue makes no progress at all. That is not
+ * hypothetical: on 2026-10-05 a fleet host spent eight minutes refusing every
+ * boot, one dispatch hung on it, and 21 tasks sat queued behind that one task
+ * for three consecutive ticks.
+ *
+ * The figure is the slowest LEGITIMATE dispatch either provider can make,
+ * rather than a round number. Talyn Fleet caps every HTTP call at 20s
+ * (`selfHosted/client.ts` DEFAULT_TIMEOUT_MS) and re-sends a create it is
+ * unsure about twice, 2s apart (`sandboxRun.ts` DISPATCH_UNCERTAIN_*), so the
+ * create leg alone is 3x20 + 2x2 = 64s; the credential leg can add one further
+ * 20s round trip when a vendor token needs refreshing, for 84s. The 90s here is
+ * that, rounded up to the next ten seconds. PostHog Code is well inside it.
+ *
+ * Past this the dispatch is not slow, it is hung, and the task is far better
+ * served by the exponential backoff above — which a timeout feeds, so a
+ * genuinely stuck task drops out of the next few ticks instead of blocking
+ * them.
+ */
+export const MAX_DISPATCH_MS = 90_000;
+
+/**
+ * Reject once `ms` elapses. Like the lock watchdog in advisoryLock.ts, the
+ * abandoned work KEEPS RUNNING — we are freeing the caller, not the callee.
+ *
+ * That is safe here, and deliberately so: a fleet create is idempotent on the
+ * run id (`fleetRunIdForTask`), so an orphan that lands late re-attaches to the
+ * same sandbox rather than booting a second one, and the worst case is a task
+ * that this tick recorded as a failed attempt being moved to `in_progress` by
+ * its own late dispatch — which is the correct end state, because the sandbox
+ * really does exist.
+ */
+async function withDispatchDeadline<T>(promise: Promise<T>, ms: number, title: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`dispatch exceeded ${ms}ms and was abandoned for "${title}"`)),
+          ms
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Backoff before attempt `attempts + 1` (exported for tests). */
 export function dispatchBackoffMs(attempts: number): number {
   return Math.min(
@@ -207,12 +263,32 @@ class TaskQueueService extends EventEmitter {
 
     console.log(`[TaskQueue] Processing ${due.length} queued task(s)`);
 
+    // The tick's own budget, so the loop stops itself rather than being
+    // abandoned mid-task by the lock watchdog. A watchdog kill rolls the lock
+    // transaction back and leaves the in-flight dispatch running unseen; ending
+    // cleanly one dispatch short of the ceiling keeps every task we did not
+    // reach plainly `queued` for the next tick, five seconds later.
+    const tickDeadline = Date.now() + this.guard.maxMs;
+
     for (const task of due) {
+      if (Date.now() + MAX_DISPATCH_MS > tickDeadline) {
+        console.warn(
+          `[TaskQueue] tick budget spent; leaving ${
+            due.length - due.indexOf(task)
+          } task(s) queued for the next tick`
+        );
+        break;
+      }
       // Per-task isolation: one task whose dispatch pipeline throws (bad
       // metadata, provider bug, DB hiccup) must not starve the rest of the
       // tick — mirrors the per-row try/catch in cloudProviders/poller.ts.
+      //
+      // A dispatch that HANGS starves it just as effectively as one that
+      // throws, and for longer, so it is bounded and routed into the same
+      // handler: the timeout counts as a failed attempt, the task backs off,
+      // and the tasks behind it get their turn. See MAX_DISPATCH_MS.
       try {
-        await this.dispatchTask(task);
+        await withDispatchDeadline(this.dispatchTask(task), MAX_DISPATCH_MS, task.title);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.error(`[TaskQueue] dispatch threw for "${task.title}": ${reason}`);

@@ -58,13 +58,31 @@ set and **`updatedAt` untouched**. The third case guards the guard — a task th
 went terminal by another route (cancelled from the API, failed by a watcher) still
 has a log worth storing, and still gets backfilled exactly once.
 
-**Left undone, deliberately:** `dispatchQueuedTasks` still walks its queue
-serially with no time budget, so one slow dispatch costs the whole tick and every
-task behind it. That is what converted a fifteen-minute host wobble into a
-total queue stall. Bounding it needs a defensible answer to "how long may one
-dispatch take", and the honest one is not obvious: the fleet client caps each HTTP
-call at 20s, but the credential leg can sit on `pg_advisory_xact_lock`, which has
-no bound at all. Logged here rather than guessed at a number.
+**Then the second half, on Tom's reading of it: "one task broke the queue for all
+the others".** `dispatchQueuedTasks` walks its due tasks serially inside one
+advisory lock. It already had a per-task try/catch, so a dispatch that THREW was
+isolated — but nothing bounded one that simply never came back, and that starves
+the queue just as completely and for far longer. The hung dispatch ate the tick's
+whole 300s budget, the watchdog abandoned the tick (which, per `withDeadline` in
+`advisoryLock.ts`, releases the lock and leaves the work running unseen), and the
+next tick started from the same head task and did it again.
+
+- **`MAX_DISPATCH_MS` is derived, not round.** The fleet caps every HTTP call at
+  20s and re-sends an uncertain create twice 2s apart, so its create leg is
+  3x20 + 2x2 = 64s; a vendor token refresh can add one more 20s round trip, for
+  84s. 90s is that rounded up. Past it a dispatch is not slow, it is hung.
+- **A timeout feeds the existing backoff** rather than inventing a new state, so
+  a genuinely stuck task drops out of the next few ticks on its own.
+- **The tick stops one dispatch short of its own ceiling**, so it ends cleanly
+  instead of being killed mid-task. Whatever it did not reach is still plainly
+  `queued` five seconds later.
+- The abandoned dispatch keeps running, deliberately: a fleet create is
+  idempotent on the run id, so a late orphan re-attaches to the same sandbox
+  rather than booting a second one.
+
+**Still open:** the credential leg can sit on `pg_advisory_xact_lock`, which has
+no bound at all (the 2026-09-30 lesson). The 90s ceiling now contains it, but
+containing it is not the same as fixing it.
 
 ## Delete the scratch branch a conflict run publishes to (2026-10-05)
 
