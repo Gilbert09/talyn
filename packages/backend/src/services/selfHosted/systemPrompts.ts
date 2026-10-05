@@ -49,7 +49,11 @@ export const TASK_SYSTEM_PROMPT =
   'the result is signed, and both refuse when the merge is not clean — a refusal means there is a real ' +
   'conflict, not that you used them wrongly. (3) Only if both refuse: resolve the conflict in the working ' +
   'tree, `fleet-publish` the result to a NEW scratch branch, then ' +
-  '`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published>`. ' +
+  '`fleet-publish --move-branch <the PR head branch> --oid <the sha you just published> ' +
+  '--drop <the scratch branch>`. Always pass `--drop`: the scratch branch exists only because ' +
+  'publishing needs a ref to commit onto, and one left behind per conflicted PR is a dead branch on ' +
+  'the repository forever. The fleet refuses to drop the branch it just moved, the default branch, or ' +
+  'any branch not sitting at that sha. ' +
   'Rung 3 rewrites the PR branch and discards its previous commits, so do not reach for it while (1) or ' +
   '(2) would have worked. Never move the repository default branch; the fleet will refuse.\n\n' +
   'git and the GitHub API are already authenticated — there are no credentials in this VM and you ' +

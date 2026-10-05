@@ -145,6 +145,19 @@ describe('buildMergeablePrompt — selfhosted variant (Talyn Fleet: fleet-publis
     expect(ladder.indexOf('--move-branch')).toBeGreaterThan(ladder.indexOf('/merges'));
   });
 
+  // Rung 3 publishes to a scratch branch because GitHub's commit mutation must
+  // commit onto a ref. Nothing used to delete it, so a repository collected one
+  // dead `talyn/<pr>-conflict-resolution` ref per conflicted PR. The cleanup is
+  // only as good as the instruction to ask for it, so assert the instruction.
+  it('tells rung 3 to drop the scratch branch it published to', () => {
+    const ladder = prompt.slice(prompt.indexOf('/update-branch'));
+    expect(ladder).toContain('--drop');
+    // Every force-update in the prompt carries the cleanup, not just one of them.
+    const moves = prompt.match(/--move-branch/g) ?? [];
+    const drops = prompt.match(/--drop/g) ?? [];
+    expect(drops.length).toBeGreaterThanOrEqual(moves.length);
+  });
+
   it('keeps `gh` — the fleet golden ships a shim for it', () => {
     expect(prompt).toContain('gh pr view 7');
   });
