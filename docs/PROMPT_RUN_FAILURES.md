@@ -12,10 +12,10 @@ guesses.
 ## What the system is
 
 Talyn (`~/dev/Gilbert09/fastowl`) is a desktop/web app that delegates PR work to
-cloud coding agents. Talyn Fleet (`~/dev/Gilbert09/talyn-fleet`, Go) is our own
+cloud coding agents. Talyn Fleet (YetAnotherSandbox, `~/dev/Gilbert09/yas`, Go) is our own
 runner: fleetd supervises Firecracker microVMs, one per run, with a credential
 proxy that injects GitHub/Anthropic tokens host-side so no secret enters the
-guest. Read `fastowl/CLAUDE.md` and `talyn-fleet/docs/SPEC.md` before changing
+guest. Read `fastowl/CLAUDE.md` and `yas/docs/SPEC.md` before changing
 anything — both are detailed and current.
 
 The unit of work is a **task** (`pr_response`, `pr_review`, `code_writing`) which
@@ -77,7 +77,7 @@ interesting ones carry a real cost ($3–$8) — they did work and then failed.
   deadline is currently the only bound on what a run can spend.
 - **`list_pr_comments` can return 75k+ characters** and blow the agent's
   tool-output limit; the agent then has to read it back from a file. Needs
-  pagination or truncation. (`talyn-fleet/runner/src/mcp.ts`)
+  pagination or truncation. (`yas/runner/src/mcp.ts`)
 - **`WebFetch` cannot work in a guest** — its safety check has to reach
   claude.ai. The prompt now says so, but check whether agents still reach for it.
 - A first `PostHog/posthog@master` golden now exists and is selectable, so runs
