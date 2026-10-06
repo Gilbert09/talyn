@@ -188,14 +188,10 @@ async function recoverSession(): Promise<boolean> {
 }
 
 /**
- * How long a GET waits before its one retry after a transport failure.
- *
- * A laptop waking from sleep is the case this exists for. The WebSocket opens a
- * fresh connection and the backend accepts it, but the catch-up refetch that
- * follows a few milliseconds later rejects with `Failed to fetch` — most likely
- * on an HTTP connection pooled before the sleep. The catch-up is then lost
- * until the next reconnect. A short wait and one retry gets a new connection;
- * a real outage fails both attempts and still surfaces as an ApiNetworkError.
+ * How long a GET waits before its one retry after a transport failure. After a
+ * wake from sleep, the reconnect catch-up GETs fail within milliseconds of a
+ * fresh WebSocket being accepted — most likely on a connection pooled before
+ * the sleep. A real outage fails both attempts and still throws.
  */
 const TRANSPORT_RETRY_DELAY_MS = 1000;
 
@@ -215,17 +211,16 @@ async function fetchOrThrow(
   init: RequestInit
 ): Promise<Response> {
   const url = `${getApiRoot()}${path}`;
+  const options = { ...init, method };
   try {
-    return await fetch(url, init);
+    return await fetch(url, options);
   } catch (err) {
-    const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
-    if (method !== 'GET' || !online || init.signal?.aborted) {
-      throw new ApiNetworkError(method, path, err);
-    }
+    const error = new ApiNetworkError(method, path, err);
+    if (method !== 'GET' || !error.online || init.signal?.aborted) throw error;
   }
   await new Promise((resolve) => setTimeout(resolve, TRANSPORT_RETRY_DELAY_MS));
   try {
-    return await fetch(url, init);
+    return await fetch(url, options);
   } catch (err) {
     throw new ApiNetworkError(method, path, err);
   }
@@ -249,7 +244,6 @@ async function request<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetchOrThrow(method, path, {
-    method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -319,7 +313,6 @@ async function rawRequest(
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const response = await fetchOrThrow(method, path, {
-    method,
     headers,
     signal: init.signal,
   });

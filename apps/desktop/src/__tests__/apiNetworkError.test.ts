@@ -30,18 +30,18 @@ const ok = (data: unknown) =>
     text: async () => JSON.stringify({ success: true, data }),
   }) as Response;
 
-describe('request — network-error wrapping', () => {
-  const realFetch = global.fetch;
-  beforeEach(() => {
-    jest.useFakeTimers();
-    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
-  });
-  afterEach(() => {
-    global.fetch = realFetch;
-    jest.useRealTimers();
-    jest.restoreAllMocks();
-  });
+const realFetch = global.fetch;
+beforeEach(() => {
+  jest.useFakeTimers();
+  Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+});
+afterEach(() => {
+  global.fetch = realFetch;
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
 
+describe('request — network-error wrapping', () => {
   it('wraps a transport-level fetch rejection in ApiNetworkError', async () => {
     global.fetch = jest
       .fn()
@@ -88,20 +88,6 @@ describe('request — network-error wrapping', () => {
 });
 
 describe('request — transport retry', () => {
-  // After sleep, the reconnect catch-up GETs failed with "Failed to fetch"
-  // while a fresh WebSocket to the same backend had just been accepted. The
-  // catch-up was lost. One retry recovers it; a real outage still throws.
-  const realFetch = global.fetch;
-  beforeEach(() => {
-    jest.useFakeTimers();
-    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
-  });
-  afterEach(() => {
-    global.fetch = realFetch;
-    jest.useRealTimers();
-    jest.restoreAllMocks();
-  });
-
   it('retries a GET once and returns the data when the retry succeeds', async () => {
     const fetchMock = jest
       .fn()
