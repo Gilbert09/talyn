@@ -187,6 +187,50 @@ async function recoverSession(): Promise<boolean> {
   return sessionRecovery;
 }
 
+/**
+ * How long a GET waits before its one retry after a transport failure.
+ *
+ * A laptop waking from sleep is the case this exists for. The WebSocket opens a
+ * fresh connection and the backend accepts it, but the catch-up refetch that
+ * follows a few milliseconds later rejects with `Failed to fetch` — most likely
+ * on an HTTP connection pooled before the sleep. The catch-up is then lost
+ * until the next reconnect. A short wait and one retry gets a new connection;
+ * a real outage fails both attempts and still surfaces as an ApiNetworkError.
+ */
+const TRANSPORT_RETRY_DELAY_MS = 1000;
+
+/**
+ * `fetch`, with transport failures wrapped in ApiNetworkError so an outage or
+ * offline blip is identifiable instead of a bare, un-symbolicated
+ * "TypeError: Failed to fetch". fetch only rejects on a transport failure,
+ * never on an HTTP error status.
+ *
+ * A GET is retried once (see TRANSPORT_RETRY_DELAY_MS). Only a GET: a POST
+ * that rejected may still have reached the server, so a replay could apply it
+ * twice. Not when offline (a retry cannot succeed) or once the caller aborted.
+ */
+async function fetchOrThrow(
+  method: string,
+  path: string,
+  init: RequestInit
+): Promise<Response> {
+  const url = `${getApiRoot()}${path}`;
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    if (method !== 'GET' || !online || init.signal?.aborted) {
+      throw new ApiNetworkError(method, path, err);
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, TRANSPORT_RETRY_DELAY_MS));
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    throw new ApiNetworkError(method, path, err);
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -204,19 +248,11 @@ async function request<T>(
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let response: Response;
-  try {
-    response = await fetch(`${getApiRoot()}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch (err) {
-    // fetch only rejects on a transport failure (never on an HTTP error
-    // status). Rethrow with context so an outage/offline blip is identifiable
-    // instead of a bare, un-symbolicated "TypeError: Failed to fetch".
-    throw new ApiNetworkError(method, path, err);
-  }
+  const response = await fetchOrThrow(method, path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
 
   if (response.status === 401 && token && !isRetry) {
     // The backend rejected our token. Try to recover the session (see
@@ -265,8 +301,9 @@ async function request<T>(
  *
  * Everything else about the transport is identical, deliberately: same auth
  * header, same client-version header, same 401-recover-and-replay, same
- * ApiNetworkError wrapping. Diverging on any of those is how one endpoint ends
- * up being the only thing that doesn't survive a token refresh.
+ * ApiNetworkError wrapping and transport retry. Diverging on any of those is
+ * how one endpoint ends up being the only thing that doesn't survive a token
+ * refresh.
  */
 async function rawRequest(
   method: string,
@@ -281,16 +318,11 @@ async function rawRequest(
   const token = await getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let response: Response;
-  try {
-    response = await fetch(`${getApiRoot()}${path}`, {
-      method,
-      headers,
-      signal: init.signal,
-    });
-  } catch (err) {
-    throw new ApiNetworkError(method, path, err);
-  }
+  const response = await fetchOrThrow(method, path, {
+    method,
+    headers,
+    signal: init.signal,
+  });
 
   if (response.status === 401 && token && !isRetry) {
     if (await recoverSession()) {
