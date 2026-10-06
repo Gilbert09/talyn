@@ -70,8 +70,19 @@ describe('exhaustedAgentFrom', () => {
     expect(rateLimitedAgentFrom(detail)).toBe('claude');
   });
 
-  it('names OpenAI as the limited vendor when the message does', () => {
-    expect(rateLimitedAgentFrom('rate_limited: Rate limited by the OpenAI API')).toBe('codex');
+  it.each([
+    ['the fleet\'s OpenAI line', 'rate_limited: Rate limited by the OpenAI API'],
+    [
+      // Verbatim from a failed run on 2026-10-06. It used to match neither
+      // list, so the run died with a connected Claude subscription idle.
+      'the Codex CLI on a ChatGPT plan',
+      'harness_no_output: the harness produced no agent turn: You have hit your ChatGPT ' +
+        'usage limit (prolite plan). Try again in ~7194 min.',
+    ],
+    ['the contracted form', "You've hit your ChatGPT usage limit (plus plan). Try again in 3 hours."],
+  ])('names Codex as the limited agent for %s', (_label, detail) => {
+    expect(exhaustedAgentFrom(detail)).toBeNull();
+    expect(rateLimitedAgentFrom(detail)).toBe('codex');
   });
 
   it.each([
@@ -133,6 +144,9 @@ describe('resetInstantFrom', () => {
     ['seconds', 'retry-after: 900', 900_000],
     ['minutes', 'try again in 30 minutes', 30 * 60_000],
     ['hours', 'try again in 5 hours', 5 * 3_600_000],
+    ['abbreviated minutes', 'Try again in ~7194 min.', 7194 * 60_000],
+    ['abbreviated hours', 'try again in 2 hrs', 2 * 3_600_000],
+    ['abbreviated seconds', 'try again in 45 secs', 45_000],
   ])('turns a relative hint in %s into an instant', (_label, detail, ms) => {
     expect(resetInstantFrom(detail, NOW)).toBe(new Date(NOW.getTime() + ms).toISOString());
   });

@@ -94,6 +94,12 @@ export function exhaustedAgentFrom(detail: string | null | undefined): FleetAgen
  * actually shows; the rest are the vendors' wording when it reaches us intact.
  * Kept narrow for the same reason as the exhaustion lists: a looser rule moves
  * work off a subscription that was never limited.
+ *
+ * "hit your … usage limit" is the Codex CLI's wording on a ChatGPT plan, which
+ * reaches us as a `harness_no_output` wrapper (observed 2026-10-06: "You have
+ * hit your ChatGPT usage limit (prolite plan). Try again in ~7194 min.").
+ * Five days is a long wait, but it is still a wait — the plan's weekly window
+ * rolls over by itself — so it moves one hop like any other rate limit.
  */
 const RATE_LIMITED = [
   /\brate_limited\b/i,
@@ -101,6 +107,7 @@ const RATE_LIMITED = [
   /rate limited by the (anthropic|openai) api/i,
   /reached your usage limit/i,
   /usage limit reached/i,
+  /\bhit your (?:\w+ )?usage limit/i,
 ] as const;
 
 /**
@@ -133,9 +140,11 @@ export function rateLimitedAgentFrom(detail: string | null | undefined): FleetAg
   if (exhaustedAgentFrom(detail)) return null;
   if (!RATE_LIMITED.some((re) => re.test(detail))) return null;
   // Which vendor. The fleet's own `rate_limited:` line names the API, and an
-  // OpenAI-worded limit is Codex; everything else that reaches here is Claude,
-  // which is the agent the overwhelming majority of these come from.
-  return /openai/i.test(detail) ? 'codex' : 'claude';
+  // OpenAI- or ChatGPT-worded limit is Codex; everything else that reaches here
+  // is Claude, which is the agent the overwhelming majority of these come from.
+  // Naming the wrong one is not harmless: the failover marks the OTHER agent
+  // as tried and re-runs on the one that is limited.
+  return /openai|chatgpt/i.test(detail) ? 'codex' : 'claude';
 }
 
 /** How the task explains a move made because one vendor was rate limiting. */
@@ -230,13 +239,16 @@ export function resetInstantFrom(
     if (!Number.isNaN(at.getTime())) return at.toISOString();
   }
 
-  const after = /(?:retry[-\s]?after|try again in)\D{0,12}?(\d{1,7})\s*(second|minute|hour)?/i.exec(
-    detail,
-  );
+  // Abbreviated units count: Codex says "try again in ~7194 min", and reading
+  // that as seconds would name a reset five days too early.
+  const after =
+    /(?:retry[-\s]?after|try again in)\D{0,12}?(\d{1,7})\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)?\b/i.exec(
+      detail,
+    );
   if (after) {
     const n = Number(after[1]);
     const unit = (after[2] ?? 'second').toLowerCase();
-    const ms = n * (unit.startsWith('hour') ? 3_600_000 : unit.startsWith('minute') ? 60_000 : 1000);
+    const ms = n * (unit.startsWith('h') ? 3_600_000 : unit.startsWith('min') ? 60_000 : 1000);
     if (ms > 0) return new Date(now.getTime() + ms).toISOString();
   }
 
