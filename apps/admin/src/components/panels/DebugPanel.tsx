@@ -7,6 +7,7 @@ import type {
   DebugGraphqlBudget,
   DebugMergeableSettle,
   DebugSnapshot,
+  GithubHealth,
 } from '@talyn/shared';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
@@ -59,6 +60,8 @@ const CATEGORY_INFO: Record<DebugCategory, string> = {
 // rows. Keep this in sync when a new outbound integration or emitter lands.
 const SERVICE_INFO: Record<string, string> = {
   github: 'GitHub REST + GraphQL API — PR data, checks, reviews, merges, and OAuth.',
+  github_status:
+    'GitHub’s public status page (githubstatus.com) — read once a minute, with no key. One of the two signals behind the in-app GitHub outage banner; the other is the share of our own GitHub calls that fail.',
   postgres: 'The Supabase Postgres database — every query funnels through here. Rows show the operation, target table, and estimated result size.',
   posthog_code: 'PostHog Code cloud-task API — creates and runs cloud agent tasks and streams their transcripts.',
   posthog_oauth:
@@ -286,6 +289,75 @@ function MergeableSettleCard({ m }: { m: DebugMergeableSettle }) {
           unhandled > 0 ? 'text-amber-400' : 'text-zinc-200'
         )}
         {stat('pending', m.pending.toLocaleString())}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What this replica says about GitHub's own health: the state clients see in
+ * their banner, which signal reported it, and the numbers behind it.
+ */
+function GithubHealthCard({ h }: { h: GithubHealth }) {
+  const tone =
+    h.state === 'down'
+      ? 'text-red-400'
+      : h.state === 'degraded'
+        ? 'text-amber-400'
+        : h.state === 'operational'
+          ? 'text-emerald-400'
+          : 'text-zinc-400';
+  const stat = (label: string, value: string, valueTone?: string) => (
+    <span className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wide text-zinc-500">{label}</span>
+      <span className={cn('font-mono text-xs', valueTone ?? 'text-zinc-200')}>{value}</span>
+    </span>
+  );
+  const failures = (t: GithubHealth['traffic']['rest']) =>
+    `${t.serverFailures.toLocaleString()}/${t.requests.toLocaleString()}`;
+  const failureTone = (t: GithubHealth['traffic']['rest']) =>
+    t.state === 'down' ? 'text-red-400' : t.state === 'degraded' ? 'text-amber-400' : undefined;
+  const windowMin = Math.round(h.traffic.windowMs / 60_000);
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-900/40 p-2">
+      <Tip
+        side="bottom"
+        content={
+          <span className="block">
+            <span className="font-medium text-zinc-100">GitHub health</span>
+            <span className="mt-1 block">
+              Whether GitHub itself is up, as this backend process sees it. Two signals: the share
+              of our own GitHub calls in the last {windowMin} min that ended in a 500/502/503/504 or
+              no answer, and GitHub&rsquo;s status page. Clients show a banner on{' '}
+              <span className="font-mono">degraded</span> and <span className="font-mono">down</span>.
+            </span>
+            <span className="mt-1 block text-zinc-500">
+              Per process: another replica can report a different state.
+              {h.since ? ` In this state since ${ago(h.since)}.` : ''}
+              {h.statusPage && h.statusPage.incidents.length > 0
+                ? ` Incidents: ${h.statusPage.incidents.map((i) => i.name).join('; ')}.`
+                : ''}
+            </span>
+          </span>
+        }
+      >
+        <span className="flex items-center gap-1 text-xs text-zinc-200">
+          GitHub health
+          <Info className="h-3 w-3 shrink-0 text-zinc-600" />
+        </span>
+      </Tip>
+      <div className="mt-1.5 flex flex-wrap gap-3">
+        {stat('state', h.state, tone)}
+        {stat('source', h.source ?? 'none')}
+        {stat('rest fail', failures(h.traffic.rest), failureTone(h.traffic.rest))}
+        {stat('graphql fail', failures(h.traffic.graphql), failureTone(h.traffic.graphql))}
+        {stat(
+          'status page',
+          h.statusPage
+            ? `${h.statusPage.indicator ?? 'unknown'} · ${ago(h.statusPage.fetchedAt)}`
+            : 'not read',
+          h.statusPage?.state === 'unknown' ? 'text-zinc-500' : undefined
+        )}
       </div>
     </div>
   );
@@ -731,7 +803,9 @@ export function DebugPanel() {
           })}
         </div>
 
-        {((snapshot?.graphqlBudgets?.length ?? 0) > 0 || snapshot?.mergeableSettle) && (
+        {((snapshot?.graphqlBudgets?.length ?? 0) > 0 ||
+          snapshot?.mergeableSettle ||
+          snapshot?.githubHealth) && (
           <>
             <div className="mt-3 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               <Gauge className="h-3.5 w-3.5" />
@@ -744,6 +818,7 @@ export function DebugPanel() {
               {snapshot?.mergeableSettle && (
                 <MergeableSettleCard m={snapshot.mergeableSettle} />
               )}
+              {snapshot?.githubHealth && <GithubHealthCard h={snapshot.githubHealth} />}
             </div>
           </>
         )}

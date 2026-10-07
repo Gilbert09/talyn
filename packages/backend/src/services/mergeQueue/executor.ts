@@ -74,6 +74,7 @@ import { debugBus } from '../debugBus.js';
 import { captureWorkspaceEvent } from '../analytics.js';
 import { decide } from './decide.js';
 import { codeReviewBlockerFor } from '../codeReview/queueGate.js';
+import { githubHealthMonitor } from '../githubHealthMonitor.js';
 import { toPublicMergeQueue } from './legacy.js';
 import {
   casTransition,
@@ -401,6 +402,7 @@ async function buildBaseContext(
     updateBranchAvailable: true,
     cloudEnvAvailable: cloudEnv !== null,
     restGateBlocked: githubRateGate.isBlocked(accountKey, 'rest'),
+    githubDown: githubHealthMonitor.isDown(),
     graphqlGateBlocked,
     graphqlBudgetLow,
     maxAttempts: MAX_ATTEMPTS,
@@ -687,6 +689,9 @@ async function providerHoldsBeforePush(ctx: ActionContext): Promise<ActionOutcom
 async function submitExternal(ctx: ActionContext): Promise<ActionOutcome> {
   const settle = (outcome: SubmitOutcome): ActionOutcome => {
     ctx.extras.submitOutcome = outcome;
+    // Read again for a failed call: the failure itself may be the response that
+    // tipped the detector, after the base context was built.
+    if (outcome.kind === 'retry') ctx.extras.githubDown = githubHealthMonitor.isDown();
     // One aftermath at a time — a submit supersedes whatever merge attempt led
     // here (decide checks submitOutcome first).
     delete ctx.extras.mergeOutcome;

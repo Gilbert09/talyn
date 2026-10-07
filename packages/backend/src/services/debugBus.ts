@@ -5,6 +5,7 @@ import type {
   DebugPollerState,
   DebugSnapshot,
   DebugWebhookLag,
+  GithubHealth,
 } from '@talyn/shared';
 import { graphqlBudget } from './graphqlBudget.js';
 import { mergeableSettleStats } from './mergeableSettle.js';
@@ -49,6 +50,7 @@ const MAX_ERROR_LEN = 500;
 
 type LiveSink = (event: DebugEvent) => void;
 type ClientCounter = () => number;
+type GithubHealthSource = () => GithubHealth;
 
 /** Strip the query string (and any credentials) from a URL for safe display. */
 export function redactUrl(raw: string): string {
@@ -117,6 +119,7 @@ class DebugBus {
   private enabled = true;
   private sink: LiveSink | null = null;
   private clientCounter: ClientCounter | null = null;
+  private githubHealthSource: GithubHealthSource | null = null;
   private counters: Record<string, number> = {};
   // Cumulative Postgres traffic since the last clear, surfaced as panel tiles.
   private dbRequestCount = 0;
@@ -162,6 +165,15 @@ class DebugBus {
   /** Registered by websocket.ts so the snapshot can report live client count. */
   setClientCounter(fn: ClientCounter | null): void {
     this.clientCounter = fn;
+  }
+
+  /**
+   * Registered by githubHealthMonitor.ts so the snapshot can show what this
+   * replica says about GitHub's own health. Injected, like the two above, so
+   * this module still imports nothing that it observes.
+   */
+  setGithubHealthSource(fn: GithubHealthSource | null): void {
+    this.githubHealthSource = fn;
   }
 
   /**
@@ -514,6 +526,7 @@ class DebugBus {
         this.webhookSlowLatencies,
         this.lastWebhookSlowProcessedAt,
       ),
+      ...(this.githubHealthSource ? { githubHealth: this.githubHealthSource() } : {}),
     };
   }
 

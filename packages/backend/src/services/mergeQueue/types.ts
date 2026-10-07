@@ -498,6 +498,12 @@ export interface DecisionContext {
   cloudEnvAvailable: boolean;
   /** githubRateGate.isBlocked(account, 'rest') — merge-critical calls would sleep. */
   restGateBlocked: boolean;
+  /**
+   * GitHub itself is down, by its status page or by the share of our own calls
+   * that fail (services/githubHealth.ts). Absent means no: a failed submit call
+   * then counts toward its budget as before.
+   */
+  githubDown?: boolean;
   /** githubRateGate.isBlocked(account, 'graphql') — probes would sleep. */
   graphqlGateBlocked: boolean;
   /** graphqlBudget.shouldDefer(account, 'queue') — points are scarce. */

@@ -2500,6 +2500,130 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       });
     });
 
+    // A GitHub outage answers 500 to every submit call. Those failures say
+    // nothing about the PR, so they must not walk it to `blocked_manual`.
+    describe('a submit call that fails while GitHub is down', () => {
+      const failedDown = (submitRetryAttempts: number, githubDown: boolean | 'absent' = true) =>
+        decide(
+          entry({ status: 'queued', submitRetryAttempts, submitAttempts: 1 }),
+          cleanPr(),
+          ctx({
+            externalGate: 'confirmed',
+            ...(githubDown === 'absent' ? {} : { githubDown }),
+            submitOutcome: { kind: 'retry', message: 'GitHub API error: 500 Internal Server Error' },
+          })
+        );
+
+      it.each([0, 1, 2, 3, 4, 5])('counts failure %i + 1 and keeps the wait growing', (n) => {
+        const t = lastTransition(failedDown(n))!;
+        expect(t.to).toBe('queued');
+        expect(t.event.code).toBe('external_submit_retry');
+        expect(t.set?.submitRetryAttempts).toBe(n + 1);
+        expect(t.set?.lastErrorAt).toBe(NOW);
+        expect(t.event.detail).toMatchObject({ retryInMs: submitCallWaitMs(n + 1), githubDown: true });
+      });
+
+      it.each([
+        SUBMIT_CALL_MAX_FAILURES - 2,
+        SUBMIT_CALL_MAX_FAILURES - 1,
+        SUBMIT_CALL_MAX_FAILURES,
+        SUBMIT_CALL_MAX_FAILURES + 5,
+        100,
+      ])('never blocks, and never counts past one short of the limit (from %i)', (n) => {
+        const d = failedDown(n);
+        const t = lastTransition(d)!;
+        expect(t.to).toBe('queued');
+        expect(t.event.code).toBe('external_submit_retry');
+        expect(t.set?.submitRetryAttempts).toBe(SUBMIT_CALL_MAX_FAILURES - 1);
+        expect(kinds(d)).not.toContain('notify_blocked');
+        expect(t.blockedCode ?? null).toBeNull();
+      });
+
+      it('keeps trying at the longest wait for as long as the outage lasts', () => {
+        let attempts = 0;
+        for (let i = 0; i < 50; i += 1) {
+          const t = lastTransition(failedDown(attempts))!;
+          expect(t.to).toBe('queued');
+          attempts = t.set!.submitRetryAttempts as number;
+        }
+        expect(attempts).toBe(SUBMIT_CALL_MAX_FAILURES - 1);
+        expect(submitCallWaitMs(attempts)).toBe(32 * 60_000);
+      });
+
+      it('says that GitHub is down, and when the next try is', () => {
+        const t = lastTransition(failedDown(SUBMIT_CALL_MAX_FAILURES - 1))!;
+        expect(t.event.message).toBe(
+          'GitHub is down, so Talyn keeps this PR in the queue and tries again in 32 min.'
+        );
+        expect(lastTransition(failedDown(0))!.event.message).toBe(
+          'GitHub is down, so Talyn keeps this PR in the queue and tries again in 30 seconds.'
+        );
+      });
+
+      it('still records the error it saw', () => {
+        const t = lastTransition(failedDown(3))!;
+        expect(t.set?.lastError).toBe('GitHub API error: 500 Internal Server Error');
+        expect(t.event.detail).toMatchObject({ error: 'GitHub API error: 500 Internal Server Error' });
+      });
+
+      it('leaves the real submit budget alone', () => {
+        expect(lastTransition(failedDown(SUBMIT_CALL_MAX_FAILURES - 1))!.set?.submitAttempts).toBeUndefined();
+      });
+
+      // The wait still holds the next submit: the backoff is not skipped.
+      it('still waits out the longest wait before the next submit', () => {
+        const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+        const d = decide(
+          entry({
+            status: 'queued',
+            submitRetryAttempts: SUBMIT_CALL_MAX_FAILURES - 1,
+            lastErrorAt: ago(31 * 60_000),
+          }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed', githubDown: true })
+        );
+        expect(kinds(d)).not.toContain('submit_external');
+        expect(d.verdict).toBe('advance');
+      });
+
+      it.each([
+        ['false', false],
+        ['absent', 'absent'],
+      ] as const)('with githubDown %s the budget is spent as before', (_name, githubDown) => {
+        const d = failedDown(SUBMIT_CALL_MAX_FAILURES - 1, githubDown);
+        const t = lastTransition(d)!;
+        expect(t.to).toBe('blocked_manual');
+        expect(t.event.code).toBe('external_submit_call_failed');
+        expect(kinds(d)).toContain('notify_blocked');
+
+        const early = lastTransition(failedDown(2, githubDown))!;
+        expect(early.to).toBe('queued');
+        expect(early.event.message).toContain(`(3/${SUBMIT_CALL_MAX_FAILURES})`);
+        expect(early.event.message).not.toContain('GitHub is down');
+      });
+
+      // Once GitHub is back, the entry is one failure from the limit. The next
+      // failure is a real one and stops it.
+      it('once GitHub is back, the next failure stops the entry', () => {
+        const during = lastTransition(failedDown(SUBMIT_CALL_MAX_FAILURES - 1))!;
+        const after = lastTransition(failedDown(during.set!.submitRetryAttempts as number, false))!;
+        expect(after.to).toBe('blocked_manual');
+      });
+
+      it('other submit outcomes ignore the flag', () => {
+        const d = decide(
+          entry({ status: 'queued', submitAttempts: 0 }),
+          cleanPr(),
+          ctx({
+            externalGate: 'confirmed',
+            githubDown: true,
+            submitOutcome: { kind: 'submitted', via: 'label' },
+          })
+        );
+        expect(lastTransition(d)!.to).toBe('awaiting_external');
+      });
+    });
+
     describe('the wait between failed submit calls', () => {
       it.each([
         [0, 0],

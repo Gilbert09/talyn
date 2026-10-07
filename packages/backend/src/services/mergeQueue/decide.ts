@@ -2129,7 +2129,26 @@ function decideSubmitAftermath(
     //
     // Its own NUMBER too, and a wait that doubles between tries. See
     // `SUBMIT_CALL_MAX_FAILURES` and `submitCallBackoff`.
-    const attempts = d.entry.submitRetryAttempts + 1;
+    //
+    // While GitHub itself is down the failure says nothing about this PR, so it
+    // must not spend the budget. The count stops one short of the limit: the
+    // entry keeps the longest wait and tries again until GitHub is back.
+    const attempts = ctx.githubDown
+      ? Math.min(d.entry.submitRetryAttempts + 1, SUBMIT_CALL_MAX_FAILURES - 1)
+      : d.entry.submitRetryAttempts + 1;
+    if (ctx.githubDown) {
+      d.transition('queued', {
+        set: { submitRetryAttempts: attempts, lastError: outcome.message, lastErrorAt: ctx.nowIso },
+        event: {
+          code: 'external_submit_retry',
+          message:
+            `GitHub is down, so Talyn keeps this PR in the queue and tries again in ` +
+            `${waitInWords(submitCallWaitMs(attempts))}.`,
+          detail: { error: outcome.message, retryInMs: submitCallWaitMs(attempts), githubDown: true },
+        },
+      });
+      return d.done('advance');
+    }
     if (attempts >= SUBMIT_CALL_MAX_FAILURES) {
       d.transition('blocked_manual', {
         blockedCode: 'external_gate',

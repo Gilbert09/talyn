@@ -63,6 +63,10 @@ export * from './releaseNotes.js';
 // string typed twice.
 export * from './featureFlags.js';
 
+// GitHub health — whether GitHub itself is up, the payload of
+// `GET /system/github-health` and of the `github:health` WebSocket event.
+export * from './githubHealth.js';
+
 // Loops — recurring prompts on a cron schedule: the schedule arithmetic both
 // editors preview from and the scheduler fires on, plus the validator the route
 // 400s with. Same argument as workflows: a "next run" the client computes
@@ -101,6 +105,7 @@ export * from './sse.js';
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
+import type { GithubHealth } from './githubHealth.js';
 
 // ============================================================================
 // Workspace
@@ -1070,6 +1075,10 @@ export type WSEventType =
   // the Loops page's history and its derived stats are live rather than
   // poll-shaped — the same reason 'workflow:run' exists.
   | 'loop:run'
+  // GitHub's own health changed (state, or the set of incidents on its status
+  // page). Broadcast to all clients; payload is the whole GithubHealth. It
+  // holds no tenant data.
+  | 'github:health'
   // Developer debug stream — one event per observed internal activity
   // (HTTP request, poll tick, WS broadcast, …). Broadcast to all clients;
   // the desktop Debug panel tails it. See DebugEvent below.
@@ -1233,6 +1242,12 @@ export interface DebugSnapshot {
    * when the firehose (`webhookLag`) is at zero.
    */
   webhookLagSlow: DebugWebhookLag;
+  /**
+   * What this replica currently says about GitHub's own health. Null when the
+   * monitor is not wired (tests). Optional so an older backend's snapshot
+   * still reads.
+   */
+  githubHealth?: GithubHealth | null;
 }
 
 /**

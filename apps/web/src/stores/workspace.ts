@@ -16,6 +16,7 @@ import type {
   SkillSummary,
   ReleaseNoteEntry,
   Features,
+  GithubHealth,
 } from '@talyn/shared';
 import type {
   GitHubStatus,
@@ -219,6 +220,12 @@ interface WorkspaceState {
    */
   /** From the GitHub status probe — see `BackendHealth`. */
   backendHealth: 'ok' | 'offline' | 'degraded' | null;
+  /**
+   * Whether GitHub itself is up, from `GET /system/github-health` and then the
+   * `github:health` WebSocket event (see useGithubHealth). Global, not per
+   * workspace. null = not loaded yet, which the banner treats as "say nothing".
+   */
+  githubHealth: GithubHealth | null;
   githubUser: GitHubUser | null;
   // GitHub App installations the connected user can access (one per account/org).
   // Preloaded by useSystemStatus and kept fresh on focus, so the global banner +
@@ -280,6 +287,7 @@ interface WorkspaceState {
   setJustOnboarded: (value: boolean) => void;
   setGitHubStatus: (status: GitHubStatus | null) => void;
   setBackendHealth: (health: 'ok' | 'offline' | 'degraded' | null) => void;
+  setGithubHealth: (health: GithubHealth | null) => void;
   setGitHubUser: (user: GitHubUser | null) => void;
   setGitHubInstallations: (installations: GitHubInstallation[] | null) => void;
   setGitHubCoverage: (coverage: GitHubOwnerCoverage[] | null) => void;
@@ -350,6 +358,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   justOnboarded: false,
   githubStatus: null,
   backendHealth: null,
+  githubHealth: null,
   githubUser: null,
   githubInstallations: null,
   githubCoverage: null,
@@ -390,6 +399,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setGitHubStatus: (githubStatus) => set({ githubStatus }),
   setBackendHealth: (backendHealth) => set({ backendHealth }),
+  setGithubHealth: (githubHealth) => set({ githubHealth }),
 
   setGitHubUser: (githubUser) => set({ githubUser }),
 

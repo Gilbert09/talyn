@@ -2,6 +2,41 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A GitHub outage detector, a banner, and a merge queue that waits (2026-10-07)
+
+Tom sent a "Merge queue blocked" notice: four submits to the external queue had
+failed with GitHub 500s, and the PR needed a person. Two requests followed.
+
+**Wait longer between failed submit calls.** A failed call was retried on every
+evaluation, and evaluations arrive with every webhook, so the budget of three
+went in seconds. Now the wait doubles from 30 seconds to 32 minutes, and the
+budget is eight failures, about an hour (`SUBMIT_CALL_MAX_FAILURES`,
+`submitCallBackoff`). Nothing schedules the end of a wait. The next webhook, or
+the reconciler's sweep of entries not evaluated for two minutes, finds it over.
+
+**Detect a GitHub outage and say so.** `githubHealth.ts` combines our own
+traffic with GitHub's status page. The numbers and their reasons:
+
+- Window 10 minutes: two periods of the reconcile sweep, so it always holds one
+  whole sweep and does not go empty on a quiet night.
+- Minimum sample 4: one GraphQL query is tried 3 times, so 3 failures can be one
+  query.
+- Degraded at 25% server failures, down at 50%.
+- Better needs 2 clean minutes. Worse is immediate.
+- Status page every 60 seconds, stale after 5 minutes, timeout 10 seconds.
+
+Our own traffic alone can raise the banner, because the status page is updated
+by hand, minutes into an incident. The banner says which signal it is: "GitHub
+has not reported an incident yet."
+
+While GitHub is down, a failed submit keeps the longest wait and never reaches
+`blocked_manual`.
+
+Not done, and worth doing next: the workflows retry sweep (a 5xx action fails
+for good), the coverage diagnosis (it answers `unknown` in an outage), and fix
+dispatch for auto-keep and the merge queue (a cloud run cannot push in an
+outage). Not tested against a real outage.
+
 ## "Kept 0, dropped 16": the judge's keeps were lost (2026-10-07)
 
 Tom sent a screenshot of a review where every finding was dismissed, and asked

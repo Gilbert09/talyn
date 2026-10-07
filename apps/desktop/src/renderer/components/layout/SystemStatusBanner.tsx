@@ -5,6 +5,12 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { openGithubAppFlow, openGithubExternalUrl, uncoveredOwners, formatOwnerList } from '../../lib/githubInstall';
 import { useGithubCoverage } from '../../hooks/useGithubCoverage';
 import type { GitHubOwnerCoverage, GitHubOwnerCoverageState } from '../../lib/api';
+import {
+  GITHUB_STATUS_SITE_URL,
+  githubHealthIncident,
+  githubStatusLink,
+  type GithubHealth,
+} from '@talyn/shared';
 
 /**
  * A connectivity row. Deliberately styled apart from the amber warning rows:
@@ -81,6 +87,37 @@ function NoticeRow({
   );
 }
 
+/**
+ * The words for a GitHub outage row. `health.state` is `down` or `degraded`.
+ *
+ * When only Talyn's own traffic shows the problem, the row says so and does
+ * not claim an incident that GitHub has not reported.
+ */
+function githubHealthMessage(health: GithubHealth): string {
+  const down = health.state === 'down';
+  const consequence = down
+    ? 'Pull request updates, merges and agent runs that need GitHub will fail or wait until it is back. Talyn retries by itself.'
+    : 'Pull request updates and merges may be slow or fail. Talyn retries by itself.';
+  if (health.source === 'traffic') {
+    return `GitHub is answering Talyn's requests with errors. GitHub has not reported an incident yet. ${consequence}`;
+  }
+  const lead = down ? 'GitHub is having an outage.' : 'GitHub is having problems.';
+  const incident = githubHealthIncident(health);
+  return incident
+    ? `${lead} GitHub reports: ${incident.name}. ${consequence}`
+    : `${lead} ${consequence}`;
+}
+
+/**
+ * What a dismissal of the `degraded` row covers: this incident only. A new
+ * incident on the status page, or the state changing and coming back, gives a
+ * different key, and the row shows again.
+ */
+function githubHealthDismissKey(health: GithubHealth): string {
+  const names = (health.statusPage?.incidents ?? []).map((incident) => incident.name).sort();
+  return JSON.stringify([health.state, health.since, names]);
+}
+
 const DISMISSED_KEY_PREFIX = 'talyn.pollingNotice.dismissed.';
 
 function readDismissedOwners(workspaceId: string | null): string[] {
@@ -116,8 +153,12 @@ export function SystemStatusBanner() {
     repositories,
     setActivePanel,
     backendHealth,
+    githubHealth,
   } = useWorkspaceStore();
   const [connecting, setConnecting] = useState(false);
+  // The `degraded` GitHub row the user closed. Held for this session only: an
+  // incident is short, and the next one must show.
+  const [dismissedHealthKey, setDismissedHealthKey] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const uncovered = currentWorkspaceId && githubStatus?.connected && githubInstallations
     && backendHealth !== 'offline' && backendHealth !== 'degraded'
@@ -183,8 +224,47 @@ export function SystemStatusBanner() {
     );
   }
 
+  // GitHub itself is unwell. Global, so it does not wait for a workspace. It
+  // goes first: it explains failures that the rows below would be blamed for.
+  const githubDown = githubHealth?.state === 'down';
+  if (githubHealth && (githubHealth.state === 'down' || githubHealth.state === 'degraded')) {
+    const incident = githubHealthIncident(githubHealth);
+    const statusUrl = incident ? githubStatusLink(incident.url) : GITHUB_STATUS_SITE_URL;
+    const statusButton = (
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => void openGithubExternalUrl(statusUrl).catch(() => undefined)}
+      >
+        GitHub status
+      </Button>
+    );
+    const message = githubHealthMessage(githubHealth);
+    if (githubDown) {
+      // Not dismissible: while GitHub is down, most of the app cannot work.
+      rows.push(<BannerRow key="gh-health" message={message} action={statusButton} />);
+    } else {
+      const dismissKey = githubHealthDismissKey(githubHealth);
+      if (dismissedHealthKey !== dismissKey) {
+        rows.push(
+          <NoticeRow
+            key="gh-health"
+            message={message}
+            action={statusButton}
+            onDismiss={() => setDismissedHealthKey(dismissKey)}
+          />
+        );
+      }
+    }
+  }
+
   // GitHub — the core of the app. `githubStatus === null` means "not checked
   // yet", so we don't flash a banner before the first status load resolves.
+  //
+  // This row stays while GitHub is down. `connected` means a token is stored,
+  // and the backend removes a token only after a 401 that GitHub's check-token
+  // call confirms. A 5xx never disconnects, so "not connected" is never a
+  // symptom of the outage.
   if (currentWorkspaceId && githubStatus && !githubStatus.connected) {
     rows.push(
       githubStatus.configured === false ? (
@@ -263,6 +343,12 @@ export function SystemStatusBanner() {
           );
           continue;
         }
+        // While GitHub is down the diagnosis cannot be trusted: it calls GitHub,
+        // and a call that fails reads as `unknown` or as an App nobody can
+        // reach. Those rows would blame the user's setup for GitHub's outage.
+        // `suspended` (above) and `sso_required` are answers GitHub gave, so
+        // they stay.
+        if (githubDown && state !== 'sso_required') continue;
         if (state === 'sso_required' || state === 'not_accessible') {
           rows.push(
             <BannerRow

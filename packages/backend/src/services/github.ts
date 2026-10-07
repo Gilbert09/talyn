@@ -17,6 +17,7 @@ import {
   type EncryptedEnvelope,
 } from './tokenCrypto.js';
 import { debugBus, redactUrl } from './debugBus.js';
+import { classifyGithubResponse, githubApiForUrl, githubTraffic } from './githubHealth.js';
 import {
   githubRateGate,
   GitHubRateLimitError,
@@ -76,6 +77,24 @@ export interface TimedResponse {
  * callers log something useful. The `signal` is applied AFTER the spread so
  * it always wins.
  */
+/**
+ * Tell the outage detector about one GitHub response, or `null` for none.
+ *
+ * It swallows its own errors. This runs inside every GitHub call the backend
+ * makes, and a fault in health reporting must not fail the call it reports on,
+ * or be counted as a GitHub failure by the `catch` below.
+ */
+function feedGithubHealth(
+  url: string,
+  response: { status: number; headers: Headers; bodyText: string } | null
+): void {
+  try {
+    githubTraffic.record(githubApiForUrl(url), classifyGithubResponse(response));
+  } catch {
+    // Nothing to do. The detector misses one sample.
+  }
+}
+
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
@@ -86,6 +105,10 @@ export async function fetchWithTimeout(
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     const bodyText = await response.text();
+    // Every GitHub call in the backend goes through here (`apiRequest`,
+    // `executeGraphql`, and the App-JWT calls in githubApp.ts), so this is the
+    // one place the GitHub outage detector is fed. See githubHealth.ts.
+    feedGithubHealth(url, { status: response.status, headers: response.headers, bodyText });
     return {
       status: response.status,
       statusText: response.statusText,
@@ -94,6 +117,8 @@ export async function fetchWithTimeout(
       bodyText,
     };
   } catch (err) {
+    // No response at all: a network error, a reset, or our own timeout.
+    feedGithubHealth(url, null);
     if (controller.signal.aborted) {
       throw new Error(`GitHub request timed out after ${timeoutMs}ms: ${url}`);
     }

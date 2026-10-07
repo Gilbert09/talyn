@@ -16,6 +16,7 @@ import type {
   CodeReviewPreset,
   CodeReviewPublic,
   Features,
+  GithubHealth,
   LoopInput,
   LoopRun,
   LoopWithStats,
@@ -2285,6 +2286,25 @@ export const users = {
 };
 
 // ============================================================================
+// System (state of what Talyn depends on)
+// ============================================================================
+
+export type {
+  GithubHealth,
+  GithubHealthState,
+  GithubStatusIncident,
+} from '@talyn/shared';
+
+export const system = {
+  /**
+   * Whether GitHub itself is up: its status page plus the share of Talyn's own
+   * GitHub calls that fail. Global, no workspace. Load it once, then follow
+   * the `github:health` WebSocket event, whose payload is the same shape.
+   */
+  githubHealth: () => request<GithubHealth>('GET', '/system/github-health'),
+};
+
+// ============================================================================
 // Features (allow-listed capabilities)
 // ============================================================================
 
@@ -2574,6 +2594,7 @@ export const api = {
   releaseNotes,
   users,
   features,
+  system,
   workflows,
   loops,
   codeReviews,

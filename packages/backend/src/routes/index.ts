@@ -14,6 +14,7 @@ import { fleetPublicRoutes, fleetRoutes } from './fleet.js';
 import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
 import { featureRoutes } from './features.js';
+import { systemRoutes } from './system.js';
 import { loopRoutes } from './loops.js';
 import { codeReviewRoutes } from './codeReviews.js';
 import { mcpServerRoutes, mcpOAuthCallbackRoutes } from './mcpServers.js';
@@ -194,6 +195,11 @@ export function setupRoutes(app: Express): void {
   // nothing for RLS to filter. See routes/features.ts — and note that hiding a
   // feature here is a courtesy; every gated surface enforces its own gate.
   app.use(`${api}/features`, mount(featureRoutes()));
+
+  // Whether GitHub itself is up (the outage banner's first load). Pre-ownerScope
+  // for the same reason as `/features`, and more so: the answer is global and
+  // comes from memory. See routes/system.ts.
+  app.use(`${api}/system`, mount(systemRoutes()));
 
   // The "What's new" feed. Pre-ownerScope because the content is global —
   // what shipped in 0.2.61 is the same fact for every user, `release_notes`

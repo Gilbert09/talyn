@@ -4,6 +4,7 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { useGithubConnection } from './useGithubConnection';
 import { useGithubInstallations } from './useGithubInstallations';
 import { useAgentConnections } from './useAgentConnections';
+import { useGithubHealth } from './useGithubHealth';
 import { useOnReconnect } from './useOnReconnect';
 
 /**
@@ -58,6 +59,10 @@ export function useSystemStatus(): void {
   useEffect(() => {
     setGitHubUser(user);
   }, [user, setGitHubUser]);
+
+  // Whether GitHub itself is up, for the banner's outage row. Global, so a
+  // workspace switch does not load it again.
+  useGithubHealth();
 
   // The agent credentials. Mounted here for the app proper; the onboarding
   // wizard mounts the same hook itself, because this one does not run until

@@ -53,6 +53,7 @@ import { initMergeQueueTriggers } from './services/mergeQueue/triggers.js';
 import { mergeQueueReconciler } from './services/mergeQueue/reconciler.js';
 import { loadExternalQueueSubmitRoutes } from './services/externalQueueSubmitRoute.js';
 import { dbWatchdog } from './services/dbWatchdog.js';
+import { githubHealthMonitor } from './services/githubHealthMonitor.js';
 
 const PORT = process.env.PORT || 4747;
 
@@ -234,6 +235,11 @@ async function main() {
   // without this the Jul 6 incident state persists until a human restarts it.
   dbWatchdog.init();
 
+  // GitHub outage detector: reads GitHub's status page once a minute and
+  // watches the share of our own GitHub calls that fail. Feeds the in-app
+  // banner. GITHUB_STATUS_POLL_ENABLED=false stops the status-page reads.
+  githubHealthMonitor.init();
+
   // Mark cloud-provider env markers connected at boot (they have no daemon
   // to dial in — they're a credential-backed delegation marker).
   await markCloudEnvironmentsConnected();
@@ -399,6 +405,7 @@ async function main() {
     draining = true; // /health now answers 503 so the LB stops routing here
     console.log('Shutting down...');
     dbWatchdog.shutdown();
+    githubHealthMonitor.shutdown();
     cloudTaskPoller.shutdown();
     prAutoMergeWatcher.shutdown();
     mergeQueueReconciler.shutdown();
