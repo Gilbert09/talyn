@@ -1,11 +1,16 @@
-import type { AgentEvent } from '@talyn/shared';
 import { debugBus } from '../debugBus.js';
 import { TickGuard } from '../tickGuard.js';
 import { guardCrossReplica } from '../advisoryLock.js';
 import { runWithoutScope } from '../../db/client.js';
 import { getSelfHostedClient } from '../selfHosted/credentials.js';
 import { FleetRunNotFoundError } from '../selfHosted/client.js';
-import { isFleetSandboxTerminal } from '../selfHosted/poller.js';
+import { fleetAgentForModel, type AgentEvent } from '@talyn/shared';
+import {
+  initialTaskOf,
+  isFleetSandboxTerminal,
+  taskOutcomeForSandbox,
+} from '../selfHosted/poller.js';
+import { clearExhaustedAgent } from '../selfHosted/exhaustedQuota.js';
 import { finalTextFromEvents, toAgentEvent } from '../selfHosted/eventCursor.js';
 import { getPostHogCodeClient } from '../posthogCode/credentials.js';
 import {
@@ -13,7 +18,8 @@ import {
   lastFlowEventIsTurnComplete,
 } from '../posthogCode/poller.js';
 import type { PostHogCodeClient } from '../posthogCode/client.js';
-import { ingestUnitOutput } from './executor.js';
+import { failedRunCode, failedRunOutputIsUsable, ingestUnitOutput } from './executor.js';
+import { capFailureDetail, settleFailedFleetUnit } from './unitFailover.js';
 import {
   getReview,
   loadDispatchedRuns,
@@ -193,7 +199,37 @@ class CodeReviewPoller {
     // Terminal. Re-read the tail from the durable log rather than trusting a
     // transcript we never kept, then ingest.
     const tail = await this.fleetTail(run, cursor);
-    await this.settleWithOutput(run, finalTextFromEvents(tail.length ? tail : events));
+    const finalText = finalTextFromEvents(tail.length ? tail : events);
+
+    // The OUTCOME is the initial task's, not the sandbox's own state: an
+    // ephemeral sandbox reports `stopped` after success and failure alike.
+    const outcome = taskOutcomeForSandbox(sandbox);
+    if (outcome !== 'completed' && !failedRunOutputIsUsable(finalText)) {
+      // The run failed, so "the agent wrote no final message" is not the
+      // finding. The sandbox's own error is, and it is the only place a
+      // vendor's refusal appears. This used to settle `unparseable`, which
+      // threw the vendor's sentence away and gave a usage limit the same
+      // record as an agent that wrote nothing.
+      const detail = initialTaskOf(sandbox)?.error || sandbox.error;
+      const result = await settleFailedFleetUnit(run, {
+        detail,
+        fallbackCode: failedRunCode(detail),
+      });
+      void scheduleReviewEvaluation(
+        run.reviewId,
+        result === 'moved' ? 'poller:unit_failed_over' : 'poller:unit_settled'
+      );
+      return;
+    }
+
+    await this.settleWithOutput(run, finalText);
+    // A run that completed proves its vendor answers, so a hold recorded
+    // against that agent is out of date. `completed` only, as on the task
+    // path: many failures never reach the model, and clearing on those would
+    // undo a hold another run had just paid a microVM to learn.
+    if (outcome === 'completed' && run.model) {
+      void clearExhaustedAgent(run.workspaceId, fleetAgentForModel(run.model));
+    }
   }
 
   /** The whole log, for the one moment we need the agent's last word. */
@@ -227,7 +263,13 @@ class CodeReviewPoller {
     }
     this.lastLogCheck.delete(run.id);
     if (latest.status !== 'completed') {
-      await settleRun(run.id, { status: 'failed', failureCode: 'dispatch_failed' });
+      await settleRun(run.id, {
+        status: 'failed',
+        failureCode: 'dispatch_failed',
+        // PostHog's own reason, when it gave one. No failover from here: this
+        // provider is already the fall-back.
+        failureDetail: capFailureDetail(latest.error_message),
+      });
       void scheduleReviewEvaluation(run.reviewId, 'poller:unit_settled');
       return;
     }

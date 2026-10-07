@@ -49,6 +49,7 @@ import {
   patchRun,
   runsForCycle,
   settleRun,
+  takeRequeuedRun,
   type ReviewRow,
   type RunFailureCode,
   type RunKind,
@@ -56,7 +57,19 @@ import {
 } from './store.js';
 import type { Action, UnitKey } from './decide.js';
 import { startFixRun } from './fix.js';
-import { captureCycleFailed, captureCycleFinished } from './analytics.js';
+import {
+  captureCycleFailed,
+  captureCycleFinished,
+  captureUnitFailedOver,
+} from './analytics.js';
+import { cycleFailureMessage } from './failureMessage.js';
+import {
+  eligibleFleetAgent,
+  failoverMessage,
+  isLimitReason,
+  limitedAgentsInCycle,
+} from './unitFailover.js';
+import { heldBackAgents } from '../selfHosted/exhaustedQuota.js';
 import { workspaceReviewSettings } from './cycle.js';
 
 /**
@@ -338,6 +351,22 @@ function chunkCountFor(files: unknown[]): number {
  * A capacity refusal leaves the unit claimed with no `dispatched_at`, which is
  * exactly the state the reconciler retries — the unit is not burned, and the user
  * sees "waiting for a runner" rather than a failure.
+ *
+ * # A second dispatch
+ *
+ * A unit whose agent reported a usage limit is `requeued` by the poller, and
+ * comes back here once. Its claim is the status change in `takeRequeuedRun`,
+ * which only one pass can win. It then runs on the workspace's other fleet
+ * agent or not at all: it never spills to the fall-back provider, and when
+ * there is nowhere to run it settles with the limit it was moved for.
+ *
+ * # Not learning a limit once per unit
+ *
+ * A rate limit writes no workspace hold, so nothing else would stop the next
+ * lens, the sweep and the judge from each booting a microVM on the limited
+ * agent. The cycle's own run rows are the record: an agent one unit of this
+ * cycle failed on is avoided by the units after it, when another fleet agent
+ * can take them.
  */
 export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<void> {
   const runId = uuid();
@@ -350,8 +379,13 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     chunkIndex: unit.chunkIndex,
     chunkTotal: review.chunkTotal,
   });
-  // Somebody else owns it. Their pass will dispatch it; ours must not.
-  if (!claim.fresh) return;
+  // Somebody else owns it. Their pass will dispatch it; ours must not. The one
+  // exception is a unit waiting for its second dispatch, and taking it is a
+  // conditional update that a second pass loses.
+  const moved = !claim.fresh && claim.status === 'requeued' ? await takeRequeuedRun(claim.id) : null;
+  if (!claim.fresh && !moved) return;
+  // What the unit settles with when its second dispatch finds nowhere to run.
+  const movedReason = moved && isLimitReason(moved.failureCode) ? moved.failureCode : 'usage_limit';
 
   // Re-checked at FIRE time as well as at the route, because a workspace can
   // lose the flag's audience without anything touching a row, and a gate that
@@ -391,16 +425,40 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     return;
   }
 
-  const spilled = (await runsForCycle(review.id, review.cycle)).filter(
-    (r) => r.provider === 'posthog_code'
-  ).length;
+  const cycleRuns = await runsForCycle(review.id, review.cycle);
+  const spilled = cycleRuns.filter((r) => r.provider === 'posthog_code').length;
+
+  // Agents this cycle already knows are limited. They are avoided only when
+  // another fleet agent can take the unit. With no alternative a first
+  // dispatch goes where it was going, and fails saying why if the limit is
+  // still there.
+  const limited = limitedAgentsInCycle(cycleRuns);
+  const alternative = limited.size
+    ? await eligibleFleetAgent(review.workspaceId, limited.keys())
+    : null;
+  if (moved && !alternative) {
+    await settleRun(claim.id, { status: 'failed', failureCode: movedReason });
+    await appendReviewEvent(review.id, {
+      toPhase: review.phase as CodeReviewPhase,
+      trigger: 'executor',
+      code: movedReason,
+      message: 'No other agent could take this reviewer.',
+      detail: { kind: unit.kind, lens: unit.lens, from: moved.failedOverFrom },
+    });
+    return;
+  }
+  const avoidAgents = alternative ? [...limited.keys()] : [];
 
   await patchRun(claim.id, { status: 'dispatching' });
 
   for (const link of chain) {
     if (link.provider === 'selfhosted') {
       const result = await dispatchSandboxRun({
-        runId: `talyn-rev-${claim.id}`,
+        // The fleet's create is idempotent on this id. A second dispatch with
+        // the first one's id would be handed back the sandbox that just died,
+        // and the unit would settle the moment it started. A unit moves once,
+        // so one suffix is enough.
+        runId: moved ? `talyn-rev-${claim.id}-r1` : `talyn-rev-${claim.id}`,
         workspaceId: review.workspaceId,
         repositoryId: review.repositoryId,
         taskType: 'code_writing',
@@ -414,8 +472,13 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
           unit.kind
         ),
         budget: { timeoutSec: UNIT_TIMEOUT_SEC[unit.kind] ?? 900 },
+        avoidAgents,
       });
       if (result.ok) {
+        // A swap on a FIRST dispatch: the unit never tried the limited agent.
+        // A moved unit already has its `failed_over_from`, and that first
+        // answer is the one to keep.
+        const swap = moved ? null : result.handle.quotaSwap;
         await patchRun(claim.id, {
           status: 'running',
           provider: 'selfhosted',
@@ -424,11 +487,46 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
           host: result.handle.host ?? null,
           endpoint: result.handle.endpoint,
           dispatchedAt: new Date(),
+          ...(swap ? { failedOverFrom: swap.from } : {}),
+          // The row now describes the second run. Why the first one stopped
+          // is on the timeline.
+          ...(moved ? { failureCode: null, failureDetail: null } : {}),
         });
+        if (swap) {
+          // A workspace hold is only ever written for a spent subscription.
+          // Anything else that caused a swap is this cycle's own record.
+          const held = await heldBackAgents(review.workspaceId).catch(
+            () => ({}) as Awaited<ReturnType<typeof heldBackAgents>>
+          );
+          const reason = held[swap.from]
+            ? 'quota_exhausted'
+            : (limited.get(swap.from) ?? 'quota_exhausted');
+          await appendReviewEvent(review.id, {
+            toPhase: review.phase as CodeReviewPhase,
+            trigger: 'executor',
+            code: 'unit_failed_over',
+            message: failoverMessage(swap.from, swap.to, reason),
+            detail: { kind: unit.kind, lens: unit.lens, from: swap.from, to: swap.to, reason },
+          });
+          captureUnitFailedOver(review.workspaceId, {
+            from_agent: swap.from,
+            to_agent: swap.to,
+            reason,
+            kind: unit.kind,
+            lens: unit.lens,
+            cycle: review.cycle,
+            at: 'dispatch',
+          });
+        }
         return;
       }
       if (!result.capacity) {
-        await settleRun(claim.id, { status: 'failed', failureCode: 'dispatch_failed' });
+        // A moved unit keeps the limit as its reason. That is why it is not
+        // running, and `dispatch_failed` would hide it.
+        await settleRun(claim.id, {
+          status: 'failed',
+          failureCode: moved ? movedReason : 'dispatch_failed',
+        });
         await appendReviewEvent(review.id, {
           toPhase: review.phase as CodeReviewPhase,
           trigger: 'executor',
@@ -442,6 +540,10 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     }
 
     if (link.provider === 'posthog_code') {
+      // A unit moved for a usage limit never lands here. This provider accepts
+      // no spend cap, and the bounded spill below is a rule about a full fleet,
+      // not about a limited subscription.
+      if (moved) break;
       if (spilled >= MAX_SPILLED_UNITS_PER_CYCLE) break;
       const result = await startCodeRun({
         workspaceId: review.workspaceId,
@@ -465,6 +567,18 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
       await settleRun(claim.id, { status: 'failed', failureCode: 'dispatch_failed' });
       return;
     }
+  }
+
+  if (moved) {
+    await settleRun(claim.id, { status: 'failed', failureCode: movedReason });
+    await appendReviewEvent(review.id, {
+      toPhase: review.phase as CodeReviewPhase,
+      trigger: 'executor',
+      code: movedReason,
+      message: 'No runner was free to move this reviewer to the other agent.',
+      detail: { kind: unit.kind, lens: unit.lens, from: moved.failedOverFrom },
+    });
+    return;
   }
 
   // Nothing had room. The unit stays claimed with no dispatch time, which is the
@@ -607,6 +721,24 @@ function harnessFailure(
     };
   }
   return null;
+}
+
+/**
+ * Whether a run that did NOT complete still left output worth reading.
+ *
+ * Two cases. Findings that parse are findings, whatever the sandbox said
+ * afterwards, and throwing them away would discard finished work. And a
+ * harness failure the agent's last text names has its own code and message in
+ * `ingestUnitOutput`. Everything else about a failed run is the poller's to
+ * settle from the sandbox's own error.
+ */
+export function failedRunOutputIsUsable(finalText: string | null): boolean {
+  return parseCodeReviewFindings(finalText).ok || harnessFailure(finalText) !== null;
+}
+
+/** The failure code for a run that failed and whose error names no vendor limit. */
+export function failedRunCode(detail: string | null | undefined): RunFailureCode {
+  return harnessFailure(detail ?? null)?.code ?? 'run_failed';
 }
 
 // ---------- Ingesting a unit's output ----------
@@ -987,7 +1119,11 @@ export async function applyActions(review: ReviewRow, actions: Action[]): Promis
         await finishCycle(review);
         return wantsImmediateRepass('finish');
       case 'fail':
-        await failCycle(review, action.code, action.message);
+        await failCycle(
+          review,
+          action.code,
+          await cycleFailureMessage(review, action.code, action.message)
+        );
         return wantsImmediateRepass('fail');
       case 'dispatch':
         break;

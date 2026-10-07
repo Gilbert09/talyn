@@ -2,6 +2,51 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## A usage limit failed a review as "no reviewer finished" (2026-10-07)
+
+Tom sent a screenshot: *"The review did not finish. No reviewer finished, so
+there is nothing to show yet. Try again."* The rows in production said all three
+lens units ran on the fleet at `gpt-5.6-sol`, and all three settled `failed` /
+`unparseable` with "The agent produced no final message." His ChatGPT
+subscription was at its usage limit, the same limit that failed a task the day
+before. "Review again" started the same three units on the same model.
+
+Two defects, both in the review engine and neither in the quota detector:
+
+- **The review poller never read the sandbox error.** `reconcileFleetRun` took a
+  terminal sandbox, looked for a final message, found none, and called it an
+  unparseable answer. The vendor's sentence was not stored anywhere, so even the
+  database could not say why. The usage limit in this note is an inference from
+  the model and the day's other runs, which is the cost of that defect.
+- **A review unit had no failover.** The task path has had one since
+  2026-09-20. A unit is not a `tasks` row, so it could not use it.
+
+What shipped (`unitFailover.ts`, `failureMessage.ts`, migration `0074`):
+
+- A failed run settles `usage_limit`, `quota_exhausted` or `run_failed`, with the
+  sentence in `failure_detail`. `unparseable` keeps its real meaning.
+- A unit that fails on a limit moves once to the workspace's other fleet agent,
+  by a new `requeued` status. It goes through the workspace ceiling again and
+  never spills to PostHog Code.
+- Later units of the same cycle read the cycle's run rows and dispatch on the
+  other agent directly.
+- The review says the real reason, for example: *"Codex reported a usage limit
+  and no other agent is connected to run the review. Try again in about 5 days,
+  or connect Claude."*
+
+Found on the way and NOT fixed:
+
+- **A `capacity_deferred` unit is never retried.** The executor comment says the
+  reconciler retries it. It does not: the claim is not fresh, `decide` counts the
+  unit as in flight, and the reaper fails it after 5 minutes.
+- **`fleetHasRoom` is computed and never read.**
+- **`unitModelTier` always returns `'default'`**, so no unit escalates today,
+  which contradicts the "depth means model tier" paragraph in `CLAUDE.md`.
+- **`codeReviewPostHogPoller.test.ts` uses the wrong sentinel**
+  (`TALYN_CODE_REVIEW_FINDINGS:`). It passes because ingest is mocked.
+- A `requeued` row can outlive a cycle that ends another way. It holds no slot
+  and no later cycle reads it.
+
 ## Settings → Developer shows your own account (2026-10-07)
 
 Tom asked for the Developer tab to show his own rate limits and anything else

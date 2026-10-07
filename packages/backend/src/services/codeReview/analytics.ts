@@ -229,3 +229,31 @@ export async function captureFixSettled(
     console.warn(`[code-review] analytics for fix on ${review.id} failed:`, err);
   }
 }
+
+/**
+ * A unit ran on the workspace's other fleet agent, because the first one was
+ * limited.
+ *
+ * `at` separates the two ways it happens. 'failure' is a unit that ran, was
+ * refused and moved. 'dispatch' is a unit that never tried the limited agent,
+ * because a hold or an earlier unit of the same cycle had already said so.
+ * Shape only, as everywhere in this module.
+ */
+export function captureUnitFailedOver(
+  workspaceId: string,
+  properties: {
+    from_agent: string;
+    to_agent: string;
+    reason: 'usage_limit' | 'quota_exhausted';
+    kind: string;
+    lens: string;
+    cycle: number;
+    at: 'dispatch' | 'failure';
+  }
+): void {
+  try {
+    captureWorkspaceEvent(workspaceId, 'code_review_unit_failed_over', properties);
+  } catch (err) {
+    console.warn('[code-review] analytics for a unit failover failed:', err);
+  }
+}

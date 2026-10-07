@@ -94,6 +94,10 @@ export const RUN_COLUMNS = {
   chunkTotal: prCodeReviewRuns.chunkTotal,
   status: prCodeReviewRuns.status,
   failureCode: prCodeReviewRuns.failureCode,
+  // One error sentence, capped at 500 characters when it is written. The
+  // dispatch path and the cycle's failure message both read it.
+  failureDetail: prCodeReviewRuns.failureDetail,
+  failedOverFrom: prCodeReviewRuns.failedOverFrom,
   provider: prCodeReviewRuns.provider,
   model: prCodeReviewRuns.model,
   sandboxId: prCodeReviewRuns.sandboxId,
@@ -134,6 +138,9 @@ export type RunKind = 'lens' | 'sweep' | 'validate' | 'repair';
 
 export type RunStatus =
   | 'claimed'
+  // The unit ran, its agent reported a usage limit, and it waits for a second
+  // dispatch on the workspace's other fleet agent. See `requeueRun`.
+  | 'requeued'
   | 'dispatching'
   | 'running'
   | 'parsing'
@@ -149,7 +156,16 @@ export type RunFailureCode =
   | 'no_provider'
   | 'run_vanished'
   | 'timeout'
+  // The run SUCCEEDED and its output could not be parsed. A run that failed is
+  // one of the three codes below, never this one.
   | 'unparseable'
+  // The vendor refused the run. `usage_limit` clears by waiting;
+  // `quota_exhausted` needs a person to add usage.
+  | 'usage_limit'
+  | 'quota_exhausted'
+  // The run failed for a reason nothing here recognises. `failure_detail`
+  // holds the provider's own words.
+  | 'run_failed'
   // Failures BEFORE the agent ran. Distinct from `unparseable` because that one
   // means "it answered and we could not read it", and these mean "it never
   // started" — which is different advice for whoever reads the review.
@@ -160,6 +176,7 @@ export type RunFailureCode =
 /** Units that have not settled. The fan-in and the poller both read this set. */
 export const IN_FLIGHT_RUN_STATUSES: RunStatus[] = [
   'claimed',
+  'requeued',
   'dispatching',
   'running',
   'parsing',
@@ -507,6 +524,8 @@ export async function claimRun(id: string, key: ClaimKey): Promise<ClaimedRun> {
 export interface RunPatch {
   status?: RunStatus;
   failureCode?: RunFailureCode | null;
+  failureDetail?: string | null;
+  failedOverFrom?: string | null;
   provider?: string | null;
   model?: string | null;
   sandboxId?: string | null;
@@ -540,7 +559,12 @@ export async function patchRun(runId: string, patch: RunPatch): Promise<void> {
  */
 export async function settleRun(
   runId: string,
-  outcome: { status: RunStatus; failureCode?: RunFailureCode | null; parseError?: string | null }
+  outcome: {
+    status: RunStatus;
+    failureCode?: RunFailureCode | null;
+    parseError?: string | null;
+    failureDetail?: string | null;
+  }
 ): Promise<boolean> {
   const updated = await getDbClient()
     .update(prCodeReviewRuns)
@@ -548,6 +572,7 @@ export async function settleRun(
       status: outcome.status,
       failureCode: outcome.failureCode ?? null,
       ...(outcome.parseError !== undefined ? { parseError: outcome.parseError } : {}),
+      ...(outcome.failureDetail !== undefined ? { failureDetail: outcome.failureDetail } : {}),
       settledAt: new Date(),
       updatedAt: new Date(),
     })
@@ -559,6 +584,68 @@ export async function settleRun(
     )
     .returning({ id: prCodeReviewRuns.id });
   return updated.length > 0;
+}
+
+/**
+ * Put a unit whose agent reported a usage limit back in line, for one more
+ * dispatch on the workspace's other fleet agent.
+ *
+ * Conditional on two things, and both matter. The status guard means only a
+ * unit with a sandbox behind it can be requeued, so the poller and the deadline
+ * reaper cannot both act on one unit. `failed_over_from IS NULL` is what makes
+ * a move happen at most once: the second failure finds the column set and
+ * settles instead.
+ *
+ * The dead run's handles are cleared so the row describes the run that is
+ * about to start. `failure_code` and `failure_detail` stay, because they are
+ * what the unit settles with if the second dispatch finds nowhere to go.
+ *
+ * `requeued` is outside `DISPATCHED_RUN_STATUSES`, so the unit gives its slot
+ * back and the second dispatch goes through the workspace ceiling again.
+ */
+export async function requeueRun(
+  runId: string,
+  input: { failedOverFrom: string; failureCode: RunFailureCode; failureDetail: string | null }
+): Promise<boolean> {
+  const updated = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({
+      status: 'requeued',
+      failedOverFrom: input.failedOverFrom,
+      failureCode: input.failureCode,
+      failureDetail: input.failureDetail,
+      sandboxId: null,
+      host: null,
+      endpoint: null,
+      eventCursor: 0,
+      costUsd: null,
+      dispatchedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(prCodeReviewRuns.id, runId),
+        inArray(prCodeReviewRuns.status, DISPATCHED_RUN_STATUSES),
+        isNull(prCodeReviewRuns.failedOverFrom)
+      )
+    )
+    .returning({ id: prCodeReviewRuns.id });
+  return updated.length > 0;
+}
+
+/**
+ * Take a requeued unit for its second dispatch.
+ *
+ * The status change is the claim, as the insert is for a first dispatch: two
+ * evaluation passes can both see the unit, and only one update matches.
+ */
+export async function takeRequeuedRun(runId: string): Promise<RunRow | null> {
+  const rows = await getDbClient()
+    .update(prCodeReviewRuns)
+    .set({ status: 'claimed', updatedAt: new Date() })
+    .where(and(eq(prCodeReviewRuns.id, runId), eq(prCodeReviewRuns.status, 'requeued')))
+    .returning(RUN_COLUMNS);
+  return rows[0] ?? null;
 }
 
 export async function getRun(runId: string): Promise<RunRow | null> {
@@ -605,7 +692,10 @@ export async function loadOrphanedClaims(olderThan: Date, limit: number): Promis
       and(
         eq(prCodeReviewRuns.status, 'claimed'),
         isNull(prCodeReviewRuns.dispatchedAt),
-        lt(prCodeReviewRuns.createdAt, olderThan)
+        // Since the claim was last written, not since the row was created. A
+        // unit taken for its second dispatch is an old row with a new claim,
+        // and it gets the same grace as a first one.
+        lt(prCodeReviewRuns.updatedAt, olderThan)
       )
     )
     .limit(limit);

@@ -68,6 +68,32 @@ function sharedFailureCode(state: DecideState): keyof typeof CYCLE_FAILURE_MESSA
 }
 
 /**
+ * The limit code, when a vendor's usage limit stopped every reviewer.
+ *
+ * `quota_exhausted` only when every unit says so. A mix of the two reads as
+ * `usage_limit`, which is the weaker claim and sends nobody to a billing page.
+ */
+function sharedLimitCode(state: DecideState): 'usage_limit' | 'quota_exhausted' | null {
+  const settled = state.runs.filter((r) => r.cycle === state.cycle && isSettled(r));
+  if (!settled.length) return null;
+  const limit = (code: string | null) => code === 'usage_limit' || code === 'quota_exhausted';
+  if (!settled.every((r) => limit(r.failureCode))) return null;
+  return settled.every((r) => r.failureCode === 'quota_exhausted')
+    ? 'quota_exhausted'
+    : 'usage_limit';
+}
+
+/**
+ * What the cycle says for a limit code when nothing better can be written.
+ *
+ * The executor replaces it with a sentence that names the agent, the wait and
+ * the other agent's state (`failureMessage.ts`). That needs the workspace's
+ * connections, which this pure function must not read.
+ */
+const LIMIT_FALLBACK_MESSAGE =
+  'A usage limit on the connected agent stopped every reviewer. Try again later.';
+
+/**
  * What a cycle says when every reviewer failed the same way.
  *
  * Each of these is a cause a person can act on, or one we have told them is
@@ -157,12 +183,19 @@ function decideUnitPhase(
   const planned = plannedUnits(state, phase);
   const existing = planned.map((unit) => ({ unit, run: runFor(state, unit) }));
 
-  const missing = existing.filter((e) => !e.run).map((e) => e.unit);
-  const inFlight = existing.filter((e) => e.run && !isSettled(e.run));
+  // A requeued unit needs a dispatch as much as one with no row. It ran, its
+  // agent reported a usage limit, and it waits to run once on the other agent.
+  // It goes through `unitsAllowed` like any other dispatch.
+  const awaitsDispatch = (run: RunRow | undefined) => !run || run.status === 'requeued';
+  const missing = existing.filter((e) => awaitsDispatch(e.run)).map((e) => e.unit);
+  const inFlight = existing.filter(
+    (e) => e.run && !isSettled(e.run) && !awaitsDispatch(e.run)
+  );
   const settled = existing.filter((e) => e.run && isSettled(e.run)).map((e) => e.run!);
 
   // Fire what we can, bounded by what the pacing allows. The remainder is not
-  // lost: it has no row yet, so the next pass finds it missing again.
+  // lost: it has no row yet, or is still requeued, so the next pass finds it
+  // again.
   if (missing.length && state.unitsAllowed > 0) {
     return missing.slice(0, state.unitsAllowed).map((unit) => ({ type: 'dispatch', unit }));
   }
@@ -181,6 +214,8 @@ function decideUnitPhase(
       // is actively misleading when every reviewer died for the same structural
       // reason — a prompt too large to spawn will be too large next time too —
       // so when the units agree on a cause, the cycle reports THAT.
+      const limit = sharedLimitCode(state);
+      if (limit) return [{ type: 'fail', code: limit, message: LIMIT_FALLBACK_MESSAGE }];
       const shared = sharedFailureCode(state);
       return [
         {

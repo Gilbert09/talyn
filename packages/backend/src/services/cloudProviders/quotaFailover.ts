@@ -79,7 +79,7 @@ interface FailoverState {
   at?: string;
 }
 
-const FLEET_HOP = (agent: FleetAgent): Hop => `fleet:${agent}`;
+export const FLEET_HOP = (agent: FleetAgent): Hop => `fleet:${agent}`;
 
 function readState(metadata: unknown): FailoverState {
   const raw = (metadata as Record<string, unknown> | null)?.quotaFailover;
@@ -291,7 +291,7 @@ export async function failoverExhaustedRun(opts: {
   return true;
 }
 
-type NextHop =
+export type NextHop =
   | { kind: 'fleet'; agent: FleetAgent }
   | { kind: 'provider'; providerType: string; envId: string };
 
@@ -302,8 +302,12 @@ type NextHop =
  * subscription the workspace has already paid for. An agent needing reauth is
  * skipped: its credential exists but the vendor will not renew it, so moving
  * an exhausted run onto it trades one dead end for another.
+ *
+ * Exported for the code-review pipeline. A review unit is not a task and
+ * cannot use `failoverExhaustedRun`, but the rule for where it may move must
+ * be this one. It always passes `fleetOnly`.
  */
-async function nextHop(
+export async function nextHop(
   workspaceId: string,
   tried: Set<Hop>,
   opts: { fleetOnly?: boolean } = {},

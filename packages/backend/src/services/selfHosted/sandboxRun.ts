@@ -93,6 +93,17 @@ export interface SandboxRunSpec {
    */
   modelFallback?: string;
   /**
+   * Fleet agents the caller knows are limited right now, although no workspace
+   * hold says so. A rate limit writes no hold, so a review whose first unit
+   * was just refused has no other way to keep its remaining units off that
+   * agent.
+   *
+   * Treated as a hold with one difference. With no other usable agent a HELD
+   * agent is refused as capacity, and an AVOIDED one is dispatched anyway: the
+   * caller's knowledge is minutes old and the limit may have cleared.
+   */
+  avoidAgents?: FleetAgent[];
+  /**
    * A ref to check out instead of the repository's default branch — how a review
    * run reads the pull request rather than trunk.
    *
@@ -285,7 +296,8 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
     const wanted = fleetAgentForModel(catalogued);
     let quotaSwap: { from: FleetAgent; to: FleetAgent } | null = null;
     let model = catalogued;
-    if (held[wanted]) {
+    const avoided = new Set<FleetAgent>(spec.avoidAgents ?? []);
+    if (held[wanted] || avoided.has(wanted)) {
       const other: FleetAgent = wanted === 'claude' ? 'codex' : 'claude';
       // The RESOLVED credential, not merely "is one configured". `creds` has
       // already refreshed what it could, so this asks the question that
@@ -294,21 +306,28 @@ export async function dispatchSandboxRun(spec: SandboxRunSpec): Promise<SandboxR
       // instead of being swapped onto and then refused for a missing key,
       // which is a hard failure a chain does not route around.
       const otherToken = other === 'codex' ? creds.openaiKey : creds.claudeToken;
-      const otherUsable = !held[other] && Boolean(otherToken);
-      if (!otherUsable) {
+      const otherUsable = !held[other] && !avoided.has(other) && Boolean(otherToken);
+      if (!otherUsable && held[wanted]) {
         return { ok: false, capacity: true, error: heldBackReason(wanted, held[wanted]!) };
       }
-      // The workspace's OWN choice for that agent, not the shipped default.
-      // A swap is a vendor change, not a licence to ignore the setting: this
-      // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
-      // workspace whose Codex model was gpt-5.6-sol, every task, all day
-      // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
-      // default, so a workspace that has chosen nothing is unaffected.
-      model = await workspaceAgentModel(spec.workspaceId, other);
-      quotaSwap = { from: wanted, to: other };
-      console.warn(
-        `[fleet] run ${spec.runId}: ${wanted} usage is held back — dispatching at ${other} instead`,
-      );
+      if (otherUsable) {
+        // The workspace's OWN choice for that agent, not the shipped default.
+        // A swap is a vendor change, not a licence to ignore the setting: this
+        // sent `defaultFleetModelForAgent` and so ran gpt-5.6-terra on a
+        // workspace whose Codex model was gpt-5.6-sol, every task, all day
+        // (observed 2026-09-21). `workspaceAgentModel` still ends at the shipped
+        // default, so a workspace that has chosen nothing is unaffected.
+        //
+        // The tier is applied again, because the swap replaced the model the
+        // tier was applied to. Without it a judging unit that moved would run
+        // below the tier its kind asks for.
+        const swapped = await workspaceAgentModel(spec.workspaceId, other);
+        model = spec.modelTier === 'top' ? topFleetModelForModel(swapped) : swapped;
+        quotaSwap = { from: wanted, to: other };
+        console.warn(
+          `[fleet] run ${spec.runId}: ${wanted} usage is held back or limited, so it dispatches at ${other}`,
+        );
+      }
     }
 
     // The model decides the provider, and the provider decides what the microVM

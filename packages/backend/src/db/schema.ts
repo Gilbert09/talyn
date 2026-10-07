@@ -1665,6 +1665,10 @@ export const prCodeReviewRuns = pgTable(
     chunkTotal: integer('chunk_total').notNull().default(1),
     status: text('status').notNull().default('claimed'),
     failureCode: text('failure_code'),
+    /** The provider's own error sentence for a failed run. Capped at 500. */
+    failureDetail: text('failure_detail'),
+    /** The fleet agent this unit moved away from. Set at most once. */
+    failedOverFrom: text('failed_over_from'),
     provider: text('provider'),
     model: text('model'),
     sandboxId: text('sandbox_id'),

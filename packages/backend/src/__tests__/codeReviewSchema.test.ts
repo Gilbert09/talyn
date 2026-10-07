@@ -238,6 +238,35 @@ describe('code review schema', () => {
     expect(byName.get('uq_pr_code_review_findings_dedupe')).toMatch(/UNIQUE/);
   });
 
+  /**
+   * Migration 0074. Both columns must accept NULL, because every unit that ran
+   * normally has neither, and both must exist under the names the Drizzle
+   * schema reads.
+   */
+  it('stores why a unit failed and which agent it moved from, both optional', async () => {
+    await testDb.db.insert(prCodeReviewRuns).values(unit);
+    await testDb.db.insert(prCodeReviewRuns).values({
+      ...unit,
+      id: 'run-2',
+      lens: 'security',
+      failureDetail: 'You have hit your ChatGPT usage limit.',
+      failedOverFrom: 'codex',
+    });
+    const rows = await testDb.pglite.query<{
+      id: string;
+      failure_detail: string | null;
+      failed_over_from: string | null;
+    }>(`SELECT id, failure_detail, failed_over_from FROM pr_code_review_runs ORDER BY id`);
+    expect(rows.rows).toEqual([
+      { id: 'run-1', failure_detail: null, failed_over_from: null },
+      {
+        id: 'run-2',
+        failure_detail: 'You have hit your ChatGPT usage limit.',
+        failed_over_from: 'codex',
+      },
+    ]);
+  });
+
   it('cascades a deleted review to its units and findings, and a deleted PR to the review', async () => {
     await testDb.db.insert(prCodeReviewRuns).values(unit);
     await testDb.db.insert(prCodeReviewFindings).values({
