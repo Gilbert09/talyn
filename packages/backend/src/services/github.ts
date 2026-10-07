@@ -367,7 +367,7 @@ export function isGitHubAccessRefusal(err: unknown): boolean {
   return err instanceof GitHubApiError && (err.status === 403 || err.status === 404);
 }
 
-class GitHubNotConnectedError extends Error {
+export class GitHubNotConnectedError extends Error {
   constructor() {
     super('GitHub not connected for this workspace');
   }
@@ -1667,6 +1667,11 @@ class GitHubService extends EventEmitter {
       // Don't cache a failure — retry next time, meanwhile degrade gracefully.
       return cached?.slugs ?? new Set();
     }
+  }
+
+  /** The cached login, without a GitHub call. Null when nothing is cached. */
+  cachedViewerLogin(workspaceId: string): string | null {
+    return this.viewerLoginCache.get(workspaceId) ?? null;
   }
 
   /**

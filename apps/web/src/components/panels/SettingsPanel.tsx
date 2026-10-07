@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { SkillsSettings } from './SkillsSettings';
 import { InstructionsSettings } from './InstructionsSettings';
+import { DeveloperInternals } from './DeveloperInternals';
 import { BillingTeamNotice, TeamSettings } from './TeamBilling';
 import { highlightsForSurface, codeReviewOffered } from '@talyn/shared';
 import { api, GitHubRepo, getMcpEndpoint } from '../../lib/api';
@@ -2310,22 +2311,11 @@ function DeveloperSettings() {
       <div>
         <h3 className="text-lg font-medium mb-1">Developer</h3>
         <p className="text-sm text-muted-foreground">
-          Tools for looking under the hood of Talyn
+          Your account's GitHub rate limits, agents and recent activity
         </p>
       </div>
 
-      <Card className="p-4">
-        <h4 className="font-medium flex items-center gap-2">
-          <Bug className="w-4 h-4" />
-          Operator tooling
-        </h4>
-        <p className="text-sm text-muted-foreground mt-1">
-          The Debug panel moved to{' '}
-          <strong>admin.talyn.dev</strong>, along with fleet and account
-          tooling. It surfaced internals across every account, so it belongs on
-          the operator console rather than in the product.
-        </p>
-      </Card>
+      <DeveloperInternals />
 
       {isDevBuild && (
       <Card className="p-4 border-destructive/50">

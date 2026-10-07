@@ -487,6 +487,14 @@ class DebugBus {
     return events;
   }
 
+  /**
+   * How far back the ring buffer reaches. One buffer serves all accounts, so
+   * this says nothing about any single account.
+   */
+  bufferInfo(): { capacity: number; oldestAt: string | null } {
+    return { capacity: MAX_EVENTS, oldestAt: this.buffer[0]?.timestamp ?? null };
+  }
+
   snapshot(): DebugSnapshot {
     const owners: DebugOwner[] = [...this.owners.entries()].map(([ownerId, label]) => ({
       ownerId,

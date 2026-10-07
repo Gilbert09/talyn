@@ -2,6 +2,40 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Settings → Developer shows your own account (2026-10-07)
+
+Tom asked for the Developer tab to show his own rate limits and anything else
+about his account, in place of the card that pointed at admin.talyn.dev. The
+Debug panel left the product in Session 80 because it showed every account. So
+the work here was isolation first and the screen second.
+
+What shipped: `routes/developer.ts` with three routes (`/rate-limits`,
+`/activity`, `/agents`), the `developer` group in `@talyn/client`, and
+`DeveloperInternals.tsx` in both apps. The tab polls every 10 seconds while it
+is visible.
+
+- **Rate limits** are GitHub's live `/rate_limit` for the workspace's own token
+  (`core`, `search`, `graphql`, `code_search`), cached for 10 seconds per
+  workspace so several open tabs share one call. It also shows Talyn's own
+  GraphQL deferral and the secondary rate gate for that account.
+- **Activity** is the debug bus, filtered on the server to `ownerId === user.id`
+  and to four categories. `meta` is cut to an allowlist of keys.
+- **Agents** shows each fleet agent as ready, reconnect needed, or held after a
+  usage limit, with the vendor's sentence.
+
+The audit of every `record*` call site found no attributed event that names
+another account. It also found two gaps that are left open:
+
+- **Webhook events are never attributed.** No `recordWebhook` call passes a
+  `workspaceId`, so the Webhooks filter is always empty. The fix is one event
+  per watching workspace, and it changes the admin stream too.
+- **`rateBudgetGovernor` has no callers.** The "poll loops slowed" state does
+  not exist in production, so the tab does not show it.
+
+The `error` filter returns every failed event, not the `error` category. Only
+failed webhooks and failed poll ticks carry that category, and neither is
+attributed, so a literal match would be empty for ever.
+
 ## Post to PR: review findings as a GitHub review, on request (2026-10-07)
 
 Tom asked for a button that writes a finished review's findings onto the pull

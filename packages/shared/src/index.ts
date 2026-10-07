@@ -1266,6 +1266,122 @@ export interface DebugDbStats {
   egressBytes: number;
 }
 
+// ----------------------------------------------------------------------------
+// Developer surface (Settings → Developer)
+//
+// The account's OWN internals. Everything here is scoped to the authenticated
+// caller by the backend (`routes/developer.ts`). The cross-account view stays
+// on the operator console.
+// ----------------------------------------------------------------------------
+
+/** The debug categories a user may read about their own account. */
+export type DeveloperActivityCategory = Extract<
+  DebugCategory,
+  'http' | 'webhook' | 'event' | 'error'
+>;
+
+/**
+ * The single list of {@link DeveloperActivityCategory} values. The backend
+ * allowlist and both front ends read it, so they cannot disagree.
+ */
+export const DEVELOPER_ACTIVITY_CATEGORIES: readonly DeveloperActivityCategory[] = [
+  'http',
+  'webhook',
+  'event',
+  'error',
+];
+
+/** One GitHub rate-limit bucket of the workspace's own token. */
+export interface DeveloperRateLimitBucket {
+  /** GitHub's resource name: `core`, `search`, `graphql`, `code_search`. */
+  resource: string;
+  limit: number;
+  remaining: number;
+  used: number;
+  /** ISO instant the bucket refills. */
+  resetAt: string;
+}
+
+/** Talyn's own tracked GraphQL points budget for the workspace's account. */
+export interface DeveloperGraphqlBudget {
+  limit: number;
+  remaining: number;
+  /** ISO instant the points window resets. */
+  resetAt: string;
+  /** Point cost of the most recently observed query. */
+  lastCost: number;
+  /** ISO instant Talyn last observed this budget. */
+  observedAt: string;
+  /** True while Talyn defers background refreshes to protect this budget. */
+  deferring: boolean;
+}
+
+export interface DeveloperRateLimits {
+  connected: boolean;
+  /** GitHub login of the connected account, when the backend has it cached. */
+  login: string | null;
+  /** OAuth scopes of the stored token. Empty when not connected. */
+  scopes: string[];
+  /** Live buckets from GitHub, in display order. Empty when not connected. */
+  github: DeveloperRateLimitBucket[];
+  graphqlBudget: DeveloperGraphqlBudget | null;
+  /**
+   * Talyn holds requests back after GitHub rate-limits the account. Each field
+   * is the ISO instant that API is gated until, or null when it flows.
+   */
+  secondaryGate: { restUntil: string | null; graphqlUntil: string | null };
+  /** ISO instant the GitHub answer was fetched (it is cached for a few seconds). */
+  fetchedAt: string | null;
+}
+
+/**
+ * A {@link DebugEvent} as its own account may read it. No owner fields, and
+ * `meta` holds an explicit allowlist of keys.
+ */
+export interface DeveloperActivityEvent {
+  id: number;
+  timestamp: string;
+  category: DeveloperActivityCategory;
+  service: string;
+  action: string;
+  ok: boolean;
+  summary: string;
+  durationMs?: number;
+  meta?: Record<string, unknown>;
+}
+
+export interface DeveloperActivity {
+  /** The caller's events, newest first. */
+  events: DeveloperActivityEvent[];
+  /** Computed from `events`, so they always agree with the list. */
+  counts: { total: number; failed: number; byService: Record<string, number> };
+  /**
+   * The backend keeps one rolling buffer for all accounts. These two values
+   * say how far back that buffer reaches right now.
+   */
+  buffer: { capacity: number; oldestAt: string | null };
+}
+
+export type DeveloperAgentState = 'ready' | 'reauth' | 'held';
+
+export interface DeveloperAgent {
+  agent: FleetAgent;
+  state: DeveloperAgentState;
+  /** Present when `state` is `held`: a usage limit keeps the agent out of use. */
+  hold?: {
+    /** ISO instant the limit was observed. */
+    heldSince: string;
+    /** ISO instant Talyn tries the agent again. */
+    retryAfter: string;
+    /** The vendor's own sentence about the caller's subscription. */
+    detail: string | null;
+  };
+}
+
+export interface DeveloperAgents {
+  agents: DeveloperAgent[];
+}
+
 export interface TaskStatusEvent {
   taskId: string;
   status: TaskStatus;

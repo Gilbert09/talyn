@@ -9,6 +9,7 @@ import { repositoryRoutes } from './repositories.js';
 import { skillRoutes } from './skills.js';
 import { pullRequestRoutes } from './pullRequests.js';
 import { debugRoutes } from './debug.js';
+import { developerRoutes } from './developer.js';
 import { fleetPublicRoutes, fleetRoutes } from './fleet.js';
 import { adminRoutes } from './admin/index.js';
 import { userRoutes } from './users.js';
@@ -199,6 +200,14 @@ export function setupRoutes(app: Express): void {
   // has no owner column, and an owner-scoped transaction would pin a pooled
   // connection to let RLS filter nothing. See routes/releaseNotes.ts.
   app.use(`${api}/release-notes`, mount(releaseNotesRoutes()));
+
+  // Settings → Developer: the caller's OWN rate limits, agent state and debug
+  // activity. An ordinary authenticated surface, unlike `/debug` above. It is
+  // pre-ownerScope for the billing reason: the tab polls, `/rate-limits` waits
+  // on GitHub, and an owner-scoped transaction would pin a pooled connection
+  // for that round trip. Every handler scopes to req.user.id itself. See
+  // routes/developer.ts.
+  app.use(`${api}/developer`, mount(developerRoutes()));
 
   // Owner-scoped DB enforcement for the data routers below: runs each request
   // inside a transaction that drops to the `authenticated` role so Postgres RLS

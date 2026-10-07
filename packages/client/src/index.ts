@@ -86,6 +86,10 @@ import type {
   AdminUserSummary,
   AdminWorkspaceDetail,
   AdminWorkspaceSummary,
+  DeveloperActivity,
+  DeveloperActivityCategory,
+  DeveloperAgents,
+  DeveloperRateLimits,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
 // shares with the backend proxy and the fleet client.
@@ -1508,6 +1512,30 @@ export const debug = {
   getAccess: () => request<{ admin: boolean }>('GET', '/debug/access'),
 };
 
+/**
+ * Settings → Developer: the caller's OWN account internals. Every route
+ * derives the account from the session. Nothing here takes an owner.
+ */
+export const developer = {
+  rateLimits: (workspaceId: string) =>
+    request<DeveloperRateLimits>(
+      'GET',
+      `/developer/rate-limits?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+  activity: (opts?: { category?: DeveloperActivityCategory; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.category) params.set('category', opts.category);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    return request<DeveloperActivity>('GET', `/developer/activity${qs ? `?${qs}` : ''}`);
+  },
+  agents: (workspaceId: string) =>
+    request<DeveloperAgents>(
+      'GET',
+      `/developer/agents?workspaceId=${encodeURIComponent(workspaceId)}`
+    ),
+};
+
 // ============================================================================
 // WebSocket Client
 // ============================================================================
@@ -2541,6 +2569,7 @@ export const api = {
   skills,
   mcpTokens,
   debug,
+  developer,
   billing,
   releaseNotes,
   users,
