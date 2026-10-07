@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, fireEvent, waitFor, cleanup, screen } from '@testing-library/react';
+import { act, render, fireEvent, waitFor, cleanup, screen } from '@testing-library/react';
 import type { CodeReviewFinding, CodeReviewPublic } from '@talyn/shared';
 import {
   FindingsTab,
@@ -111,6 +111,9 @@ const postButton = () =>
 async function renderTab() {
   render(<FindingsTab pullRequestId="pr1" />);
   await waitFor(() => expect(screen.getByText('Finding f-1')).toBeInTheDocument());
+  // The tab clears the ticks in an effect when the review first arrives. A tick
+  // made before that effect runs is lost, so let it run first.
+  await act(async () => {});
 }
 
 beforeEach(() => {
