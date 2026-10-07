@@ -101,7 +101,10 @@ describe('owner coverage', () => {
     { name: 'forbidden without SSO', response: { probeStatus: 403 }, expected: { state: 'not_accessible' } },
     { name: 'personal account', response: { personal: true }, expected: { state: 'not_accessible' } },
     { name: 'installation error', response: { error: 500 }, expected: { state: 'unknown' } },
-    { name: 'probe error', response: { probeStatus: 503 }, expected: { state: 'unknown' } },
+    // The App said "installed" before the probe failed, so never `unknown`.
+    { name: 'probe error', response: { probeStatus: 503 }, expected: { state: 'not_accessible' } },
+    { name: 'probe rate limit', response: { probeStatus: 429 }, expected: { state: 'not_accessible' } },
+    { name: 'probe unauthorized', response: { probeStatus: 401 }, expected: { state: 'not_accessible' } },
   ])('diagnoses $name', async ({ response, expected }) => {
     await watch(['PostHog']);
     const fetchMock = mockGithub({ PostHog: response });
@@ -118,6 +121,31 @@ describe('owner coverage', () => {
       { owner: 'Broken', state: 'unknown' },
       { owner: 'PostHog', state: 'suspended' },
     ]);
+  });
+
+  it('records each diagnosis on the debug bus, and nothing for a covered workspace', async () => {
+    await watch(['Broken', 'PostHog']);
+    mockGithub({ Broken: { error: 502 }, PostHog: {} });
+    const record = vi.spyOn(debugBus, 'recordEvent');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await githubService.diagnoseOwnerCoverage('coverage');
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({
+      service: 'github',
+      action: 'coverage:diagnosed',
+      workspaceId: 'coverage',
+      summary: 'owner coverage — Broken=unknown, PostHog=not_accessible',
+      meta: { problems: [
+        { owner: 'Broken', state: 'unknown' },
+        { owner: 'PostHog', state: 'not_accessible' },
+      ] },
+    }));
+
+    record.mockClear();
+    await githubService.storeToken('coverage', 'ghu_again', 'bearer', 'repo');
+    vi.mocked(globalThis.fetch).mockRestore();
+    mockGithub({}, ['broken', 'posthog']);
+    await githubService.diagnoseOwnerCoverage('coverage');
+    expect(record.mock.calls.filter(([e]) => e.action === 'coverage:diagnosed')).toEqual([]);
   });
 
   it('omits covered owners and ignores case when it removes duplicate owners', async () => {

@@ -1039,22 +1039,41 @@ class GitHubService extends EventEmitter {
     const problems: GitHubOwnerCoverage[] = [];
     for (const [key, owner] of owners) {
       if (covered.has(key)) continue;
+      let installation: Awaited<ReturnType<typeof fetchOwnerInstallation>>;
       try {
         if (!auth) throw new GitHubNotConnectedError();
-        const installation = await fetchOwnerInstallation(owner);
-        if (!installation) {
-          problems.push({ owner, state: 'not_installed' });
-        } else if (installation.suspended) {
-          problems.push({ owner, state: 'suspended' });
-        } else {
-          const sso = await probeOrgSso(auth.accessToken, owner);
-          problems.push(sso.required
-            ? { owner, state: 'sso_required', ssoUrl: sso.url }
-            : { owner, state: 'not_accessible' });
-        }
+        installation = await fetchOwnerInstallation(owner);
       } catch {
         problems.push({ owner, state: 'unknown' });
+        continue;
       }
+      if (!installation) {
+        problems.push({ owner, state: 'not_installed' });
+      } else if (installation.suspended) {
+        problems.push({ owner, state: 'suspended' });
+      } else {
+        // The App answered "installed", so a failed SSO probe must not become
+        // `unknown`: the client shows that as "isn't installed", which is the
+        // one thing we know to be false here.
+        const sso = await probeOrgSso(auth.accessToken, owner)
+          .catch(() => ({ required: false as const }));
+        problems.push(sso.required
+          ? { owner, state: 'sso_required', ssoUrl: sso.url }
+          : { owner, state: 'not_accessible' });
+      }
+    }
+    if (problems.length > 0) {
+      // The only record of which banner a workspace was shown.
+      const summary = problems.map((problem) => `${problem.owner}=${problem.state}`).join(', ');
+      console.warn(`[github] workspace ${workspaceId}: owner coverage — ${summary}`);
+      debugBus.recordEvent({
+        service: 'github',
+        action: 'coverage:diagnosed',
+        summary: `owner coverage — ${summary}`,
+        ok: false,
+        workspaceId,
+        meta: { problems: problems.map(({ owner, state }) => ({ owner, state })) },
+      });
     }
     return problems;
   }
