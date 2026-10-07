@@ -139,7 +139,8 @@ export function externalSubmissionLostReason(attempts: number): string {
 export function submitCallFailedReason(attempts: number, error: string): string {
   return (
     `Talyn tried to submit this PR to the external merge queue ${attempts} times on this ` +
-    `commit and the call itself failed each time, so the queue never saw it (${error}). ` +
+    `commit over about an hour, with a longer wait before each try, and the call itself ` +
+    `failed each time, so the queue never saw it (${error}). ` +
     `If that is a GitHub outage it will clear on its own — re-queue to retry. Otherwise ` +
     `check that the workspace's GitHub connection and App permissions are intact.`
   );
@@ -1698,6 +1699,8 @@ function decideCleanButWaitingOnCi(
       if (heldForRun) return heldForRun;
       const backoff = queueBackoff(d, ctx);
       if (backoff) return backoff;
+      const waiting = submitCallBackoff(d, ctx);
+      if (waiting) return waiting;
       d.act({ kind: 'submit_external' });
       return d.done('advance');
     }
@@ -2123,8 +2126,11 @@ function decideSubmitAftermath(
     // PROVIDER did with the PR. A call that never reached the provider is a
     // different fact, and letting a couple of transient blips eat the real
     // submit budget would block a healthy PR out of doors that still work.
+    //
+    // Its own NUMBER too, and a wait that doubles between tries. See
+    // `SUBMIT_CALL_MAX_FAILURES` and `submitCallBackoff`.
     const attempts = d.entry.submitRetryAttempts + 1;
-    if (attempts >= ctx.maxAttempts) {
+    if (attempts >= SUBMIT_CALL_MAX_FAILURES) {
       d.transition('blocked_manual', {
         blockedCode: 'external_gate',
         blockedReason: submitCallFailedReason(attempts, outcome.message),
@@ -2133,7 +2139,7 @@ function decideSubmitAftermath(
           code: 'external_submit_call_failed',
           message:
             `Submitting to the external merge queue failed ${attempts} times on this commit ` +
-            `without reaching it — stopping rather than retrying every evaluation.`,
+            `without reaching it, with a longer wait before each try. Stopping.`,
           detail: { error: outcome.message },
         },
       });
@@ -2144,8 +2150,10 @@ function decideSubmitAftermath(
       set: { submitRetryAttempts: attempts, lastError: outcome.message, lastErrorAt: ctx.nowIso },
       event: {
         code: 'external_submit_retry',
-        message: `Submitting to the external merge queue failed — retrying (${attempts}/${ctx.maxAttempts}).`,
-        detail: { error: outcome.message },
+        message:
+          `Submitting to the external merge queue failed. Talyn tries again in ` +
+          `${waitInWords(submitCallWaitMs(attempts))} (${attempts}/${SUBMIT_CALL_MAX_FAILURES}).`,
+        detail: { error: outcome.message, retryInMs: submitCallWaitMs(attempts) },
       },
     });
     return d.done('advance');
@@ -2454,6 +2462,48 @@ function submitHeldForRun(
   return d.done('advance');
 }
 
+/**
+ * How many failed submit CALLS an entry may have on one commit before it stops.
+ *
+ * With the waits below, eight failures take about an hour: 30 s, then 1, 2, 4,
+ * 8, 16 and 32 minutes. That is the point of the number. A GitHub outage that
+ * answers 500 is usually over inside an hour, and the old budget of three was
+ * spent in seconds, because every evaluation retried at once and evaluations
+ * arrive with every webhook. A permanent condition that is not a 403 still
+ * stops, after eight calls and not after one call per evaluation.
+ */
+export const SUBMIT_CALL_MAX_FAILURES = 8;
+
+/** The wait before the first retry. Each later wait is twice the one before. */
+export const SUBMIT_CALL_FIRST_WAIT_MS = 30_000;
+
+/** How long to wait after the `failures`-th failed submit call. */
+export function submitCallWaitMs(failures: number): number {
+  return failures > 0 ? SUBMIT_CALL_FIRST_WAIT_MS * 2 ** (failures - 1) : 0;
+}
+
+function waitInWords(ms: number): string {
+  return ms < 60_000 ? `${Math.round(ms / 1000)} seconds` : `${Math.round(ms / 60_000)} min`;
+}
+
+/**
+ * Hold a submit while the wait after a failed submit call is still running.
+ *
+ * Returns null when the entry may submit. Nothing schedules the end of the
+ * wait: the next webhook for this PR, or the reconciler's sweep of entries not
+ * evaluated for two minutes, evaluates the entry again and finds it over.
+ */
+function submitCallBackoff(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
+  const failures = d.entry.submitRetryAttempts;
+  if (failures <= 0 || !d.entry.lastErrorAt) return null;
+  const failedAt = Date.parse(d.entry.lastErrorAt);
+  if (Number.isNaN(failedAt)) return null;
+  if (Date.parse(ctx.nowIso) >= failedAt + submitCallWaitMs(failures)) return null;
+  // `advance`, not `hold`: this entry cannot make progress until the wait
+  // ends, so the next entry in the group must not sit behind it.
+  return d.done('advance');
+}
+
 function queueBackoff(d: DecisionBuilder, ctx: DecisionContext): Decision | null {
   if (!ctx.queueHealth || ctx.queueHealth.state !== 'degraded') return null;
   if (d.entry.status === 'blocked' && d.entry.blockedCode === 'external_queue_unhealthy') {
@@ -2515,6 +2565,8 @@ function decideCleanPath(
     if (heldForRun) return heldForRun;
     const backoff = queueBackoff(d, ctx);
     if (backoff) return backoff;
+    const waiting = submitCallBackoff(d, ctx);
+    if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');
   }
@@ -2564,6 +2616,8 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
     });
     const backoff = queueBackoff(d, ctx);
     if (backoff) return backoff;
+    const waiting = submitCallBackoff(d, ctx);
+    if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');
   }
@@ -2592,6 +2646,8 @@ function decideMergeAftermath(d: DecisionBuilder, pr: PrSnapshot, ctx: DecisionC
     });
     const backoff = queueBackoff(d, ctx);
     if (backoff) return backoff;
+    const waiting = submitCallBackoff(d, ctx);
+    if (waiting) return waiting;
     d.act({ kind: 'submit_external' });
     return d.done('hold');
   }
@@ -2773,6 +2829,10 @@ class DecisionBuilder {
       if (opts.set.rerunAttempts !== undefined) this.entry.rerunAttempts = opts.set.rerunAttempts;
       if (opts.set.resignAttempts !== undefined) this.entry.resignAttempts = opts.set.resignAttempts;
       if (opts.set.submitAttempts !== undefined) this.entry.submitAttempts = opts.set.submitAttempts;
+      if (opts.set.submitRetryAttempts !== undefined) {
+        this.entry.submitRetryAttempts = opts.set.submitRetryAttempts;
+      }
+      if (opts.set.lastErrorAt !== undefined) this.entry.lastErrorAt = opts.set.lastErrorAt;
       if (opts.set.externalSubmitVia !== undefined) {
         this.entry.externalSubmitVia = opts.set.externalSubmitVia;
       }

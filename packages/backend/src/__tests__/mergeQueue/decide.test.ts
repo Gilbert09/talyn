@@ -15,6 +15,9 @@ import {
   decide,
   queueSignature,
   unsignedCommitsBlockReason,
+  SUBMIT_CALL_FIRST_WAIT_MS,
+  SUBMIT_CALL_MAX_FAILURES,
+  submitCallWaitMs,
 } from '../../services/mergeQueue/decide.js';
 import { MAX_INFRA_SUBMITS_PER_HEAD } from '../../services/mergeQueue/types.js';
 import type {
@@ -2463,12 +2466,29 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
       });
 
       it('stops once the budget is spent', () => {
-        const d = failed(2);
+        const d = failed(SUBMIT_CALL_MAX_FAILURES - 1);
         const t = lastTransition(d)!;
         expect(t.to).toBe('blocked_manual');
         expect(t.event.code).toBe('external_submit_call_failed');
         expect(kinds(d)).toContain('notify_blocked');
         expect(t.blockedReason).toContain('GitHub not connected');
+        expect(t.blockedReason).toContain(`${SUBMIT_CALL_MAX_FAILURES} times`);
+      });
+
+      // The old budget was three, and every evaluation retried at once, so a
+      // GitHub 500 that lasted a minute blocked the PR for a person to fix.
+      it.each([1, 2, 3, 4, 5, 6])('still retries after %i failures', (n) => {
+        const t = lastTransition(failed(n))!;
+        expect(t.to).toBe('queued');
+        expect(t.event.code).toBe('external_submit_retry');
+        expect(t.set?.submitRetryAttempts).toBe(n + 1);
+      });
+
+      it('records when the next try is due, in the event', () => {
+        const t = lastTransition(failed(2))!;
+        expect(t.event.detail).toMatchObject({ retryInMs: submitCallWaitMs(3) });
+        expect(t.event.message).toContain('tries again in 2 min');
+        expect(t.set?.lastErrorAt).toBe(NOW);
       });
 
       // The two budgets answer different questions and must not share a pot:
@@ -2477,6 +2497,70 @@ describe('decide — external merge queue (trunk.io / GitHub native)', () => {
         for (const n of [0, 2]) {
           expect(lastTransition(failed(n))!.set?.submitAttempts).toBeUndefined();
         }
+      });
+    });
+
+    describe('the wait between failed submit calls', () => {
+      it.each([
+        [0, 0],
+        [1, 30_000],
+        [2, 60_000],
+        [3, 2 * 60_000],
+        [4, 4 * 60_000],
+        [7, 32 * 60_000],
+      ])('after %i failures the wait is %i ms', (failures, ms) => {
+        expect(submitCallWaitMs(failures)).toBe(ms);
+      });
+
+      it('lets the whole budget run for about an hour', () => {
+        let total = 0;
+        for (let n = 1; n < SUBMIT_CALL_MAX_FAILURES; n += 1) total += submitCallWaitMs(n);
+        expect(total).toBe(SUBMIT_CALL_FIRST_WAIT_MS * (2 ** (SUBMIT_CALL_MAX_FAILURES - 1) - 1));
+        expect(total / 60_000).toBeGreaterThan(60);
+        expect(total / 60_000).toBeLessThan(70);
+      });
+
+      const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+      const waiting = (failures: number, sinceMs: number) =>
+        decide(
+          entry({ status: 'queued', submitRetryAttempts: failures, lastErrorAt: ago(sinceMs) }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed' })
+        );
+
+      it.each([
+        [1, 0],
+        [1, 29_000],
+        [3, 60_000],
+        [7, 31 * 60_000],
+      ])('does not submit %i failures in, %i ms after the last one', (failures, sinceMs) => {
+        const d = waiting(failures, sinceMs);
+        expect(kinds(d)).not.toContain('submit_external');
+        // Nothing to record, and the next entry must not sit behind this one.
+        expect(d.actions).toEqual([]);
+        expect(d.verdict).toBe('advance');
+      });
+
+      it.each([
+        [1, 30_000],
+        [3, 2 * 60_000],
+        [7, 32 * 60_000],
+        [2, 24 * 60 * 60_000],
+      ])('submits again %i failures in, %i ms after the last one', (failures, sinceMs) => {
+        expect(kinds(waiting(failures, sinceMs))).toContain('submit_external');
+      });
+
+      it.each([
+        ['no failure recorded', { submitRetryAttempts: 0, lastErrorAt: NOW }],
+        ['no time recorded', { submitRetryAttempts: 3, lastErrorAt: null }],
+        ['a time that does not parse', { submitRetryAttempts: 3, lastErrorAt: 'not-a-date' }],
+      ])('submits at once with %s', (_label, fields) => {
+        const d = decide(
+          entry({ status: 'queued', ...fields }),
+          cleanPr(),
+          ctx({ externalGate: 'confirmed' })
+        );
+        expect(kinds(d)).toContain('submit_external');
       });
     });
 

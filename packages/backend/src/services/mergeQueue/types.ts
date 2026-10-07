@@ -242,6 +242,11 @@ export interface EntrySnapshot {
   /** Submit attempts whose CALL failed, never reaching the provider (migration 0045). */
   submitRetryAttempts: number;
   /**
+   * When the entry last recorded an error (ISO). Read with
+   * `submitRetryAttempts` to space out the retries of a failed submit call.
+   */
+  lastErrorAt?: string | null;
+  /**
    * Blocker signatures a COMPLETED remediation has already left this head with.
    * This — not the counters above — is what stops remediation: see the
    * "Progress, not retries" note in decide.ts. Always an array; a null column

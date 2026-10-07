@@ -89,6 +89,7 @@ export function rowToEntrySnapshot(row: EntryRow): EntrySnapshot {
     resignAttempts: row.resignAttempts,
     submitAttempts: row.submitAttempts,
     submitRetryAttempts: row.submitRetryAttempts,
+    lastErrorAt: row.lastErrorAt ? row.lastErrorAt.toISOString() : null,
     // A null column (rows written before the progress rule shipped) reads as
     // "nothing has defeated a run yet", so those entries get a clean start
     // rather than an unexplained instant block.
