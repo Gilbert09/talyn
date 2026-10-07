@@ -2710,7 +2710,21 @@ class GitHubService extends EventEmitter {
     options: {
       body?: string;
       event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
-      comments?: Array<{ path: string; position?: number; body: string }>;
+      /** The commit the comments are about. GitHub defaults to the latest one. */
+      commit_id?: string;
+      /**
+       * `position` is the legacy diff offset. `line` and `side` are the modern
+       * fields, with `start_line` and `start_side` for a range of lines.
+       */
+      comments?: Array<{
+        path: string;
+        position?: number;
+        line?: number;
+        side?: 'LEFT' | 'RIGHT';
+        start_line?: number;
+        start_side?: 'LEFT' | 'RIGHT';
+        body: string;
+      }>;
     }
   ): Promise<GitHubReview> {
     return this.apiRequest<GitHubReview>(
@@ -2770,6 +2784,32 @@ class GitHubService extends EventEmitter {
     patch?: string;
   }>> {
     return this.apiRequest(workspaceId, `/repos/${owner}/${repo}/pulls/${number}/files`);
+  }
+
+  /**
+   * Every changed file of a pull request, with its patch.
+   *
+   * `getPRFiles` reads one page. This reads all of them, 100 at a time. GitHub
+   * stops this listing at 3000 files, so the loop ends there at the latest.
+   */
+  async getAllPRFiles(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    number: number
+  ): Promise<Array<{ filename: string; status: string; patch?: string }>> {
+    const perPage = 100;
+    const files: Array<{ filename: string; status: string; patch?: string }> = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.apiRequest<
+        Array<{ filename: string; status: string; patch?: string }>
+      >(
+        workspaceId,
+        `/repos/${owner}/${repo}/pulls/${number}/files?per_page=${perPage}&page=${page}`
+      );
+      files.push(...batch);
+      if (batch.length < perPage) return files;
+    }
   }
 
   /**

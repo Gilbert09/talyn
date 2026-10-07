@@ -1786,6 +1786,16 @@ export const prCodeReviewFindings = pgTable(
      * head is routinely still the old one.
      */
     fixedHeadSha: text('fixed_head_sha'),
+    /**
+     * When "Post to PR" wrote this finding onto the pull request.
+     *
+     * Set once and never cleared, including when a later cycle re-opens the
+     * finding: the comment is still on GitHub, and posting it again would
+     * duplicate it.
+     */
+    postedAt: timestamp('posted_at', { withTimezone: true }),
+    /** The GitHub review that carries it. */
+    postedReviewId: text('posted_review_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

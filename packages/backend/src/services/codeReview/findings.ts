@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ne, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, inArray, isNull, sql } from 'drizzle-orm';
 import { v4 as uuid } from 'uuid';
 import {
   CODE_REVIEW_SEVERITY_ORDER,
@@ -55,6 +55,9 @@ export const FINDING_LIST_COLUMNS = {
   fixedHeadSha: prCodeReviewFindings.fixedHeadSha,
   fixTaskId: prCodeReviewFindings.fixTaskId,
   fixedAt: prCodeReviewFindings.fixedAt,
+  // One timestamp. The card needs it to draw "Posted to PR", and the button
+  // needs it to know what is left to post.
+  postedAt: prCodeReviewFindings.postedAt,
   firstSeenCycle: prCodeReviewFindings.firstSeenCycle,
   lastSeenCycle: prCodeReviewFindings.lastSeenCycle,
   seenCount: prCodeReviewFindings.seenCount,
@@ -300,6 +303,58 @@ export async function findingsForFix(
       )
     )
     .orderBy(asc(severityRank(prCodeReviewFindings.severity)));
+}
+
+/**
+ * The findings "Post to PR" may write onto the pull request.
+ *
+ * `findingIds` null means every finding of the review. An id that belongs to
+ * another review matches nothing, because the review id is in the predicate.
+ * A finding that was posted before is never returned.
+ */
+export async function findingsForPost(
+  reviewId: string,
+  findingIds: string[] | null
+): Promise<FindingDetailRow[]> {
+  if (findingIds && !findingIds.length) return [];
+  return getDbClient()
+    .select(FINDING_DETAIL_COLUMNS)
+    .from(prCodeReviewFindings)
+    .where(
+      and(
+        eq(prCodeReviewFindings.reviewId, reviewId),
+        ...(findingIds ? [inArray(prCodeReviewFindings.id, findingIds)] : []),
+        inArray(prCodeReviewFindings.disposition, [...ACTIVE_DISPOSITIONS]),
+        ne(prCodeReviewFindings.verdict, 'rejected'),
+        isNull(prCodeReviewFindings.postedAt)
+      )
+    );
+}
+
+/**
+ * Record that these findings are on the pull request now.
+ *
+ * Only rows that were not posted before are written, so the first review that
+ * carried a finding stays the one on record.
+ */
+export async function markPosted(
+  reviewId: string,
+  findingIds: string[],
+  githubReviewId: string | null
+): Promise<number> {
+  if (!findingIds.length) return 0;
+  const updated = await getDbClient()
+    .update(prCodeReviewFindings)
+    .set({ postedAt: new Date(), postedReviewId: githubReviewId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(prCodeReviewFindings.reviewId, reviewId),
+        inArray(prCodeReviewFindings.id, findingIds),
+        isNull(prCodeReviewFindings.postedAt)
+      )
+    )
+    .returning({ id: prCodeReviewFindings.id });
+  return updated.length;
 }
 
 /**

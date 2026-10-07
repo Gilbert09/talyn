@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  MessageSquare,
   RotateCcw,
   ScanSearch,
   Undo2,
@@ -34,8 +35,10 @@ import {
 import { api } from '../../../lib/api';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { useWorkspaceStore } from '../../../stores/workspace';
+import { toast } from '../../../stores/toast';
 import { trackEvent } from '../../../lib/analytics';
 import { Button } from '../../ui/button';
+import { ConfirmDialog } from '../../ui/confirm-dialog';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
 import { Markdown } from '../../../lib/markdown';
@@ -97,6 +100,11 @@ export function FindingsTab({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Which pull request this is, in words, for the confirmation before a post.
+  const [prLabel, setPrLabel] = useState<string | null>(null);
+  // The findings a post is about to write. Non-null means the confirmation is open.
+  const [confirmPost, setConfirmPost] = useState<string[] | null>(null);
+  const [posting, setPosting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +112,11 @@ export function FindingsTab({
       setReview(data.review);
       setFindings(data.findings);
       setDefaultPreset(data.defaultPreset);
+      setPrLabel(
+        data.pullRequest
+          ? `${data.pullRequest.owner}/${data.pullRequest.repo}#${data.pullRequest.number}`
+          : null
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -201,6 +214,18 @@ export function FindingsTab({
     [grouped]
   );
 
+  // What "Post to PR" would write. Derived from `grouped`, like `fixableAll`, so
+  // it never posts a finding the list is not showing.
+  const post = useMemo(
+    () =>
+      postToPrState({
+        running,
+        shown: grouped.flatMap((g) => g.items),
+        ticked: selected,
+      }),
+    [running, grouped, selected]
+  );
+
   const lensTally = useMemo(() => codeReviewLensTally(findings), [findings]);
 
   const bucket = useMemo(
@@ -271,6 +296,35 @@ export function FindingsTab({
       else setError(message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Write findings onto the pull request as one GitHub review.
+   *
+   * Runs only from the confirmation: this writes on GitHub under the user's own
+   * name, and Talyn cannot take it back. No analytics event here, because the
+   * route sends the one event for a post.
+   */
+  async function postFindings(ids: string[]) {
+    if (!ids.length) return;
+    setPosting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.pullRequests.postCodeReviewFindings(pullRequestId, ids);
+      if (result.review) setReview(result.review);
+      setSelected(new Set());
+      toast.success(
+        `Posted ${result.posted} finding${result.posted === 1 ? '' : 's'} to the pull request`
+      );
+      await load();
+    } catch (err) {
+      if (maybeHandleBillingLimit(err, 'code_review_post')) return;
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPosting(false);
+      setConfirmPost(null);
     }
   }
 
@@ -376,6 +430,25 @@ export function FindingsTab({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {/* Post to PR. Shown whenever there are findings on the list, and
+                disabled with the reason when it cannot act, so the button does
+                not come and go as the review moves. */}
+            {grouped.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                data-attr="code-review-post"
+                disabled={busy || posting || post.disabledReason !== null}
+                onClick={() => setConfirmPost(post.ids)}
+                title={
+                  post.disabledReason ??
+                  'Write these findings on the pull request as one review'
+                }
+              >
+                <MessageSquare className="mr-1 h-3 w-3" />
+                {post.label}
+              </Button>
+            )}
             {running ? (
               <Button
                 size="sm"
@@ -731,6 +804,18 @@ export function FindingsTab({
         </div>
       )}
 
+      <ConfirmDialog
+        open={confirmPost !== null}
+        title="Post findings to the pull request?"
+        description={`This writes ${confirmPost?.length ?? 0} finding${
+          confirmPost?.length === 1 ? '' : 's'
+        } on ${prLabel ?? 'this pull request'} as a review comment from your GitHub account. You cannot undo it from Talyn.`}
+        confirmLabel="Post to PR"
+        busy={posting}
+        onConfirm={() => void postFindings(confirmPost ?? [])}
+        onCancel={() => setConfirmPost(null)}
+      />
+
       {/* The action bar lives INSIDE the tab, not in the sheet's footer, which the
           merge actions own. Only when something is ticked — a permanently visible
           push button is the thing this screen most needs not to be. */}
@@ -752,6 +837,37 @@ export function FindingsTab({
       )}
     </div>
   );
+}
+
+/**
+ * What the "Post to PR" button says and does.
+ *
+ * With findings ticked it posts those. With none ticked it posts every finding
+ * the list shows. A finding that is on the pull request already is never
+ * counted, so the number on the button is the number of comments to expect.
+ */
+export function postToPrState(input: {
+  running: boolean;
+  shown: readonly Pick<CodeReviewFinding, 'id' | 'postedAt'>[];
+  ticked: ReadonlySet<string>;
+}): { label: string; ids: string[]; disabledReason: string | null } {
+  const postable = input.shown.filter((f) => !f.postedAt).map((f) => f.id);
+  const tickedShown = input.shown.filter((f) => input.ticked.has(f.id));
+  const ids = tickedShown.length ? postable.filter((id) => input.ticked.has(id)) : postable;
+  const label = tickedShown.length && ids.length ? `Post ${ids.length} to PR` : 'Post to PR';
+  if (input.running) {
+    return { label, ids, disabledReason: 'Wait for the review to finish before you post.' };
+  }
+  if (!ids.length) {
+    return {
+      label,
+      ids,
+      disabledReason: tickedShown.length
+        ? 'The findings you ticked are already on the pull request.'
+        : 'Every finding shown is already on the pull request.',
+    };
+  }
+  return { label, ids, disabledReason: null };
 }
 
 /**
@@ -874,6 +990,11 @@ function FindingCard({
               ` · ${finding.lenses.map(codeReviewLensLabel).join(' and ')} agree`}
             {/* Said out loud, because it changes how much to trust the location. */}
             {!finding.anchorVerified && ' · location approximate'}
+            {/* On GitHub already. It stays ticked-able for a fix, and "Post to
+                PR" skips it. */}
+            {finding.postedAt && (
+              <span data-attr="code-review-finding-posted"> · Posted to PR</span>
+            )}
           </p>
         </button>
       </div>

@@ -2,6 +2,45 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Post to PR: review findings as a GitHub review, on request (2026-10-07)
+
+Tom asked for a button that writes a finished review's findings onto the pull
+request as inline comments. Until now the findings lived only in the app, and
+the design said so on purpose. That stays the default: nothing is posted unless
+a person presses **Post to PR** in the Findings tab and confirms.
+
+What shipped: `POST /pull-requests/:id/code-review/post`, `postToPr.ts` and the
+pure `postFormat.ts` in `services/codeReview/`, migration `0073` (`posted_at`,
+`posted_review_id` on the findings table), `postCodeReviewFindings` in
+`@talyn/client`, and the button plus a confirm step in both `FindingsTab.tsx`
+forks.
+
+The decisions, and the reason for each:
+
+- **One review, always `COMMENT`.** It posts from the user's own account, so it
+  must never approve or block a merge on its own judgement.
+- **Inline only on evidence.** A finding goes inline when its anchor is verified
+  and every line is on the RIGHT side of the diff. GitHub refuses the whole
+  review with a 422 when one comment points outside the diff, so every other
+  finding goes in the review body with its file and line. A 422 that still
+  occurs is retried once with all findings in the body.
+- **A moved head posts no inline comments.** The file listing describes the
+  newest commit and proves nothing about the reviewed one.
+- **`posted_at` stops a duplicate.** A second press posts only the findings that
+  are new. The sequence runs one at a time per review, on the pool and not on
+  the request's transaction, because a mark written there is invisible to the
+  press that waits behind it. The queue is per process: two replicas in a deploy
+  overlap can still post twice. A cross-replica guard needs a claim column.
+- **A suggested fix is plain text**, not a GitHub `suggestion` block. An applied
+  suggestion replaces the commented lines exactly.
+- **65,536 characters is GitHub's limit for a body.** Findings are kept whole
+  and dropped from the least serious end. The body says how many were left out,
+  and those are not marked as posted.
+
+Not covered: the route's status mapping (409 and 502) has no HTTP-level test,
+and the modern `line` / `side` payload is checked only against mocks, not live
+GitHub. The first real post is the test of that.
+
 ## The reconcile sweep was restarting production (2026-10-05)
 
 Tom sent a screenshot of the in-app banner: *"Talyn is having trouble on our

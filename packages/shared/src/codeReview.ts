@@ -645,6 +645,12 @@ export interface CodeReviewFinding {
   fixedAt?: string | null;
   /** The run that fixed it, so the transcript is one click from the finding. */
   fixTaskId?: string | null;
+  /**
+   * When "Post to PR" wrote this finding onto the pull request, as an ISO
+   * string. Null when it is only in the app. It stays set when a later cycle
+   * re-opens the finding, because the comment is still on the pull request.
+   */
+  postedAt?: string | null;
 }
 
 export type CodeReviewCounts = Record<CodeReviewSeverity, number>;
@@ -1345,7 +1351,9 @@ export interface CodeReviewPromptFinding {
 }
 
 /** `path:41-44`, `path:41`, or just `path` — whatever the finding actually knows. */
-export function codeReviewFindingLocation(f: CodeReviewPromptFinding): string {
+export function codeReviewFindingLocation(
+  f: Pick<CodeReviewPromptFinding, 'filePath' | 'lineStart' | 'lineEnd'>
+): string {
   if (!f.lineStart) return f.filePath;
   const end = f.lineEnd && f.lineEnd !== f.lineStart ? `-${f.lineEnd}` : '';
   return `${f.filePath}:${f.lineStart}${end}`;

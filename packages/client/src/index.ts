@@ -1327,6 +1327,8 @@ export const pullRequests = {
       review: CodeReviewPublic | null;
       findings: CodeReviewFinding[];
       defaultPreset: CodeReviewPreset;
+      /** Absent when nothing was reviewed, and from an older backend. */
+      pullRequest?: { owner: string; repo: string; number: number } | null;
     }>('GET', `/pull-requests/${id}/code-review`),
   /**
    * Start a review, or return the one already running.
@@ -1357,6 +1359,22 @@ export const pullRequests = {
       `/pull-requests/${id}/code-review/fix`,
       { findingIds }
     ),
+  /**
+   * Write the findings onto the pull request as one GitHub review, from the
+   * user's own GitHub account.
+   *
+   * No ids means every finding. Only open findings that are not on the pull
+   * request yet are posted. 409 with `code_review_post_nothing_to_post` when
+   * none is left, and with `code_review_post_not_ready` while a review runs.
+   */
+  postCodeReviewFindings: (id: string, findingIds?: string[]) =>
+    request<{
+      review: CodeReviewPublic | null;
+      posted: number;
+      inline: number;
+      inSummary: number;
+      reviewUrl: string | null;
+    }>('POST', `/pull-requests/${id}/code-review/post`, { findingIds: findingIds ?? [] }),
   /**
    * One finding, with the parts the list drops.
    *

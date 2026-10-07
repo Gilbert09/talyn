@@ -50,6 +50,7 @@ import {
   workspacePreset,
 } from '../services/codeReview/cycle.js';
 import { startFixRun } from '../services/codeReview/fix.js';
+import { postFindingsToPr } from '../services/codeReview/postToPr.js';
 import {
   getFinding,
   listFindings,
@@ -1359,6 +1360,8 @@ export function pullRequestRoutes(): Router {
         review: payload,
         findings: findings.map((f) => serializeFinding(f, pr)),
         defaultPreset: await workspacePreset(workspaceId),
+        // So the tab can name the pull request it is about to write to.
+        pullRequest: pr ? { owner: pr.owner, repo: pr.repo, number: pr.number } : null,
       },
     });
   });
@@ -1447,6 +1450,55 @@ export function pullRequestRoutes(): Router {
     res.json({
       success: true,
       data: { taskId: outcome.taskId, review: await publicReviewById(review.id) },
+    });
+  });
+
+  /**
+   * Post to PR: write the findings onto the pull request as one GitHub review.
+   *
+   * `findingIds` empty or absent means every finding. Either way only open
+   * findings that are not on the pull request yet are posted.
+   */
+  router.post('/:id/code-review/post', async (req, res) => {
+    const workspaceId = await reviewGate(req, res);
+    if (!workspaceId) return;
+    const review = await getReviewForPr(req.params.id);
+    if (!review) {
+      return res.status(404).json({ success: false, error: 'That pull request has no review.' });
+    }
+    const findingIds = Array.isArray(req.body?.findingIds)
+      ? (req.body.findingIds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : [];
+
+    const user = assertUser(req);
+    const outcome = await postFindingsToPr(review.id, findingIds, user.id);
+    if (!outcome.ok) {
+      // GitHub's own refusal is a 502: the request was fine and the upstream
+      // said no. Its message goes to the user, who is the one who can act on it.
+      return res.status(outcome.code === 'github_failed' ? 502 : 409).json({
+        success: false,
+        error: outcome.message,
+        code: `code_review_post_${outcome.code}`,
+      });
+    }
+    // The ONE emit for a post, for the reason the dismiss route gives.
+    void captureWorkspaceEvent(workspaceId, 'code_review_posted_to_pr', {
+      posted: outcome.posted,
+      inline: outcome.inline,
+      in_summary: outcome.inSummary,
+      selected_count: findingIds.length,
+      preset: review.preset,
+      cycle: review.cycle,
+    });
+    res.json({
+      success: true,
+      data: {
+        review: await publicReviewById(review.id),
+        posted: outcome.posted,
+        inline: outcome.inline,
+        inSummary: outcome.inSummary,
+        reviewUrl: outcome.reviewUrl,
+      },
     });
   });
 
@@ -2158,6 +2210,7 @@ function serializeFinding(
         : null,
     fixedAt: f.fixedAt ? f.fixedAt.toISOString() : null,
     fixTaskId: f.fixTaskId,
+    postedAt: f.postedAt ? f.postedAt.toISOString() : null,
   };
 }
 
