@@ -65,7 +65,7 @@ vi.mock('../services/selfHosted/quotaProbe.js', () => ({ verifyAgentQuota }));
 vi.mock('../services/github.js', () => ({
   githubService: {
     getVerifiedAccessToken: vi.fn(async () => 'gho_token'),
-    getPRFiles: vi.fn(async () => [
+    getAllPRFiles: vi.fn(async () => [
       { filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+x' },
     ]),
   },

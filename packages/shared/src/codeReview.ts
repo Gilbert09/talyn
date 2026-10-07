@@ -852,6 +852,11 @@ export interface RawCodeReviewFinding {
   body: string;
   suggestion: string | null;
   confidence: number | null;
+  /**
+   * Only the judge sends this: the id of the candidate it is keeping, which is
+   * that candidate's dedupe key. Absent on every other unit.
+   */
+  id?: string;
 }
 
 /**
@@ -1009,6 +1014,7 @@ function normaliseFinding(value: unknown): RawCodeReviewFinding | null {
     body: str(f.body).slice(0, CODE_REVIEW_MAX_BODY_CHARS),
     suggestion: f.suggestion == null ? null : str(f.suggestion).slice(0, CODE_REVIEW_MAX_BODY_CHARS),
     confidence: clampConfidence(f.confidence),
+    ...(str(f.id).trim() ? { id: str(f.id).trim().slice(0, 200) } : {}),
   };
 }
 

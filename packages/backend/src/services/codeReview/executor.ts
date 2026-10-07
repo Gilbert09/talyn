@@ -200,8 +200,13 @@ async function loadPromptContext(
     headSha?: string;
   };
 
+  // EVERY changed file, not the first page. `getPRFiles` returns GitHub's
+  // default page of 30, so a review of a 317-file pull request read 30 files,
+  // said "Reviewing 25 changed files", and could not verify one anchor in the
+  // other 287 (2026-10-07). The parts a large change is split into are what
+  // bound a unit's size, not the listing.
   const files = await githubService
-    .getPRFiles(review.workspaceId, pr.owner, pr.repo, pr.number)
+    .getAllPRFiles(review.workspaceId, pr.owner, pr.repo, pr.number)
     .catch(() => []);
 
   const body = await loadPrBody(review.pullRequestId);
@@ -875,10 +880,19 @@ export async function ingestUnitOutput(
     // Carries the judge's severity through, not just the key: the prompt invites
     // it to correct one, and reading only keys silently discarded every
     // correction it made.
-    const kept = parsed.findings.map((f) => ({
-      key: keyFor(f, verified(f)),
-      severity: f.severity,
-    }));
+    //
+    // A keep is matched by the ID the judge was given, not by a key computed
+    // again from what it sent back. See `matchJudgeKeep`.
+    const candidateKeys = new Set(
+      (await findingsForJudging(review.id, review.cycle)).map((c) => c.dedupeKey)
+    );
+    const kept: { key: string; severity: string }[] = [];
+    let unmatched = 0;
+    for (const f of parsed.findings) {
+      const key = matchJudgeKeep(f, candidateKeys, verified(f));
+      if (key) kept.push({ key, severity: f.severity });
+      else unmatched += 1;
+    }
     // The judge is handed each candidate's dedupe key as its id, so what comes
     // back needs no mapping. Recorded so that "the checker threw away five of
     // six" is a claim somebody can audit rather than take on trust.
@@ -888,8 +902,25 @@ export async function ingestUnitOutput(
       review.cycle,
       kept,
       run.id,
-      droppedReasons
+      droppedReasons,
+      // A keep we cannot place means "left out" no longer means "dropped": one
+      // of the candidates the judge did not name is the one it kept. So only
+      // the candidates it NAMED as dropped are rejected, and the rest stay
+      // unchecked and on screen. Showing an unchecked finding costs a look.
+      // Hiding a confirmed one costs the bug.
+      { onlyNamedDrops: unmatched > 0 }
     );
+    if (unmatched > 0) {
+      await appendReviewEvent(review.id, {
+        toPhase: review.phase as CodeReviewPhase,
+        trigger: 'poller',
+        code: 'judge_unmatched',
+        message:
+          `The checker kept ${unmatched} finding(s) that Talyn could not match to a candidate. ` +
+          'The findings it did not name stay on the list, marked as not checked.',
+        detail: { unmatched, kept: kept.length, named: droppedReasons.size },
+      });
+    }
     await patchRun(run.id, { findingCount: confirmed });
     await settleRun(run.id, { status: 'succeeded' });
     await appendReviewEvent(review.id, {
@@ -930,6 +961,36 @@ export async function ingestUnitOutput(
  * the way the findings were keyed when they were written — same function, same
  * anchor-verification answer, or nothing matches and every candidate is dropped.
  */
+/**
+ * Which candidate a judge's keep is about, or null when none can be found.
+ *
+ * The ID first. The judge is handed each candidate's dedupe key as its id and
+ * told to send it back, so that is the answer whenever it is present and real.
+ *
+ * It used to be the ONLY the computed key: file, title and anchor, hashed again
+ * from what the judge sent. The judge is never shown the candidate's anchor, so
+ * it quotes the code itself, and one changed word in a title or a quote that now
+ * verifies gives a different key. Nothing matched, and everything unmatched was
+ * marked rejected. On 2026-10-07 a judge kept five of sixteen findings, a
+ * blocker among them, and the review recorded "Kept 0, dropped 16".
+ *
+ * The computed key stays as the fallback for a keep with no usable id, tried
+ * with both answers to "was the anchor verified", because that answer is the
+ * part most likely to differ from the day the finding was stored.
+ */
+export function matchJudgeKeep(
+  finding: RawCodeReviewFinding,
+  candidateKeys: ReadonlySet<string>,
+  verified: boolean
+): string | null {
+  if (finding.id && candidateKeys.has(finding.id)) return finding.id;
+  for (const answer of [verified, !verified]) {
+    const key = keyFor(finding, answer);
+    if (candidateKeys.has(key)) return key;
+  }
+  return null;
+}
+
 function keyFor(finding: RawCodeReviewFinding, verified: boolean): string {
   return codeReviewDedupeKey({
     filePath: finding.file,

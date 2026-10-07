@@ -2802,13 +2802,11 @@ class GitHubService extends EventEmitter {
     owner: string,
     repo: string,
     number: number
-  ): Promise<Array<{ filename: string; status: string; patch?: string }>> {
+  ): Promise<Awaited<ReturnType<GitHubService['getPRFiles']>>> {
     const perPage = 100;
-    const files: Array<{ filename: string; status: string; patch?: string }> = [];
+    const files: Awaited<ReturnType<GitHubService['getPRFiles']>> = [];
     for (let page = 1; ; page += 1) {
-      const batch = await this.apiRequest<
-        Array<{ filename: string; status: string; patch?: string }>
-      >(
+      const batch = await this.apiRequest<Awaited<ReturnType<GitHubService['getPRFiles']>>>(
         workspaceId,
         `/repos/${owner}/${repo}/pulls/${number}/files?per_page=${perPage}&page=${page}`
       );

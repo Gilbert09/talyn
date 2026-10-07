@@ -40,7 +40,7 @@ const { createSandbox, scheduleReviewEvaluation, startCodeRun, capture, github }
     capture: vi.fn(),
     github: {
       getVerifiedAccessToken: vi.fn(async () => 'gho_token'),
-      getPRFiles: vi.fn(),
+      getAllPRFiles: vi.fn(),
       getDirectoryListingResolved: vi.fn(),
       getDirectoryListing: vi.fn(),
       getTreeRecursive: vi.fn(),
@@ -164,7 +164,7 @@ beforeEach(async () => {
     sandbox: { id: input.id, status: 'running' },
     host: 'host-1',
   }));
-  github.getPRFiles.mockResolvedValue([
+  github.getAllPRFiles.mockResolvedValue([
     { filename: 'src/a.ts', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+const x = 1;' },
   ]);
   repoHasSkill(REPO_SKILL);
@@ -458,7 +458,7 @@ describe('which reviewers a cycle runs', () => {
   });
 
   it("drops Talyn's lenses a docs-only change does not need, and still runs the team's own", async () => {
-    github.getPRFiles.mockResolvedValue([
+    github.getAllPRFiles.mockResolvedValue([
       { filename: 'README.md', status: 'modified', additions: 1, deletions: 0, patch: '@@ -1 +1 @@\n+hello' },
     ]);
     await setReviewSettings({ customReviewers: [{ skillKey: PLATFORM_KEY, name: 'Security rules' }] });
@@ -468,7 +468,7 @@ describe('which reviewers a cycle runs', () => {
   });
 
   it('runs a custom reviewer once per chunk on a large pull request', async () => {
-    github.getPRFiles.mockResolvedValue(
+    github.getAllPRFiles.mockResolvedValue(
       Array.from({ length: 30 }, (_, i) => ({
         filename: `src/f${i}.ts`,
         status: 'modified',

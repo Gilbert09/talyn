@@ -2,6 +2,46 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## "Kept 0, dropped 16": the judge's keeps were lost (2026-10-07)
+
+Tom sent a screenshot of a review where every finding was dismissed, and asked
+if that was right. It was not. The judge kept 5 of 16 and Talyn recorded 0.
+
+The evidence was in the judge's own drop reasons: *"Duplicate of 1f5a9642, which
+is kept"* and *"merged with e2b80a15 into the kept finding"*. Those are dedupe
+keys of two findings stored as `rejected` with no reason. Five findings had no
+reason at all, because the judge had not dropped them. One was a blocker (two
+`1395` migrations on one parent), and the pull request does add both files.
+
+Two defects:
+
+- **Keeps were matched by a recomputed key.** Drops were matched by the id the
+  judge was given. Keeps were matched by hashing the file, title and anchor that
+  the judge sent back. The judge never sees the stored anchor, so the hash moved
+  and nothing matched. A comment at that line said so: "or nothing matches and
+  every candidate is dropped". This is also the likely cause of the first real
+  review keeping "one of six".
+- **The review read 30 files of 317.** `loadPromptContext` called `getPRFiles`,
+  which is one page of GitHub's default 30. The timeline said "Reviewing 25
+  changed files". The reviewers read the checkout and found problems in other
+  files, and no anchor in those files could verify, which is why all 16 findings
+  said "location approximate".
+
+What shipped: the judge must return the id on each keep, `matchJudgeKeep` uses
+it and falls back to the computed key, an unmatched keep stops Talyn rejecting
+the findings the judge did not name, and the prompt context reads every page.
+
+Things to know:
+
+- **Cost goes up on a large pull request, on purpose.** A 317-file change is 13
+  parts of 25 files, so a Standard review is about 39 lens runs plus the sweep
+  and the judge. Before, it was 3 runs on a tenth of the change. The live-unit
+  ceiling paces it. Nothing caps it.
+- **The Files tab still lists 30 files.** `GET /pull-requests/:id/files` calls
+  the same one-page function. Not changed here.
+- The 5 lost findings on that review cannot be restored. The judge's raw answer
+  is not stored. "Review again" gives the correct result.
+
 ## Custom reviewers: a team's own skills as review lenses (2026-10-07)
 
 A user asked to set up his own code review skill in place of Talyn's built-in

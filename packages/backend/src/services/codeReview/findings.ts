@@ -408,7 +408,15 @@ export async function applyJudgement(
    * reason must degrade to "rejected, reason unrecorded" rather than to a failed
    * judging pass.
    */
-  droppedReasons: ReadonlyMap<string, string> = new Map()
+  droppedReasons: ReadonlyMap<string, string> = new Map(),
+  /**
+   * `onlyNamedDrops` rejects only the candidates the judge named in `dropped`,
+   * and leaves the others `unvalidated`. The caller sets it when the judge kept
+   * something that could not be matched to a candidate: then a candidate the
+   * judge did not mention may be the one it kept, and rejecting it would hide a
+   * confirmed finding.
+   */
+  options: { onlyNamedDrops?: boolean } = {}
 ): Promise<{ confirmed: number; rejected: number }> {
   const db = getDbClient();
   const keptKeys = kept.map((k) => k.key);
@@ -444,6 +452,9 @@ export async function applyJudgement(
       );
   }
 
+  const namedDrops = options.onlyNamedDrops
+    ? [...droppedReasons.keys()].filter((key) => !keptKeys.includes(key))
+    : null;
   const rejected = await db
     .update(prCodeReviewFindings)
     .set({
@@ -460,7 +471,9 @@ export async function applyJudgement(
         eq(prCodeReviewFindings.reviewId, reviewId),
         eq(prCodeReviewFindings.lastSeenCycle, cycle),
         eq(prCodeReviewFindings.verdict, 'unvalidated'),
-        inArray(prCodeReviewFindings.disposition, [...ACTIVE_DISPOSITIONS])
+        inArray(prCodeReviewFindings.disposition, [...ACTIVE_DISPOSITIONS]),
+        // An empty list matches no row, which is the point: nothing was named.
+        ...(namedDrops ? [inArray(prCodeReviewFindings.dedupeKey, namedDrops)] : [])
       )
     )
     .returning({ id: prCodeReviewFindings.id });
