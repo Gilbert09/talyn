@@ -8,7 +8,13 @@ dockerfilePath = "Dockerfile"
 [deploy]
 # /health is unauthenticated and returns 200 when all services init'd.
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+# 120 seconds, not 30. /health does a real DB check and answers 503 when it
+# fails, and for a moment in each deploy the old and the new instance are both
+# connected. On 2026-10-07 a good build answered 503 twice inside 30 seconds
+# and was rejected; the same commit passed on a rerun. The old build serves
+# traffic for the whole window, so the cost of the longer wait is that a build
+# which cannot start is reported about 90 seconds later.
+healthcheckTimeout = 120
 
 # Restart on crash; don't loop forever on config errors. 25 (not 5): the DB
 # watchdog (services/dbWatchdog.ts) now exits deliberately when the Supabase
