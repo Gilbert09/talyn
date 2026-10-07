@@ -3,8 +3,11 @@ import {
   CODE_REVIEW_FINDINGS_SENTINEL,
   CODE_REVIEW_PRESET_PLAN,
   codeReviewDedupeKey,
+  codeReviewLensLabel,
+  codeReviewLensNames,
   codeReviewUnitCount,
   isCodeReviewPreset,
+  isCustomReviewerLens,
   parseCodeReviewFindings,
   type CodeReviewPhase,
   type CodeReviewPreset,
@@ -26,11 +29,13 @@ import { workspaceMayUseCodeReview } from '../codeReviewAccess.js';
 import {
   buildJudgePrompt,
   buildLensPrompt,
+  buildSkillLensPrompt,
   buildSweepPrompt,
   lensByKey,
   lensesForPreset,
   type ReviewPromptContext,
 } from './lenses.js';
+import { loadReviewerSkill } from './reviewerSkills.js';
 import {
   applyJudgement,
   findingsForJudging,
@@ -291,8 +296,30 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
   // where the file list first exists — and because `runsTotal` is written in
   // the same transition. Selecting anywhere later would mean a progress bar
   // that promised five steps and delivered four.
-  const { selected, skipped } = selectLensesForFiles(lensesForPreset(preset), loaded.ctx.files);
-  const runsTotal = codeReviewUnitCount(preset, chunkTotal, selected.length);
+  //
+  // Selection is for Talyn's lenses only. The team's own reviewers were chosen
+  // by a person for this repository, and nothing here knows what one of them
+  // looks at, so they always run. A NULL `customReviewers` is a cycle that
+  // started before the start path froze its reviewers, and it runs the preset.
+  const frozen = review.customReviewers;
+  const builtIn =
+    frozen === null
+      ? lensesForPreset(preset)
+      : ((review.lensKeys as string[] | null) ?? []).filter((k) => !isCustomReviewerLens(k));
+  const { selected, skipped } = selectLensesForFiles(builtIn, loaded.ctx.files);
+  const lensKeys = [...selected, ...(frozen ?? []).map((r) => r.lensKey)];
+  if (!lensKeys.length) {
+    // The start path refuses this, so reaching it means the row was changed
+    // underneath a queued cycle. Failing is right: with no reviewer the phase
+    // could only end as "no reviewer finished", after spending nothing useful.
+    await failCycle(
+      review,
+      'no_reviewers',
+      "This review has no reviewers. Turn on Talyn's reviewers or add one of your own in Settings."
+    );
+    return;
+  }
+  const runsTotal = codeReviewUnitCount(preset, chunkTotal, lensKeys.length);
 
   await casTransition(
     review.id,
@@ -300,7 +327,7 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
     {
       phase: 'reviewing',
       phaseStartedAt: new Date(),
-      lensKeys: selected,
+      lensKeys,
       sweep: plan.sweep,
       validate: plan.validate,
       chunkTotal,
@@ -313,8 +340,8 @@ export async function prepareCycle(review: ReviewRow): Promise<void> {
       trigger: 'executor',
       code: 'cycle_planned',
       message: skipped.length
-        ? `Reviewing ${loaded.ctx.files.length} changed files with ${selected.length} of ` +
-          `${selected.length + skipped.length} reviewers.`
+        ? `Reviewing ${loaded.ctx.files.length} changed files with ${lensKeys.length} of ` +
+          `${lensKeys.length + skipped.length} reviewers.`
         : `Reviewing ${loaded.ctx.files.length} changed files.`,
       // The skips are RECORDED, with their reasons, because a reviewer that
       // never ran finds nothing and nothing looks exactly like a clean bill of
@@ -407,11 +434,26 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
     return;
   }
 
-  const prompt = await buildUnitPrompt(review, unit, loaded.ctx);
-  if (!prompt) {
+  const built = await buildUnitPrompt(review, unit, loaded.ctx);
+  if (!built) {
     await settleRun(claim.id, { status: 'skipped', failureCode: 'dispatch_failed' });
     return;
   }
+  if (!built.ok) {
+    // One of the team's own reviewers could not run. FAILED, never skipped and
+    // never an empty success: it read nothing, and the timeline says which skill
+    // and why. The other units of the cycle are untouched.
+    await settleRun(claim.id, { status: 'failed', failureCode: built.code });
+    await appendReviewEvent(review.id, {
+      toPhase: review.phase as CodeReviewPhase,
+      trigger: 'executor',
+      code: built.code,
+      message: built.message,
+      detail: { kind: unit.kind, lens: unit.lens, chunkIndex: unit.chunkIndex },
+    });
+    return;
+  }
+  const prompt = built.prompt;
 
   const chain = await resolveCloudEnvChain(review.workspaceId);
   if (!chain.length) {
@@ -548,7 +590,7 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
       const result = await startCodeRun({
         workspaceId: review.workspaceId,
         repositoryId: review.repositoryId,
-        title: `Code review · ${unit.kind}${unit.lens ? ` · ${unit.lens}` : ''} · ${loaded.ctx.ref}`,
+        title: `Code review · ${unit.kind}${unit.lens ? ` · ${lensLabelFor(review, unit.lens)}` : ''} · ${loaded.ctx.ref}`,
         // This provider cannot be told which ref to read, so the prompt has to
         // ask for the checkout itself.
         prompt: `First run \`gh pr checkout ${loaded.ctx.ref.split('#')[1]}\` so you are reading the pull request under review.\n\n${prompt}`,
@@ -594,11 +636,26 @@ export async function dispatchUnit(review: ReviewRow, unit: UnitKey): Promise<vo
   });
 }
 
+/** A lens key as a person reads it, with this cycle's own reviewers named. */
+function lensLabelFor(review: ReviewRow, lens: string): string {
+  return codeReviewLensLabel(lens, codeReviewLensNames(review.customReviewers));
+}
+
+/**
+ * A unit's prompt, or why it has none.
+ *
+ * `null` is a unit with nothing to do, which settles `skipped`. `ok: false` is
+ * a unit that cannot run, which settles FAILED with that code.
+ */
+type BuiltPrompt =
+  | { ok: true; prompt: string }
+  | { ok: false; code: Extract<RunFailureCode, 'skill_unavailable' | 'skill_too_large'>; message: string };
+
 async function buildUnitPrompt(
   review: ReviewRow,
   unit: UnitKey,
   ctx: ReviewPromptContext
-): Promise<string | null> {
+): Promise<BuiltPrompt | null> {
   const scoped: ReviewPromptContext = {
     ...ctx,
     files: filesForChunk(ctx.files, unit.chunkIndex, review.chunkTotal),
@@ -608,7 +665,22 @@ async function buildUnitPrompt(
 
   if (unit.kind === 'lens') {
     const lens = lensByKey(unit.lens);
-    return lens ? buildLensPrompt(lens, scoped) : null;
+    if (lens) return { ok: true, prompt: buildLensPrompt(lens, scoped) };
+    if (!isCustomReviewerLens(unit.lens)) return null;
+
+    // One of the team's own reviewers. The cycle froze WHICH skill; its text is
+    // read now, from the skill itself, and is never on the review row.
+    const reviewer = (review.customReviewers ?? []).find((r) => r.lensKey === unit.lens);
+    if (!reviewer) {
+      return {
+        ok: false,
+        code: 'skill_unavailable',
+        message: 'This review no longer records which skill that reviewer ran.',
+      };
+    }
+    const loadedSkill = await loadReviewerSkill(review.workspaceId, review.repositoryId, reviewer);
+    if (!loadedSkill.ok) return loadedSkill;
+    return { ok: true, prompt: buildSkillLensPrompt(loadedSkill.skill, scoped) };
   }
 
   if (unit.kind === 'sweep') {
@@ -617,7 +689,16 @@ async function buildUnitPrompt(
       filePath: f.filePath,
       title: f.title,
     }));
-    return buildSweepPrompt(scoped, covered, (review.lensKeys as string[]) ?? []);
+    return {
+      ok: true,
+      prompt: buildSweepPrompt(
+        scoped,
+        covered,
+        // Named, not keyed. A custom reviewer's key is its skill key, which says
+        // less to the sweep than the reviewer's name does.
+        ((review.lensKeys as string[]) ?? []).map((k) => lensLabelFor(review, k))
+      ),
+    };
   }
 
   if (unit.kind === 'validate') {
@@ -625,17 +706,20 @@ async function buildUnitPrompt(
     // Nothing to judge is not a failure — it is the clean review, and the phase
     // should move on without spending a sandbox to confirm an empty list.
     if (!candidates.length) return null;
-    return buildJudgePrompt(
-      scoped,
-      candidates.map((c) => ({
-        id: c.dedupeKey,
-        severity: c.severity,
-        filePath: c.filePath,
-        lines: c.lineStart ? `${c.lineStart}${c.lineEnd ? `-${c.lineEnd}` : ''}` : '?',
-        title: c.title,
-        body: c.body,
-      }))
-    );
+    return {
+      ok: true,
+      prompt: buildJudgePrompt(
+        scoped,
+        candidates.map((c) => ({
+          id: c.dedupeKey,
+          severity: c.severity,
+          filePath: c.filePath,
+          lines: c.lineStart ? `${c.lineStart}${c.lineEnd ? `-${c.lineEnd}` : ''}` : '?',
+          title: c.title,
+          body: c.body,
+        }))
+      ),
+    };
   }
 
   return null;

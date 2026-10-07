@@ -277,13 +277,19 @@ async function runCodeReview(
  * reaches this — it is handled as a success above, because a second cycle on
  * one pull request is exactly what should not happen.
  */
-function workflowCodeFor(code: 'not_available' | 'pr_closed' | 'pr_missing'): WorkflowActionFailureCode {
+function workflowCodeFor(
+  code: 'not_available' | 'pr_closed' | 'pr_missing' | 'no_reviewers'
+): WorkflowActionFailureCode {
   switch (code) {
     case 'pr_closed':
       return 'not_open';
     case 'pr_missing':
       return 'pr_not_tracked';
     case 'not_available':
+      return 'code_review_unavailable';
+    // The workspace has no reviewer for this repository. The outcome's message
+    // says so, and the code is the nearest one the history speaks.
+    case 'no_reviewers':
       return 'code_review_unavailable';
   }
 }

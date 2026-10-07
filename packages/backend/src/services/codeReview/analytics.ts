@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   CODE_REVIEW_REPORTING_BAR,
   isCodeReviewPreset,
+  isCustomReviewerLens,
   type CodeReviewPhase,
 } from '@talyn/shared';
 import { getDbClient } from '../../db/client.js';
@@ -104,6 +105,28 @@ async function cycleStartedAt(reviewId: string): Promise<Date | null> {
   return at ? new Date(at) : null;
 }
 
+/**
+ * Whose reviewers a cycle ran: Talyn's, the team's own, or both.
+ *
+ * Counts and a boolean. A custom reviewer's lens key holds its repository and
+ * its skill name, so the key itself never leaves this function.
+ */
+export function reviewerShape(review: Pick<ReviewRow, 'lensKeys' | 'customReviewers'>): {
+  custom_reviewers: number;
+  builtin_reviewers: boolean;
+} {
+  const keys = (review.lensKeys as string[] | null) ?? [];
+  return {
+    // The frozen list before the cycle is planned, the planned keys after. They
+    // agree once `prepareCycle` has run.
+    custom_reviewers: Math.max(
+      keys.filter(isCustomReviewerLens).length,
+      review.customReviewers?.length ?? 0
+    ),
+    builtin_reviewers: keys.some((k) => !isCustomReviewerLens(k)),
+  };
+}
+
 function secondsBetween(from: Date | null, to: Date): number | null {
   if (!from) return null;
   return Math.max(0, Math.round((to.getTime() - from.getTime()) / 1000));
@@ -130,6 +153,7 @@ export async function codeReviewCycleShape(review: ReviewRow): Promise<Record<st
     is_rereview: review.cycle > 1,
     auto: review.auto === true,
     lenses: ((review.lensKeys as string[]) ?? []).length,
+    ...reviewerShape(review),
     chunks: review.chunkTotal,
     units_planned: review.runsTotal,
     units_total: units.total,
@@ -252,7 +276,11 @@ export function captureUnitFailedOver(
   }
 ): void {
   try {
-    captureWorkspaceEvent(workspaceId, 'code_review_unit_failed_over', properties);
+    captureWorkspaceEvent(workspaceId, 'code_review_unit_failed_over', {
+      ...properties,
+      // Shape only. A custom reviewer's key names a repository and a skill.
+      lens: isCustomReviewerLens(properties.lens) ? 'custom' : properties.lens,
+    });
   } catch (err) {
     console.warn('[code-review] analytics for a unit failover failed:', err);
   }

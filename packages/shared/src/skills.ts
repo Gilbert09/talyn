@@ -32,6 +32,40 @@ export function platformSkillKey(id: string): SkillKey {
   return `platform:${id}`;
 }
 
+/** A skill key, taken apart. `null` for a key in none of the three formats. */
+export type ParsedSkillKey =
+  | { source: 'repo'; owner: string; repo: string; name: string }
+  | { source: 'platform'; id: string }
+  | { source: 'local'; name: string };
+
+/**
+ * Read a skill key back into its parts.
+ *
+ * A repo key is `repo:<owner>/<repo>:<name>`. The name is everything after the
+ * SECOND colon, so a skill name that contains a colon still parses.
+ */
+export function parseSkillKey(key: unknown): ParsedSkillKey | null {
+  if (typeof key !== 'string') return null;
+  if (key.startsWith('platform:')) {
+    const id = key.slice('platform:'.length);
+    return id ? { source: 'platform', id } : null;
+  }
+  if (key.startsWith('local:')) {
+    const name = key.slice('local:'.length);
+    return name ? { source: 'local', name } : null;
+  }
+  if (key.startsWith('repo:')) {
+    const rest = key.slice('repo:'.length);
+    const sep = rest.indexOf(':');
+    if (sep < 0) return null;
+    const [owner, repo, ...extra] = rest.slice(0, sep).split('/');
+    const name = rest.slice(sep + 1);
+    if (!owner || !repo || extra.length || !name) return null;
+    return { source: 'repo', owner, repo, name };
+  }
+  return null;
+}
+
 /**
  * Hard ceiling on a skill's SKILL.md size. Skills are NEVER truncated — a
  * silently clipped skill changes its meaning — so anything over this is

@@ -18,6 +18,7 @@ import {
   assertCanEnableAutoReview,
 } from '../services/billing/entitlements.js';
 import { ensureDefaultWorkspace } from '../services/workspaceBootstrap.js';
+import { checkCustomReviewers } from '../services/codeReview/reviewerSkills.js';
 import {
   PROMPT_KINDS,
   validatePromptTemplate,
@@ -31,7 +32,10 @@ import {
   type ApiResponse,
   type PromptKind,
   type PromptTemplateOverride,
+  CodeReviewRequestError,
+  codeReviewReviewersProblem,
   codeReviewSettingsPatch,
+  resolveCodeReviewSettings,
   type CodeReviewSettings,
   type PromptTemplateSettings,
   type WorkspaceSettings,
@@ -350,6 +354,12 @@ export function workspaceRoutes(): Router {
         autoReview: sql<
           string | null
         >`${workspacesTable.settings} -> 'codeReview' ->> 'autoReview'`,
+        // The two reviewer keys, which a patch of ONE of them is checked
+        // against. Skill keys and names, a few hundred bytes.
+        builtInReviewers: sql<
+          string | null
+        >`${workspacesTable.settings} -> 'codeReview' ->> 'builtInReviewers'`,
+        customReviewers: sql<unknown>`${workspacesTable.settings} -> 'codeReview' -> 'customReviewers'`,
       })
       .from(workspacesTable)
       .where(eq(workspacesTable.id, req.params.id))
@@ -412,7 +422,38 @@ export function workspaceRoutes(): Router {
       }
       let codeReview: CodeReviewSettings | undefined;
       if (body.settings.codeReview !== undefined) {
-        codeReview = codeReviewSettingsPatch(body.settings.codeReview);
+        try {
+          codeReview = codeReviewSettingsPatch(body.settings.codeReview);
+          // Each reviewer must be a skill this workspace can run: a repository
+          // it watches, or a skill saved to it. Checked on the list that was
+          // SENT, so a reviewer saved earlier whose repository has since left
+          // is named the next time the list is edited.
+          if (codeReview.customReviewers) {
+            codeReview.customReviewers = await checkCustomReviewers(
+              req.params.id,
+              codeReview.customReviewers
+            );
+          }
+          // The two keys are judged TOGETHER, against what is stored, because a
+          // client sends only the one it changed. Turning Talyn's reviewers off
+          // is fine with a reviewer of your own and a dead setup without one.
+          if (codeReview.customReviewers !== undefined || codeReview.builtInReviewers !== undefined) {
+            const stored = resolveCodeReviewSettings({
+              builtInReviewers: existing[0].builtInReviewers !== 'false',
+              customReviewers: existing[0].customReviewers as CodeReviewSettings['customReviewers'],
+            });
+            const problem = codeReviewReviewersProblem({
+              builtInReviewers: codeReview.builtInReviewers ?? stored.builtInReviewers,
+              customReviewers: codeReview.customReviewers ?? stored.customReviewers,
+            });
+            if (problem) throw new CodeReviewRequestError(problem);
+          }
+        } catch (err) {
+          if (err instanceof CodeReviewRequestError) {
+            return res.status(400).json({ success: false, error: err.message });
+          }
+          throw err;
+        }
         // Turning automatic review ON is an Unlimited feature. Gate the
         // TRANSITION, not the state — exactly as the auto-keep default above: a
         // workspace that already has it on predates the gate and keeps it, so a

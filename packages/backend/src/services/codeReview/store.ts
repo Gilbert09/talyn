@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import {
   CODE_REVIEW_ACTIVE_PHASES,
+  type CodeReviewCycleReviewer,
   type CodeReviewPhase,
   type CodeReviewPreset,
 } from '@talyn/shared';
@@ -50,6 +51,9 @@ export const REVIEW_COLUMNS = {
   cycle: prCodeReviews.cycle,
   preset: prCodeReviews.preset,
   lensKeys: prCodeReviews.lensKeys,
+  // Names and keys of the team's own reviewers. Small, and the public payload
+  // needs it to label a finding. The skill content is never on this row.
+  customReviewers: prCodeReviews.customReviewers,
   sweep: prCodeReviews.sweep,
   validate: prCodeReviews.validate,
   chunkTotal: prCodeReviews.chunkTotal,
@@ -171,7 +175,11 @@ export type RunFailureCode =
   // started" — which is different advice for whoever reads the review.
   | 'prompt_too_large'
   | 'runner_out_of_space'
-  | 'runner_out_of_memory';
+  | 'runner_out_of_memory'
+  // One of the team's own reviewers could not run. The skill is gone or could
+  // not be read, or it is too large to send. Never "reviewed and found nothing".
+  | 'skill_unavailable'
+  | 'skill_too_large';
 
 /** Units that have not settled. The fan-in and the poller both read this set. */
 export const IN_FLIGHT_RUN_STATUSES: RunStatus[] = [
@@ -259,6 +267,7 @@ export interface ReviewPatch {
   cycle?: number;
   preset?: CodeReviewPreset;
   lensKeys?: string[] | null;
+  customReviewers?: CodeReviewCycleReviewer[] | null;
   sweep?: boolean;
   validate?: boolean;
   chunkTotal?: number;

@@ -124,7 +124,9 @@ async function onSnapshot(
     // already in flight, a pull request that closed between the two reads. Logged
     // at debug volume rather than warned about, because an automatic trigger that
     // shouts on every ordinary refusal trains people to ignore the log.
-    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy') {
+    // `no_reviewers` is the workspace's own setup, and it is the answer on every
+    // push to a repository none of its reviewers covers.
+    if (outcome.code !== 'pr_closed' && outcome.code !== 'busy' && outcome.code !== 'no_reviewers') {
       console.log(`[code-review] auto review for ${prId} declined: ${outcome.code}`);
     }
   }

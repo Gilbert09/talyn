@@ -2,6 +2,37 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Custom reviewers: a team's own skills as review lenses (2026-10-07)
+
+A user asked to set up his own code review skill in place of Talyn's built-in
+setup. Tom chose the shape: each chosen skill runs as its own reviewer next to
+Talyn's, a switch turns Talyn's off, and the source is the skill system (a
+repository `SKILL.md` or a Talyn skill), not text typed in Settings.
+
+What shipped: `customReviewers` and `builtInReviewers` in the code review
+settings, `reviewerSkills.ts`, `buildSkillLensPrompt`, migration `0075`, and a
+"Who reviews" step in Settings → Code review in both apps. The Findings tab
+shows the skill's name as the reviewer.
+
+Why it is built this way:
+
+- **Default branch only.** The sandbox checks out the pull request, so the
+  prompt never tells the reviewer to read the skill from the checkout.
+- **Talyn's wrapper stays.** Many skills are written to be run as a task ("post
+  a comment", "push a fix"). The wrapper says those steps are out of scope and
+  asks for findings in their place. The output contract is last.
+- **No cap on the number of reviewers.** Each one costs a run for each part of
+  the pull request. The live-unit ceiling and the free plan's cycle limit bound
+  the spend, and Settings states the cost.
+- **A repository skill's existence is checked at dispatch, not at save.** A save
+  would need a GitHub call for each reviewer, and the answer can change a minute
+  later. A skill that is gone fails its own unit and the review continues.
+
+Known limits: an agent that obeys a hostile skill and ends with an empty block is
+read as "no findings". The pull request description and the file list are still
+unbounded in the prompt, on the built-in path too. The header comment in
+`lenses.ts` still says lens names never reach the user, which is no longer true.
+
 ## A usage limit failed a review as "no reviewer finished" (2026-10-07)
 
 Tom sent a screenshot: *"The review did not finish. No reviewer finished, so

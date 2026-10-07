@@ -1,4 +1,5 @@
 import type { Features } from './featureFlags.js';
+import { parseSkillKey } from './skills.js';
 
 /**
  * Code review — the vocabulary both front ends, the routes and the engine share.
@@ -691,6 +692,13 @@ export interface CodeReviewPublic {
    */
   lensesRun: string[];
   /**
+   * The team's own reviewers on this cycle, so a client can label their lens
+   * keys. Frozen at cycle start, so a skill renamed or removed afterwards still
+   * reads by the name it ran under. Absent from an older backend, and empty when
+   * the cycle ran none.
+   */
+  customReviewers?: { lensKey: string; name: string }[];
+  /**
    * How many pieces the diff was read in. 1 means whole.
    *
    * Scope, which the app otherwise says nothing about — so a review that read
@@ -1116,6 +1124,13 @@ export interface CodeReviewSettings {
    * A DISPLAY bar, not a commit bar — see `resolveReportingBar`.
    */
   reportingBar?: CodeReviewSeverity;
+  /**
+   * The team's own reviewers. Each one is a skill that runs as its own reviewer,
+   * next to Talyn's. See `CodeReviewCustomReviewer`.
+   */
+  customReviewers?: CodeReviewCustomReviewer[];
+  /** Run Talyn's own reviewers. On unless a team wants only its own. */
+  builtInReviewers?: boolean;
 }
 
 export interface ResolvedCodeReviewSettings {
@@ -1126,6 +1141,8 @@ export interface ResolvedCodeReviewSettings {
   autoFix: boolean;
   autoFixSeverity: CodeReviewSeverity;
   reportingBar: CodeReviewSeverity;
+  customReviewers: CodeReviewCustomReviewer[];
+  builtInReviewers: boolean;
 }
 
 /**
@@ -1155,6 +1172,10 @@ export function resolveCodeReviewSettings(
       ? settings.autoFixSeverity
       : 'blocker',
     reportingBar: resolveReportingBar(settings),
+    customReviewers: storedCustomReviewers(settings?.customReviewers),
+    // On unless somebody turned it off. An absent key is every workspace that
+    // existed before the switch did.
+    builtInReviewers: settings?.builtInReviewers !== false,
   };
 }
 
@@ -1165,6 +1186,10 @@ export function resolveCodeReviewSettings(
  * `||`, so sending `{ codeReview: { preset } }` would replace the whole object
  * and silently drop the three toggles. The route deep-merges this key the way it
  * already special-cases `prompts`, and this function is what it merges.
+ *
+ * `customReviewers` is the one key that THROWS (`CodeReviewRequestError`)
+ * instead of being dropped. A reviewer list that was quietly discarded reads as
+ * a save that worked, and the team then waits for a reviewer that never runs.
  */
 export function codeReviewSettingsPatch(input: unknown): CodeReviewSettings {
   if (!input || typeof input !== 'object') return {};
@@ -1177,7 +1202,175 @@ export function codeReviewSettingsPatch(input: unknown): CodeReviewSettings {
   if (typeof raw.autoFix === 'boolean') patch.autoFix = raw.autoFix;
   if (isCodeReviewSeverity(raw.autoFixSeverity)) patch.autoFixSeverity = raw.autoFixSeverity;
   if (isCodeReviewSeverity(raw.reportingBar)) patch.reportingBar = raw.reportingBar;
+  if (typeof raw.builtInReviewers === 'boolean') patch.builtInReviewers = raw.builtInReviewers;
+  if (raw.customReviewers !== undefined) {
+    patch.customReviewers = validateCustomReviewers(raw.customReviewers);
+  }
   return patch;
+}
+
+// ---------- Custom reviewers ----------
+
+/**
+ * One of the team's own reviewers: a skill that runs as its own reviewer.
+ *
+ * `skillKey` is the ordinary skill key. A repo skill carries its repository, so
+ * it runs on pull requests in that repository only. A Talyn skill is
+ * workspace-wide. A `local:` skill is never valid here, because the backend
+ * cannot read a file on somebody's machine.
+ *
+ * `name` is the skill's name when it was added. It labels the reviewer when the
+ * skill cannot be loaded later.
+ */
+export interface CodeReviewCustomReviewer {
+  skillKey: string;
+  name: string;
+}
+
+/** A custom reviewer as one cycle froze it. Stored on the review row. */
+export interface CodeReviewCycleReviewer extends CodeReviewCustomReviewer {
+  lensKey: string;
+}
+
+export const CODE_REVIEW_SKILL_LENS_PREFIX = 'skill:';
+
+/**
+ * The lens key a custom reviewer runs under: `skill:` plus the skill key.
+ *
+ * The skill key itself and not a hash of it. Two reviewers whose hashes
+ * collided would share one unit claim, and one of them would never run with
+ * nothing to say so. The prefix keeps the key out of the built-in lens names.
+ */
+export function customReviewerLensKey(skillKey: string): string {
+  return `${CODE_REVIEW_SKILL_LENS_PREFIX}${skillKey}`;
+}
+
+export function isCustomReviewerLens(lensKey: string): boolean {
+  return lensKey.startsWith(CODE_REVIEW_SKILL_LENS_PREFIX);
+}
+
+/**
+ * The largest skill that can run as a reviewer, in bytes.
+ *
+ * Not a taste judgement. A review prompt is one process argument, which Linux
+ * caps at 131072 bytes. 32 KB of that is kept for the instructions, the pull
+ * request description, the file list and the output contract. The other 96 KB
+ * is shared by the skill and the inline diff. A diff that does not fit is named
+ * and read from the checkout, so its share can go to zero. A skill cannot be
+ * read from anywhere else, so its share cannot go above the whole 96 KB.
+ *
+ * Lower than `SKILL_MAX_BYTES` (256 KB), so a skill that runs as a task can
+ * still be too large to run as a reviewer. The backend's inline-diff budget is
+ * the same number, and a test holds the two together.
+ */
+export const CODE_REVIEW_REVIEWER_SKILL_MAX_BYTES = 96 * 1024;
+
+const LOCAL_REVIEWER_REFUSAL =
+  'A reviewer cannot be a skill on your machine, because Talyn runs reviews on its servers. ' +
+  'Use a skill in the repository or one saved to Talyn.';
+
+/** Compared without case on the repository, which GitHub does not distinguish. */
+function reviewerIdentity(skillKey: string): string {
+  const parsed = parseSkillKey(skillKey);
+  if (parsed?.source === 'repo') {
+    return `repo:${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}:${parsed.name}`;
+  }
+  return skillKey;
+}
+
+/**
+ * Validate a reviewer list, throwing a message written for a person.
+ *
+ * Checks the SHAPE only: each key parses, none is `local:`, duplicates are
+ * removed. Whether a key names a repository or a skill of this workspace needs
+ * the database, and the route does that.
+ */
+export function validateCustomReviewers(input: unknown): CodeReviewCustomReviewer[] {
+  if (!Array.isArray(input)) {
+    throw new CodeReviewRequestError('`customReviewers` has to be a list of skills.');
+  }
+  const seen = new Set<string>();
+  const out: CodeReviewCustomReviewer[] = [];
+  for (const entry of input) {
+    const raw = (entry ?? {}) as Record<string, unknown>;
+    const skillKey = typeof raw.skillKey === 'string' ? raw.skillKey.trim() : '';
+    const parsed = parseSkillKey(skillKey);
+    if (!parsed) {
+      throw new CodeReviewRequestError(
+        `"${skillKey || String(raw.skillKey)}" is not a skill Talyn can run as a reviewer.`
+      );
+    }
+    if (parsed.source === 'local') throw new CodeReviewRequestError(LOCAL_REVIEWER_REFUSAL);
+    const identity = reviewerIdentity(skillKey);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const given = typeof raw.name === 'string' ? raw.name.trim() : '';
+    // A repo skill's name is in its key. A Talyn skill's key holds an id, so
+    // the name comes with it, and the route replaces it with the stored one.
+    out.push({ skillKey, name: parsed.source === 'repo' ? parsed.name : given || 'Talyn skill' });
+  }
+  return out;
+}
+
+/** The stored list, tolerantly: an entry this build cannot read is left out. */
+function storedCustomReviewers(input: unknown): CodeReviewCustomReviewer[] {
+  if (!Array.isArray(input)) return [];
+  const out: CodeReviewCustomReviewer[] = [];
+  for (const entry of input) {
+    try {
+      out.push(...validateCustomReviewers([entry]));
+    } catch {
+      // Skipped. The start path refuses a cycle that is left with no reviewer.
+    }
+  }
+  return validateCustomReviewers(out);
+}
+
+/**
+ * Why this reviewer setup cannot be saved, or null when it can.
+ *
+ * One function for the settings page and the route, so a disabled switch and a
+ * 400 cannot disagree about why.
+ */
+export function codeReviewReviewersProblem(settings: {
+  builtInReviewers: boolean;
+  customReviewers: readonly unknown[];
+}): string | null {
+  if (!settings.builtInReviewers && !settings.customReviewers.length) {
+    return "Turn on Talyn's reviewers or add at least one of your own.";
+  }
+  return null;
+}
+
+/**
+ * Which of the team's reviewers run on a pull request in this repository.
+ *
+ * Every Talyn skill, and every repo skill of THIS repository. A repo skill of
+ * another repository is left out without an error: that is what the setting
+ * means.
+ */
+export function customReviewersForRepo(
+  reviewers: readonly CodeReviewCustomReviewer[],
+  repo: { owner: string; repo: string }
+): CodeReviewCycleReviewer[] {
+  const full = `${repo.owner}/${repo.repo}`.toLowerCase();
+  const out: CodeReviewCycleReviewer[] = [];
+  for (const reviewer of reviewers) {
+    const parsed = parseSkillKey(reviewer.skillKey);
+    if (!parsed || parsed.source === 'local') continue;
+    if (parsed.source === 'repo' && `${parsed.owner}/${parsed.repo}`.toLowerCase() !== full) {
+      continue;
+    }
+    out.push({ ...reviewer, lensKey: customReviewerLensKey(reviewer.skillKey) });
+  }
+  return out;
+}
+
+/** Where a reviewer's skill lives, in the words the settings page shows. */
+export function customReviewerSource(skillKey: string): string {
+  const parsed = parseSkillKey(skillKey);
+  if (parsed?.source === 'repo') return `${parsed.owner}/${parsed.repo}`;
+  return 'Talyn skill';
 }
 
 /**
@@ -1243,9 +1436,40 @@ export const CODE_REVIEW_LENS_LABELS: Record<string, string> = {
   sweep: 'Second pass',
 };
 
-/** The label for a lens key, falling back to the key for one we do not know. */
-export function codeReviewLensLabel(key: string): string {
-  return CODE_REVIEW_LENS_LABELS[key] ?? key;
+/** Lens key to display name, for the reviewers that are not Talyn's own. */
+export type CodeReviewLensNames = Readonly<Record<string, string>>;
+
+/** The name map for a review payload's (or a settings object's) reviewers. */
+export function codeReviewLensNames(
+  reviewers: readonly { lensKey?: string; skillKey?: string; name: string }[] | null | undefined
+): CodeReviewLensNames {
+  const names: Record<string, string> = {};
+  for (const reviewer of reviewers ?? []) {
+    const key =
+      reviewer.lensKey ?? (reviewer.skillKey ? customReviewerLensKey(reviewer.skillKey) : null);
+    if (key && reviewer.name) names[key] = reviewer.name;
+  }
+  return names;
+}
+
+/**
+ * The label for a lens key.
+ *
+ * Talyn's own lenses have fixed labels. A custom reviewer is named by `names`,
+ * which a review payload carries for its own cycle. Without a name, a repo
+ * skill's key still holds its skill name, so that is used. Anything else falls
+ * back to the key.
+ */
+export function codeReviewLensLabel(key: string, names?: CodeReviewLensNames): string {
+  const builtIn = CODE_REVIEW_LENS_LABELS[key];
+  if (builtIn) return builtIn;
+  const named = names?.[key];
+  if (named) return named;
+  if (isCustomReviewerLens(key)) {
+    const parsed = parseSkillKey(key.slice(CODE_REVIEW_SKILL_LENS_PREFIX.length));
+    if (parsed?.source === 'repo') return parsed.name;
+  }
+  return key;
 }
 
 /**
@@ -1256,14 +1480,15 @@ export function codeReviewLensLabel(key: string): string {
  * visible.
  */
 export function codeReviewLensTally(
-  findings: readonly { lenses: string[] }[]
+  findings: readonly { lenses: string[] }[],
+  names?: CodeReviewLensNames
 ): { lens: string; label: string; count: number }[] {
   const tally = new Map<string, number>();
   for (const finding of findings) {
     for (const lens of finding.lenses) tally.set(lens, (tally.get(lens) ?? 0) + 1);
   }
   return [...tally.entries()]
-    .map(([lens, count]) => ({ lens, label: codeReviewLensLabel(lens), count }))
+    .map(([lens, count]) => ({ lens, label: codeReviewLensLabel(lens, names), count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 

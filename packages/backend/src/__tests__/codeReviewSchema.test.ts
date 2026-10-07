@@ -9,6 +9,7 @@
  * shows up in a typecheck, and neither is visible in the code that depends on it.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import {
   prCodeReviewFindings,
@@ -265,6 +266,32 @@ describe('code review schema', () => {
         failed_over_from: 'codex',
       },
     ]);
+  });
+
+  /**
+   * Migration 0075. NULL and an empty list are different facts and both must
+   * be storable: NULL is a cycle from before the column, which runs the preset,
+   * and `[]` is a cycle that ran none of the team's own reviewers.
+   */
+  it.each([
+    ['a cycle from before the column', undefined, null],
+    ['a cycle with none of the team\'s own', [], []],
+    [
+      'a cycle with one',
+      [{ lensKey: 'skill:platform:s1', skillKey: 'platform:s1', name: 'Security rules' }],
+      [{ lensKey: 'skill:platform:s1', skillKey: 'platform:s1', name: 'Security rules' }],
+    ],
+  ])('stores the reviewers of %s under custom_reviewers', async (_label, value, expected) => {
+    if (value !== undefined) {
+      await testDb.db
+        .update(prCodeReviews)
+        .set({ customReviewers: value })
+        .where(eq(prCodeReviews.id, 'rev-1'));
+    }
+    const rows = await testDb.pglite.query<{ custom_reviewers: unknown }>(
+      `SELECT custom_reviewers FROM pr_code_reviews WHERE id = 'rev-1'`
+    );
+    expect(rows.rows).toEqual([{ custom_reviewers: expected }]);
   });
 
   it('cascades a deleted review to its units and findings, and a deleted PR to the review', async () => {

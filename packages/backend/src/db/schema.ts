@@ -1593,6 +1593,14 @@ export const prCodeReviews = pgTable(
     preset: text('preset').notNull().default('standard'),
     /** The preset's resolved shape, frozen at cycle start rather than re-read. */
     lensKeys: jsonb('lens_keys').$type<string[] | null>(),
+    /**
+     * The team's own reviewers on this cycle, frozen at cycle start. Names and
+     * keys only, never the skill's content. NULL is a cycle started before the
+     * column existed. See migration 0075.
+     */
+    customReviewers: jsonb('custom_reviewers').$type<
+      { lensKey: string; skillKey: string; name: string }[] | null
+    >(),
     sweep: boolean('sweep').notNull().default(false),
     validate: boolean('validate').notNull().default(false),
     chunkTotal: integer('chunk_total').notNull().default(1),

@@ -116,6 +116,14 @@ const CYCLE_FAILURE_MESSAGES = {
   timeout:
     'Every reviewer ran out of time before finishing. A smaller change, or a lighter ' +
     'review depth, will usually get through.',
+  // Only reachable when the team's own reviewers are the whole review. With
+  // Talyn's reviewers on, one of them finishing carries the cycle.
+  skill_unavailable:
+    'None of your review skills could be loaded, so nothing reviewed this change. Check ' +
+    'that each skill still exists, or change your reviewers in Settings.',
+  skill_too_large:
+    'Your review skills are too large to run as reviewers, so nothing reviewed this ' +
+    'change. Make them shorter, or change your reviewers in Settings.',
 } as const;
 
 const SETTLED: RunStatus[] = ['succeeded', 'failed', 'cancelled', 'skipped'];

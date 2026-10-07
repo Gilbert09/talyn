@@ -17,7 +17,10 @@ import {
   CODE_REVIEW_PRESETS,
   CODE_REVIEW_PRESET_BLURBS,
   codeReviewLensLabel,
+  codeReviewLensNames,
   codeReviewLensTally,
+  isCustomReviewerLens,
+  type CodeReviewLensNames,
   codeReviewPresetFacts,
   CODE_REVIEW_PRESET_LABELS,
   CODE_REVIEW_PRESET_PLAN,
@@ -226,7 +229,13 @@ export function FindingsTab({
     [running, grouped, selected]
   );
 
-  const lensTally = useMemo(() => codeReviewLensTally(findings), [findings]);
+  // The names of the team's own reviewers on this cycle. Talyn's lenses have
+  // fixed labels. A skill's name comes with the review.
+  const lensNames = useMemo(
+    () => codeReviewLensNames(review?.customReviewers),
+    [review?.customReviewers]
+  );
+  const lensTally = useMemo(() => codeReviewLensTally(findings, lensNames), [findings, lensNames]);
 
   const bucket = useMemo(
     () =>
@@ -422,10 +431,8 @@ export function FindingsTab({
                   pass for a result. The reason per reviewer is in the
                   timeline. */}
               {review.lensesRun.length > 0 &&
-                ` · read by ${review.lensesRun.map(codeReviewLensLabel).join(', ')}`}
-              {review.lensesRun.length > 0 &&
-                review.lensesRun.length < CODE_REVIEW_PRESET_PLAN[review.preset].lenses &&
-                ` (${CODE_REVIEW_PRESET_PLAN[review.preset].lenses - review.lensesRun.length} not needed here)`}
+                ` · read by ${review.lensesRun.map((lens) => codeReviewLensLabel(lens, lensNames)).join(', ')}`}
+              {notNeededCount(review) > 0 && ` (${notNeededCount(review)} not needed here)`}
               {review.staleForHead && ' · there are newer commits'}
             </p>
           </div>
@@ -602,6 +609,7 @@ export function FindingsTab({
               finding={finding}
               pullRequestId={pullRequestId}
               files={files}
+              lensNames={lensNames}
               stillChecking={reviewRunning}
               selected={selected.has(finding.id)}
               expanded={expanded.has(finding.id)}
@@ -885,10 +893,24 @@ function headline(review: CodeReviewPublic): string {
   return `${review.openCount} finding${review.openCount === 1 ? '' : 's'}`;
 }
 
+/**
+ * How many of Talyn's own reviewers sat this change out.
+ *
+ * Counted over Talyn's lenses only. A team's own reviewers are extra, so they
+ * must not hide a lens that sat out. And a cycle that ran none of Talyn's has
+ * them turned off, which is a setting and not a reviewer that was not needed.
+ */
+export function notNeededCount(review: Pick<CodeReviewPublic, 'lensesRun' | 'preset'>): number {
+  const builtIn = review.lensesRun.filter((lens) => !isCustomReviewerLens(lens)).length;
+  if (builtIn === 0) return 0;
+  return Math.max(0, CODE_REVIEW_PRESET_PLAN[review.preset].lenses - builtIn);
+}
+
 function FindingCard({
   finding,
   pullRequestId,
   files,
+  lensNames,
   stillChecking,
   selected,
   expanded,
@@ -899,6 +921,8 @@ function FindingCard({
   finding: CodeReviewFinding;
   pullRequestId: string;
   files: PRFile[] | null;
+  /** Names for the lens keys of the team's own reviewers. */
+  lensNames: CodeReviewLensNames;
   /** The cycle is still running, so this finding may yet be withdrawn. */
   stillChecking: boolean;
   selected: boolean;
@@ -987,7 +1011,7 @@ function FindingCard({
             {/* Named, not counted. "Logic and Reliability both flagged this" is a
                 reason to believe it; "2 reviewers agreed" is a number. */}
             {finding.lenses.length > 1 &&
-              ` · ${finding.lenses.map(codeReviewLensLabel).join(' and ')} agree`}
+              ` · ${finding.lenses.map((lens) => codeReviewLensLabel(lens, lensNames)).join(' and ')} agree`}
             {/* Said out loud, because it changes how much to trust the location. */}
             {!finding.anchorVerified && ' · location approximate'}
             {/* On GitHub already. It stays ticked-able for a fix, and "Post to
@@ -1032,7 +1056,9 @@ function FindingCard({
               until this row existed both rendered identically. */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
             <span>
-              Raised by {full.lenses.map(codeReviewLensLabel).join(', ') || 'a reviewer'}
+              Raised by{' '}
+              {full.lenses.map((lens) => codeReviewLensLabel(lens, lensNames)).join(', ') ||
+                'a reviewer'}
               {full.lenses.length > 1 && ' — independently'}
             </span>
             {full.confidence !== null && <span>Confidence {full.confidence}%</span>}

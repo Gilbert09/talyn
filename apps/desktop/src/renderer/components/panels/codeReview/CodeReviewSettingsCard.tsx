@@ -5,6 +5,7 @@ import {
   CODE_REVIEW_SEVERITY_LABELS,
   CODE_REVIEW_SEVERITY_ORDER,
   codeReviewLensLabel,
+  codeReviewLensNames,
   codeReviewPresetFacts,
   type CodeReviewLensStat,
   CODE_REVIEW_PRESET_LABELS,
@@ -17,10 +18,11 @@ import { api } from '../../../lib/api';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
-import { Filter, Gauge, ScanSearch, ShieldCheck, Wrench } from 'lucide-react';
+import { Filter, Gauge, ScanSearch, ShieldCheck, Users, Wrench } from 'lucide-react';
 import { Card } from '../../ui/card';
 import { cn } from '../../../lib/utils';
 import { toast } from '../../../stores/toast';
+import { ReviewersSettings } from './ReviewersSettings';
 
 /**
  * Code review's four settings.
@@ -77,6 +79,10 @@ export function CodeReviewSettingsCard() {
   const workspace = workspaces.find((w) => w.id === currentWorkspaceId);
   const settings = resolveCodeReviewSettings(workspace?.settings?.codeReview);
 
+  // Names for the lens keys of this workspace's own reviewers, for the history
+  // below. A reviewer removed since then falls back to what its key says.
+  const lensNames = codeReviewLensNames(settings.customReviewers);
+
   const save = async (patch: CodeReviewSettings, what: string) => {
     if (!currentWorkspaceId) return;
     setSaving(true);
@@ -89,9 +95,13 @@ export function CodeReviewSettingsCard() {
       // reported as one that happened. Every value here is an enum or a boolean
       // — the inline-comments opt-in rate is the number that says whether the
       // "findings stay in the app" posture is the right one.
+      // The reviewer list goes as a COUNT. Its entries name repositories and
+      // skills, which are not ours to send.
+      const { customReviewers, ...values } = patch;
       trackEvent('code_review_settings_changed', {
         keys: Object.keys(patch).join(','),
-        ...patch,
+        ...values,
+        ...(customReviewers ? { custom_reviewers: customReviewers.length } : {}),
       });
       setWorkspaces(
         workspaces.map((w) =>
@@ -127,7 +137,8 @@ export function CodeReviewSettingsCard() {
       </div>
 
       {/* A FLOW, not a list of switches. Each step is the question the previous
-          answer raises: review everything → how hard → fix it for me → fix what.
+          answer raises: review everything → how hard → who reviews → what to show →
+          fix it for me → fix what.
           The two GitHub-posting settings sit apart at the end because they are a
           different decision — how loud Talyn is on somebody else's pull request —
           and mixing them into the flow made this page read as eight unrelated
@@ -208,7 +219,7 @@ export function CodeReviewSettingsCard() {
               {lensStats.map((stat) => (
                 <li key={stat.lens} className="flex items-center gap-2 text-xs">
                   <span className="w-28 shrink-0 text-muted-foreground">
-                    {codeReviewLensLabel(stat.lens)}
+                    {codeReviewLensLabel(stat.lens, lensNames)}
                   </span>
                   <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                     <span
@@ -230,11 +241,24 @@ export function CodeReviewSettingsCard() {
 
       <Step
         n={3}
+        icon={Users}
+        title="Who reviews"
+        badge={reviewersBadge(settings.builtInReviewers, settings.customReviewers.length)}
+      >
+        <ReviewersSettings
+          settings={settings}
+          disabled={saving || !currentWorkspaceId}
+          onSave={(patch, what) => void save(patch, what)}
+        />
+      </Step>
+
+      <Step
+        n={4}
         icon={Filter}
         title="What is worth your attention"
         badge={`${CODE_REVIEW_SEVERITY_LABELS[settings.reportingBar]} and above`}
       >
-        {/* A DISPLAY bar, and deliberately not the same control as step 5's
+        {/* A DISPLAY bar, and deliberately not the same control as step 6's
             commit bar. Seeing a minor finding and having Talyn push a commit for
             one unattended are different risks, and one knob for both forces the
             cautious answer on the reader. */}
@@ -266,7 +290,7 @@ export function CodeReviewSettingsCard() {
       </Step>
 
       <Step
-        n={4}
+        n={5}
         icon={Wrench}
         title="Fix findings for me"
         badge={settings.autoFix ? 'On' : 'Off'}
@@ -283,11 +307,11 @@ export function CodeReviewSettingsCard() {
         </Toggle>
       </Step>
 
-      {/* Step 4 exists only once step 3 is on: "which findings" is not a question
+      {/* Step 6 exists only once step 5 is on: "which findings" is not a question
           until something is answering it. */}
       {settings.autoFix && (
         <Step
-          n={5}
+          n={6}
           icon={ShieldCheck}
           title="Which findings it may fix"
           badge={`${CODE_REVIEW_SEVERITY_LABELS[settings.autoFixSeverity]} and above`}
@@ -353,6 +377,13 @@ export function CodeReviewSettingsCard() {
       </Card>
     </div>
   );
+}
+
+/** The step's badge: whose reviewers read a pull request. */
+export function reviewersBadge(builtIn: boolean, custom: number): string {
+  if (!custom) return builtIn ? "Talyn's" : 'None';
+  const own = `${custom} of your own`;
+  return builtIn ? `Talyn's and ${own}` : own;
 }
 
 /**

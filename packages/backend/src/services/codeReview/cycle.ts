@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import {
   CODE_REVIEW_PHASE_AT_REST,
+  customReviewersForRepo,
   type CodeReviewPhase,
   type CodeReviewPreset,
 } from '@talyn/shared';
@@ -20,7 +21,8 @@ import {
   IN_FLIGHT_RUN_STATUSES,
   type ReviewRow,
 } from './store.js';
-import { workspaceOwner, workspacePreset } from './workspaceSettings.js';
+import { lensesForPreset } from './lenses.js';
+import { workspaceOwner, workspacePreset, workspaceReviewSettings } from './workspaceSettings.js';
 
 /**
  * Starting and stopping a review cycle.
@@ -33,7 +35,11 @@ import { workspaceOwner, workspacePreset } from './workspaceSettings.js';
 
 export type StartOutcome =
   | { ok: true; review: ReviewRow; started: boolean }
-  | { ok: false; code: 'not_available' | 'pr_closed' | 'pr_missing' | 'busy'; message: string };
+  | {
+      ok: false;
+      code: 'not_available' | 'pr_closed' | 'pr_missing' | 'busy' | 'no_reviewers';
+      message: string;
+    };
 
 export interface StartReviewInput {
   pullRequestId: string;
@@ -81,7 +87,30 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
     return { ok: true, review: existing, started: false };
   }
 
-  const preset = input.preset ?? (await workspacePreset(pr.workspaceId));
+  const settings = await workspaceReviewSettings(pr.workspaceId);
+  const preset = input.preset ?? settings.preset;
+
+  // Who reads this cycle, decided HERE and frozen on the row with the
+  // transition below. A settings change after this point is for the next cycle.
+  // Talyn's lenses are the preset's, before the files are known. `prepareCycle`
+  // drops the ones this change gives nothing to look at.
+  const customReviewers = customReviewersForRepo(settings.customReviewers, pr);
+  const builtInLenses = settings.builtInReviewers ? lensesForPreset(preset) : [];
+  if (!builtInLenses.length && !customReviewers.length) {
+    // Refused before the plan gate and before any row moves. A cycle with no
+    // reviewer can only fail, and it would spend a free plan's one cycle to do it.
+    return {
+      ok: false,
+      code: 'no_reviewers',
+      message: settings.customReviewers.length
+        ? `Talyn's reviewers are turned off, and none of your reviewers runs on pull requests ` +
+          `in ${pr.owner}/${pr.repo}. Turn on Talyn's reviewers or add a reviewer for this ` +
+          'repository in Settings.'
+        : "Talyn's reviewers are turned off and you have none of your own. Turn on Talyn's " +
+          'reviewers or add a reviewer in Settings.',
+    };
+  }
+
   const ownerId = await workspaceOwner(pr.workspaceId);
 
   const outcome = await withReviewCycleGate(
@@ -108,6 +137,8 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
           phaseStartedAt: new Date(),
           cycle: review.cycle + 1,
           preset,
+          lensKeys: builtInLenses,
+          customReviewers,
           auto: input.auto === true,
           startedBy: input.userId ?? review.startedBy,
           lastError: null,
@@ -121,7 +152,12 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
           message: input.reset
             ? 'Reviewing again, discarding the earlier findings.'
             : 'Review queued.',
-          detail: { preset, cycle: review.cycle + 1 },
+          detail: {
+            preset,
+            cycle: review.cycle + 1,
+            builtInReviewers: builtInLenses.length > 0,
+            customReviewers: customReviewers.length,
+          },
         }
       );
 
@@ -134,7 +170,11 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
           : { ok: false, code: 'busy', message: 'The review changed while it was starting.' };
       }
 
-      return { ok: true, review: { ...review, cycle: review.cycle + 1, preset }, started: true };
+      return {
+        ok: true,
+        review: { ...review, cycle: review.cycle + 1, preset, lensKeys: builtInLenses, customReviewers },
+        started: true,
+      };
     }
   );
 

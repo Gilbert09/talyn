@@ -49,6 +49,7 @@ import {
   startReviewCycle,
   workspacePreset,
 } from '../services/codeReview/cycle.js';
+import { reviewerShape } from '../services/codeReview/analytics.js';
 import { startFixRun } from '../services/codeReview/fix.js';
 import { postFindingsToPr } from '../services/codeReview/postToPr.js';
 import {
@@ -1399,6 +1400,7 @@ export function pullRequestRoutes(): Router {
     }
     void captureWorkspaceEvent(workspaceId, 'code_review_started', {
       preset: outcome.review.preset,
+      ...reviewerShape(outcome.review),
       trigger: 'api',
       is_rereview: outcome.review.cycle > 1,
       started: outcome.started,
