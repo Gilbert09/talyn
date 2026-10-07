@@ -186,7 +186,11 @@ describe('billing store', () => {
     it('keeps the last snapshot when a refresh fails', async () => {
       useBillingStore.getState().setStatus(status({ activeTasks: 2 }));
       (global.fetch as jest.Mock) = jest.fn().mockRejectedValue(new TypeError('offline'));
-      await useBillingStore.getState().refresh();
+      const refresh = useBillingStore.getState().refresh();
+      // The GET retries once after a delay, and the timers here are fake.
+      await jest.runAllTimersAsync();
+      await refresh;
+      expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(useBillingStore.getState().status?.activeTasks).toBe(2);
     });
   });
