@@ -856,7 +856,7 @@ function PRTableRow({
                   spaces every chip. */}
               {variant !== 'queue' && stack?.depth === 0 && stackAll.length > 1 && (
                 <span
-                  className="inline-flex items-center gap-1 rounded bg-indigo-200 px-1 py-0.5 text-[10px] uppercase text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+                  className="inline-flex items-center gap-1 rounded bg-slate-200 px-1 py-0.5 text-[10px] uppercase text-slate-800 dark:bg-slate-700 dark:text-slate-200"
                   title={`This PR is the bottom of a stack of ${stackAll.length}. They land from here up — in one queue run where the repo's merge queue takes stacks, otherwise one at a time.`}
                 >
                   <Layers className="h-2.5 w-2.5" />
