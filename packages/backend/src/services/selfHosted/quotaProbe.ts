@@ -94,7 +94,10 @@ async function probeClaude(workspaceId: string, token: string): Promise<QuotaVer
         'anthropic-version': '2023-06-01',
         'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
         'content-type': 'application/json',
-        'user-agent': 'claude-cli/2.1.75',
+        // The version the fleet's harness claims (pi-ai's `claudeCodeVersion`).
+        // Keep the two equal: Anthropic refuses newer models from an older
+        // version, and the probe must not answer differently from a real run.
+        'user-agent': 'claude-cli/2.1.280',
         'x-app': 'cli',
       },
       body: JSON.stringify({
