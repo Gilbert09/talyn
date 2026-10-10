@@ -13,6 +13,31 @@ const POSTHOG_HOST =
 
 let started = false;
 
+/**
+ * The rejection Microsoft's link scanner raises when it opens a page.
+ *
+ * Outlook Safe Links and Defender open every link in a scanned email in an
+ * embedded browser (CefSharp). Its own injected script rejects with this
+ * plain string, so the event has no stack and no frame from our code. It
+ * arrives in bursts on `/`, from a visitor with one direct pageview, no
+ * clicks, and no return visit. There is no code change on this site that
+ * would prevent it, so it is dropped rather than tracked.
+ */
+const LINK_SCANNER_REJECTION =
+  /Object Not Found Matching Id:\d+, MethodName:\w+, ParamCount:\d+/;
+
+/** Whether a captured `$exception` comes from Microsoft's link scanner. */
+export function isLinkScannerException(event: {
+  event?: string;
+  properties?: Record<string, unknown>;
+}): boolean {
+  if (event.event !== "$exception") return false;
+  const list = event.properties?.$exception_list as
+    | Array<{ value?: string }>
+    | undefined;
+  return !!list?.some((e) => LINK_SCANNER_REJECTION.test(e?.value ?? ""));
+}
+
 export function initPostHog(): void {
   if (started || !POSTHOG_KEY || typeof window === "undefined") return;
   // Persistence is left at the default on purpose. posthog-js writes its
@@ -32,6 +57,8 @@ export function initPostHog(): void {
     // We capture pageviews manually on route change (App Router).
     capture_pageview: false,
     capture_pageleave: true,
+    before_send: (event) =>
+      event && isLinkScannerException(event) ? null : event,
   });
   started = true;
 }
