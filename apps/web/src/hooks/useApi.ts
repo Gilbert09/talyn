@@ -4,6 +4,7 @@ import { prefetchSkills } from '../lib/skillsData';
 import { useOnReconnect } from './useOnReconnect';
 import {
   useWorkspaceStore,
+  onboardingStartedOnThisDevice,
   ACTIVE_STATUS_PARAM,
   HISTORY_STATUS_PARAM,
   HISTORY_TASK_STATUSES,
@@ -466,11 +467,18 @@ export function useInitialDataLoad() {
       // Only evaluated on the very first load: `loadData` re-runs when the
       // active workspace changes, and connecting GitHub mid-wizard must not
       // retroactively decide the user was already onboarded.
+      //
+      // Nor may a RELOAD do it. Connecting GitHub is step one of the wizard, so
+      // a new user who reloads the tab, relaunches the app, or lands back from
+      // the GitHub flow in a fresh page has a connection and an unfinished
+      // wizard. Reading that as "returning user" skipped the rest of setup and
+      // never sent onboarding_completed. A device that has shown the wizard
+      // resumes it instead.
       if (!migrationCheckedRef.current) {
         migrationCheckedRef.current = true;
         const onboarded = useWorkspaceStore.getState().onboardingComplete;
         const githubConnected = workspaces.some((w) => !!w.integrations?.github);
-        if (githubConnected && !onboarded) {
+        if (githubConnected && !onboarded && !onboardingStartedOnThisDevice()) {
           setOnboardingComplete(true);
         } else if (!githubConnected && onboarded) {
           // The inverse: a persisted flag says "onboarded" but the server has

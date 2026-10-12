@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, renderHook, screen, waitFor, cleanup } from '@testing-library/react';
 
 /**
  * The onboarding wizard's shape, and the signal that decides whether anyone
@@ -23,6 +23,7 @@ jest.mock('../renderer/lib/api', () => ({
     },
     repositories: { list: jest.fn().mockResolvedValue([]) },
     workspaces: { list: jest.fn().mockResolvedValue([]), create: jest.fn() },
+    environments: { list: jest.fn().mockResolvedValue([]) },
   },
 }));
 jest.mock('../renderer/lib/analytics', () => ({ trackEvent: jest.fn() }));
@@ -95,5 +96,46 @@ describe('the returning-user signal', () => {
 
   it('is false with no workspaces at all', () => {
     expect(isOnboarded([])).toBe(false);
+  });
+});
+
+/**
+ * Connecting GitHub is step one, so a new user who quits and relaunches the
+ * app before Finish has a connection and an unfinished wizard. The
+ * returning-user check read that as a finished setup: it skipped the rest of
+ * the wizard and never sent onboarding_completed.
+ */
+describe('a relaunch mid-wizard resumes it', () => {
+  const connected = [{ id: 'ws1', integrations: { github: { enabled: true } } }];
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const { api } = require('../renderer/lib/api');
+  const { useWorkspaceStore, onboardingStartedOnThisDevice } = require('../renderer/stores/workspace');
+  const { useInitialDataLoad } = require('../renderer/hooks/useApi');
+  /* eslint-enable @typescript-eslint/no-var-requires */
+
+  async function loadWith(persisted: string | null) {
+    if (persisted === null) localStorage.removeItem('fastowl-onboarding-complete');
+    else localStorage.setItem('fastowl-onboarding-complete', persisted);
+    useWorkspaceStore.setState({ onboardingComplete: false });
+    api.workspaces.list.mockResolvedValueOnce(connected);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = renderHook(() => useInitialDataLoad());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    return useWorkspaceStore.getState().onboardingComplete;
+  }
+
+  it('records on this device that the wizard started', () => {
+    localStorage.removeItem('fastowl-onboarding-complete');
+    expect(onboardingStartedOnThisDevice()).toBe(false);
+    render(<OnboardingWizard />);
+    expect(onboardingStartedOnThisDevice()).toBe(true);
+  });
+
+  it('keeps the wizard when this device started it and GitHub is now connected', async () => {
+    expect(await loadWith('false')).toBe(false);
+  });
+
+  it('still skips the wizard for a returning user on a new device', async () => {
+    expect(await loadWith(null)).toBe(true);
   });
 });

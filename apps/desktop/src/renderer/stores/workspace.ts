@@ -135,6 +135,22 @@ function getInitialOnboardingComplete(): boolean {
   }
 }
 
+/**
+ * True when this device has shown the wizard and it was not finished. The
+ * wizard persists `'false'` when it mounts, so the key tells apart two users
+ * the server cannot: somebody who connected GitHub mid-wizard and then
+ * reloaded or relaunched (`'false'`), and a returning user on a new machine
+ * (no key at all). Only the second may skip the wizard.
+ */
+export function onboardingStartedOnThisDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(ONBOARDING_KEY) === 'false';
+  } catch {
+    return false;
+  }
+}
+
 const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';
 
 // Last-selected workspace id, so a switch survives an app restart instead of
