@@ -253,12 +253,7 @@ describe('the returning-user signal', () => {
   });
 });
 
-/**
- * Connecting GitHub is step one, so a new user who reloads, relaunches, or
- * lands back from the GitHub flow in a fresh page has a connection and an
- * unfinished wizard. The returning-user check read that as a finished setup:
- * it skipped the rest of the wizard and never sent onboarding_completed.
- */
+// A fresh load after connecting GitHub used to skip the wizard silently.
 describe('a reload mid-wizard resumes it', () => {
   const connected = [{ id: 'ws1', integrations: { github: { enabled: true } } }];
 

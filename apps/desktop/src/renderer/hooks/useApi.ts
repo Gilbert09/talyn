@@ -467,13 +467,8 @@ export function useInitialDataLoad() {
       // Only evaluated on the very first load: `loadData` re-runs when the
       // active workspace changes, and connecting GitHub mid-wizard must not
       // retroactively decide the user was already onboarded.
-      //
-      // Nor may a RELOAD do it. Connecting GitHub is step one of the wizard, so
-      // a new user who reloads the tab, relaunches the app, or lands back from
-      // the GitHub flow in a fresh page has a connection and an unfinished
-      // wizard. Reading that as "returning user" skipped the rest of setup and
-      // never sent onboarding_completed. A device that has shown the wizard
-      // resumes it instead.
+      // Nor may a reload mid-wizard: a device that has shown the wizard resumes
+      // it (see onboardingStartedOnThisDevice).
       if (!migrationCheckedRef.current) {
         migrationCheckedRef.current = true;
         const onboarded = useWorkspaceStore.getState().onboardingComplete;
