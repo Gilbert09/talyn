@@ -28,6 +28,7 @@ import { v4 as uuid } from 'uuid';
 import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { deriveCiVerdict, type CheckFact, type CiVerdict } from '@talyn/shared';
 import { getPoolDbClient, isRealPostgres } from '../db/client.js';
+import { createConcurrencyLimit } from './concurrencyLimit.js';
 import {
   pullRequests as pullRequestsTable,
   prCheckStates,
@@ -220,19 +221,53 @@ async function affectedPrsForSha(
   lockRows = false,
 ): Promise<AffectedPr[]> {
   if (repoIds.length === 0) return [];
-  const db = getPoolDbClient();
-  const query = db
-    .select(AFFECTED_COLUMNS)
-    .from(pullRequestsTable)
-    .where(
-      and(
-        inArray(pullRequestsTable.repositoryId, repoIds),
-        eq(pullRequestsTable.state, 'open'),
-        sql`${pullRequestsTable.lastSummary} ->> 'headSha' = ${headSha}`,
-      ),
-    );
-  return lockRows && isRealPostgres() ? query.for('update') : query;
+  const query = () =>
+    getPoolDbClient()
+      .select(AFFECTED_COLUMNS)
+      .from(pullRequestsTable)
+      .where(
+        and(
+          inArray(pullRequestsTable.repositoryId, repoIds),
+          eq(pullRequestsTable.state, 'open'),
+          sql`${pullRequestsTable.lastSummary} ->> 'headSha' = ${headSha}`,
+        ),
+      );
+  if (!lockRows || !isRealPostgres()) return query();
+  // NOWAIT, then a short wait OFF the connection, then again. A plain
+  // `FOR UPDATE` holds its pooled connection for as long as the row's holder
+  // takes, up to the 30s statement_timeout. When a request transaction held a
+  // PR row through a GitHub call on 2026-10-12, these waits filled the pool and
+  // the DB watchdog restarted production twice. A flush that still cannot get
+  // the row fails, and the settle refresh recovers it, as for any failed flush.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await query().for('update', { noWait: true });
+    } catch (err) {
+      if (!isLockNotAvailable(err) || attempt >= LOCK_RETRY_WAITS_MS.length) throw err;
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_WAITS_MS[attempt]));
+    }
+  }
 }
+
+/** Waits between NOWAIT attempts: about 4s in all, which no healthy request needs. */
+const LOCK_RETRY_WAITS_MS = [250, 500, 1_000, 2_000];
+
+/** Postgres `lock_not_available`, which drizzle wraps as the error's `cause`. */
+function isLockNotAvailable(err: unknown): boolean {
+  for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) {
+    if ((e as { code?: unknown }).code === '55P03') return true;
+  }
+  return false;
+}
+
+/**
+ * Flushes that run at once. Each holds a pooled connection, and the coalescer
+ * starts one per (repo, sha) with no bound of its own, so a CI burst across
+ * many commits could otherwise take most of the pool's 20. Four is the most
+ * this path may hold, leaving the rest for requests and the webhook worker.
+ */
+const FLUSH_CONCURRENCY = 4;
+const flushSlots = createConcurrencyLimit(FLUSH_CONCURRENCY);
 
 /**
  * Run a ledger write + recompute for one commit.
@@ -709,13 +744,13 @@ async function applyEvents(
   repoIds: string[],
   states: CheckEventInput[],
 ): Promise<number> {
-  return withShaLock(repoFullName, headSha, async () => {
+  return flushSlots(() => withShaLock(repoFullName, headSha, async () => {
     const affected = await affectedPrsForSha(repoIds, headSha, true);
     if (affected.length === 0) return 0;
     await upsertCheckStates(states);
     await recomputeVerdicts(repoFullName, headSha, affected, { announceUnchanged: true });
     return affected.length;
-  });
+  }));
 }
 
 /**

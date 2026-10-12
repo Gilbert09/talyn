@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
-import { getDbClient, runWithoutScope } from '../db/client.js';
+import { getDbClient } from '../db/client.js';
 import {
   pullRequests as pullRequestsTable,
   mergeQueueEntries as mergeQueueEntriesTable,
@@ -78,7 +78,7 @@ import { onQueueMembershipChanged } from '../services/mergeQueue/triggers.js';
 import {
   applyQueueMembership,
   emitDequeued,
-  publishDraftForQueue,
+  publishDraftsThenKick,
   setQueueMembership,
 } from '../services/mergeQueue/membership.js';
 import {
@@ -1187,20 +1187,12 @@ export function pullRequestRoutes(): Router {
       await applyAll();
     }
 
-    // Per-call work, once for the batch rather than once per member.
-    for (const member of members) {
-      if (enabled) await publishDraftForQueue(member);
-      else emitDequeued(member);
-    }
+    // Per-call work, once for the batch rather than once per member. The
+    // draft publish and the kick run off this request's transaction, which
+    // holds every member's row until the response is sent.
+    if (!enabled) for (const member of members) emitDequeued(member);
     await broadcastMergeQueuePositions(anchor.workspaceId);
-    if (enabled) {
-      runWithoutScope(() => {
-        // The evaluator coalesces these into one walk per group.
-        for (const member of members) {
-          void onQueueMembershipChanged(member.id, 'user:enqueue-stack');
-        }
-      });
-    }
+    if (enabled) publishDraftsThenKick(members, 'user:enqueue-stack');
 
     res.json({
       success: true,

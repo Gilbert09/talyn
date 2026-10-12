@@ -2,6 +2,48 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Two watchdog restarts, and a pool that waited on row locks (2026-10-12)
+
+Tom bulk-tracked and queued posthog.com PRs and got a toast per PR: `Failed
+query: update "pull_requests" set "watching" …`. The toast dropped the cause,
+which was `canceling statement due to statement timeout`, `while updating tuple
+… in relation "pull_requests"`: the update waited 30 seconds for a row lock.
+The DB watchdog restarted production at 14:01 and again at 14:17, each after 8
+probes over 3 seconds. The first stall began at 13:52, before the clicks.
+
+**What we know and what we do not.** The logs show row-lock waits and slow
+reads, about 2,000 GitHub webhooks a minute, and no backend deploy since
+2026-10-10. They do not show which transaction held the rows. That needs
+`pg_stat_activity` / `pg_locks` during a stall, or Supabase's own metrics, and
+neither was available. So the changes below remove the shapes that can cause
+this, and the trigger of the 13:52 stall is still unknown.
+
+**The shape.** A transaction locks a PR row and then waits: for GitHub, or for
+a second pool connection. Other writers of that row each hold one of the 20
+pool connections while they wait for it. When the pool is full, the watchdog's
+probe cannot get a connection either. Only the 30-second timeouts break it.
+
+**Changes.**
+- `checkCounts.ts`: the flush's `FOR UPDATE` read is now `NOWAIT`, retried
+  after 0.25, 0.5, 1 and 2 seconds with the connection released between tries.
+  A flush that still cannot get the row fails, and the settle refresh recovers
+  it. Flushes run at most 4 at a time (`FLUSH_CONCURRENCY`,
+  `services/concurrencyLimit.ts`). Before, the coalescer started one per
+  (repo, sha) with no bound, and each could wait 30 seconds on a connection.
+- `mergeQueue/membership.ts`: queueing a draft called GitHub's "ready for
+  review" and then `refreshPr` (a pool read) INSIDE the request transaction,
+  after the PR row update, and the stack route did it for each member in
+  series. Leaving the queue called GitHub to disarm auto-merge in the same
+  place. Both now run off the transaction (`afterQueueWrite`). The disarm
+  writes `pendingDisarm` first, so a failure is retried by the reconciler as
+  before; the follow-up clears it on success.
+
+**Not changed, and worth doing.** The free-plan task gate outside requests
+still uses `withBlockingAdvisoryLock` (`entitlements.ts`), the 2026-09-30
+shape. The merge queue evaluator abandons a walk at 45 seconds but lets it run
+on, and a second walk for the group can start beside it. Neither was proven to
+be part of this incident.
+
 ## A GitHub outage detector, a banner, and a merge queue that waits (2026-10-07)
 
 Tom sent a "Merge queue blocked" notice: four submits to the external queue had

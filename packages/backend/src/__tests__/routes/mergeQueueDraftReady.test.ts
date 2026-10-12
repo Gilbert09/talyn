@@ -8,6 +8,7 @@ import { wrapAsyncRoutes } from '../../middleware/asyncHandler.js';
 import { requireAuth, internalProxyHeaders } from '../../middleware/auth.js';
 import { markReadyForReview } from '../../services/githubAutoMerge.js';
 import { prMonitorService } from '../../services/prMonitor.js';
+import { settleQueueFollowUps } from '../../services/mergeQueue/membership.js';
 import { createTestDb, seedUser, TEST_USER_ID } from '../helpers/testDb.js';
 import type { Database } from '../../db/client.js';
 import {
@@ -97,12 +98,16 @@ function routeRefreshCalls(): number {
     return id;
   }
 
-  function enqueue(prId: string) {
-    return fetch(`${url}/pull-requests/${prId}/merge-queue`, {
+  // The publish runs after the queue write, off the request's transaction,
+  // so wait for it before asserting what it did (or did not) do.
+  async function enqueue(prId: string) {
+    const res = await fetch(`${url}/pull-requests/${prId}/merge-queue`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ enabled: true }),
     });
+    await settleQueueFollowUps();
+    return res;
   }
 
   beforeEach(async () => {

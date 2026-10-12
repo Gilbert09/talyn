@@ -101,25 +101,43 @@ export async function applyQueueMembership(
         message: 'Removed from the merge queue.',
       });
       // A dequeued PR must NOT keep a Talyn-armed auto-merge on GitHub —
-      // GitHub would merge it after the user explicitly pulled it. Disarm
-      // synchronously; on failure flag pendingDisarm so the reconciler
-      // retries (never leave it dangling). User-armed auto-merges are left
-      // alone — we never disarm what we didn't arm.
+      // GitHub would merge it after the user explicitly pulled it. User-armed
+      // auto-merges are left alone — we never disarm what we didn't arm.
+      //
+      // The flag is written FIRST, on the caller's transaction, and the GitHub
+      // call runs off it. A GitHub call made while this transaction holds the
+      // PR row keeps the row locked for as long as GitHub takes, and every
+      // other writer of that row holds a pool connection while it waits. On
+      // 2026-10-12 that pattern filled the pool twice and the DB watchdog
+      // restarted production. If the call fails, the reconciler retries it.
       if (closed?.automergeArmedBy === 'talyn') {
+        await db
+          .update(mergeQueueEntriesTable)
+          .set({ pendingDisarm: true, updatedAt: new Date() })
+          .where(eq(mergeQueueEntriesTable.id, closed.id));
         const nodeId = (row.lastSummary as { nodeId?: string } | null)?.nodeId;
-        const disarmed = nodeId
-          ? await disableAutoMerge({
+        if (nodeId) {
+          const entryId = closed.id;
+          afterQueueWrite(async () => {
+            const disarmed = await disableAutoMerge({
               workspaceId: row.workspaceId,
               owner: row.owner,
               repo: row.repo,
               nodeId,
-            })
-          : false;
-        if (!disarmed) {
-          await db
-            .update(mergeQueueEntriesTable)
-            .set({ pendingDisarm: true, updatedAt: new Date() })
-            .where(eq(mergeQueueEntriesTable.id, closed.id));
+            });
+            if (!disarmed) return;
+            // On the pool, so this waits for the caller's commit and then
+            // applies. Same columns as the reconciler's retry.
+            await getDbClient()
+              .update(mergeQueueEntriesTable)
+              .set({
+                pendingDisarm: false,
+                automergeArmedAt: null,
+                automergeArmedBy: null,
+                updatedAt: new Date(),
+              })
+              .where(eq(mergeQueueEntriesTable.id, entryId));
+          });
         }
       }
     }
@@ -132,11 +150,55 @@ export async function applyQueueMembership(
 }
 
 /**
+ * Work that must run OFF the caller's transaction: GitHub calls, and anything
+ * that reads or writes on the pool. Started now, outside any request scope;
+ * its pool writes wait for the caller's commit rather than the caller waiting
+ * for them. Errors are logged, never thrown — the queue write already stands.
+ */
+const followUps = new Set<Promise<void>>();
+
+function afterQueueWrite(fn: () => Promise<void>): void {
+  runWithoutScope(() => {
+    const run = fn()
+      .catch((err) => {
+        console.warn(
+          '[mergeQueue] follow-up after a queue change failed:',
+          err instanceof Error ? err.message : err
+        );
+      })
+      .finally(() => followUps.delete(run));
+    followUps.add(run);
+  });
+}
+
+/** Tests: wait for every follow-up started so far. */
+export async function settleQueueFollowUps(): Promise<void> {
+  while (followUps.size > 0) await Promise.all([...followUps]);
+}
+
+/**
+ * Publish any drafts among `rows`, then kick an evaluation for each, all off
+ * the caller's transaction (see {@link afterQueueWrite}). The publish comes
+ * first so the kick reads the refreshed, non-draft summary.
+ */
+export function publishDraftsThenKick(rows: QueueMembershipRow[], trigger: string): void {
+  afterQueueWrite(async () => {
+    for (const row of rows) await publishDraftForQueue(row);
+    // The evaluator coalesces these into one walk per group.
+    for (const row of rows) void onQueueMembershipChanged(row.id, trigger);
+  });
+}
+
+/**
  * Queuing a draft PR: GitHub 405s a draft merge, so a queued draft would just
  * sit blocked waiting on the author. Since queuing IS the intent to merge,
  * mark it ready for review now. Best-effort — on success we refresh the
  * cached summary so the kick merges without waiting for the ready_for_review
  * webhook; on failure decide()'s draft block still surfaces the manual action.
+ *
+ * Callers inside a request go through {@link publishDraftsThenKick}: this makes
+ * a GitHub call and a pool read, and must not run while the request's
+ * transaction holds the PR row.
  */
 export async function publishDraftForQueue(row: QueueMembershipRow): Promise<void> {
   const summary = row.lastSummary as
@@ -209,21 +271,15 @@ export async function setQueueMembership(opts: {
     await apply();
   }
 
-  if (enabled) await publishDraftForQueue(row);
   // When disabling, the row is no longer in the queue so the group rebroadcast
   // below will not touch it — emit its cleared badge explicitly here.
-  else emitDequeued(row);
+  if (!enabled) emitDequeued(row);
 
   // Recompute "#N" for the whole queue so the toggled PR gets its real position
   // and every sibling shifts to match — not just after a refresh.
   await broadcastMergeQueuePositions(row.workspaceId);
 
-  // Kick an evaluation so an already-clean PR merges without waiting for the
-  // reconciler. Scope-escaped — fire-and-forget work must never inherit a
-  // request's transaction handle (it is dead by the time the kick runs).
-  if (enabled) {
-    runWithoutScope(() => {
-      void onQueueMembershipChanged(row.id, trigger);
-    });
-  }
+  // Publish a draft, then kick an evaluation so an already-clean PR merges
+  // without waiting for the reconciler. Both off the caller's transaction.
+  if (enabled) publishDraftsThenKick([row], trigger);
 }
