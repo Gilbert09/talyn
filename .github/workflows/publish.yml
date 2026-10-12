@@ -344,14 +344,40 @@ jobs:
           # Releases publish to this (public) repo, so the workflow's own
           # GITHUB_TOKEN can upload the assets — no PAT needed.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A DRAFT until the last macOS file is up; the next step publishes
+          # it. electron-builder creates the release on its first upload, so a
+          # leg that fails after that point used to leave a "Latest" release
+          # with only some files. On 2026-10-12 v0.3.20 went out with only
+          # the arm64 zip: no DMG for the download button and no
+          # latest-mac.yml for the updater. A draft is invisible to both.
+          EP_DRAFT: 'true'
         run: |
+          # electron-builder downloads Electron itself and does not retry, so
+          # one 504 from GitHub failed the 2026-10-12 release. Fetch both
+          # arches first, with retries. See scripts/prefetch-electron.mjs.
+          ELECTRON_DIST="$RUNNER_TEMP/electron-dist"
+          node scripts/prefetch-electron.mjs "$ELECTRON_DIST" darwin-arm64 darwin-x64
           cd apps/desktop
           # electron is hoisted to the monorepo root node_modules, so
           # electron-builder can't infer the version from this workspace —
           # resolve it explicitly and pass it in.
           ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
           npm exec electron-builder -- --publish always \
-            -c.electronVersion="$ELECTRON_VERSION"
+            -c.electronVersion="$ELECTRON_VERSION" \
+            -c.electronDist="$ELECTRON_DIST"
+
+      - name: Publish the draft release
+        # Only now do the updater and the download button see this version.
+        # --target pins a NEW tag to the commit that was built: without it
+        # GitHub tags whatever main is at this moment. An existing tag (the
+        # tag-push path) is not moved. Publishing a release that is already
+        # published changes nothing, so a re-run is safe.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --target "$GITHUB_SHA"
 
   release-notes:
     # Generates this release's "What's new" highlights from its commits and
@@ -498,7 +524,16 @@ jobs:
         # (its default is PowerShell, where this is a syntax error).
         shell: bash
         run: |
+          # The same retry guard as the macOS leg. Both runners build x64 only.
+          case "$RUNNER_OS" in
+            Windows) TARGET=win32-x64 ;;
+            Linux) TARGET=linux-x64 ;;
+            *) echo "Unexpected runner OS: $RUNNER_OS"; exit 1 ;;
+          esac
+          ELECTRON_DIST="$RUNNER_TEMP/electron-dist"
+          node scripts/prefetch-electron.mjs "$ELECTRON_DIST" "$TARGET"
           cd apps/desktop
           ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
           npm exec electron-builder -- --publish always \
-            -c.electronVersion="$ELECTRON_VERSION"
+            -c.electronVersion="$ELECTRON_VERSION" \
+            -c.electronDist="$ELECTRON_DIST"
