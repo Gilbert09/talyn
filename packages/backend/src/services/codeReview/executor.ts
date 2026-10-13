@@ -1062,7 +1062,7 @@ function patchBodyText(patch: string): string {
 // ---------- Finishing ----------
 
 /** Everything not seen this cycle goes stale, then the review rests at `ready`. */
-export async function finishCycle(review: ReviewRow): Promise<void> {
+export async function finishCycle(review: ReviewRow, note?: string): Promise<void> {
   const staled = await markStale(review.id, review.cycle);
   await casTransition(
     review.id,
@@ -1079,7 +1079,9 @@ export async function finishCycle(review: ReviewRow): Promise<void> {
       toPhase: 'ready',
       trigger: 'executor',
       code: 'cycle_finished',
-      message: staled ? `${staled} earlier findings are gone.` : 'Review finished.',
+      message: [note, staled ? `${staled} earlier findings are gone.` : '']
+        .filter(Boolean)
+        .join(' ') || 'Review finished.',
       detail: { staled, headSha: review.targetHeadSha },
     }
   );
@@ -1262,7 +1264,7 @@ export async function applyActions(review: ReviewRow, actions: Action[]): Promis
         await advancePhase(review, action.to, action.code, action.message);
         return wantsImmediateRepass('phase');
       case 'finish':
-        await finishCycle(review);
+        await finishCycle(review, action.message);
         return wantsImmediateRepass('finish');
       case 'fail':
         await failCycle(

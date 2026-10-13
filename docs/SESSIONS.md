@@ -2,6 +2,35 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## No code review ever finished, and the judge could not keep two lenses (2026-10-13)
+
+Tom saw a Deep review drop all 15 findings. Two separate faults came out of it.
+
+**`finishCycle` never ran, from the first release (2026-09-26).** `decide` returned
+a `phase → ready` action and then `finish`. `applyActions` returns after the first
+CAS action, so `finish` was never reached, and `ready` is terminal, so no later pass
+asked for it. Every review reached `ready` with these steps skipped:
+- `reviewedHeadSha` stayed empty, so Post to PR always refused.
+- The merge queue never parked on a blocker (`queueGate` matches on that SHA).
+- Auto-fix never ran.
+- Findings from earlier cycles were never marked stale.
+- `code_review_completed` never reached PostHog: 0 events in 30 days, against 50
+  `code_review_started`. That is why there was no kept-versus-raised history to read.
+
+A cycle now ends with `finish` as the only action. When the sweep or the judge died,
+the action carries the "Continuing with what the reviewers found." note into the
+`cycle_finished` event. Reviews that finished before this fix still have an empty
+`reviewedHeadSha`. "Review again" repairs one; nothing backfills them.
+
+**The judge had no keep rule for a test gap or an operability problem.** Its only
+rule was "the code as written would cause a real problem", so every Tests and
+Operability finding was "a gap, not a defect". On the review Tom saw, 9 of the 15
+dropped findings came from those two reviewers. The judge now sees which reviewers
+raised each candidate and has a keep rule for each kind, capped at `minor` unless
+the finding names the defect the gap hides. Why it got WORSE recently is not
+known: the judge prompt did not change, and without the completed event there is
+no history to compare.
+
 ## Two watchdog restarts, and a pool that waited on row locks (2026-10-12)
 
 Tom bulk-tracked and queued posthog.com PRs and got a toast per PR: `Failed

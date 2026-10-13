@@ -149,10 +149,7 @@ describe('decide', () => {
           runs: [run({ status: 'succeeded' })],
         })
       );
-      expect(actions).toEqual([
-        { type: 'phase', to: 'ready', code: 'reviewing_done' },
-        { type: 'finish' },
-      ]);
+      expect(actions).toEqual([{ type: 'finish' }]);
     });
 
     it('advances on a PARTIAL phase, so one dead lens does not void the review', () => {
@@ -199,22 +196,13 @@ describe('decide', () => {
     it('finishes when the judge died, leaving the candidates unjudged', () => {
       const runs = [run({ id: 'j', kind: 'validate', lens: '', status: 'failed' })];
       expect(decide(state({ phase: 'validating', runs }))).toEqual([
-        {
-          type: 'phase',
-          to: 'ready',
-          code: 'judge_failed',
-          message: 'Continuing with what the reviewers found.',
-        },
-        { type: 'finish' },
+        { type: 'finish', message: 'Continuing with what the reviewers found.' },
       ]);
     });
 
     it('finishes normally once the judge has ruled', () => {
       const runs = [run({ id: 'j', kind: 'validate', lens: '', status: 'succeeded' })];
-      expect(decide(state({ phase: 'validating', runs }))).toEqual([
-        { type: 'phase', to: 'ready', code: 'validating_done' },
-        { type: 'finish' },
-      ]);
+      expect(decide(state({ phase: 'validating', runs }))).toEqual([{ type: 'finish' }]);
     });
   });
 

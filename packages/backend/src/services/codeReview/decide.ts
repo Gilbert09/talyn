@@ -29,7 +29,7 @@ export type Action =
   /** Move the review on. */
   | { type: 'phase'; to: CodeReviewPhase; code: string; message?: string }
   /** Finish the cycle: stale what went away, then rest at `ready`. */
-  | { type: 'finish' }
+  | { type: 'finish'; message?: string }
   /** Give up on the cycle, with a reason a person can read. */
   | { type: 'fail'; code: string; message: string };
 
@@ -236,22 +236,20 @@ function decideUnitPhase(
       ];
     }
     const to = nextPhaseAfter(state, phase);
+    const message = 'Continuing with what the reviewers found.';
+    if (to === 'ready') return [{ type: 'finish', message }];
     return [
       {
         type: 'phase',
         to,
         code: phase === 'sweeping' ? 'sweep_failed' : 'judge_failed',
-        message: 'Continuing with what the reviewers found.',
+        message,
       },
-      ...(to === 'ready' ? [{ type: 'finish' } as Action] : []),
     ];
   }
 
   const to = nextPhaseAfter(state, phase);
-  return [
-    { type: 'phase', to, code: `${phase}_done` },
-    ...(to === 'ready' ? [{ type: 'finish' } as Action] : []),
-  ];
+  return to === 'ready' ? [{ type: 'finish' }] : [{ type: 'phase', to, code: `${phase}_done` }];
 }
 
 /**

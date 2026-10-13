@@ -8,18 +8,22 @@
  * its own errors, which is right for a dashboard and means a broken query would
  * report nothing and look fine. So the suite calls the gather directly.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb, seedUser } from './helpers/testDb.js';
 import {
   prCodeReviewEvents,
+  prCodeReviewFindings,
   prCodeReviewRuns,
   prCodeReviews,
   pullRequests,
   repositories,
   workspaces,
 } from '../db/schema.js';
-import { codeReviewCycleShape } from '../services/codeReview/analytics.js';
+import { captureCycleFinished, codeReviewCycleShape } from '../services/codeReview/analytics.js';
 import { getReview } from '../services/codeReview/store.js';
+
+const { capture } = vi.hoisted(() => ({ capture: vi.fn() }));
+vi.mock('../services/analytics.js', () => ({ captureWorkspaceEvent: capture }));
 
 const STARTED = new Date('2026-09-28T10:00:00.000Z');
 const DISPATCHED = new Date('2026-09-28T10:00:30.000Z');
@@ -39,6 +43,7 @@ describe('codeReviewCycleShape', () => {
   };
 
   beforeEach(async () => {
+    capture.mockClear();
     testDb = await createTestDb();
     await seedUser(testDb.db, { id: 'owner-a' });
     await testDb.db.insert(workspaces).values({ id: 'ws-a', ownerId: 'owner-a', name: 'A' });
@@ -184,5 +189,32 @@ describe('codeReviewCycleShape', () => {
     expect(out.units_total).toBe(0);
     expect(out.agent_seconds).toBeNull();
     expect(out.queue_seconds as number).toBeGreaterThan(0);
+  });
+
+  it('captures a completed cycle with finding and funnel counts', async () => {
+    await testDb.db.insert(prCodeReviewFindings).values({
+      id: 'finding-1',
+      reviewId: 'rev-1',
+      workspaceId: 'ws-a',
+      pullRequestId: 'pr-a',
+      dedupeKey: 'finding-1',
+      severity: 'major',
+      title: 'Finding',
+      verdict: 'confirmed',
+    });
+
+    await captureCycleFinished((await getReview('rev-1'))!);
+
+    expect(capture).toHaveBeenCalledWith(
+      'ws-a',
+      'code_review_completed',
+      expect.objectContaining({
+        findings_raised: 1,
+        findings_kept: 1,
+        majors: 1,
+        open_count: 1,
+        reporting_bar: 'minor',
+      })
+    );
   });
 });
