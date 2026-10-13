@@ -113,3 +113,56 @@ exploration (follow-up).
 - Codex-in-sandbox verification.
 - Deploy the YAS branch endpoints; until then diff/files run through `exec` (and their frames
   land in the events ring) and the terminal goes over ssh-stream.
+
+## State of the build (2026-10-13)
+
+Built on `tom/workbenches`, in five parts:
+
+| Part | Where | Verified by |
+|---|---|---|
+| Shared core, flag, client contract | `packages/shared/src/{workbench,workbenchGit,agentStream,workbenchConfig}.ts`, `packages/client` | 508 unit tests, real-git checkpoint test |
+| Backend sandbox runtime | `packages/backend/src/services/workbenches/`, `routes/workbenches.ts`, migration `0076` | 1035 tests against a FAKE fleet |
+| Local worktree runtime | `apps/desktop/src/main/workbench/` | 44 jest tests, real temp git repos, fake CLI |
+| Desktop UI | `apps/desktop/src/renderer/components/workbench/` | 75 new jest tests |
+| Fleet endpoints | yas `tom/workbench-endpoints` | Go tests, macOS + Linux container, no microVM |
+
+**Not yet done: a full run of the app against a real sandbox.** The spike proved the
+primitives (create, clone, claude turn, resume, suspend) and the guest has the tools the
+exec wrapper needs (`sed -u`, `base64 -w`, `tmux`, `setsid`, `pkill`; the guest user is
+`fleet`). The backend, the UI and the fleet together have not run end to end.
+
+### How to run it locally
+
+1. `npm run dev:db` (local Supabase), then apply migrations.
+2. Backend env: `WORKBENCHES_ENABLED=true`, `FLEET_ENABLED=true`, and the fleet gateway
+   variables (`FLEET_PINNED_ENDPOINT`, `FLEET_GATEWAY_TOKEN` / `FLEET_API_TOKEN`). The local
+   `.env` has no fleet variables today.
+3. Connect a Claude subscription in Settings, so the workspace has a fleet credential.
+4. Start the desktop app. "Workbenches" shows in the sidebar.
+5. Local mode needs `claude` or `codex` on the PATH, and `node-pty` rebuilt for Electron
+   (`npm run rebuild` in `apps/desktop/release/app`).
+
+### Backend decisions that differ from the plan
+
+- **Tagged exec framing.** The events ring is per sandbox, so two commands that run at the
+  same time mix their output. Each exec is wrapped: every line carries a nonce tag, and a
+  tagged trailer gives the exit code (`services/workbenches/execFraming.ts`).
+- **The router is mounted before `ownerScope`**, like billing. Handlers wait on the fleet,
+  and a scoped transaction would hold a pool connection for that time.
+- **Seq allocation** is one CTE statement on `workbench_chats.next_seq`. No advisory lock.
+- **Archive** pushes commits to the branch (never forced) and saves uncommitted work as a
+  hidden commit at `refs/talyn/archive/<id>`. A failed save keeps the sandbox.
+- **Terminal**: the fleet `/pty` first; on `409 pty_unsupported`, `ssh2` over `ssh-stream`.
+
+### Known gaps
+
+- The boot sweep that stops orphaned turns assumes ONE backend replica. A deploy overlap
+  would stop a live replica's turns. Fix this before any production use.
+- The preview proxy needs a Bearer token, so an iframe cannot load it directly.
+- `stream_event` deltas are stored without pruning.
+- `openSshStream` and `openPty` do not use `FLEET_HTTP_PROXY`.
+- Sandbox: pasted images are not sent. Local: archive does not remove the worktree.
+- macOS: the menu's close item takes ⌘W before the renderer sees it.
+- No billing gates. Not verified on a real fleet: Codex in a sandbox, and GitHub accepting a
+  push to `refs/talyn/*`.
+- The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden.
