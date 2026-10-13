@@ -365,9 +365,9 @@ export function ReviewsPanel() {
                 value={requestedFilter}
                 onChange={(e) => setRequestedFilter(e.target.value)}
                 className="h-7 rounded-md border bg-background px-2 py-0 text-xs leading-7"
-                title="Filter by who requested your review"
+                title="Filter by who was requested: you, or one of your teams"
               >
-                <option value="all">Any requester</option>
+                <option value="all">Any requested</option>
                 {requestedOptions.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
