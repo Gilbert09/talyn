@@ -63,6 +63,7 @@ import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useGitHubActions } from '../panels/github/useGitHubActions';
 import { stackSelection } from '../panels/github/stacks';
+import { OpenInWorkbenchButton } from '../workbench/OpenInWorkbenchButton';
 
 /**
  * Slide-in detail panel for a PR. Phase 4 ships the skeleton —
@@ -581,6 +582,7 @@ export function PRDetailSheet({
             >
               <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
             </Button>
+            {view && <OpenInWorkbenchButton row={view.row} onOpened={onClose} />}
             {view && (
               <Button
                 variant="ghost"
@@ -1319,7 +1321,7 @@ const FILTER_STATES: Record<CheckFilter, PRCheckState[]> = {
   skipped: ['skipped'],
 };
 
-function ChecksTab({
+export function ChecksTab({
   data,
   detailPending,
 }: {
@@ -1597,7 +1599,7 @@ function CheckCountTile({
   );
 }
 
-function ReviewsTab({
+export function ReviewsTab({
   data,
 }: {
   data: { row: PRRow; fresh: (PRSummaryShape & PRFreshDetail) | null };

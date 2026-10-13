@@ -17,6 +17,7 @@ export type ActivePanel =
   | 'loops'
   | 'code_reviews'
   | 'mcp_servers'
+  | 'workbenches'
   | 'settings';
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,

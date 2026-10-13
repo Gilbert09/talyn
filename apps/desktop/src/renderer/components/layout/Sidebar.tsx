@@ -4,6 +4,7 @@ import {
   codeReviewOffered,
   loopsOffered,
   mcpServersOffered,
+  workbenchesOffered,
   workflowsOffered,
   type CloudProviderTone,
 } from '@talyn/shared';
@@ -23,6 +24,7 @@ import {
   Check,
   Plus,
   Download,
+  SquareTerminal,
 } from 'lucide-react';
 import type { User } from '@supabase/supabase-js';
 import type { UpdaterEvent } from '../../../main/updaterEvents';
@@ -33,6 +35,7 @@ import { WorkspaceLogo } from '../widgets/WorkspaceLogo';
 import { FleetAgentMark, ProviderIcon } from '../../lib/providerMeta';
 import { useWorkspaceStore, type ActivePanel } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
+import { useWorkbenchStore } from '../../stores/workbenches';
 import { visibleReviewCohort } from '../panels/github/reviewHidden';
 import { useIsDevBuild } from '../../hooks/useIsDevBuild';
 import { useAuth } from '../auth/AuthProvider';
@@ -75,6 +78,8 @@ export function Sidebar({ className }: SidebarProps) {
   // Pull requests whose review found something nobody has dealt with yet.
   const codeReviewCount = prRows.filter((r) => (r.codeReview?.openCount ?? 0) > 0).length;
   const queueCount = prRows.filter((r) => r.mergeQueued).length;
+  // Workbench chats with a finished turn nobody has looked at yet.
+  const workbenchUnread = useWorkbenchStore((s) => Object.keys(s.unread).length);
 
   // Things happening to you: PRs, the queue, runs in flight.
   const workNavItems: NavItem[] = [
@@ -124,6 +129,18 @@ export function Sidebar({ className }: SidebarProps) {
       label: 'Tasks',
       badge: runningTasksCount > 0 ? runningTasksCount : undefined,
     },
+    // Workbenches: a branch, a long agent chat, a diff and a terminal. Gated
+    // the same three-state way as Loops, failing closed.
+    ...(workbenchesOffered(features)
+      ? [
+          {
+            id: 'workbenches' as const,
+            icon: SquareTerminal,
+            label: 'Workbenches',
+            badge: workbenchUnread > 0 ? workbenchUnread : undefined,
+          },
+        ]
+      : []),
   ];
 
   // Things you set up: automation rules, schedules and tool connections. No

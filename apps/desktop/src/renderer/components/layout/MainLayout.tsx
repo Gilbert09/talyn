@@ -1,5 +1,11 @@
 import React from 'react';
-import { codeReviewOffered, loopsOffered, mcpServersOffered, workflowsOffered } from '@talyn/shared';
+import {
+  codeReviewOffered,
+  loopsOffered,
+  mcpServersOffered,
+  workbenchesOffered,
+  workflowsOffered,
+} from '@talyn/shared';
 import { Sidebar } from './Sidebar';
 import { SystemStatusBanner } from './SystemStatusBanner';
 import { QueuePanel } from '../panels/QueuePanel';
@@ -13,6 +19,7 @@ import { LoopsPanel } from '../panels/loops/LoopsPanel';
 // web fork's lazy split buys nothing here.
 import { CodeReviewsPanel } from '../panels/codeReview/CodeReviewsPanel';
 import { McpServersPanel } from '../panels/mcpServers/McpServersPanel';
+import { WorkbenchesPanel } from '../workbench/WorkbenchesPanel';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
 import { ConnectAgentModal } from '../modals/ConnectAgentModal';
@@ -69,6 +76,7 @@ export function MainLayout() {
         <CodeReviewsPanel />
       )}
           {activePanel === 'mcp_servers' && mcpServersOffered(features) && <McpServersPanel />}
+            {activePanel === 'workbenches' && workbenchesOffered(features) && <WorkbenchesPanel />}
             {activePanel === 'settings' && <SettingsPanel />}
           </div>
         </main>

@@ -50,6 +50,7 @@ import {
 import { SkillPickerModal } from './SkillPickerModal';
 import { ProviderIcon } from '../../../lib/providerMeta';
 import { PRStatusPill } from '../../widgets/PRStatusPill';
+import { OpenInWorkbenchButton } from '../../workbench/OpenInWorkbenchButton';
 import { CodeReviewRowChip } from '../../widgets/codeReview/CodeReviewRowChip';
 import { PRReviewPill } from '../../widgets/PRReviewPill';
 import { PollingOnlyBadge } from '../../widgets/PollingOnlyBadge';
@@ -1388,6 +1389,7 @@ function PRTableRow({
               <Wand2 className="h-3.5 w-3.5" />
             </button>
           )}
+          <OpenInWorkbenchButton row={row} variant="row" />
           <button
             type="button"
             data-attr="pr-row-copy-link"

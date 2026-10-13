@@ -1,0 +1,326 @@
+import {
+  createClaudeStreamParser,
+  nextWorkbenchAction,
+  type AgentEvent,
+  type AgentEventDraft,
+  type Workbench,
+  type WorkbenchAttachment,
+  type WorkbenchContextUsage,
+  type WorkbenchEvent,
+  type WorkbenchNextAction,
+  type WorkbenchNextActionInput,
+  type WorkbenchTodo,
+} from '@talyn/shared';
+import type { PRRow, PRState, PRSummaryShape } from './api';
+
+/**
+ * Pure helpers for the Workbenches panel. Nothing here touches React, the
+ * store or the network, so all of it is unit-tested directly.
+ */
+
+// ============================================================================
+// User messages in the transcript
+// ============================================================================
+
+/**
+ * The event that records what the user sent, at the head of each turn.
+ *
+ * Claude's stream does not echo the prompt in `-p` mode, so the runtime writes
+ * it. The shape is a Claude `user` event with a `text` block: `buildBlocks`
+ * renders only `tool_result` blocks from a user event, so the agent transcript
+ * ignores it and the workbench transcript draws it as a message bubble.
+ */
+export function makeUserMessageEvent(text: string, attachments?: WorkbenchAttachment[]): AgentEventDraft {
+  const draft: AgentEventDraft = {
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text }] },
+    talyn_user_message: true,
+  };
+  if (attachments?.length) {
+    draft.talyn_attachments = attachments.map((a) => ({ name: a.name, mimeType: a.mimeType, path: a.path }));
+  }
+  return draft;
+}
+
+/**
+ * The text of a user message event, or null for any other event.
+ *
+ * Accepts the shape above, a bare string `content`, and a
+ * `talyn_user_message` event with a top-level `text` — whichever the runtime
+ * that stored it chose. A user event that carries only `tool_result` blocks is
+ * the agent's own tool output, not a message.
+ */
+export function userMessageText(event: AgentEvent): string | null {
+  if (event.type === 'talyn_user_message' && typeof event.text === 'string') return event.text;
+  if (event.type !== 'user') return null;
+  const content = event.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const texts: string[] = [];
+  for (const block of content) {
+    const b = block as { type?: unknown; text?: unknown };
+    if (b?.type === 'tool_result') return null;
+    if (b?.type === 'text' && typeof b.text === 'string') texts.push(b.text);
+  }
+  return texts.length ? texts.join('\n') : null;
+}
+
+export interface TranscriptTurn {
+  turn: number;
+  /** The user's message for this turn, when one was recorded. */
+  userText: string | null;
+  userSeq: number | null;
+  /** The agent's events for the turn, user message excluded. */
+  events: AgentEvent[];
+}
+
+/** Split a chat's events into turns, each led by the user's message. */
+export function splitTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = [];
+  let current: TranscriptTurn | null = null;
+  for (const e of events) {
+    const text = userMessageText(e.event);
+    if (!current || current.turn !== e.turn || (text !== null && current.userText !== null)) {
+      current = { turn: e.turn, userText: null, userSeq: null, events: [] };
+      turns.push(current);
+    }
+    if (text !== null && current.userText === null && current.events.length === 0) {
+      current.userText = text;
+      current.userSeq = e.seq;
+    } else {
+      current.events.push(e.event);
+    }
+  }
+  return turns;
+}
+
+// ============================================================================
+// Derived chat state: to-dos and context usage
+// ============================================================================
+
+export interface ChatInsights {
+  todos: WorkbenchTodo[] | null;
+  contextUsage: WorkbenchContextUsage | null;
+}
+
+/**
+ * The agent's latest to-do list and how full its context is.
+ *
+ * Stored events are already in Claude's stream-json shape — Codex output is
+ * converted on the way in — so Claude's parser reads both agents' history.
+ * Only the events that decide the answer go through it: the last `TodoWrite`,
+ * the last top-level assistant message (its usage is the prompt size), the
+ * last result (the context window) and the last init (the model). A long chat
+ * re-derives this on every new event, so it must not re-parse everything.
+ */
+export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
+  let todo = -1;
+  let assistant = -1;
+  let result = -1;
+  let init = -1;
+  for (let i = events.length - 1; i >= 0 && (todo < 0 || assistant < 0 || result < 0 || init < 0); i--) {
+    const ev = events[i].event;
+    if (ev.type === 'assistant') {
+      if (assistant < 0 && !ev.parent_tool_use_id && ev.message?.usage) assistant = i;
+      if (todo < 0 && Array.isArray(ev.message?.content)) {
+        const hasTodo = (ev.message?.content as Array<{ type?: unknown; name?: unknown }>).some(
+          (b) => b?.type === 'tool_use' && b.name === 'TodoWrite'
+        );
+        if (hasTodo) todo = i;
+      }
+    } else if (ev.type === 'result' && result < 0) result = i;
+    else if (ev.type === 'system' && ev.subtype === 'init' && init < 0) init = i;
+  }
+  const parser = createClaudeStreamParser();
+  const picked = [...new Set([init, todo, result, assistant].filter((i) => i >= 0))].sort((a, b) => a - b);
+  for (const i of picked) parser.push(JSON.stringify(events[i].event));
+  return { todos: parser.todos, contextUsage: parser.contextUsage };
+}
+
+// ============================================================================
+// The next action
+// ============================================================================
+
+/** The fields of a PR the next action reads. */
+export interface WorkbenchPrLike {
+  state: PRState;
+  summary: Pick<PRSummaryShape, 'mergeable' | 'ciStatus' | 'url'> & Partial<PRSummaryShape>;
+}
+
+/**
+ * Map Talyn's PR summary onto the shared next-action input.
+ *
+ * `failing_optional` reads as green: a check GitHub does not require does not
+ * block the merge. `needs_human` reads as pending: only a person can clear it,
+ * and that is not an agent's job or a merge button's.
+ */
+export function nextActionInput(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextActionInput {
+  const hasChanges = (workbench.diffStat?.files ?? 0) > 0;
+  if (!pr) return { hasChanges, pr: null };
+  const mergeable =
+    pr.summary.mergeable === 'CONFLICTING' ? 'conflicting' : pr.summary.mergeable === 'MERGEABLE' ? 'mergeable' : 'unknown';
+  const ci = pr.summary.ciStatus;
+  const ciStatus: NonNullable<WorkbenchNextActionInput['pr']>['ciStatus'] =
+    ci === undefined
+      ? undefined
+      : ci === 'passing' || ci === 'failing_optional'
+        ? 'success'
+        : ci === 'failing_required'
+          ? 'failure'
+          : ci === 'none'
+            ? 'none'
+            : 'pending';
+  return { hasChanges, pr: { state: pr.state, mergeable, ciStatus } };
+}
+
+export function workbenchNextAction(workbench: Pick<Workbench, 'diffStat'>, pr: WorkbenchPrLike | null): WorkbenchNextAction {
+  return nextWorkbenchAction(nextActionInput(workbench, pr));
+}
+
+export const NEXT_ACTION_LABEL: Record<Exclude<WorkbenchNextAction, null>, string> = {
+  create_pr: 'Create PR',
+  resolve_conflicts: 'Resolve conflicts',
+  fix_checks: 'Fix checks',
+  merge: 'Merge',
+  archive: 'Archive',
+};
+
+export function prRowAsLike(row: PRRow): WorkbenchPrLike {
+  return { state: row.state, summary: row.summary };
+}
+
+// ============================================================================
+// Diff comments
+// ============================================================================
+
+export interface DiffComment {
+  id: string;
+  path: string;
+  side: 'additions' | 'deletions';
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
+function lineLabel(c: DiffComment): string {
+  const range = c.startLine === c.endLine ? `line ${c.startLine}` : `lines ${c.startLine}-${c.endLine}`;
+  return c.side === 'deletions' ? `${range} (removed side)` : range;
+}
+
+/**
+ * The one message a tray of diff comments becomes. Grouped by file, in the
+ * order the files were first commented on, each comment with its line range.
+ */
+export function formatCommentsMessage(comments: DiffComment[]): string {
+  if (comments.length === 0) return '';
+  const byPath = new Map<string, DiffComment[]>();
+  for (const c of comments) {
+    const list = byPath.get(c.path);
+    if (list) list.push(c);
+    else byPath.set(c.path, [c]);
+  }
+  const lines = [
+    comments.length === 1
+      ? 'I left a comment on the diff. Address it:'
+      : `I left ${comments.length} comments on the diff. Address each one:`,
+  ];
+  for (const [path, list] of byPath) {
+    lines.push('', `\`${path}\``);
+    for (const c of [...list].sort((a, b) => a.startLine - b.startLine)) {
+      const text = c.text.trim().replace(/\n+/g, '\n  ');
+      lines.push(`- ${lineLabel(c)}: ${text}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// ============================================================================
+// Files
+// ============================================================================
+
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  children: FileTreeNode[] | null;
+}
+
+/** A sorted tree from flat paths: folders first, then files, each alphabetical. */
+export function buildFileTree(paths: string[]): FileTreeNode[] {
+  const root: FileTreeNode = { name: '', path: '', children: [] };
+  for (const full of paths) {
+    const parts = full.split('/').filter(Boolean);
+    let node = root;
+    parts.forEach((part, i) => {
+      const isFile = i === parts.length - 1;
+      const path = parts.slice(0, i + 1).join('/');
+      const children = node.children ?? (node.children = []);
+      let child = children.find((c) => c.name === part && (c.children === null) === isFile);
+      if (!child) {
+        child = { name: part, path, children: isFile ? null : [] };
+        children.push(child);
+      }
+      node = child;
+    });
+  }
+  const sort = (nodes: FileTreeNode[]) => {
+    nodes.sort((a, b) => {
+      const af = a.children === null ? 1 : 0;
+      const bf = b.children === null ? 1 : 0;
+      return af - bf || a.name.localeCompare(b.name);
+    });
+    for (const n of nodes) if (n.children) sort(n.children);
+  };
+  sort(root.children ?? []);
+  return root.children ?? [];
+}
+
+/**
+ * Fuzzy file match for the `@` popover: every query character in order,
+ * scored so a hit in the file name beats a hit in the directory and a
+ * contiguous run beats a scattered one.
+ */
+export function fuzzyMatchPaths(query: string, paths: string[], limit = 20): string[] {
+  const q = query.toLowerCase();
+  if (!q) return paths.slice(0, limit);
+  const scored: Array<{ path: string; score: number }> = [];
+  for (const path of paths) {
+    const lower = path.toLowerCase();
+    const nameStart = lower.lastIndexOf('/') + 1;
+    let score = 0;
+    let pos = -1;
+    let ok = true;
+    for (const ch of q) {
+      const next = lower.indexOf(ch, pos + 1);
+      if (next === -1) {
+        ok = false;
+        break;
+      }
+      score += next === pos + 1 ? 3 : 1;
+      if (next >= nameStart) score += 2;
+      pos = next;
+    }
+    if (!ok) continue;
+    if (lower.slice(nameStart).startsWith(q)) score += 10;
+    scored.push({ path, score: score - path.length / 100 });
+  }
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((s) => s.path);
+}
+
+/** Slash commands from `.claude/commands/*.md` paths: `name` for `.claude/commands/name.md`. */
+export function slashCommandsFrom(paths: string[]): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    const match = /^\.claude\/commands\/(.+)\.md$/.exec(p);
+    if (match) out.push(match[1].replace(/\//g, ':'));
+  }
+  return out.sort();
+}
+
+export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}

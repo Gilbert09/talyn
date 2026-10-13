@@ -76,6 +76,8 @@
     "@supabase/supabase-js": "^2.103.3",
     "@talyn/client": "*",
     "@talyn/shared": "*",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "electron-debug": "^4.1.0",
     "electron-log": "^5.3.2",
     "electron-updater": "^6.3.9",

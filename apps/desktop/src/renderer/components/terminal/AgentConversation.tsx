@@ -111,6 +111,30 @@ export function AgentConversation({
   );
 }
 
+/**
+ * The block list on its own, with no scroll container or empty state — for a
+ * caller that lays several transcripts out in one scrolling view (a workbench
+ * chat draws one per turn, under the user's message).
+ */
+export function AgentBlocks({
+  events,
+  envName,
+  scopeId,
+}: {
+  events: AgentEvent[];
+  envName?: string;
+  scopeId?: string;
+}) {
+  const blocks = useMemo(() => groupToolRuns(mergeToolBlocks(buildBlocks(events))), [events]);
+  return (
+    <>
+      {blocks.map((block) => (
+        <BlockView key={`${scopeId ?? ''}:${block.key}`} block={block} envName={envName} scopeId={scopeId} />
+      ))}
+    </>
+  );
+}
+
 // buildBlocks, blockSignature and the Block model live in @talyn/shared:
 // apps/web, apps/desktop and apps/admin all render the same event stream,
 // and this file used to be a byte-identical copy of its desktop twin.
