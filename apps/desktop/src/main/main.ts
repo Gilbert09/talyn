@@ -18,6 +18,7 @@ import {
   safeStorage,
 } from 'electron';
 import MenuBuilder from './menu';
+import { registerWorkbenchIpc } from './workbench/ipc';
 import { resolveHtmlPath } from './util';
 import { AuthStorage, type EncryptionBackend } from './authStorage';
 import { initAutoUpdater } from './updater';
@@ -410,6 +411,7 @@ app.on('window-all-closed', () => {
 app
   .whenReady()
   .then(() => {
+    registerWorkbenchIpc(() => mainWindow);
     createWindow();
     // Registers updater IPC handlers + background checks once for the app.
     // Reads the live window lazily so events reach whatever window exists.

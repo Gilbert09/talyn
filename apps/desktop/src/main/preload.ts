@@ -1,6 +1,7 @@
 // Disable no-unused-vars, broken for spread args
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { WorkbenchLocalBridge } from '@talyn/shared';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
 import type { ReviewRankingExportResult } from './reviewRankingExport';
@@ -26,7 +27,40 @@ export interface LocalSkillFile {
   content: string | null;
 }
 
+function subscribe<T>(channel: string, callback: (frame: T) => void): () => void {
+  const handler = (_event: IpcRendererEvent, frame: T) => callback(frame);
+  ipcRenderer.on(channel, handler);
+  return () => { ipcRenderer.removeListener(channel, handler); };
+}
+
+const workbench: WorkbenchLocalBridge = {
+  createWorktree: (input) => ipcRenderer.invoke('workbench:create-worktree', input),
+  removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
+  startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
+  cancelTurn: (chatId) => ipcRenderer.invoke('workbench:cancel-turn', chatId),
+  exec: (path, steps) => ipcRenderer.invoke('workbench:exec', path, steps),
+  readFile: (path, relativePath) => ipcRenderer.invoke('workbench:read-file', path, relativePath),
+  listFiles: (path) => ipcRenderer.invoke('workbench:list-files', path),
+  terminal: {
+    open: (input) => ipcRenderer.invoke('workbench:terminal:open', input),
+    write: (id, data) => { void ipcRenderer.invoke('workbench:terminal:write', id, data).catch(console.error); },
+    resize: (id, cols, rows) => { void ipcRenderer.invoke('workbench:terminal:resize', id, cols, rows).catch(console.error); },
+    close: (id) => { void ipcRenderer.invoke('workbench:terminal:close', id).catch(console.error); },
+    onData: (callback) => subscribe('workbench:terminal-data', callback),
+  },
+  scripts: {
+    run: (input) => ipcRenderer.invoke('workbench:scripts:run', input),
+    stop: (input) => ipcRenderer.invoke('workbench:scripts:stop', input),
+    onFrame: (callback) => subscribe('workbench:script-frame', callback),
+  },
+  onTurnEvent: (callback) => subscribe('workbench:turn-event', callback),
+  onTurnEnd: (callback) => subscribe('workbench:turn-end', callback),
+  detectAgents: () => ipcRenderer.invoke('workbench:detect-agents'),
+  pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
+};
+
 const electronHandler = {
+  workbench,
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,
   reviewRanking: {

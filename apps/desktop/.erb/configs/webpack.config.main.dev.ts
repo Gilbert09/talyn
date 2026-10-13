@@ -23,6 +23,10 @@ const configuration: webpack.Configuration = {
 
   target: 'electron-main',
 
+  resolve: { conditionNames: ['require', 'node', 'default'] },
+
+  externals: { 'node-pty': `commonjs ${path.join(webpackPaths.appNodeModulesPath, 'node-pty')}` },
+
   entry: {
     main: path.join(webpackPaths.srcMainPath, 'main.ts'),
     preload: path.join(webpackPaths.srcMainPath, 'preload.ts'),
@@ -60,4 +64,4 @@ const configuration: webpack.Configuration = {
   },
 };
 
-export default merge(baseConfig, configuration);
+export default merge({ ...baseConfig, externals: (baseConfig.externals as string[]).filter((name) => name !== 'node-pty') }, configuration);
