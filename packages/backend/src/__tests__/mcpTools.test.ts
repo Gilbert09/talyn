@@ -273,6 +273,7 @@ const features: Features = {
   reviewRankingCandidate: false,
   reviewRankingExport: false,
   teams: false,
+  workbenches: false,
   reviewPriorityMode: true,
 };
 const workflow = {

@@ -102,6 +102,14 @@ export * from './transcript.js';
 // browser that reads the proxied stream.
 export * from './sse.js';
 
+// Workbenches — a branch, an agent chat, a diff and a terminal, in a sandbox or
+// a local worktree. Vocabulary, git argv + parsers, the agent CLI stream
+// parsers and repository config; pure, so both runtimes share them.
+export * from './workbench.js';
+export * from './workbenchGit.js';
+export * from './agentStream.js';
+export * from './workbenchConfig.js';
+
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
 import type { PRFilterDefinition } from './prFilters.js';
@@ -1075,6 +1083,13 @@ export type WSEventType =
   // the Loops page's history and its derived stats are live rather than
   // poll-shaped — the same reason 'workflow:run' exists.
   | 'loop:run'
+  // Workbenches: the row, its deletion, a chat row, a batch of transcript
+  // events, and script output. Payload shapes are `WorkbenchWsPayloads`.
+  | 'workbench:updated'
+  | 'workbench:deleted'
+  | 'workbench:chat'
+  | 'workbench:event'
+  | 'workbench:script'
   // GitHub's own health changed (state, or the set of incidents on its status
   // page). Broadcast to all clients; payload is the whole GithubHealth. It
   // holds no tenant data.

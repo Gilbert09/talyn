@@ -162,6 +162,29 @@ export const FEATURE_FLAGS = {
   },
 
   /**
+   * Workbenches — a branch, an agent chat, a diff and a terminal, in a Talyn
+   * Fleet sandbox or a local worktree (Conductor-style).
+   *
+   * Fallback OFF, on the `loops` side of the line: a workbench keeps a fleet
+   * microVM alive across turns and spends the workspace's own agent
+   * subscription, so "PostHog is unreachable" must not open long-lived
+   * hardware to every account. Unlike `codeReview` it keeps an env override,
+   * because the feature is still an exploration and has to run locally with no
+   * PostHog project (`WORKBENCHES_ENABLED=true`).
+   *
+   * `availability: 'gated'` until it ships, which withholds every
+   * `workbenches` highlight from everybody.
+   */
+  workbenches: {
+    posthogKey: 'workbenches',
+    envOverride: 'WORKBENCHES_ENABLED',
+    fallback: false,
+    description: 'Workbenches — a branch with an agent chat, diff and terminal, in a sandbox or a local worktree',
+    availability: 'gated',
+    releaseScopes: ['workbenches'],
+  },
+
+  /**
    * Code review — AI findings on a pull request, shown in the app.
    *
    * Fallback OFF, on the `loops` side of the line rather than the `workflows`
@@ -447,6 +470,7 @@ export const ACCOUNT_FEATURE_FLAGS = [
   'reviewRankingCandidate',
   'reviewRankingExport',
   'teams',
+  'workbenches',
 ] as const satisfies readonly FeatureFlagKey[];
 
 export type AccountFeatureFlagKey = (typeof ACCOUNT_FEATURE_FLAGS)[number];
