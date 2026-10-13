@@ -2607,6 +2607,11 @@ export const workbenches = {
     request<WorkbenchChat>('POST', `/workbenches/${enc(workbenchId)}/chats`, input),
   updateChat: (chatId: string, patch: UpdateWorkbenchChatInput) =>
     request<WorkbenchChat>('PATCH', `/workbenches/chats/${enc(chatId)}`, patch),
+  /** Close a chat tab. A running turn is stopped first; the transcript is kept. */
+  closeChat: (chatId: string) => request<void>('DELETE', `/workbenches/chats/${enc(chatId)}`),
+  /** Drop one queued message (by its `id`) before it runs. Returns the chat with the shorter queue. */
+  removeQueuedMessage: (chatId: string, messageId: string) =>
+    request<WorkbenchChat>('DELETE', `/workbenches/chats/${enc(chatId)}/queue/${enc(messageId)}`),
   /**
    * Send a message. `queued: true` means a turn was already running: a sandbox
    * exec has no stdin, so the message waits and runs when that turn ends.
@@ -2640,6 +2645,12 @@ export const workbenches = {
   file: (id: string, path: string) =>
     request<{ content: string; binary: boolean }>('GET', `/workbenches/${enc(id)}/file?path=${enc(path)}`),
   files: (id: string) => request<{ paths: string[] }>('GET', `/workbenches/${enc(id)}/files`),
+  /**
+   * The preview proxy for a port a script listens on in the sandbox. Bearer
+   * auth like every route, so it is for fetches, not for an iframe `src`.
+   */
+  portUrl: (id: string, port: number, path = '') =>
+    `${getConfig().baseUrl}/api/v1/workbenches/${enc(id)}/ports/${port}/${path.replace(/^\/+/, '')}`,
 
   // ---- Checkpoints ----
   checkpoints: (chatId: string) =>

@@ -109,9 +109,36 @@ export interface Workbench {
   settings: WorkbenchSettings;
   /** Null until a diff has been computed once. */
   diffStat: WorkbenchDiffStat | null;
+  /**
+   * Why `status` is what it is, in words a person can act on — set on `error`
+   * (what failed while provisioning) and cleared when there is nothing to say.
+   */
+  statusMessage?: string | null;
+  /**
+   * The linked pull request, as {@link nextWorkbenchAction} reads it. Present on
+   * the single-workbench GET once a PR from this branch exists; null otherwise.
+   */
+  pr?: WorkbenchPullRequestSummary | null;
+  /**
+   * What went wrong, when provisioning or the sandbox failed; null otherwise.
+   * The same words as `statusMessage` on an `error` status, kept separate so
+   * an informational message ("Running the setup script") never reads as one.
+   */
+  error?: string | null;
+  /** The open chats, oldest first. Embedded in the list and single GET responses. */
+  chats?: WorkbenchChat[];
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** The linked PR, narrowed to what the header's next-action button needs. */
+export interface WorkbenchPullRequestSummary {
+  number: number;
+  url: string;
+  state: 'open' | 'merged' | 'closed';
+  mergeable: 'conflicting' | 'mergeable' | 'unknown';
+  ciStatus: 'success' | 'failure' | 'pending' | 'none';
 }
 
 /** A file attached to a message. Exactly one of `dataBase64` / `path` is set. */
