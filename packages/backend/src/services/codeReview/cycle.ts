@@ -23,6 +23,8 @@ import {
 } from './store.js';
 import { lensesForPreset } from './lenses.js';
 import { workspaceOwner, workspacePreset, workspaceReviewSettings } from './workspaceSettings.js';
+import { reviewerShape } from './analytics.js';
+import { captureWorkspaceEvent } from '../analytics.js';
 
 /**
  * Starting and stopping a review cycle.
@@ -48,6 +50,8 @@ export interface StartReviewInput {
   reset?: boolean;
   /** Set when the clock started this rather than a person. */
   auto?: boolean;
+  /** What asked for the cycle, for analytics. Absent means `auto` decides. */
+  trigger?: 'api' | 'auto' | 'workflow';
   userId?: string | null;
 }
 
@@ -193,6 +197,20 @@ export async function startReviewCycle(input: StartReviewInput): Promise<StartOu
   // look like the review HAD been looked at.
   if (outcome.ok && outcome.started) {
     scheduleReviewEvaluation(outcome.review.id, input.auto ? 'auto' : 'user:start');
+  }
+
+  // The ONE emit for a start, here and not on the route. Only the route sent it,
+  // so a cycle that an automatic review or a workflow started had no first step
+  // in the review-to-fix funnel, and a fix asked for on its findings counted
+  // nowhere.
+  if (outcome.ok) {
+    captureWorkspaceEvent(pr.workspaceId, 'code_review_started', {
+      preset: outcome.review.preset,
+      ...reviewerShape(outcome.review),
+      trigger: input.trigger ?? (input.auto ? 'auto' : 'api'),
+      is_rereview: outcome.review.cycle > 1,
+      started: outcome.started,
+    });
   }
   return outcome;
 }

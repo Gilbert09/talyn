@@ -235,6 +235,7 @@ async function runCodeReview(
       // No person pressed anything, which is what decides how the refusal reads
       // and how the cycle is recorded.
       auto: true,
+      trigger: 'workflow',
     });
   } catch (err) {
     // The plan gate THROWS rather than returning a refusal code, because on the
