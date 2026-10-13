@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -66,6 +66,12 @@ export function OnboardingWizard() {
   const STEPS = stepsFor(features);
   const [step, setStep] = useState(0);
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
+
+  // Persist "started, not finished" so a reload resumes the wizard rather than
+  // reading the GitHub connection as a finished setup (useInitialDataLoad).
+  useEffect(() => {
+    setOnboardingComplete(false);
+  }, [setOnboardingComplete]);
 
   // Captured on click rather than on Finish: an answer given by somebody who
   // then closes the window is still the answer, and this is the only

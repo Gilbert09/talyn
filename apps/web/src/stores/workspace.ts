@@ -112,13 +112,28 @@ const ONBOARDING_KEY = 'fastowl-onboarding-complete';
 // survives restarts. Defaults to false → the wizard shows on a true first
 // run; `useInitialDataLoad` flips it to true for returning users who already
 // have at least one workspace, so they never see the wizard.
-function getInitialOnboardingComplete(): boolean {
-  if (typeof window === 'undefined') return false;
+function readOnboardingFlag(): string | null {
+  if (typeof window === 'undefined') return null;
   try {
-    return localStorage.getItem(ONBOARDING_KEY) === 'true';
+    return localStorage.getItem(ONBOARDING_KEY);
   } catch {
-    return false;
+    return null;
   }
+}
+
+function getInitialOnboardingComplete(): boolean {
+  return readOnboardingFlag() === 'true';
+}
+
+/**
+ * True when this device has shown the wizard and it was not finished. The
+ * wizard persists `'false'` when it mounts, so the key tells apart two users
+ * the server cannot: somebody who connected GitHub mid-wizard and then
+ * reloaded or relaunched (`'false'`), and a returning user on a new machine
+ * (no key at all). Only the second may skip the wizard.
+ */
+export function onboardingStartedOnThisDevice(): boolean {
+  return readOnboardingFlag() === 'false';
 }
 
 const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';

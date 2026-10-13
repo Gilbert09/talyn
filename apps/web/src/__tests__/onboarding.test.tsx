@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 /**
  * The onboarding wizard renders in the browser build.
@@ -30,6 +30,7 @@ vi.mock('../lib/api', () => ({
     },
     repositories: { list: vi.fn().mockResolvedValue([]) },
     workspaces: { list: vi.fn().mockResolvedValue([]), create: vi.fn() },
+    environments: { list: vi.fn().mockResolvedValue([]) },
     // Step 2 loads the agent credentials itself — `useSystemStatus` does not
     // run until onboarding is over, which is exactly the bug that made the
     // Talyn Fleet card invisible on this screen.
@@ -249,5 +250,40 @@ describe('the returning-user signal', () => {
 
   it('is false with no workspaces at all', () => {
     expect(isOnboarded([])).toBe(false);
+  });
+});
+
+// A fresh load after connecting GitHub used to skip the wizard silently.
+describe('a reload mid-wizard resumes it', () => {
+  const connected = [{ id: 'ws1', integrations: { github: { enabled: true } } }];
+
+  async function loadWith(persisted: string | null) {
+    const { api } = await import('../lib/api');
+    const { useWorkspaceStore } = await import('../stores/workspace');
+    const { useInitialDataLoad } = await import('../hooks/useApi');
+    if (persisted === null) localStorage.removeItem('fastowl-onboarding-complete');
+    else localStorage.setItem('fastowl-onboarding-complete', persisted);
+    useWorkspaceStore.setState({ onboardingComplete: false });
+    vi.mocked(api.workspaces.list).mockResolvedValueOnce(connected as never);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = renderHook(() => useInitialDataLoad());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    return useWorkspaceStore.getState().onboardingComplete;
+  }
+
+  it('records on this device that the wizard started', async () => {
+    const { onboardingStartedOnThisDevice } = await import('../stores/workspace');
+    localStorage.removeItem('fastowl-onboarding-complete');
+    expect(onboardingStartedOnThisDevice()).toBe(false);
+    render(<OnboardingWizard />);
+    expect(onboardingStartedOnThisDevice()).toBe(true);
+  });
+
+  it('keeps the wizard when this device started it and GitHub is now connected', async () => {
+    expect(await loadWith('false')).toBe(false);
+  });
+
+  it('still skips the wizard for a returning user on a new device', async () => {
+    expect(await loadWith(null)).toBe(true);
   });
 });
