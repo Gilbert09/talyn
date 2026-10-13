@@ -442,10 +442,12 @@ export function buildSweepPrompt(
  *
  * It re-reads the code rather than judging from the finding's text: half of what
  * it drops is dropped because the premise turns out to be wrong.
+ * On 2026-10-12, a Deep review dropped all 15 findings. Nine came from the Tests
+ * and Operability reviewers, but the only keep rule covered defects.
  */
 export function buildJudgePrompt(
   ctx: ReviewPromptContext,
-  candidates: { id: string; severity: string; filePath: string; lines: string; title: string; body: string }[]
+  candidates: { id: string; severity: string; filePath: string; lines: string; title: string; body: string; raisedBy: string[] }[]
 ): string {
   return [
     preamble(ctx),
@@ -467,6 +469,29 @@ export function buildJudgePrompt(
     'a broken contract with a caller, a performance problem that bites at real',
     'scale, or a failure mode with no handling. A good keep can name the trigger and',
     'the consequence.',
+    '',
+    '## Keep a coverage gap when',
+    '',
+    'The finding names behaviour this diff adds or changes. Read the tests in the',
+    'pull request and repository. Keep it only when no test would fail if that',
+    'behaviour broke. The behaviour must matter: a result a caller uses, a',
+    'permission check, data written or deleted, a caller contract, or an error',
+    'path with handling. Drop it if a test covers it, and name that test in the',
+    'reason. Drop trivial code and gaps about the repository at large.',
+    '',
+    '## Keep an operability problem when',
+    '',
+    'If this code fails in production, people cannot detect, diagnose, or undo',
+    'the failure. Keep a failure on an important path that is swallowed',
+    'or not logged. Keep a migration with no way back, a change with a wide',
+    'effect and no off switch, or an error message with no useful action.',
+    'Drop it when a log, metric, rollback path, or switch already exists.',
+    'Name that safeguard in the reason.',
+    '',
+    'These two rules apply to any candidate of that kind, whichever reviewer raised it.',
+    'A kept coverage gap or operability problem is at most minor.',
+    'Keep a higher severity only if its body names a specific defect hidden by the gap.',
+    'Precision over recall still applies. If you are unsure, drop it.',
     '',
     '## Drop it when',
     '',
@@ -493,6 +518,7 @@ export function buildJudgePrompt(
     ...candidates.map((c) =>
       [
         `### ${c.id}`,
+        ...(c.raisedBy.length ? [`Raised by: ${c.raisedBy.join(', ')}`] : []),
         `[${c.severity}] ${c.filePath}:${c.lines}`,
         c.title,
         '',

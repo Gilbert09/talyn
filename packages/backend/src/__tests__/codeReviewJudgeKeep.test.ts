@@ -101,10 +101,34 @@ describe('the judge contract', () => {
         chunkIndex: 1,
         chunkTotal: 1,
       },
-      [{ id: 'abc123', severity: 'major', filePath: 'src/a.ts', lines: '10', title: 'T', body: 'B' }]
+      [{ id: 'abc123', severity: 'major', filePath: 'src/a.ts', lines: '10', title: 'T', body: 'B', raisedBy: [] }]
     );
     expect(prompt).toContain('### abc123');
     expect(prompt).toContain('MUST carry one more field: `"id"`');
+  });
+
+  it.each([
+    [['Tests', 'Reliability'], 'Raised by: Tests, Reliability'],
+    [[], null],
+  ])('shows reviewer names for %j', (raisedBy, reviewerLine) => {
+    const prompt = buildJudgePrompt(
+      {
+        ref: 'acme/app#7',
+        title: 't',
+        body: '',
+        headBranch: 'h',
+        baseBranch: 'main',
+        files: [],
+        chunkIndex: 1,
+        chunkTotal: 1,
+      },
+      [{ id: 'abc123', severity: 'minor', filePath: 'src/a.ts', lines: '10', title: 'T', body: 'B', raisedBy }]
+    );
+
+    if (reviewerLine) expect(prompt).toContain(`### abc123\n${reviewerLine}`);
+    else expect(prompt).not.toContain('Raised by:');
+    expect(prompt).toContain('## Keep a coverage gap when');
+    expect(prompt).toContain('## Keep an operability problem when');
   });
 
   it.each([

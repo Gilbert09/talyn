@@ -722,6 +722,7 @@ async function buildUnitPrompt(
           lines: c.lineStart ? `${c.lineStart}${c.lineEnd ? `-${c.lineEnd}` : ''}` : '?',
           title: c.title,
           body: c.body,
+          raisedBy: (c.lenses ?? []).map((key) => lensLabelFor(review, key)),
         }))
       ),
     };
