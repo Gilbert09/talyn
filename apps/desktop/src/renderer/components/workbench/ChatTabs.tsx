@@ -5,7 +5,7 @@ import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
-import { StatusDot } from './WorkbenchSidebar';
+import { StatusDot } from './WorkbenchBadges';
 
 /** Make a new chat tab and open it. Shared with the composer's first send. */
 export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat | null> {

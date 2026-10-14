@@ -5,6 +5,7 @@ import type { WorkbenchLocalBridge } from '@talyn/shared';
 import type { UpdaterEvent, UpdaterCheckResult, UpdateChannel } from './updaterEvents';
 import type { CodexSignInResult } from './codexAuth';
 import type { ReviewRankingExportResult } from './reviewRankingExport';
+import { MENU_COMMAND_CHANNEL } from './menuCommands';
 
 /** A SKILL.md found under ~/.claude/skills/<dirName>/. */
 export interface LocalMcpFinding {
@@ -69,6 +70,14 @@ const electronHandler = {
   workbench,
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,
+  /**
+   * Commands from the application menu (main/menuCommands.ts). The menu owns
+   * those chords, so the renderer runs the shortcut with this id instead of
+   * reading the key itself. Returns an unsubscribe fn.
+   */
+  onMenuCommand(cb: (id: string) => void): () => void {
+    return subscribe<string>(MENU_COMMAND_CHANNEL, cb);
+  },
   reviewRanking: {
     export(data: string): Promise<ReviewRankingExportResult> {
       return ipcRenderer.invoke('review-ranking:export', data);

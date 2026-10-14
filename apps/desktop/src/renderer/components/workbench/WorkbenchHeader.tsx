@@ -23,7 +23,7 @@ import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
 import { NEXT_ACTION_LABEL, prRowAsLike, workbenchNextAction } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
-import { PrPill } from './WorkbenchSidebar';
+import { PrPill } from './WorkbenchBadges';
 
 const ACTION_ICON: Record<Exclude<WorkbenchNextAction, null>, typeof GitPullRequest> = {
   create_pr: GitPullRequest,

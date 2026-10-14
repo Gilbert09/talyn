@@ -5,6 +5,12 @@ import {
   MenuItemConstructorOptions,
 } from 'electron';
 import { checkForUpdatesInteractively } from './updater';
+import {
+  MENU_COMMANDS,
+  MENU_COMMAND_CHANNEL,
+  toAccelerator,
+  type MenuSection,
+} from './menuCommands';
 
 const SITE_URL = 'https://talyn.dev';
 const SUPPORT_URL = 'https://github.com/Gilbert09/talyn/issues';
@@ -50,6 +56,27 @@ export default class MenuBuilder {
     });
   }
 
+  /**
+   * Menu items for the renderer's shortcut registry. The menu owns these
+   * chords (it sees them before the page does), and a click sends the id to
+   * the renderer, which runs the shortcut registered under it.
+   */
+  commandItems(section: MenuSection): MenuItemConstructorOptions[] {
+    const items: MenuItemConstructorOptions[] = [];
+    for (const cmd of MENU_COMMANDS) {
+      if (cmd.section !== section) continue;
+      if (cmd.separatorBefore && items.length > 0) items.push({ type: 'separator' });
+      items.push({
+        label: cmd.label,
+        accelerator: toAccelerator(cmd.keys),
+        click: () => {
+          this.mainWindow.webContents.send(MENU_COMMAND_CHANNEL, cmd.id);
+        },
+      });
+    }
+    return items;
+  }
+
   buildDarwinTemplate(): MenuItemConstructorOptions[] {
     // Explicit labels on the role items: bare roles interpolate `app.name`,
     // which is the package.json `name` ("fastowl" — kept for the userData
@@ -65,6 +92,8 @@ export default class MenuBuilder {
           },
         },
         { type: 'separator' },
+        ...this.commandItems('app'),
+        { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide', label: 'Hide Talyn' },
@@ -73,6 +102,10 @@ export default class MenuBuilder {
         { type: 'separator' },
         { role: 'quit', label: 'Quit Talyn' },
       ],
+    };
+    const subMenuFile: MenuItemConstructorOptions = {
+      label: 'File',
+      submenu: this.commandItems('file'),
     };
     const subMenuEdit: MenuItemConstructorOptions = {
       label: 'Edit',
@@ -89,9 +122,12 @@ export default class MenuBuilder {
     const subMenuViewDev: MenuItemConstructorOptions = {
       label: 'View',
       submenu: [
+        ...this.commandItems('view'),
+        { type: 'separator' },
         {
+          // ⌘R is left free for the workbench; reload moves to ⌘⇧R.
           label: 'Reload',
-          accelerator: 'Command+R',
+          accelerator: 'Command+Shift+R',
           click: () => {
             this.mainWindow.webContents.reload();
           },
@@ -115,6 +151,8 @@ export default class MenuBuilder {
     const subMenuViewProd: MenuItemConstructorOptions = {
       label: 'View',
       submenu: [
+        ...this.commandItems('view'),
+        { type: 'separator' },
         {
           label: 'Toggle Full Screen',
           accelerator: 'Ctrl+Command+F',
@@ -124,11 +162,16 @@ export default class MenuBuilder {
         },
       ],
     };
+    const subMenuWorkbench: MenuItemConstructorOptions = {
+      label: 'Workbench',
+      submenu: this.commandItems('workbench'),
+    };
     const subMenuWindow: MenuItemConstructorOptions = {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
-        { role: 'close' },
+        // ⌘W closes the chat tab (File menu); the window takes ⌘⇧W.
+        { role: 'close', accelerator: 'Command+Shift+W' },
         { type: 'separator' },
         { role: 'front' },
       ],
@@ -157,7 +200,15 @@ export default class MenuBuilder {
         ? subMenuViewDev
         : subMenuViewProd;
 
-    return [subMenuApp, subMenuEdit, subMenuView, subMenuWindow, subMenuHelp];
+    return [
+      subMenuApp,
+      subMenuFile,
+      subMenuEdit,
+      subMenuView,
+      subMenuWorkbench,
+      subMenuWindow,
+      subMenuHelp,
+    ];
   }
 
   buildDefaultTemplate(): MenuItemConstructorOptions[] {
@@ -165,9 +216,14 @@ export default class MenuBuilder {
       {
         label: '&File',
         submenu: [
+          ...this.commandItems('file'),
+          { type: 'separator' },
+          ...this.commandItems('app'),
+          { type: 'separator' },
           {
-            label: '&Close',
-            accelerator: 'Ctrl+W',
+            // Ctrl+W closes the chat tab; the window takes Ctrl+Shift+W.
+            label: '&Close Window',
+            accelerator: 'Ctrl+Shift+W',
             click: () => {
               this.mainWindow.close();
             },
@@ -180,9 +236,11 @@ export default class MenuBuilder {
           process.env.NODE_ENV === 'development' ||
           process.env.DEBUG_PROD === 'true'
             ? [
+                ...this.commandItems('view'),
+                { type: 'separator' },
                 {
                   label: '&Reload',
-                  accelerator: 'Ctrl+R',
+                  accelerator: 'Ctrl+Shift+R',
                   click: () => {
                     this.mainWindow.webContents.reload();
                   },
@@ -205,6 +263,8 @@ export default class MenuBuilder {
                 },
               ]
             : [
+                ...this.commandItems('view'),
+                { type: 'separator' },
                 {
                   label: 'Toggle &Full Screen',
                   accelerator: 'F11',
@@ -215,6 +275,10 @@ export default class MenuBuilder {
                   },
                 },
               ],
+      },
+      {
+        label: '&Workbench',
+        submenu: this.commandItems('workbench'),
       },
       {
         label: 'Help',

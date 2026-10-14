@@ -1,0 +1,170 @@
+import { useMemo, useSyncExternalStore } from 'react';
+import { Cloud, GitPullRequest, History, Home, Laptop, Settings, Workflow } from 'lucide-react';
+import { codeReviewOffered, workbenchesOffered } from '@talyn/shared';
+import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
+import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
+import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
+import { useWorkbenchStore } from '../stores/workbenches';
+import { AUTOMATION_TAB_LABEL, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from './ui/command';
+
+const SETTINGS_LABEL: Record<SettingsSection, string> = {
+  workspace: 'Workspace',
+  integrations: 'Integrations',
+  skills: 'Skills',
+  instructions: 'Instructions',
+  codeReview: 'Code review',
+  account: 'Account',
+  billing: 'Billing',
+  teams: 'Teams',
+  appearance: 'Appearance',
+  developer: 'Developer',
+  mcp: 'MCP',
+  about: 'About',
+};
+
+interface NavItem {
+  key: string;
+  label: string;
+  icon: typeof Home;
+  route: Route;
+}
+
+let shortcutsVersion = 0;
+function subscribeVersion(listener: () => void): () => void {
+  return subscribeShortcuts(() => {
+    shortcutsVersion += 1;
+    listener();
+  });
+}
+const readVersion = () => shortcutsVersion;
+
+/**
+ * ⌘K. Jump to any workbench, go anywhere in the app, or run any shortcut
+ * that applies now (listed with its keys). Closes on Escape or on a pick.
+ */
+export function CommandPalette() {
+  const open = useNavigationStore((s) => s.paletteOpen);
+  const setOpen = useNavigationStore((s) => s.setPaletteOpen);
+  if (!open) return null;
+  return <PaletteBody onClose={() => setOpen(false)} />;
+}
+
+function PaletteBody({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigationStore((s) => s.navigate);
+  const features = useWorkspaceStore((s) => s.features);
+  const openNewDialog = useWorkbenchStore((s) => s.openNewDialog);
+  const all = useWorkspaceWorkbenches();
+  // Re-render when the registry changes; `when` is read on each render, and the palette renders on open.
+  useSyncExternalStore(subscribeVersion, readVersion);
+
+  const workbenches = useMemo(() => groupByRepository(all.filter((w) => !isArchived(w))).flatMap((g) => g.items), [all]);
+
+  const navItems = useMemo<NavItem[]>(() => {
+    const items: NavItem[] = [{ key: 'home', label: 'Home', icon: Home, route: { view: 'home' } }];
+    if (workbenchesOffered(features)) {
+      items.push({ key: 'history', label: 'History', icon: History, route: { view: 'history' } });
+    }
+    for (const tab of PR_TABS) {
+      if (tab === 'code_reviews' && !codeReviewOffered(features)) continue;
+      items.push({
+        key: `prs:${tab}`,
+        label: `Pull requests: ${PR_TAB_LABEL[tab]}`,
+        icon: GitPullRequest,
+        route: { view: 'prs', tab },
+      });
+    }
+    for (const tab of offeredAutomationTabs(features)) {
+      items.push({
+        key: `automations:${tab}`,
+        label: `Automations: ${AUTOMATION_TAB_LABEL[tab]}`,
+        icon: Workflow,
+        route: { view: 'automations', tab },
+      });
+    }
+    for (const section of Object.keys(SETTINGS_LABEL) as SettingsSection[]) {
+      items.push({
+        key: `settings:${section}`,
+        label: `Settings: ${SETTINGS_LABEL[section]}`,
+        icon: Settings,
+        route: { view: 'settings', section },
+      });
+    }
+    return items;
+  }, [features]);
+
+  const actions: Shortcut[] = getShortcuts().filter((s) => !s.hidden && shortcutEnabled(s));
+
+  const pick = (fn: () => void) => {
+    onClose();
+    fn();
+  };
+
+  return (
+    <CommandDialog open onOpenChange={(next) => !next && onClose()}>
+      <CommandInput placeholder="Search workbenches, pages and actions…" autoFocus />
+      <CommandList>
+        <CommandEmpty>Nothing matches.</CommandEmpty>
+        {workbenches.length > 0 && (
+          <CommandGroup heading="Workbenches">
+            {workbenches.map((wb) => {
+              const Icon = wb.runtime === 'local' ? Laptop : Cloud;
+              return (
+                <CommandItem
+                  key={wb.id}
+                  value={`workbench ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
+                  onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))}
+                >
+                  <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="truncate">{wb.name}</span>
+                  <span className="truncate font-mono text-[11px] text-muted-foreground">{wb.repoFullName}</span>
+                </CommandItem>
+              );
+            })}
+          </CommandGroup>
+        )}
+        <CommandGroup heading="Navigate">
+          {workbenchesOffered(features) && (
+            <CommandItem
+              value="new workbench"
+              onSelect={() =>
+                pick(() => {
+                  navigate({ view: 'home' });
+                  openNewDialog();
+                })
+              }
+            >
+              <Home className="h-3.5 w-3.5 text-muted-foreground" />
+              New workbench
+            </CommandItem>
+          )}
+          {navItems.map((item) => (
+            <CommandItem key={item.key} value={`go ${item.label}`} onSelect={() => pick(() => navigate(item.route))}>
+              <item.icon className="h-3.5 w-3.5 text-muted-foreground" />
+              {item.label}
+            </CommandItem>
+          ))}
+        </CommandGroup>
+        {actions.length > 0 && (
+          <CommandGroup heading="Actions">
+            {actions.map((s) => (
+              <CommandItem key={s.id} value={`action ${s.label} ${s.group}`} onSelect={() => pick(s.run)}>
+                <span className="truncate">{s.label}</span>
+                <CommandShortcut>{formatKeys(s.keys)}</CommandShortcut>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
+      </CommandList>
+    </CommandDialog>
+  );
+}

@@ -19,6 +19,23 @@ export type ActivePanel =
   | 'mcp_servers'
   | 'workbenches'
   | 'settings';
+
+/**
+ * Where `setActivePanel` / `openSettings` send the app. `stores/navigation.ts`
+ * installs it when it loads: the route there is the source of truth, and
+ * `activePanel` is derived from it. Without a navigator (a component test that
+ * never loads the shell) the two setters just write the fields, as before.
+ */
+export interface PanelNavigator {
+  openPanel: (panel: ActivePanel) => void;
+  openSettings: (section: SettingsSection) => void;
+}
+
+let panelNavigator: PanelNavigator | null = null;
+
+export function setPanelNavigator(navigator: PanelNavigator | null): void {
+  panelNavigator = navigator;
+}
 import {
   ACTIVE_TASK_STATUSES as SHARED_ACTIVE_TASK_STATUSES,
   TERMINAL_TASK_STATUSES,
@@ -151,6 +168,17 @@ export function onboardingStartedOnThisDevice(): boolean {
   return readOnboardingFlag() === 'false';
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'talyn-sidebar-collapsed';
+
+function getInitialSidebarCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 const WORKSPACE_PREF_KEY = 'fastowl-current-workspace';
 
 // Last-selected workspace id, so a switch survives an app restart instead of
@@ -222,6 +250,7 @@ interface WorkspaceState {
 
   // UI State
   sidebarCollapsed: boolean;
+  /** Derived from the route in stores/navigation.ts. Read-only for callers: write through setActivePanel. */
   activePanel: ActivePanel;
   selectedTaskId: string | null;
   theme: Theme;
@@ -229,7 +258,7 @@ interface WorkspaceState {
   // switcher and the Settings empty state).
   createWorkspaceOpen: boolean;
   // First-run onboarding gate. When false, App renders the OnboardingWizard
-  // instead of MainLayout.
+  // instead of AppShell.
   onboardingComplete: boolean;
   // One-shot flag set when the user finishes the wizard (not on the returning-
   // user migration path). The freshly-watched repos haven't been polled yet, so
@@ -291,7 +320,7 @@ interface WorkspaceState {
   pendingCloudTask: PendingCloudTask | null;
   /**
    * WHERE the modal was opened from, for the connect funnel. The modal itself
-   * cannot know — it is mounted once in MainLayout and driven by this store —
+   * cannot know — it is mounted once in AppShell and driven by this store —
    * and "how many people who were asked went on to connect" is only an
    * answerable question if the asking is attributed to a surface.
    */
@@ -379,8 +408,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   tasksHistoryTotal: null,
   tasksLoadingMore: false,
   repositories: [],
-  sidebarCollapsed: false,
-  activePanel: 'my_prs',
+  sidebarCollapsed: getInitialSidebarCollapsed(),
+  activePanel: 'workbenches',
   selectedTaskId: null,
   theme: getInitialTheme(),
   createWorkspaceOpen: false,
@@ -457,11 +486,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setSettingsSection: (settingsSection) => set({ settingsSection }),
 
-  openSettings: (section) =>
+  openSettings: (section) => {
+    if (panelNavigator) {
+      panelNavigator.openSettings(section ?? useWorkspaceStore.getState().settingsSection);
+      return;
+    }
     set((state) => ({
       activePanel: 'settings',
       settingsSection: section ?? state.settingsSection,
-    })),
+    }));
+  },
 
   setEnvironments: (environments) => set({ environments }),
 
@@ -576,9 +610,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setRepositories: (repos) => set({ repositories: repos }),
 
   toggleSidebar: () =>
-    set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+    set((state) => {
+      const sidebarCollapsed = !state.sidebarCollapsed;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? 'true' : 'false');
+      } catch {
+        // ignore quota / privacy-mode issues
+      }
+      return { sidebarCollapsed };
+    }),
 
-  setActivePanel: (panel) => set({ activePanel: panel }),
+  // An adapter over stores/navigation.ts: the ~25 callers keep their panel
+  // vocabulary, and the route decides what is on screen.
+  setActivePanel: (panel) => {
+    if (panelNavigator) panelNavigator.openPanel(panel);
+    else set({ activePanel: panel });
+  },
 
   selectTask: (id) => set({ selectedTaskId: id }),
 

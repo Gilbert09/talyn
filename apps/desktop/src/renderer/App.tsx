@@ -1,12 +1,13 @@
 import { api } from './lib/api';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
-import { MainLayout } from './components/layout/MainLayout';
+import { AppShell } from './components/layout/AppShell';
 import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { AuthProvider, useAuth } from './components/auth/AuthProvider';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { useApiConnection, useInitialDataLoad } from './hooks/useApi';
 import { useWorkspaceStore } from './stores/workspace';
+import { analyticsPanel, useNavigationStore } from './stores/navigation';
 import { Toaster } from './components/ui/toaster';
 import { BlinkingOwl } from './components/widgets/BlinkingOwl';
 import {
@@ -23,7 +24,7 @@ import './App.css';
 
 /**
  * On macOS the window is frameless, so screens without their own chrome need
- * an invisible top strip to drag the window by. MainLayout doesn't use this —
+ * an invisible top strip to drag the window by. AppShell doesn't use this —
  * its sidebar reserves an in-flow drag region instead (an overlay here would
  * swallow clicks on panel-header controls near the top edge).
  */
@@ -188,7 +189,7 @@ function AuthedApp() {
   return (
     <>
       {onboardingComplete ? (
-        <MainLayout />
+        <AppShell />
       ) : (
         <>
           <MacDragOverlay />
@@ -229,7 +230,7 @@ function AppBody() {
  */
 function Analytics() {
   const { user } = useAuth();
-  const activePanel = useWorkspaceStore((s) => s.activePanel);
+  const panel = useNavigationStore((s) => analyticsPanel(s.route));
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const userId = user?.id;
   const email = user?.email;
@@ -298,15 +299,15 @@ function Analytics() {
     }
   }, [currentWorkspaceId]);
 
+  // `panel` keeps the old panel names for the PR and automation tabs, so
+  // their history stays comparable; the new views report their view name.
   useEffect(() => {
-    if (activePanel) {
-      trackEvent('panel_viewed', {
-        panel: activePanel,
-        previous_panel: previousPanelRef.current,
-      });
-      previousPanelRef.current = activePanel;
-    }
-  }, [activePanel]);
+    trackEvent('panel_viewed', {
+      panel,
+      previous_panel: previousPanelRef.current,
+    });
+    previousPanelRef.current = panel;
+  }, [panel]);
 
   return null;
 }

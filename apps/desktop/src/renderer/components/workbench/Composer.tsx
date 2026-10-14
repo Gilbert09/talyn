@@ -12,6 +12,7 @@ import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
 import { downscaleImage } from '../../lib/imageDownscale';
 import { fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
+import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -70,6 +71,13 @@ export function Composer({
   useEffect(() => {
     textareaRef.current?.focus();
   }, [draftKey]);
+
+  // ⌘L (lib/shortcuts.ts) asks the open composer for focus.
+  useEffect(() => {
+    const onFocusRequest = () => textareaRef.current?.focus();
+    window.addEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
+    return () => window.removeEventListener(FOCUS_COMPOSER_EVENT, onFocusRequest);
+  }, []);
 
   const loadPaths = () => {
     if (paths || pathsLoading || ops.unavailable) return;
