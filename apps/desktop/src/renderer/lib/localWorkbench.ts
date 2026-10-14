@@ -169,7 +169,7 @@ export class LocalTurnController {
 
   private async startTurn(workbench: Workbench, chat: WorkbenchChat, input: SendWorkbenchMessageInput): Promise<void> {
     const path = workbench.localPath;
-    if (!path) throw new Error('This workbench has no local path.');
+    if (!path) throw new Error('This session has no local path.');
     const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
     const turn = Math.max(lastTurn(events), this.running.get(chat.id)?.turn ?? 0) + 1;
     this.running.set(chat.id, { workbenchId: workbench.id, turn });
@@ -336,7 +336,7 @@ export interface CreateLocalWorkbenchInput {
  */
 export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Promise<Workbench> {
   const bridge = getWorkbenchBridge();
-  if (!bridge) throw new Error('Local workbenches need the Talyn desktop app.');
+  if (!bridge) throw new Error('Local sessions need the Talyn desktop app.');
   const name = input.prompt?.trim()
     ? workbenchNameFromTask(input.prompt, input.takenNames)
     : pickWorkbenchName(input.takenNames);

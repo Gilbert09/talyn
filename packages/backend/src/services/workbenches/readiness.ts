@@ -31,7 +31,7 @@ export async function workbenchReadiness(workspaceId: string, user: ReadinessUse
   const reasons: WorkbenchReadinessReason[] = [];
 
   if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
-    reasons.push({ code: 'flag_off', message: `Workbenches are not available: ${workbenchesRefusalReason()}.` });
+    reasons.push({ code: 'flag_off', message: `Sessions are not available: ${workbenchesRefusalReason()}.` });
   }
   if (!getCloudProvider('selfhosted')) {
     reasons.push({

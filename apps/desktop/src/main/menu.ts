@@ -163,7 +163,7 @@ export default class MenuBuilder {
       ],
     };
     const subMenuWorkbench: MenuItemConstructorOptions = {
-      label: 'Workbench',
+      label: 'Session',
       submenu: this.commandItems('workbench'),
     };
     const subMenuWindow: MenuItemConstructorOptions = {
@@ -277,7 +277,7 @@ export default class MenuBuilder {
               ],
       },
       {
-        label: '&Workbench',
+        label: '&Session',
         submenu: this.commandItems('workbench'),
       },
       {

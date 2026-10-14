@@ -191,16 +191,16 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
     if (!user) return close(4401, 'invalid token');
     try {
       if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
-        return close(4403, 'workbenches are not available for this account');
+        return close(4403, 'sessions are not available for this account');
       }
       const row = await getWorkbench(workbenchId);
       // Not found and not yours are one answer, as on every route.
-      if (!row || !(await ownsWorkspace(user.id, row.workspaceId))) return close(4404, 'workbench not found');
-      if (row.runtime !== 'sandbox') return close(4403, 'a local workbench has its terminal in the desktop app');
+      if (!row || !(await ownsWorkspace(user.id, row.workspaceId))) return close(4404, 'session not found');
+      if (row.runtime !== 'sandbox') return close(4403, 'a local session has its terminal in the desktop app');
       // Failed or archived: final, because no box is coming until a person acts.
       if (row.archivedAt || row.status === 'archived' || row.status === 'error') return close(1008, 'not_ready');
       // Still coming up: not final, so the client tries again.
-      if (row.status !== 'ready' || !row.sandboxId) return close(1013, 'workbench is not ready');
+      if (row.status !== 'ready' || !row.sandboxId) return close(1013, 'session is not ready');
       if (phase === 'closed') return;
 
       if (user.expiresAt) {

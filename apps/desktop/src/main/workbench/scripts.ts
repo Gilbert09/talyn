@@ -26,7 +26,7 @@ export class PortAllocator {
         return port;
       }
     }
-    throw new Error('No workbench port range is available');
+    throw new Error('No session port range is available');
   }
 
   release(workbenchId: string): void {

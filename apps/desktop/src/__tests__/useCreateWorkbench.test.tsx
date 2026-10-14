@@ -191,7 +191,7 @@ describe('useCreateWorkbench: sandbox', () => {
   it('falls back to a generic message for an error with no text', async () => {
     mockApi.create.mockRejectedValue(new Error(''));
     const { result } = await run(spec());
-    expect(result.current.error).toBe('Could not create the workbench.');
+    expect(result.current.error).toBe('Could not create the session.');
   });
 
   it('clearError forgets the error', async () => {

@@ -58,7 +58,7 @@ const ACTION_HINT: Record<WorkbenchAction, string> = {
   resolve_conflicts: 'Ask the agent to merge the base branch in and resolve the conflicts',
   fix_checks: 'Ask the agent to fix the failing checks; the prompt carries each failing check and its link',
   merge: 'Merge the pull request on GitHub',
-  archive: 'Archive this workbench',
+  archive: 'Archive this session',
 };
 
 /**
@@ -144,7 +144,7 @@ export function WorkbenchHeader({
       const cur = latest.current;
       if (workbenchId !== cur.workbenchId || !action) return;
       if (!cur.available.includes(action)) {
-        toast.info(`${NEXT_ACTION_LABEL[action]} does not apply to this workbench now`);
+        toast.info(`${NEXT_ACTION_LABEL[action]} does not apply to this session now`);
         return;
       }
       if (cur.disabled(action)) return;
@@ -177,7 +177,7 @@ export function WorkbenchHeader({
       useWorkbenchStore.getState().selectWorkbench(null);
       setConfirm(null);
     } catch (err) {
-      toast.error('Could not archive the workbench', err instanceof Error ? err.message : undefined);
+      toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(null);
     }
@@ -317,7 +317,7 @@ export function WorkbenchHeader({
       <ConfirmDialog
         open={confirm === 'archive'}
         title={`Archive ${workbench.name}?`}
-        description="The workbench moves to History. The branch, its chats and any PR stay, and you can restore it later."
+        description="The session moves to History. The branch, its chats and any PR stay, and you can restore it later."
         confirmLabel="Archive"
         busy={busy === 'archive'}
         onConfirm={() => void archive()}

@@ -258,9 +258,9 @@ export async function fleetCreateTarget(workspaceId: string): Promise<{ client: 
 
 function requireSandbox(row: WorkbenchRow): string {
   if (row.runtime !== 'sandbox') {
-    throw new WorkbenchError('This workbench runs on your machine.', 409, 'local_runtime');
+    throw new WorkbenchError('This session runs on your machine.', 409, 'local_runtime');
   }
-  if (!row.sandboxId) throw new WorkbenchError('This workbench has no sandbox yet.', 409, 'not_ready');
+  if (!row.sandboxId) throw new WorkbenchError('This session has no sandbox yet.', 409, 'not_ready');
   return row.sandboxId;
 }
 
@@ -597,7 +597,7 @@ export async function refreshSandboxCredentials(row: WorkbenchRow): Promise<void
   if (!key) {
     const label = provider === 'openai' ? 'Codex (ChatGPT)' : 'Claude';
     throw new WorkbenchError(
-      `This workbench runs ${label}, and the workspace has no ${label} subscription connected. Connect it in Settings → Talyn Fleet.`,
+      `This session runs ${label}, and the workspace has no ${label} subscription connected. Connect it in Settings → Talyn Fleet.`,
       409,
       'credentials_unavailable',
     );

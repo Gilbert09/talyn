@@ -19,7 +19,7 @@ export async function loadWorkbenches(workspaceId: string): Promise<void> {
     useWorkbenchStore.getState().setWorkbenches(workspaceId, list);
     for (const wb of list) absorbEmbeddedChats(wb);
   } catch (err) {
-    useWorkbenchStore.getState().setListError(err instanceof Error ? err.message : 'Could not load workbenches.');
+    useWorkbenchStore.getState().setListError(err instanceof Error ? err.message : 'Could not load sessions.');
   }
 }
 

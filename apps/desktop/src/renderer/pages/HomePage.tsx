@@ -73,7 +73,7 @@ export function Welcome() {
       <div className="space-y-2">
         <h1 className="font-display text-2xl font-semibold tracking-tight">Welcome to Talyn</h1>
         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          Add the repositories you code in. Each workbench is one branch of one of them, with an agent chat, a live diff
+          Add the repositories you code in. Each session is one branch of one of them, with an agent chat, a live diff
           and a terminal.
         </p>
       </div>
@@ -145,7 +145,7 @@ function NotOffered() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <SquareTerminal className="h-8 w-8 text-muted-foreground" />
-      <p className="max-w-md text-sm text-muted-foreground">Workbenches are not available on this account yet.</p>
+      <p className="max-w-md text-sm text-muted-foreground">Sessions are not available on this account yet.</p>
       <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate({ view: 'prs', tab: 'my_prs' })}>
         <GitPullRequest className="h-4 w-4" /> Open pull requests
       </Button>

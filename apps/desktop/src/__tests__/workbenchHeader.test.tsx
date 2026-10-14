@@ -181,7 +181,7 @@ describe('WorkbenchHeader action cycle', () => {
       render(<WorkbenchHeader workbench={WB} pr={prRow({})} chat={chat} ops={o} />);
       act(() => requestWorkbenchAction('wb1', 'fix_checks'));
       expect(o.runAction).not.toHaveBeenCalled();
-      expect(toast.info).toHaveBeenCalledWith('Fix checks does not apply to this workbench now');
+      expect(toast.info).toHaveBeenCalledWith('Fix checks does not apply to this session now');
     });
 
     it("ignores another workbench's request", () => {

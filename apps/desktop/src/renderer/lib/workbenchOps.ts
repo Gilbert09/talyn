@@ -74,7 +74,7 @@ export interface WorkbenchOps {
 
 /** Why a sandbox workbench cannot be acted on right now, or null. */
 export function sandboxUnavailableReason(workbench: Workbench): string | null {
-  if (workbench.status === 'archived' || workbench.archivedAt) return 'This workbench is archived.';
+  if (workbench.status === 'archived' || workbench.archivedAt) return 'This session is archived.';
   if (workbench.status === 'error' || workbench.sandboxState === 'error') {
     return workbench.error || workbench.statusMessage || 'The sandbox failed to start.';
   }
@@ -111,7 +111,7 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
       await api.workbenches.action(id, action, chat?.id);
     },
     attach: async () => {
-      throw new Error('Attachments are not supported in sandbox workbenches yet.');
+      throw new Error('Attachments are not supported in sandbox sessions yet.');
     },
   };
 }
@@ -133,11 +133,11 @@ export function localOps(
 ): WorkbenchOps {
   const path = workbench.localPath ?? '';
   const unavailable = !bridge
-    ? 'This local workbench needs the Talyn desktop app.'
+    ? 'This local session needs the Talyn desktop app.'
     : workbench.deviceId && workbench.deviceId !== getDeviceId()
-      ? 'This workbench lives on another computer. Open it there.'
+      ? 'This session lives on another computer. Open it there.'
       : !path
-        ? 'This workbench has no local path.'
+        ? 'This session has no local path.'
         : null;
 
   const need = (): WorkbenchLocalBridge => {

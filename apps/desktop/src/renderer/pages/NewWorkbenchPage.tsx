@@ -32,7 +32,7 @@ import { useCreateWorkbench } from '../components/workbench/new/useCreateWorkben
 import { useRepoPaths } from '../components/workbench/new/useRepoPaths';
 import { defaultRepositoryId, writeLastRepository } from '../components/workbench/new/lastRepository';
 
-const PLACEHOLDER = 'Describe a task. Enter creates the workbench and starts it. ⇧Enter for a new line.';
+const PLACEHOLDER = 'Describe a task. Enter creates the session and starts it. ⇧Enter for a new line.';
 const AGENTS: WorkbenchAgent[] = ['claude', 'codex'];
 
 /** A repository's local checkout, matched case-insensitively: a remote's case need not match GitHub's. */

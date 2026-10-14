@@ -147,7 +147,7 @@ describe('workbench terminal socket', () => {
     const { ws, closed, reason } = await connect('wb-new');
     ws.send(auth('tok-a'));
     expect(await closed).toBe(1013);
-    expect(await reason).toBe('workbench is not ready');
+    expect(await reason).toBe('session is not ready');
   });
 
   it('closes 4403 when the flag is off', async () => {

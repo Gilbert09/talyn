@@ -21,7 +21,7 @@ import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
 
 const SANDBOX_ATTACHMENT_NOTE =
-  '(I pasted an image here, but sandbox workbenches cannot take attachments yet, so it was not sent.)';
+  '(I pasted an image here, but sandbox sessions cannot take attachments yet, so it was not sent.)';
 
 export function Composer({
   workbench,
@@ -275,7 +275,7 @@ export function Composer({
             ))}
             {droppedImage && (
               <span className="text-[11px] text-amber-700 dark:text-amber-400">
-                Sandbox workbenches cannot take images yet. The message will say so.
+                Sandbox sessions cannot take images yet. The message will say so.
               </span>
             )}
           </div>

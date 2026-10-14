@@ -58,7 +58,7 @@ export function useCreateWorkbench(): CreateWorkbenchState {
       if (spec.runtime === 'local') void startLocalChat(wb, spec);
       return wb;
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : 'Could not create the workbench.');
+      setError(err instanceof Error && err.message ? err.message : 'Could not create the session.');
       return null;
     } finally {
       setBusy(false);
@@ -130,6 +130,6 @@ async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec): Promise<vo
     store.selectChat(wb.id, chat.id);
     if (prompt) await opsFor(wb).send(chat, { text: prompt, model: spec.model, planMode: spec.planMode, effort });
   } catch (err) {
-    toast.error('The workbench is ready, but the first message did not start', err instanceof Error ? err.message : undefined);
+    toast.error('The session is ready, but the first message did not start', err instanceof Error ? err.message : undefined);
   }
 }

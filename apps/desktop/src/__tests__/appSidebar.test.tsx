@@ -125,7 +125,7 @@ describe('AppSidebar', () => {
 
   it('stacks New workbench over Search, so both fit the sidebar', () => {
     render(<AppSidebar />);
-    const newWb = screen.getByText('New workbench').closest('button')!;
+    const newWb = screen.getByText('New session').closest('button')!;
     const search = screen.getByText('Search').closest('button')!;
     expect(newWb.parentElement).toBe(search.parentElement);
     expect(newWb.parentElement).toHaveClass('flex-col');
@@ -212,7 +212,7 @@ describe('AppSidebar', () => {
     render(<AppSidebar />);
     expect(screen.queryByText('lisbon')).not.toBeInTheDocument();
     expect(screen.queryByText('History')).not.toBeInTheDocument();
-    expect(screen.queryByText('New workbench')).not.toBeInTheDocument();
+    expect(screen.queryByText('New session')).not.toBeInTheDocument();
     expect(screen.getByText('Add repository')).toBeInTheDocument();
   });
 
@@ -231,7 +231,7 @@ describe('AppSidebar', () => {
     useNavigationStore.getState().navigate({ view: 'prs', tab: 'reviews' });
     const before = useWorkbenchStore.getState().newWorkbench.seq;
     render(<AppSidebar />);
-    fireEvent.click(screen.getByText('New workbench'));
+    fireEvent.click(screen.getByText('New session'));
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
     expect(useWorkbenchStore.getState().newWorkbench).toEqual({ seq: before + 1, prefill: null });
   });

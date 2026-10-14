@@ -136,7 +136,7 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
-  if (!wb) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!wb) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
   // Only a workbench still starting may queue: a failed or archived one has no
   // box coming, so a queued message would wait forever.
@@ -279,7 +279,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
   try {
     const wb = await getWorkbench(chat.workbenchId);
     if (!wb || wb.status !== 'ready' || !wb.sandboxId) {
-      throw new WorkbenchError('The workbench is not ready.', 409, 'not_ready');
+      throw new WorkbenchError('The session is not ready.', 409, 'not_ready');
     }
     recordWorkbenchEvent(wb, 'turn_start', `chat ${chatId.slice(0, 8)} turn ${turn}`);
 
@@ -456,9 +456,9 @@ export async function restoreCheckpoint(chatId: string, turn: number): Promise<v
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
-  if (!wb) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!wb) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
-  if (wb.status !== 'ready') throw new WorkbenchError('The workbench is not ready.', 409, 'not_ready');
+  if (wb.status !== 'ready') throw new WorkbenchError('The session is not ready.', 409, 'not_ready');
   if (chat.status === 'running') {
     throw new WorkbenchError('Stop the running turn before restoring a checkpoint.', 409, 'chat_running');
   }
@@ -499,7 +499,7 @@ export async function cancelTurn(chatId: string): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat) throw new WorkbenchError('Chat not found', 404, 'not_found');
   const wb = await getWorkbench(chat.workbenchId);
-  if (!wb) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!wb) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
   const live = liveTurns.get(chatId);
   if (live) live.cancelRequested = true;
@@ -522,7 +522,7 @@ export async function cancelAllTurns(chatIds: string[]): Promise<void> {
 
 export const ORPHAN_MESSAGE =
   'The backend restarted while this turn was running, so Talyn lost its view of it and stopped the agent. ' +
-  'Any changes it made are still in the workbench. Send a message to carry on.';
+  'Any changes it made are still in the session. Send a message to carry on.';
 
 /**
  * Settle chats a dead process left `running`: stop the orphaned agent (two

@@ -31,21 +31,21 @@ export class WorkbenchError extends Error {
 
 export const localRuntimeError = (): WorkbenchError =>
   new WorkbenchError(
-    'This workbench runs on your machine; the desktop app does this itself.',
+    'This session runs on your machine; the desktop app does this itself.',
     409,
     'local_runtime',
   );
 
 const NOT_READY_COPY: Record<string, string> = {
-  provisioning: 'This workbench is still starting. Try again in a moment.',
-  error: 'This workbench failed to start; retry it.',
-  archived: 'This workbench is archived. Restore it first.',
-  ready: 'This workbench has no sandbox yet.',
+  provisioning: 'This session is still starting. Try again in a moment.',
+  error: 'This session failed to start; retry it.',
+  archived: 'This session is archived. Restore it first.',
+  ready: 'This session has no sandbox yet.',
 };
 
 /** Why a workbench cannot do this now. Never shows the raw status value. */
 export const notReadyError = (status: string): WorkbenchError =>
-  new WorkbenchError(NOT_READY_COPY[status] ?? 'This workbench is not ready.', 409, 'not_ready');
+  new WorkbenchError(NOT_READY_COPY[status] ?? 'This session is not ready.', 409, 'not_ready');
 
 /**
  * The deployment variables the fleet still needs, or null when it has what it
@@ -73,7 +73,7 @@ export function userFacingError(err: unknown): string {
       ? 'The sandbox runners are not reachable right now. Try again shortly.'
       : 'The sandbox runners are all busy. Try again shortly.';
   }
-  if (err instanceof FleetRunNotFoundError) return 'The sandbox no longer exists. Archive and restore this workbench to get a new one.';
+  if (err instanceof FleetRunNotFoundError) return 'The sandbox no longer exists. Archive and restore this session to get a new one.';
   if (err instanceof FleetThrottleError) return 'Talyn Fleet is rate limiting requests. Try again shortly.';
   if (err instanceof FleetDispatchUncertainError) return 'Talyn Fleet did not answer in time. Try again shortly.';
   // The fleet's own error text: it names the problem and carries no endpoint.

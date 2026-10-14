@@ -242,9 +242,9 @@ describe('workbench store', () => {
     });
 
     it.each([
-      [[], 'This workbench failed to start: no fleet'],
-      [['m1'], 'This workbench failed to start: no fleet Your queued message was not sent.'],
-      [['m1', 'm2'], 'This workbench failed to start: no fleet 2 queued messages were not sent.'],
+      [[], 'This session failed to start: no fleet'],
+      [['m1'], 'This session failed to start: no fleet Your queued message was not sent.'],
+      [['m1', 'm2'], 'This session failed to start: no fleet 2 queued messages were not sent.'],
     ])('drops queue %j, marks the chat error, and says why in the transcript', async (queue, text) => {
       await updateChat('chat-1', { queuedMessages: queue.map((id) => msg(id)) });
       const failed = await failQueued('wb-1', 'no fleet');

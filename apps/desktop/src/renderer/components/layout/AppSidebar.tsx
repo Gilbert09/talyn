@@ -72,7 +72,7 @@ export function AppSidebar() {
           {offered && (
             <SidebarItem
               icon={Plus}
-              label="New workbench"
+              label="New session"
               keys="mod+n"
               collapsed={collapsed}
               active={route.view === 'home'}
@@ -90,7 +90,7 @@ export function AppSidebar() {
           />
         </div>
 
-        <nav className="min-h-0 flex-1 overflow-y-auto px-1.5" aria-label="Workbenches">
+        <nav className="min-h-0 flex-1 overflow-y-auto px-1.5" aria-label="Sessions">
           {offered && !collapsed && <SidebarWorkbenchList workbenches={workbenches} />}
           <div className="mt-2 space-y-0.5">
             {offered && (

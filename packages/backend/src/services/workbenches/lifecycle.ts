@@ -254,7 +254,7 @@ export function restoreSavedWorkScript(row: Pick<WorkbenchRow, 'id' | 'branch'>)
  */
 export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
-  if (!row) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (row.archivedAt) return row;
   const notes: string[] = [];
 
@@ -278,7 +278,7 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
       if (saved.exitCode !== 0) {
         // The box stays: deleting it now would lose work nothing else holds.
         throw new WorkbenchError(
-          `This workbench was not archived, because its work could not be saved to GitHub first: ` +
+          `This session was not archived, because its work could not be saved to GitHub first: ` +
             (saved.stderr.trim().split('\n').slice(-2).join(' ') || `git exited ${saved.exitCode}`),
           409,
           'archive_save_failed',
@@ -287,7 +287,7 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
       const pushed = /^PUSHED_BRANCH (\d+)/m.exec(saved.stdout);
       if (pushed) notes.push(`Pushed ${pushed[1]} commit${pushed[1] === '1' ? '' : 's'} to ${row.branch}.`);
       if (/^PUSHED_HEAD/m.test(saved.stdout)) {
-        notes.push(`${row.branch} had moved on GitHub, so this workbench's commits were saved separately.`);
+        notes.push(`${row.branch} had moved on GitHub, so this session's commits were saved separately.`);
       }
       if (/^SAVED_WORK/m.test(saved.stdout)) notes.push('Saved the uncommitted changes; restoring brings them back.');
     }
@@ -321,11 +321,11 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
  */
 export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
-  if (!row) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (row.runtime !== 'sandbox') throw localRuntimeError();
   if (row.archivedAt) throw notReadyError('archived');
   if (row.status !== 'error') {
-    throw new WorkbenchError('This workbench has not failed, so there is nothing to retry.', 409, 'not_failed');
+    throw new WorkbenchError('This session has not failed, so there is nothing to retry.', 409, 'not_failed');
   }
   if (row.sandboxId && row.sandboxState !== 'deleted') {
     try {
@@ -365,7 +365,7 @@ function fleetHoldsNoBox(err: unknown): boolean {
  */
 export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRow> {
   let row = await getWorkbench(workbenchId);
-  if (!row) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (!row) throw new WorkbenchError('Session not found', 404, 'not_found');
   if (!row.archivedAt) return row;
 
   // The name is unique among LIVE workbenches, and another may have taken it.
@@ -391,7 +391,7 @@ export async function restoreWorkbench(workbenchId: string): Promise<WorkbenchRo
         event: {
           type: 'system',
           subtype: 'sandbox_restored',
-          text: 'This workbench was restored onto a new sandbox. The agent starts a fresh session and does not remember earlier turns.',
+          text: 'This session was restored onto a new sandbox. The agent starts fresh and does not remember earlier turns.',
         },
       },
     ]);

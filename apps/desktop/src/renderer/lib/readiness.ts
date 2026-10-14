@@ -56,7 +56,7 @@ export function agentChoice(
   const { sandbox } = readiness;
   if (!sandbox) return { available: false, reason: 'Checking cloud availability' };
   if (!sandbox.ok)
-    return { available: false, reason: sandbox.reasons[0]?.message ?? 'Cloud workbenches are unavailable' };
+    return { available: false, reason: sandbox.reasons[0]?.message ?? 'Cloud sessions are unavailable' };
   const entry = sandbox.agents?.[agent];
   if (entry && !entry.ok)
     return {

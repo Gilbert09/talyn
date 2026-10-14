@@ -71,7 +71,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
         ) : (
           <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">
             {workbench.status === 'provisioning'
-              ? 'The workbench is getting ready. You can write the first message now.'
+              ? 'The session is getting ready. You can write the first message now.'
               : 'No chat yet. Send a message to start one.'}
           </div>
         )}
@@ -102,7 +102,7 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
       <Banner
         tone="error"
         icon={<AlertTriangle className="h-3.5 w-3.5" />}
-        text={workbench.error ?? workbench.statusMessage ?? 'The workbench hit an error. Retry, or delete it.'}
+        text={workbench.error ?? workbench.statusMessage ?? 'The session hit an error. Retry, or delete it.'}
         action={
           <>
             {workbench.runtime === 'sandbox' && (

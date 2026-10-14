@@ -75,12 +75,12 @@ describe('CommandPalette', () => {
   it('renders nothing while closed', () => {
     useNavigationStore.setState({ paletteOpen: false });
     render(<CommandPalette />);
-    expect(screen.queryByPlaceholderText(/Search workbenches/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Search sessions/)).not.toBeInTheDocument();
   });
 
   it('lists live workbenches, with their repository, and leaves archived ones out', () => {
     render(<CommandPalette />);
-    expect(screen.getByText('Workbenches')).toBeInTheDocument();
+    expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.getByText('lisbon')).toBeInTheDocument();
     expect(screen.getByText('oslo')).toBeInTheDocument();
     expect(screen.getByText('acme/web')).toBeInTheDocument();
@@ -96,7 +96,7 @@ describe('CommandPalette', () => {
 
   it('filters by branch', () => {
     render(<CommandPalette />);
-    fireEvent.change(screen.getByPlaceholderText(/Search workbenches/), { target: { value: 'feat/lisbon' } });
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), { target: { value: 'feat/lisbon' } });
     expect(screen.getByText('lisbon')).toBeInTheDocument();
     expect(screen.queryByText('oslo')).not.toBeInTheDocument();
   });
@@ -121,12 +121,12 @@ describe('CommandPalette', () => {
     render(<CommandPalette />);
     expect(screen.getByText('Toggle Sidebar')).toBeInTheDocument();
     expect(screen.getByText(formatKeys('mod+b'))).toBeInTheDocument();
-    expect(screen.getByText('Next Workbench')).toBeInTheDocument();
+    expect(screen.getByText('Next Session')).toBeInTheDocument();
     // Workbench-only actions do not apply on the home page.
     expect(screen.queryByText('Create Pull Request')).not.toBeInTheDocument();
     expect(screen.queryByText('Focus Composer')).not.toBeInTheDocument();
     // Hidden entries stay out of the list.
-    expect(screen.queryByText('Open workbench 1')).not.toBeInTheDocument();
+    expect(screen.queryByText('Open session 1')).not.toBeInTheDocument();
   });
 
   it('lists the workbench actions inside a workbench', () => {

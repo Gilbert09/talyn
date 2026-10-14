@@ -31,7 +31,7 @@ export function OpenInWorkbenchButton({
     openPrInWorkbench(row);
     onOpened?.();
   };
-  const title = 'Open in a workbench — check out this branch with an agent chat, a diff and a terminal';
+  const title = 'Open in a session — check out this branch with an agent chat, a diff and a terminal';
   if (variant === 'row') {
     return (
       <button
@@ -40,14 +40,14 @@ export function OpenInWorkbenchButton({
         onClick={open}
         className="rounded p-1 text-muted-foreground hover:text-foreground"
         title={title}
-        aria-label="Open in workbench"
+        aria-label="Open in session"
       >
         <SquareTerminal className="h-3.5 w-3.5" />
       </button>
     );
   }
   return (
-    <Button variant="ghost" className="h-7 w-7 p-0" onClick={open} title={title} aria-label="Open in workbench">
+    <Button variant="ghost" className="h-7 w-7 p-0" onClick={open} title={title} aria-label="Open in session">
       <SquareTerminal className="h-4 w-4" />
     </Button>
   );

@@ -54,7 +54,7 @@ export async function runWorkbenchAction(
 
   let chat = chatId ? await getChat(chatId) : await latestChat(row.id);
   if (chatId && (!chat || chat.workbenchId !== row.id)) {
-    throw new WorkbenchError('That chat does not belong to this workbench.', 404, 'not_found');
+    throw new WorkbenchError('That chat does not belong to this session.', 404, 'not_found');
   }
   if (!chat || chat.closedAt) {
     chat = await insertChat({
@@ -82,7 +82,7 @@ export async function runWorkbenchAction(
 /** Merge the PR this branch opened, with the method the PR row carries. */
 async function mergeLinkedPullRequest(row: WorkbenchRow): Promise<void> {
   if (!row.pullRequestId) {
-    throw new WorkbenchError('This workbench has no pull request to merge.', 409, 'no_pull_request');
+    throw new WorkbenchError('This session has no pull request to merge.', 409, 'no_pull_request');
   }
   const rows = await getPoolDbClient()
     .select({ owner: prTable.owner, repo: prTable.repo, number: prTable.number, mergeMethod: prTable.mergeMethod })
@@ -90,7 +90,7 @@ async function mergeLinkedPullRequest(row: WorkbenchRow): Promise<void> {
     .where(eq(prTable.id, row.pullRequestId))
     .limit(1);
   const pr = rows[0];
-  if (!pr) throw new WorkbenchError('This workbench has no pull request to merge.', 409, 'no_pull_request');
+  if (!pr) throw new WorkbenchError('This session has no pull request to merge.', 409, 'no_pull_request');
   const method = pr.mergeMethod === 'merge' || pr.mergeMethod === 'rebase' ? pr.mergeMethod : 'squash';
   try {
     await githubService.mergePullRequest(row.workspaceId, pr.owner, pr.repo, pr.number, { merge_method: method });

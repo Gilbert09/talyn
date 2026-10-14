@@ -16,10 +16,10 @@ export function WorkbenchPage({ id }: { id: string }) {
   return (
     <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
       {listLoaded ? (
-        (listError ?? 'This workbench is not available.')
+        (listError ?? 'This session is not available.')
       ) : (
         <>
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading the workbench…
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading the session…
         </>
       )}
     </div>

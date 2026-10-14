@@ -59,7 +59,7 @@ export async function startScript(
   const config = opts.config ?? (await loadWorkbenchConfig(row));
   const resolved = commandFor(config, name);
   if (!resolved) {
-    throw new WorkbenchError(`This workbench has no "${name}" script.`, 404, 'script_not_found');
+    throw new WorkbenchError(`This session has no "${name}" script.`, 404, 'script_not_found');
   }
   const scripts = running.get(row.id) ?? new Map<string, RunningScript>();
   running.set(row.id, scripts);

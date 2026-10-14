@@ -513,7 +513,7 @@ export async function failQueued(workbenchId: string, reason: string): Promise<C
         event: {
           type: 'system',
           subtype: 'workbench_failed',
-          text: `This workbench failed to start: ${reason}${notSent}`,
+          text: `This session failed to start: ${reason}${notSent}`,
           droppedMessages: dropped.map((m: WorkbenchQueuedMessage) => ({ id: m.id, text: m.text })),
         },
       },

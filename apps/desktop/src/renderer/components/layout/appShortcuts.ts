@@ -68,7 +68,7 @@ function fromMenu(def: Def): Shortcut {
 function headerAction(id: string, action: WorkbenchAction): Shortcut {
   return fromMenu({
     id,
-    group: 'Workbench',
+    group: 'Session',
     allowInInput: true,
     when: inWorkbench,
     run: () => {
@@ -89,8 +89,8 @@ export function buildAppShortcuts(): Shortcut[] {
   const jumps: Shortcut[] = Array.from({ length: 9 }, (_, i) =>
     fromMenu({
       id: `workbench.jump.${i + 1}`,
-      label: `Open workbench ${i + 1}`,
-      group: 'Workbenches',
+      label: `Open session ${i + 1}`,
+      group: 'Sessions',
       allowInInput: true,
       hidden: true,
       when: () => orderedLiveWorkbenches().length > i,
@@ -109,7 +109,7 @@ export function buildAppShortcuts(): Shortcut[] {
     }),
     fromMenu({
       id: 'workbench.new',
-      group: 'Workbenches',
+      group: 'Sessions',
       allowInInput: true,
       when: offered,
       run: () => openNewWorkbench(),
@@ -143,14 +143,14 @@ export function buildAppShortcuts(): Shortcut[] {
     }),
     fromMenu({
       id: 'workbench.previous',
-      group: 'Workbenches',
+      group: 'Sessions',
       allowInInput: true,
       when: () => orderedLiveWorkbenches().length > 0,
       run: () => stepWorkbench(-1),
     }),
     fromMenu({
       id: 'workbench.next',
-      group: 'Workbenches',
+      group: 'Sessions',
       allowInInput: true,
       when: () => orderedLiveWorkbenches().length > 0,
       run: () => stepWorkbench(1),
@@ -158,21 +158,21 @@ export function buildAppShortcuts(): Shortcut[] {
     ...jumps,
     fromMenu({
       id: 'workbench.changes',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => wbStore().setSideTab('changes'),
     }),
     fromMenu({
       id: 'terminal.toggle',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => wbStore().toggleTerminal(),
     }),
     fromMenu({
       id: 'panel.toggle',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => wbStore().toggleRightPanel(),
@@ -183,7 +183,7 @@ export function buildAppShortcuts(): Shortcut[] {
     headerAction('workbench.archive', 'archive'),
     fromMenu({
       id: 'chat.new',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => {
@@ -194,7 +194,7 @@ export function buildAppShortcuts(): Shortcut[] {
     fromMenu({
       id: 'chat.close',
       label: 'Close chat tab',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: () => {
         const wb = currentWorkbench();
@@ -208,7 +208,7 @@ export function buildAppShortcuts(): Shortcut[] {
     }),
     fromMenu({
       id: 'composer.focus',
-      group: 'Workbench',
+      group: 'Session',
       allowInInput: true,
       when: inWorkbench,
       run: () => window.dispatchEvent(new CustomEvent(FOCUS_COMPOSER_EVENT)),

@@ -80,7 +80,7 @@ export function GitPanel({
         aria-label="Resize the right panel"
         aria-valuenow={width}
       />
-      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1.5" role="tablist" aria-label="Workbench panels">
+      <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1.5" role="tablist" aria-label="Session panels">
         {GIT_PANEL_TAB_LABELS.map((t) => (
           <button
             key={t.id}

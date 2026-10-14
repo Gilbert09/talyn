@@ -25,10 +25,10 @@ export async function workspaceMayUseWorkbenches(workspaceId: string): Promise<b
 export function workbenchesRefusalReason(): string {
   const env = FEATURE_FLAGS.workbenches.envOverride;
   if (readFlagOverride('workbenches', process.env) === false) {
-    return `workbenches are switched off on this deployment (${env}=false)`;
+    return `sessions are switched off on this deployment (${env}=false)`;
   }
   if (!process.env.TALYN_POSTHOG_KEY) {
-    return `this deployment has no PostHog key, so workbenches stay off (set ${env}=true to use them anyway)`;
+    return `this deployment has no PostHog key, so sessions stay off (set ${env}=true to use them anyway)`;
   }
   return 'this account is not in the audience for the "workbenches" feature flag';
 }

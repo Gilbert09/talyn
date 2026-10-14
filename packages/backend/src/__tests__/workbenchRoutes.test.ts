@@ -775,7 +775,7 @@ describe('workbench routes', () => {
       expect(page.body.data.events.at(-1).event).toMatchObject({
         type: 'system',
         subtype: 'workbench_failed',
-        text: `This workbench failed to start: ${NOT_DEPLOYED} Your queued message was not sent.`,
+        text: `This session failed to start: ${NOT_DEPLOYED} Your queued message was not sent.`,
         droppedMessages: [{ text: 'add a readme' }],
       });
 
@@ -801,7 +801,7 @@ describe('workbench routes', () => {
       const chatId = await chatIdOf(wb.id);
       const res = await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hello?' });
       expect(res.status).toBe(409);
-      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This workbench failed to start; retry it.' });
+      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This session failed to start; retry it.' });
       expect((await getChat(chatId))?.queuedMessages).toEqual([]);
     });
 
@@ -809,7 +809,7 @@ describe('workbench routes', () => {
       const wb = await createSandboxWorkbench();
       await call('POST', `/workbenches/${wb.id}/archive`);
       const res = await call('POST', `/workbenches/chats/${await chatIdOf(wb.id)}/messages`, { text: 'hi' });
-      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This workbench is archived. Restore it first.' });
+      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This session is archived. Restore it first.' });
       expect(res.status).toBe(409);
     });
 

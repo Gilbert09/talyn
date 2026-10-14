@@ -118,7 +118,7 @@ export function workbenchRoutes(): Router {
     }
     const user = assertUser(req);
     if (!(await userMayUseWorkbenches({ distinctId: user.id, email: user.email }))) {
-      bad(res, 403, `Workbenches are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
+      bad(res, 403, `Sessions are not available: ${workbenchesRefusalReason()}.`, 'workbenches_unavailable');
       return false;
     }
     return true;
@@ -128,7 +128,7 @@ export function workbenchRoutes(): Router {
   async function gatedWorkbench(req: Request, res: Response, id: string): Promise<WorkbenchRow | null> {
     const row = await getWorkbench(id);
     if (!row) {
-      bad(res, 404, 'Workbench not found');
+      bad(res, 404, 'Session not found');
       return null;
     }
     return (await gate(req, res, row.workspaceId)) ? row : null;
@@ -264,7 +264,7 @@ export function workbenchRoutes(): Router {
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
     if (found.workbench.runtime !== 'local') {
-      return bad(res, 409, 'Only a local workbench uploads its own events.', 'sandbox_runtime');
+      return bad(res, 409, 'Only a local session uploads its own events.', 'sandbox_runtime');
     }
     const raw = (req.body as { events?: unknown } | undefined)?.events;
     if (!Array.isArray(raw)) return bad(res, 400, 'events must be an array');
@@ -294,7 +294,7 @@ export function workbenchRoutes(): Router {
     const found = await gatedChat(req, res, req.params.chatId);
     if (!found) return;
     if (found.workbench.runtime !== 'local') {
-      return bad(res, 409, 'Only a local workbench reports its own chat state.', 'sandbox_runtime');
+      return bad(res, 409, 'Only a local session reports its own chat state.', 'sandbox_runtime');
     }
     const body = (req.body ?? {}) as UpdateLocalWorkbenchChatInput;
     if (!CHAT_STATUSES.includes(body.status)) return bad(res, 400, 'unknown status');
@@ -404,7 +404,7 @@ export function workbenchRoutes(): Router {
 
     if (body.runtime === 'local') {
       if (typeof body.deviceId !== 'string' || !body.deviceId || typeof body.localPath !== 'string' || !body.localPath) {
-        return bad(res, 400, 'A local workbench needs deviceId and localPath.');
+        return bad(res, 400, 'A local session needs deviceId and localPath.');
       }
     } else {
       // A sandbox workbench needs fleet hardware, a deployed fleet, the fleet
@@ -436,7 +436,7 @@ export function workbenchRoutes(): Router {
     for (let attempt = 0; attempt < 4 && !row; attempt++) {
       const taken = await liveWorkbenchNames(workspaceId);
       if (requestedName && taken.includes(requestedName)) {
-        return bad(res, 409, `A workbench named "${requestedName}" already exists.`, 'name_taken');
+        return bad(res, 409, `A session named "${requestedName}" already exists.`, 'name_taken');
       }
       const name = requestedName || (prompt ? workbenchNameFromTask(prompt, taken) : pickWorkbenchName(taken));
       try {
@@ -466,7 +466,7 @@ export function workbenchRoutes(): Router {
         }
       }
     }
-    if (!row) return bad(res, 409, 'Could not find a free name for the workbench; try again.', 'name_taken');
+    if (!row) return bad(res, 409, 'Could not find a free name for the session; try again.', 'name_taken');
 
     // The first chat exists from the start, with the prompt waiting in its
     // queue: a sandbox workbench drains it when the box is ready, a local one
@@ -495,7 +495,7 @@ export function workbenchRoutes(): Router {
       const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
       if (!NAME_PATTERN.test(name)) return bad(res, 400, 'name must be lowercase letters, digits and hyphens.');
       if (name !== row.name && !row.archivedAt && (await liveWorkbenchNames(row.workspaceId)).includes(name)) {
-        return bad(res, 409, `A workbench named "${name}" already exists.`, 'name_taken');
+        return bad(res, 409, `A session named "${name}" already exists.`, 'name_taken');
       }
       patch.name = name;
     }
@@ -559,7 +559,7 @@ export function workbenchRoutes(): Router {
   router.post('/:id/chats', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);
     if (!row) return;
-    if (row.archivedAt) return bad(res, 409, 'This workbench is archived. Restore it first.', 'archived');
+    if (row.archivedAt) return bad(res, 409, 'This session is archived. Restore it first.', 'archived');
     const body = (req.body ?? {}) as CreateWorkbenchChatInput;
     if (body.effort !== undefined && !WORKBENCH_EFFORTS.includes(body.effort)) return bad(res, 400, 'unknown effort');
     const chat = await insertChat({

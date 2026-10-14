@@ -110,17 +110,17 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
 
   return (
     <CommandDialog open onOpenChange={(next) => !next && onClose()}>
-      <CommandInput placeholder="Search workbenches, pages and actions…" autoFocus />
+      <CommandInput placeholder="Search sessions, pages and actions…" autoFocus />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         {workbenches.length > 0 && (
-          <CommandGroup heading="Workbenches">
+          <CommandGroup heading="Sessions">
             {workbenches.map((wb) => {
               const Icon = wb.runtime === 'local' ? Laptop : Cloud;
               return (
                 <CommandItem
                   key={wb.id}
-                  value={`workbench ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
+                  value={`session ${wb.name} ${wb.branch} ${wb.repoFullName} ${wb.id}`}
                   onSelect={() => pick(() => navigate({ view: 'workbench', id: wb.id }))}
                 >
                   <Icon className="h-3.5 w-3.5 text-muted-foreground" />
@@ -134,13 +134,13 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         <CommandGroup heading="Navigate">
           {workbenchesOffered(features) && (
             <CommandItem
-              value="new workbench"
+              value="new session"
               onSelect={() =>
                 pick(() => openNewWorkbench())
               }
             >
               <Home className="h-3.5 w-3.5 text-muted-foreground" />
-              New workbench
+              New session
             </CommandItem>
           )}
           {navItems.map((item) => (

@@ -145,7 +145,7 @@ describe('sandboxOps', () => {
     ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],
     ['error with message', { status: 'error', error: 'clone failed' }, 'clone failed'],
     ['error with status message', { status: 'error', statusMessage: 'no fleet' }, 'no fleet'],
-    ['archived', { status: 'archived' }, 'This workbench is archived.'],
+    ['archived', { status: 'archived' }, 'This session is archived.'],
   ] as const)('unavailable: %s', (_n, over, expected) => {
     const ops = sandboxOps(wb({ runtime: 'sandbox', ...over } as Partial<Workbench>));
     expect(ops.unavailable).toBe(expected);

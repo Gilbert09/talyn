@@ -26,7 +26,7 @@ export const MENU_COMMAND_CHANNEL = 'menu:command';
 
 const JUMP_COMMANDS: MenuCommand[] = Array.from({ length: 9 }, (_, i) => ({
   id: `workbench.jump.${i + 1}`,
-  label: `Workbench ${i + 1}`,
+  label: `Session ${i + 1}`,
   keys: `mod+${i + 1}`,
   section: 'workbench' as const,
   separatorBefore: i === 0,
@@ -34,7 +34,7 @@ const JUMP_COMMANDS: MenuCommand[] = Array.from({ length: 9 }, (_, i) => ({
 
 export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'settings.open', label: 'Settings…', keys: 'mod+,', section: 'app' },
-  { id: 'workbench.new', label: 'New Workbench', keys: 'mod+n', section: 'file' },
+  { id: 'workbench.new', label: 'New Session', keys: 'mod+n', section: 'file' },
   { id: 'chat.new', label: 'New Chat', keys: 'mod+t', section: 'file' },
   { id: 'chat.close', label: 'Close Chat', keys: 'mod+w', section: 'file', separatorBefore: true },
   { id: 'palette.open', label: 'Command Palette…', keys: 'mod+k', section: 'view' },
@@ -48,15 +48,15 @@ export const MENU_COMMANDS: MenuCommand[] = [
   { id: 'workbench.createPr', label: 'Create Pull Request', keys: 'mod+shift+p', section: 'workbench' },
   { id: 'workbench.fixChecks', label: 'Fix Checks', keys: 'mod+shift+x', section: 'workbench' },
   { id: 'workbench.merge', label: 'Merge Pull Request', keys: 'mod+shift+m', section: 'workbench' },
-  { id: 'workbench.archive', label: 'Archive Workbench', keys: 'mod+shift+a', section: 'workbench' },
+  { id: 'workbench.archive', label: 'Archive Session', keys: 'mod+shift+a', section: 'workbench' },
   {
     id: 'workbench.previous',
-    label: 'Previous Workbench',
+    label: 'Previous Session',
     keys: 'mod+alt+up',
     section: 'workbench',
     separatorBefore: true,
   },
-  { id: 'workbench.next', label: 'Next Workbench', keys: 'mod+alt+down', section: 'workbench' },
+  { id: 'workbench.next', label: 'Next Session', keys: 'mod+alt+down', section: 'workbench' },
   ...JUMP_COMMANDS,
 ];
 

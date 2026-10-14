@@ -65,7 +65,7 @@ export function HistoryView() {
       useWorkbenchStore.getState().removeWorkbench(pendingDelete.id);
       setPendingDelete(null);
     } catch (err) {
-      toast.error('Could not delete the workbench', err instanceof Error ? err.message : undefined);
+      toast.error('Could not delete the session', err instanceof Error ? err.message : undefined);
     } finally {
       setDeleting(false);
     }
@@ -81,7 +81,7 @@ export function HistoryView() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, branch or repo"
-            aria-label="Search archived workbenches"
+            aria-label="Search archived sessions"
             className="h-7 pl-7 text-[13px]"
           />
         </div>
@@ -94,7 +94,7 @@ export function HistoryView() {
         ) : groups.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-16 text-center text-[13px] text-muted-foreground">
             <Archive className="h-6 w-6" />
-            {listError ?? (totalArchived === 0 ? 'Nothing archived yet.' : 'No archived workbench matches your search.')}
+            {listError ?? (totalArchived === 0 ? 'Nothing archived yet.' : 'No archived session matches your search.')}
           </div>
         ) : (
           groups.map((g) => (
@@ -111,8 +111,8 @@ export function HistoryView() {
       </div>
       <ConfirmDialog
         open={pendingDelete !== null}
-        title={`Delete ${pendingDelete?.name ?? 'workbench'}?`}
-        description="This removes the workbench and its chats for good. The branch on GitHub is not touched."
+        title={`Delete ${pendingDelete?.name ?? 'session'}?`}
+        description="This removes the session and its chats for good. The branch on GitHub is not touched."
         confirmLabel="Delete"
         busy={deleting}
         onConfirm={() => void confirmDelete()}
@@ -133,7 +133,7 @@ function HistoryRow({ workbench, onDelete }: { workbench: Workbench; onDelete: (
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useNavigationStore.getState().navigate({ view: 'workbench', id: wb.id });
     } catch (err) {
-      toast.error('Could not restore the workbench', err instanceof Error ? err.message : undefined);
+      toast.error('Could not restore the session', err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(false);
     }

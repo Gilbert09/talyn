@@ -13,7 +13,7 @@ export function notificationText(
   chat: Pick<WorkbenchChat, 'status' | 'title'>,
   workbench: Pick<Workbench, 'name'> | undefined
 ): { title: string; body: string } {
-  const name = workbench?.name ?? 'Workbench';
+  const name = workbench?.name ?? 'Session';
   const chatTitle = chat.title || 'The chat';
   if (chat.status === 'error') return { title: `${name}: stopped with an error`, body: `${chatTitle} needs a look.` };
   if (chat.status === 'awaiting_input') return { title: `${name}: needs your input`, body: `${chatTitle} is waiting for an answer.` };
