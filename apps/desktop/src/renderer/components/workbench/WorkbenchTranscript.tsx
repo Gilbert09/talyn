@@ -45,39 +45,41 @@ export function WorkbenchTranscript({
   const totals = useMemo(() => chatTotals(events), [events]);
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      className="h-full min-w-0 overflow-auto bg-background px-4 py-4 text-sm text-foreground"
-    >
-      {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
-      {turns.length === 0 && !loading && (
-        <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
-          {emptyHint ?? 'Send a message to start.'}
-        </div>
-      )}
-      {loading && turns.length === 0 && (
-        <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the chat…
-        </div>
-      )}
-      <div className="space-y-3">
-        {turns.map((turn, i) => (
-          <TurnView
-            key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
-            chatId={chat.id}
-            turn={turn}
-            ops={ops}
-            canRevert={!running && !ops.unavailable && turn.userText !== null}
-          />
-        ))}
-        {running && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> Working…
+    <div className="flex h-full min-w-0 flex-col bg-background">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4 text-sm text-foreground"
+      >
+        {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
+        {turns.length === 0 && !loading && (
+          <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
+            {emptyHint ?? 'Send a message to start.'}
           </div>
         )}
-        {!running && totals.turns > 0 && <ChatTotalsFooter totals={totals} />}
+        {loading && turns.length === 0 && (
+          <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the chat…
+          </div>
+        )}
+        <div className="space-y-3">
+          {turns.map((turn, i) => (
+            <TurnView
+              key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
+              chatId={chat.id}
+              turn={turn}
+              ops={ops}
+              canRevert={!running && !ops.unavailable && turn.userText !== null}
+            />
+          ))}
+          {running && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Working…
+            </div>
+          )}
+        </div>
       </div>
+      {totals.turns > 0 && <ChatTotalsFooter totals={totals} />}
     </div>
   );
 }
@@ -107,10 +109,10 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   }, [events]);
 }
 
-/** The chat's spend so far, once, under the last turn. */
+/** The chat's spend so far, pinned under the transcript so it never scrolls away. */
 function ChatTotalsFooter({ totals }: { totals: ReturnType<typeof chatTotals> }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground">
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 border-t border-border px-4 py-1.5 text-xs text-muted-foreground">
       <span>
         {totals.turns} {totals.turns === 1 ? 'turn' : 'turns'}
       </span>
