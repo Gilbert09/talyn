@@ -12,10 +12,12 @@ import '@fontsource/jetbrains-mono/500.css';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initAnalytics } from './lib/analytics';
+import { installNavigation } from './stores/navigation';
 
 // Initialise PostHog before first render so session replay + autocapture
 // cover the whole session. No-op unless a key was baked in at build time.
 initAnalytics();
+installNavigation();
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);

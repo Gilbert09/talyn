@@ -45,6 +45,7 @@ function load(persisted?: unknown): { nav: NavModule; ws: WsModule; wbs: WbModul
       wbs: require('../renderer/stores/workbenches'),
     };
   });
+  mods.nav.installNavigation();
   return mods;
 }
 

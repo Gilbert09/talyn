@@ -276,47 +276,59 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   },
 }));
 
-// The adapter behind setActivePanel / openSettings.
-setPanelNavigator({
-  openPanel: (panel) => {
+let installed = false;
+
+/**
+ * Wires the route store to the workspace and workbench stores. The app calls
+ * it once, before the first render. It is not a module side effect, so a test
+ * that mocks the workspace store can still import a component that reads the
+ * route.
+ */
+export function installNavigation(): void {
+  if (installed) return;
+  installed = true;
+  // The adapter behind setActivePanel / openSettings.
+  setPanelNavigator({
+    openPanel: (panel) => {
+      const nav = useNavigationStore.getState();
+      nav.navigate(
+        routeForPanel(panel, {
+          lastWorkbenchId: useWorkbenchStore.getState().selectedWorkbenchId ?? nav.lastWorkbenchId,
+          workbenches: useWorkbenchStore.getState().workbenches,
+          settingsSection: useWorkspaceStore.getState().settingsSection,
+        })
+      );
+    },
+    openSettings: (section) => useNavigationStore.getState().navigate({ view: 'settings', section }),
+  });
+
+  // Derive the panel for the persisted route before anything renders.
+  useWorkspaceStore.setState({
+    activePanel: panelForRoute(initialRoute),
+    ...(initialRoute.view === 'settings' ? { settingsSection: initialRoute.section } : {}),
+  });
+
+  // A direct selectWorkbench(id) is a request to open that workbench;
+  // selectWorkbench(null) while one is open (archive, workspace switch) goes home.
+  useWorkbenchStore.subscribe((s, prev) => {
+    if (s.selectedWorkbenchId === prev.selectedWorkbenchId) return;
     const nav = useNavigationStore.getState();
-    nav.navigate(
-      routeForPanel(panel, {
-        lastWorkbenchId: useWorkbenchStore.getState().selectedWorkbenchId ?? nav.lastWorkbenchId,
-        workbenches: useWorkbenchStore.getState().workbenches,
-        settingsSection: useWorkspaceStore.getState().settingsSection,
-      })
-    );
-  },
-  openSettings: (section) => useNavigationStore.getState().navigate({ view: 'settings', section }),
-});
+    const id = s.selectedWorkbenchId;
+    if (id) {
+      if (!(nav.route.view === 'workbench' && nav.route.id === id)) nav.navigate({ view: 'workbench', id });
+    } else if (nav.route.view === 'workbench' && s.listLoaded) {
+      nav.navigate(HOME, { replace: true });
+    }
+  });
 
-// Derive the panel for the persisted route before anything renders.
-useWorkspaceStore.setState({
-  activePanel: panelForRoute(initialRoute),
-  ...(initialRoute.view === 'settings' ? { settingsSection: initialRoute.section } : {}),
-});
-
-// A direct selectWorkbench(id) is a request to open that workbench;
-// selectWorkbench(null) while one is open (archive, workspace switch) goes home.
-useWorkbenchStore.subscribe((s, prev) => {
-  if (s.selectedWorkbenchId === prev.selectedWorkbenchId) return;
-  const nav = useNavigationStore.getState();
-  const id = s.selectedWorkbenchId;
-  if (id) {
-    if (!(nav.route.view === 'workbench' && nav.route.id === id)) nav.navigate({ view: 'workbench', id });
-  } else if (nav.route.view === 'workbench' && s.listLoaded) {
-    nav.navigate(HOME, { replace: true });
-  }
-});
-
-// Settings' own section list writes settingsSection; keep the route's copy in step without a history entry.
-useWorkspaceStore.subscribe((s, prev) => {
-  if (s.settingsSection === prev.settingsSection) return;
-  const { route } = useNavigationStore.getState();
-  if (route.view === 'settings' && route.section !== s.settingsSection) {
-    const next: Route = { view: 'settings', section: s.settingsSection };
-    useNavigationStore.setState({ route: next });
-    persistRoute(next);
-  }
-});
+  // Settings' own section list writes settingsSection; keep the route's copy in step without a history entry.
+  useWorkspaceStore.subscribe((s, prev) => {
+    if (s.settingsSection === prev.settingsSection) return;
+    const { route } = useNavigationStore.getState();
+    if (route.view === 'settings' && route.section !== s.settingsSection) {
+      const next: Route = { view: 'settings', section: s.settingsSection };
+      useNavigationStore.setState({ route: next });
+      persistRoute(next);
+    }
+  });
+}
