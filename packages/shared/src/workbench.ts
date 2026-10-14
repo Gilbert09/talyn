@@ -306,6 +306,45 @@ export interface WorkbenchScriptFrame {
   exitCode?: number | null;
 }
 
+/** Why a runtime or an agent cannot run now. `message` is shown to the user as it is. */
+export interface WorkbenchReadinessReason {
+  code:
+    | 'flag_off'
+    | 'fleet_disabled'
+    | 'fleet_not_deployed'
+    | 'fleet_not_allowed'
+    | 'agent_not_connected'
+    | 'agent_reauth_required'
+    | (string & {});
+  message: string;
+}
+
+export interface WorkbenchAgentReadiness {
+  ok: boolean;
+  reason?: WorkbenchReadinessReason;
+}
+
+/**
+ * What the backend can run for a workspace, asked BEFORE a create so the UI can
+ * disable a choice with its reason instead of failing late. The create route
+ * checks the same answer.
+ */
+export interface WorkbenchReadiness {
+  sandbox: {
+    ok: boolean;
+    reasons: WorkbenchReadinessReason[];
+    agents: Record<WorkbenchAgent, WorkbenchAgentReadiness>;
+  };
+}
+
+/** What this machine can run for a local workbench (from Electron main). */
+export interface WorkbenchLocalReadiness {
+  claude: { ok: boolean; path?: string };
+  codex: { ok: boolean; path?: string };
+  pty: { ok: boolean; error?: string };
+  git: { ok: boolean; path?: string };
+}
+
 /** Payload per workbench WS event type. The type names are in `WSEventType`. */
 export interface WorkbenchWsPayloads {
   'workbench:updated': { workbench: Workbench };
@@ -450,6 +489,14 @@ export interface WorkbenchLocalBridge {
   detectAgents(): Promise<{ claude: string | null; codex: string | null }>;
   /** Native folder picker. Null when the user cancels. */
   pickRepoFolder(): Promise<string | null>;
+  /** What this machine can run. Cached for 30 s in main; `force` bypasses the cache. */
+  readiness(force?: boolean): Promise<WorkbenchLocalReadiness>;
+  /** Per-machine map of `owner/name` to local checkout path. */
+  repoPaths: {
+    get(): Promise<Record<string, string>>;
+    set(input: { repoFullName: string; path: string }): Promise<Record<string, string>>;
+    remove(repoFullName: string): Promise<Record<string, string>>;
+  };
 }
 
 // ============================================================================

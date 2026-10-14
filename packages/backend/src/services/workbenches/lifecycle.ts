@@ -6,7 +6,7 @@ import {
   toShellScript,
 } from '@talyn/shared';
 import { runWithoutScope } from '../../db/client.js';
-import { FleetCapacityError, FleetRunNotFoundError } from '../selfHosted/client.js';
+import { FleetRunNotFoundError } from '../selfHosted/client.js';
 import { FleetNotDeployedError } from '../selfHosted/credentials.js';
 import {
   buildSandboxCreateBody,
@@ -15,7 +15,7 @@ import {
 } from '../selfHosted/sandboxRun.js';
 import { refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchDeleted, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
-import { WorkbenchError } from './errors.js';
+import { localRuntimeError, notReadyError, userFacingError, WorkbenchError } from './errors.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import {
   cloneScript,
@@ -34,10 +34,12 @@ import {
   appendEvents,
   clearAgentSessions,
   deleteWorkbenchRow,
+  failQueued,
   getWorkbench,
   listChats,
   liveWorkbenchNames,
   provisioningWorkbenchIds,
+  resetFailedChats,
   rowToChat,
   updateWorkbench,
   type WorkbenchRow,
@@ -73,17 +75,22 @@ async function setRow(row: WorkbenchRow, patch: Parameters<typeof updateWorkbenc
   return updated;
 }
 
-/** A failure, in words for the person looking at the workbench — never a private endpoint. */
-function userFacing(err: unknown): string {
-  if (err instanceof WorkbenchError) return err.message;
-  if (err instanceof FleetNotDeployedError) return 'Talyn Fleet is not set up on this deployment.';
-  if (err instanceof FleetCapacityError) {
-    return err.reason === 'unreachable'
-      ? 'The sandbox runners are not reachable right now. Try again shortly.'
-      : 'The sandbox runners are all busy. Try again shortly.';
-  }
-  if (err instanceof FleetRunNotFoundError) return 'The sandbox no longer exists. Archive and restore this workbench to get a new one.';
-  return err instanceof Error ? err.message : String(err);
+/**
+ * The ONE way a provision fails: the workbench and a box that never came up
+ * go to `error`, the reason lands in `statusMessage` (which the payload's
+ * `error` carries), and every waiting message is dropped with the reason in
+ * its chat. A workbench archived while this ran is left alone.
+ */
+async function failProvision(workbenchId: string, message: string): Promise<void> {
+  const row = await getWorkbench(workbenchId);
+  if (!row || row.archivedAt) return;
+  recordWorkbenchEvent(row, 'provision_failed', message, false);
+  await setRow(row, {
+    status: 'error',
+    statusMessage: message,
+    ...(row.sandboxState === 'creating' || row.sandboxState === 'none' ? { sandboxState: 'error' } : {}),
+  });
+  await failQueued(row.id, message);
 }
 
 export function scheduleProvision(workbenchId: string, opts: { restore?: boolean } = {}): void {
@@ -98,14 +105,7 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
   let row = await getWorkbench(workbenchId);
   try {
     if (!row || row.runtime !== 'sandbox' || row.archivedAt) return;
-    const fail = async (message: string) => {
-      recordWorkbenchEvent(row!, 'provision_failed', message, false);
-      row = await setRow(row!, {
-        status: 'error',
-        statusMessage: message,
-        ...(row!.sandboxState === 'creating' || row!.sandboxState === 'none' ? { sandboxState: 'error' } : {}),
-      });
-    };
+    const fail = (message: string) => failProvision(workbenchId, message);
 
     // 1. The box. The create body comes from the ONE builder task dispatch
     // uses, so the credential rules cannot differ between the two.
@@ -174,9 +174,9 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
     }
   } catch (err) {
     console.warn(`[workbench] provisioning ${workbenchId} failed:`, err);
-    if (row) {
-      await setRow(row, { status: 'error', statusMessage: userFacing(err) }).catch(() => undefined);
-    }
+    await failProvision(workbenchId, userFacingError(err)).catch((failErr) =>
+      console.error(`[workbench] recording the failed provision of ${workbenchId} failed:`, failErr),
+    );
   } finally {
     provisioning.delete(workbenchId);
   }
@@ -255,7 +255,7 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
   if (row.archivedAt) return row;
   const notes: string[] = [];
 
-  if (row.runtime === 'sandbox' && row.sandboxId) {
+  if (row.runtime === 'sandbox' && row.sandboxId && row.sandboxState !== 'deleted') {
     const chats = await listChats(row.id);
     await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id));
     await stopAllScripts(row).catch(() => undefined);
@@ -268,7 +268,7 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
           const code = await done;
           notes.push(code === 0 ? 'Ran the archive script.' : `The archive script exited with ${code ?? 'no exit code'}.`);
         } catch (err) {
-          notes.push(`The archive script could not run: ${userFacing(err)}`);
+          notes.push(`The archive script could not run: ${userFacingError(err)}`);
         }
       }
       const saved = await runCapture(row, archiveSaveScript(row), { timeoutMs: ARCHIVE_PUSH_TIMEOUT_MS });
@@ -289,9 +289,17 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
       if (/^SAVED_WORK/m.test(saved.stdout)) notes.push('Saved the uncommitted changes; restoring brings them back.');
     }
 
-    const client = await fleetClientFor(row.workspaceId);
-    await client.deleteSandbox(row.sandboxId);
-    recordWorkbenchEvent(row, 'archived', notes.join(' ') || 'sandbox deleted');
+    try {
+      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+      await client.deleteSandbox(row.sandboxId);
+      recordWorkbenchEvent(row, 'archived', notes.join(' ') || 'sandbox deleted');
+    } catch (err) {
+      // A workbench that never became ready holds no work, and a fleet that is
+      // not set up cannot hold a box either. Archive it without the box rather
+      // than strand it. A ready one keeps the refusal: its box may hold work.
+      if (row.status === 'ready' || !fleetHoldsNoBox(err)) throw err;
+      recordWorkbenchEvent(row, 'archived', `archived without the sandbox: ${userFacingError(err)}`);
+    }
   }
 
   row = await setRow(row, {
@@ -301,6 +309,49 @@ export async function archiveWorkbench(workbenchId: string): Promise<WorkbenchRo
     statusMessage: notes.length > 0 ? notes.join(' ') : null,
   });
   return row;
+}
+
+/**
+ * Provision again after a failed start. A half-made box is deleted first, and
+ * the new one takes the next sandbox id, because the fleet answers a deleted
+ * id from its tombstone. Chats the failure left in `error` go back to `idle`.
+ */
+export async function retryWorkbench(workbenchId: string): Promise<WorkbenchRow> {
+  let row = await getWorkbench(workbenchId);
+  if (!row) throw new WorkbenchError('Workbench not found', 404, 'not_found');
+  if (row.runtime !== 'sandbox') throw localRuntimeError();
+  if (row.archivedAt) throw notReadyError('archived');
+  if (row.status !== 'error') {
+    throw new WorkbenchError('This workbench has not failed, so there is nothing to retry.', 409, 'not_failed');
+  }
+  if (row.sandboxId && row.sandboxState !== 'deleted') {
+    try {
+      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
+      await client.deleteSandbox(row.sandboxId);
+    } catch (err) {
+      if (!fleetHoldsNoBox(err)) throw err;
+    }
+  }
+  row = await setRow(row, {
+    status: 'provisioning',
+    statusMessage: 'Creating the sandbox',
+    sandboxId: row.sandboxId ? sandboxIdFor(row.id, sandboxGeneration(row.sandboxId) + 1) : sandboxIdFor(row.id),
+    sandboxState: 'creating',
+    fleetHost: null,
+  });
+  recordWorkbenchEvent(row, 'provision_retry', `retrying on ${row.sandboxId}`);
+  await resetFailedChats(row.id);
+  scheduleProvision(row.id);
+  return row;
+}
+
+/** Errors that mean this fleet cannot be holding the workbench's box. */
+function fleetHoldsNoBox(err: unknown): boolean {
+  return (
+    err instanceof FleetNotDeployedError ||
+    err instanceof FleetRunNotFoundError ||
+    (err instanceof WorkbenchError && err.code === 'fleet_unconfigured')
+  );
 }
 
 /**
@@ -357,7 +408,7 @@ export async function deleteWorkbench(workbenchId: string): Promise<void> {
     await cancelAllTurns(chats.filter((c) => c.status === 'running').map((c) => c.id)).catch(() => undefined);
     await stopAllScripts(row).catch(() => undefined);
     try {
-      const client = await fleetClientFor(row.workspaceId);
+      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
       await client.deleteSandbox(row.sandboxId);
     } catch (err) {
       console.warn(`[workbench] deleting sandbox ${row.sandboxId} failed; removing the workbench anyway:`, err);

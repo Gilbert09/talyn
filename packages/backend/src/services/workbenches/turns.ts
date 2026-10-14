@@ -17,7 +17,7 @@ import {
 import { runWithoutScope } from '../../db/client.js';
 import { assertRepoPath, refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
-import { localRuntimeError, WorkbenchError } from './errors.js';
+import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import {
@@ -138,7 +138,10 @@ export async function sendMessage(chatId: string, input: SendWorkbenchMessageInp
   const wb = await getWorkbench(chat.workbenchId);
   if (!wb) throw new WorkbenchError('Workbench not found', 404, 'not_found');
   if (wb.runtime === 'local') throw localRuntimeError();
-  if (wb.archivedAt) throw new WorkbenchError('This workbench is archived. Restore it first.', 409, 'archived');
+  // Only a workbench still starting may queue: a failed or archived one has no
+  // box coming, so a queued message would wait forever.
+  if (wb.archivedAt || wb.status === 'archived') throw notReadyError('archived');
+  if (wb.status !== 'ready' && wb.status !== 'provisioning') throw notReadyError(wb.status);
   const message = normaliseMessage(input);
   const claim = await claimOrEnqueue(chatId, message, wb.status === 'ready');
   if (!claim) throw new WorkbenchError('Chat not found', 404, 'not_found');

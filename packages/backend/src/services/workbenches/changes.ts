@@ -52,7 +52,7 @@ function mergeBaseLine(row: WorkbenchRow): string {
 }
 
 export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const fleet = await client.getDiff(row.sandboxId!, { base: baseRef(row), cwd: repoDirFor(row) });
   if (fleet.supported && fleet.data) {
     return {
@@ -110,7 +110,7 @@ export async function getChanges(row: WorkbenchRow): Promise<WorkbenchChanges> {
 /** The unified patch vs the merge-base, untracked files included as additions. */
 export async function getPatch(row: WorkbenchRow, path?: string): Promise<{ patch: string }> {
   const safePath = path ? assertRepoPath(path) : undefined;
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const fleet = await client.getDiff(row.sandboxId!, {
     base: baseRef(row),
     patch: true,
@@ -147,7 +147,7 @@ export function looksBinary(bytes: Buffer): boolean {
  */
 export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ content: string; binary: boolean }> {
   const safePath = assertRepoPath(path);
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const fleet = await client.readFile(row.sandboxId!, safePath, { cwd: repoDirFor(row) });
   if (fleet.supported && fleet.data) {
     if (fleet.data.tooLarge) {
@@ -175,7 +175,7 @@ export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ c
 
 /** Tracked and untracked files, gitignored ones excluded. */
 export async function listRepoFiles(row: WorkbenchRow): Promise<{ paths: string[] }> {
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const fleet = await client.listFiles(row.sandboxId!, { cwd: repoDirFor(row) });
   if (fleet.supported && fleet.data) return { paths: fleet.data.paths };
   const r = await runCapture(row, 'git ls-files --cached --others --exclude-standard -z', {

@@ -103,6 +103,7 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEvent,
   WorkbenchNextAction,
+  WorkbenchReadiness,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
 // shares with the backend proxy and the fleet client.
@@ -2600,6 +2601,10 @@ export const workbenches = {
     request<Workbench>('PATCH', `/workbenches/${enc(id)}`, patch),
   archive: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/archive`),
   restore: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/restore`),
+  /** Provision again after a failed start. */
+  retry: (id: string) => request<Workbench>('POST', `/workbenches/${enc(id)}/retry`),
+  readiness: (workspaceId: string) =>
+    request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
 
   // ---- Chats ----

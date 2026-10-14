@@ -30,8 +30,10 @@ import { getWorkbench, type WorkbenchRow } from './store.js';
  *  - A resize is the text frame `{"type":"resize","cols":…,"rows":…}`.
  *  - Output is binary.
  *  - Close codes 4401 (bad or missing token), 4403 (not allowed) and 4404 (no
- *    such workbench) are final. Any other code means "try again", and the
- *    client reconnects — into the same tmux session, so nothing is lost.
+ *    such workbench) are final, and so is 1008 with the reason `not_ready`
+ *    (the workbench failed to start or is archived). Any other code means "try
+ *    again", and the client reconnects — into the same tmux session, so
+ *    nothing is lost. A workbench still starting closes 1013, which retries.
  *
  * # Two ways into the box
  *
@@ -194,8 +196,9 @@ function serveTerminal(ws: WebSocket, workbenchId: string, opts: OpenOptions): v
       const row = await getWorkbench(workbenchId);
       // Not found and not yours are one answer, as on every route.
       if (!row || !(await ownsWorkspace(user.id, row.workspaceId))) return close(4404, 'workbench not found');
-      if (row.archivedAt) return close(4404, 'workbench is archived');
       if (row.runtime !== 'sandbox') return close(4403, 'a local workbench has its terminal in the desktop app');
+      // Failed or archived: final, because no box is coming until a person acts.
+      if (row.archivedAt || row.status === 'archived' || row.status === 'error') return close(1008, 'not_ready');
       // Still coming up: not final, so the client tries again.
       if (row.status !== 'ready' || !row.sandboxId) return close(1013, 'workbench is not ready');
       if (phase === 'closed') return;
@@ -241,7 +244,7 @@ async function openSandboxTerminal(
   opts: OpenOptions,
   handlers: SessionHandlers,
 ): Promise<TerminalSession> {
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   try {
     return await openFleetPty(client, row, opts, handlers);
   } catch (err) {

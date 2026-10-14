@@ -37,13 +37,20 @@ describe('workbench terminal socket', () => {
   let output: ((data: Buffer) => void) | null;
   let exit: (() => void) | null;
 
-  function connect(id: string, query = ''): Promise<{ ws: WebSocket; closed: Promise<number>; received: Buffer[] }> {
+  function connect(
+    id: string,
+    query = '',
+  ): Promise<{ ws: WebSocket; closed: Promise<number>; reason: Promise<string>; received: Buffer[] }> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url(id, query));
       const received: Buffer[] = [];
       ws.on('message', (data: Buffer) => received.push(data));
-      const closed = new Promise<number>((r) => ws.on('close', (code) => r(code)));
-      ws.on('open', () => resolve({ ws, closed, received }));
+      const ended = new Promise<{ code: number; reason: string }>((r) =>
+        ws.on('close', (code, reason) => r({ code, reason: reason.toString('utf8') })),
+      );
+      const closed = ended.then((e) => e.code);
+      const reason = ended.then((e) => e.reason);
+      ws.on('open', () => resolve({ ws, closed, reason, received }));
       ws.on('error', reject);
     });
   }
@@ -123,11 +130,27 @@ describe('workbench terminal socket', () => {
     expect(await closed).toBe(4401);
   });
 
-  it('closes 4403 when the flag is off, and 4404 for an archived workbench', async () => {
-    await updateWorkbench('wb-ready', { archivedAt: new Date() });
-    const archived = await connect('wb-ready');
-    archived.ws.send(auth('tok-a'));
-    expect(await archived.closed).toBe(4404);
+  it.each([
+    ['archived', { archivedAt: new Date(), status: 'archived' }],
+    ['archived but still marked ready', { archivedAt: new Date() }],
+    ['failed to start', { status: 'error', sandboxState: 'error' }],
+  ] as const)('closes a workbench that %s with the final 1008 not_ready', async (_name, patch) => {
+    await updateWorkbench('wb-ready', patch);
+    const { ws, closed, reason } = await connect('wb-ready');
+    ws.send(auth('tok-a'));
+    expect(await closed).toBe(1008);
+    expect(await reason).toBe('not_ready');
+    expect(opened).toEqual([]);
+  });
+
+  it('keeps the retryable 1013 for a workbench still starting', async () => {
+    const { ws, closed, reason } = await connect('wb-new');
+    ws.send(auth('tok-a'));
+    expect(await closed).toBe(1013);
+    expect(await reason).toBe('workbench is not ready');
+  });
+
+  it('closes 4403 when the flag is off', async () => {
 
     vi.stubEnv('WORKBENCHES_ENABLED', 'false');
     resetFeatureFlagsForTests();

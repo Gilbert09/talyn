@@ -12,6 +12,7 @@ import {
   type UpdateLocalWorkbenchChatInput,
   type UpdateWorkbenchChatInput,
   type UpdateWorkbenchInput,
+  type WorkbenchAgent,
   type WorkbenchChatStatus,
   type WorkbenchEffort,
   type WorkbenchEvent,
@@ -20,22 +21,21 @@ import {
 import { getPoolDbClient, runWithoutScope } from '../db/client.js';
 import { pullRequests as prTable, repositories as reposTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
-import { fleetRefusalReason, workspaceMayUseFleet } from '../services/cloudProviders/fleetAccess.js';
-import { getCloudProvider } from '../services/cloudProviders/registry.js';
 import { reconcileDefaultBranch } from '../services/repoDefaultBranch.js';
-import { fleetAgentStatus } from '../services/selfHosted/credentials.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
 import { runWorkbenchAction } from '../services/workbenches/actions.js';
 import { getChanges, getPatch, listRepoFiles, readRepoFile } from '../services/workbenches/changes.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from '../services/workbenches/emit.js';
-import { localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
+import { fleetErrorAsRefusal, localRuntimeError, notReadyError, WorkbenchError } from '../services/workbenches/errors.js';
 import {
   archiveWorkbench,
   deleteWorkbench,
   restoreWorkbench,
+  retryWorkbench,
   scheduleProvision,
 } from '../services/workbenches/lifecycle.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
+import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
 import { fleetClientFor, sandboxIdFor } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
 import {
@@ -86,10 +86,15 @@ const ok = <T>(res: Response, data: T) => res.json({ success: true, data } as Ap
 const bad = (res: Response, status: number, error: string, code?: string) =>
   res.status(status).json({ success: false, error, ...(code ? { code } : {}) });
 
-/** Refusals the services throw become their status and code; anything else is a real fault. */
+/**
+ * Refusals the services throw become their status and code, and so do fleet
+ * faults (a 503 with words a person can read). Anything else is a real fault.
+ */
 function fail(res: Response, err: unknown): void {
-  if (err instanceof WorkbenchError) {
-    bad(res, err.status, err.message, err.code);
+  const refusal = fleetErrorAsRefusal(err);
+  if (refusal) {
+    if (!(err instanceof WorkbenchError)) console.warn('[workbench] fleet request failed:', err);
+    bad(res, refusal.status, refusal.message, refusal.code);
     return;
   }
   throw err;
@@ -145,6 +150,7 @@ export function workbenchRoutes(): Router {
   /** A sandbox workbench that can run a command right now, or the refusal that says why not. */
   function requireReadySandbox(row: WorkbenchRow): void {
     if (row.runtime === 'local') throw localRuntimeError();
+    if (row.archivedAt) throw notReadyError('archived');
     if (row.status !== 'ready' || !row.sandboxId) throw notReadyError(row.status);
   }
 
@@ -307,6 +313,23 @@ export function workbenchRoutes(): Router {
   // Workbenches
   // ==========================================================================
 
+  /**
+   * What this backend can run for the workspace. Workspace access only, not
+   * the flag gate: a flag that is off is one of the answers (`flag_off`).
+   * Declared before `/:id` so the path is not read as a workbench id.
+   */
+  router.get('/readiness', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    if (!workspaceId) return bad(res, 400, 'workspaceId is required');
+    try {
+      await requireWorkspaceAccess(req, workspaceId);
+    } catch (err) {
+      return handleAccessError(err, res);
+    }
+    const user = assertUser(req);
+    ok(res, await workbenchReadiness(workspaceId, { id: user.id, email: user.email }));
+  });
+
   router.get('/', async (req, res) => {
     const workspaceId = (req.query.workspaceId as string) ?? '';
     if (!(await gate(req, res, workspaceId))) return;
@@ -383,17 +406,13 @@ export function workbenchRoutes(): Router {
         return bad(res, 400, 'A local workbench needs deviceId and localPath.');
       }
     } else {
-      // A sandbox workbench needs fleet hardware, the fleet audience, and the
-      // subscription for ITS agent — the box's vendor is fixed when it boots.
-      if (!getCloudProvider('selfhosted')) return bad(res, 400, 'Talyn Fleet is not available on this deployment.', 'fleet_unavailable');
-      if (!(await workspaceMayUseFleet(workspaceId))) {
-        return bad(res, 403, `Talyn Fleet is not available: ${fleetRefusalReason()}.`, 'fleet_unavailable');
-      }
-      const { connectedAgents } = await fleetAgentStatus(workspaceId);
-      if (!connectedAgents.includes(body.agent)) {
-        const label = body.agent === 'codex' ? 'Codex' : 'Claude';
-        return bad(res, 400, `Talyn Fleet has no ${label} subscription connected to this workspace. Connect it in Settings → Talyn Fleet.`, 'agent_not_connected');
-      }
+      // A sandbox workbench needs fleet hardware, a deployed fleet, the fleet
+      // audience and the subscription for ITS agent: the box's vendor is fixed
+      // when it boots. The same answer GET /readiness gives, so nothing is
+      // inserted that would only fail later.
+      const user = assertUser(req);
+      const refusal = sandboxRefusal(await workbenchReadiness(workspaceId, { id: user.id, email: user.email }), body.agent);
+      if (refusal) return fail(res, refusal);
     }
 
     const requestedName = typeof body.name === 'string' ? body.name.trim().toLowerCase() : '';
@@ -494,6 +513,25 @@ export function workbenchRoutes(): Router {
     if (!row) return;
     try {
       ok(res, await publicWorkbench(await archiveWorkbench(row.id)));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  /** Provision again after a failed start. Refused, unchanged, while the fleet still cannot run it. */
+  router.post('/:id/retry', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      if (row.runtime === 'sandbox' && row.status === 'error' && !row.archivedAt) {
+        const user = assertUser(req);
+        const refusal = sandboxRefusal(
+          await workbenchReadiness(row.workspaceId, { id: user.id, email: user.email }),
+          row.agent as WorkbenchAgent,
+        );
+        if (refusal) throw refusal;
+      }
+      ok(res, await publicWorkbench(await retryWorkbench(row.id)));
     } catch (err) {
       fail(res, err);
     }
@@ -636,7 +674,7 @@ export function workbenchRoutes(): Router {
       if (body === 'too_large') return bad(res, 413, 'That request body is too large to forward.');
       const rest = (req.params as Record<string, string>)[0] ?? '';
       const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
-      const client = await fleetClientFor(row.workspaceId);
+      const client = await fleetClientFor(row.workspaceId, row.fleetHost);
       const controller = new AbortController();
       res.on('close', () => controller.abort());
       const upstream = await client.proxyPort(row.sandboxId!, port, `${rest}${query}`, {

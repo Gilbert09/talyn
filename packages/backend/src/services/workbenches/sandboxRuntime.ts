@@ -11,9 +11,17 @@ import {
 import { getPoolDbClient } from '../../db/client.js';
 import { users as usersTable, workspaces as workspacesTable } from '../../db/schema.js';
 import { debugBus } from '../debugBus.js';
+import { getFleetHost } from '../fleetHosts.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
-import { FleetClient, type FleetExecFrame, type FleetExecRequest } from '../selfHosted/client.js';
-import { getSelfHostedClient, resolveFleetTarget } from '../selfHosted/credentials.js';
+import { FleetCapacityError, FleetClient, type FleetExecFrame, type FleetExecRequest } from '../selfHosted/client.js';
+import {
+  fleetApiToken,
+  FleetNotDeployedError,
+  fleetPinnedEndpoint,
+  getSelfHostedClient,
+  getSelfHostedCredentials,
+  resolveFleetTarget,
+} from '../selfHosted/credentials.js';
 import { resolveSandboxCredentials } from '../selfHosted/sandboxRun.js';
 import {
   aliveMarkerScript,
@@ -104,20 +112,39 @@ export function setWorkbenchFleetClientForTests(fn: ((workspaceId: string) => Pr
   clientCache.clear();
 }
 
-export async function fleetClientFor(workspaceId: string): Promise<FleetClient> {
+/**
+ * The client for a workbench's fleet. Pass the row's `fleetHost` when there is
+ * one: without a gateway, an existing box lives on the host that created it,
+ * and the registry's least-loaded pick is usually a different machine.
+ */
+export async function fleetClientFor(workspaceId: string, fleetHost?: string | null): Promise<FleetClient> {
   if (clientOverride) {
     const client = await clientOverride(workspaceId);
     if (!client) throw new WorkbenchError('Talyn Fleet is not configured for this workspace.', 409, 'fleet_unconfigured');
     return client;
   }
-  const hit = clientCache.get(workspaceId);
+  const pinnedHost = fleetHost && !fleetPinnedEndpoint() ? fleetHost : null;
+  const key = pinnedHost ? `${workspaceId}@${pinnedHost}` : workspaceId;
+  const hit = clientCache.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.client;
-  const client = await getSelfHostedClient(workspaceId);
+  const client = pinnedHost ? await hostClientFor(workspaceId, pinnedHost) : await getSelfHostedClient(workspaceId);
   if (!client) {
     throw new WorkbenchError('Talyn Fleet is not configured for this workspace.', 409, 'fleet_unconfigured');
   }
-  clientCache.set(workspaceId, { client, expiresAt: Date.now() + CLIENT_TTL_MS });
+  clientCache.set(key, { client, expiresAt: Date.now() + CLIENT_TTL_MS });
   return client;
+}
+
+/** A client for one named host. Null when the workspace has no fleet credential. */
+async function hostClientFor(workspaceId: string, hostName: string): Promise<FleetClient | null> {
+  if (!(await getSelfHostedCredentials(workspaceId))) return null;
+  const token = fleetApiToken();
+  if (!token) throw new FleetNotDeployedError();
+  const host = await getFleetHost(hostName);
+  if (!host?.apiEndpoint) {
+    throw new FleetCapacityError(`fleet host ${hostName} is not registered or has no endpoint`, undefined, 'unreachable');
+  }
+  return new FleetClient(host.apiEndpoint, token);
 }
 
 /**
@@ -180,7 +207,7 @@ export async function runCapture(
   opts: SandboxExecOptions = {},
 ): Promise<SandboxExecResult> {
   const sandboxId = requireSandbox(row);
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const framed = frameCommand(script, { mode: 'capture', marker: opts.marker, env: opts.env });
   const req: FleetExecRequest = {
     cmd: framed.cmd,
@@ -279,7 +306,7 @@ export async function runStream(
   },
 ): Promise<StreamOutcome> {
   const sandboxId = requireSandbox(row);
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   const framed = frameCommand(script, { mode: 'stream', marker: opts.marker, env: opts.env });
   const demux = new FrameDemux(framed.nonce, opts.onStdoutLine, opts.onStderrLine);
   const controller = new AbortController();
@@ -480,7 +507,7 @@ export async function refreshSandboxCredentials(row: WorkbenchRow): Promise<void
     );
   }
   const integrations = await mcpIntegrationSecrets({ workspaceId: row.workspaceId, metadata: undefined });
-  const client = await fleetClientFor(row.workspaceId);
+  const client = await fleetClientFor(row.workspaceId, row.fleetHost);
   await client.setSandboxCredentials(sandboxId, {
     githubToken: resolved.githubToken,
     ...(provider === 'openai' ? { openaiKey: key } : { anthropicKey: key }),

@@ -20,6 +20,7 @@ import {
   workbenchEvents as eventsTable,
   workbenches as workbenchesTable,
 } from '../../db/schema.js';
+import { emitWorkbenchChat, emitWorkbenchEvents } from './emit.js';
 
 /**
  * Reads and writes for the four workbench tables.
@@ -473,6 +474,66 @@ export async function finishTurn(
   const startedMessage =
     typeof row.started_message === 'string' ? JSON.parse(row.started_message) : row.started_message;
   return { chat, started: { message: startedMessage as WorkbenchQueuedMessage, turn: chat.turnCount } };
+}
+
+/**
+ * A workbench failed to start: every open chat that is not running drops its
+ * queue and goes to `error`, and its transcript says why. The queued messages
+ * cannot run on a box that does not exist, and leaving them would make them
+ * look sent. One statement for the queues, so a send at the same moment either
+ * lands before the clear or sees the chat in `error`.
+ */
+export async function failQueued(workbenchId: string, reason: string): Promise<ChatRow[]> {
+  const result = await db().execute(sql`
+    WITH old AS (
+      SELECT id, queued_messages AS dropped FROM workbench_chats
+      WHERE workbench_id = ${workbenchId} AND closed_at IS NULL AND status <> 'running'
+      FOR UPDATE
+    )
+    UPDATE workbench_chats c SET
+      queued_messages = '[]'::jsonb,
+      status = 'error',
+      status_message = ${reason},
+      updated_at = now()
+    FROM old
+    WHERE c.id = old.id
+    RETURNING ${RETURNING_CHAT}, old.dropped AS dropped
+  `);
+  const out: ChatRow[] = [];
+  for (const raw of rowsOf<RawChatRow & { dropped: WorkbenchQueuedMessage[] | string | null }>(result)) {
+    const chat = rawToChatRow(raw);
+    const dropped = (typeof raw.dropped === 'string' ? JSON.parse(raw.dropped) : raw.dropped) ?? [];
+    const notSent =
+      dropped.length === 0
+        ? ''
+        : ` ${dropped.length === 1 ? 'Your queued message was' : `${dropped.length} queued messages were`} not sent.`;
+    const stored = await appendEvents(chat.id, [
+      {
+        turn: chat.turnCount,
+        event: {
+          type: 'system',
+          subtype: 'workbench_failed',
+          text: `This workbench failed to start: ${reason}${notSent}`,
+          droppedMessages: dropped.map((m: WorkbenchQueuedMessage) => ({ id: m.id, text: m.text })),
+        },
+      },
+    ]);
+    emitWorkbenchEvents(chat.workspaceId, chat.id, stored);
+    emitWorkbenchChat(chat.workspaceId, rowToChat(chat));
+    out.push(chat);
+  }
+  return out;
+}
+
+/** After a retry: chats a failed start left in `error` go back to `idle`. */
+export async function resetFailedChats(workbenchId: string): Promise<ChatRow[]> {
+  const rows = await db()
+    .update(chatsTable)
+    .set({ status: 'idle', statusMessage: null, updatedAt: new Date() })
+    .where(and(eq(chatsTable.workbenchId, workbenchId), eq(chatsTable.status, 'error'), isNull(chatsTable.closedAt)))
+    .returning(CHAT_COLUMNS);
+  for (const row of rows) emitWorkbenchChat(row.workspaceId, rowToChat(row));
+  return rows;
 }
 
 // ============================================================================

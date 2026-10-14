@@ -22,18 +22,21 @@ vi.mock('../services/websocket.js', async (importOriginal) => ({
 }));
 
 let creds: { claudeToken?: string; openaiKey?: string } | null = { claudeToken: 'sk-ant-oat-claude', openaiKey: 'oa-codex' };
+let reauth: string[] = [];
+let fleetRegistered = true;
 
 vi.mock('../services/selfHosted/credentials.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/selfHosted/credentials.js')>()),
   getSelfHostedCredentials: async () => creds,
   fleetAgentStatus: async () => ({
     connectedAgents: [...(creds?.claudeToken ? ['claude'] : []), ...(creds?.openaiKey ? ['codex'] : [])],
+    reauthAgents: reauth,
   }),
 }));
 
 vi.mock('../services/cloudProviders/registry.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/cloudProviders/registry.js')>()),
-  getCloudProvider: () => ({ type: 'selfhosted' }),
+  getCloudProvider: () => (fleetRegistered ? { type: 'selfhosted' } : null),
 }));
 
 vi.mock('../services/repoDefaultBranch.js', async (importOriginal) => ({
@@ -50,6 +53,8 @@ const { setWorkbenchFleetClientForTests } = await import('../services/workbenche
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
+const { FleetNotDeployedError } = await import('../services/selfHosted/credentials.js');
+const { FleetCapacityError, FleetHttpError } = await import('../services/selfHosted/client.js');
 
 /** A response body read loosely: these tests assert on shapes the routes define, field by field. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -112,7 +117,13 @@ describe('workbench routes', () => {
   beforeEach(async () => {
     emitted.length = 0;
     creds = { claudeToken: 'sk-ant-oat-claude', openaiKey: 'oa-codex' };
+    reauth = [];
+    fleetRegistered = true;
     vi.stubEnv('WORKBENCHES_ENABLED', 'true');
+    // A deployed fleet, by the registry path. Readiness reads only these.
+    vi.stubEnv('FLEET_API_TOKEN', 'fleet-token');
+    vi.stubEnv('FLEET_PINNED_ENDPOINT', '');
+    vi.stubEnv('FLEET_GATEWAY_TOKEN', '');
     vi.stubEnv('FLEET_ALLOWED', 'true');
     resetFeatureFlagsForTests();
     testDb = await createTestDb();
@@ -287,7 +298,7 @@ describe('workbench routes', () => {
       const res = await call('POST', '/workbenches', {
         workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent,
       });
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       expect(res.body.code).toBe('agent_not_connected');
       expect(fleet.created).toEqual([]);
     });
@@ -629,6 +640,280 @@ describe('workbench routes', () => {
       expect(fleet.deleted).toEqual([`talyn-wb-${wb.id}`]);
       expect(await getWorkbench(wb.id)).toBeNull();
       expect(emitted.at(-1)).toMatchObject({ type: 'workbench:deleted', payload: { id: wb.id } });
+    });
+  });
+
+  describe('readiness', () => {
+    const readiness = async (user = 'owner-a') => call('GET', '/workbenches/readiness?workspaceId=ws-a', undefined, user);
+
+    it('answers ready with both agents when everything is in place', async () => {
+      const res = await readiness();
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } },
+      });
+    });
+
+    it.each([
+      ['flag_off', () => vi.stubEnv('WORKBENCHES_ENABLED', 'false'), /WORKBENCHES_ENABLED=false/],
+      ['fleet_disabled', () => (fleetRegistered = false), /FLEET_ENABLED=true/],
+      ['fleet_not_deployed', () => vi.stubEnv('FLEET_API_TOKEN', ''), /set FLEET_PINNED_ENDPOINT and FLEET_GATEWAY_TOKEN\./],
+      [
+        'fleet_not_deployed',
+        () => {
+          vi.stubEnv('FLEET_PINNED_ENDPOINT', 'https://gateway.example');
+          vi.stubEnv('FLEET_API_TOKEN', '');
+        },
+        /set FLEET_GATEWAY_TOKEN\.$/,
+      ],
+      ['fleet_not_allowed', () => vi.stubEnv('FLEET_ALLOWED', 'false'), /FLEET_ALLOWED=false/],
+    ] as const)('reports %s as a reason, with words that say what to do', async (code, setup, message) => {
+      setup();
+      resetFeatureFlagsForTests();
+      const res = await readiness();
+      expect(res.status).toBe(200);
+      expect(res.body.data.sandbox.ok).toBe(false);
+      expect(res.body.data.sandbox.reasons).toHaveLength(1);
+      expect(res.body.data.sandbox.reasons[0].code).toBe(code);
+      expect(res.body.data.sandbox.reasons[0].message).toMatch(message);
+    });
+
+    it.each([
+      ['codex not connected', { claudeToken: 'c' }, [], { claude: true, codex: 'agent_not_connected' }, true],
+      ['claude not connected', { openaiKey: 'o' }, [], { claude: 'agent_not_connected', codex: true }, true],
+      ['claude needs a new sign-in', { claudeToken: 'c', openaiKey: 'o' }, ['claude'], { claude: 'agent_reauth_required', codex: true }, true],
+      ['nothing connected', null, [], { claude: 'agent_not_connected', codex: 'agent_not_connected' }, false],
+      ['both need a new sign-in', { claudeToken: 'c', openaiKey: 'o' }, ['claude', 'codex'], { claude: 'agent_reauth_required', codex: 'agent_reauth_required' }, false],
+    ] as const)('reports each agent on its own: %s', async (_name, held, needsReauth, expected, sandboxOk) => {
+      creds = held;
+      reauth = [...needsReauth];
+      const { sandbox } = (await readiness()).body.data;
+      expect(sandbox.ok).toBe(sandboxOk);
+      expect(sandbox.reasons).toEqual([]);
+      for (const agent of ['claude', 'codex'] as const) {
+        const want = expected[agent];
+        if (want === true) expect(sandbox.agents[agent]).toEqual({ ok: true });
+        else {
+          expect(sandbox.agents[agent].ok).toBe(false);
+          expect(sandbox.agents[agent].reason.code).toBe(want);
+          expect(sandbox.agents[agent].reason.message).toMatch(/Settings → Talyn Fleet/);
+        }
+      }
+    });
+
+    it("answers 404 for another owner's workspace and 400 with no workspace", async () => {
+      expect((await readiness('owner-b')).status).toBe(404);
+      expect((await call('GET', '/workbenches/readiness')).status).toBe(400);
+    });
+
+    it.each([
+      ['fleet_not_deployed', 503, () => vi.stubEnv('FLEET_API_TOKEN', '')],
+      ['fleet_disabled', 503, () => (fleetRegistered = false)],
+      ['fleet_not_allowed', 403, () => vi.stubEnv('FLEET_ALLOWED', 'false')],
+      ['agent_reauth_required', 409, () => (reauth = ['claude'])],
+    ] as const)('refuses to create a sandbox workbench on %s, and inserts nothing', async (code, status, setup) => {
+      setup();
+      resetFeatureFlagsForTests();
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude', prompt: 'hi',
+      });
+      expect([res.status, res.body.code]).toEqual([status, code]);
+      expect(res.body.error).toBeTruthy();
+      expect(fleet.created).toEqual([]);
+      expect((await call('GET', '/workbenches?workspaceId=ws-a&includeArchived=true')).body.data).toEqual([]);
+    });
+
+    it('still creates a local workbench, with its first chat embedded, when the fleet is not deployed', async () => {
+      vi.stubEnv('FLEET_API_TOKEN', '');
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'local', agent: 'codex', deviceId: 'dev-1', localPath: '/tmp/wt', prompt: 'go',
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.data.chats).toHaveLength(1);
+      expect(res.body.data.chats[0]).toMatchObject({ workbenchId: res.body.data.id, agent: 'codex', status: 'idle' });
+      expect(res.body.data.chats[0].queuedMessages.map((m: Loose) => m.text)).toEqual(['go']);
+    });
+  });
+
+  describe('a failed start', () => {
+    const NOT_DEPLOYED = 'Talyn Fleet is not configured on this backend: set FLEET_PINNED_ENDPOINT and FLEET_GATEWAY_TOKEN.';
+
+    /** A sandbox workbench whose box could not be created, settled at `error`. */
+    async function createFailedWorkbench(err: Error = new FleetNotDeployedError(), extra: Record<string, unknown> = {}): Promise<Loose> {
+      fleet.createSandbox = async () => {
+        throw err;
+      };
+      const res = await call('POST', '/workbenches', {
+        workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude', ...extra,
+      });
+      expect(res.status).toBe(200);
+      const chatId = await chatIdOf(res.body.data.id);
+      await vi.waitFor(async () => {
+        expect((await getWorkbench(res.body.data.id))?.status).toBe('error');
+        expect((await getChat(chatId))?.status).toBe('error');
+      }, { timeout: 5000 });
+      return res.body.data;
+    }
+
+    const restoreCreate = () => {
+      fleet.createSandbox = FakeFleet.prototype.createSandbox;
+    };
+
+    it('shows why, marks the box as failed, and drops the queue with the reason in the chat', async () => {
+      const wb = await createFailedWorkbench(new FleetNotDeployedError(), { prompt: 'add a readme' });
+      expect(await getWorkbench(wb.id)).toMatchObject({ status: 'error', sandboxState: 'error', statusMessage: NOT_DEPLOYED });
+
+      const got = (await call('GET', `/workbenches/${wb.id}`)).body.data;
+      expect(got).toMatchObject({ status: 'error', sandboxState: 'error', error: NOT_DEPLOYED });
+      expect(got.chats[0]).toMatchObject({ status: 'error', queuedMessages: [] });
+
+      const page = await call('GET', `/workbenches/chats/${got.chats[0].id}/events`);
+      expect(page.body.data.events.at(-1).event).toMatchObject({
+        type: 'system',
+        subtype: 'workbench_failed',
+        text: `This workbench failed to start: ${NOT_DEPLOYED} Your queued message was not sent.`,
+        droppedMessages: [{ text: 'add a readme' }],
+      });
+
+      const updates = emitted.filter((e) => e.type === 'workbench:updated').map((e) => (e.payload as Loose).workbench);
+      expect(updates.at(-1)).toMatchObject({ status: 'error', sandboxState: 'error', error: NOT_DEPLOYED });
+      const chats = emitted.filter((e) => e.type === 'workbench:chat').map((e) => (e.payload as Loose).chat);
+      expect(chats.at(-1)).toMatchObject({ status: 'error', queuedMessages: [] });
+    });
+
+    it.each([
+      ['an unreachable fleet', new FleetCapacityError('http://10.0.0.7:8080 refused', undefined, 'unreachable'), 'The sandbox runners are not reachable right now. Try again shortly.'],
+      ['a fleet refusal', new FleetHttpError('provider must be anthropic or openai', 400), 'Talyn Fleet refused the request: provider must be anthropic or openai'],
+      ['a plain fault', new Error('boom'), 'boom'],
+    ])('words %s for a person, never the private endpoint', async (_name, err, message) => {
+      const wb = await createFailedWorkbench(err);
+      const got = (await call('GET', `/workbenches/${wb.id}`)).body.data;
+      expect(got.error).toBe(message);
+      expect(got.error).not.toContain('10.0.0.7');
+    });
+
+    it('refuses a message with 409 not_ready instead of queueing it', async () => {
+      const wb = await createFailedWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      const res = await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hello?' });
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This workbench failed to start; retry it.' });
+      expect((await getChat(chatId))?.queuedMessages).toEqual([]);
+    });
+
+    it('refuses a message to an archived workbench with 409 not_ready', async () => {
+      const wb = await createSandboxWorkbench();
+      await call('POST', `/workbenches/${wb.id}/archive`);
+      const res = await call('POST', `/workbenches/chats/${await chatIdOf(wb.id)}/messages`, { text: 'hi' });
+      expect(res.body).toMatchObject({ code: 'not_ready', error: 'This workbench is archived. Restore it first.' });
+      expect(res.status).toBe(409);
+    });
+
+    it('still queues a message while the workbench is starting', async () => {
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      scriptedFleet(async (script) => {
+        if (script.includes('git clone')) await held;
+        return null;
+      });
+      const res = await call('POST', '/workbenches', { workspaceId: 'ws-a', repositoryId: 'repo-a', runtime: 'sandbox', agent: 'claude' });
+      const sent = await call('POST', `/workbenches/chats/${await chatIdOf(res.body.data.id)}/messages`, { text: 'queued' });
+      expect([sent.status, sent.body.data]).toEqual([200, { queued: true }]);
+      release();
+      await vi.waitFor(async () => expect((await getWorkbench(res.body.data.id))?.status).toBe('ready'));
+    });
+
+    it('retries onto a new sandbox id, puts the chat back to idle, and becomes ready', async () => {
+      const wb = await createFailedWorkbench();
+      restoreCreate();
+      const res = await call('POST', `/workbenches/${wb.id}/retry`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        status: 'provisioning', sandboxState: 'creating', error: null, sandboxId: `talyn-wb-${wb.id}-r1`,
+      });
+      expect(fleet.deleted).toEqual([`talyn-wb-${wb.id}`]);
+      await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
+      expect(fleet.created.map((c) => c.id)).toEqual([`talyn-wb-${wb.id}-r1`]);
+      expect((await getChat(await chatIdOf(wb.id)))?.status).toBe('idle');
+    });
+
+    it('retries past a half-made box the fleet cannot be holding', async () => {
+      const wb = await createFailedWorkbench();
+      restoreCreate();
+      fleet.deleteSandbox = async () => {
+        throw new FleetNotDeployedError();
+      };
+      expect((await call('POST', `/workbenches/${wb.id}/retry`)).status).toBe(200);
+      await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
+    });
+
+    it('refuses a retry, and changes nothing, while the fleet is still not deployed', async () => {
+      const wb = await createFailedWorkbench();
+      vi.stubEnv('FLEET_API_TOKEN', '');
+      const res = await call('POST', `/workbenches/${wb.id}/retry`);
+      expect([res.status, res.body.code]).toEqual([503, 'fleet_not_deployed']);
+      expect(res.body.error).toBe(NOT_DEPLOYED);
+      expect(fleet.deleted).toEqual([]);
+      expect(await getWorkbench(wb.id)).toMatchObject({ status: 'error', sandboxId: `talyn-wb-${wb.id}` });
+    });
+
+    it.each([
+      ['a ready workbench', 'not_failed', async () => (await createSandboxWorkbench()).id],
+      ['a local workbench', 'local_runtime', async () => (await createLocalWorkbench()).id],
+      ['an archived workbench', 'not_ready', async () => {
+        const wb = await createSandboxWorkbench();
+        await call('POST', `/workbenches/${wb.id}/archive`);
+        return wb.id;
+      }],
+    ] as const)('refuses to retry %s with 409 %s', async (_name, code, make) => {
+      const id = await make();
+      const res = await call('POST', `/workbenches/${id}/retry`);
+      expect([res.status, res.body.code]).toEqual([409, code]);
+    });
+
+    it("answers 404 to a retry of another owner's workbench", async () => {
+      const wb = await createFailedWorkbench();
+      expect((await call('POST', `/workbenches/${wb.id}/retry`, undefined, 'owner-b')).status).toBe(404);
+    });
+
+    it('archives a failed workbench without its box when the fleet is not deployed', async () => {
+      const wb = await createFailedWorkbench();
+      fleet.deleteSandbox = async () => {
+        throw new FleetNotDeployedError();
+      };
+      const res = await call('POST', `/workbenches/${wb.id}/archive`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ status: 'archived', sandboxState: 'deleted', error: null });
+    });
+
+    it('archives a failed workbench that never had a sandbox id, without calling the fleet', async () => {
+      const wb = await createFailedWorkbench();
+      await updateWorkbench(wb.id, { sandboxId: null });
+      const res = await call('POST', `/workbenches/${wb.id}/archive`);
+      expect(res.body.data).toMatchObject({ status: 'archived' });
+      expect(fleet.deleted).toEqual([]);
+      expect(fleet.scripts).toEqual([]);
+    });
+
+    it('keeps a ready workbench, and answers 503, when its box cannot be deleted', async () => {
+      const wb = await createSandboxWorkbench();
+      fleet.deleteSandbox = async () => {
+        throw new FleetNotDeployedError();
+      };
+      const res = await call('POST', `/workbenches/${wb.id}/archive`);
+      expect([res.status, res.body.code, res.body.error]).toEqual([503, 'fleet_not_deployed', NOT_DEPLOYED]);
+      expect((await getWorkbench(wb.id))?.archivedAt).toBeNull();
+    });
+
+    it('answers a fleet that is down with 503 and words, not a 500', async () => {
+      const wb = await createSandboxWorkbench();
+      scriptedFleet((script) => {
+        if (script.includes('PUSHED_BRANCH')) throw new FleetCapacityError('http://10.0.0.7:8080 down', undefined, 'unreachable');
+        return null;
+      });
+      const res = await call('POST', `/workbenches/${wb.id}/archive`);
+      expect([res.status, res.body.code]).toEqual([503, 'fleet_unavailable']);
+      expect(res.body.error).toBe('The sandbox runners are not reachable right now. Try again shortly.');
     });
   });
 
