@@ -47,16 +47,16 @@ export function WorkbenchTranscript({
     <div
       ref={scrollRef}
       onScroll={onScroll}
-      className="h-full min-w-0 overflow-auto bg-[#151517] px-4 py-4 text-sm text-zinc-100"
+      className="h-full min-w-0 overflow-auto bg-background px-4 py-4 text-sm text-foreground"
     >
-      {error && <p className="mb-3 text-xs text-red-400">Could not load this chat: {error}</p>}
+      {error && <p className="mb-3 text-xs text-destructive">Could not load this chat: {error}</p>}
       {turns.length === 0 && !loading && (
-        <div className="flex h-full items-center justify-center text-center text-xs text-zinc-500">
+        <div className="flex h-full items-center justify-center text-center text-xs text-muted-foreground">
           {emptyHint ?? 'Send a message to start.'}
         </div>
       )}
       {loading && turns.length === 0 && (
-        <div className="flex h-full items-center justify-center gap-2 text-xs text-zinc-500">
+        <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the chat…
         </div>
       )}
@@ -71,7 +71,7 @@ export function WorkbenchTranscript({
           />
         ))}
         {running && (
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" /> Working…
           </div>
         )}
@@ -158,11 +158,11 @@ function UserMessage({
   return (
     <div className="group flex justify-end">
       <div className="max-w-[85%] space-y-1">
-        <div className="rounded-lg bg-zinc-800 px-3 py-2 text-[13px] text-zinc-100 [overflow-wrap:anywhere]">
+        <div className="rounded-lg bg-muted px-3 py-2 text-[13px] text-foreground [overflow-wrap:anywhere]">
           {renderMarkdownish(text)}
         </div>
         {canRevert && (
-          <div className="flex justify-end gap-1.5 text-[11px] text-zinc-500">
+          <div className="flex justify-end gap-1.5 text-[11px] text-muted-foreground">
             {confirming ? (
               <>
                 <span>Restore the files to before this message? Later changes are lost.</span>
@@ -170,7 +170,7 @@ function UserMessage({
                   type="button"
                   onClick={() => void restore()}
                   disabled={busy}
-                  className="rounded px-1.5 text-amber-400 hover:bg-zinc-800 disabled:opacity-50"
+                  className="rounded px-1.5 text-warning hover:bg-accent disabled:opacity-50"
                 >
                   {busy ? <Loader2 className="inline h-3 w-3 animate-spin" /> : 'Restore'}
                 </button>
@@ -178,7 +178,7 @@ function UserMessage({
                   type="button"
                   onClick={() => setConfirming(false)}
                   disabled={busy}
-                  className="rounded px-1.5 hover:bg-zinc-800"
+                  className="rounded px-1.5 hover:bg-accent"
                 >
                   Cancel
                 </button>
@@ -187,7 +187,7 @@ function UserMessage({
               <button
                 type="button"
                 onClick={() => setConfirming(true)}
-                className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-zinc-800 hover:text-zinc-300 group-hover:opacity-100"
+                className="inline-flex items-center gap-1 rounded px-1.5 opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
                 title="Restore the files to how they were before this message"
               >
                 <History className="h-3 w-3" /> Revert to here

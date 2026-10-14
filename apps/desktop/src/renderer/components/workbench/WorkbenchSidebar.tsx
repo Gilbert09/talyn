@@ -131,8 +131,8 @@ function WorkbenchRow({
         <span className="min-w-0 flex-1 truncate font-mono">{workbench.branch}</span>
         {workbench.diffStat && workbench.diffStat.files > 0 && (
           <span className="shrink-0 tabular-nums">
-            <span className="text-emerald-600 dark:text-emerald-500">+{workbench.diffStat.added}</span>{' '}
-            <span className="text-red-600 dark:text-red-500">−{workbench.diffStat.removed}</span>
+            <span className="text-success">+{workbench.diffStat.added}</span>{' '}
+            <span className="text-destructive">−{workbench.diffStat.removed}</span>
           </span>
         )}
         {pr && <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />}
@@ -143,14 +143,14 @@ function WorkbenchRow({
 
 export function StatusDot({ tone }: { tone: 'running' | 'error' | 'unread' | 'idle' }) {
   if (tone === 'running') {
-    return <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-amber-500" aria-label="Running" />;
+    return <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-warning" aria-label="Running" />;
   }
   return (
     <span
       className={cn(
         'h-2 w-2 shrink-0 rounded-full',
-        tone === 'error' && 'bg-red-500',
-        tone === 'unread' && 'bg-sky-500',
+        tone === 'error' && 'bg-destructive',
+        tone === 'unread' && 'bg-info',
         tone === 'idle' && 'bg-muted-foreground/30'
       )}
       aria-label={tone === 'error' ? 'Error' : tone === 'unread' ? 'Needs you' : 'Idle'}
@@ -164,12 +164,12 @@ export function PrPill({ number, state, draft }: { number: number; state: string
       className={cn(
         'shrink-0 rounded px-1 font-mono text-[10px] font-medium',
         state === 'merged'
-          ? 'bg-violet-500/15 text-violet-700 dark:text-violet-300'
+          ? 'bg-primary/15 text-primary'
           : state === 'closed'
-            ? 'bg-red-500/15 text-red-700 dark:text-red-300'
+            ? 'bg-destructive/15 text-destructive'
             : draft
               ? 'bg-muted text-muted-foreground'
-              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+              : 'bg-success/15 text-success'
       )}
     >
       #{number}

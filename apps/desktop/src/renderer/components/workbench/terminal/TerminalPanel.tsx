@@ -43,7 +43,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
   };
 
   return (
-    <div className="relative flex shrink-0 flex-col border-t bg-[#151517]" style={{ height }}>
+    <div className="relative flex shrink-0 flex-col border-t bg-background" style={{ height }}>
       <div
         onPointerDown={onDragStart}
         className="absolute inset-x-0 -top-1 h-2 cursor-row-resize"
@@ -51,7 +51,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
         aria-orientation="horizontal"
         aria-label="Resize the terminal"
       />
-      <div className="flex items-center gap-0.5 border-b border-zinc-800 px-2 text-xs">
+      <div className="flex items-center gap-0.5 border-b border-border px-2 text-xs">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -59,7 +59,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
             onClick={() => setTab(t.id)}
             className={cn(
               'border-b-2 px-2 py-1.5',
-              tab === t.id ? 'border-zinc-300 text-zinc-100' : 'border-transparent text-zinc-500 hover:text-zinc-300'
+              tab === t.id ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
             )}
           >
             {t.label}
@@ -70,7 +70,7 @@ export function TerminalPanel({ workbench, ops }: { workbench: Workbench; ops: W
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           title="Hide the terminal (⌘J)"
           aria-label="Hide the terminal"
         >
@@ -108,7 +108,7 @@ function ScriptControls({ workbench, ops, name }: { workbench: Workbench; ops: W
       type="button"
       onClick={() => void act()}
       disabled={busy || Boolean(ops.unavailable)}
-      className="mr-1 inline-flex items-center gap-1 rounded px-2 py-0.5 text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+      className="mr-1 inline-flex items-center gap-1 rounded px-2 py-0.5 text-foreground/80 hover:bg-accent disabled:opacity-50"
       title={running ? `Stop the ${name} script` : `Run the ${name} script`}
     >
       {busy ? (
@@ -152,7 +152,7 @@ function ScriptOutput({ workbenchId, name }: { workbenchId: string; name: string
   return (
     <div className="absolute inset-0">
       {!output && (
-        <p className="absolute left-3 top-2 z-10 text-xs text-zinc-500">
+        <p className="absolute left-3 top-2 z-10 text-xs text-muted-foreground">
           No {name} output yet. Press Run to start the {name} script from the repository config.
         </p>
       )}

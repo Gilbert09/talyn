@@ -85,7 +85,7 @@ export function AgentConversation({
     // "waiting to start" if we've seen any activity at all.
     const hasAnyEvents = (transcript?.length ?? 0) > 0;
     return (
-      <div className="h-full flex items-center justify-center text-xs text-zinc-500 bg-[#1a1a1a]">
+      <div className="h-full flex items-center justify-center text-xs text-muted-foreground bg-background">
         {hasAnyEvents
           ? 'Claude is thinking…'
           : (waitingHint ?? 'Waiting for the agent to start…')}
@@ -97,7 +97,7 @@ export function AgentConversation({
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="h-full overflow-auto px-4 py-4 text-sm text-zinc-100 bg-[#151517] space-y-3 min-w-0"
+      className="h-full overflow-auto px-4 py-4 text-sm text-foreground bg-background space-y-3 min-w-0"
     >
       {blocks.map((block) => (
         <BlockView
@@ -217,7 +217,7 @@ function TextBlock({ text }: { text: string }) {
     // its `p`), so this sets size and colour only. Overriding it from here
     // would be two single-class rules at equal specificity fighting over
     // stylesheet order.
-    <div className="text-[13px] text-zinc-200 min-w-0 [overflow-wrap:anywhere]">
+    <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
       {renderMarkdownish(text)}
     </div>
   );
@@ -235,19 +235,19 @@ function ThinkingBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const firstLine = text.split('\n').find((l) => l.trim()) ?? 'Thinking';
   return (
-    <div className="text-[12px] text-zinc-500">
+    <div className="text-[12px] text-muted-foreground">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-baseline gap-2 text-left hover:text-zinc-400 min-w-0"
+        className="flex w-full items-baseline gap-2 text-left hover:text-foreground min-w-0"
       >
-        <span className="flex-none text-zinc-600 select-none">✻</span>
+        <span className="flex-none text-muted-foreground select-none">✻</span>
         <span className={cn('italic min-w-0 flex-1', !open && 'truncate')}>
           {open ? 'Thinking' : firstLine}
         </span>
       </button>
       {open && (
-        <div className="mt-1 ml-[13px] whitespace-pre-wrap italic leading-relaxed text-zinc-500 [overflow-wrap:anywhere]">
+        <div className="mt-1 ml-[13px] whitespace-pre-wrap italic leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
           {text}
         </div>
       )}
@@ -329,19 +329,19 @@ function ToolBlockView({
           : {})}
         className={cn(
           'flex w-full items-baseline gap-2 min-w-0 text-left',
-          canToggle && 'group hover:text-zinc-200'
+          canToggle && 'group hover:text-foreground'
         )}
       >
         <span
           aria-hidden
           className={cn(
             'flex-none w-1.5 h-1.5 rounded-full translate-y-[-1px]',
-            !settled && 'bg-amber-400 animate-pulse',
-            settled && isError && 'bg-red-400',
-            settled && !isError && 'bg-zinc-600'
+            !settled && 'bg-warning animate-pulse',
+            settled && isError && 'bg-destructive',
+            settled && !isError && 'bg-muted-foreground/50'
           )}
         />
-        <span className={cn('flex-none font-medium', isError ? 'text-red-300' : 'text-zinc-300')}>
+        <span className={cn('flex-none font-medium', isError ? 'text-destructive' : 'text-foreground/80')}>
           {label}
         </span>
         {detail && (
@@ -349,15 +349,15 @@ function ToolBlockView({
           // string itself is what produced `git clone --depth` with the rest
           // of the command simply gone.
           <span
-            className={cn('min-w-0 flex-1 truncate', isCommand ? 'text-zinc-400' : 'text-zinc-500')}
+            className={cn('min-w-0 flex-1 truncate', isCommand ? 'text-muted-foreground' : 'text-muted-foreground')}
             title={detail}
           >
             {detail}
           </span>
         )}
-        {!settled && <span className="flex-none text-[11px] text-zinc-600">running…</span>}
+        {!settled && <span className="flex-none text-[11px] text-muted-foreground">running…</span>}
         {canToggle && (
-          <span className="flex-none flex items-center gap-1 text-[11px] text-zinc-600">
+          <span className="flex-none flex items-center gap-1 text-[11px] text-muted-foreground">
             <span>{out.summary}</span>
             {open ? (
               <ChevronDown className="w-3 h-3" />
@@ -372,7 +372,7 @@ function ToolBlockView({
         <div
           className={cn(
             'mt-1 ml-[2px] border-l pl-3 py-0.5',
-            isError ? 'border-red-500/40' : 'border-white/10'
+            isError ? 'border-destructive/40' : 'border-border'
           )}
         >
           <pre
@@ -381,7 +381,7 @@ function ToolBlockView({
               // Bounded and scrollable once it is open. Without the cap, opening
               // one JSON response pushes the rest of the run off the screen.
               !fitsInline && 'max-h-72 overflow-auto pr-2',
-              isError ? 'text-red-300/90' : 'text-zinc-400'
+              isError ? 'text-destructive' : 'text-muted-foreground'
             )}
           >
             {out.text}
@@ -428,19 +428,19 @@ function ToolGroupView({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-baseline gap-2 min-w-0 text-left text-zinc-500 hover:text-zinc-300"
+        className="flex w-full items-baseline gap-2 min-w-0 text-left text-muted-foreground hover:text-foreground"
       >
         <span
           aria-hidden
           className={cn(
             'flex-none w-1.5 h-1.5 rounded-full translate-y-[-1px]',
-            running && 'bg-amber-400 animate-pulse',
-            !running && isError && 'bg-red-400',
-            !running && !isError && 'bg-zinc-700'
+            running && 'bg-warning animate-pulse',
+            !running && isError && 'bg-destructive',
+            !running && !isError && 'bg-muted-foreground/50'
           )}
         />
-        <span className={cn('min-w-0 truncate', isError && 'text-red-300/80')}>{summary}</span>
-        {running && <span className="flex-none text-[11px] text-zinc-600">running…</span>}
+        <span className={cn('min-w-0 truncate', isError && 'text-destructive')}>{summary}</span>
+        {running && <span className="flex-none text-[11px] text-muted-foreground">running…</span>}
         {open ? (
           <ChevronDown className="w-3 h-3 flex-none" />
         ) : (
@@ -449,7 +449,7 @@ function ToolGroupView({
       </button>
 
       {open && (
-        <div className="mt-1.5 ml-[2px] border-l border-white/10 pl-3 space-y-2">
+        <div className="mt-1.5 ml-[2px] border-l border-border pl-3 space-y-2">
           {tools.map((t) => (
             <ToolBlockView
               key={t.key}
@@ -498,9 +498,9 @@ function PermissionBlock({
         'rounded border px-3 py-2.5 text-sm',
         resolved
           ? status === 'allowed'
-            ? 'border-green-500/30 bg-green-500/5'
-            : 'border-red-500/30 bg-red-500/5'
-          : 'border-yellow-500/40 bg-yellow-500/10'
+            ? 'border-success/30 bg-success/5'
+            : 'border-destructive/30 bg-destructive/5'
+          : 'border-warning/40 bg-warning/10'
       )}
     >
       <div className="flex items-center gap-2 text-xs mb-2">
@@ -509,9 +509,9 @@ function PermissionBlock({
             'w-4 h-4',
             resolved
               ? status === 'allowed'
-                ? 'text-green-400'
-                : 'text-red-400'
-              : 'text-yellow-400'
+                ? 'text-success'
+                : 'text-destructive'
+              : 'text-warning'
           )}
         />
         <span className="font-semibold">
@@ -531,7 +531,7 @@ function PermissionBlock({
 
 function SystemBlock({ text, subtype }: { text: string; subtype?: string }) {
   return (
-    <div className="text-xs text-zinc-400 italic border-l-2 border-zinc-700 pl-2">
+    <div className="text-xs text-muted-foreground italic border-l-2 border-border pl-2">
       {subtype ? <span className="uppercase tracking-wide mr-1">{subtype}</span> : null}
       {text}
     </div>
@@ -560,7 +560,7 @@ function ResultBlock({
     <div
       className={cn(
         'mt-3 pt-2 border-t text-xs flex items-center gap-3',
-        isError ? 'border-red-500/30 text-red-300' : 'border-zinc-800 text-zinc-400'
+        isError ? 'border-destructive/30 text-destructive' : 'border-border text-muted-foreground'
       )}
     >
       <span className={isError ? 'font-medium' : ''}>
@@ -573,7 +573,7 @@ function ResultBlock({
         </span>
       )}
       {denials > 0 && (
-        <span className="text-yellow-400">
+        <span className="text-warning">
           {denials} permission den{denials === 1 ? 'ial' : 'ials'}
         </span>
       )}
@@ -603,22 +603,22 @@ function AutoAllowedPermission({
   const [open, setOpen] = useState(false);
   const summary = describeTool(toolName, toolInput).detail;
   return (
-    <div className="rounded border border-green-500/20 bg-green-500/5 overflow-hidden">
+    <div className="rounded border border-success/20 bg-success/5 overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-start gap-2 px-3 py-2 text-xs text-left hover:bg-green-500/10"
+        className="w-full flex items-start gap-2 px-3 py-2 text-xs text-left hover:bg-success/10"
       >
         {open ? (
-          <ChevronDown className="w-3 h-3 flex-none text-green-300 mt-0.5" />
+          <ChevronDown className="w-3 h-3 flex-none text-success mt-0.5" />
         ) : (
-          <ChevronRight className="w-3 h-3 flex-none text-green-300 mt-0.5" />
+          <ChevronRight className="w-3 h-3 flex-none text-success mt-0.5" />
         )}
-        <Shield className="w-3.5 h-3.5 flex-none text-green-400 mt-0.5" />
-        <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-green-300">
+        <Shield className="w-3.5 h-3.5 flex-none text-success mt-0.5" />
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere] text-success">
           <span className="font-medium">{toolName}</span>
           {summary && (
-            <span className="ml-2 text-green-200/80 font-mono font-normal">
+            <span className="ml-2 text-success font-mono font-normal">
               {summary}
             </span>
           )}
@@ -626,7 +626,7 @@ function AutoAllowedPermission({
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-2">
-          <div className="text-[11px] text-green-200/60 italic">
+          <div className="text-[11px] text-success italic">
             Auto-allowed — pre-approved for {envName ?? 'this environment'}.
           </div>
           <ToolInputPreview toolName={toolName} toolInput={toolInput} />
@@ -662,7 +662,7 @@ function ToolInputPreview({
         <button
           type="button"
           onClick={() => setShowJson((v) => !v)}
-          className="text-[11px] text-zinc-400 hover:text-zinc-200 underline-offset-2 hover:underline"
+          className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
         >
           {showJson ? 'Hide full input' : 'Show full input'}
         </button>
@@ -694,12 +694,12 @@ function renderToolInputSummary(
           opts.block ? 'flex-col' : 'items-baseline'
         )}
       >
-        <span className="text-[11px] uppercase tracking-wide text-zinc-500 shrink-0">
+        <span className="text-[11px] uppercase tracking-wide text-muted-foreground shrink-0">
           {label}
         </span>
         <span
           className={cn(
-            'text-zinc-100 break-all',
+            'text-foreground break-all',
             opts.mono && 'font-mono text-xs'
           )}
         >
@@ -710,7 +710,7 @@ function renderToolInputSummary(
   };
 
   const wrap = (children: React.ReactNode) => (
-    <div className="bg-black/30 rounded p-2 space-y-1">{children}</div>
+    <div className="bg-muted rounded p-2 space-y-1">{children}</div>
   );
 
   switch (toolName) {
@@ -737,26 +737,26 @@ function renderToolInputSummary(
           {field('file', input.file_path, { mono: true })}
           {typeof input.old_string === 'string' && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
                 replace
               </div>
-              <pre className="font-mono text-xs bg-red-500/10 text-red-200 rounded px-2 py-1 whitespace-pre-wrap break-all">
+              <pre className="font-mono text-xs bg-destructive/10 text-destructive rounded px-2 py-1 whitespace-pre-wrap break-all">
                 {truncate(input.old_string as string, 400)}
               </pre>
             </div>
           )}
           {typeof input.new_string === 'string' && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
                 with
               </div>
-              <pre className="font-mono text-xs bg-green-500/10 text-green-200 rounded px-2 py-1 whitespace-pre-wrap break-all">
+              <pre className="font-mono text-xs bg-success/10 text-success rounded px-2 py-1 whitespace-pre-wrap break-all">
                 {truncate(input.new_string as string, 400)}
               </pre>
             </div>
           )}
           {toolName === 'Write' && typeof input.content === 'string' && (
-            <pre className="font-mono text-xs bg-green-500/10 text-green-200 rounded px-2 py-1 whitespace-pre-wrap break-all">
+            <pre className="font-mono text-xs bg-success/10 text-success rounded px-2 py-1 whitespace-pre-wrap break-all">
               {truncate(input.content as string, 400)}
             </pre>
           )}
@@ -796,10 +796,10 @@ function renderToolInputSummary(
           {field('subagent', input.subagent_type)}
           {typeof input.prompt === 'string' && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500 mb-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
                 prompt
               </div>
-              <pre className="font-mono text-xs whitespace-pre-wrap break-all text-zinc-200">
+              <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">
                 {truncate(input.prompt as string, 600)}
               </pre>
             </div>
@@ -825,7 +825,7 @@ function PrettyJson({ value }: { value: unknown }) {
     }
   }, [value]);
   return (
-    <pre className="text-xs font-mono whitespace-pre-wrap text-zinc-200 bg-black/30 rounded p-2 overflow-x-auto">
+    <pre className="text-xs font-mono whitespace-pre-wrap text-foreground bg-muted rounded p-2 overflow-x-auto">
       {text}
     </pre>
   );

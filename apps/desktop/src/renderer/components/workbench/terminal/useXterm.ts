@@ -1,14 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
-import { Terminal } from '@xterm/xterm';
+import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
-const THEME = {
-  background: '#151517',
-  foreground: '#e4e4e7',
-  cursor: '#e4e4e7',
-  selectionBackground: '#3f3f46',
-};
+function cssColor(name: string, fallback: string): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return raw ? `hsl(${raw})` : fallback;
+}
+
+/** xterm theme built from the app's CSS variables, so it follows light/dark. */
+function buildTheme(): ITheme {
+  const dark = document.documentElement.classList.contains('dark');
+  const background = cssColor('--background', dark ? '#1f1d1a' : '#fcfbf8');
+  const foreground = cssColor('--foreground', dark ? '#f5f3ee' : '#23201b');
+  return {
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
+    selectionBackground: cssColor('--accent', dark ? '#3a3631' : '#e6dfd1'),
+    red: cssColor('--destructive', '#dc2626'),
+    green: cssColor('--success', '#16a34a'),
+    yellow: cssColor('--warning', '#ca8a04'),
+    blue: cssColor('--info', '#2563eb'),
+    brightRed: cssColor('--destructive', '#dc2626'),
+    brightGreen: cssColor('--success', '#16a34a'),
+    brightYellow: cssColor('--warning', '#ca8a04'),
+    brightBlue: cssColor('--info', '#2563eb'),
+  };
+}
 
 /**
  * One xterm.js terminal mounted in `ref`, fitted to its box and refitted when
@@ -31,7 +51,7 @@ export function useXterm(opts: { readOnly?: boolean; onResize?: (cols: number, r
       disableStdin: Boolean(opts.readOnly),
       convertEol: Boolean(opts.readOnly),
       scrollback: 5000,
-      theme: THEME,
+      theme: buildTheme(),
     });
     const fit = new FitAddon();
     t.loadAddon(fit);
@@ -47,9 +67,14 @@ export function useXterm(opts: { readOnly?: boolean; onResize?: (cols: number, r
     doFit();
     const observer = new ResizeObserver(() => doFit());
     observer.observe(el);
+    const themeObserver = new MutationObserver(() => {
+      t.options.theme = buildTheme();
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     setTerm(t);
     return () => {
       observer.disconnect();
+      themeObserver.disconnect();
       t.dispose();
       setTerm(null);
     };
