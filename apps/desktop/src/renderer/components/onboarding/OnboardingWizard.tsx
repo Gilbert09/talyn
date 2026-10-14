@@ -9,29 +9,22 @@ import { ConnectAgentStep } from './steps/ConnectAgentStep';
 import { ConnectGitHubStep } from './steps/ConnectGitHubStep';
 import { WatchReposStep } from './steps/WatchReposStep';
 import { SourceSurvey, type SignupSource } from './SourceSurvey';
-import { CodeReviewStep } from './steps/CodeReviewStep';
-import { codeReviewOffered, type Features } from '@talyn/shared';
+import { useNavigationStore } from '../../stores/navigation';
 
 /**
- * The steps, as a FUNCTION of what this account is offered.
+ * The steps, code-first: GitHub, the repositories you will code in, then an
+ * agent. Repositories are required (a workbench needs a repo); the agent is
+ * optional because a local CLI or a later sign-in also works.
  *
- * It was a `const`, and the code-review step is why it cannot stay one: that
- * feature is behind a flag whose fallback is OFF, so most accounts must not see a
- * fourth step at all. `.length` is read in three derived places below — the last
- * check, the indicator map, and the clamp — and all three read it from here.
+ * Step position is component state only, never persisted, so a user who was on
+ * the removed code-review step before this order existed simply restarts at
+ * the first step with GitHub and repos already done and one click apart.
  */
-function stepsFor(features: Features | null | undefined) {
-  return [
-    { key: 'github', title: 'Connect GitHub', optional: false },
-    { key: 'agent', title: 'Connect an agent', optional: true },
-    { key: 'repos', title: 'Watch repositories', optional: true },
-    // Last, and OPTIONAL — mandatory for the reason the agent step is: only step
-    // 0 gates Next, and a step somebody cannot complete would strand them.
-    ...(codeReviewOffered(features)
-      ? [{ key: 'review', title: 'Turn on code review', optional: true } as const]
-      : []),
-  ] as const;
-}
+const STEPS = [
+  { key: 'github', title: 'Connect GitHub', optional: false },
+  { key: 'repos', title: 'Add repositories', optional: false },
+  { key: 'agent', title: 'Connect an agent', optional: true },
+] as const;
 
 /**
  * First-run onboarding. Walks a new user through the minimum setup needed to
@@ -62,8 +55,7 @@ export function OnboardingWizard() {
   const { currentWorkspaceId, repositories, cloudProviders, setOnboardingComplete, setJustOnboarded } =
     useWorkspaceStore();
   const { status, user } = useGithubConnection(currentWorkspaceId);
-  const features = useWorkspaceStore((s) => s.features);
-  const STEPS = stepsFor(features);
+  const navigate = useNavigationStore((s) => s.navigate);
   const [step, setStep] = useState(0);
   const [signupSource, setSignupSource] = useState<SignupSource | null>(null);
 
@@ -87,7 +79,7 @@ export function OnboardingWizard() {
   const agentConnected = (cloudProviders ?? []).some((p) => p.connected);
 
   // Required steps gate the Next button; optional steps are always advanceable.
-  const canAdvance = step === 0 ? githubConnected : true;
+  const canAdvance = step === 0 ? githubConnected : step === 1 ? repositories.length > 0 : true;
 
   const isLast = step === STEPS.length - 1;
 
@@ -97,15 +89,13 @@ export function OnboardingWizard() {
         github_connected: githubConnected,
         repos_watched: repositories.length,
         agent_connected: agentConnected,
-        // Reported into the EXISTING completion event rather than a second one, so
-        // the funnel keeps one denominator.
-        code_review_offered: codeReviewOffered(features),
         signup_source: signupSource,
       });
       // Tell the PR sync to force a real poll on first entry (the repos were
       // only just watched, so the cache is empty) — see usePullRequestSync.
       setJustOnboarded(true);
       setOnboardingComplete(true);
+      navigate({ view: 'home' }, { replace: true });
       return;
     }
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
@@ -156,11 +146,10 @@ export function OnboardingWizard() {
           {step === 0 && (
             <ConnectGitHubStep workspaceId={currentWorkspaceId} status={status} user={user} />
           )}
-          {step === 1 && <ConnectAgentStep />}
-          {step === 2 && currentWorkspaceId && (
+          {step === 1 && currentWorkspaceId && (
             <WatchReposStep workspaceId={currentWorkspaceId} />
           )}
-          {STEPS[step]?.key === 'review' && <CodeReviewStep />}
+          {step === 2 && <ConnectAgentStep />}
 
           {isLast && (
             <div className="mt-4">

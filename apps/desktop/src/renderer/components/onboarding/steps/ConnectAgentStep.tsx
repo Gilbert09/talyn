@@ -11,11 +11,12 @@ import {
   PostHogCodeCard,
 } from '../../panels/SettingsPanel';
 import { Card } from '../../ui/card';
+import { LocalAgentStatus } from './LocalAgentStatus';
 
 type AgentChoice = 'claude' | 'codex' | 'posthog';
 
 /**
- * Onboarding step 2: connect the agent that will actually do the work.
+ * Onboarding step 3: connect the agent that will actually do the work.
  *
  * Two screens, not one. First the person picks an agent, then they see only
  * that agent's sign-in. The old step drew every connect form at once, and a
@@ -103,8 +104,10 @@ export function ConnectAgentStep() {
 
   return (
     <div className="space-y-4">
+      <LocalAgentStatus />
       <p className="text-sm text-muted-foreground">
-        Which agent should do your PR work? You can add another later in Settings.
+        Or run in the cloud on Talyn Fleet with your own subscription. You can add another
+        agent later in Settings.
       </p>
       <div className="space-y-2">
         {options.map((option) => (

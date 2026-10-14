@@ -23,10 +23,9 @@ interface WatchReposStepProps {
 }
 
 /**
- * Step 3 — pick repositories to watch. Reuses the same localStorage repo
+ * Step 2 — add the repositories you code in and track PRs for. Reuses the same localStorage repo
  * cache as the Settings card (one shared key per workspace) so the expensive
- * "all repos" fetch isn't repeated. Skippable: repos can be added later in
- * Settings → Workspace.
+ * "all repos" fetch isn't repeated. Required: at least one repo.
  */
 export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   const { repositories, setRepositories } = useWorkspaceStore();
@@ -109,8 +108,8 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Pick the repositories you want Talyn to track. Their PRs, reviews, and CI status
-        show up in the GitHub panel.
+        Add at least one repository. These are the repos you will code in with Talyn, and
+        the ones whose PRs, reviews and CI status it tracks.
       </p>
 
       {repositories.length > 0 && (

@@ -13,7 +13,7 @@ import { CodeReviewsPanel } from '../components/panels/codeReview/CodeReviewsPan
 
 /**
  * The PR area: the five existing panels behind one tab strip, unchanged
- * inside. Code review is gated by its flag exactly as the old nav gated it,
+ * inside. The route carries the tab, so the last one is remembered. Code review is gated by its flag exactly as the old nav gated it,
  * failing closed while features load.
  */
 export function PullRequestsView({ tab }: { tab: PrTab }) {
@@ -31,7 +31,8 @@ export function PullRequestsView({ tab }: { tab: PrTab }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center border-b px-4 py-1.5">
+      <div className="flex shrink-0 items-center gap-4 border-b px-4 py-1.5">
+        <h1 className="text-[13px] font-semibold">Pull requests</h1>
         <Tabs value={tab} onValueChange={(next) => navigate({ view: 'prs', tab: next as PrTab })}>
           <TabsList aria-label="Pull requests">
             {tabs.map((t) => (

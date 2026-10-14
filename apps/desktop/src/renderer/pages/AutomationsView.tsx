@@ -26,7 +26,8 @@ export function AutomationsView({ tab }: { tab: AutomationTab }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center border-b px-4 py-1.5">
+      <div className="flex shrink-0 items-center gap-4 border-b px-4 py-1.5">
+        <h1 className="text-[13px] font-semibold">Automations</h1>
         <Tabs value={shown} onValueChange={(next) => navigate({ view: 'automations', tab: next as AutomationTab })}>
           <TabsList aria-label="Automations">
             {tabs.map((t) => (
