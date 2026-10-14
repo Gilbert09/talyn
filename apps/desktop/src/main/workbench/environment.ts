@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import { constants, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
+import type { WorkbenchLocalReadiness } from '@talyn/shared';
 
 export function mergePath(
   shellPath = '',
@@ -70,26 +71,63 @@ export async function processEnv(
   };
 }
 
+async function locate(name: string): Promise<string | null> {
+  const directories = (await loginPath()).split(path.delimiter);
+  for (const directory of directories) {
+    const candidate = path.join(directory, name);
+    try {
+      await fs.access(candidate, constants.X_OK);
+      if ((await fs.stat(candidate)).isFile()) return candidate;
+    } catch {
+      /* Try the next directory. */
+    }
+  }
+  return null;
+}
+
 export async function detectAgents(): Promise<{
   claude: string | null;
   codex: string | null;
 }> {
-  const directories = (await loginPath()).split(path.delimiter);
-  const locate = async (name: string): Promise<string | null> => {
-    for (const directory of directories) {
-      const candidate = path.join(directory, name);
-      try {
-        await fs.access(candidate, constants.X_OK);
-        if ((await fs.stat(candidate)).isFile()) return candidate;
-      } catch {
-        /* Try the next directory. */
-      }
-    }
-    return null;
-  };
   const [claude, codex] = await Promise.all([
     locate('claude'),
     locate('codex'),
   ]);
   return { claude, codex };
+}
+
+export function checkPty(): WorkbenchLocalReadiness['pty'] {
+  try {
+    require('node-pty');
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+const READINESS_TTL_MS = 30_000;
+let readinessCache: { at: number; value: WorkbenchLocalReadiness } | undefined;
+
+export function resetReadinessCache(): void {
+  readinessCache = undefined;
+}
+
+export async function localReadiness(
+  force = false,
+): Promise<WorkbenchLocalReadiness> {
+  if (!force && readinessCache && Date.now() - readinessCache.at < READINESS_TTL_MS)
+    return readinessCache.value;
+  const [agents, gitPath] = await Promise.all([detectAgents(), locate('git')]);
+  const found = (p: string | null) => (p ? { ok: true, path: p } : { ok: false });
+  const value: WorkbenchLocalReadiness = {
+    claude: found(agents.claude),
+    codex: found(agents.codex),
+    git: found(gitPath),
+    pty: checkPty(),
+  };
+  readinessCache = { at: Date.now(), value };
+  return value;
 }

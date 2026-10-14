@@ -2,7 +2,7 @@ import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import type { GitStep, WorkbenchLocalBridge } from '@talyn/shared';
 import { AgentProcesses } from './agentProcess';
-import { detectAgents, loginPath } from './environment';
+import { detectAgents, localReadiness, loginPath } from './environment';
 import {
   exec,
   git,
@@ -12,10 +12,11 @@ import {
   WorktreeManager,
 } from './git';
 import { WorkbenchPaths } from './paths';
+import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
 
-export async function pickRepoFolder(): Promise<{
+export async function pickRepoFolder(repoPaths?: RepoPaths): Promise<{
   path: string;
   remoteUrl: string | null;
 } | null> {
@@ -31,6 +32,9 @@ export async function pickRepoFolder(): Promise<{
   } catch {
     /* A local repository can have no remote. */
   }
+  const repoFullName = remoteUrl ? repoFullNameFromRemote(remoteUrl) : null;
+  if (repoPaths && repoFullName)
+    await repoPaths.set({ repoFullName, path: root }).catch(() => undefined);
   return { path: root, remoteUrl };
 }
 
@@ -38,6 +42,7 @@ export function registerWorkbenchIpc(
   getWindow: () => BrowserWindow | null,
 ): void {
   const paths = new WorkbenchPaths(app.getPath('userData'));
+  const repoPaths = new RepoPaths(app.getPath('userData'));
   const emit = (channel: string, payload: unknown) => {
     const window = getWindow();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed())
@@ -154,7 +159,16 @@ export function registerWorkbenchIpc(
   handle('detect-agents', detectAgents);
   handle(
     'pick-repo-folder',
-    async () => (await pickRepoFolder())?.path ?? null,
+    async () => (await pickRepoFolder(repoPaths))?.path ?? null,
+  );
+  handle('readiness', (force?: boolean) => localReadiness(force === true));
+  handle('repo-paths:get', () => repoPaths.get());
+  handle(
+    'repo-paths:set',
+    (input: { repoFullName: string; path: string }) => repoPaths.set(input),
+  );
+  handle('repo-paths:remove', (repoFullName: string) =>
+    repoPaths.remove(repoFullName),
   );
 
   app.on('before-quit', (event) => {

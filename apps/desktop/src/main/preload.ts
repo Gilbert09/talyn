@@ -57,6 +57,12 @@ const workbench: WorkbenchLocalBridge = {
   onTurnEnd: (callback) => subscribe('workbench:turn-end', callback),
   detectAgents: () => ipcRenderer.invoke('workbench:detect-agents'),
   pickRepoFolder: () => ipcRenderer.invoke('workbench:pick-repo-folder'),
+  readiness: (force) => ipcRenderer.invoke('workbench:readiness', force),
+  repoPaths: {
+    get: () => ipcRenderer.invoke('workbench:repo-paths:get'),
+    set: (input) => ipcRenderer.invoke('workbench:repo-paths:set', input),
+    remove: (repoFullName) => ipcRenderer.invoke('workbench:repo-paths:remove', repoFullName),
+  },
 };
 
 const electronHandler = {
