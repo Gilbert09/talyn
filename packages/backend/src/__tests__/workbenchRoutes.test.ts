@@ -287,6 +287,10 @@ describe('workbench routes', () => {
         // Bare and long-lived: no task, and no `ephemeral` to stop it after one.
         expect(body).not.toHaveProperty('task');
         expect(body).not.toHaveProperty('ephemeral');
+        // With no task to carry task.repo, the box names its repository at the
+        // top level. Without it the fleet proxy refuses the commit, checks and
+        // review-thread endpoints that Create PR and Fix checks need.
+        expect(body.repo).toBe('acme/app');
       },
     );
 

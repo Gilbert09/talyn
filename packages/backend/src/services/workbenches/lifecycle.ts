@@ -123,6 +123,9 @@ export async function provisionWorkbench(workbenchId: string, opts: { restore?: 
       mcpServerIds: null,
       gitAuthor: await gitAuthorFor(row.workspaceId),
       // No `task` and no `ephemeral`: a bare box that outlives every turn.
+      // So the scope goes at the top level: the fleet proxy's commit, checks
+      // and review-thread endpoints refuse a box that names no repository.
+      repo: row.repoFullName,
     });
     if (!built.ok) return await fail(built.error);
     const target = await fleetCreateTarget(row.workspaceId);

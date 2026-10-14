@@ -251,6 +251,11 @@ export interface SandboxCreateBodySpec {
   ephemeral?: boolean;
   /** Task dispatch: the initial work order. A bare workbench box: omitted. */
   task?: CreateSandboxTaskInput;
+  /**
+   * A bare box only: the `owner/name` its GitHub token is scoped to. Ignored
+   * when `task` is set, because the task's own repo is the scope there.
+   */
+  repo?: string;
   /** Who the box's commits are by. Omitted leaves the guest's baked default. */
   gitAuthor?: { name: string; email: string };
 }
@@ -300,6 +305,10 @@ export async function buildSandboxCreateBody(
     // say it. Never both: the fleet refuses a disagreement, and one source is
     // what keeps that from being possible.
     ...(spec.task ? { task: spec.task } : { provider }),
+    // The same rule for the repository scope. A bare box names it at the top
+    // level; a task's repo already is the scope, and a second copy could only
+    // disagree with it.
+    ...(!spec.task && spec.repo ? { repo: spec.repo } : {}),
     githubToken: spec.githubToken,
     // The credential for this dispatch's vendor, and only that one.
     ...(provider === 'openai' ? { openaiKey: agentKey } : { anthropicKey: agentKey }),

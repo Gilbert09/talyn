@@ -277,6 +277,18 @@ export interface CreateSandboxInput {
    * sets one or the other.
    */
   provider?: 'anthropic' | 'openai';
+  /**
+   * `owner/name`: the repository a BARE sandbox's GitHub token is scoped to,
+   * as `task.repo.slug` scopes a dispatch. The fleet proxy's verified-commit,
+   * checks, review and review-thread endpoints refuse a box with no scope.
+   * The fleet keeps it on the box's record, so it survives a restart and a
+   * suspend. Sent beside `task.repo` it must name the same repository, so a
+   * task dispatch does not send it.
+   *
+   * The fleet decodes a create body leniently (no unknown-field refusal), so a
+   * fleet that predates the field ignores it rather than refusing the create.
+   */
+  repo?: string;
   /** Who the box's commits are by. Written into the guest's ~/.gitconfig; not a secret. */
   gitAuthorName?: string;
   gitAuthorEmail?: string;
