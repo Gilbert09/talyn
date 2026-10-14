@@ -20,6 +20,7 @@ import { cn } from '../../lib/utils';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { Button } from '../ui/button';
 import { Card } from '../ui/card';
+import { SettingsSection } from '../ui/settings';
 import { Progress } from '../ui/progress';
 
 /** Matches the backend's 10-second cache of the GitHub answer. */
@@ -79,10 +80,10 @@ function BucketCard({ bucket }: { bucket: DeveloperRateLimitBucket }) {
       data-low={low ? 'true' : 'false'}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-medium">{name}</span>
+        <span className="text-[13px] font-medium">{name}</span>
         {low && <span className="text-xs text-yellow-500">Low</span>}
       </div>
-      <div className={cn('mt-1 text-sm tabular-nums', low && 'text-yellow-500')}>
+      <div className={cn('mt-1 text-[13px] tabular-nums', low && 'text-yellow-500')}>
         {bucket.remaining.toLocaleString()} / {bucket.limit.toLocaleString()}
       </div>
       <Progress
@@ -100,7 +101,7 @@ function BucketCard({ bucket }: { bucket: DeveloperRateLimitBucket }) {
 function RateLimits({ data }: { data: DeveloperRateLimits }) {
   if (!data.connected) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         GitHub is not connected for this workspace.
       </p>
     );
@@ -137,8 +138,8 @@ function RateLimits({ data }: { data: DeveloperRateLimits }) {
 
 function AgentRow({ agent }: { agent: DeveloperAgent }) {
   return (
-    <div className="py-2" data-testid={`agent-${agent.agent}`}>
-      <div className="flex items-baseline justify-between gap-3 text-sm">
+    <div className="px-3 py-2" data-testid={`agent-${agent.agent}`}>
+      <div className="flex items-baseline justify-between gap-3 text-[13px]">
         <span className="font-medium">{fleetAgentLabel(agent.agent)}</span>
         {agent.state === 'ready' && <span className="text-muted-foreground">Ready</span>}
         {agent.state === 'reauth' && <span className="text-destructive">Reconnect needed</span>}
@@ -293,36 +294,33 @@ export function DeveloperInternals() {
         )}
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
+            <RefreshCw className="h-3.5 w-3.5" />
           )}
           Refresh
         </Button>
       </div>
 
       <section className="space-y-2">
-        <h4 className="font-medium">GitHub rate limits</h4>
+        <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">GitHub rate limits</h2>
         {rateLimits ? (
           <RateLimits data={rateLimits} />
         ) : (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-xs text-muted-foreground">Loading…</p>
         )}
       </section>
 
       {agents.length > 0 && (
-        <section className="space-y-2">
-          <h4 className="font-medium">Agents</h4>
-          <Card className="divide-y divide-border/50 px-3">
-            {agents.map((agent) => (
-              <AgentRow key={agent.agent} agent={agent} />
-            ))}
-          </Card>
-        </section>
+        <SettingsSection title="Agents">
+          {agents.map((agent) => (
+            <AgentRow key={agent.agent} agent={agent} />
+          ))}
+        </SettingsSection>
       )}
 
       <section className="space-y-2">
-        <h4 className="font-medium">Recent activity</h4>
+        <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Recent activity</h2>
         <div className="flex flex-wrap gap-1.5">
           {CHIPS.map((c) => (
             <button
@@ -357,7 +355,7 @@ export function DeveloperInternals() {
           </>
         )}
         {activity && activity.events.length === 0 && (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             No recent activity for your account. Talyn keeps a short rolling window for all
             accounts.
           </p>

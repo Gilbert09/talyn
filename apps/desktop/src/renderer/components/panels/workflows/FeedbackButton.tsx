@@ -68,7 +68,7 @@ export function FeedbackButton({ surface }: { surface: string }) {
         onClick={() => setOpen(true)}
         title="Request a feature or tell us what is not working"
       >
-        <MessageSquarePlus className="mr-1 h-4 w-4" />
+        <MessageSquarePlus className="mr-1 h-3.5 w-3.5" />
         Feedback
       </Button>
 

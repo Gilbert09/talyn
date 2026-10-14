@@ -7,6 +7,7 @@ import {
   type WorkbenchEffort,
 } from '@talyn/shared';
 import { cn } from '../lib/utils';
+import { readSessionDefaults } from '../lib/sessionDefaults';
 import { FOCUS_COMPOSER_EVENT, formatKeys } from '../lib/shortcuts';
 import { agentChoice, runtimeChoice, useReadiness, type WorkbenchRuntime } from '../lib/readiness';
 import { useWorkspaceStore } from '../stores/workspace';
@@ -66,12 +67,14 @@ export function NewWorkbenchPage() {
   const [baseBranch, setBaseBranch] = useState('');
   const [source, setSource] = useState<NewWorkbenchSource>(NEW_BRANCH);
   const [fromOpen, setFromOpen] = useState(false);
-  const [runtime, setRuntime] = useState<WorkbenchRuntime>('sandbox');
+  // Read once: a change in Settings applies to the next new session, not to this draft.
+  const [defaults] = useState(readSessionDefaults);
+  const [runtime, setRuntime] = useState<WorkbenchRuntime>(defaults.runtime);
   const [runtimeTouched, setRuntimeTouched] = useState(false);
-  const [agent, setAgent] = useState<WorkbenchAgent>('claude');
-  const [model, setModel] = useState<string>(() => defaultFleetModelForAgent('claude'));
-  const [effort, setEffort] = useState<WorkbenchEffort | null>(null);
-  const [planMode, setPlanMode] = useState(false);
+  const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
+  const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
+  const [effort, setEffort] = useState<WorkbenchEffort | null>(defaults.effort);
+  const [planMode, setPlanMode] = useState(defaults.planMode);
   const [pathError, setPathError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -106,7 +109,7 @@ export function NewWorkbenchPage() {
     if (!repositories.some((r) => r.id === repositoryId)) setRepositoryId(defaultRepositoryId(workspaceId, repositories));
   }, [repositories, repositoryId, workspaceId]);
 
-  // Sandbox is the default; when readiness refuses it and Local works, move there until the person chooses.
+  // The default runtime comes from Settings; when readiness refuses it and the other works, move there until the person chooses.
   useEffect(() => {
     if (!readinessKnown || runtimeTouched || runtimes[runtime].available) return;
     const other: WorkbenchRuntime = runtime === 'sandbox' ? 'local' : 'sandbox';
@@ -382,9 +385,9 @@ export function NewWorkbenchPage() {
                         <button
                           type="button"
                           className="underline underline-offset-2 hover:text-foreground"
-                          onClick={() => openSettings('integrations')}
+                          onClick={() => openSettings('agents')}
                         >
-                          Integrations
+                          Agents
                         </button>
                       </>
                     )}

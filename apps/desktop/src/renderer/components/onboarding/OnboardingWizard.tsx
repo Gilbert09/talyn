@@ -103,10 +103,10 @@ export function OnboardingWizard() {
 
   return (
     <div className="flex h-screen items-center justify-center bg-background p-6">
-      <div className="w-full max-w-lg space-y-6 rounded-lg border bg-card p-8 shadow-sm">
+      <div className="w-full max-w-lg space-y-6 rounded-lg border bg-card p-6">
         <div className="space-y-1 text-center">
-          <h1 className="font-display text-2xl font-semibold tracking-tight">Welcome to Talyn</h1>
-          <p className="text-sm text-muted-foreground">Let's get your workspace set up.</p>
+          <h1 className="font-display text-base font-semibold tracking-tight">Welcome to Talyn</h1>
+          <p className="text-[13px] text-muted-foreground">Let's get your workspace set up.</p>
         </div>
 
         {/* Step indicator */}
@@ -136,7 +136,7 @@ export function OnboardingWizard() {
         </div>
 
         <div>
-          <h2 className="mb-3 text-lg font-medium">
+          <h2 className="mb-3 text-base font-semibold">
             {STEPS[step].title}
             {STEPS[step].optional && (
               <span className="ml-2 text-xs font-normal text-muted-foreground">Optional</span>
@@ -166,7 +166,7 @@ export function OnboardingWizard() {
             disabled={step === 0}
             className={step === 0 ? 'invisible' : ''}
           >
-            <ArrowLeft className="mr-1 h-4 w-4" />
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
             Back
           </Button>
           <Button onClick={handlePrimary} disabled={!canAdvance}>
@@ -175,7 +175,7 @@ export function OnboardingWizard() {
             ) : (
               <>
                 Next
-                <ArrowRight className="ml-1 h-4 w-4" />
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
               </>
             )}
           </Button>

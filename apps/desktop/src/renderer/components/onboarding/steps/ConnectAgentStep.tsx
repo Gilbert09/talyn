@@ -105,7 +105,7 @@ export function ConnectAgentStep() {
   return (
     <div className="space-y-4">
       <LocalAgentStatus />
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         Or run in the cloud on Talyn Fleet with your own subscription. You can add another
         agent later in Settings.
       </p>
@@ -125,10 +125,10 @@ export function ConnectAgentStep() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-medium">{option.name}</p>
-              <p className="text-sm text-muted-foreground">{option.detail}</p>
+              <p className="text-[13px] text-muted-foreground">{option.detail}</p>
             </div>
             {option.connected && (
-              <span className="flex items-center gap-1 text-sm text-green-600">
+              <span className="flex items-center gap-1 text-[13px] text-green-600">
                 <Check className="w-4 h-4" />
                 Connected
               </span>
@@ -146,7 +146,7 @@ function ChosenAgent({ onBack, children }: { onBack: () => void; children: React
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="w-4 h-4" />
         Choose a different agent

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useWorkspaceStore } from '../stores/workspace';
 import { useNavigationStore, type AutomationTab } from '../stores/navigation';
 import { AUTOMATION_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
+import { PageHeader } from '../components/ui/page-header';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { WorkflowsPanel } from '../components/panels/workflows/WorkflowsPanel';
 import { LoopsPanel } from '../components/panels/loops/LoopsPanel';
@@ -26,8 +27,7 @@ export function AutomationsView({ tab }: { tab: AutomationTab }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-4 border-b px-4 py-1.5">
-        <h1 className="text-[13px] font-semibold">Automations</h1>
+      <PageHeader title="Automations" className="gap-4">
         <Tabs value={shown} onValueChange={(next) => navigate({ view: 'automations', tab: next as AutomationTab })}>
           <TabsList aria-label="Automations">
             {tabs.map((t) => (
@@ -37,7 +37,7 @@ export function AutomationsView({ tab }: { tab: AutomationTab }) {
             ))}
           </TabsList>
         </Tabs>
-      </div>
+      </PageHeader>
       <div className="min-h-0 flex-1 overflow-hidden">
         {shown === 'workflows' && <WorkflowsPanel />}
         {shown === 'loops' && <LoopsPanel />}

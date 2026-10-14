@@ -137,13 +137,13 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
   return (
     <div className="flex flex-col h-full min-w-0 border-l-4 border-transparent">
       {/* Terminal Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b bg-card">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b bg-card">
         <div className="flex items-center gap-2.5 min-w-0">
           <span
             aria-hidden
             className={cn('w-2 h-2 rounded-full flex-none', runState.dot, runState.live && 'animate-pulse')}
           />
-          <span className="font-medium text-sm">Run</span>
+          <span className="font-medium text-[13px]">Run</span>
           <span className="text-xs text-muted-foreground">{runState.label}</span>
         </div>
         <div className="flex items-center gap-1">
@@ -155,15 +155,15 @@ export function TaskTerminal({ task }: TaskTerminalProps) {
               variant="ghost"
               size="sm"
               data-attr="task-abort"
-              className="h-8 text-destructive hover:text-destructive"
+              className="text-destructive hover:text-destructive"
               title="Cancel the cloud run and mark the task Cancelled. Use when the agent went off-track."
               onClick={handleStopTask}
               disabled={isStopping}
             >
               {isStopping ? (
-                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
-                <Square className="w-4 h-4 mr-1" />
+                <Square className="w-3.5 h-3.5" />
               )}
               Abort
             </Button>

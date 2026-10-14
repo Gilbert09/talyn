@@ -76,7 +76,7 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
       <DialogContent onClose={() => handleClose(false)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <FolderKanban className="h-5 w-5" />
+            <FolderKanban className="h-4 w-4" />
             New workspace
           </DialogTitle>
           <DialogDescription>
@@ -95,12 +95,12 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
               onClick={() => setSeed(randomSeed())}
               disabled={saving}
             >
-              <Shuffle className="mr-1 h-4 w-4" />
+              <Shuffle className="mr-1 h-3.5 w-3.5" />
               Shuffle logo
             </Button>
           </div>
           <div>
-            <label className="text-sm font-medium">Name</label>
+            <label className="text-[13px] font-medium">Name</label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -113,7 +113,7 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
             />
           </div>
           <div>
-            <label className="text-sm font-medium">Description (optional)</label>
+            <label className="text-[13px] font-medium">Description (optional)</label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -122,7 +122,7 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
               className="mt-1"
             />
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-[13px] text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>
@@ -130,7 +130,7 @@ export function CreateWorkspaceModal({ open, onOpenChange }: CreateWorkspaceModa
             Cancel
           </Button>
           <Button onClick={handleCreate} disabled={!name.trim() || saving}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create workspace'}
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Create workspace'}
           </Button>
         </DialogFooter>
       </DialogContent>

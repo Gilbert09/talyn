@@ -51,7 +51,7 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         Talyn tracks your pull requests, reviews, and CI status through GitHub. Connect
         your account to continue — a browser window opens to authorize, then you're returned
         here.
@@ -59,7 +59,7 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
 
       <div className="flex items-center gap-3 rounded-lg border bg-card p-4">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary">
-          <Github className={connected ? 'h-5 w-5 text-green-500' : 'h-5 w-5'} />
+          <Github className={connected ? 'h-4 w-4 text-green-500' : 'h-4 w-4'} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -83,7 +83,7 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
         </div>
         {!connected && (
           <Button onClick={handleConnect} disabled={connecting || !configured || !workspaceId}>
-            {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Connect'}
+            {connecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Connect'}
           </Button>
         )}
       </div>
@@ -108,8 +108,8 @@ export function ConnectGitHubStep({ workspaceId, status, user }: ConnectGitHubSt
       )}
 
       {error && (
-        <p className="flex items-center gap-2 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4" />
+        <p className="flex items-center gap-2 text-[13px] text-destructive">
+          <AlertCircle className="h-3.5 w-3.5" />
           {error}
         </p>
       )}

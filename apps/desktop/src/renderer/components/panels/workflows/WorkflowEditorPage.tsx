@@ -34,6 +34,7 @@ import {
   workflowToInput,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
+import { PageHeader } from '../../ui/page-header';
 import { Input } from '../../ui/input';
 import { Select } from '../../ui/select';
 import { Textarea } from '../../ui/textarea';
@@ -469,49 +470,51 @@ export function WorkflowEditorPage({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          Workflows
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">
-            {input.name.trim() || (editing ? 'Workflow' : 'New workflow')}
-          </h1>
-        </div>
-        {/* Only when editing. A workflow you are creating is on — nobody composes
-            a rule in order to leave it switched off, and the list row has the
-            toggle for the moment that changes. */}
-        {editing && (
-          <Button
-            variant={input.enabled === false ? 'outline' : 'secondary'}
-            size="sm"
-            onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
-          >
-            {input.enabled === false ? 'Off' : 'On'}
+      <PageHeader
+        variant="toolbar"
+        title={<span className="truncate">{input.name.trim() || (editing ? 'Workflow' : 'New workflow')}</span>}
+        icon={
+          <Button variant="ghost" size="sm" onClick={onCancel} data-attr="workflow-editor-back">
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+            Workflows
           </Button>
-        )}
-        <Button onClick={save} disabled={saving} data-attr="workflow-save">
-          {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
-        </Button>
-      </header>
+        }
+        actions={
+          <>
+            {/* Only when editing. A workflow you are creating is on — nobody composes
+                a rule in order to leave it switched off, and the list row has the
+                toggle for the moment that changes. */}
+            {editing && (
+              <Button
+                variant={input.enabled === false ? 'outline' : 'secondary'}
+                size="sm"
+                onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
+              >
+                {input.enabled === false ? 'Off' : 'On'}
+              </Button>
+            )}
+            <Button size="sm" onClick={save} disabled={saving} data-attr="workflow-save">
+              {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl space-y-4 p-6">
+        <div className="mx-auto max-w-3xl space-y-4 px-4 py-4">
           {(saveError ?? (attempted ? problem : null)) && (
-            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-500">
               {saveError ?? problem}
             </p>
           )}
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="workflow-name">
+            <label className="text-xs font-medium" htmlFor="workflow-name">
               Name
             </label>
             <Input
               id="workflow-name"
-              className="h-10 text-base"
-              value={input.name}
+                            value={input.name}
               maxLength={MAX_WORKFLOW_NAME_LENGTH}
               placeholder="Label new PRs from bots"
               onChange={(e) => setInput((p) => ({ ...p, name: e.target.value }))}
@@ -538,7 +541,7 @@ export function WorkflowEditorPage({
             }
           >
             {input.events.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Pick at least one trigger — a workflow with none can never run.
               </p>
             ) : (
@@ -553,7 +556,7 @@ export function WorkflowEditorPage({
                     <span
                       key={e}
                       className={cn(
-                        'inline-flex items-center gap-2 rounded-md border bg-muted/60 py-1.5 pl-3 pr-1.5 text-sm font-medium',
+                        'inline-flex items-center gap-2 rounded-md border bg-muted/60 py-1 pl-2.5 pr-1 text-[13px] font-medium',
                         WORKFLOW_EVENTS_REQUIRING_TRACKED_PR.includes(e) && 'border-dashed'
                       )}
                     >
@@ -610,7 +613,7 @@ export function WorkflowEditorPage({
             }
           >
             {activeConditionKeys.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 No conditions. This runs on every pull request the trigger fires for, including
                 ones you did not open.
               </p>
@@ -666,7 +669,7 @@ export function WorkflowEditorPage({
             }
           >
             {input.actions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Nothing yet. Add at least one action — labelling, asking for a review, commenting,
                 running a skill, or sending the PR to the merge queue.
               </p>
@@ -700,12 +703,12 @@ export function WorkflowEditorPage({
           <div>
             <Button variant="ghost" size="sm" onClick={() => setShowAdvanced((v) => !v)}>
               <Plus
-                className={cn('mr-1 h-4 w-4 transition-transform', showAdvanced && 'rotate-45')}
+                className={cn('mr-1 h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-45')}
               />
               Advanced
             </Button>
             {showAdvanced && (
-              <div className="mt-2 rounded-lg border p-4">
+              <div className="mt-2 rounded-lg border bg-card p-3">
                 <label className="text-xs font-medium text-muted-foreground">
                   Stop after this many runs on one PR per hour
                 </label>
@@ -729,14 +732,14 @@ export function WorkflowEditorPage({
           {/* The same action as the header's, where you finish reading. The header
               copy is for a long form you have scrolled up in; this one is for the
               end of the sentence you just wrote. */}
-          <div className="flex items-center justify-end gap-3 border-t pt-4">
+          <div className="flex items-center justify-end gap-3 border-t pt-3">
             {attempted && problem && (
               <p className="flex-1 text-xs text-red-500">{problem}</p>
             )}
-            <Button variant="ghost" onClick={onCancel} disabled={saving}>
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving} data-attr="workflow-save-inline">
+            <Button size="sm" onClick={save} disabled={saving} data-attr="workflow-save-inline">
               {saving ? 'Saving...' : editing ? 'Save changes' : 'Create workflow'}
             </Button>
           </div>

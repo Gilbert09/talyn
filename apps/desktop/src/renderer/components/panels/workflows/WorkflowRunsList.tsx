@@ -78,14 +78,14 @@ export function WorkflowRunsList({
   const selectTask = useWorkspaceStore((s) => s.selectTask);
 
   if (error) {
-    return <p className="p-4 text-sm text-red-500">{error}</p>;
+    return <p className="px-3 py-2 text-[13px] text-red-500">{error}</p>;
   }
   if (loading && runs.length === 0) {
-    return <p className="p-4 text-sm text-muted-foreground">Loading history...</p>;
+    return <p className="px-3 py-2 text-[13px] text-muted-foreground">Loading history...</p>;
   }
   if (runs.length === 0) {
     return (
-      <p className="p-4 text-sm text-muted-foreground">
+      <p className="px-3 py-2 text-[13px] text-muted-foreground">
         This workflow has not run yet. It fires on the next matching pull request event.
       </p>
     );
@@ -95,7 +95,7 @@ export function WorkflowRunsList({
     <div className="divide-y">
       {runs.map((run) => (
         <div key={run.id} className="space-y-1.5 px-4 py-3">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-[13px]">
             <Badge variant={statusVariant(run.status)}>
               {WORKFLOW_RUN_STATUS_LABELS[run.status]}
             </Badge>

@@ -25,8 +25,8 @@ import {
  */
 function DegradedRow() {
   return (
-    <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
-      <ServerCrash className="h-4 w-4 shrink-0" />
+    <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+      <ServerCrash className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1">
         Talyn is having trouble on our side. What you see may be out of date — retrying
         automatically, nothing for you to do.
@@ -38,8 +38,8 @@ function DegradedRow() {
 function OfflineRow() {
   const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
   return (
-    <div className="flex items-center gap-3 border-b border-border bg-muted px-4 py-2 text-sm text-muted-foreground">
-      <WifiOff className="h-4 w-4 shrink-0" />
+    <div className="flex items-center gap-3 border-b border-border bg-muted px-4 py-1.5 text-xs text-muted-foreground">
+      <WifiOff className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1">
         {offline
           ? "You're offline — Talyn will reconnect and refresh automatically."
@@ -52,8 +52,8 @@ function OfflineRow() {
 /** One warning row in the global banner. */
 function BannerRow({ message, action }: { message: string; action?: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
-      <AlertTriangle className="h-4 w-4 shrink-0" />
+    <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1">{message}</span>
       {action && <div className="flex shrink-0 items-center gap-1">{action}</div>}
     </div>
@@ -74,13 +74,13 @@ function NoticeRow({
   onDismiss: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 border-b border-border bg-muted px-4 py-2 text-sm text-muted-foreground">
-      <Info className="h-4 w-4 shrink-0" />
+    <div className="flex items-center gap-3 border-b border-border bg-muted px-4 py-1.5 text-xs text-muted-foreground">
+      <Info className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1">{message}</span>
       <div className="flex shrink-0 items-center gap-1">
         {action}
         <Button size="sm" variant="ghost" onClick={onDismiss} title="Dismiss" aria-label="Dismiss">
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>
@@ -280,10 +280,10 @@ export function SystemStatusBanner() {
             <>
               <Button size="sm" onClick={handleConnect} disabled={connecting}>
                 {connecting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <>
-                    <Github className="mr-1 h-4 w-4" />
+                    <Github className="mr-1 h-3.5 w-3.5" />
                     Connect GitHub
                   </>
                 )}
@@ -294,7 +294,7 @@ export function SystemStatusBanner() {
                 onClick={() => setActivePanel('settings')}
                 title="GitHub settings"
               >
-                <Settings className="h-4 w-4" />
+                <Settings className="h-3.5 w-3.5" />
               </Button>
             </>
           }
@@ -336,7 +336,7 @@ export function SystemStatusBanner() {
                   onClick={() => setActivePanel('settings')}
                   title="GitHub settings"
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="h-3.5 w-3.5" />
                 </Button>
               }
             />
@@ -370,10 +370,10 @@ export function SystemStatusBanner() {
                   ))}
                   <Button size="sm" onClick={handleConnect} disabled={connecting}>
                     {connecting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
                       <>
-                        <Github className="mr-1 h-4 w-4" />
+                        <Github className="mr-1 h-3.5 w-3.5" />
                         Reconnect GitHub
                       </>
                     )}
@@ -399,10 +399,10 @@ export function SystemStatusBanner() {
               <>
                 <Button size="sm" onClick={handleInstallApp} disabled={installing}>
                   {installing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <>
-                      <Plus className="mr-1 h-4 w-4" />
+                      <Plus className="mr-1 h-3.5 w-3.5" />
                       Install app
                     </>
                   )}
@@ -413,7 +413,7 @@ export function SystemStatusBanner() {
                   onClick={() => setActivePanel('settings')}
                   title="GitHub settings"
                 >
-                  <Settings className="h-4 w-4" />
+                  <Settings className="h-3.5 w-3.5" />
                 </Button>
               </>
             }

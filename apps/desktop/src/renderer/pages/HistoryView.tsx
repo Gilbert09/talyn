@@ -73,7 +73,7 @@ export function HistoryView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
+      <div className="app-region-drag flex shrink-0 items-center gap-3 border-b px-4 py-2">
         <h1 className="text-[13px] font-semibold">History</h1>
         <div className="relative ml-auto w-64 max-w-full">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

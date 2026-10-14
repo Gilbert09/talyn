@@ -10,7 +10,7 @@ import { useOnReconnect } from './useOnReconnect';
 /**
  * Preloads integration connection state into the workspace store at startup
  * (mount once from MainLayout) so anything that reads it — the global
- * SystemStatusBanner and Settings → Integrations — renders instantly instead
+ * SystemStatusBanner and Settings → Agents — renders instantly instead
  * of fetching on open.
  *
  * GitHub reuses useGithubConnection's fetch + on-focus re-check, which also

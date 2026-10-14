@@ -424,11 +424,11 @@ export function PRFilterModal({
           </p>
         </div>
 
-        <div className="mt-6 flex items-center justify-between gap-2">
+        <div className="mt-4 flex items-center justify-between gap-2">
           <div>
             {editing && (
               <Button variant="ghost" size="sm" onClick={() => void del()} disabled={saving}>
-                <Trash2 className="mr-1 h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
                 Delete
               </Button>
             )}
@@ -461,7 +461,7 @@ function Field({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <label className="text-sm font-medium">{label}</label>
+        <label className="text-xs font-medium">{label}</label>
         {right}
       </div>
       {children}

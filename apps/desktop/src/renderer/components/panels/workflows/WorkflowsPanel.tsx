@@ -34,7 +34,7 @@ import { WorkflowRunsList } from './WorkflowRunsList';
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="min-w-16">
-      <div className="text-sm font-medium tabular-nums">{value}</div>
+      <div className="text-[13px] font-medium tabular-nums">{value}</div>
       <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
@@ -71,20 +71,20 @@ function WorkflowRow({
 }) {
   const { stats } = workflow;
   return (
-    <div className="rounded-lg border">
-      <div className="flex items-start gap-3 p-4">
+    <div>
+      <div className="flex items-start gap-3 px-3 py-2">
         <button
           className="mt-0.5 text-muted-foreground hover:text-foreground"
           onClick={onToggleExpanded}
           title={expanded ? 'Hide history' : 'Show history'}
           data-attr="workflow-toggle-history"
         >
-          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={cn('font-medium', !workflow.enabled && 'text-muted-foreground')}>
+            <span className={cn('text-[13px] font-medium', !workflow.enabled && 'text-muted-foreground')}>
               {workflow.name}
             </span>
             {!workflow.enabled && <Badge variant="secondary">Off</Badge>}
@@ -94,13 +94,13 @@ function WorkflowRow({
               </Badge>
             )}
           </div>
-          <p className="mt-1 truncate text-sm text-muted-foreground">
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
             When {describeWorkflowTrigger(workflow).toLowerCase()} &rarr;{' '}
             {describeWorkflowActions(workflow).toLowerCase()}
           </p>
         </div>
 
-        <div className="flex items-start gap-5 pr-2">
+        <div className="flex items-start gap-4 pr-2">
           <StatCell label="24h" value={stats.runs24h} />
           <StatCell label="7d" value={stats.runs7d} />
           <StatCell label="all time" value={stats.runsTotal} />
@@ -121,10 +121,10 @@ function WorkflowRow({
             {workflow.enabled ? 'On' : 'Off'}
           </Button>
           <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
-            <Pencil className="h-4 w-4" />
+            <Pencil className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="sm" onClick={onDelete} title="Delete">
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -275,44 +275,40 @@ export function WorkflowsPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Workflow className="h-5 w-5" />
-        <div className="flex-1">
-          <h1 className="text-lg font-semibold">Workflows</h1>
-          <p className="text-sm text-muted-foreground">
-            Automate what happens on a pull request. Fires on every PR in the repositories this
-            workspace watches, including ones you did not open.
-          </p>
-        </div>
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          Automate what happens on a pull request. Fires on every PR in the repositories this
+          workspace watches, including ones you did not open.
+        </p>
         <FeedbackButton surface="workflows" />
-        <Button onClick={openNew} data-attr="workflow-new">
-          <Plus className="mr-1 h-4 w-4" />
+        <Button size="sm" onClick={openNew} data-attr="workflow-new">
+          <Plus className="mr-1 h-3.5 w-3.5" />
           New workflow
         </Button>
-      </header>
+      </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
+      <div className="flex-1 overflow-auto p-4">
+        {error && <p className="mb-3 text-[13px] text-red-500">{error}</p>}
 
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "no workflows" at somebody who has ten. */}
         {workflows === null ? (
-          <p className="text-sm text-muted-foreground">Loading workflows...</p>
+          <p className="text-[13px] text-muted-foreground">Loading workflows...</p>
         ) : workflows.length === 0 ? (
-          <div className="mx-auto max-w-lg py-12 text-center">
-            <Workflow className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <h2 className="font-medium">No workflows yet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+          <div className="mx-auto max-w-lg py-10 text-center">
+            <Workflow className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
+            <h2 className="text-[13px] font-medium">No workflows yet</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
               A workflow watches for something on a pull request and then acts: label it, pull in a
               reviewer, comment, add it to My PRs, run a skill, or send it to the merge queue.
             </p>
             <Button className="mt-4" onClick={openNew}>
-              <Plus className="mr-1 h-4 w-4" />
+              <Plus className="mr-1 h-3.5 w-3.5" />
               Create your first workflow
             </Button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y divide-border/60 rounded-lg border bg-card">
             {workflows.map((workflow) => (
               <WorkflowRow
                 key={workflow.id}

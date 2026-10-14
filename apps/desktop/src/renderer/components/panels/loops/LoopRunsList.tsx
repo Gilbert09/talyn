@@ -87,13 +87,13 @@ function RunRow({ run }: { run: LoopRun }) {
   const late = lateness(run);
   const took = duration(run);
   return (
-    <div className="flex items-start gap-3 border-b px-4 py-2.5 last:border-b-0">
+    <div className="flex items-start gap-3 border-b px-3 py-2 last:border-b-0">
       <Badge variant={STATUS_VARIANT[run.status]} className="mt-0.5 shrink-0">
         {LOOP_RUN_STATUS_LABELS[run.status]}
       </Badge>
 
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2 text-[13px]">
           <span className="tabular-nums">{when(run.createdAt)}</span>
           {run.trigger === 'manual' && <Badge variant="secondary">Run now</Badge>}
           {late && <span className="text-xs text-muted-foreground">{late}</span>}
@@ -160,13 +160,13 @@ export function LoopRunsList({
 }) {
   const { runs, loading, error, loadMore, hasMore } = useLoopRuns(loopId, liveRuns);
 
-  if (error) return <p className="px-4 py-3 text-sm text-red-500">{error}</p>;
+  if (error) return <p className="px-3 py-2 text-[13px] text-red-500">{error}</p>;
   if (loading && runs.length === 0) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">Loading history...</p>;
+    return <p className="px-3 py-2 text-[13px] text-muted-foreground">Loading history...</p>;
   }
   if (runs.length === 0) {
     return (
-      <p className="px-4 py-3 text-sm text-muted-foreground">
+      <p className="px-3 py-2 text-[13px] text-muted-foreground">
         This loop has not run yet. It will appear here the moment it does.
       </p>
     );

@@ -70,7 +70,7 @@ export function LocalImport(props: LocalImportProps) {
         setOpen(true);
         setScanVersion((version) => version + 1);
       }} data-attr="mcp-import">
-        <Download className="mr-1 h-4 w-4" />
+        <Download className="mr-1 h-3.5 w-3.5" />
         Import servers
         {!failed && availableCount !== undefined && (
           <Badge variant="secondary" className="ml-2">{availableCount}</Badge>
@@ -122,9 +122,9 @@ function LocalImportList({ connectedUrls, onImport, findings, failed }: LocalImp
   failed: boolean;
 }) {
 
-  if (failed) return <p role="alert" className="text-sm text-muted-foreground">Could not read local servers. Close this window and try again.</p>;
-  if (findings === null) return <p role="status" className="text-sm text-muted-foreground">Looking for local servers…</p>;
-  if (findings.length === 0) return <p className="text-sm text-muted-foreground">No servers found in your Claude or Codex configuration.</p>;
+  if (failed) return <p role="alert" className="text-[13px] text-muted-foreground">Could not read local servers. Close this window and try again.</p>;
+  if (findings === null) return <p role="status" className="text-[13px] text-muted-foreground">Looking for local servers…</p>;
+  if (findings.length === 0) return <p className="text-[13px] text-muted-foreground">No servers found in your Claude or Codex configuration.</p>;
 
   const importable = findings.filter((f) => f.importable && !connectedUrls.has(f.url ?? ''));
   const rest = findings.filter((f) => !f.importable || connectedUrls.has(f.url ?? ''));
@@ -137,7 +137,7 @@ function LocalImportList({ connectedUrls, onImport, findings, failed }: LocalImp
             <McpServerLogo url={f.url} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{f.name}</span>
+                <span className="truncate text-[13px] font-medium">{f.name}</span>
                 <Badge variant="outline">{f.source}</Badge>
                 {f.hasLocalCredential && <Badge variant="secondary">Key needed</Badge>}
               </div>
@@ -175,7 +175,7 @@ function LocalImportList({ connectedUrls, onImport, findings, failed }: LocalImp
               <McpServerLogo url={f.url} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{f.name}</span>
+                  <span className="truncate text-[13px] font-medium">{f.name}</span>
                   <Badge variant="outline">{f.source}</Badge>
                   {already && <Badge variant="secondary">Connected</Badge>}
                 </div>

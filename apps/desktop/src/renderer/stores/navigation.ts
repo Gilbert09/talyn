@@ -34,6 +34,11 @@ export type Route =
 export const PR_TABS: readonly PrTab[] = ['my_prs', 'reviews', 'code_reviews', 'merge_queue', 'queue'];
 export const AUTOMATION_TABS: readonly AutomationTab[] = ['workflows', 'loops', 'mcp_servers'];
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'sessions',
+  'agents',
+  'repositories',
+  'shortcuts',
+  'pullRequests',
   'workspace',
   'integrations',
   'skills',

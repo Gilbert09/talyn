@@ -173,7 +173,7 @@ export function UpgradeModal({
       <DialogContent onClose={() => handleClose(false)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5" />
+            <Zap className="h-4 w-4" />
             {upgraded
               ? 'You’re on Unlimited'
               : // This modal was not asked for — it opened to report something
@@ -206,36 +206,36 @@ export function UpgradeModal({
                 disabled={opening || waiting}
               />
             </div>
-            <ul className="space-y-1 text-sm text-muted-foreground">
+            <ul className="space-y-1 text-[13px] text-muted-foreground">
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited concurrent tasks
+                <Check className="h-3.5 w-3.5" /> Unlimited concurrent tasks
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited PRs in the merge queue
+                <Check className="h-3.5 w-3.5" /> Unlimited PRs in the merge queue
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Merge queue & auto-keep-mergeable never wait for a
+                <Check className="h-3.5 w-3.5" /> Merge queue & auto-keep-mergeable never wait for a
                 slot
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited workflows
+                <Check className="h-3.5 w-3.5" /> Unlimited workflows
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Unlimited loops
+                <Check className="h-3.5 w-3.5" /> Unlimited loops
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Review and fix as many pull requests at once as
+                <Check className="h-3.5 w-3.5" /> Review and fix as many pull requests at once as
                 you like
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Review every new pull request automatically
+                <Check className="h-3.5 w-3.5" /> Review every new pull request automatically
               </li>
               <li className="flex items-center gap-2">
-                <Check className="h-4 w-4" /> Cancel anytime from Settings
+                <Check className="h-3.5 w-3.5" /> Cancel anytime from Settings
               </li>
             </ul>
             {teamsOffered && (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[13px] text-muted-foreground">
                 Buying for a team?{' '}
                 <button
                   type="button"
@@ -251,12 +251,12 @@ export function UpgradeModal({
               </p>
             )}
             {waiting && (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[13px] text-muted-foreground">
                 <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
                 Finish checkout in your browser — this updates by itself once payment completes.
               </p>
             )}
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p className="text-[13px] text-destructive">{error}</p>}
           </div>
         )}
 
@@ -270,7 +270,7 @@ export function UpgradeModal({
               </Button>
               <Button onClick={handleUpgrade} disabled={opening || waiting}>
                 {opening ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : waiting ? (
                   'Waiting for checkout…'
                 ) : (
@@ -309,8 +309,8 @@ function PlanOption({
         selected ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/40'
       } ${disabled ? 'opacity-60' : ''}`}
     >
-      <div className="text-sm font-medium">{label}</div>
-      <div className="text-lg font-semibold">{price}</div>
+      <div className="text-[13px] font-medium">{label}</div>
+      <div className="text-sm font-semibold">{price}</div>
       {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
     </button>
   );

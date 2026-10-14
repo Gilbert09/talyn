@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 function openEditor(label = 'Keep mergeable / Fix PR') {
-  const card = screen.getByText(label).closest('[class*="p-4"]') as HTMLElement;
+  const card = screen.getByText(label).closest('[data-testid="prompt-card"]') as HTMLElement;
   fireEvent.click(within(card).getByRole('button', { name: /Customize|Edit/ }));
   return screen.getByRole('textbox') as HTMLTextAreaElement;
 }

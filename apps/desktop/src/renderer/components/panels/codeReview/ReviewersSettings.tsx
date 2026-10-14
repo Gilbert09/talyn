@@ -78,7 +78,7 @@ export function ReviewersSettings({
           aria-label="Talyn's reviewers"
         />
         <div className="flex-1">
-          <div className="text-sm font-medium">Talyn&rsquo;s reviewers</div>
+          <div className="text-[13px] font-medium">Talyn&rsquo;s reviewers</div>
           <p className="mt-1 text-xs text-muted-foreground">
             Logic, Security, Reliability and the others for the depth you choose.
           </p>
@@ -92,7 +92,7 @@ export function ReviewersSettings({
 
       <div className="border-t pt-3">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium">Your reviewers</p>
+          <p className="text-[13px] font-medium">Your reviewers</p>
           <button
             type="button"
             disabled={disabled}
@@ -239,9 +239,9 @@ function ReviewerSkillPicker({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl p-4" onClose={onClose}>
+      <DialogContent className="max-w-xl" onClose={onClose}>
         <DialogHeader className="mb-2">
-          <DialogTitle className="text-base">Add a reviewer</DialogTitle>
+          <DialogTitle>Add a reviewer</DialogTitle>
         </DialogHeader>
 
         <div className="mb-2 flex items-center gap-2">
@@ -249,7 +249,6 @@ function ReviewerSkillPicker({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search skills…"
-            className="h-8"
             data-attr="reviewer-picker-search"
           />
           {workspaceRepos.length > 1 && (
@@ -276,11 +275,11 @@ function ReviewerSkillPicker({
 
         <div className="max-h-[24rem] overflow-y-auto">
           {loading && groups.length === 0 ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading skills…
+            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading skills…
             </div>
           ) : groups.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">
+            <p className="py-6 text-center text-xs text-muted-foreground">
               {query.trim()
                 ? 'No skills match your search.'
                 : 'No skills found. Commit one under .claude/skills in the repository, or add one in Settings, Skills.'}
@@ -307,7 +306,7 @@ function ReviewerSkillPicker({
                     >
                       <group.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{skill.name}</span>
+                        <span className="block truncate text-[13px] font-medium">{skill.name}</span>
                         {(refusal || skill.description) && (
                           <span className="mt-0.5 block truncate text-xs text-muted-foreground">
                             {refusal ?? skill.description}

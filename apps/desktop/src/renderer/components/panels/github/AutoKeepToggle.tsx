@@ -161,7 +161,7 @@ export function AutoKeepToggle() {
             : 'Let a cloud agent clear conflicts and red CI on every PR you open'
         }
         className={cn(
-          'group/ak relative inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1',
+          'group/ak relative inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5',
           'text-xs font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60',
           enabled
             ? // ON — lit up. The glow is a coloured ring plus a soft outer shadow;
@@ -210,7 +210,7 @@ export function AutoKeepToggle() {
         <DialogContent onClose={() => setExplaining(false)}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-violet-500" />
+              <Sparkles className="h-4 w-4 text-violet-500" />
               Keep new PRs green
             </DialogTitle>
             <DialogDescription>
@@ -219,7 +219,7 @@ export function AutoKeepToggle() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 py-2 text-sm">
+          <div className="space-y-3 py-2 text-[13px]">
             <p className="text-muted-foreground">
               When a watched PR falls behind its base, hits a conflict, or goes red, Talyn
               sends a cloud agent to fix it and push the fix to your branch. It keeps doing

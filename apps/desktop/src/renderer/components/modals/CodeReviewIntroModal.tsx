@@ -96,7 +96,7 @@ export function CodeReviewIntroModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[13px] text-muted-foreground">
             It reads the change, works out what is actually wrong with it, and gives you a short
             list. You pick what to fix and Talyn fixes it.
           </p>
@@ -106,7 +106,7 @@ export function CodeReviewIntroModal({
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
                 Try it on
               </p>
-              <p className="mt-0.5 truncate text-sm font-medium">
+              <p className="mt-0.5 truncate text-[13px] font-medium">
                 {example.summary.title || `${example.owner}/${example.repo}#${example.number}`}
               </p>
               <p className="truncate text-[11px] text-muted-foreground">

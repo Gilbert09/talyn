@@ -87,17 +87,11 @@ export function CodeReviewsPanel() {
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="app-region-drag border-b p-4">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <ScanSearch className="h-4 w-4" />
-          Code review
-        </h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Every review this workspace has run.
-        </p>
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1 text-xs text-muted-foreground">
+        <p className="py-1">Every review this workspace has run.</p>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto p-4">
+      <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs">
             {error}
@@ -110,20 +104,24 @@ export function CodeReviewsPanel() {
           <EmptyState onGoToPrs={() => setActivePanel('my_prs')} />
         )}
 
-        {(items ?? []).map((item) => (
-          <ReviewRow
-            key={item.review.id}
-            item={item}
-            fixStatus={fixStatusFor(item)}
-            onOpen={() => setSelectedId(item.pullRequest.id)}
-            onOpenTask={() => {
-              const id = item.pullRequest.taskId;
-              if (!id) return;
-              selectTask(id);
-              setActivePanel('queue');
-            }}
-          />
-        ))}
+        {items !== null && items.length > 0 && (
+          <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border bg-card">
+            {items.map((item) => (
+              <ReviewRow
+                key={item.review.id}
+                item={item}
+                fixStatus={fixStatusFor(item)}
+                onOpen={() => setSelectedId(item.pullRequest.id)}
+                onOpenTask={() => {
+                  const id = item.pullRequest.taskId;
+                  if (!id) return;
+                  selectTask(id);
+                  setActivePanel('queue');
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* The same sheet the pull-request list opens, `contained` so it floats
@@ -152,9 +150,13 @@ export function CodeReviewsPanel() {
  */
 function LoadingRows() {
   return (
-    <div className="space-y-2" aria-busy="true" aria-label="Loading your reviews">
+    <div
+      className="divide-y divide-border/60 rounded-lg border border-border bg-card"
+      aria-busy="true"
+      aria-label="Loading your reviews"
+    >
       {[0, 1, 2].map((i) => (
-        <div key={i} className="rounded-md border p-3">
+        <div key={i} className="px-3 py-2">
           <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
           <div className="mt-2 h-2.5 w-1/3 animate-pulse rounded bg-muted/70" />
           <div className="mt-3 flex gap-3">
@@ -176,14 +178,14 @@ function LoadingRows() {
  */
 function EmptyState({ onGoToPrs }: { onGoToPrs: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-md border border-dashed px-6 py-12 text-center">
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-12 text-center">
       <ScanSearch className="h-6 w-6 text-muted-foreground" />
-      <p className="mt-3 text-sm font-medium">No reviews yet</p>
+      <p className="mt-2 text-[13px] font-medium">No reviews yet</p>
       <p className="mt-1 max-w-sm text-xs text-muted-foreground">
         Talyn reads a pull request from several angles, checks what it found against the
         code, and shows you what is worth fixing. Reviews you run collect here.
       </p>
-      <Button size="sm" variant="outline" className="mt-4" onClick={onGoToPrs}>
+      <Button size="sm" variant="outline" className="mt-3" onClick={onGoToPrs}>
         Go to My PRs
       </Button>
       <p className="mt-2 text-[11px] text-muted-foreground">
@@ -224,14 +226,14 @@ function ReviewRow({
     <div
       data-stage={stage.stage}
       className={cn(
-        'rounded-md border border-l-4 transition-colors hover:border-muted-foreground/40',
+        'border-l-4 transition-colors hover:bg-accent/50',
         reviewStageEdgeClass(stage.tone)
       )}
     >
-      <button type="button" onClick={onOpen} className="w-full p-3 text-left">
+      <button type="button" onClick={onOpen} className="w-full px-3 py-2 text-left">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">{pullRequest.summary.title}</p>
+            <p className="truncate text-[13px] font-medium">{pullRequest.summary.title}</p>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
               {pullRequest.owner}/{pullRequest.repo}#{pullRequest.number}
               {pullRequest.summary.author && ` · @${pullRequest.summary.author}`}
@@ -242,7 +244,7 @@ function ReviewRow({
           </div>
           <span
             className={cn(
-              'shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-medium',
+              'shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium',
               reviewStageChipClass(stage.tone)
             )}
           >
@@ -319,7 +321,7 @@ function ReviewRow({
           this goes somewhere else entirely. The GitHub link that used to sit
           here is gone: the row opens the detail sheet, which links out. */}
       {showFix && (
-        <div className="flex items-center gap-3 border-t px-3 py-1.5">
+        <div className="flex items-center gap-3 border-t border-border/60 px-3 py-1.5">
           <button
             type="button"
             onClick={onOpenTask}

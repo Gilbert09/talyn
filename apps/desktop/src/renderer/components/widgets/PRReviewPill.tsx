@@ -57,7 +57,7 @@ export function PRReviewPill({
           className
         )}
       >
-        <Icon className="w-3.5 h-3.5 shrink-0" />
+        <Icon className="w-3 h-3 shrink-0" />
       </span>
     );
   }
@@ -66,12 +66,12 @@ export function PRReviewPill({
     <span
       title={variant.title}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium',
+        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium',
         toneClass(variant.tone),
         className
       )}
     >
-      <Icon className="w-3.5 h-3.5 shrink-0" />
+      <Icon className="w-3 h-3 shrink-0" />
       <span className="truncate">{variant.label}</span>
     </span>
   );

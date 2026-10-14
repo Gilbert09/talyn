@@ -111,8 +111,8 @@ export function Welcome() {
       </ul>
       <p className="max-w-md text-xs text-muted-foreground">
         To run agents in a sandbox, connect your Claude or ChatGPT subscription in{' '}
-        <button type="button" className="underline hover:text-foreground" onClick={() => openSettings('integrations')}>
-          Settings → Integrations
+        <button type="button" className="underline hover:text-foreground" onClick={() => openSettings('agents')}>
+          Settings → Agents
         </button>
         .
       </p>

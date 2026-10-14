@@ -544,18 +544,18 @@ export function PRDetailSheet({
             : 'fixed inset-y-0 right-0 z-40 shadow-2xl'
       )}
     >
-      <header className="flex shrink-0 flex-col gap-3 border-b p-4">
+      <header className="flex shrink-0 flex-col gap-3 border-b p-3">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             {!view ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+              <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 Loading…
               </div>
             ) : (
               <div className="flex items-center gap-2">
                 <h2
-                  className="truncate text-base font-semibold leading-snug"
+                  className="truncate text-[13px] font-semibold leading-snug"
                   title={view.row.summary.title}
                 >
                   {view.row.summary.title}
@@ -580,7 +580,7 @@ export function PRDetailSheet({
               disabled={loading || refreshing}
               title="Re-fetch from GitHub"
             >
-              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+              <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
             </Button>
             {view && <OpenInWorkbenchButton row={view.row} onOpened={onClose} />}
             {view && (
@@ -590,11 +590,11 @@ export function PRDetailSheet({
                 onClick={() => window.open(view.row.summary.url, '_blank', 'noopener,noreferrer')}
                 title="Open on GitHub"
               >
-                <ExternalLink className="h-4 w-4" />
+                <ExternalLink className="h-3.5 w-3.5" />
               </Button>
             )}
             <Button variant="ghost" className="h-7 w-7 p-0" onClick={onClose} title="Close">
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
@@ -985,7 +985,7 @@ function DetailTabs({
       </nav>
 
       <ScrollArea className="flex-1">
-        <div className="p-4">
+        <div className="p-3">
           {error && (
             <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
               {error}
@@ -1072,10 +1072,10 @@ function OverviewTab({
   // the author has just deleted.
   const body = (data.fresh ? data.fresh.body : cachedBody) ?? '';
   return (
-    <div className="space-y-4 text-sm">
+    <div className="space-y-4 text-[13px]">
       {body ? (
         <section>
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Description
           </h3>
           <div className="text-xs leading-relaxed [overflow-wrap:anywhere]">
@@ -1092,7 +1092,7 @@ function OverviewTab({
       )}
       <MergeQueueSection row={data.row} />
       <section>
-        <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Status
         </h3>
         <ul className="space-y-1 text-xs">
@@ -1212,7 +1212,7 @@ function MergeQueueSection({ row }: { row: PRRow }) {
 
   return (
     <section>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         Merge queue
       </h3>
       <div className="space-y-2 rounded-md border p-3 text-xs">
@@ -1377,7 +1377,7 @@ export function ChecksTab({
   }
 
   return (
-    <div className="space-y-3 text-sm">
+    <div className="space-y-3 text-[13px]">
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
         <CheckCountTile
           label="Passed"
@@ -1630,15 +1630,15 @@ export function ReviewsTab({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+      <div className="flex items-center gap-2 py-4 text-[13px] text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Loading reviews…
       </div>
     );
   }
   if (error) {
     return (
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3 text-[13px]">
         <p className="text-xs text-muted-foreground">Couldn't load reviews: {error}</p>
         <a
           href={data.row.summary.url}
@@ -1699,7 +1699,7 @@ export function ReviewsTab({
     : 0;
 
   return (
-    <div className="space-y-3 text-sm">
+    <div className="space-y-3 text-[13px]">
       {unresolvedCount > 0 && (
         <p className="text-xs text-muted-foreground">
           {unresolvedCount} unresolved inline {unresolvedCount === 1 ? 'comment' : 'comments'}
@@ -2070,15 +2070,15 @@ function FilesTab({
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+      <div className="flex items-center gap-2 py-4 text-[13px] text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
         Loading files…
       </div>
     );
   }
   if (error) {
     return (
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3 text-[13px]">
         <p className="text-xs text-muted-foreground">Couldn't load files: {error}</p>
         <GitHubFilesLink url={data.row.summary.url} />
       </div>
@@ -2094,7 +2094,7 @@ function FilesTab({
   );
 
   return (
-    <div className="space-y-2 text-sm">
+    <div className="space-y-2 text-[13px]">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
           {files.length} {files.length === 1 ? 'file' : 'files'} changed

@@ -164,7 +164,7 @@ export function SkillPickerModal({
         <meta.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium">{skill.name}</span>
+            <span className="truncate text-[13px] font-medium">{skill.name}</span>
             <span className="shrink-0 rounded border px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {meta.label}
             </span>
@@ -204,9 +204,9 @@ export function SkillPickerModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl p-4" onClose={onClose}>
+      <DialogContent className="max-w-xl" onClose={onClose}>
         <DialogHeader className="mb-2">
-          <DialogTitle className="flex items-center gap-2 text-base">
+          <DialogTitle className="flex items-center gap-2">
             <Wand2 className="h-4 w-4 text-violet-500" />
             {pendingSkill
               ? `Run "${pendingSkill.name}" with…`
@@ -222,7 +222,7 @@ export function SkillPickerModal({
                 type="button"
                 disabled={launching}
                 onClick={() => void launch(pendingSkill, p.type, p.model)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-muted"
               >
                 {launching ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -239,7 +239,7 @@ export function SkillPickerModal({
                 onClose();
                 onOpenIntegrations?.();
               }}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-muted-foreground hover:bg-muted"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-muted-foreground hover:bg-muted"
             >
               <Settings className="h-3.5 w-3.5" />
               Set default…
@@ -286,11 +286,11 @@ export function SkillPickerModal({
 
             <div className="max-h-[26rem] overflow-y-auto">
               {loading && navOrder.length === 0 ? (
-                <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading skills…
+                <div className="flex items-center justify-center gap-2 py-6 text-[13px] text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading skills…
                 </div>
               ) : navOrder.length === 0 ? (
-                <div className="py-6 text-center text-sm text-muted-foreground">
+                <div className="py-6 text-center text-[13px] text-muted-foreground">
                   {query.trim()
                     ? 'No skills match your search.'
                     : 'No skills found — add one in Settings → Skills, drop one in ~/.claude/skills, or commit one under .claude/skills in the repo.'}

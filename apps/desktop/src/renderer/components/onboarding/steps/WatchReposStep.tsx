@@ -107,7 +107,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         Add at least one repository. These are the repos you will code in with Talyn, and
         the ones whose PRs, reviews and CI status it tracks.
       </p>
@@ -120,8 +120,8 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
               className="flex items-center justify-between rounded bg-secondary p-2"
             >
               <div className="flex min-w-0 items-center gap-2">
-                <Github className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="truncate text-sm">{repo.fullName}</span>
+                <Github className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-[13px]">{repo.fullName}</span>
                 {checked && !isOwnerCovered(repo.owner, installations) && (
                   <Badge variant="warning" className="shrink-0 text-xs">
                     App not installed
@@ -164,7 +164,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           disabled={reposLoading}
           title="Re-fetch your repos + all your orgs' repos from GitHub"
         >
-          <RefreshCw className={reposLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+          <RefreshCw className={reposLoading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -173,7 +173,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
       </p>
 
       {firstLoad ? (
-        <div className="flex items-start gap-2 rounded-md border p-3 text-sm text-muted-foreground">
+        <div className="flex items-start gap-2 rounded-md border p-3 text-[13px] text-muted-foreground">
           <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
           <div>
             <p>Loading your repositories from GitHub…</p>
@@ -183,7 +183,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           </div>
         </div>
       ) : loadFailed && availableRepos.length === 0 ? (
-        <p className="p-2 text-sm text-muted-foreground">
+        <p className="p-2 text-[13px] text-muted-foreground">
           Could not load your repositories from GitHub. Try Refresh.
         </p>
       ) : filtered.length > 0 ? (
@@ -191,11 +191,11 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           {filtered.map((repo) => (
             <button
               key={repo.id}
-              className="flex w-full items-center gap-2 p-2 text-left text-sm hover:bg-secondary"
+              className="flex w-full items-center gap-2 p-2 text-left text-[13px] hover:bg-secondary"
               onClick={() => handleAddRepo(repo)}
               disabled={mutating}
             >
-              <Github className="h-4 w-4 text-muted-foreground" />
+              <Github className="h-3.5 w-3.5 text-muted-foreground" />
               <span>{repo.full_name}</span>
               <span className="ml-auto flex items-center gap-1">
                 {checked && !isOwnerCovered(repo.owner.login, installations) && (
@@ -213,7 +213,7 @@ export function WatchReposStep({ workspaceId }: WatchReposStepProps) {
           ))}
         </div>
       ) : (
-        <p className="p-2 text-sm text-muted-foreground">
+        <p className="p-2 text-[13px] text-muted-foreground">
           {search
             ? 'No matching repositories. Try Refresh if a repo is missing.'
             : 'No repositories found. Try Refresh.'}

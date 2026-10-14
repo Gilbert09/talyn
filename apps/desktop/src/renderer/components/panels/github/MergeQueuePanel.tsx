@@ -80,7 +80,7 @@ function MergeQueueModeToggle() {
           disabled={saving || !currentWorkspaceId}
           onClick={() => void onPick(m)}
           className={cn(
-            'inline-flex items-center gap-1 px-2.5 py-1 font-medium transition-colors',
+            'inline-flex items-center gap-1 px-2 py-1 font-medium transition-colors',
             m === mode
               ? 'bg-primary text-primary-foreground'
               : 'bg-background text-muted-foreground hover:text-foreground'
@@ -141,15 +141,13 @@ export function MergeQueuePanel() {
 
   return (
     <GitHubPageShell
-      title="Merge Queue"
-      icon={<GitMerge className="h-5 w-5" />}
       activeView="all"
       search={search}
       onSearch={setSearch}
       searchPlaceholder="Search queued PRs or #number… (⌘F)"
       filters={<MergeQueueModeToggle />}
       rows={queued}
-      emptyIcon={<GitMerge className="h-8 w-8" />}
+      emptyIcon={<GitMerge className="h-6 w-6" />}
       emptyTitle={hasSearch ? 'No queued PRs match your search.' : 'The merge queue is empty.'}
       emptyHint={
         hasSearch
@@ -161,7 +159,7 @@ export function MergeQueuePanel() {
         <div className="flex flex-col">
           {groups.map((g) => (
             <div key={g.key}>
-              <div className="sticky top-0 z-[1] flex items-center gap-1.5 border-b bg-muted/60 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+              <div className="sticky top-0 z-[1] flex items-center gap-1.5 border-b border-border/60 bg-muted/60 px-3 py-1 text-[11px] font-medium text-muted-foreground">
                 {g.kind === 'stack' ? (
                   <Layers className="h-3.5 w-3.5" />
                 ) : (

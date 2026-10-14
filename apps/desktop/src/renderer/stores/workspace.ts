@@ -103,6 +103,11 @@ export const HISTORY_STATUS_PARAM = HISTORY_TASK_STATUSES.join(',');
  *  provider status, the per-task "Set default" action) can deep-link into a
  *  specific section. */
 export type SettingsSection =
+  | 'sessions'
+  | 'agents'
+  | 'repositories'
+  | 'shortcuts'
+  | 'pullRequests'
   | 'workspace'
   | 'integrations'
   | 'skills'
@@ -267,7 +272,7 @@ interface WorkspaceState {
   // (never persisted) — cleared immediately after it's consumed.
   justOnboarded: boolean;
   // Integration connection state for the current workspace, preloaded at
-  // startup (useSystemStatus) so Settings → Integrations renders instantly
+  // startup (useSystemStatus) so Settings → Agents renders instantly
   // instead of fetching on open. null = not yet checked.
   githubStatus: GitHubStatus | null;
   /**

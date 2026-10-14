@@ -33,7 +33,7 @@ import { LoopRunsList } from './LoopRunsList';
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="min-w-16">
-      <div className="text-sm font-medium tabular-nums">{value}</div>
+      <div className="text-[13px] font-medium tabular-nums">{value}</div>
       <div className="text-xs text-muted-foreground">{label}</div>
     </div>
   );
@@ -86,20 +86,20 @@ function LoopRow({
 }) {
   const { stats } = loop;
   return (
-    <div className="rounded-lg border">
-      <div className="flex items-start gap-3 p-4">
+    <div>
+      <div className="flex items-start gap-3 px-3 py-2">
         <button
           className="mt-0.5 text-muted-foreground hover:text-foreground"
           onClick={onToggleExpanded}
           title={expanded ? 'Hide history' : 'Show history'}
           data-attr="loop-toggle-history"
         >
-          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={cn('font-medium', !loop.enabled && 'text-muted-foreground')}>
+            <span className={cn('text-[13px] font-medium', !loop.enabled && 'text-muted-foreground')}>
               {loop.name}
             </span>
             {!loop.enabled && <Badge variant="secondary">Off</Badge>}
@@ -109,20 +109,20 @@ function LoopRow({
               </Badge>
             )}
           </div>
-          <p className="mt-1 truncate text-sm text-muted-foreground">
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {describeSchedule(loop.cron, loop.timezone)} &middot; {loop.repoFullName} &middot;{' '}
             <span className="font-mono text-xs">{loop.model}</span>
           </p>
           {/* The engine switched this off. Says which reason, because every one
               of them has a different fix. */}
           {loop.disabledReason && (
-            <p className="mt-1 text-xs text-yellow-500">
+            <p className="mt-0.5 text-xs text-yellow-500">
               {LOOP_DISABLED_REASON_LABELS[loop.disabledReason]}
             </p>
           )}
         </div>
 
-        <div className="flex items-start gap-5 pr-2">
+        <div className="flex items-start gap-4 pr-2">
           <StatCell
             label="next run"
             value={loop.enabled ? relativeFuture(loop.nextRunAt) : 'paused'}
@@ -145,13 +145,13 @@ function LoopRow({
             {loop.enabled ? 'On' : 'Off'}
           </Button>
           <Button variant="ghost" size="sm" onClick={onRunNow} title="Run now">
-            <Play className="h-4 w-4" />
+            <Play className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="sm" onClick={onEdit} title="Edit">
-            <Pencil className="h-4 w-4" />
+            <Pencil className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="sm" onClick={onDelete} title="Delete">
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -291,45 +291,41 @@ export function LoopsPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Repeat className="h-5 w-5" />
-        <div className="flex-1">
-          <h1 className="text-lg font-semibold">Loops</h1>
-          <p className="text-sm text-muted-foreground">
-            Run a prompt on a schedule. Every run starts a cloud task on the agent you pick, and
-            opens a pull request if the work warrants one.
-          </p>
-        </div>
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          Run a prompt on a schedule. Every run starts a cloud task on the agent you pick, and
+          opens a pull request if the work warrants one.
+        </p>
         <FeedbackButton surface="loops" />
-        <Button onClick={openNew} data-attr="loop-new">
-          <Plus className="mr-1 h-4 w-4" />
+        <Button size="sm" onClick={openNew} data-attr="loop-new">
+          <Plus className="mr-1 h-3.5 w-3.5" />
           New loop
         </Button>
-      </header>
+      </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
+      <div className="flex-1 overflow-auto p-4">
+        {error && <p className="mb-3 text-[13px] text-red-500">{error}</p>}
 
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "no loops" at somebody who has ten. */}
         {loops === null ? (
-          <p className="text-sm text-muted-foreground">Loading loops...</p>
+          <p className="text-[13px] text-muted-foreground">Loading loops...</p>
         ) : loops.length === 0 ? (
-          <div className="mx-auto max-w-lg py-12 text-center">
-            <Repeat className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <h2 className="font-medium">No loops yet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+          <div className="mx-auto max-w-lg py-10 text-center">
+            <Repeat className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
+            <h2 className="text-[13px] font-medium">No loops yet</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
               A loop runs the same prompt on a repository on a schedule — sweep yesterday&rsquo;s
               failing checks every morning, keep dependencies current every Monday, or draft the
               release notes every Friday at five.
             </p>
             <Button className="mt-4" onClick={openNew}>
-              <Plus className="mr-1 h-4 w-4" />
+              <Plus className="mr-1 h-3.5 w-3.5" />
               Create your first loop
             </Button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="divide-y divide-border/60 rounded-lg border bg-card">
             {loops.map((loop) => (
               <LoopRow
                 key={loop.id}

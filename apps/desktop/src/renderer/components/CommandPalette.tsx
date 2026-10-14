@@ -18,6 +18,11 @@ import {
 } from './ui/command';
 
 const SETTINGS_LABEL: Record<SettingsSection, string> = {
+  sessions: 'Sessions',
+  agents: 'Agents',
+  repositories: 'Repositories',
+  shortcuts: 'Shortcuts',
+  pullRequests: 'Pull requests',
   workspace: 'Workspace',
   integrations: 'Integrations',
   skills: 'Skills',

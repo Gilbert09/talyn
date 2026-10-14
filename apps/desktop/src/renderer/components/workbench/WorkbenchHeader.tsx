@@ -187,7 +187,7 @@ export function WorkbenchHeader({
   const primaryKeys = primary ? keysLabel(primary) : null;
 
   return (
-    <div className="flex items-center gap-2 border-b px-3 py-1.5">
+    <div className="app-region-drag flex items-center gap-2 border-b px-3 py-1.5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold">{workbench.name}</h1>
@@ -199,7 +199,13 @@ export function WorkbenchHeader({
             {workbench.runtime === 'local' ? 'Local' : 'Sandbox'}
           </span>
           {pr && (
-            <a href={pr.summary.url} target="_blank" rel="noopener noreferrer" title={pr.summary.title}>
+            <a
+              href={pr.summary.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={pr.summary.title}
+              className="app-region-no-drag"
+            >
               <PrPill number={pr.number} state={pr.state} draft={pr.summary.draft} />
             </a>
           )}
@@ -212,7 +218,7 @@ export function WorkbenchHeader({
           <button
             type="button"
             onClick={copyBranch}
-            className="rounded p-0.5 hover:bg-accent hover:text-foreground"
+            className="app-region-no-drag rounded p-0.5 hover:bg-accent hover:text-foreground"
             title="Copy the branch name"
             aria-label="Copy the branch name"
           >

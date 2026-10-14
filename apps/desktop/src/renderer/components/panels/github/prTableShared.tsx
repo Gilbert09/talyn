@@ -119,7 +119,7 @@ interface PRTableProps {
   /** One entry per AGENT the workspace can run a task on — Talyn Fleet
    *  contributes one per connected subscription, each carrying its model. */
   taskProviders?: { type: string; displayName: string; model?: string }[];
-  /** Navigate to Settings → Integrations (the dropdown's "Set default" item). */
+  /** Navigate to Settings → Pull requests (the dropdown's "Set default" item). */
   onOpenIntegrations?: () => void;
   /** Live status of each linked task, keyed by task id. */
   taskStatusById: Map<string, TaskStatus>;
@@ -184,10 +184,10 @@ export function PRTable({
   }, [rows]);
   return (
     <>
-    <table className="w-full text-sm">
-      <thead className="sticky top-0 bg-background text-xs uppercase tracking-wide text-muted-foreground">
+    <table className="w-full text-[13px]">
+      <thead className="sticky top-0 bg-background text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         <tr>
-          <th className="px-4 py-2 text-left font-medium">Title</th>
+          <th className="px-3 py-2 text-left font-medium">Title</th>
           {variant === 'queue' && (
             <th className="min-w-[190px] px-2 py-2 text-left font-medium">Queue</th>
           )}
@@ -196,7 +196,7 @@ export function PRTable({
           {/* Extra right padding: the list scrolls under an 8px overlay-ish
               scrollbar and an auto-layout table can exceed the viewport by
               that much — the gutter keeps the row actions clear of it. */}
-          <th className="w-10 py-2 pl-2 pr-4"></th>
+          <th className="w-10 py-2 pl-2 pr-3"></th>
         </tr>
       </thead>
       <tbody>
@@ -648,7 +648,7 @@ function PRTableRow({
     <tr
       data-review-ranking-id={variant === 'review' ? row.id : undefined}
       className={cn(
-        'group cursor-pointer border-b transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'group cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40 focus:bg-muted/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         isSelected && 'bg-muted/40'
       )}
       tabIndex={0}
@@ -686,7 +686,7 @@ function PRTableRow({
           it truncates to one line instead. Without max-w-0 an auto-layout
           table refuses to shrink below the full text width and `truncate`
           never engages. */}
-      <td className="w-full max-w-0 px-4 py-2">
+      <td className="w-full max-w-0 px-3 py-2">
         <div
           className={cn(
             'flex min-w-0 flex-col gap-0.5',
@@ -1086,7 +1086,7 @@ function PRTableRow({
       <td className="px-2 py-2 text-xs text-muted-foreground" title={updatedTooltip}>
         {formatRelative(summary.updatedAt || row.lastPolledAt)}
       </td>
-      <td className="py-2 pl-2 pr-4" title={rowError ?? undefined}>
+      <td className="py-2 pl-2 pr-3" title={rowError ?? undefined}>
         <div className="flex items-center justify-end gap-1">
           {/* Row actions reveal on hover/focus to keep the table calm.
               Merge, merge-queue, and "get mergeable" are owner actions, so
@@ -1343,7 +1343,7 @@ function PRTableRow({
                           setTaskMenuOpen(false);
                           void startTask(p.type, p.model);
                         }}
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-muted"
                       >
                         <Bot className="h-3.5 w-3.5 text-muted-foreground" />
                         {p.displayName}
@@ -1356,7 +1356,7 @@ function PRTableRow({
                         setTaskMenuOpen(false);
                         onOpenIntegrations?.();
                       }}
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] text-muted-foreground hover:bg-muted"
                     >
                       <Settings className="h-3.5 w-3.5" />
                       Set default…

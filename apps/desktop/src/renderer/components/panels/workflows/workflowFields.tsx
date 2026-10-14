@@ -69,7 +69,7 @@ export function DropdownButton({
   return (
     <div className="relative inline-block" ref={ref}>
       <Button variant={variant} size="sm" onClick={() => setOpen((o) => !o)}>
-        {icon ?? <Plus className="mr-1 h-4 w-4" />}
+        {icon ?? <Plus className="mr-1 h-3.5 w-3.5" />}
         {label}
         <ChevronDown className="ml-1 h-3 w-3 opacity-60" />
       </Button>
@@ -87,7 +87,7 @@ export function DropdownButton({
               <button
                 key={o.value}
                 disabled={o.disabled}
-                className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-40"
+                className="block w-full rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:opacity-40"
                 onClick={() => {
                   onPick(o.value);
                   setOpen(false);
@@ -197,7 +197,7 @@ export function TokenField({
             // Chrome draws its own blue ring on `:focus-visible`, which the app's
             // global `*:focus { outline: none }` does not cover — so both are
             // named here explicitly rather than relying on the shorthand.
-            className="w-full bg-transparent py-0.5 text-sm placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0"
+            className="w-full bg-transparent py-0.5 text-[13px] placeholder:text-muted-foreground focus:outline-none focus-visible:outline-none focus-visible:ring-0"
             value={text}
             placeholder={values.length === 0 ? placeholder : 'Add another...'}
             onChange={(e) => setText(e.target.value)}
@@ -231,7 +231,7 @@ export function TokenField({
                 matches.map((s) => (
                   <button
                     key={s}
-                    className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-accent"
+                    className="block w-full rounded px-2 py-1 text-left text-[13px] hover:bg-accent"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => add(s)}
                   >
@@ -435,17 +435,19 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-lg border">
-      <header className="flex items-start gap-3 border-b px-4 py-3">
+    <section>
+      <div className="mb-1.5 flex items-end gap-3 px-1">
         <div className="flex-1">
-          <h2 className="text-sm font-semibold">{title}</h2>
+          <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {title}
+          </h2>
           {description && (
             <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
           )}
         </div>
         {action}
-      </header>
-      <div className="space-y-3 p-4">{children}</div>
+      </div>
+      <div className="space-y-2 rounded-lg border bg-card p-3">{children}</div>
     </section>
   );
 }
@@ -463,17 +465,17 @@ export function EditorRow({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-md border bg-card/40 p-3">
+    <div className="rounded-md border bg-background/40 p-2.5">
       <div className="flex items-start gap-2">
         <div className="flex-1">
-          <div className="text-sm font-medium">{title}</div>
+          <div className="text-[13px] font-medium">{title}</div>
           {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
         </div>
         <Button variant="ghost" size="sm" onClick={onRemove} aria-label={`Remove ${title}`}>
-          <X className="h-4 w-4" />
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
-      {children && <div className="mt-2.5">{children}</div>}
+      {children && <div className="mt-2">{children}</div>}
     </div>
   );
 }

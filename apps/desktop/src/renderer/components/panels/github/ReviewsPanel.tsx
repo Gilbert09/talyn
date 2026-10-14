@@ -1,6 +1,6 @@
 import { loadReviewSortMode, REVIEW_SORT_MODE_KEY } from '@talyn/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, EyeOff } from 'lucide-react';
 import { api, type ReviewRankPayload } from '../../../lib/api';
 import { trackEvent } from '../../../lib/analytics';
 import { useWorkspaceStore } from '../../../stores/workspace';
@@ -348,8 +348,6 @@ export function ReviewsPanel() {
   return (
     <>
       <GitHubPageShell
-        title="Review requests"
-        icon={<Eye className="h-5 w-5" />}
         activeView="review"
         search={search}
         onSearch={setSearch}
@@ -421,7 +419,7 @@ export function ReviewsPanel() {
                   }
                   setShowHidden((v) => !v);
                 }}
-                className="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
               >
                 {showHidden ? (
                   <ChevronDown className="h-3.5 w-3.5" />

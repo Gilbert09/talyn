@@ -29,7 +29,7 @@ import { useWorkspaceStore } from '../../stores/workspace';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
-import { Card } from '../ui/card';
+import { SettingRow, SettingsSection } from '../ui/settings';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 
 const SELECT_CLASS =
@@ -114,64 +114,67 @@ export function InstructionsSettings() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium">Instructions</h3>
-        <p className="text-sm text-muted-foreground mt-1">
-          The prompts Talyn hands to a cloud agent. Each starts from Talyn&apos;s default; customize
-          one to replace it for this workspace. Anything in double braces, like{' '}
-          <code className="text-xs">{'{{pr.url}}'}</code>, is filled in per run.
-        </p>
-      </div>
-
-      {PROMPT_KINDS.map((kind) => {
-        const info = PROMPT_KIND_INFO[kind];
-        const override = promptTemplateOverride(workspace?.settings, kind);
-        const stale = override ? promptDefaultChangedSince(override, kind) : false;
-        return (
-          <Card key={kind} className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <h4 className="font-medium flex items-center gap-2">
+      <SettingsSection
+        title="Prompts"
+        description={
+          <>
+            The prompts Talyn hands to a cloud agent. Each starts from Talyn&apos;s default;
+            customize one to replace it for this workspace. Anything in double braces, like{' '}
+            <code className="text-[11px]">{'{{pr.url}}'}</code>, is filled in per run.
+          </>
+        }
+      >
+        {PROMPT_KINDS.map((kind) => {
+          const info = PROMPT_KIND_INFO[kind];
+          const override = promptTemplateOverride(workspace?.settings, kind);
+          const stale = override ? promptDefaultChangedSince(override, kind) : false;
+          return (
+            <div key={kind} data-testid="prompt-card">
+              <SettingRow
+                className="items-start"
+                label={
+                  <span className="flex items-center gap-2 font-medium">
                     {kind === 'skill' ? (
-                      <Sparkles className="w-4 h-4 text-violet-500" />
+                      <Sparkles className="h-3.5 w-3.5 text-violet-500" />
                     ) : (
-                      <FileText className="w-4 h-4 text-muted-foreground" />
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
                     {info.label}
-                  </h4>
-                  {override ? (
-                    <Badge variant="success">Customized</Badge>
-                  ) : (
-                    <Badge variant="outline">Default</Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">{info.usedFor}</p>
-                {override && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Last edited {new Date(override.updatedAt).toLocaleString()}
-                  </p>
-                )}
-                {stale && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-500 mt-2 flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    Talyn&apos;s default for this prompt changed since you customized it.
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
+                    {override ? (
+                      <Badge variant="success">Customized</Badge>
+                    ) : (
+                      <Badge variant="outline">Default</Badge>
+                    )}
+                  </span>
+                }
+                description={
+                  <>
+                    {info.usedFor}
+                    {override && (
+                      <span className="mt-1 block">
+                        Last edited {new Date(override.updatedAt).toLocaleString()}
+                      </span>
+                    )}
+                    {stale && (
+                      <span className="mt-1 flex items-center gap-1 text-yellow-600 dark:text-yellow-500">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Talyn&apos;s default for this prompt changed since you customized it.
+                      </span>
+                    )}
+                  </>
+                }
+              >
                 {override && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="gap-1"
                     disabled={resetting === kind || !currentWorkspaceId}
                     onClick={() => void resetFromCard(kind)}
                   >
                     {resetting === kind ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <RotateCcw className="w-3.5 h-3.5" />
+                      <RotateCcw className="h-3.5 w-3.5" />
                     )}
                     Reset
                   </Button>
@@ -179,18 +182,17 @@ export function InstructionsSettings() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="gap-1"
                   disabled={!currentWorkspaceId}
                   onClick={() => setEditing(kind)}
                 >
-                  <Pencil className="w-3.5 h-3.5" />
+                  <Pencil className="h-3.5 w-3.5" />
                   {override ? 'Edit' : 'Customize'}
                 </Button>
-              </div>
+              </SettingRow>
             </div>
-          </Card>
-        );
-      })}
+          );
+        })}
+      </SettingsSection>
 
       {editing && (
         <PromptTemplateEditor

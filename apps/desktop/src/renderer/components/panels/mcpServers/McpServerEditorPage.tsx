@@ -15,6 +15,7 @@ import {
   type McpServerInput,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
+import { PageHeader } from '../../ui/page-header';
 import { Input } from '../../ui/input';
 import { Section, TextField } from '../workflows/workflowFields';
 import { api } from '../../../lib/api';
@@ -317,51 +318,59 @@ export function McpServerEditorPage({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Button variant="ghost" size="sm" onClick={onCancel} data-attr="mcp-editor-back">
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          MCP servers
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">
+      <PageHeader
+        variant="toolbar"
+        title={
+          <span className="truncate">
             {input.displayName?.trim() ||
               input.name.trim() ||
               (editing ? 'MCP server' : 'New MCP server')}
-          </h1>
-        </div>
-        {/* Only when editing. One you are creating is on — nobody fills in a
-            URL and a key in order to leave it switched off. */}
-        {editing && (
-          <Button
-            variant={input.enabled === false ? 'outline' : 'secondary'}
-            size="sm"
-            onClick={() => edit({ enabled: input.enabled === false })}
-          >
-            {input.enabled === false ? 'Off' : 'On'}
+          </span>
+        }
+        icon={
+          <Button variant="ghost" size="sm" onClick={onCancel} data-attr="mcp-editor-back">
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+            MCP servers
           </Button>
-        )}
-        {connected && (
-          <Button
-            variant="outline"
-            onClick={testNow}
-            disabled={probing || saving || !authReady || (method === 'oauth' && !oauthConnected)}
-            data-attr="mcp-test"
-          >
-            {probing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
-            {probing ? 'Testing...' : 'Test'}
-          </Button>
-        )}
-        {validAddress && (method !== 'oauth' || connected) && (
-          <Button onClick={save} disabled={saving || !authReady} data-attr="mcp-save">
-            {saving ? 'Connecting…' : connected ? 'Save' : 'Connect'}
-          </Button>
-        )}
-      </header>
+        }
+        actions={
+          <>
+            {/* Only when editing. One you are creating is on — nobody fills in a
+                URL and a key in order to leave it switched off. */}
+            {editing && (
+              <Button
+                variant={input.enabled === false ? 'outline' : 'secondary'}
+                size="sm"
+                onClick={() => edit({ enabled: input.enabled === false })}
+              >
+                {input.enabled === false ? 'Off' : 'On'}
+              </Button>
+            )}
+            {connected && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={testNow}
+                disabled={probing || saving || !authReady || (method === 'oauth' && !oauthConnected)}
+                data-attr="mcp-test"
+              >
+                {probing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                {probing ? 'Testing...' : 'Test'}
+              </Button>
+            )}
+            {validAddress && (method !== 'oauth' || connected) && (
+              <Button size="sm" onClick={save} disabled={saving || !authReady} data-attr="mcp-save">
+                {saving ? 'Connecting…' : connected ? 'Save' : 'Connect'}
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl space-y-4 p-6">
+        <div className="mx-auto max-w-3xl space-y-4 px-4 py-4">
           {(saveError ?? submitProblem) && (
-            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-500">
               {saveError ?? submitProblem}
             </p>
           )}
@@ -407,14 +416,14 @@ export function McpServerEditorPage({
 
           {validAddress && new URL(input.url).origin === 'https://mcp.slack.com' && !connected && method === 'bearer' && (
             <Section title="Connect your own Slack app" description="Create an internal app in the Slack workspace you want to connect.">
-              <ol className="list-decimal space-y-2 pl-5 text-sm">
+              <ol className="list-decimal space-y-2 pl-5 text-[13px]">
                 <li><button type="button" className="underline" onClick={() => void openExternal('https://api.slack.com/apps')}>Open Slack apps</button> and select Create New App → From a manifest.</li>
                 <li>Select your workspace. Copy the manifest below into Slack, then create the app.</li>
                 <li>Open Agents &amp; AI Apps. Enable Model Context Protocol. PKCE is already enabled in the manifest.</li>
                 <li>Under OAuth &amp; Permissions, install the app to your workspace. Your administrator may need to approve it.</li>
                 <li>Copy the User OAuth Token (xoxp-) and paste it below. Keep public distribution off.</li>
               </ol>
-              <details className="mt-3 text-sm">
+              <details className="mt-3 text-[13px]">
                 <summary className="cursor-pointer">App manifest</summary>
                 <pre className="mt-2 max-h-64 overflow-auto rounded border p-3 text-xs select-text">{JSON.stringify(SLACK_INTERNAL_APP_MANIFEST, null, 2)}</pre>
               </details>
@@ -429,22 +438,22 @@ export function McpServerEditorPage({
                 description="Talyn checks the server address to find its authentication options."
               >
                 {checking && (
-                  <p role="status" className="text-sm text-muted-foreground">
+                  <p role="status" className="text-[13px] text-muted-foreground">
                     Checking authentication…
                   </p>
                 )}
                 {discovery?.detail && (
-                  <p className="text-sm text-muted-foreground">{discovery.detail}</p>
+                  <p className="text-[13px] text-muted-foreground">{discovery.detail}</p>
                 )}
                 {!checking && !authReady && (
-                  <p className="text-sm text-muted-foreground">Enter a valid server address.</p>
+                  <p className="text-[13px] text-muted-foreground">Enter a valid server address.</p>
                 )}
                 {authReady &&
                   !manualFields &&
                   (availableMethods.length > 1 ? (
                     <select
                       aria-label="Authentication method"
-                      className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                      className="h-8 w-full rounded-md border bg-transparent px-2 text-[13px]"
                       value={method}
                       onChange={(event) => chooseMethod(event.target.value as McpAuthMethod)}
                     >
@@ -455,7 +464,7 @@ export function McpServerEditorPage({
                       ))}
                     </select>
                   ) : (
-                    <p className="text-sm">{AUTH_LABELS[method]}</p>
+                    <p className="text-[13px]">{AUTH_LABELS[method]}</p>
                   ))}
                 <button
                   type="button"
@@ -522,7 +531,7 @@ export function McpServerEditorPage({
                     {manualFields && (
                       <select
                         aria-label="Authentication method"
-                        className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+                        className="h-8 w-full rounded-md border bg-transparent px-2 text-[13px]"
                         value={method}
                         onChange={(e) => chooseMethod(e.target.value as McpAuthMethod)}
                       >
@@ -656,7 +665,7 @@ function ToolPicker({
 
   if (names.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         {probed
           ? 'This server offered no tools.'
           : 'Test the connection to see which tools this server offers.'}
@@ -666,7 +675,7 @@ function ToolPicker({
 
   return (
     <div className="space-y-3">
-      <label className="flex items-center gap-2 text-sm">
+      <label className="flex items-center gap-2 text-[13px]">
         <input
           type="checkbox"
           checked={allowed === null}
@@ -688,7 +697,7 @@ function ToolPicker({
           return (
             <div key={name} className="flex items-start gap-3 px-3 py-2.5">
               <details className="min-w-0 flex-1">
-                <summary className="cursor-pointer text-sm font-medium">
+                <summary className="cursor-pointer text-[13px] font-medium">
                   {tool?.title || name}
                   <div className="mt-0.5 line-clamp-1 text-xs font-normal text-muted-foreground pointer-events-none">
                     <Markdown text={tool?.description || (offered.includes(name) ? 'No description provided.' : 'Not offered by the server now.')} variant="surface" />
@@ -859,8 +868,8 @@ function SignIn({
       <div className="space-y-2">
         {grant?.status === 'connected' ? (
           <div className="flex items-center gap-2">
-            <Check className="h-4 w-4 text-emerald-600" />
-            <span className="text-sm">
+            <Check className="h-3.5 w-3.5 text-emerald-600" />
+            <span className="text-[13px]">
               {account?.name || account?.email
                 ? `Signed in as ${[account.name, account.email].filter(Boolean).join(' · ')}`
                 : 'Signed in.'}
@@ -872,7 +881,7 @@ function SignIn({
           </div>
         ) : (
           <Button variant="outline" onClick={() => void start()} disabled={busy}>
-            {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+            {busy && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
             {busy ? 'Waiting for sign-in…' : 'Connect account'}
           </Button>
         )}
@@ -897,11 +906,11 @@ function ProbeBanner({ probe }: { probe: McpProbeResult }) {
     ? 'border-emerald-500/40 bg-emerald-500/10'
     : 'border-red-500/40 bg-red-500/10';
   return (
-    <p className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${tone}`}>
+    <p className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[13px] ${tone}`}>
       {probe.ok ? (
-        <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
       ) : (
-        <X className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+        <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
       )}
       <span>
         {probe.ok

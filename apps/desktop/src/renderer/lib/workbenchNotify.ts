@@ -1,6 +1,7 @@
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { setChatFinishedListener, useWorkbenchStore } from '../stores/workbenches';
 import { useNavigationStore } from '../stores/navigation';
+import { readSessionDefaults } from './sessionDefaults';
 
 /**
  * "Your agent finished" — an OS notification when a chat stops running (done,
@@ -36,6 +37,7 @@ export function openFromNotification(chat: Pick<WorkbenchChat, 'id' | 'workbench
 }
 
 function notifyChatFinished(chat: WorkbenchChat, workbench: Workbench | undefined): void {
+  if (!readSessionDefaults().notifyOnFinish) return;
   if (typeof document !== 'undefined' && document.hasFocus()) return;
   if (typeof Notification === 'undefined') return;
   const { title, body } = notificationText(chat, workbench);

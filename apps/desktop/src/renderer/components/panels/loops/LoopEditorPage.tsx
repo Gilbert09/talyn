@@ -18,6 +18,7 @@ import {
   type LoopSchedulePresetKind,
 } from '@talyn/shared';
 import { Button } from '../../ui/button';
+import { PageHeader } from '../../ui/page-header';
 import { Input } from '../../ui/input';
 import { Select } from '../../ui/select';
 import { Textarea } from '../../ui/textarea';
@@ -174,36 +175,39 @@ export function LoopEditorPage({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Button variant="ghost" size="sm" onClick={onCancel} data-attr="loop-editor-back">
-          <ArrowLeft className="mr-1 h-4 w-4" />
-          Loops
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">
-            {input.name.trim() || (editing ? 'Loop' : 'New loop')}
-          </h1>
-        </div>
-        {/* Only when editing. A loop you are creating is on — nobody composes a
-            schedule in order to leave it switched off. */}
-        {editing && (
-          <Button
-            variant={input.enabled === false ? 'outline' : 'secondary'}
-            size="sm"
-            onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
-          >
-            {input.enabled === false ? 'Off' : 'On'}
+      <PageHeader
+        variant="toolbar"
+        title={<span className="truncate">{input.name.trim() || (editing ? 'Loop' : 'New loop')}</span>}
+        icon={
+          <Button variant="ghost" size="sm" onClick={onCancel} data-attr="loop-editor-back">
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+            Loops
           </Button>
-        )}
-        <Button onClick={save} disabled={saving} data-attr="loop-save">
-          {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
-        </Button>
-      </header>
+        }
+        actions={
+          <>
+            {/* Only when editing. A loop you are creating is on — nobody composes a
+                schedule in order to leave it switched off. */}
+            {editing && (
+              <Button
+                variant={input.enabled === false ? 'outline' : 'secondary'}
+                size="sm"
+                onClick={() => setInput((p) => ({ ...p, enabled: p.enabled === false }))}
+              >
+                {input.enabled === false ? 'Off' : 'On'}
+              </Button>
+            )}
+            <Button size="sm" onClick={save} disabled={saving} data-attr="loop-save">
+              {saving ? 'Saving...' : editing ? 'Save' : 'Create'}
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-3xl space-y-4 p-6">
+        <div className="mx-auto max-w-3xl space-y-4 px-4 py-4">
           {(saveError ?? submitProblem) && (
-            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-500">
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-500">
               {saveError ?? submitProblem}
             </p>
           )}
@@ -380,9 +384,9 @@ export function LoopEditorPage({
             description="Which agent runs the prompt, and on which model."
           >
             {agents.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 No agents are connected to this workspace. Connect one in Settings &rarr;
-                Integrations before a loop can run.
+                Agents before a loop can run.
               </p>
             ) : (
               <div className="flex flex-wrap items-end gap-3">
@@ -495,12 +499,12 @@ export function LoopEditorPage({
           )}
 
           {/* The same action as the header's, where you finish reading. */}
-          <div className="flex items-center justify-end gap-3 border-t pt-4">
+          <div className="flex items-center justify-end gap-3 border-t pt-3">
             {submitProblem && <p className="flex-1 text-xs text-red-500">{submitProblem}</p>}
-            <Button variant="ghost" onClick={onCancel} disabled={saving}>
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving} data-attr="loop-save-inline">
+            <Button size="sm" onClick={save} disabled={saving} data-attr="loop-save-inline">
               {saving ? 'Saving...' : editing ? 'Save changes' : 'Create loop'}
             </Button>
           </div>

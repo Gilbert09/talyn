@@ -54,7 +54,7 @@ function Release({ entry, showVersion }: { entry: ReleaseNoteEntry; showVersion:
     <section className="space-y-3">
       {showVersion && (
         <div className="flex items-baseline gap-2 border-b pb-1.5">
-          <h3 className="text-sm font-medium">Version {entry.version}</h3>
+          <h3 className="text-[13px] font-medium">Version {entry.version}</h3>
           <span className="text-xs text-muted-foreground">{releaseDate(entry.publishedAt)}</span>
         </div>
       )}
@@ -63,10 +63,10 @@ function Release({ entry, showVersion }: { entry: ReleaseNoteEntry; showVersion:
           const Icon = KIND_ICON[h.kind];
           return (
             <li key={`${entry.version}-${h.title}`} className="flex gap-3">
-              <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', KIND_CLASS[h.kind])} />
+              <Icon className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', KIND_CLASS[h.kind])} />
               <div className="min-w-0">
-                <p className="text-sm font-medium leading-snug">{h.title}</p>
-                <p className="mt-0.5 text-sm text-muted-foreground leading-snug">
+                <p className="text-[13px] font-medium leading-snug">{h.title}</p>
+                <p className="mt-0.5 text-[13px] text-muted-foreground leading-snug">
                   {h.description}
                 </p>
               </div>
@@ -108,7 +108,7 @@ export function WhatsNewModal() {
       <DialogContent className="max-w-2xl" onClose={close}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5" />
+            <Sparkles className="h-4 w-4" />
             What&rsquo;s new
           </DialogTitle>
           <DialogDescription>

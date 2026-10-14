@@ -5,6 +5,7 @@ import { useNavigationStore, type PrTab } from '../stores/navigation';
 import { usePrBadgeCounts } from '../hooks/usePrBadgeCounts';
 import { PR_TAB_LABEL } from '../lib/routeLabels';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { PageHeader } from '../components/ui/page-header';
 import { QueuePanel } from '../components/panels/QueuePanel';
 import { MyPRsPanel } from '../components/panels/github/MyPRsPanel';
 import { ReviewsPanel } from '../components/panels/github/ReviewsPanel';
@@ -31,8 +32,7 @@ export function PullRequestsView({ tab }: { tab: PrTab }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-4 border-b px-4 py-1.5">
-        <h1 className="text-[13px] font-semibold">Pull requests</h1>
+      <PageHeader title="Pull requests" className="gap-4">
         <Tabs value={tab} onValueChange={(next) => navigate({ view: 'prs', tab: next as PrTab })}>
           <TabsList aria-label="Pull requests">
             {tabs.map((t) => (
@@ -43,7 +43,7 @@ export function PullRequestsView({ tab }: { tab: PrTab }) {
             ))}
           </TabsList>
         </Tabs>
-      </div>
+      </PageHeader>
       <div className="min-h-0 flex-1 overflow-hidden">
         {tab === 'my_prs' && <MyPRsPanel />}
         {tab === 'reviews' && <ReviewsPanel />}

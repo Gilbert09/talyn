@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Pencil, Plug, Plus, Trash2, X } from 'lucide-react';
+import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   MCP_CATALOG,
   mcpServerFromCatalog,
@@ -122,14 +122,10 @@ export function McpServersPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b px-6 py-4">
-        <Plug className="h-5 w-5" />
-        <div className="flex-1">
-          <h1 className="text-lg font-semibold">MCP servers</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect MCP servers to give your agents more tools.
-          </p>
-        </div>
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-1">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          Connect MCP servers to give your agents more tools.
+        </p>
         <FeedbackButton surface="mcp_servers" />
         {servers !== null && (
           <LocalImport
@@ -137,23 +133,23 @@ export function McpServersPanel() {
             onImport={(input) => openNew(input)}
           />
         )}
-        <Button onClick={() => openNew()} data-attr="mcp-new">
-          <Plus className="mr-1 h-4 w-4" />
+        <Button size="sm" onClick={() => openNew()} data-attr="mcp-new">
+          <Plus className="mr-1 h-3.5 w-3.5" />
           Add a server
         </Button>
-      </header>
+      </div>
 
-      <div className="flex-1 overflow-auto p-6">
-        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
+      <div className="flex-1 overflow-auto p-4">
+        {error && <p className="mb-3 text-[13px] text-red-500">{error}</p>}
 
         {/* `null` is loading, `[]` is genuinely none. Rendering the empty state
             for both would flash "nothing connected" at somebody who has six. */}
         {servers === null ? (
-          <p className="text-sm text-muted-foreground">Loading MCP servers...</p>
+          <p className="text-[13px] text-muted-foreground">Loading MCP servers...</p>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-6">
             {servers.length > 0 && (
-              <div className="space-y-3">
+              <div className="divide-y divide-border/60 rounded-lg border bg-card">
                 {servers.map((server) => (
                   <McpServerRow
                     key={server.id}
@@ -215,14 +211,14 @@ function McpServerRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-lg border px-4 py-3',
+        'flex items-center gap-3 px-3 py-2',
         !server.enabled && 'opacity-60'
       )}
     >
       <McpServerLogo url={server.url} catalogHandle={server.catalogHandle} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{server.displayName || server.name}</span>
+          <span className="truncate text-[13px] font-medium">{server.displayName || server.name}</span>
           <code className="truncate text-xs text-muted-foreground">{server.name}</code>
           <Badge variant="secondary">{mcpToolCountLabel(server)}</Badge>
         </div>
@@ -230,7 +226,7 @@ function McpServerRow({
         {probe && (
           <p
             className={cn(
-              'mt-1 flex items-center gap-1 text-xs',
+              'mt-0.5 flex items-center gap-1 text-xs',
               probe.ok ? 'text-emerald-600' : 'text-red-500'
             )}
           >
@@ -250,7 +246,7 @@ function McpServerRow({
         {server.enabled ? 'On' : 'Off'}
       </Button>
       <Button variant="ghost" size="sm" onClick={onEdit} aria-label="Edit">
-        <Pencil className="h-4 w-4" />
+        <Pencil className="h-3.5 w-3.5" />
       </Button>
       <Button
         variant="ghost"
@@ -258,7 +254,7 @@ function McpServerRow({
         onClick={onDelete}
         aria-label="Delete"
       >
-        <Trash2 className="h-4 w-4" />
+        <Trash2 className="h-3.5 w-3.5" />
       </Button>
     </div>
   );
@@ -281,8 +277,8 @@ function Catalog({
   );
   return (
     <div>
-      <h2 className="mb-1 font-medium">{empty ? 'Connect your first MCP server' : 'Add another'}</h2>
-      <p className="mb-3 text-sm text-muted-foreground">
+      <h2 className="mb-1 text-[13px] font-medium">{empty ? 'Connect your first MCP server' : 'Add another'}</h2>
+      <p className="mb-3 text-xs text-muted-foreground">
         Pick one to fill in its address, or add any server by hand.
       </p>
       <Input
@@ -293,7 +289,7 @@ function Catalog({
         onChange={(event) => setQuery(event.target.value)}
         className="mb-3"
       />
-      {entries.length === 0 && <p className="text-sm text-muted-foreground">No servers match your search.</p>}
+      {entries.length === 0 && <p className="text-[13px] text-muted-foreground">No servers match your search.</p>}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {entries.map((entry) => {
           const already = connected.has(entry.handle);
@@ -312,7 +308,7 @@ function Catalog({
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-white p-1">
                   <img src={entry.logo} alt="" width={24} height={24} className="object-contain" />
                 </span>
-                <span className="min-w-0 truncate text-sm font-medium">{entry.title}</span>
+                <span className="min-w-0 truncate text-[13px] font-medium">{entry.title}</span>
                 {already && <Badge variant="secondary">Connected</Badge>}
               </div>
               <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{entry.summary}</p>

@@ -46,7 +46,7 @@ export function LoopToolServers({
 
   if (servers !== null && servers.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         This workspace has no MCP servers connected, so this loop&rsquo;s agent gets the usual
         tools and nothing else.
       </p>
@@ -90,7 +90,7 @@ export function LoopToolServers({
             {enabled.map((server) => {
               const on = value.includes(server.id);
               return (
-                <label key={server.id} className="flex items-center gap-2 text-sm">
+                <label key={server.id} className="flex items-center gap-2 text-[13px]">
                   <input
                     type="checkbox"
                     checked={on}

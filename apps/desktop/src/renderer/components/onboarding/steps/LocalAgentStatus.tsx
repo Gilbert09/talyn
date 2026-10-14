@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Check, Laptop, X } from 'lucide-react';
+import { Check, Laptop, Loader2, RefreshCw, X } from 'lucide-react';
 import type { WorkbenchLocalReadiness } from '@talyn/shared';
 import { getWorkbenchBridge } from '../../../lib/workbenchBridge';
+import { Button } from '../../ui/button';
 
 const AGENTS = [
   { key: 'claude', name: 'Claude Code', hint: 'Install with: npm i -g @anthropic-ai/claude-code' },
@@ -11,10 +12,25 @@ const AGENTS = [
 /**
  * The "Run locally" path: which agent CLIs this machine already has. Renders
  * nothing when the desktop bridge is absent (older main process, tests).
+ * `recheck` adds a button that skips main's 30 s readiness cache, for after
+ * an install.
  */
-export function LocalAgentStatus() {
+export function LocalAgentStatus({ recheck = false }: { recheck?: boolean } = {}) {
   const [local, setLocal] = useState<WorkbenchLocalReadiness | null>(null);
+  const [checking, setChecking] = useState(false);
   const bridge = getWorkbenchBridge();
+
+  const runRecheck = async () => {
+    if (!bridge) return;
+    setChecking(true);
+    try {
+      setLocal(await bridge.readiness(true));
+    } catch {
+      // Keep the last answer.
+    } finally {
+      setChecking(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -37,6 +53,18 @@ export function LocalAgentStatus() {
       <div className="flex items-center gap-2">
         <Laptop className="h-4 w-4 text-muted-foreground" />
         <p className="font-medium">Run locally</p>
+        {recheck && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto"
+            onClick={() => void runRecheck()}
+            disabled={checking}
+          >
+            {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Re-check
+          </Button>
+        )}
       </div>
       <p className="text-sm text-muted-foreground">
         Use an agent CLI already installed on this machine. No sign-in needed here.

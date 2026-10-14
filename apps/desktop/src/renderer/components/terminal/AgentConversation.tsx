@@ -97,7 +97,7 @@ export function AgentConversation({
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="h-full overflow-auto px-4 py-4 text-sm text-foreground bg-background space-y-3 min-w-0"
+      className="h-full overflow-auto px-4 py-4 text-[13px] text-foreground bg-background space-y-3 min-w-0"
     >
       {blocks.map((block) => (
         <BlockView
@@ -241,7 +241,7 @@ function ThinkingBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const firstLine = text.split('\n').find((l) => l.trim()) ?? 'Thinking';
   return (
-    <div className="text-[12px] text-muted-foreground">
+    <div className="text-xs text-muted-foreground">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -324,7 +324,7 @@ function ToolBlockView({
   const Row = canToggle ? 'button' : 'div';
 
   return (
-    <div className="font-mono text-[12px] min-w-0">
+    <div className="font-mono text-xs min-w-0">
       <Row
         {...(canToggle
           ? {
@@ -429,7 +429,7 @@ function ToolGroupView({
   const [open, setOpen] = useState(isError || running);
 
   return (
-    <div className="font-mono text-[12px] min-w-0">
+    <div className="font-mono text-xs min-w-0">
       <button
         type="button"
         aria-expanded={open}
@@ -501,7 +501,7 @@ function PermissionBlock({
   return (
     <div
       className={cn(
-        'rounded border px-3 py-2.5 text-sm',
+        'rounded border px-3 py-2.5 text-[13px]',
         resolved
           ? status === 'allowed'
             ? 'border-success/30 bg-success/5'
@@ -512,7 +512,7 @@ function PermissionBlock({
       <div className="flex items-center gap-2 text-xs mb-2">
         <Shield
           className={cn(
-            'w-4 h-4',
+            'w-3.5 h-3.5',
             resolved
               ? status === 'allowed'
                 ? 'text-success'

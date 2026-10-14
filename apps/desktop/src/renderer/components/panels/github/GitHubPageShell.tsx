@@ -14,8 +14,8 @@ import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
 
 /**
  * Shared chrome for the three GitHub pages (My PRs, Reviews, Merge Queue):
- * the header (title + Copy list / Refresh / Settings), the filter bar (a
- * page-specific `filters` slot + a common search box with ⌘F), the loading /
+ * one toolbar (a page-specific `filters` slot, a common search box with ⌘F,
+ * then Copy list / Refresh / Settings), the loading /
  * error / empty / disconnected states, and the list+detail split layout.
  *
  * The page passes its already-filtered+sorted `rows` and renders the list
@@ -23,8 +23,6 @@ import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
  * state so clicking a row opens the detail sheet beside the list.
  */
 interface GitHubPageShellProps {
-  title: string;
-  icon?: React.ReactNode;
   /** Which cohort to tell the backend is on screen (adaptive polling). */
   activeView: 'mine' | 'review' | 'all';
   search: string;
@@ -39,8 +37,8 @@ interface GitHubPageShellProps {
    * box around every time a filter is added.
    */
   filtersSecondary?: React.ReactNode;
-  /** Page-specific header buttons, rendered left of Copy list. An ACTION, not
-   *  a filter — which is why it lives up here and not in the filter row. */
+  /** Page-specific toolbar buttons, rendered left of Copy list. An ACTION, not
+   *  a filter — which is why it sits with the actions and not with the filters. */
   headerActions?: React.ReactNode;
   /** The page's filtered + sorted rows — drives Copy list + empty states. */
   rows: PRRow[];
@@ -65,8 +63,6 @@ interface GitHubPageShellProps {
 }
 
 export function GitHubPageShell({
-  title,
-  icon,
   activeView,
   search,
   onSearch,
@@ -128,48 +124,9 @@ export function GitHubPageShell({
 
   return (
     <div className="flex h-full flex-col">
-      {/* The header doubles as the frameless window's drag region on macOS;
-          interactive controls opt out with app-region-no-drag. */}
-      <header className="app-region-drag flex items-center justify-between border-b p-4">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          {icon ?? <Github className="h-5 w-5" />}
-          {title}
-        </h2>
-        <div className="app-region-no-drag flex items-center gap-1">
-          {headerActions}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void copyList(rows, stackMeta)}
-            disabled={rows.length === 0}
-            title="Copy the filtered PRs as a list for Slack"
-          >
-            <Copy className="mr-1 h-4 w-4" />
-            Copy list
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void refreshPullRequests()}
-            disabled={loading}
-            title="Refresh list"
-          >
-            <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setActivePanel('settings')}
-            title="GitHub settings"
-          >
-            <Settings className="h-4 w-4" />
-          </Button>
-        </div>
-      </header>
-
       <div
         className={cn(
-          'flex flex-wrap items-center gap-2 px-4 py-2 text-xs',
+          'flex shrink-0 flex-wrap items-center gap-2 px-4 py-1 text-xs',
           filtersSecondary ? '' : 'border-b'
         )}
       >
@@ -194,9 +151,41 @@ export function GitHubPageShell({
             </button>
           )}
         </div>
+        <div className="flex items-center gap-1">
+          {headerActions}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void copyList(rows, stackMeta)}
+            disabled={rows.length === 0}
+            title="Copy the filtered PRs as a list for Slack"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            Copy list
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-7 p-0"
+            onClick={() => void refreshPullRequests()}
+            disabled={loading}
+            title="Refresh list"
+          >
+            <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-7 p-0"
+            onClick={() => setActivePanel('settings')}
+            title="GitHub settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
-      {filtersSecondary && <div className="border-b px-4 pb-2">{filtersSecondary}</div>}
+      {filtersSecondary && <div className="border-b px-4 pb-1.5">{filtersSecondary}</div>}
 
       {/* The list always keeps its full width; the detail panel floats over its
           right edge as a `contained` overlay (absolute to this relative row)
@@ -212,12 +201,12 @@ export function GitHubPageShell({
               has just authorized. */}
           {(loading || initialSync) && rows.length === 0 && !error ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin" />
+              <Loader2 className="h-5 w-5 animate-spin" />
               {/* The catch-up poll that follows a fresh connection reads from
                   GitHub and takes a few seconds. Say what is happening: the
                   person watching has just authorized and is waiting to see
                   their PRs appear. */}
-              <p className="text-sm">
+              <p className="text-[13px]">
                 {initialSync ? 'Pulling in your pull requests…' : 'Loading pull requests…'}
               </p>
               {initialSync && (
@@ -227,30 +216,30 @@ export function GitHubPageShell({
           ) : (
           <ScrollArea className="h-full">
             {error && (
-              <div className="m-4 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
+              <div className="m-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
                 {error}
               </div>
             )}
             {!loading && rows.length === 0 && !error && connected === false && (
-              <div className="flex flex-col items-center justify-center p-10 text-center text-muted-foreground">
-                <Github className="mb-2 h-8 w-8 opacity-50" />
-                <p className="text-sm">GitHub isn't connected for this workspace.</p>
-                <p className="mt-1 text-xs">
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center text-[13px] text-muted-foreground">
+                <Github className="h-6 w-6 opacity-50" />
+                <p>GitHub isn't connected for this workspace.</p>
+                <p className="text-xs">
                   Connect GitHub to watch pull requests across your repos.
                 </p>
-                <Button size="sm" className="mt-3" onClick={() => void connect()}>
-                  <Github className="mr-1 h-4 w-4" />
+                <Button size="sm" className="mt-1" onClick={() => void connect()}>
+                  <Github className="h-3.5 w-3.5" />
                   Connect GitHub
                 </Button>
               </div>
             )}
             {!loading && rows.length === 0 && !error && connected !== false && (
-              <div className="flex flex-col items-center justify-center p-10 text-center text-muted-foreground">
-                <div className="mb-2 opacity-50">
-                  {emptyIcon ?? <GitPullRequest className="h-8 w-8" />}
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center text-[13px] text-muted-foreground">
+                <div className="opacity-50">
+                  {emptyIcon ?? <GitPullRequest className="h-6 w-6" />}
                 </div>
-                <p className="text-sm">{emptyTitle}</p>
-                {emptyHint && <p className="mt-1 max-w-xs text-xs">{emptyHint}</p>}
+                <p>{emptyTitle}</p>
+                {emptyHint && <p className="max-w-xs text-xs">{emptyHint}</p>}
               </div>
             )}
             {rows.length > 0 && children({ selectedId, onSelect: setSelectedId })}

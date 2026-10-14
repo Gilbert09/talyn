@@ -41,7 +41,7 @@ interface SourceSurveyProps {
 export function SourceSurvey({ value, onSelect }: SourceSurveyProps) {
   return (
     <div className="space-y-2 border-t pt-4">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         Where did you find Talyn?
         <span className="ml-2 text-xs">Optional</span>
       </p>

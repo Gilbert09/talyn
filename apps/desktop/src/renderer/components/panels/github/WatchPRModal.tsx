@@ -157,7 +157,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
       <DialogContent onClose={() => handleClose(false)}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Eye className="h-5 w-5" />
+            <Eye className="h-4 w-4" />
             Watch a pull request
           </DialogTitle>
           <DialogDescription>
@@ -168,7 +168,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
 
         <div className="space-y-4 py-2">
           <div>
-            <label className="text-sm font-medium">Pull request</label>
+            <label className="text-xs font-medium">Pull request</label>
             <Input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
@@ -190,7 +190,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
               data-attr="watch-pr-repo-warning"
               className="flex gap-2 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm"
             >
-              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
               <div className="space-y-1">
                 <p>
                   Talyn isn&apos;t watching{' '}
@@ -214,7 +214,7 @@ export function WatchPRModal({ open, onOpenChange }: WatchPRModalProps) {
             </div>
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>

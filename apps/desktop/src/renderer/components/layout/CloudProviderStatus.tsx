@@ -30,7 +30,7 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
             <button
               key={p.type}
               type="button"
-              onClick={() => openSettings('integrations')}
+              onClick={() => openSettings('agents')}
               title={title}
               aria-label={title}
               className="relative flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
@@ -48,7 +48,7 @@ export function CloudProviderStatus({ collapsed }: { collapsed: boolean }) {
           <button
             key={p.type}
             type="button"
-            onClick={() => openSettings('integrations')}
+            onClick={() => openSettings('agents')}
             title={title}
             className="group flex h-7 w-full items-center gap-3 rounded-md px-4 text-xs transition-colors hover:bg-accent"
           >

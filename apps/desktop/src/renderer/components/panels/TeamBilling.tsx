@@ -54,15 +54,15 @@ export function TeamSettings() {
 
   if (!status) {
     return (
-      <Card className="p-4">
-        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      <Card className="p-3">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
       </Card>
     );
   }
   if (!status.billingEnabled) {
     return (
-      <Card className="p-4">
-        <p className="text-sm text-muted-foreground">
+      <Card className="p-3">
+        <p className="text-xs text-muted-foreground">
           Billing is not configured on this backend, so there is no team plan to manage.
         </p>
       </Card>
@@ -88,10 +88,10 @@ export function BillingTeamNotice({ status }: { status: BillingStatus }) {
   }
   if (!team && !teamsOffered) return null;
   return (
-    <Card className="p-4 flex items-center justify-between gap-4">
+    <Card className="p-3 flex items-center justify-between gap-4">
       <div className="flex items-start gap-3">
-        <Users className="w-5 h-5 text-primary mt-0.5 shrink-0" />
-        <p className="text-sm text-muted-foreground">
+        <Users className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+        <p className="text-xs text-muted-foreground">
           {team
             ? `You manage the team ${team.name}. Its seats, billing and invoices are in Team settings.`
             : 'Buying for a team? Pay for everyone on one invoice.'}
@@ -162,14 +162,14 @@ function TeamMemberCard({
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">Team plan</h3>
-      <Card className="p-4 space-y-3">
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team plan</h3>
+      <Card className="p-3 space-y-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <Users className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+            <Users className="h-4 w-4 text-primary mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium">{name}</p>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[13px] font-medium">{name}</p>
+              <p className="text-xs text-muted-foreground">
                 {active
                   ? 'Your team pays for your Unlimited plan. The team’s admins manage its billing, so there is nothing for you to pay.'
                   : 'Your team is not paying for seats at the moment, so your own plan applies.'}
@@ -195,14 +195,14 @@ function TeamMemberCard({
         )}
         {paidPersonallyToo && active && (
           <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-            <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-            <p className="text-sm">
+            <AlertCircle className="h-3.5 w-3.5 text-amber-600 mt-0.5 shrink-0" />
+            <p className="text-[13px]">
               You also pay for Unlimited yourself. Your team covers you now, so you can cancel
               your own subscription with Manage subscription above.
             </p>
           </div>
         )}
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="text-xs text-destructive">{error}</p>}
       </Card>
       <ConfirmDialog
         open={confirming}
@@ -241,9 +241,9 @@ function StartTeamCard() {
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">Buying for a team?</h3>
-      <Card className="p-4 space-y-3">
-        <p className="text-sm text-muted-foreground">
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Buying for a team?</h3>
+      <Card className="p-3 space-y-3">
+        <p className="text-xs text-muted-foreground">
           Pay for everyone on one invoice. You choose who gets a seat by GitHub username, and
           each person gets Unlimited on their own account. Workspaces stay private to each
           person.
@@ -262,11 +262,11 @@ function StartTeamCard() {
             maxLength={80}
           />
           <Button type="submit" disabled={busy || !name.trim()} className="gap-2 shrink-0">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Users className="h-3.5 w-3.5" />}
             Start a team
           </Button>
         </form>
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="text-xs text-destructive">{error}</p>}
       </Card>
     </div>
   );
@@ -309,9 +309,9 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
   if (loadError) {
     return (
       <div>
-        <h3 className="text-lg font-semibold mb-4">Team</h3>
-        <Card className="p-4">
-          <p className="text-sm text-destructive">{loadError}</p>
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team</h3>
+        <Card className="p-3">
+          <p className="text-xs text-destructive">{loadError}</p>
         </Card>
       </div>
     );
@@ -319,9 +319,9 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
   if (!team) {
     return (
       <div>
-        <h3 className="text-lg font-semibold mb-4">Team</h3>
-        <Card className="p-4">
-          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team</h3>
+        <Card className="p-3">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         </Card>
       </div>
     );
@@ -340,8 +340,8 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold mb-4">Team: {team.name}</h3>
-        <Card className="p-4 space-y-4">
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team: {team.name}</h3>
+        <Card className="p-3 space-y-4">
           {team.active ? (
             <TeamSubscriptionSummary
               team={team}
@@ -370,15 +370,15 @@ function TeamAdminPanel({ teamId }: { teamId: string }) {
 
           {team.overAllocated && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-              <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
-              <p className="text-sm">
+              <AlertCircle className="h-3.5 w-3.5 text-destructive mt-0.5 shrink-0" />
+              <p className="text-[13px]">
                 {team.seatsUsed} people hold seats, but the team pays for {team.seatsPurchased}.
                 Remove {team.seatsUsed - team.seatsPurchased} or add seats. Nobody can be added
                 until the numbers match.
               </p>
             </div>
           )}
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </Card>
       </div>
 
@@ -426,14 +426,14 @@ function TeamSubscriptionSummary({
   return (
     <div className="space-y-4">
       <div>
-        <p className="font-medium">
+        <p className="text-[13px] font-medium">
           {team.seatsUsed} of {team.seatsPurchased} seats used
         </p>
         {team.planSource === 'override' ? (
-          <p className="text-sm text-muted-foreground">Complimentary — nothing to pay.</p>
+          <p className="text-xs text-muted-foreground">Complimentary — nothing to pay.</p>
         ) : (
           team.currentPeriodEnd && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {team.cancelAtPeriodEnd
                 ? `Seats stay active until ${formatDate(team.currentPeriodEnd)}, then end.`
                 : `Renews ${formatDate(team.currentPeriodEnd)}.`}
@@ -441,7 +441,7 @@ function TeamSubscriptionSummary({
           )
         )}
         {team.subscriptionStatus === 'past_due' && (
-          <p className="text-sm text-destructive mt-1">
+          <p className="text-xs text-destructive mt-1">
             The last payment failed. Update the payment method in Manage billing.
           </p>
         )}
@@ -465,11 +465,11 @@ function TeamSubscriptionSummary({
               setBusy(null);
             }}
           >
-            {busy === 'seats' && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+            {busy === 'seats' && <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />}
             Change seat count
           </Button>
           {seats !== team.seatsPurchased && (
-            <span className="text-sm text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               Billed pro rata from today.
             </span>
           )}
@@ -484,9 +484,9 @@ function TeamSubscriptionSummary({
             }}
           >
             {busy === 'portal' ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <CreditCard className="w-4 h-4" />
+              <CreditCard className="h-3.5 w-3.5" />
             )}
             Manage billing
           </Button>
@@ -535,7 +535,7 @@ function BuySeats({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Choose how many seats to buy. You add people by GitHub username once payment
         completes, and you get a seat yourself unless you remove it.
       </p>
@@ -548,7 +548,7 @@ function BuySeats({
           className="w-24"
           aria-label="Seats"
         />
-        <span className="text-sm">seats</span>
+        <span className="text-[13px]">seats</span>
         {(['monthly', 'annual'] as const)
           .filter((p) => pricing?.[p])
           .map((p) => (
@@ -563,7 +563,7 @@ function BuySeats({
           ))}
       </div>
       {tiers && (
-        <p className="text-sm">
+        <p className="text-[13px]">
           {price !== null ? (
             <>
               <span className="font-medium">{formatMoney(price, tiers.currency)}</span>
@@ -581,16 +581,16 @@ function BuySeats({
         </p>
       )}
       <Button onClick={() => void checkout()} disabled={busy || waiting || price === null} className="gap-2">
-        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />}
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CreditCard className="h-3.5 w-3.5" />}
         Buy {seats} seat{seats === 1 ? '' : 's'}
       </Button>
       {waiting && (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
           Finish checkout in your browser. This page updates by itself once payment completes.
         </p>
       )}
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }
@@ -708,7 +708,7 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
           {picked.map((p) => (
             <span
               key={p.login}
-              className="flex items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-2 text-sm"
+              className="flex items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-2 text-[13px]"
             >
               <img
                 src={p.avatarUrl ?? `https://avatars.githubusercontent.com/${encodeURIComponent(p.login)}?size=40`}
@@ -765,7 +765,7 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
             }
             disabled={room <= 0}
             aria-label="Search GitHub users"
-            className="min-w-[10rem] flex-1 border-0 bg-transparent p-0 py-1 text-sm shadow-none outline-none placeholder:text-muted-foreground focus:border-0 focus:outline-none focus:ring-0"
+            className="min-w-[10rem] flex-1 border-0 bg-transparent p-0 py-1 text-[13px] shadow-none outline-none placeholder:text-muted-foreground focus:border-0 focus:outline-none focus:ring-0"
           />
           {searching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
@@ -781,7 +781,7 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
                   onMouseEnter={() => setHighlight(i)}
                   onClick={() => pick([{ login: s.login, avatarUrl: s.avatarUrl }])}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm',
+                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px]',
                     i === highlight && 'bg-secondary'
                   )}
                 >
@@ -809,13 +809,13 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
           disabled={busy || picked.length === 0}
           className="gap-2 shrink-0"
         >
-          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
           {picked.length > 1 ? `Add ${picked.length} people` : 'Add'}
         </Button>
       </div>
 
       {failed.length > 0 && (
-        <ul className="text-sm text-destructive space-y-0.5">
+        <ul className="text-xs text-destructive space-y-0.5">
           {failed.map((f) => (
             <li key={f.login}>
               @{f.login}: {f.reason}
@@ -823,7 +823,7 @@ function SeatPicker({ team, onAssigned }: { team: TeamDetail; onAssigned: () => 
           ))}
         </ul>
       )}
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }
@@ -867,8 +867,8 @@ function SeatList({
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">Seats</h3>
-      <Card className="p-4 space-y-4">
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Seats</h3>
+      <Card className="p-3 space-y-4">
         <SeatPicker team={team} onAssigned={onAssigned} />
 
         {team.seats.length > 0 && (
@@ -887,7 +887,7 @@ function SeatList({
                     alt=""
                     className="w-6 h-6 rounded-full bg-muted"
                   />
-                  <span className="text-sm font-medium">@{seat.githubLogin}</span>
+                  <span className="text-[13px] font-medium">@{seat.githubLogin}</span>
                   {seat.isAdmin && (
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                       Admin
@@ -922,7 +922,7 @@ function SeatList({
                         setRemoving({ id: seat.id, login: seat.githubLogin, isAdmin: seat.isAdmin })
                       }
                     >
-                      <X className="w-4 h-4" />
+                      <X className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -976,18 +976,18 @@ function TeamOrders({ teamId, orders }: { teamId: string; orders: BillingOrder[]
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">Team invoices</h3>
+      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Team invoices</h3>
       <Card className="divide-y p-0">
         {orders.map((order) => (
-          <div key={order.id} className="flex items-center gap-4 px-4 py-3">
+          <div key={order.id} className="flex items-center gap-4 px-3 py-2">
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate">{order.productName ?? 'Talyn Team'}</p>
+              <p className="text-[13px] font-medium truncate">{order.productName ?? 'Talyn Team'}</p>
               <p className="text-xs text-muted-foreground">
                 {formatDate(order.createdAt)}
                 {order.invoiceNumber ? ` · ${order.invoiceNumber}` : ''}
               </p>
             </div>
-            <div className="text-sm font-medium tabular-nums">
+            <div className="text-[13px] font-medium tabular-nums">
               {formatMoney(order.amount, order.currency)}
             </div>
             <Button
@@ -1007,7 +1007,7 @@ function TeamOrders({ teamId, orders }: { teamId: string; orders: BillingOrder[]
           </div>
         ))}
       </Card>
-      {error && <p className="text-sm text-destructive mt-2">{error}</p>}
+      {error && <p className="text-xs text-destructive mt-2">{error}</p>}
     </div>
   );
 }

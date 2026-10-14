@@ -184,14 +184,14 @@ export function PRStatusPill({
             ))
       }
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors',
+        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium transition-colors',
         toneClass(variant.tone),
         onClick ? 'cursor-pointer hover:opacity-90' : 'cursor-default',
         className
       )}
     >
       <Icon
-        className={cn('w-3.5 h-3.5 shrink-0', variant.spin && 'animate-spin')}
+        className={cn('w-3 h-3 shrink-0', variant.spin && 'animate-spin')}
       />
       <span className="truncate">{variant.label}</span>
       {showRollup && (

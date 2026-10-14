@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { GitPullRequest, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import type { TaskStatus, AnyCloudProviderType, PRFilterDefinition } from '@talyn/shared';
@@ -148,8 +148,6 @@ export function MyPRsPanel() {
   return (
     <>
       <GitHubPageShell
-        title="My PRs"
-        icon={<GitPullRequest className="h-5 w-5" />}
         activeView="mine"
         search={search}
         onSearch={setSearch}
@@ -165,7 +163,7 @@ export function MyPRsPanel() {
               onClick={() => setWatchModalOpen(true)}
               title="Track any PR by its GitHub link — it doesn't have to be yours"
             >
-              <Plus className="mr-1 h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               Add PR
             </Button>
           </>

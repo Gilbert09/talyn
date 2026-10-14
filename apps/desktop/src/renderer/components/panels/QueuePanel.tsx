@@ -152,15 +152,11 @@ export function QueuePanel() {
     <div className="flex h-full">
       {/* Task List */}
       <div className="w-80 border-r flex flex-col">
-        <div className="app-region-drag flex items-center justify-between p-4 border-b">
-          <h2 className="text-lg font-semibold">Task Queue</h2>
-        </div>
-
         <ScrollArea ref={scrollRef} className="flex-1">
           {tasks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-center p-4">
-              <ListTodo className="w-10 h-10 text-muted-foreground/50 mb-3" />
-              <h3 className="font-medium mb-1 text-sm">No tasks</h3>
+            <div className="flex flex-col items-center justify-center gap-2 py-16 px-4 text-center text-[13px]">
+              <ListTodo className="w-6 h-6 text-muted-foreground/50" />
+              <h3 className="font-medium">No tasks</h3>
               <p className="text-xs text-muted-foreground">
                 Start a task from a pull request in the GitHub panel.
               </p>
@@ -168,14 +164,14 @@ export function QueuePanel() {
           ) : (
             <div className="p-2">
               {inProgressTasks.length > 0 && (
-                <div className="mb-4">
-                  <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
+                <div className="mb-3">
+                  <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1 px-1 flex items-center gap-1.5">
                     <span>RUNNING</span>
                     <span className="tabular-nums text-muted-foreground/70">
                       {inProgressTasks.length}
                     </span>
                   </h3>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {inProgressTasks.map((task) => (
                       <TaskListItem
                         key={task.id}
@@ -189,14 +185,14 @@ export function QueuePanel() {
               )}
 
               {queuedTasks.length > 0 && (
-                <div className="mb-4">
-                  <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
+                <div className="mb-3">
+                  <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1 px-1 flex items-center gap-1.5">
                     <span>QUEUED</span>
                     <span className="tabular-nums text-muted-foreground/70">
                       {queuedTasks.length}
                     </span>
                   </h3>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {queuedTasks.map((task) => (
                       <TaskListItem
                         key={task.id}
@@ -211,7 +207,7 @@ export function QueuePanel() {
 
               {completedTasks.length > 0 && (
                 <div>
-                  <h3 className="text-xs font-medium text-muted-foreground mb-2 px-1 flex items-center gap-1.5">
+                  <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-1 px-1 flex items-center gap-1.5">
                     <span>COMPLETED</span>
                     {/* `n/total`, because the bare number was the count of
                         rows LOADED — it grew every time the infinite scroll
@@ -225,7 +221,7 @@ export function QueuePanel() {
                         : `${completedTasks.length}/${tasksHistoryTotal}`}
                     </span>
                   </h3>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {completedTasks.map((task) => (
                       <TaskListItem
                         key={task.id}
@@ -242,7 +238,7 @@ export function QueuePanel() {
                       ref={sentinelRef}
                       className="flex items-center justify-center py-3 text-muted-foreground"
                     >
-                      {tasksLoadingMore && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {tasksLoadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                     </div>
                   )}
                 </div>
@@ -264,10 +260,10 @@ export function QueuePanel() {
         {selectedTaskId ? (
           <TaskDetail taskId={selectedTaskId} />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-            <ListTodo className="w-16 h-16 text-muted-foreground/30 mb-4" />
-            <h3 className="font-medium mb-2">No task selected</h3>
-            <p className="text-sm text-muted-foreground">
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center p-8 text-[13px]">
+            <ListTodo className="w-6 h-6 text-muted-foreground/30" />
+            <h3 className="font-medium">No task selected</h3>
+            <p className="text-xs text-muted-foreground">
               Select a task to view its details. Start new tasks from a pull
               request in the GitHub panel.
             </p>
@@ -304,7 +300,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
   return (
     <Card
       className={cn(
-        'p-3 cursor-pointer transition-colors border-transparent bg-transparent shadow-none border-l-4 border-l-transparent',
+        'px-3 py-2 cursor-pointer transition-colors border-transparent bg-transparent shadow-none border-l-4 border-l-transparent',
         isSelected ? 'bg-accent' : 'hover:bg-accent/50'
       )}
       onClick={onSelect}
@@ -312,18 +308,18 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            'w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0 bg-secondary',
+            'w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 bg-secondary',
             statusColor
           )}
         >
-          <StatusIcon className={cn('w-4 h-4', isRunning && 'animate-spin')} />
+          <StatusIcon className={cn('w-3.5 h-3.5', isRunning && 'animate-spin')} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium truncate">{task.title}</span>
+            <span className="text-[13px] font-medium truncate">{task.title}</span>
             <ProviderIcon provider={provider} className="h-3 w-3" />
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-0.5">
             {task.status === 'completed' && task.completedAt ? (
               <span
                 className="text-xs text-muted-foreground tabular-nums"
@@ -340,7 +336,7 @@ function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
               </span>
             )}
             {isRunning && (
-              <Badge variant="secondary" className="text-xs">
+              <Badge variant="secondary">
                 {runningStatus.label}
               </Badge>
             )}
@@ -396,7 +392,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   if (!task) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-muted-foreground">Task not found</p>
+        <p className="text-[13px] text-muted-foreground">Task not found</p>
       </div>
     );
   }
@@ -457,7 +453,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
         Cloud run on {providerLabel(provider ?? cloudMeta.provider) ?? cloudMeta.provider}
       </span>
       {cloudMeta.status && (
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary">
           {cloudMeta.status}
         </Badge>
       )}
@@ -479,40 +475,40 @@ function TaskDetail({ taskId }: TaskDetailProps) {
     return (
       <>
         {/* Header */}
-        <div className="app-region-drag p-4 border-b">
+        <div className="app-region-drag px-4 py-3 border-b">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
                 className={cn(
-                  'w-10 h-10 rounded-lg flex items-center justify-center bg-secondary',
+                  'w-7 h-7 rounded-md flex items-center justify-center bg-secondary',
                   runningStatus.color
                 )}
               >
-                <StatusIcon className="w-5 h-5 animate-spin" />
+                <StatusIcon className="w-3.5 h-3.5 animate-spin" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold">{task.title}</h2>
-                <div className="flex items-center gap-2 mt-1">
+                <h2 className="text-[13px] font-semibold">{task.title}</h2>
+                <div className="flex items-center gap-1.5 mt-1">
                   <Badge variant="secondary">{runningStatus.label}</Badge>
                   {provider && (
-                    <Badge variant="outline" className="text-xs gap-1">
+                    <Badge variant="outline" className="gap-1">
                       <ProviderIcon provider={provider} className="h-3 w-3" />
                       {providerLabel(provider)}
                     </Badge>
                   )}
                   {model && (
-                    <Badge variant="outline" className="text-xs" title={model}>
+                    <Badge variant="outline" title={model}>
                       {cloudModelLabel(model)}
                     </Badge>
                   )}
                   {repo && (
-                    <Badge variant="outline" className="text-xs">
-                      <GitBranch className="w-3 h-3 mr-1" />
+                    <Badge variant="outline" className="gap-1">
+                      <GitBranch className="w-3 h-3" />
                       {repo.fullName}
                     </Badge>
                   )}
                   {task.branch && (
-                    <Badge variant="secondary" className="text-xs font-mono">
+                    <Badge variant="secondary" className="font-mono">
                       {task.branch}
                     </Badge>
                   )}
@@ -535,7 +531,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
 
         {/* Cloud tasks have no local Files/Git data — the agent log is the
             whole story. */}
-        <div className="flex-1 overflow-hidden p-4">
+        <div className="flex-1 overflow-hidden p-3">
           <div className="h-full">
             <TaskTerminal key={task.id} task={task} />
           </div>
@@ -549,20 +545,20 @@ function TaskDetail({ taskId }: TaskDetailProps) {
   return (
     <>
       {/* Header */}
-      <div className="app-region-drag p-4 border-b">
-        <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+      <div className="app-region-drag px-4 py-3 border-b">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={cn(
-                'w-10 h-10 rounded-lg flex items-center justify-center bg-secondary shrink-0',
+                'w-7 h-7 rounded-md flex items-center justify-center bg-secondary shrink-0',
                 statusConfig[task.status].color
               )}
             >
-              <StatusIcon className="w-5 h-5" />
+              <StatusIcon className="w-3.5 h-3.5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-semibold break-words">{task.title}</h2>
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <h2 className="text-[13px] font-semibold break-words">{task.title}</h2>
+              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 <Badge variant="outline">{statusConfig[task.status].label}</Badge>
                 {provider && (
                   <Badge variant="outline" className="gap-1">
@@ -603,9 +599,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             {canStart && (
               <Button size="sm" data-attr="task-start-now" onClick={handleStartTask} disabled={actionInFlight}>
                 {isLoadingFor('start') ? (
-                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Play className="w-4 h-4 mr-1" />
+                  <Play className="w-3.5 h-3.5" />
                 )}
                 Start Now
               </Button>
@@ -616,14 +612,14 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             {(task.status === 'failed' || task.status === 'needs_human') && (
               <>
                 <Button size="sm" data-attr="task-retry" onClick={handleRetryTask} disabled={actionInFlight}>
-                  {isLoadingFor('retry') ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RotateCw className="w-4 h-4 mr-1" />}
+                  {isLoadingFor('retry') ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
                   Retry
                 </Button>
                 <Button size="sm" variant="destructive" data-attr="task-delete" onClick={handleDeleteTask} disabled={actionInFlight}>
                   {isLoadingFor('delete') ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : (
-                    <Trash2 className="w-4 h-4 mr-1" />
+                    <Trash2 className="w-3.5 h-3.5" />
                   )}
                   Delete
                 </Button>
@@ -636,7 +632,7 @@ function TaskDetail({ taskId }: TaskDetailProps) {
             )}
             {['pending', 'queued'].includes(task.status) && (
               <Button size="sm" variant="destructive" data-attr="task-cancel" onClick={handleCancelTask} disabled={actionInFlight}>
-                {isLoadingFor('cancel') && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+                {isLoadingFor('cancel') && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Cancel
               </Button>
             )}
@@ -716,11 +712,11 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           (task.description && task.description.trim() !== (task.prompt ?? '').trim())) && (
         <div className="px-4 pt-3 pb-2 border-b">
           {task.prompt ? (
-            <pre className="text-sm bg-secondary p-3 rounded-lg whitespace-pre-wrap break-words max-h-32 overflow-auto">
+            <pre className="text-xs bg-secondary p-3 rounded-lg whitespace-pre-wrap break-words max-h-32 overflow-auto">
               {task.prompt}
             </pre>
           ) : (
-            <p className="text-sm text-muted-foreground break-words">{task.description}</p>
+            <p className="text-[13px] text-muted-foreground break-words">{task.description}</p>
           )}
         </div>
       )}
@@ -731,10 +727,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
           added to stop making. Retry is offered because the person reading it
           is usually the one who just unblocked the thing. */}
       {task.status === 'needs_human' && (
-        <div className="px-4 py-3 border-b bg-amber-500/10 text-sm">
+        <div className="px-4 py-2.5 border-b bg-amber-500/10 text-[13px]">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2 min-w-0 flex-1">
-              <UserRoundCheck className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <UserRoundCheck className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
               <div className="min-w-0">
                 <p className="font-medium text-amber-700 dark:text-amber-400">
                   Needs you
@@ -754,9 +750,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
               disabled={actionInFlight}
             >
               {isLoadingFor('retry') ? (
-                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                <Loader2 className="w-3 h-3 animate-spin" />
               ) : (
-                <RotateCw className="w-3 h-3 mr-1" />
+                <RotateCw className="w-3 h-3" />
               )}
               Run again
             </Button>
@@ -790,10 +786,10 @@ function TaskDetail({ taskId }: TaskDetailProps) {
       {/* Failed/cancelled result banner — loud, above the log, with the
           full reason + a Retry action. */}
       {task.status !== 'needs_human' && task.result && !task.result.success && (
-        <div className="px-4 py-3 border-b bg-red-500/10 text-sm">
+        <div className="px-4 py-2.5 border-b bg-red-500/10 text-[13px]">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2 min-w-0 flex-1">
-              <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+              <AlertCircle className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />
               <div className="min-w-0">
                 <p className="font-medium text-red-700 dark:text-red-400">
                   {task.status === 'cancelled' ? 'Task cancelled' : 'Task failed'}
@@ -812,9 +808,9 @@ function TaskDetail({ taskId }: TaskDetailProps) {
                 disabled={actionInFlight}
               >
                 {isLoadingFor('retry') ? (
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                  <Loader2 className="w-3 h-3 animate-spin" />
                 ) : (
-                  <RotateCw className="w-3 h-3 mr-1" />
+                  <RotateCw className="w-3 h-3" />
                 )}
                 Retry
               </Button>
@@ -920,7 +916,7 @@ function TaskPRControls({
         onClick={() => window.open(pr.url, '_blank', 'noopener,noreferrer')}
         title={pr.url}
       >
-        <GitPullRequest className="w-4 h-4 mr-1" />
+        <GitPullRequest className="w-3.5 h-3.5" />
         View PR #{pr.number}
       </Button>
     </>

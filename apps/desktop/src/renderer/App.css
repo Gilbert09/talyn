@@ -179,3 +179,9 @@
   -webkit-app-region: no-drag;
 }
 
+/* Controls inside a drag region stay clickable without each one opting out. */
+.app-region-drag
+  :is(button, a, input, select, textarea, label, [role='button'], [role='tab'], [role='menuitem'], [role='switch'], [role='checkbox']) {
+  -webkit-app-region: no-drag;
+}
+

@@ -58,8 +58,8 @@ export function CodeReviewStep() {
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3 rounded-md border bg-muted/30 p-3">
-        <ScanSearch className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm">
+        <ScanSearch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <p className="text-[13px]">
           Talyn can read your pull requests and tell you what is wrong with them.{' '}
           <span className="font-medium">Findings show up here, in Talyn.</span>
         </p>

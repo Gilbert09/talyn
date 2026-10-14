@@ -68,7 +68,7 @@ export function useGitHubActions() {
     [connectedProviders, workspaceSettings]
   );
   const taskAsk = defaultCloudProvider === 'ask' && taskProviders.length > 1;
-  const openIntegrations = useCallback(() => openSettings('integrations'), [openSettings]);
+  const openIntegrations = useCallback(() => openSettings('pullRequests'), [openSettings]);
 
   // Auto fallback env, in the same order the backend's resolveCloudEnvChain
   // uses — the two must agree or a task started from the UI lands somewhere the

@@ -129,12 +129,9 @@ export function CodeReviewSettingsCard() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="text-lg font-semibold">Code review</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Talyn reads a pull request and puts what it finds in the app.
-        </p>
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Talyn reads a pull request and puts what it finds in the app.
+      </p>
 
       {/* A FLOW, not a list of switches. Each step is the question the previous
           answer raises: review everything → how hard → who reviews → what to show →
@@ -345,10 +342,10 @@ export function CodeReviewSettingsCard() {
         </Step>
       )}
 
-      <Card className="space-y-4 p-4">
+      <Card className="space-y-3 p-3">
         <div>
-          <h4 className="text-sm font-medium">On GitHub</h4>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <h4 className="text-[13px] font-semibold">On GitHub</h4>
+          <p className="mt-0.5 text-xs text-muted-foreground">
             Findings live in Talyn. These two are the exceptions.
           </p>
         </div>
@@ -407,16 +404,16 @@ function Step({
   children: React.ReactNode;
 }) {
   return (
-    <Card className="p-4">
+    <Card className="p-3">
       <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-medium text-muted-foreground">
           {n}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Icon className="h-4 w-4 text-muted-foreground" />
-            <h4 className="text-sm font-medium">{title}</h4>
-            <span className="rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            <h4 className="text-[13px] font-semibold">{title}</h4>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
               {badge}
             </span>
           </div>
@@ -449,12 +446,12 @@ function Toggle({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-1"
+        className="mt-0.5"
         data-attr={attr}
       />
       <div className="flex-1">
-        <div className="text-sm font-medium">{title}</div>
-        <p className="mt-1 text-xs text-muted-foreground">{children}</p>
+        <div className="text-[13px] font-medium">{title}</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">{children}</p>
       </div>
     </label>
   );

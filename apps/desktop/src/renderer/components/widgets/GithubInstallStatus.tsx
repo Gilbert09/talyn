@@ -103,8 +103,8 @@ export function GithubInstallStatus({
       )}
 
       {showWarning && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[13px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <div className="min-w-0 flex-1 space-y-2">
             <p>
               {noInstalls
@@ -114,10 +114,10 @@ export function GithubInstallStatus({
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={() => void startInstall(installMode)} disabled={opening}>
                 {opening ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <>
-                    <Plus className="mr-1 h-4 w-4" />
+                    <Plus className="mr-1 h-3.5 w-3.5" />
                     Install on GitHub
                   </>
                 )}
@@ -129,7 +129,7 @@ export function GithubInstallStatus({
                 disabled={loading}
                 title="Re-check installation status"
               >
-                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
               </Button>
             </div>
           </div>
@@ -140,7 +140,7 @@ export function GithubInstallStatus({
         <Button
           size="sm"
           variant="ghost"
-          className="h-7 px-2 text-xs text-muted-foreground"
+          className="text-muted-foreground"
           onClick={() => void startInstall('manage')}
           disabled={opening}
         >

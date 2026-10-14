@@ -14,7 +14,6 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  Wand2,
 } from 'lucide-react';
 import type { PlatformSkill, SkillSummary } from '@talyn/shared';
 import { api } from '../../lib/api';
@@ -24,7 +23,7 @@ import { useSkills } from '../../hooks/useSkills';
 import { toLocalSkillSummaries } from '../../lib/skills';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
-import { Card } from '../ui/card';
+import { SettingsSection, SettingsSelect } from '../ui/settings';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
@@ -159,157 +158,143 @@ export function SkillsSettings() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold flex items-center gap-2">
-          <Wand2 className="w-5 h-5" />
-          Skills
-        </h3>
-        <p className="text-sm text-muted-foreground mt-1">
-          Agent skills (SKILL.md) you can run on a pull request with a cloud task — from this
-          workspace, this machine, or the PR&apos;s repo.
-        </p>
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Agent skills (SKILL.md) you can run on a pull request with a cloud task — from this
+        workspace, this machine, or the PR&apos;s repo.
+      </p>
 
       {/* Talyn (platform) skills */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="font-medium flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-violet-500" />
-            Talyn skills
-          </h4>
+      <SettingsSection
+        title="Talyn skills"
+        actions={
           <Button
             size="sm"
             variant="outline"
-            className="gap-1"
             onClick={() => setDraft({ name: '', description: '', content: '' })}
           >
-            <Plus className="w-3.5 h-3.5" /> New skill
+            <Plus className="h-3.5 w-3.5" /> New skill
           </Button>
-        </div>
+        }
+      >
         {platformSkills.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="px-3 py-2 text-xs text-muted-foreground">
             No skills saved to Talyn yet. Create one, or save a local skill below.
           </p>
         ) : (
-          <div className="space-y-1">
-            {platformSkills.map((skill) => (
+          platformSkills.map((skill) => (
+            <div
+              key={skill.key}
+              className="flex items-center gap-2 px-3 py-2 hover:bg-muted/60"
+            >
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium">{skill.name}</div>
+                {skill.description && (
+                  <div className="truncate text-xs text-muted-foreground">
+                    {skill.description}
+                  </div>
+                )}
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0"
+                title="Edit"
+                onClick={() => void editSkill(skill)}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
+                title="Delete"
+                onClick={() => setPendingDelete(skill)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))
+        )}
+      </SettingsSection>
+
+      {/* Local skills */}
+      <SettingsSection
+        title="Local skills (this machine)"
+        description={
+          <>
+            Read from <code>~/.claude/skills</code> — ready to run on any PR straight from the
+            picker, nothing to set up. Saving one to Talyn is optional and only makes it
+            available from other machines.
+          </>
+        }
+      >
+        {localSkills.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted-foreground">No local skills found.</p>
+        ) : (
+          localSkills.map((skill) => {
+            const alreadyOnTalyn = platformSkills.some((p) => p.name === skill.name);
+            return (
               <div
                 key={skill.key}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                className="group flex items-center gap-2 px-3 py-2 hover:bg-muted/60"
               >
+                <Laptop className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{skill.name}</div>
+                  <div className="truncate text-[13px] font-medium">{skill.name}</div>
                   {skill.description && (
-                    <div className="text-xs text-muted-foreground truncate">
+                    <div className="truncate text-xs text-muted-foreground">
                       {skill.description}
                     </div>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0"
-                  title="Edit"
-                  onClick={() => void editSkill(skill)}
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
-                  title="Delete"
-                  onClick={() => setPendingDelete(skill)}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* Local skills */}
-      <Card className="p-4">
-        <h4 className="font-medium flex items-center gap-2 mb-1">
-          <Laptop className="w-4 h-4 text-muted-foreground" />
-          Local skills (this machine)
-        </h4>
-        <p className="text-xs text-muted-foreground mb-3">
-          Read from <code>~/.claude/skills</code> — ready to run on any PR straight from the
-          picker, nothing to set up. Saving one to Talyn is optional and only makes it
-          available from other machines.
-        </p>
-        {localSkills.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No local skills found.</p>
-        ) : (
-          <div className="space-y-1">
-            {localSkills.map((skill) => {
-              const alreadyOnTalyn = platformSkills.some((p) => p.name === skill.name);
-              return (
-                <div
-                  key={skill.key}
-                  className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium truncate">{skill.name}</div>
-                    {skill.description && (
-                      <div className="text-xs text-muted-foreground truncate">
-                        {skill.description}
-                      </div>
+                {alreadyOnTalyn ? (
+                  <span
+                    className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+                    title="Also saved to Talyn"
+                  >
+                    <Check className="h-3 w-3" /> On Talyn
+                  </span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+                    disabled={importingPath === skill.localPath}
+                    title="Optional — copies this skill to Talyn so it's available from other machines"
+                    onClick={() => void saveLocalToTalyn(skill)}
+                  >
+                    {importingPath === skill.localPath ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Upload className="h-3 w-3" />
                     )}
-                  </div>
-                  {alreadyOnTalyn ? (
-                    <span
-                      className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
-                      title="Also saved to Talyn"
-                    >
-                      <Check className="w-3 h-3" /> On Talyn
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 gap-1 px-2 text-xs text-muted-foreground opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
-                      disabled={importingPath === skill.localPath}
-                      title="Optional — copies this skill to Talyn so it's available from other machines"
-                      onClick={() => void saveLocalToTalyn(skill)}
-                    >
-                      {importingPath === skill.localPath ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Upload className="w-3 h-3" />
-                      )}
-                      Save to Talyn
-                    </Button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    Save to Talyn
+                  </Button>
+                )}
+              </div>
+            );
+          })
         )}
-      </Card>
+      </SettingsSection>
 
       {/* Repo skills */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="font-medium flex items-center gap-2">
-            <FolderGit2 className="w-4 h-4 text-muted-foreground" />
-            Repo skills
-          </h4>
+      <SettingsSection
+        title="Repo skills"
+        actions={
           <div className="flex items-center gap-2">
             {workspaceRepos.length > 1 && (
-              <select
+              <SettingsSelect
                 value={repoId ?? ''}
                 onChange={(e) => setSelectedRepoId(e.target.value || null)}
-                className="max-w-[240px] shrink-0 rounded-md border bg-background px-2 py-1 text-xs"
+                className="max-w-[240px]"
               >
                 {workspaceRepos.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.fullName}
                   </option>
                 ))}
-              </select>
+              </SettingsSelect>
             )}
             {workspaceRepos.length === 1 && (
               <span className="text-xs text-muted-foreground">{workspaceRepos[0].fullName}</span>
@@ -323,36 +308,40 @@ export function SkillsSettings() {
               onClick={() => void refresh({ refreshRepo: true })}
             >
               {refreshing ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RefreshCw className="h-3.5 w-3.5" />
               )}
             </Button>
           </div>
-        </div>
+        }
+      >
         {workspaceRepos.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No repositories in this workspace.</p>
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            No repositories in this workspace.
+          </p>
         ) : repoStatus === 'error' ? (
-          <p className="text-sm text-amber-600 dark:text-amber-400">
+          <p className="px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
             Couldn&apos;t load skills from GitHub — try refreshing.
           </p>
         ) : repoSkills.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="px-3 py-2 text-xs text-muted-foreground">
             No skills in this repo (looked in <code>.claude/skills</code> on the default branch).
           </p>
         ) : (
-          <div className="space-y-1">
-            {repoSkills.map((skill) => (
-              <div key={skill.key} className="rounded-md px-2 py-1.5 hover:bg-muted/60">
-                <div className="text-sm font-medium">{skill.name}</div>
-                <div className="text-xs text-muted-foreground truncate">
+          repoSkills.map((skill) => (
+            <div key={skill.key} className="flex items-center gap-2 px-3 py-2 hover:bg-muted/60">
+              <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium">{skill.name}</div>
+                <div className="truncate text-xs text-muted-foreground">
                   {skill.description || skill.repoPath}
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))
         )}
-      </Card>
+      </SettingsSection>
 
       {/* Create / edit dialog */}
       {draft && (
@@ -397,7 +386,7 @@ export function SkillsSettings() {
                 Cancel
               </Button>
               <Button onClick={() => void saveDraft()} disabled={saving}>
-                {saving && <Loader2 className="mr-1.5 w-3.5 h-3.5 animate-spin" />}
+                {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 {draft.id ? 'Save changes' : 'Create skill'}
               </Button>
             </DialogFooter>
