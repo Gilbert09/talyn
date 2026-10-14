@@ -601,6 +601,8 @@ export function resetFleetDispatcherCache(): void {
  * either.
  */
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** How long a resume may take. The fleet itself allows two hours; ten minutes covers a multi-gigabyte pull. */
+const RESUME_TIMEOUT_MS = 10 * 60_000;
 
 export class FleetClient {
   private readonly timeoutMs: number;
@@ -706,12 +708,12 @@ export class FleetClient {
       );
     }
     if (!resp.ok) {
-      const message = await errorMessage(resp, `fleet returned ${resp.status}`);
+      const { message, code } = await errorBody(resp, `fleet returned ${resp.status}`);
       // Terminal, not retryable — see FleetRunNotFoundError.
       if (isRunNotFoundResponse(resp.status, message)) {
         throw new FleetRunNotFoundError(message);
       }
-      throw new FleetHttpError(message, resp.status);
+      throw new FleetHttpError(message, resp.status, code);
     }
     // The gateway names the host that took a create, because Talyn has to bound
     // a later credential pull BY HOST and cannot read that off a registry it no
@@ -1061,10 +1063,10 @@ export class FleetClient {
     }
     this.recordHttp('POST', path, resp.status, started, resp.ok);
     if (!resp.ok || !resp.body) {
-      const message = await errorMessage(resp, `exec ${id}: ${resp.status} ${resp.statusText}`);
+      const { message, code } = await errorBody(resp, `exec ${id}: ${resp.status} ${resp.statusText}`);
       if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
       if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
-      throw new FleetHttpError(message, resp.status);
+      throw new FleetHttpError(message, resp.status, code);
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -1293,7 +1295,9 @@ export class FleetClient {
   }
 
   async resumeSandbox(id: string): Promise<void> {
-    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body: '{}' }, { timeoutMs: 60_000 });
+    // A hibernated box pulls its image back from object storage first, which
+    // the fleet allows minutes for. Sixty seconds gave up on a resume that works.
+    await this.request(sandboxPath(id, '/resume'), { method: 'POST', body: '{}' }, { timeoutMs: RESUME_TIMEOUT_MS });
   }
 
   /** Delete a sandbox. Already gone counts as done: the caller wanted it gone. */
@@ -1554,6 +1558,16 @@ async function errorMessage(resp: Response, fallback: string): Promise<string> {
     return body.message || body.error || fallback;
   } catch {
     return fallback;
+  }
+}
+
+/** The fleet's error text and its machine code (`error` in its JSON body), when it sent one. */
+async function errorBody(resp: Response, fallback: string): Promise<{ message: string; code?: string }> {
+  try {
+    const body = (await resp.json()) as { message?: string; error?: string };
+    return { message: body.message || body.error || fallback, ...(body.error ? { code: body.error } : {}) };
+  } catch {
+    return { message: fallback };
   }
 }
 

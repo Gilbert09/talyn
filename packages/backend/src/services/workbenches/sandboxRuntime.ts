@@ -13,7 +13,13 @@ import { users as usersTable, workspaces as workspacesTable } from '../../db/sch
 import { debugBus } from '../debugBus.js';
 import { getFleetHost } from '../fleetHosts.js';
 import { mcpIntegrationSecrets } from '../mcpServers/dispatch.js';
-import { FleetCapacityError, FleetClient, type FleetExecFrame, type FleetExecRequest } from '../selfHosted/client.js';
+import {
+  FleetCapacityError,
+  FleetClient,
+  FleetHttpError,
+  type FleetExecFrame,
+  type FleetExecRequest,
+} from '../selfHosted/client.js';
 import {
   fleetApiToken,
   FleetNotDeployedError,
@@ -133,7 +139,7 @@ export async function fleetClientFor(workspaceId: string, fleetHost?: string | n
   if (clientOverride) {
     const client = await clientOverride(workspaceId);
     if (!client) throw new WorkbenchError('Talyn Fleet is not configured for this workspace.', 409, 'fleet_unconfigured');
-    return client;
+    return withWake(client);
   }
   const pinnedHost = fleetHost && !fleetPinnedEndpoint() ? fleetHost : null;
   const key = pinnedHost ? `${workspaceId}@${pinnedHost}` : workspaceId;
@@ -143,8 +149,86 @@ export async function fleetClientFor(workspaceId: string, fleetHost?: string | n
   if (!client) {
     throw new WorkbenchError('Talyn Fleet is not configured for this workspace.', 409, 'fleet_unconfigured');
   }
-  clientCache.set(key, { client, expiresAt: Date.now() + CLIENT_TTL_MS });
-  return client;
+  const waking = withWake(client);
+  clientCache.set(key, { client: waking, expiresAt: Date.now() + CLIENT_TTL_MS });
+  return waking;
+}
+
+// ============================================================================
+// Waking a hibernated sandbox
+// ============================================================================
+
+/**
+ * The fleet's answer for a box whose only copy is in object storage. A plain
+ * suspend wakes on the next exec; a hibernated box does not, because pulling
+ * the image back takes minutes, and only POST /resume may wait that long.
+ */
+export function isRemoteResumeRequired(err: unknown): boolean {
+  return err instanceof FleetHttpError && err.code === 'remote_resume_required';
+}
+
+/** Resumes in flight, per sandbox, so a burst of calls waits on one resume. */
+const resuming = new Map<string, Promise<void>>();
+
+function resumeOnce(client: FleetClient, sandboxId: string): Promise<void> {
+  let pending = resuming.get(sandboxId);
+  if (!pending) {
+    console.log(`[workbench] resuming hibernated sandbox ${sandboxId}`);
+    pending = client.resumeSandbox(sandboxId).finally(() => resuming.delete(sandboxId));
+    resuming.set(sandboxId, pending);
+  }
+  return pending;
+}
+
+/** Calls that manage the box itself, and must never resume it as a side effect. */
+const NO_WAKE = new Set<PropertyKey>(['createSandbox', 'resumeSandbox', 'suspendSandbox', 'deleteSandbox']);
+
+/**
+ * The client, but a call refused with `remote_resume_required` resumes the box
+ * and is sent once more. Every sandbox call takes the sandbox id first, and
+ * only a sandbox route answers with that code, so `args[0]` is the box to wake.
+ * Methods run on the real client, so its own internal calls skip this layer.
+ */
+function withWake(client: FleetClient): FleetClient {
+  return new Proxy(client, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop, target);
+      if (typeof value !== 'function') return value;
+      const method = value as (...args: unknown[]) => unknown;
+      if (NO_WAKE.has(prop)) return method.bind(target);
+      if (prop === 'execFollow') {
+        return (...args: Parameters<FleetClient['execFollow']>) => followWithWake(target, args);
+      }
+      return (...args: unknown[]) => {
+        const result = method.apply(target, args);
+        const sandboxId = args[0];
+        if (!(result instanceof Promise) || typeof sandboxId !== 'string') return result;
+        return result.catch(async (err: unknown) => {
+          if (!isRemoteResumeRequired(err)) throw err;
+          await resumeOnce(target, sandboxId);
+          return method.apply(target, args);
+        });
+      };
+    },
+  });
+}
+
+/** The fleet refuses a follow before its first frame, so a retry repeats nothing. */
+async function* followWithWake(
+  client: FleetClient,
+  args: Parameters<FleetClient['execFollow']>,
+): AsyncGenerator<FleetExecFrame> {
+  let started = false;
+  try {
+    for await (const frame of client.execFollow(...args)) {
+      started = true;
+      yield frame;
+    }
+  } catch (err) {
+    if (started || !isRemoteResumeRequired(err)) throw err;
+    await resumeOnce(client, args[0]);
+    yield* client.execFollow(...args);
+  }
 }
 
 /** A client for one named host. Null when the workspace has no fleet credential. */
