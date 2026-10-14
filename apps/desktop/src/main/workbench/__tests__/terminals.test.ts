@@ -4,7 +4,7 @@ import { Terminals } from '../terminals';
 import * as environment from '../environment';
 import * as processes from '../processes';
 
-jest.mock('node-pty', () => ({ spawn: jest.fn() }));
+jest.mock('node-pty', () => ({ spawn: jest.fn() }), { virtual: true });
 
 let onData: (data: string) => void;
 let onExit: (event: { exitCode: number; signal?: number }) => void;

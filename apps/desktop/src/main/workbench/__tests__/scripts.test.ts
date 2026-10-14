@@ -4,7 +4,7 @@ import { Terminals } from '../terminals';
 import { WorkbenchPaths } from '../paths';
 import * as config from '../config';
 
-jest.mock('node-pty', () => ({ spawn: jest.fn() }));
+jest.mock('node-pty', () => ({ spawn: jest.fn() }), { virtual: true });
 
 test('allocates distinct blocks and keeps a stable block per workbench', () => {
   const ports = new PortAllocator();
@@ -20,7 +20,7 @@ test('does not allocate ports outside the valid range', () => {
   const ports = new PortAllocator();
   for (let i = 0; i < 1043; i += 1)
     expect(ports.allocate(String(i))).toBe(55100 + i * 10);
-  expect(() => ports.allocate('overflow')).toThrow('No workbench port range');
+  expect(() => ports.allocate('overflow')).toThrow('No session port range');
 });
 
 test('loads scripts, applies environment variables, and stops nonconcurrent runs', async () => {
