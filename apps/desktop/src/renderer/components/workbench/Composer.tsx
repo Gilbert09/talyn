@@ -15,7 +15,7 @@ import { fuzzyMatchPaths, slashCommandsFrom } from '../../lib/workbenchFormat';
 import { FOCUS_COMPOSER_EVENT } from '../../lib/shortcuts';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
-import { useWorkbenchStore } from '../../stores/workbenches';
+import { composerDraftKey, useWorkbenchStore } from '../../stores/workbenches';
 import { createChatTab } from './ChatTabs';
 import { ComposerPopover, applyTrigger, findTrigger, type ComposerTrigger } from './ComposerPopover';
 import { ContextMeter, EffortPicker, ModelPicker, PlanToggle, TodoChip, defaultModelFor } from './ComposerControls';
@@ -36,7 +36,7 @@ export function Composer({
   todos: WorkbenchTodo[] | null;
   contextUsage: WorkbenchContextUsage | null;
 }) {
-  const draftKey = chat?.id ?? `wb:${workbench.id}`;
+  const draftKey = composerDraftKey(workbench.id, chat);
   const draft = useWorkbenchStore((s) => s.drafts[draftKey] ?? '');
   const setDraft = useWorkbenchStore((s) => s.setDraft);
   const localQueue = useWorkbenchStore((s) => (chat ? s.localQueues[chat.id] : undefined));

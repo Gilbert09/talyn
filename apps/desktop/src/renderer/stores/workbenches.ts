@@ -6,6 +6,15 @@ import type {
   WorkbenchQueuedMessage,
   WorkbenchScriptFrame,
 } from '@talyn/shared';
+import {
+  DOCK_DEFAULT_HEIGHT,
+  DOCK_MIN_HEIGHT,
+  clampDockHeight,
+  clampPanelWidth,
+  readLayout,
+  writeLayout,
+  type GitPanelTab,
+} from '../lib/workbenchLayout';
 
 /**
  * Workbenches: the list, each workbench's chats, each chat's transcript
@@ -18,7 +27,7 @@ import type {
  * dropped, never appended twice.
  */
 
-export type WorkbenchSideTab = 'changes' | 'files' | 'checks';
+export type WorkbenchSideTab = GitPanelTab;
 export type WorkbenchTerminalTab = 'setup' | 'run' | 'terminal';
 
 export interface ChatEventsState {
@@ -60,8 +69,8 @@ export interface ScriptOutputState {
 /** Keeps the newest output of a script. A dev server can print for hours. */
 export const SCRIPT_OUTPUT_MAX_CHUNKS = 5000;
 
-export const TERMINAL_MIN_HEIGHT = 120;
-export const TERMINAL_DEFAULT_HEIGHT = 260;
+export const TERMINAL_MIN_HEIGHT = DOCK_MIN_HEIGHT;
+export const TERMINAL_DEFAULT_HEIGHT = DOCK_DEFAULT_HEIGHT;
 
 const EMPTY_EVENTS: ChatEventsState = { events: [], loaded: false, loading: false, error: null };
 
@@ -138,6 +147,10 @@ interface WorkbenchState {
   /** Chat tabs the user closed. There is no server-side close, so this is a view decision. */
   hiddenChatIds: Record<string, true>;
   sideTab: WorkbenchSideTab;
+  /** The right panel (files, changes, checks and the terminal dock). ⌘⌥B. */
+  rightPanelOpen: boolean;
+  rightPanelWidth: number;
+  /** The terminal dock under the right panel is open; closed, it is one bar. */
   terminalOpen: boolean;
   terminalHeight: number;
   terminalTab: WorkbenchTerminalTab;
@@ -164,11 +177,16 @@ interface WorkbenchState {
   selectChat: (workbenchId: string, chatId: string) => void;
   hideChat: (workbenchId: string, chatId: string) => void;
   setSideTab: (tab: WorkbenchSideTab) => void;
+  setRightPanelOpen: (open: boolean) => void;
+  toggleRightPanel: () => void;
+  setRightPanelWidth: (width: number) => void;
   setTerminalOpen: (open: boolean) => void;
   toggleTerminal: () => void;
   setTerminalHeight: (height: number) => void;
   setTerminalTab: (tab: WorkbenchTerminalTab) => void;
   setDraft: (key: string, text: string) => void;
+  /** Add text to the end of a draft, on its own paragraph. */
+  appendDraft: (key: string, text: string) => void;
   markRead: (chatId: string) => void;
   enqueueLocal: (chatId: string, message: WorkbenchQueuedMessage) => void;
   dequeueLocal: (chatId: string) => WorkbenchQueuedMessage | undefined;
@@ -180,6 +198,8 @@ interface WorkbenchState {
   clearNewWorkbenchPrefill: () => void;
 }
 
+const initialLayout = readLayout();
+
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   workspaceId: null,
   workbenches: {},
@@ -190,9 +210,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   selectedWorkbenchId: null,
   selectedChatByWorkbench: {},
   hiddenChatIds: {},
-  sideTab: 'changes',
+  sideTab: initialLayout.gitPanelTab,
+  rightPanelOpen: true,
+  rightPanelWidth: initialLayout.gitPanelWidth,
   terminalOpen: false,
-  terminalHeight: TERMINAL_DEFAULT_HEIGHT,
+  terminalHeight: initialLayout.dockHeight,
   terminalTab: 'terminal',
   drafts: {},
   unread: {},
@@ -288,11 +310,30 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       return { hiddenChatIds: { ...s.hiddenChatIds, [chatId]: true }, selectedChatByWorkbench: selected };
     }),
 
-  setSideTab: (sideTab) => set({ sideTab }),
-  setTerminalOpen: (terminalOpen) => set({ terminalOpen }),
-  toggleTerminal: () => set((s) => ({ terminalOpen: !s.terminalOpen })),
-  setTerminalHeight: (height) => set({ terminalHeight: Math.max(TERMINAL_MIN_HEIGHT, Math.round(height)) }),
-  setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true }),
+  setSideTab: (sideTab) => {
+    set({ sideTab, rightPanelOpen: true });
+    writeLayout({ gitPanelTab: sideTab });
+  },
+  setRightPanelOpen: (rightPanelOpen) => set({ rightPanelOpen }),
+  toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
+  setRightPanelWidth: (width) => {
+    const rightPanelWidth = clampPanelWidth(width);
+    set({ rightPanelWidth });
+    writeLayout({ gitPanelWidth: rightPanelWidth });
+  },
+  // The dock lives under the right panel, so opening it shows the panel too.
+  setTerminalOpen: (terminalOpen) => set((s) => ({ terminalOpen, rightPanelOpen: terminalOpen || s.rightPanelOpen })),
+  toggleTerminal: () =>
+    set((s) => {
+      const open = !(s.terminalOpen && s.rightPanelOpen);
+      return { terminalOpen: open, rightPanelOpen: open || s.rightPanelOpen };
+    }),
+  setTerminalHeight: (height) => {
+    const terminalHeight = clampDockHeight(height);
+    set({ terminalHeight });
+    writeLayout({ dockHeight: terminalHeight });
+  },
+  setTerminalTab: (terminalTab) => set({ terminalTab, terminalOpen: true, rightPanelOpen: true }),
 
   setDraft: (key, text) =>
     set((s) => {
@@ -302,6 +343,14 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       else delete drafts[key];
       return { drafts };
     }),
+
+  appendDraft: (key, text) => {
+    const add = text.trim();
+    if (!add) return;
+    const cur = get().drafts[key] ?? '';
+    const sep = !cur.trim() ? '' : cur.endsWith('\n\n') ? '' : cur.endsWith('\n') ? '\n' : '\n\n';
+    get().setDraft(key, cur.trim() ? `${cur}${sep}${add}` : add);
+  },
 
   markRead: (chatId) =>
     set((s) => {
@@ -361,6 +410,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   clearNewWorkbenchPrefill: () =>
     set((s) => (s.newWorkbench.prefill ? { newWorkbench: { ...s.newWorkbench, prefill: null } } : s)),
 }));
+
+/** Where the composer keeps its draft: the chat's, or the workbench's before it has a chat. */
+export function composerDraftKey(workbenchId: string, chat: Pick<WorkbenchChat, 'id'> | null): string {
+  return chat?.id ?? `wb:${workbenchId}`;
+}
 
 /** The chats of a workbench the user has not closed. */
 export function visibleChats(state: Pick<WorkbenchState, 'chats' | 'hiddenChatIds'>, workbenchId: string): WorkbenchChat[] {

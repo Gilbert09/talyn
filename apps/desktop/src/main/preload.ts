@@ -70,6 +70,10 @@ const electronHandler = {
   workbench,
   /** OS platform, for platform-specific window chrome (macOS traffic lights). */
   platform: process.platform,
+  /** Bring the main window to the front (a notification click). */
+  focusWindow(): Promise<void> {
+    return ipcRenderer.invoke('app:focus-window');
+  },
   /**
    * Commands from the application menu (main/menuCommands.ts). The menu owns
    * those chords, so the renderer runs the shortcut with this id instead of

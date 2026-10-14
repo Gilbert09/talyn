@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { formatKeys } from '../../lib/shortcuts';
 import { api } from '../../lib/api';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
@@ -54,7 +55,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
   };
 
   return (
-    <div className="flex items-center gap-0.5 overflow-x-auto border-b px-2" role="tablist" aria-label="Chats">
+    <div className="flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2" role="tablist" aria-label="Chats">
       {chats.map((chat) => {
         const active = chat.id === selected?.id;
         const tone = chat.status === 'running' ? 'running' : chat.status === 'error' ? 'error' : unread[chat.id] ? 'unread' : null;
@@ -113,7 +114,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
         onClick={() => void newChat()}
         disabled={creating}
         className="ml-1 shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-        title="New chat"
+        title={`New chat (${formatKeys('mod+t')})`}
         aria-label="New chat"
       >
         {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}

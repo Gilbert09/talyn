@@ -1,8 +1,8 @@
 import { v4 as uuid } from 'uuid';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { resolveWorkbenchActionPrompt, type WorkbenchNextAction, type WorkbenchPromptAction } from '@talyn/shared';
 import { getPoolDbClient } from '../../db/client.js';
-import { pullRequests as prTable } from '../../db/schema.js';
+import { prCheckStates, pullRequests as prTable } from '../../db/schema.js';
 import { githubService } from '../github.js';
 import { emitWorkbenchChat } from './emit.js';
 import { localRuntimeError, WorkbenchError } from './errors.js';
@@ -67,10 +67,14 @@ export async function runWorkbenchAction(
     });
     emitWorkbenchChat(row.workspaceId, rowToChat(chat));
   }
-  const text = resolveWorkbenchActionPrompt(action as WorkbenchPromptAction, row.settings, {
+  let text = resolveWorkbenchActionPrompt(action as WorkbenchPromptAction, row.settings, {
     branch: row.branch,
     baseBranch: row.baseBranch,
   });
+  if (action === 'fix_checks') {
+    const context = await readFixChecksContext(row);
+    if (context) text = `${text}\n\n${context}`;
+  }
   await sendMessage(chat.id, { text });
   return { chatId: chat.id };
 }
@@ -96,5 +100,133 @@ async function mergeLinkedPullRequest(row: WorkbenchRow): Promise<void> {
       409,
       'merge_failed',
     );
+  }
+}
+
+// ============================================================================
+// Fix checks: the failing checks, in the prompt
+// ============================================================================
+
+export interface FailingCheckFact {
+  name: string;
+  /** GitHub's own conclusion before normalisation (FAILURE, TIMED_OUT…), when known. */
+  conclusion: string | null;
+  /** null when GitHub's required-ness is not known. */
+  required: boolean | null;
+  url: string | null;
+}
+
+export interface FixChecksContextInput {
+  prNumber: number;
+  prUrl: string | null;
+  headSha: string | null;
+  checks: FailingCheckFact[];
+  /** True when only the names could be read (the ledger had nothing for this commit). */
+  namesOnly?: boolean;
+}
+
+function requiredLabel(required: boolean | null): string {
+  if (required === true) return 'required';
+  if (required === false) return 'optional';
+  return 'required-ness unknown';
+}
+
+/**
+ * The block appended to the fix-checks prompt: each failing check with its
+ * conclusion, whether it blocks the merge, and the link to its run. Required
+ * checks first, because an optional one does not block the merge. Empty
+ * when there is nothing to name, so the configured prompt goes alone.
+ */
+export function formatFixChecksContext(input: FixChecksContextInput): string {
+  if (input.checks.length === 0) return '';
+  const order = (c: FailingCheckFact) => (c.required === true ? 0 : c.required === null ? 1 : 2);
+  const sorted = input.checks
+    .slice()
+    .sort((a, b) => order(a) - order(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const head = input.headSha ? ` (head ${input.headSha.slice(0, 7)})` : '';
+  const lines = [`## Failing checks on #${input.prNumber}${head}`, ''];
+  for (const c of sorted) {
+    const parts = [`\`${c.name}\``];
+    if (!input.namesOnly) {
+      parts.push(c.conclusion ? c.conclusion.toLowerCase().replace(/_/g, ' ') : 'failed');
+      parts.push(requiredLabel(c.required));
+    }
+    lines.push(`- ${parts.join(' — ')}${c.url ? ` — ${c.url}` : ''}`);
+  }
+  if (input.prUrl) lines.push('', `All checks: ${input.prUrl}/checks`);
+  if (sorted.some((c) => c.required === false) && sorted.some((c) => c.required !== false)) {
+    lines.push('', 'Fix the required checks first. An optional check does not block the merge.');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * The failing checks of the PR this workbench opened, formatted for the
+ * prompt, or '' when there is no PR or nothing is known to fail.
+ *
+ * Reads the check ledger for the PR's head commit. The PR row is read
+ * through a projection: the head sha, the URL and the failed count come out
+ * of `last_summary` in SQL, so the blob never ships. When the ledger has
+ * nothing for that commit but the summary counts failures, the names are
+ * read live from GitHub — rare, because this runs once per button press.
+ * Never throws: a sharper prompt must never stop the fix from starting.
+ */
+export async function readFixChecksContext(row: Pick<WorkbenchRow, 'workspaceId' | 'pullRequestId'>): Promise<string> {
+  if (!row.pullRequestId) return '';
+  try {
+    const db = getPoolDbClient();
+    const prs = await db
+      .select({
+        owner: prTable.owner,
+        repo: prTable.repo,
+        number: prTable.number,
+        headSha: sql<string | null>`${prTable.lastSummary} ->> 'headSha'`,
+        url: sql<string | null>`${prTable.lastSummary} ->> 'url'`,
+        failed: sql<number | null>`(${prTable.lastSummary} -> 'checks' ->> 'failed')::int`,
+      })
+      .from(prTable)
+      .where(and(eq(prTable.id, row.pullRequestId), eq(prTable.workspaceId, row.workspaceId)))
+      .limit(1);
+    const pr = prs[0];
+    if (!pr) return '';
+    const base = { prNumber: pr.number, prUrl: pr.url, headSha: pr.headSha };
+
+    if (pr.headSha) {
+      const ledger = await db
+        .select({
+          name: prCheckStates.name,
+          rawState: prCheckStates.rawState,
+          required: prCheckStates.required,
+          url: prCheckStates.url,
+        })
+        .from(prCheckStates)
+        .where(
+          and(
+            eq(prCheckStates.repoFullName, `${pr.owner}/${pr.repo}`.toLowerCase()),
+            eq(prCheckStates.headSha, pr.headSha),
+            eq(prCheckStates.state, 'failure'),
+          ),
+        )
+        .orderBy(asc(prCheckStates.name));
+      if (ledger.length > 0) {
+        return formatFixChecksContext({
+          ...base,
+          checks: ledger.map((c) => ({ name: c.name, conclusion: c.rawState, required: c.required, url: c.url })),
+        });
+      }
+    }
+
+    if ((pr.failed ?? 0) === 0) return '';
+    const live = await githubService.listFailingCheckNames(row.workspaceId, pr.owner, pr.repo, pr.number);
+    if (!live || live.names.length === 0) return '';
+    return formatFixChecksContext({
+      ...base,
+      headSha: live.headSha,
+      namesOnly: true,
+      checks: live.names.map((name) => ({ name, conclusion: null, required: null, url: null })),
+    });
+  } catch (err) {
+    console.warn('[workbenches] could not read the failing checks:', err instanceof Error ? err.message : err);
+    return '';
   }
 }

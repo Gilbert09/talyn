@@ -112,6 +112,39 @@ describe('AppSidebar', () => {
     expect(screen.getByText('lisbon')).not.toHaveClass('font-semibold');
   });
 
+  it.each<[string, Partial<Workbench>, string]>([
+    ['a failed workbench', { status: 'error' }, 'Error'],
+    ['a sandbox that failed to start', { sandboxState: 'error' }, 'Error'],
+    ['a starting workbench', { status: 'provisioning' }, 'Running'],
+    ['a ready idle workbench', {}, 'Idle'],
+  ])('%s shows the %s dot', (_name, over, label) => {
+    useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', { repoFullName: 'acme/web', ...over }));
+    render(<AppSidebar />);
+    expect(within(screen.getByRole('button', { name: /lisbon/ })).getByLabelText(label)).toBeInTheDocument();
+  });
+
+  it('stacks New workbench over Search, so both fit the sidebar', () => {
+    render(<AppSidebar />);
+    const newWb = screen.getByText('New workbench').closest('button')!;
+    const search = screen.getByText('Search').closest('button')!;
+    expect(newWb.parentElement).toBe(search.parentElement);
+    expect(newWb.parentElement).toHaveClass('flex-col');
+    expect(newWb).not.toHaveClass('flex-1');
+  });
+
+  it.each([
+    [1, '1 repo'],
+    [2, '2 repos'],
+    [0, '0 repos'],
+  ])('the workspace switcher counts %p repositories as %p', (count, text) => {
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'w', name: 'Acme', repos: Array.from({ length: count }, (_, i) => ({ id: `r${i}` })) }] as never,
+      currentWorkspaceId: 'w',
+    });
+    render(<AppSidebar />);
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
   it('an idle row with a PR shows the PR state colour', () => {
     useWorkbenchStore.getState().upsertWorkbench(wb('lisbon', { repoFullName: 'acme/web', pullRequestId: 'p9' }));
     usePullRequestStore.setState({ rows: [pr({ id: 'p9', state: 'merged' })] });

@@ -58,7 +58,7 @@ export function WorkspaceSwitcher({ collapsed }: { collapsed: boolean }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-medium leading-tight">{current?.name || 'No Workspace'}</p>
               <p className="truncate text-[11px] leading-tight text-muted-foreground">
-                {current ? `${current.repos.length} repos` : 'Select a workspace'}
+                {current ? `${current.repos.length} ${current.repos.length === 1 ? 'repo' : 'repos'}` : 'Select a workspace'}
               </p>
             </div>
             <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />

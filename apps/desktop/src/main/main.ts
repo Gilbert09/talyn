@@ -184,6 +184,17 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 // (e.g. a "DEV" badge on the profile) so a dev build is unmistakable.
 ipcMain.handle('app:is-dev', () => IS_DEV_BUILD);
 
+// A workbench notification click brings the window to the front
+// (renderer/lib/workbenchNotify.ts). The renderer's own window.focus() does
+// not raise a window that sits behind another app.
+ipcMain.handle('app:focus-window', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  if (process.platform === 'darwin') app.focus({ steal: true });
+});
+
 // Local agent skills: ~/.claude/skills/<dir>/SKILL.md. Content rides the
 // listing (skills are small); frontmatter parsing happens renderer-side with
 // the shared parser. Over the size guard, content is omitted but the entry

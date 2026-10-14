@@ -8,13 +8,12 @@ import {
   runShortcut,
   type Shortcut,
 } from '../../lib/shortcuts';
-import { opsFor } from '../../lib/workbenchOps';
+import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenchActions';
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
-import { runPromptAction } from '../workbench/WorkbenchHeader';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
 /** Live workbenches in sidebar order, the order ⌘1–9 counts in. */
@@ -60,6 +59,23 @@ function fromMenu(def: Def): Shortcut {
   const cmd = MENU_COMMANDS.find((c) => c.id === def.id);
   if (!cmd) throw new Error(`No menu command ${def.id}`);
   return { ...def, keys: cmd.keys, label: def.label ?? cmd.label, menu: true };
+}
+
+/**
+ * A header action. The header owns the confirmations and the busy state, so
+ * the shortcut asks it through an event rather than acting itself.
+ */
+function headerAction(id: string, action: WorkbenchAction): Shortcut {
+  return fromMenu({
+    id,
+    group: 'Workbench',
+    allowInInput: true,
+    when: inWorkbench,
+    run: () => {
+      const wb = currentWorkbench();
+      if (wb) requestWorkbenchAction(wb.id, action);
+    },
+  });
 }
 
 /**
@@ -155,15 +171,16 @@ export function buildAppShortcuts(): Shortcut[] {
       run: () => wbStore().toggleTerminal(),
     }),
     fromMenu({
-      id: 'workbench.createPr',
+      id: 'panel.toggle',
       group: 'Workbench',
       allowInInput: true,
       when: inWorkbench,
-      run: () => {
-        const wb = currentWorkbench();
-        if (wb) void runPromptAction(opsFor(wb), 'create_pr', currentChat(wb));
-      },
+      run: () => wbStore().toggleRightPanel(),
     }),
+    headerAction('workbench.createPr', 'create_pr'),
+    headerAction('workbench.fixChecks', 'fix_checks'),
+    headerAction('workbench.merge', 'merge'),
+    headerAction('workbench.archive', 'archive'),
     fromMenu({
       id: 'chat.new',
       group: 'Workbench',

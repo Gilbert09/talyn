@@ -10,18 +10,21 @@ import { emptyChatEvents, useWorkbenchStore } from '../../stores/workbenches';
 import { Button } from '../ui/button';
 import { ChatTabs } from './ChatTabs';
 import { Composer } from './Composer';
+import { GitPanel } from './GitPanel';
 import { WorkbenchHeader } from './WorkbenchHeader';
-import { WorkbenchSidePanel } from './WorkbenchSidePanel';
 import { WorkbenchTranscript } from './WorkbenchTranscript';
-import { TerminalPanel } from './terminal/TerminalPanel';
 import { useSelectedChat, useWorkbenchOps, useWorkbenchPr } from './workbenchSelectors';
 
-/** One workbench: header, chat tabs + transcript + composer, the side panel and the terminal. */
+/**
+ * One workbench. Centre: the header, the chat tab strip, the transcript and
+ * the composer. Right: the GitPanel (files, changes, checks) with the
+ * terminal dock under it; ⌘⌥B hides it.
+ */
 export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   const ops = useWorkbenchOps(workbench);
   const chat = useSelectedChat(workbench.id);
   const pr = useWorkbenchPr(workbench);
-  const terminalOpen = useWorkbenchStore((s) => s.terminalOpen);
+  const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
 
   // A fresh read on open: the list may be minutes old, and it carries the chats when the backend embeds them.
   useEffect(() => {
@@ -29,17 +32,14 @@ export function WorkbenchView({ workbench }: { workbench: Workbench }) {
   }, [workbench.id]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
-      <StatusBanner workbench={workbench} ops={ops} />
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <ChatTabs workbench={workbench} selected={chat} />
-          <ChatView workbench={workbench} chat={chat} ops={ops} />
-        </div>
-        <WorkbenchSidePanel workbench={workbench} chat={chat} ops={ops} pr={pr} />
+    <div className="flex h-full min-h-0">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <WorkbenchHeader workbench={workbench} pr={pr} chat={chat} ops={ops} />
+        <StatusBanner workbench={workbench} ops={ops} />
+        <ChatTabs workbench={workbench} selected={chat} />
+        <ChatView workbench={workbench} chat={chat} ops={ops} />
       </div>
-      {terminalOpen && <TerminalPanel workbench={workbench} ops={ops} />}
+      {rightPanelOpen && <GitPanel workbench={workbench} chat={chat} ops={ops} pr={pr} />}
     </div>
   );
 }
@@ -169,8 +169,8 @@ function Banner({
     <div
       className={
         tone === 'error'
-          ? 'flex items-center gap-2 border-b bg-red-500/10 px-4 py-1.5 text-xs text-red-700 dark:text-red-300'
-          : 'flex items-center gap-2 border-b bg-muted/40 px-4 py-1.5 text-xs text-muted-foreground'
+          ? 'flex items-center gap-2 border-b bg-destructive/10 px-3 py-1.5 text-xs text-destructive'
+          : 'flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground'
       }
     >
       {icon}

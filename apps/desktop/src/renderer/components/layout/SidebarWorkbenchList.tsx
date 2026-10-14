@@ -64,7 +64,8 @@ function WorkbenchRow({
     workbench.pullRequestId ? s.rows.find((r) => r.id === workbench.pullRequestId) : undefined
   );
   const provisioning = workbench.status === 'provisioning';
-  const tone = workbench.status === 'error' ? 'error' : provisioning ? 'running' : chatTone(chats ?? [], unread);
+  const failed = workbench.status === 'error' || workbench.sandboxState === 'error';
+  const tone = failed ? 'error' : provisioning ? 'running' : chatTone(chats ?? [], unread);
   const isUnread = tone === 'unread';
   const suspended = workbench.runtime === 'sandbox' && workbench.sandboxState === 'suspended';
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;

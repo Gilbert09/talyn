@@ -67,16 +67,8 @@ export function AppSidebar() {
           <WorkspaceSwitcher collapsed={collapsed} />
         </div>
 
-        <div className={cn('flex gap-1 px-2 pb-2', collapsed && 'flex-col')}>
-          <SidebarItem
-            icon={Search}
-            label="Search"
-            keys="mod+k"
-            collapsed={collapsed}
-            onClick={() => setPaletteOpen(true)}
-            className={cn(!collapsed && 'flex-1')}
-            dataAttr="sidebar-search"
-          />
+        {/* Stacked: side by side, two labels and two shortcuts do not fit in 240px. */}
+        <div className="flex flex-col gap-0.5 px-1.5 pb-2">
           {offered && (
             <SidebarItem
               icon={Plus}
@@ -85,10 +77,17 @@ export function AppSidebar() {
               collapsed={collapsed}
               active={route.view === 'home'}
               onClick={newWorkbench}
-              className={cn(!collapsed && 'flex-1')}
               dataAttr="sidebar-new-workbench"
             />
           )}
+          <SidebarItem
+            icon={Search}
+            label="Search"
+            keys="mod+k"
+            collapsed={collapsed}
+            onClick={() => setPaletteOpen(true)}
+            dataAttr="sidebar-search"
+          />
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto px-1.5" aria-label="Workbenches">

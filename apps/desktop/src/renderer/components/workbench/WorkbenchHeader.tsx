@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Archive,
   ArrowLeft,
   Check,
+  ChevronDown,
   Cloud,
   Copy,
   GitBranch,
@@ -11,26 +12,53 @@ import {
   Laptop,
   Loader2,
   PanelBottom,
+  PanelRight,
   Wrench,
-  X,
 } from 'lucide-react';
-import type { Workbench, WorkbenchChat, WorkbenchNextAction } from '@talyn/shared';
+import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import { cn } from '../../lib/utils';
 import { api, type PRRow } from '../../lib/api';
+import { formatKeys } from '../../lib/shortcuts';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore } from '../../stores/workbenches';
-import { NEXT_ACTION_LABEL, prRowAsLike, workbenchNextAction } from '../../lib/workbenchFormat';
+import { NEXT_ACTION_LABEL, prRowAsLike } from '../../lib/workbenchFormat';
+import {
+  PROMPT_ACTIONS,
+  WORKBENCH_ACTION_EVENT,
+  availableWorkbenchActions,
+  isArchivedWorkbench,
+  primaryWorkbenchAction,
+  workbenchActionKeys,
+  type WorkbenchAction,
+  type WorkbenchActionRequest,
+} from '../../lib/workbenchActions';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PrPill } from './WorkbenchBadges';
 
-const ACTION_ICON: Record<Exclude<WorkbenchNextAction, null>, typeof GitPullRequest> = {
+const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
   resolve_conflicts: GitBranch,
   fix_checks: Wrench,
   merge: GitMerge,
   archive: Archive,
+};
+
+const ACTION_HINT: Record<WorkbenchAction, string> = {
+  create_pr: 'Ask the agent to commit, push and open a pull request',
+  resolve_conflicts: 'Ask the agent to merge the base branch in and resolve the conflicts',
+  fix_checks: 'Ask the agent to fix the failing checks; the prompt carries each failing check and its link',
+  merge: 'Merge the pull request on GitHub',
+  archive: 'Archive this workbench',
 };
 
 /**
@@ -51,6 +79,11 @@ export async function runPromptAction(
   }
 }
 
+function keysLabel(action: WorkbenchAction): string | null {
+  const keys = workbenchActionKeys(action);
+  return keys ? formatKeys(keys) : null;
+}
+
 export function WorkbenchHeader({
   workbench,
   pr,
@@ -63,14 +96,20 @@ export function WorkbenchHeader({
   ops: WorkbenchOps;
 }) {
   const toggleTerminal = useWorkbenchStore((s) => s.toggleTerminal);
+  const toggleRightPanel = useWorkbenchStore((s) => s.toggleRightPanel);
+  const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
-  const [busy, setBusy] = useState<WorkbenchNextAction>(null);
-  const [confirmMerge, setConfirmMerge] = useState(false);
-  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [busy, setBusy] = useState<WorkbenchAction | null>(null);
+  const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
 
-  const action = workbenchNextAction(workbench, pr ? prRowAsLike(pr) : null);
-  const archived = workbench.status === 'archived' || Boolean(workbench.archivedAt);
+  const prLike = pr ? prRowAsLike(pr) : null;
+  const primary = primaryWorkbenchAction(workbench, prLike);
+  const available = availableWorkbenchActions(workbench, prLike);
+  const archived = isArchivedWorkbench(workbench);
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
+
+  const disabled = (action: WorkbenchAction) =>
+    busy !== null || (PROMPT_ACTIONS.has(action) && Boolean(ops.unavailable)) || (action === 'merge' && !pr);
 
   const copyBranch = () => {
     navigator.clipboard
@@ -82,14 +121,38 @@ export function WorkbenchHeader({
       .catch(() => toast.error('Could not copy to clipboard'));
   };
 
-  const onAction = async () => {
-    if (!action) return;
-    if (action === 'merge') return setConfirmMerge(true);
-    if (action === 'archive') return setConfirmArchive(true);
-    setBusy(action);
-    await runPromptAction(ops, action, chat);
-    setBusy(null);
-  };
+  const run = useCallback(
+    async (action: WorkbenchAction) => {
+      if (action === 'merge' || action === 'archive') {
+        setConfirm(action);
+        return;
+      }
+      setBusy(action);
+      await runPromptAction(ops, action, chat);
+      setBusy(null);
+    },
+    [ops, chat]
+  );
+
+  // Shortcuts and the palette ask through an event, so they get the same
+  // confirmations and busy state as a click.
+  const latest = useRef({ available, run, disabled, workbenchId: workbench.id });
+  latest.current = { available, run, disabled, workbenchId: workbench.id };
+  useEffect(() => {
+    const onRequest = (e: Event) => {
+      const { workbenchId, action } = (e as CustomEvent<WorkbenchActionRequest>).detail ?? {};
+      const cur = latest.current;
+      if (workbenchId !== cur.workbenchId || !action) return;
+      if (!cur.available.includes(action)) {
+        toast.info(`${NEXT_ACTION_LABEL[action]} does not apply to this workbench now`);
+        return;
+      }
+      if (cur.disabled(action)) return;
+      void cur.run(action);
+    };
+    window.addEventListener(WORKBENCH_ACTION_EVENT, onRequest);
+    return () => window.removeEventListener(WORKBENCH_ACTION_EVENT, onRequest);
+  }, []);
 
   const merge = async () => {
     if (!pr) return;
@@ -98,7 +161,7 @@ export function WorkbenchHeader({
       const res = await api.pullRequests.merge(pr.id);
       if (res.merged) toast.success(`Merged #${pr.number}`, res.message);
       else toast.info(`#${pr.number} was not merged`, res.message);
-      setConfirmMerge(false);
+      setConfirm(null);
     } catch (err) {
       toast.error(`Could not merge #${pr.number}`, err instanceof Error ? err.message : undefined);
     } finally {
@@ -112,7 +175,7 @@ export function WorkbenchHeader({
       const wb = await api.workbenches.archive(workbench.id);
       useWorkbenchStore.getState().upsertWorkbench(wb);
       useWorkbenchStore.getState().selectWorkbench(null);
-      setConfirmArchive(false);
+      setConfirm(null);
     } catch (err) {
       toast.error('Could not archive the workbench', err instanceof Error ? err.message : undefined);
     } finally {
@@ -120,10 +183,11 @@ export function WorkbenchHeader({
     }
   };
 
-  const ActionIcon = action ? ACTION_ICON[action] : null;
+  const PrimaryIcon = primary ? ACTION_ICON[primary] : null;
+  const primaryKeys = primary ? keysLabel(primary) : null;
 
   return (
-    <div className="flex items-center gap-3 border-b px-4 py-2">
+    <div className="flex items-center gap-2 border-b px-3 py-1.5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="truncate text-sm font-semibold">{workbench.name}</h1>
@@ -152,7 +216,7 @@ export function WorkbenchHeader({
             title="Copy the branch name"
             aria-label="Copy the branch name"
           >
-            {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+            {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
           </button>
         </div>
       </div>
@@ -160,52 +224,104 @@ export function WorkbenchHeader({
         variant="ghost"
         className="h-7 w-7 p-0"
         onClick={toggleTerminal}
-        title="Toggle the terminal (⌘J)"
+        title={`Toggle the terminal (${formatKeys('mod+j')})`}
         aria-label="Toggle the terminal"
       >
         <PanelBottom className="h-4 w-4" />
       </Button>
-      {confirmMerge && pr ? (
-        <div className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
-          <span>
-            Merge #{pr.number} into <span className="font-mono">{pr.summary.baseBranch}</span>?
-          </span>
-          <Button className="h-6 px-2 text-xs" onClick={() => void merge()} disabled={busy === 'merge'}>
-            {busy === 'merge' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Merge'}
-          </Button>
-          <Button
-            variant="ghost"
-            className="h-6 w-6 p-0"
-            onClick={() => setConfirmMerge(false)}
-            disabled={busy === 'merge'}
-            aria-label="Cancel merge"
-          >
-            <X className="h-3 w-3" />
-          </Button>
+      <Button
+        variant="ghost"
+        className={cn('h-7 w-7 p-0', !rightPanelOpen && 'text-muted-foreground')}
+        onClick={toggleRightPanel}
+        title={`${rightPanelOpen ? 'Hide' : 'Show'} the right panel (${formatKeys('mod+alt+b')})`}
+        aria-label="Toggle the right panel"
+        aria-pressed={rightPanelOpen}
+      >
+        <PanelRight className="h-4 w-4" />
+      </Button>
+      {!archived && (
+        <div className="flex items-center">
+          {primary && PrimaryIcon && (
+            <Button
+              className={cn(
+                'h-7 gap-1.5 rounded-r-none px-2.5 text-xs',
+                primary === 'archive' && 'bg-muted text-foreground hover:bg-muted/80'
+              )}
+              onClick={() => void run(primary)}
+              disabled={disabled(primary)}
+              title={`${ACTION_HINT[primary]}${primaryKeys ? ` (${primaryKeys})` : ''}`}
+              data-testid="workbench-primary-action"
+            >
+              {busy === primary ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PrimaryIcon className="h-3.5 w-3.5" />}
+              {NEXT_ACTION_LABEL[primary]}
+              {primaryKeys && <span className="ml-0.5 text-[10px] opacity-70">{primaryKeys}</span>}
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant={primary ? 'default' : 'outline'}
+                className={cn(
+                  'h-7 px-1.5 text-xs',
+                  primary ? 'rounded-l-none border-l border-primary-foreground/20' : 'gap-1 px-2',
+                  primary === 'archive' && 'bg-muted text-foreground hover:bg-muted/80'
+                )}
+                aria-label="More actions"
+                disabled={busy !== null}
+              >
+                {!primary && 'Actions'}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[13rem]">
+              {available.map((action) => {
+                const Icon = ACTION_ICON[action];
+                const keys = keysLabel(action);
+                return (
+                  <DropdownMenuItem
+                    key={action}
+                    disabled={disabled(action)}
+                    onSelect={() => void run(action)}
+                    title={ACTION_HINT[action]}
+                  >
+                    <Icon className="mr-2 h-3.5 w-3.5" />
+                    {NEXT_ACTION_LABEL[action]}
+                    {keys && <DropdownMenuShortcut>{keys}</DropdownMenuShortcut>}
+                  </DropdownMenuItem>
+                );
+              })}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={copyBranch}>
+                <Copy className="mr-2 h-3.5 w-3.5" />
+                Copy branch name
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      ) : (
-        action &&
-        ActionIcon &&
-        !archived && (
-          <Button
-            className={cn('h-7 gap-1.5 px-2.5 text-xs', action === 'archive' && 'bg-muted text-foreground hover:bg-muted/80')}
-            onClick={() => void onAction()}
-            disabled={busy !== null || Boolean(ops.unavailable && action !== 'merge' && action !== 'archive')}
-            title={action === 'create_pr' ? 'Ask the agent to commit, push and open a PR (⌘⇧P)' : NEXT_ACTION_LABEL[action]}
-          >
-            {busy === action ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ActionIcon className="h-3.5 w-3.5" />}
-            {NEXT_ACTION_LABEL[action]}
-          </Button>
-        )
       )}
       <ConfirmDialog
-        open={confirmArchive}
+        open={confirm === 'merge' && pr !== null}
+        title={pr ? `Merge #${pr.number}?` : 'Merge?'}
+        description={
+          pr ? (
+            <>
+              {pr.summary.title} merges into <span className="font-mono">{pr.summary.baseBranch}</span> on GitHub.
+            </>
+          ) : undefined
+        }
+        confirmLabel="Merge"
+        busy={busy === 'merge'}
+        onConfirm={() => void merge()}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === 'archive'}
         title={`Archive ${workbench.name}?`}
-        description="The workbench moves to the Archived list. The branch, its chats and any PR stay, and you can restore it later."
+        description="The workbench moves to History. The branch, its chats and any PR stay, and you can restore it later."
         confirmLabel="Archive"
         busy={busy === 'archive'}
         onConfirm={() => void archive()}
-        onCancel={() => setConfirmArchive(false)}
+        onCancel={() => setConfirm(null)}
       />
     </div>
   );
