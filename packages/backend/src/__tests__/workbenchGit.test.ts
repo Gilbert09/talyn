@@ -134,8 +134,15 @@ describe('shellQuote', () => {
     ['glob', '* ? [abc]'],
     ['unicode', 'héllo – 日本'],
     ['leading dash', '-n'],
-    ['backslashes', '\\\\n \\t'],
   ])('round-trips %s through sh unchanged', (_name, input) => {
+    const out = execFileSync('sh', ['-c', `printf '%s' ${shellQuote(input)}`], { encoding: 'utf8' });
+    expect(out).toBe(input);
+  });
+
+  // The quoting is for the Linux sandbox. Git Bash's sh on a Windows runner
+  // collapses a doubled backslash in its arguments before printf sees them.
+  it.skipIf(process.platform === 'win32')('round-trips backslashes through sh unchanged', () => {
+    const input = '\\\\n \\t';
     const out = execFileSync('sh', ['-c', `printf '%s' ${shellQuote(input)}`], { encoding: 'utf8' });
     expect(out).toBe(input);
   });
@@ -483,6 +490,8 @@ describe('checkpoints in a real repository', () => {
     run(['config', 'user.name', 'Test']);
     run(['config', 'user.email', 'test@example.com']);
     run(['config', 'commit.gpgsign', 'false']);
+    // A Windows runner checks files out with CRLF unless told not to.
+    run(['config', 'core.autocrlf', 'false']);
     writeFileSync(join(dir, '.gitignore'), 'node_modules/\n.env\n');
     writeFileSync(join(dir, 'a.txt'), 'one\n');
     writeFileSync(join(dir, 'b.txt'), 'bee\n');
