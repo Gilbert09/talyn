@@ -2,6 +2,38 @@
 
 Chronological notes from development sessions. Most recent first. See [`CLAUDE.md`](../CLAUDE.md) for the project context and [`ROADMAP.md`](./ROADMAP.md) for the phased TODO.
 
+## Workbenches, and a desktop app rebuilt around them (2026-10-13 to 2026-10-14, branch only)
+
+On branch `tom/workbenches`, not on `main`. Design and state: [`WORKBENCHES.md`](./WORKBENCHES.md).
+
+**What it is.** A Conductor.build-style unit, the workbench: one branch of one repo, long agent
+chats (the real `claude` / `codex` CLIs, one process per turn), a diff, a terminal, scripts and
+checkpoints. Two runtimes sit behind one UI: a long-lived Talyn Fleet sandbox (the default) and a
+local git worktree. The first pass added it as one nav item. Tom then asked for the whole desktop
+app to be code-first, so the shell was rebuilt: workbenches are home, and the PR panels are one
+"Pull requests" area.
+
+**What the first real run found.** Every unit and route test passed against a fake fleet, and the
+first run against the real one still failed in four ways that no fake could show:
+- The local backend had no fleet key, and the UI hid that: a stale "Starting…" banner, and a
+  message queued forever. Failures now go through one path that sets a readable reason, clears the
+  queue, and offers Retry. A readiness endpoint answers before create, so a doomed workbench is
+  never inserted.
+- The fleet refuses box names over 40 characters. Ours were 48.
+- The fleet's 404 for a missing FILE was read as a missing sandbox.
+- A push was refused because the local-dev GitHub App has Contents: read. Production has write.
+  Separately, a bare box named no repository, so the fleet proxy refused its commit, checks and
+  review-thread endpoints. YAS branch `tom/bare-box-repo` adds a top-level `repo`, not deployed.
+
+**Fleet.** `tom/workbench-endpoints` (quiet exec, diff, files, pty, ports, idle TTL, a hold count
+for busy) was merged to YAS `main` and deployed on 2026-10-14. It also changed one existing
+behaviour: a box adopted after a restart or resumed now keeps its own idle timeout (normally
+600 s) instead of the 30-minute default.
+
+**Process note.** Five parallel agents each running `tsc` and multi-worker tests slowed Tom's
+laptop badly. Agents now run no typecheck; one serial, `nice`d typecheck per package runs after
+they finish, and tests run single-worker on the touched files only.
+
 ## No code review ever finished, and the judge could not keep two lenses (2026-10-13)
 
 Tom saw a Deep review drop all 15 findings. Two separate faults came out of it.

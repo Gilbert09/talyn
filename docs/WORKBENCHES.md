@@ -114,33 +114,49 @@ exploration (follow-up).
 - Deploy the YAS branch endpoints; until then diff/files run through `exec` (and their frames
   land in the events ring) and the terminal goes over ssh-stream.
 
-## State of the build (2026-10-13)
+## State of the build (2026-10-14)
 
-Built on `tom/workbenches`, in five parts:
+The desktop app is now code-first: it opens on workbenches, and the PR features are one area
+inside it.
 
-| Part | Where | Verified by |
-|---|---|---|
-| Shared core, flag, client contract | `packages/shared/src/{workbench,workbenchGit,agentStream,workbenchConfig}.ts`, `packages/client` | 508 unit tests, real-git checkpoint test |
-| Backend sandbox runtime | `packages/backend/src/services/workbenches/`, `routes/workbenches.ts`, migration `0076` | 1035 tests against a FAKE fleet |
-| Local worktree runtime | `apps/desktop/src/main/workbench/` | 44 jest tests, real temp git repos, fake CLI |
-| Desktop UI | `apps/desktop/src/renderer/components/workbench/` | 75 new jest tests |
-| Fleet endpoints | yas `tom/workbench-endpoints` | Go tests, macOS + Linux container, no microVM |
+| Part | Where |
+|---|---|
+| Shell | `layout/AppShell.tsx`, `AppSidebar.tsx`, `stores/navigation.ts` (route union), `lib/shortcuts.ts` + `layout/appShortcuts.ts`, `CommandPalette.tsx` (⌘K) |
+| Menu chords | `main/menuCommands.ts`: the Electron menu owns ⌘N, ⌘W, ⌘T and the rest, and sends `menu:command` to the renderer. Close Window is ⌘⇧W. |
+| Home | `pages/NewWorkbenchPage.tsx`: one composer. Enter creates the workbench and starts it. Names come from the task (`workbenchNameFromTask`). |
+| Workbench | `WorkbenchView.tsx`, `WorkbenchHeader.tsx` (one action button: Create PR → Resolve conflicts → Fix checks → Merge → Archive), `GitPanel.tsx` (All files / Changes / Checks, terminal dock) |
+| Other pages | `pages/HistoryView.tsx`, `PullRequestsView.tsx` (the five PR panels), `AutomationsView.tsx` (Workflows, Loops, MCP servers) |
+| Readiness | `GET /workbenches/readiness` + Electron `workbench:readiness`, merged by `lib/readiness.ts`. A choice that cannot run is disabled with its reason, and create refuses before it inserts a row. |
+| Failure handling | One provisioning failure path (status and sandbox state `error`, a readable reason, queued messages cleared). `POST /workbenches/:id/retry`. |
 
-**Not yet done: a full run of the app against a real sandbox.** The spike proved the
-primitives (create, clone, claude turn, resume, suspend) and the guest has the tools the
-exec wrapper needs (`sed -u`, `base64 -w`, `tmux`, `setsid`, `pkill`; the guest user is
-`fleet`). The backend, the UI and the fleet together have not run end to end.
+**Verified against the real fleet (2026-10-14), through the local backend's API:** readiness,
+retry, provisioning (about 10 s with the clone), two turns with recall, a file edit, changes,
+diff, file list and read, the terminal (as user `fleet`), and checkpoint restore.
+
+**Not verified:** Create PR. The push was refused because the local-dev GitHub App
+`talyn-app-dev` has Contents: read. The production App has write. Merge and Archive from the new
+header have not run against a real PR.
 
 ### How to run it locally
 
-1. `npm run dev:db` (local Supabase), then apply migrations.
-2. Backend env: `WORKBENCHES_ENABLED=true`, `FLEET_ENABLED=true`, and the fleet gateway
-   variables (`FLEET_PINNED_ENDPOINT`, `FLEET_GATEWAY_TOKEN` / `FLEET_API_TOKEN`). The local
-   `.env` has no fleet variables today.
-3. Connect a Claude subscription in Settings, so the workspace has a fleet credential.
-4. Start the desktop app. "Workbenches" shows in the sidebar.
-5. Local mode needs `claude` or `codex` on the PATH, and `node-pty` rebuilt for Electron
-   (`npm run rebuild` in `apps/desktop/release/app`).
+1. `npm run dev:db` and `npm run dev:redis`.
+2. Backend env (local-dev `.env` only): `FLEET_PINNED_ENDPOINT=https://api.yetanothersandbox.dev`
+   and `FLEET_GATEWAY_TOKEN` (a key from `yas keys create <name>`). Start the backend with
+   `WORKBENCHES_ENABLED=true FLEET_ENABLED=true FLEET_ALLOWED=true npm run dev:backend`.
+3. Connect a Claude subscription in Settings → Talyn Fleet.
+4. `npm run dev:desktop`. Local mode needs `claude` or `codex` on the login PATH and `node-pty`
+   built for Electron (`npm run rebuild` in `apps/desktop/release/app`).
+5. To push from a sandbox, the GitHub App needs Contents: Read & write (and Workflows write for
+   workflow files).
+
+### Fleet changes this needs
+
+- `tom/workbench-endpoints` (quiet exec, diff, files, pty, ports, idle TTL): merged and deployed
+  on 2026-10-14.
+- `tom/bare-box-repo` (a top-level `repo` on a bare create, so the proxy scopes the token and
+  serves the commit, checks and review-thread endpoints): on a branch, NOT deployed. Talyn sends
+  the field already; a fleet without it ignores it.
+- Sandbox ids must be 40 characters or fewer. `sandboxIdFor` uses 24 hex digits of the uuid.
 
 ### Backend decisions that differ from the plan
 
@@ -162,7 +178,10 @@ exec wrapper needs (`sed -u`, `base64 -w`, `tmux`, `setsid`, `pkill`; the guest 
 - `stream_event` deltas are stored without pruning.
 - `openSshStream` and `openPty` do not use `FLEET_HTTP_PROXY`.
 - Sandbox: pasted images are not sent. Local: archive does not remove the worktree.
-- macOS: the menu's close item takes ⌘W before the renderer sees it.
+- Fix checks for a local workbench sends the plain prompt without the check list. No failing
+  log excerpts are included for either runtime.
+- `stores/workspace.ts` keeps `setActivePanel` / `openSettings` as adapters over the route store.
+- `apps/web` has none of this; it is a separate fork.
 - No billing gates. Not verified on a real fleet: Codex in a sandbox, and GitHub accepting a
   push to `refs/talyn/*`.
 - The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden.
