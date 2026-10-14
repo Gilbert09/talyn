@@ -1,12 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Bot, Check, ChevronDown, Cloud, FolderGit2, GitBranch, GitPullRequest, Laptop, Split, X } from 'lucide-react';
 import type { WorkbenchAgent } from '@talyn/shared';
 import type { PRRow } from '../../../lib/api';
 import type { Choice, WorkbenchRuntime } from '../../../lib/readiness';
 import { cn } from '../../../lib/utils';
 import { formatKeys } from '../../../lib/shortcuts';
+import { FleetAgentMark } from '../../../lib/providerMeta';
 import type { WatchedRepo } from '../../../stores/workspace';
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../../ui/command';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../ui/tooltip';
@@ -100,25 +101,87 @@ export function BaseBranchField({
   placeholder: string;
   suggestions: string[];
 }) {
+  const [open, setOpen] = useState(false);
+  // Filter only while typing; a click shows every branch.
+  const [typing, setTyping] = useState(false);
+  const anchor = useRef<HTMLLabelElement>(null);
+  const query = typing ? value.trim().toLowerCase() : '';
+  const matches = suggestions.filter((b) => b.toLowerCase().includes(query));
+  const shown = open && matches.length > 0;
+  const toggle = () => {
+    setTyping(false);
+    setOpen((o) => !o);
+  };
+  const pick = (branch: string) => {
+    onChange(branch);
+    setOpen(false);
+  };
+
   return (
-    <label className={cn(chipClass, 'cursor-text gap-1 hover:bg-accent/60')} title="Base branch">
-      <GitBranch className="h-3.5 w-3.5 shrink-0" />
-      <span className="sr-only">Base branch</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        list="new-workbench-base-branches"
-        spellCheck={false}
-        aria-label="Base branch"
-        className="w-28 min-w-0 border-0 bg-transparent p-0 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
-      />
-      <datalist id="new-workbench-base-branches">
-        {suggestions.map((b) => (
-          <option key={b} value={b} />
-        ))}
-      </datalist>
-    </label>
+    <Popover open={shown} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <label ref={anchor} className={cn(chipClass, 'cursor-text gap-1 hover:bg-accent/60')} title="Base branch">
+          <GitBranch className="h-3.5 w-3.5 shrink-0" />
+          <input
+            value={value}
+            onChange={(e) => {
+              onChange(e.target.value);
+              setTyping(true);
+              setOpen(true);
+            }}
+            onClick={toggle}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setTyping(false);
+                setOpen(true);
+              } else if ((e.key === 'Escape' || e.key === 'Enter') && shown) {
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
+            placeholder={placeholder}
+            role="combobox"
+            aria-expanded={shown}
+            aria-controls="new-workbench-base-branches"
+            aria-autocomplete="list"
+            spellCheck={false}
+            aria-label="Base branch"
+            className="w-28 min-w-0 border-0 bg-transparent p-0 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+          />
+          {suggestions.length > 0 && (
+            <button type="button" tabIndex={-1} aria-label="Show branches" onClick={toggle} className="shrink-0">
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          )}
+        </label>
+      </PopoverAnchor>
+      <PopoverContent
+        align="start"
+        className="max-h-64 w-56 overflow-auto p-1"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onInteractOutside={(e) => {
+          // A click on the field itself toggles; do not close here and reopen there.
+          if (anchor.current?.contains(e.target as Node)) e.preventDefault();
+        }}
+      >
+        <ul id="new-workbench-base-branches" role="listbox" aria-label="Branches">
+          {matches.map((b) => (
+            <li key={b} role="option" aria-selected={b === value}>
+              <button
+                type="button"
+                onClick={() => pick(b)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left font-mono text-xs hover:bg-accent"
+              >
+                <span className="min-w-0 flex-1 truncate">{b}</span>
+                {b === value && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -331,7 +394,7 @@ export function AgentPicker({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <ControlChip aria-label="Agent" data-attr="new-workbench-agent">
-          <Bot className="h-3.5 w-3.5 shrink-0" />
+          {value ? <FleetAgentMark agent={value} className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5 shrink-0" />}
           <span className="truncate">{value ? AGENT_LABEL[value] : 'No agent'}</span>
           <ChevronDown className="h-3 w-3 shrink-0" />
         </ControlChip>
@@ -349,6 +412,7 @@ export function AgentPicker({
                 }}
                 className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent disabled:cursor-not-allowed disabled:hover:bg-transparent"
               >
+                <FleetAgentMark agent={agent} className={cn('mt-0.5 h-4 w-4', !choice.available && 'opacity-50')} />
                 <span className="min-w-0 flex-1">
                   <span className={cn('block', !choice.available && 'text-muted-foreground')}>{AGENT_LABEL[agent]}</span>
                   {(choice.reason || choice.warning) && (
