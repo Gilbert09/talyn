@@ -120,12 +120,18 @@ export function AgentBlocks({
   events,
   envName,
   scopeId,
+  hideCompletedResults = false,
 }: {
   events: AgentEvent[];
   envName?: string;
   scopeId?: string;
+  /** Drop the footer of a turn that ended well; the caller shows the totals once. */
+  hideCompletedResults?: boolean;
 }) {
-  const blocks = useMemo(() => groupToolRuns(mergeToolBlocks(buildBlocks(events))), [events]);
+  const blocks = useMemo(() => {
+    const all = groupToolRuns(mergeToolBlocks(buildBlocks(events)));
+    return hideCompletedResults ? all.filter((b) => b.kind !== 'result' || b.isError) : all;
+  }, [events, hideCompletedResults]);
   return (
     <>
       {blocks.map((block) => (

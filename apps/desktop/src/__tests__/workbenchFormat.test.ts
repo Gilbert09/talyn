@@ -2,6 +2,8 @@ import type { AgentEvent, Workbench, WorkbenchEvent } from '@talyn/shared';
 import {
   buildFileTree,
   chatInsights,
+  chatTotals,
+  compactCount,
   formatCommentsMessage,
   fuzzyMatchPaths,
   makeUserMessageEvent,
@@ -144,6 +146,49 @@ describe('transcript turns', () => {
     expect(turns).toHaveLength(1);
     expect(turns[0].userText).toBeNull();
     expect(turns[0].events).toHaveLength(2);
+  });
+});
+
+describe('chatTotals', () => {
+  const result = (seq: number, extra: Record<string, unknown>): WorkbenchEvent => ({
+    chatId: 'c1',
+    seq,
+    turn: seq,
+    event: { seq, type: 'result', ...extra } as AgentEvent,
+  });
+
+  it('adds up every turn, cache tokens included', () => {
+    const events = [
+      result(1, { total_cost_usd: 0.05, usage: { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 20 } }),
+      { chatId: 'c1', seq: 2, turn: 2, event: { seq: 2, type: 'assistant' } as AgentEvent },
+      result(3, { total_cost_usd: 0.01, is_error: true, usage: { input_tokens: 3, output_tokens: 5 } }),
+    ];
+    const totals = chatTotals(events);
+    expect(totals.turns).toBe(2);
+    expect(totals.costUsd).toBeCloseTo(0.06);
+    expect(totals.inputTokens).toBe(115);
+    expect(totals.outputTokens).toBe(25);
+  });
+
+  it('has no cost when no turn reported one', () => {
+    expect(chatTotals([result(1, { usage: { output_tokens: 4 } })])).toEqual({
+      turns: 1,
+      costUsd: null,
+      inputTokens: 0,
+      outputTokens: 4,
+    });
+    expect(chatTotals([]).turns).toBe(0);
+  });
+
+  it.each([
+    [0, '0'],
+    [999, '999'],
+    [1000, '1k'],
+    [48_213, '48k'],
+    [9_950, '9.9k'],
+    [1_204_000, '1.2M'],
+  ])('compactCount(%i) is %s', (n, out) => {
+    expect(compactCount(n)).toBe(out);
   });
 });
 

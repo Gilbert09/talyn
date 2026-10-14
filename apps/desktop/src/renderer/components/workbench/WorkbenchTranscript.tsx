@@ -3,7 +3,7 @@ import { History, Loader2 } from 'lucide-react';
 import type { WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { renderMarkdownish } from '../../lib/markdown';
-import { splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
+import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 
@@ -42,6 +42,7 @@ export function WorkbenchTranscript({
   }, [events.length, chat.id]);
 
   const running = chat.status === 'running';
+  const totals = useMemo(() => chatTotals(events), [events]);
 
   return (
     <div
@@ -75,6 +76,7 @@ export function WorkbenchTranscript({
             <Loader2 className="h-3 w-3 animate-spin" /> Working…
           </div>
         )}
+        {!running && totals.turns > 0 && <ChatTotalsFooter totals={totals} />}
       </div>
     </div>
   );
@@ -105,6 +107,21 @@ function useStableTurns(events: WorkbenchEvent[]): TranscriptTurn[] {
   }, [events]);
 }
 
+/** The chat's spend so far, once, under the last turn. */
+function ChatTotalsFooter({ totals }: { totals: ReturnType<typeof chatTotals> }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted-foreground">
+      <span>
+        {totals.turns} {totals.turns === 1 ? 'turn' : 'turns'}
+      </span>
+      {totals.costUsd !== null && <span>${totals.costUsd.toFixed(2)}</span>}
+      <span title="Tokens the model read (cache included) and wrote, over every turn">
+        {compactCount(totals.inputTokens)} in · {compactCount(totals.outputTokens)} out
+      </span>
+    </div>
+  );
+}
+
 const TurnView = React.memo(function TurnView({
   chatId,
   turn,
@@ -121,7 +138,9 @@ const TurnView = React.memo(function TurnView({
       {turn.userText !== null && (
         <UserMessage chatId={chatId} turn={turn.turn} text={turn.userText} ops={ops} canRevert={canRevert} />
       )}
-      {turn.events.length > 0 && <AgentBlocks events={turn.events} scopeId={`${chatId}:${turn.turn}`} />}
+      {turn.events.length > 0 && (
+        <AgentBlocks events={turn.events} scopeId={`${chatId}:${turn.turn}`} hideCompletedResults />
+      )}
     </div>
   );
 });

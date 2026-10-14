@@ -137,6 +137,43 @@ export function chatInsights(events: WorkbenchEvent[]): ChatInsights {
   return { todos: parser.todos, contextUsage: parser.contextUsage };
 }
 
+export interface ChatTotals {
+  /** Turns that reached a result. */
+  turns: number;
+  /** Null when no turn reported a cost (Codex does not). */
+  costUsd: number | null;
+  /** Prompt tokens, cache reads and writes included: what the model read. */
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** One chat's spend, added up over every turn's result. */
+export function chatTotals(events: WorkbenchEvent[]): ChatTotals {
+  const totals: ChatTotals = { turns: 0, costUsd: null, inputTokens: 0, outputTokens: 0 };
+  for (const { event } of events) {
+    if (event.type !== 'result') continue;
+    totals.turns += 1;
+    if (typeof event.total_cost_usd === 'number') totals.costUsd = (totals.costUsd ?? 0) + event.total_cost_usd;
+    const usage = (event.usage ?? {}) as {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+    totals.inputTokens +=
+      (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+    totals.outputTokens += usage.output_tokens ?? 0;
+  }
+  return totals;
+}
+
+/** 950 → "950", 48213 → "48.2k", 1_204_000 → "1.2M". */
+export function compactCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, '')}k`;
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
+
 // ============================================================================
 // The next action
 // ============================================================================
