@@ -72,7 +72,7 @@ export function NewWorkbenchPage() {
   const [runtimeTouched, setRuntimeTouched] = useState(false);
   const [agent, setAgent] = useState<WorkbenchAgent>(defaults.agent);
   const [model, setModel] = useState<string>(() => defaultFleetModelForAgent(defaults.agent));
-  const [effort, setEffort] = useState<WorkbenchEffort | null>(defaults.effort);
+  const [effort, setEffort] = useState<WorkbenchEffort>(defaults.effort);
   const [planMode, setPlanMode] = useState(defaults.planMode);
   const [pathError, setPathError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

@@ -49,11 +49,10 @@ export function SessionsSettings() {
         />
         <SettingRow label="Reasoning effort">
           <SettingsSelect
-            value={defaults.effort ?? ''}
-            onChange={(e) => writeSessionDefaults({ effort: (e.target.value || null) as WorkbenchEffort | null })}
+            value={defaults.effort}
+            onChange={(e) => writeSessionDefaults({ effort: e.target.value as WorkbenchEffort })}
             aria-label="Default reasoning effort"
           >
-            <option value="">Default</option>
             {WORKBENCH_EFFORTS.map((e) => (
               <option key={e} value={e}>
                 {EFFORT_LABEL[e]}

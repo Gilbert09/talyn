@@ -83,19 +83,18 @@ export function EffortPicker({
   onChange,
   disabled,
 }: {
-  value: WorkbenchEffort | null;
-  onChange: (effort: WorkbenchEffort | null) => void;
+  value: WorkbenchEffort;
+  onChange: (effort: WorkbenchEffort) => void;
   disabled?: boolean;
 }) {
   return (
     <PickerSelect
-      value={value ?? ''}
-      onChange={(e) => onChange((e.target.value || null) as WorkbenchEffort | null)}
+      value={value}
+      onChange={(e) => onChange(e.target.value as WorkbenchEffort)}
       disabled={disabled}
       title="Reasoning effort"
       aria-label="Reasoning effort"
     >
-      <option value="">Default effort</option>
       {WORKBENCH_EFFORTS.map((e) => (
         <option key={e} value={e}>
           {EFFORT_LABEL[e]}

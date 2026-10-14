@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { WORKBENCH_EFFORTS, type WorkbenchAgent, type WorkbenchEffort } from '@talyn/shared';
+import { DEFAULT_WORKBENCH_EFFORT, WORKBENCH_EFFORTS, type WorkbenchAgent, type WorkbenchEffort } from '@talyn/shared';
 import type { WorkbenchRuntime } from './readiness';
 
 /**
@@ -16,7 +16,7 @@ export const SESSION_DEFAULTS_KEY = 'talyn.session.defaults';
 export interface SessionDefaults {
   runtime: WorkbenchRuntime;
   agent: WorkbenchAgent;
-  effort: WorkbenchEffort | null;
+  effort: WorkbenchEffort;
   planMode: boolean;
   notifyOnFinish: boolean;
 }
@@ -24,7 +24,7 @@ export interface SessionDefaults {
 export const DEFAULT_SESSION_DEFAULTS: SessionDefaults = {
   runtime: 'sandbox',
   agent: 'claude',
-  effort: null,
+  effort: DEFAULT_WORKBENCH_EFFORT,
   planMode: false,
   notifyOnFinish: true,
 };

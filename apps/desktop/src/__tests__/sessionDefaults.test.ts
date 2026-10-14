@@ -14,7 +14,7 @@ describe('session defaults', () => {
     expect(DEFAULT_SESSION_DEFAULTS).toEqual({
       runtime: 'sandbox',
       agent: 'claude',
-      effort: null,
+      effort: 'high',
       planMode: false,
       notifyOnFinish: true,
     });
@@ -29,6 +29,15 @@ describe('session defaults', () => {
   ])('reads %s as the defaults', (_name, raw) => {
     localStorage.setItem(SESSION_DEFAULTS_KEY, raw);
     expect(readSessionDefaults()).toEqual(DEFAULT_SESSION_DEFAULTS);
+  });
+
+  it.each([
+    ['null', null],
+    ['an empty string', ''],
+    ['missing', undefined],
+  ])('reads a stored %s effort as High', (_name, effort) => {
+    localStorage.setItem(SESSION_DEFAULTS_KEY, JSON.stringify({ agent: 'codex', effort }));
+    expect(readSessionDefaults()).toMatchObject({ agent: 'codex', effort: 'high' });
   });
 
   it('keeps the valid fields of a partly corrupt value', () => {
@@ -47,7 +56,7 @@ describe('session defaults', () => {
     [{ runtime: 'local' as const }],
     [{ agent: 'codex' as const }],
     [{ effort: 'high' as const }],
-    [{ effort: null }],
+    [{ effort: 'low' as const }],
     [{ planMode: true }],
     [{ notifyOnFinish: false }],
   ])('round-trips %j', (patch) => {

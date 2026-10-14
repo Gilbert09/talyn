@@ -418,6 +418,8 @@ describe('workbench routes', () => {
       const second = fleet.execs.filter((e) => e.script.startsWith('claude '))[1];
       expect(second.script).toContain('--resume sess-1');
       expect(second.script).toContain('--permission-mode bypassPermissions');
+      // No effort on the message or the chat runs at High.
+      expect(second.script).toContain('--effort high');
     });
 
     it('queues messages sent while a turn runs and drains them in order', async () => {

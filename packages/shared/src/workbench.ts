@@ -42,6 +42,9 @@ export type WorkbenchEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const WORKBENCH_EFFORTS: readonly WorkbenchEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+/** What a session or turn with no stored effort runs at. */
+export const DEFAULT_WORKBENCH_EFFORT: WorkbenchEffort = 'high';
+
 /** The prompt-driven actions whose wording a workbench may override. */
 export type WorkbenchPromptAction = 'create_pr' | 'fix_checks' | 'resolve_conflicts' | 'rename_branch';
 

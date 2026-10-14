@@ -1,12 +1,13 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, ImageIcon, Loader2, Square, X } from 'lucide-react';
-import type {
-  Workbench,
-  WorkbenchAttachment,
-  WorkbenchChat,
-  WorkbenchContextUsage,
-  WorkbenchEffort,
-  WorkbenchTodo,
+import {
+  DEFAULT_WORKBENCH_EFFORT,
+  type Workbench,
+  type WorkbenchAttachment,
+  type WorkbenchChat,
+  type WorkbenchContextUsage,
+  type WorkbenchEffort,
+  type WorkbenchTodo,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { api } from '../../lib/api';
@@ -51,7 +52,7 @@ export function Composer({
   const [pathsLoading, setPathsLoading] = useState(false);
 
   const model = chat?.model ?? defaultModelFor(workbench.agent);
-  const effort = chat?.effort ?? null;
+  const effort = chat?.effort ?? DEFAULT_WORKBENCH_EFFORT;
   const planMode = chat?.planMode ?? false;
   const running = chat?.status === 'running';
   const queue = ops.runtime === 'local' ? (localQueue ?? []) : (chat?.queuedMessages ?? []);
@@ -145,7 +146,7 @@ export function Composer({
         attachments: attachments.length ? attachments : undefined,
         planMode,
         model,
-        effort: effort ?? undefined,
+        effort,
       });
       if (res.queued) {
         toast.info(

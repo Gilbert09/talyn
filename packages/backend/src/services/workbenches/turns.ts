@@ -7,6 +7,7 @@ import {
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
   shellQuote,
+  DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
   type AgentEventDraft,
   type SendWorkbenchMessageInput,
@@ -294,7 +295,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
     const planMode = message.planMode ?? chat.planMode;
     const model = message.model ?? chat.model ?? wb.model ?? undefined;
-    const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? undefined;
+    const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     const resumeSessionId = chat.agentSessionId ?? undefined;
     const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     const prompt = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);

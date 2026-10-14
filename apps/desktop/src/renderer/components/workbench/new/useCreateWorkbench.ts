@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import type { Workbench, WorkbenchAgent, WorkbenchEffort, WorkbenchRuntimeKind } from '@talyn/shared';
+import { DEFAULT_WORKBENCH_EFFORT, type Workbench, type WorkbenchAgent, type WorkbenchEffort, type WorkbenchRuntimeKind } from '@talyn/shared';
 import { api } from '../../../lib/api';
 import { createLocalWorkbench } from '../../../lib/localWorkbench';
 import { opsFor } from '../../../lib/workbenchOps';
@@ -14,7 +14,7 @@ export interface NewWorkbenchSpec {
   runtime: WorkbenchRuntimeKind;
   agent: WorkbenchAgent;
   model: string;
-  effort: WorkbenchEffort | null;
+  effort: WorkbenchEffort;
   planMode: boolean;
   /** The first message. Empty creates the workbench with nothing to do yet. */
   prompt: string;
@@ -105,7 +105,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
   // The queued first message takes the chat's plan mode and effort when it
   // runs, and the box takes far longer to boot than this one request.
   const chat = wb.chats?.[0];
-  if (chat && (spec.planMode || spec.effort)) {
+  if (chat && (spec.planMode || spec.effort !== DEFAULT_WORKBENCH_EFFORT)) {
     await api.workbenches
       .updateChat(chat.id, { planMode: spec.planMode, effort: spec.effort })
       .then((updated) => useWorkbenchStore.getState().upsertChat(updated))
@@ -117,11 +117,11 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
 /** A new local workbench's first chat, and its first message when one was given. */
 async function startLocalChat(wb: Workbench, spec: NewWorkbenchSpec): Promise<void> {
   const prompt = spec.prompt.trim();
-  const effort = spec.effort ?? undefined;
+  const { effort } = spec;
   try {
     // The create route already inserted the first chat; a second would be a duplicate "Chat" tab.
     let chat = wb.chats?.[0] ?? (await api.workbenches.createChat(wb.id, { model: spec.model, effort, planMode: spec.planMode }));
-    if (wb.chats?.[0] && (spec.planMode || effort)) {
+    if (wb.chats?.[0] && (spec.planMode || effort !== DEFAULT_WORKBENCH_EFFORT)) {
       chat = await api.workbenches.updateChat(chat.id, { planMode: spec.planMode, effort: spec.effort }).catch(() => chat);
     }
     const store = useWorkbenchStore.getState();

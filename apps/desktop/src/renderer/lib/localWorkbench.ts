@@ -1,5 +1,6 @@
 import {
   checkpointCreateSteps,
+  DEFAULT_WORKBENCH_EFFORT,
   pickWorkbenchName,
   withSeq,
   workbenchNameFromTask,
@@ -189,7 +190,7 @@ export class LocalTurnController {
         agent: chat.agent,
         prompt,
         model: input.model ?? chat.model ?? undefined,
-        effort: input.effort ?? chat.effort ?? undefined,
+        effort: input.effort ?? chat.effort ?? DEFAULT_WORKBENCH_EFFORT,
         planMode: input.planMode ?? chat.planMode,
         resumeSessionId: chat.agentSessionId ?? undefined,
         attachments: input.attachments,

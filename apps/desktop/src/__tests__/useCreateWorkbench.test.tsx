@@ -87,7 +87,7 @@ function spec(over: Partial<NewWorkbenchSpec> = {}): NewWorkbenchSpec {
     runtime: 'sandbox',
     agent: 'claude',
     model: 'claude-sonnet',
-    effort: null,
+    effort: 'high',
     planMode: false,
     prompt: '  Fix the login redirect  ',
     ...over,
@@ -157,8 +157,8 @@ describe('useCreateWorkbench: sandbox', () => {
   });
 
   it.each([
-    ['plan mode', { planMode: true, effort: null }],
-    ['effort', { planMode: false, effort: 'high' as const }],
+    ['plan mode', { planMode: true, effort: 'high' as const }],
+    ['effort', { planMode: false, effort: 'low' as const }],
     ['both', { planMode: true, effort: 'max' as const }],
   ])('sets %s on the first chat before its queued message runs', async (_label, over) => {
     mockApi.create.mockResolvedValue(workbench());
@@ -243,7 +243,7 @@ describe('useCreateWorkbench: local', () => {
     mockCreateLocal.mockResolvedValue(workbench({ runtime: 'local', chats: [] }));
     mockApi.createChat.mockResolvedValue(chat('c9'));
     await run(local());
-    expect(mockApi.createChat).toHaveBeenCalledWith('wb1', { model: 'claude-sonnet', effort: undefined, planMode: false });
+    expect(mockApi.createChat).toHaveBeenCalledWith('wb1', { model: 'claude-sonnet', effort: 'high', planMode: false });
     expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ id: 'c9' }), expect.objectContaining({ text: 'Fix the login redirect' }));
   });
 
