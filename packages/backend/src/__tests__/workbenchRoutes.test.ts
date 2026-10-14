@@ -49,7 +49,7 @@ const { apiErrorHandler } = await import('../routes/index.js');
 const { wrapAsyncRoutes } = await import('../middleware/asyncHandler.js');
 const { githubService } = await import('../services/github.js');
 const { resetFeatureFlagsForTests } = await import('../services/featureFlags.js');
-const { setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
+const { sandboxIdFor, setWorkbenchFleetClientForTests } = await import('../services/workbenches/sandboxRuntime.js');
 const { getChat, getWorkbench, listChats, updateChat, updateWorkbench } = await import('../services/workbenches/store.js');
 const { ORPHAN_MESSAGE, sweepOrphanedTurns, turnMarker } = await import('../services/workbenches/turns.js');
 const { resolveRunCredentials } = await import('../services/selfHosted/runCredentials.js');
@@ -258,7 +258,7 @@ describe('workbench routes', () => {
       });
       expect(res.body.data).toMatchObject({
         status: 'provisioning', sandboxState: 'creating', runtime: 'sandbox', repoFullName: 'acme/app',
-        baseBranch: 'main', sandboxId: `talyn-wb-${res.body.data.id}`, error: null,
+        baseBranch: 'main', sandboxId: `${sandboxIdFor(res.body.data.id)}`, error: null,
       });
       expect(res.body.data.branch).toBe(res.body.data.name);
       expect(res.body.data.chats).toHaveLength(1);
@@ -281,7 +281,7 @@ describe('workbench routes', () => {
       async (agent, provider, key, otherKey, suppressed) => {
         const wb = await createSandboxWorkbench({ agent });
         const body = fleet.created[0];
-        expect(body).toMatchObject({ id: `talyn-wb-${wb.id}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', ...key });
+        expect(body).toMatchObject({ id: `${sandboxIdFor(wb.id)}`, workspaceId: 'ws-a', provider, githubToken: 'gh-token', ...key });
         expect(body).not.toHaveProperty(otherKey);
         expect(body.policy).toEqual({ credentials: suppressed });
         // Bare and long-lived: no task, and no `ephemeral` to stop it after one.
@@ -599,7 +599,7 @@ describe('workbench routes', () => {
       expect(res.body.data.archivedAt).toBeTruthy();
       expect(res.body.data.statusMessage).toContain(`Pushed 3 commits to ${wb.branch}.`);
       expect(res.body.data.statusMessage).toContain('uncommitted changes');
-      expect(fleet.deleted).toEqual([`talyn-wb-${wb.id}`]);
+      expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
       const save = fleet.scripts.findIndex((s) => s.includes(`git push origin HEAD:refs/heads/${wb.branch}`));
       expect(save).toBeGreaterThan(-1);
       expect((await call('GET', '/workbenches?workspaceId=ws-a')).body.data).toEqual([]);
@@ -625,9 +625,9 @@ describe('workbench routes', () => {
       fleet.scripts.length = 0;
 
       const res = await call('POST', `/workbenches/${wb.id}/restore`);
-      expect(res.body.data).toMatchObject({ status: 'provisioning', archivedAt: null, sandboxId: `talyn-wb-${wb.id}-r1` });
+      expect(res.body.data).toMatchObject({ status: 'provisioning', archivedAt: null, sandboxId: `${sandboxIdFor(wb.id, 1)}` });
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
-      expect(fleet.created.map((c) => c.id)).toEqual([`talyn-wb-${wb.id}`, `talyn-wb-${wb.id}-r1`]);
+      expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id)}`, `${sandboxIdFor(wb.id, 1)}`]);
       expect(fleet.scripts.some((s) => s.includes(`git fetch origin refs/talyn/archive/${wb.id}`))).toBe(true);
       expect((await getChat(chatId))?.agentSessionId).toBeNull();
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
@@ -637,7 +637,7 @@ describe('workbench routes', () => {
     it('deletes the workbench, its box and its rows', async () => {
       const wb = await createSandboxWorkbench();
       expect((await call('DELETE', `/workbenches/${wb.id}`)).status).toBe(200);
-      expect(fleet.deleted).toEqual([`talyn-wb-${wb.id}`]);
+      expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
       expect(await getWorkbench(wb.id)).toBeNull();
       expect(emitted.at(-1)).toMatchObject({ type: 'workbench:deleted', payload: { id: wb.id } });
     });
@@ -829,11 +829,11 @@ describe('workbench routes', () => {
       const res = await call('POST', `/workbenches/${wb.id}/retry`);
       expect(res.status).toBe(200);
       expect(res.body.data).toMatchObject({
-        status: 'provisioning', sandboxState: 'creating', error: null, sandboxId: `talyn-wb-${wb.id}-r1`,
+        status: 'provisioning', sandboxState: 'creating', error: null, sandboxId: `${sandboxIdFor(wb.id, 1)}`,
       });
-      expect(fleet.deleted).toEqual([`talyn-wb-${wb.id}`]);
+      expect(fleet.deleted).toEqual([`${sandboxIdFor(wb.id)}`]);
       await vi.waitFor(async () => expect((await getWorkbench(wb.id))?.status).toBe('ready'));
-      expect(fleet.created.map((c) => c.id)).toEqual([`talyn-wb-${wb.id}-r1`]);
+      expect(fleet.created.map((c) => c.id)).toEqual([`${sandboxIdFor(wb.id, 1)}`]);
       expect((await getChat(await chatIdOf(wb.id)))?.status).toBe('idle');
     });
 
@@ -854,7 +854,7 @@ describe('workbench routes', () => {
       expect([res.status, res.body.code]).toEqual([503, 'fleet_not_deployed']);
       expect(res.body.error).toBe(NOT_DEPLOYED);
       expect(fleet.deleted).toEqual([]);
-      expect(await getWorkbench(wb.id)).toMatchObject({ status: 'error', sandboxId: `talyn-wb-${wb.id}` });
+      expect(await getWorkbench(wb.id)).toMatchObject({ status: 'error', sandboxId: `${sandboxIdFor(wb.id)}` });
     });
 
     it.each([
@@ -1093,8 +1093,8 @@ describe('workbench routes', () => {
 
   describe('a host asking for a workbench box\'s credentials back', () => {
     it.each([
-      ['the host it was created on', 'host-1', (id: string) => `talyn-wb-${id}`, { ok: true }],
-      ['another host', 'host-2', (id: string) => `talyn-wb-${id}`, { ok: false, reason: 'wrong_host' }],
+      ['the host it was created on', 'host-1', (id: string) => `${sandboxIdFor(id)}`, { ok: true }],
+      ['another host', 'host-2', (id: string) => `${sandboxIdFor(id)}`, { ok: false, reason: 'wrong_host' }],
       ['an unknown box', 'host-1', () => 'talyn-wb-nope', { ok: false, reason: 'unknown_run' }],
     ])('answers %s', async (_name, host, runId, expected) => {
       const wb = await createSandboxWorkbench({ agent: 'codex' });
@@ -1108,10 +1108,10 @@ describe('workbench routes', () => {
     it('refuses once the workbench is archived, and when the subscription has gone', async () => {
       const wb = await createSandboxWorkbench();
       creds = { openaiKey: 'oa-codex' };
-      expect(await resolveRunCredentials('host-1', `talyn-wb-${wb.id}`)).toEqual({ ok: false, reason: 'credentials_unavailable' });
+      expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'credentials_unavailable' });
       creds = { claudeToken: 'sk-ant-oat-claude' };
       await call('POST', `/workbenches/${wb.id}/archive`);
-      expect(await resolveRunCredentials('host-1', `talyn-wb-${wb.id}`)).toEqual({ ok: false, reason: 'run_not_live' });
+      expect(await resolveRunCredentials('host-1', `${sandboxIdFor(wb.id)}`)).toEqual({ ok: false, reason: 'run_not_live' });
     });
   });
 });

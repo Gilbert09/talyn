@@ -60,8 +60,20 @@ export const SANDBOX_PORT_BASE = 3000;
  * the old id answers from its tombstone — so it moves to the next generation.
  */
 export function sandboxIdFor(workbenchId: string, generation = 0): string {
-  return generation > 0 ? `talyn-wb-${workbenchId}-r${generation}` : `talyn-wb-${workbenchId}`;
+  // The fleet refuses box names over 40 characters, and a full uuid makes 45
+  // before the generation suffix. 24 hex digits (96 bits) of the uuid keep
+  // ids unique; credential pulls look the box up by this stored id, never by
+  // parsing it.
+  const short = workbenchId.replace(/-/g, '').slice(0, 24);
+  const id = generation > 0 ? `talyn-wb-${short}-r${generation}` : `talyn-wb-${short}`;
+  if (id.length > FLEET_SANDBOX_ID_MAX) {
+    throw new Error(`sandbox id ${id} is longer than the fleet's ${FLEET_SANDBOX_ID_MAX}-character limit`);
+  }
+  return id;
 }
+
+/** The fleet's limit on a box name. */
+export const FLEET_SANDBOX_ID_MAX = 40;
 
 /** The generation an existing sandbox id is on, so a restore can take the next. */
 export function sandboxGeneration(sandboxId: string | null): number {

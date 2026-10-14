@@ -188,6 +188,12 @@ describe('sandbox naming and scripts', () => {
     expect(sandboxGeneration(id)).toBe(generation);
   });
 
+  it.each([0, 1, 999])('keeps a uuid id within the fleet limit at generation %i', (generation) => {
+    const id = sandboxIdFor('b4e2e7f0-44d3-4475-91d0-cf2487b07765', generation);
+    expect(id.length).toBeLessThanOrEqual(40);
+    expect(sandboxGeneration(id)).toBe(generation);
+  });
+
   it('has no generation before a sandbox exists', () => {
     expect(sandboxGeneration(null)).toBe(-1);
   });
