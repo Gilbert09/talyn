@@ -15,12 +15,12 @@ import { cn, isMacDesktop } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { offeredAutomationTabs } from '../../lib/routeLabels';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { useWorkbenchStore } from '../../stores/workbenches';
 import { useNavigationStore } from '../../stores/navigation';
 import { usePrBadgeCounts } from '../../hooks/usePrBadgeCounts';
 import { useAuth } from '../auth/AuthProvider';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { useWorkspaceWorkbenches } from '../workbench/workbenchSelectors';
+import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { SidebarWorkbenchList } from './SidebarWorkbenchList';
 import { UpdateNotice } from './UpdateNotice';
@@ -42,7 +42,6 @@ export function AppSidebar() {
   const navigate = useNavigationStore((s) => s.navigate);
   const setPaletteOpen = useNavigationStore((s) => s.setPaletteOpen);
   const setAddRepositoryOpen = useNavigationStore((s) => s.setAddRepositoryOpen);
-  const openNewDialog = useWorkbenchStore((s) => s.openNewDialog);
   const workbenches = useWorkspaceWorkbenches();
   const { user } = useAuth();
 
@@ -50,10 +49,7 @@ export function AppSidebar() {
   const prCounts = usePrBadgeCounts(codeReviewOffered(features));
   const automationTabs = offeredAutomationTabs(features);
 
-  const newWorkbench = () => {
-    navigate({ view: 'home' });
-    openNewDialog();
-  };
+  const newWorkbench = () => openNewWorkbench();
 
   return (
     <TooltipProvider delayDuration={400}>

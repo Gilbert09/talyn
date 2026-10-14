@@ -4,9 +4,9 @@ import { codeReviewOffered, workbenchesOffered } from '@talyn/shared';
 import { formatKeys, getShortcuts, shortcutEnabled, subscribeShortcuts, type Shortcut } from '../lib/shortcuts';
 import { useNavigationStore, type Route, PR_TABS } from '../stores/navigation';
 import { useWorkspaceStore, type SettingsSection } from '../stores/workspace';
-import { useWorkbenchStore } from '../stores/workbenches';
 import { AUTOMATION_TAB_LABEL, PR_TAB_LABEL, offeredAutomationTabs } from '../lib/routeLabels';
 import { groupByRepository, isArchived, useWorkspaceWorkbenches } from './workbench/workbenchSelectors';
+import { openNewWorkbench } from './workbench/new/openNewWorkbench';
 import {
   CommandDialog,
   CommandEmpty,
@@ -62,7 +62,6 @@ export function CommandPalette() {
 function PaletteBody({ onClose }: { onClose: () => void }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const features = useWorkspaceStore((s) => s.features);
-  const openNewDialog = useWorkbenchStore((s) => s.openNewDialog);
   const all = useWorkspaceWorkbenches();
   // Re-render when the registry changes; `when` is read on each render, and the palette renders on open.
   useSyncExternalStore(subscribeVersion, readVersion);
@@ -137,10 +136,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             <CommandItem
               value="new workbench"
               onSelect={() =>
-                pick(() => {
-                  navigate({ view: 'home' });
-                  openNewDialog();
-                })
+                pick(() => openNewWorkbench())
               }
             >
               <Home className="h-3.5 w-3.5 text-muted-foreground" />

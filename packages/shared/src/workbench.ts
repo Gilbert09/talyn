@@ -552,6 +552,70 @@ export function pickWorkbenchName(taken: Iterable<string>, random: () => number 
   }
 }
 
+/** Longest name `workbenchNameFromTask` builds from the words, before a `-2` suffix. */
+export const WORKBENCH_TASK_NAME_MAX = 24;
+
+/**
+ * Words that say nothing about the task. Verbs that do (`fix`, `add`,
+ * `remove`, `update`) are kept: "fix-login-redirect" reads better than
+ * "login-redirect".
+ */
+const TASK_NAME_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'to', 'and', 'or', 'but', 'of', 'in', 'into', 'on', 'onto', 'for', 'with', 'without',
+  'at', 'by', 'from', 'as', 'about', 'so', 'then', 'than', 'if', 'when', 'while', 'up',
+  'please', 'pls', 'plz', 'can', 'could', 'would', 'should', 'will', 'shall', 'may', 'might', 'must',
+  'you', 'your', 'we', 'our', 'us', 'i', 'im', 'me', 'my', 'it', 'its', 'lets', 'let',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am', 'do', 'does', 'did', 'make', 'get',
+  'this', 'that', 'these', 'those', 'there', 'here', 'some', 'any', 'all',
+  'just', 'also', 'now', 'need', 'needs', 'want', 'wants', 'try', 'help', 'hey', 'hi', 'ok', 'okay',
+]);
+
+function taskNameWords(text: string): string[] {
+  return text
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/['’`]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w && !TASK_NAME_STOP_WORDS.has(w));
+}
+
+/**
+ * A workbench name from the user's first message: the first two or three
+ * significant words as a lowercase slug, at most `WORKBENCH_TASK_NAME_MAX`
+ * characters. A name in `taken` gets `-2`, `-3`, … When the text has no usable
+ * word (empty, only stop words, a script with no ASCII form), it falls back to
+ * a city from `pickWorkbenchName`.
+ *
+ * No model is asked: there is no metered key to ask with, and this runs on
+ * every create.
+ */
+export function workbenchNameFromTask(
+  text: string,
+  taken: Iterable<string>,
+  random: () => number = Math.random
+): string {
+  const used = new Set<string>();
+  for (const name of taken) used.add(name.trim().toLowerCase());
+
+  let base = '';
+  for (const word of taskNameWords(text).slice(0, 3)) {
+    const next = base ? `${base}-${word}` : word;
+    if (next.length > WORKBENCH_TASK_NAME_MAX) {
+      if (!base) base = word.slice(0, WORKBENCH_TASK_NAME_MAX);
+      break;
+    }
+    base = next;
+  }
+  if (!base) return pickWorkbenchName(used, random);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 // ============================================================================
 // The next action
 // ============================================================================

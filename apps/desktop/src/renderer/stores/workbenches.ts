@@ -29,10 +29,23 @@ export interface ChatEventsState {
   error: string | null;
 }
 
+/** What the new-workbench page starts from when something opens it with a target (a PR row, a branch). */
 export interface NewWorkbenchPrefill {
   repositoryId?: string;
   fromPullRequestId?: string;
   baseBranch?: string;
+  /** An existing branch to check out. */
+  branch?: string;
+  runtime?: 'sandbox' | 'local';
+}
+
+/**
+ * A request to show the new-workbench page. `seq` grows on every request, so
+ * the page re-applies the prefill and re-focuses even when it is already open.
+ */
+export interface NewWorkbenchRequest {
+  seq: number;
+  prefill: NewWorkbenchPrefill | null;
 }
 
 export interface ScriptOutputState {
@@ -136,7 +149,7 @@ interface WorkbenchState {
   localQueues: Record<string, WorkbenchQueuedMessage[]>;
   /** Script output per workbench, per script name. */
   scriptOutput: Record<string, Record<string, ScriptOutputState>>;
-  newDialog: { open: boolean; prefill: NewWorkbenchPrefill | null };
+  newWorkbench: NewWorkbenchRequest;
 
   setWorkspace: (workspaceId: string | null) => void;
   setWorkbenches: (workspaceId: string, list: Workbench[]) => void;
@@ -162,8 +175,9 @@ interface WorkbenchState {
   removeLocalQueued: (chatId: string, messageId: string) => void;
   appendScriptFrame: (frame: WorkbenchScriptFrame) => void;
   markScriptStarted: (workbenchId: string, name: string) => void;
-  openNewDialog: (prefill?: NewWorkbenchPrefill | null) => void;
-  closeNewDialog: () => void;
+  /** Ask the new-workbench page for a fresh start. Navigation is the caller's: see `openNewWorkbench`. */
+  requestNewWorkbench: (prefill?: NewWorkbenchPrefill | null) => void;
+  clearNewWorkbenchPrefill: () => void;
 }
 
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
@@ -184,7 +198,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   unread: {},
   localQueues: {},
   scriptOutput: {},
-  newDialog: { open: false, prefill: null },
+  newWorkbench: { seq: 0, prefill: null },
 
   setWorkspace: (workspaceId) =>
     set((s) =>
@@ -343,8 +357,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
       };
     }),
 
-  openNewDialog: (prefill = null) => set({ newDialog: { open: true, prefill } }),
-  closeNewDialog: () => set({ newDialog: { open: false, prefill: null } }),
+  requestNewWorkbench: (prefill = null) => set((s) => ({ newWorkbench: { seq: s.newWorkbench.seq + 1, prefill } })),
+  clearNewWorkbenchPrefill: () =>
+    set((s) => (s.newWorkbench.prefill ? { newWorkbench: { ...s.newWorkbench, prefill: null } } : s)),
 }));
 
 /** The chats of a workbench the user has not closed. */

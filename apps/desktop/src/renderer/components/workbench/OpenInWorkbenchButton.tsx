@@ -4,16 +4,11 @@ import { SquareTerminal } from 'lucide-react';
 import type { PRRow } from '../../lib/api';
 import { Button } from '../ui/button';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { useWorkbenchStore } from '../../stores/workbenches';
+import { openNewWorkbench, prefillFromPr } from './new/openNewWorkbench';
 
-/** Open the Workbenches panel with the New workbench dialog filled in from this PR. */
+/** Open the new-workbench page aimed at this PR: its repository, its head branch, the link. */
 export function openPrInWorkbench(row: Pick<PRRow, 'id' | 'repositoryId' | 'summary'>): void {
-  useWorkspaceStore.getState().setActivePanel('workbenches');
-  useWorkbenchStore.getState().openNewDialog({
-    repositoryId: row.repositoryId,
-    fromPullRequestId: row.id,
-    baseBranch: row.summary.baseBranch,
-  });
+  openNewWorkbench(prefillFromPr(row));
 }
 
 /**

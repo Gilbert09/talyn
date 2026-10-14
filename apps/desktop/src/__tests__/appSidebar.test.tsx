@@ -194,13 +194,13 @@ describe('AppSidebar', () => {
     useNavigationStore.setState({ paletteOpen: false, addRepositoryOpen: false });
   });
 
-  it('New workbench goes home and opens the new-workbench form', () => {
+  it('New workbench goes home and asks the new-workbench page for a fresh start', () => {
     useNavigationStore.getState().navigate({ view: 'prs', tab: 'reviews' });
+    const before = useWorkbenchStore.getState().newWorkbench.seq;
     render(<AppSidebar />);
     fireEvent.click(screen.getByText('New workbench'));
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
-    expect(useWorkbenchStore.getState().newDialog.open).toBe(true);
-    useWorkbenchStore.getState().closeNewDialog();
+    expect(useWorkbenchStore.getState().newWorkbench).toEqual({ seq: before + 1, prefill: null });
   });
 
   it('collapses to an icon rail with the toggle', () => {

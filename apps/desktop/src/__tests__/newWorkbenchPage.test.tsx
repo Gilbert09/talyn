@@ -1,0 +1,313 @@
+/**
+ * @jest-environment jsdom
+ */
+import '@testing-library/jest-dom';
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { Features, Workbench, WorkbenchReadiness, Workspace } from '@talyn/shared';
+import type { PRRow } from '../renderer/lib/api';
+import { NewWorkbenchPage, localPathFor } from '../renderer/pages/NewWorkbenchPage';
+import { openNewWorkbench, prefillFromPr } from '../renderer/components/workbench/new/openNewWorkbench';
+import { defaultRepositoryId } from '../renderer/components/workbench/new/lastRepository';
+import { useWorkspaceStore } from '../renderer/stores/workspace';
+import { useWorkbenchStore } from '../renderer/stores/workbenches';
+import { useNavigationStore } from '../renderer/stores/navigation';
+import { usePullRequestStore } from '../renderer/stores/pullRequests';
+
+jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
+
+const mockReadiness = jest.fn();
+const mockCreate = jest.fn();
+jest.mock('../renderer/lib/api', () => ({
+  api: {
+    workbenches: {
+      readiness: (...args: unknown[]) => mockReadiness(...args),
+      create: (...args: unknown[]) => mockCreate(...args),
+      updateChat: jest.fn(),
+    },
+    pullRequests: {},
+  },
+}));
+
+// The local runtime is covered by useCreateWorkbench.test.tsx.
+jest.mock('../renderer/lib/localWorkbench', () => ({ createLocalWorkbench: jest.fn() }));
+
+const READY: WorkbenchReadiness = {
+  sandbox: { ok: true, reasons: [], agents: { claude: { ok: true }, codex: { ok: true } } },
+};
+const NOT_DEPLOYED: WorkbenchReadiness = {
+  sandbox: {
+    ok: false,
+    reasons: [{ code: 'fleet_not_deployed', message: 'Talyn Fleet is not deployed: set TALYN_FLEET_URL.' }],
+    agents: { claude: { ok: false }, codex: { ok: false } },
+  },
+};
+const CODEX_ONLY: WorkbenchReadiness = {
+  sandbox: {
+    ok: true,
+    reasons: [],
+    agents: {
+      claude: { ok: false, reason: { code: 'agent_not_connected', message: 'Connect Claude to Talyn Fleet.' } },
+      codex: { ok: true },
+    },
+  },
+};
+
+const REPOS = [
+  { id: 'r1', workspaceId: 'ws1', owner: 'acme', repo: 'api', fullName: 'acme/api' },
+  { id: 'r2', workspaceId: 'ws1', owner: 'acme', repo: 'web', fullName: 'acme/web' },
+];
+
+function pr(over: Partial<PRRow> = {}): PRRow {
+  return {
+    id: 'pr42',
+    workspaceId: 'ws1',
+    repositoryId: 'r1',
+    number: 42,
+    state: 'open',
+    authored: true,
+    summary: { title: 'Speed up search', headBranch: 'feat/search', baseBranch: 'develop', draft: false },
+    ...over,
+  } as unknown as PRRow;
+}
+
+function wb(id: string, over: Partial<Workbench> = {}): Workbench {
+  return {
+    id,
+    workspaceId: 'ws1',
+    repositoryId: 'r1',
+    repoFullName: 'acme/api',
+    name: id,
+    branch: `b-${id}`,
+    baseBranch: 'main',
+    runtime: 'sandbox',
+    agent: 'claude',
+    status: 'ready',
+    sandboxState: 'running',
+    pullRequestId: null,
+    archivedAt: null,
+    settings: {},
+    createdAt: '2026-10-13T00:00:00Z',
+    updatedAt: '2026-10-13T00:00:00Z',
+    ...over,
+  } as Workbench;
+}
+
+beforeAll(() => {
+  (global as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  localStorage.clear();
+  mockReadiness.mockResolvedValue(READY);
+  useWorkspaceStore.setState({
+    currentWorkspaceId: 'ws1',
+    workspaces: [
+      {
+        id: 'ws1',
+        name: 'Acme',
+        repos: [
+          { id: 'x1', name: 'acme/api', url: '', defaultBranch: 'main' },
+          { id: 'x2', name: 'acme/web', url: '', defaultBranch: 'trunk' },
+        ],
+        settings: {},
+      } as unknown as Workspace,
+    ],
+    repositories: REPOS,
+    features: { workbenches: true } as Features,
+  });
+  useWorkbenchStore.getState().setWorkspace('ws1');
+  useWorkbenchStore.getState().setWorkbenches('ws1', []);
+  useWorkbenchStore.setState({ newWorkbench: { seq: 0, prefill: null } });
+  usePullRequestStore.setState({ rows: [] });
+  useNavigationStore.getState().navigate({ view: 'home' });
+});
+
+afterEach(cleanup);
+
+async function renderPage() {
+  const utils = render(<NewWorkbenchPage />);
+  await waitFor(() => expect(mockReadiness).toHaveBeenCalledWith('ws1'));
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return utils;
+}
+
+const textarea = () => screen.getByRole('textbox', { name: 'Task' });
+const radio = (name: string) => screen.getByRole('radio', { name });
+
+describe('NewWorkbenchPage', () => {
+  it('defaults to the first watched repository and its default branch', async () => {
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('acme/api');
+    expect(screen.getByRole('combobox', { name: 'Base branch' })).toHaveAttribute('placeholder', 'main');
+    expect(textarea()).toHaveFocus();
+  });
+
+  it('defaults to the repository last used in this workspace', async () => {
+    localStorage.setItem('talyn-new-workbench-repo:ws1', 'r2');
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Repository' })).toHaveTextContent('acme/web');
+    expect(screen.getByRole('combobox', { name: 'Base branch' })).toHaveAttribute('placeholder', 'trunk');
+  });
+
+  it('selects Sandbox when readiness allows it', async () => {
+    await renderPage();
+    expect(radio('Sandbox')).toBeEnabled();
+    expect(radio('Sandbox')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('disables Sandbox with the reason when readiness says no', async () => {
+    mockReadiness.mockResolvedValue(NOT_DEPLOYED);
+    await renderPage();
+    await waitFor(() => expect(radio('Sandbox')).toBeDisabled());
+    expect(screen.getByText(/Sandbox unavailable:/).parentElement).toHaveTextContent(
+      'Talyn Fleet is not deployed: set TALYN_FLEET_URL.'
+    );
+    expect(screen.getByRole('button', { name: 'Create and start' })).toBeDisabled();
+  });
+
+  it('disables Local outside the desktop bridge, with its reason', async () => {
+    await renderPage();
+    expect(radio('Local')).toBeDisabled();
+    expect(screen.getByText(/Local unavailable:/).parentElement).toHaveTextContent('only available in the desktop app');
+  });
+
+  it('moves to an agent that is ready', async () => {
+    mockReadiness.mockResolvedValue(CODEX_ONLY);
+    await renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Agent' })).toHaveTextContent('Codex'));
+  });
+
+  it('Enter creates on the chosen repository with the text as the first prompt', async () => {
+    localStorage.setItem('talyn-new-workbench-repo:ws1', 'r2');
+    mockCreate.mockResolvedValue(wb('fix-login', { repositoryId: 'r2', repoFullName: 'acme/web' }));
+    await renderPage();
+    fireEvent.change(textarea(), { target: { value: 'Fix the login redirect' } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+    });
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ repositoryId: 'r2', runtime: 'sandbox', agent: 'claude', prompt: 'Fix the login redirect' })
+    );
+    expect(useNavigationStore.getState().route).toEqual({ view: 'workbench', id: 'fix-login' });
+    expect(localStorage.getItem('talyn-new-workbench-repo:ws1')).toBe('r2');
+  });
+
+  it.each([
+    ['Shift+Enter', { key: 'Enter', shiftKey: true }],
+    ['Enter on an empty composer', { key: 'Enter' }],
+  ])('%s does not create', async (label, event) => {
+    await renderPage();
+    if (label.startsWith('Shift')) fireEvent.change(textarea(), { target: { value: 'something' } });
+    fireEvent.keyDown(textarea(), event);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the text and shows the reason when the create is refused', async () => {
+    mockCreate.mockRejectedValue(Object.assign(new Error('Connect Claude to Talyn Fleet first.'), { status: 409 }));
+    await renderPage();
+    fireEvent.change(textarea(), { target: { value: 'Add dark mode' } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Connect Claude to Talyn Fleet first.');
+    expect(textarea()).toHaveValue('Add dark mode');
+    expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
+  });
+
+  it('"Create without a task" creates with no prompt', async () => {
+    mockCreate.mockResolvedValue(wb('lisbon'));
+    await renderPage();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create without a task' }));
+    });
+    expect(mockCreate.mock.calls[0][0].prompt).toBeUndefined();
+  });
+
+  it('Shift+Tab toggles plan mode', async () => {
+    await renderPage();
+    const plan = screen.getByRole('button', { name: /Plan/ });
+    expect(plan).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.keyDown(textarea(), { key: 'Tab', shiftKey: true });
+    expect(plan).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('a PR prefill shows the PR and creates on its branch', async () => {
+    usePullRequestStore.setState({ rows: [pr()] });
+    mockCreate.mockResolvedValue(wb('search'));
+    openNewWorkbench(prefillFromPr(pr()));
+    await renderPage();
+    expect(screen.getByText('#42')).toBeInTheDocument();
+    expect(screen.getByText('Speed up search')).toBeInTheDocument();
+    expect(useWorkbenchStore.getState().newWorkbench.prefill).toBeNull();
+
+    fireEvent.change(textarea(), { target: { value: 'Address the review' } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+    });
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositoryId: 'r1',
+        branch: 'feat/search',
+        baseBranch: 'develop',
+        fromPullRequestId: 'pr42',
+      })
+    );
+  });
+
+  it('Esc drops a prefill and returns to a new branch', async () => {
+    usePullRequestStore.setState({ rows: [pr()] });
+    openNewWorkbench(prefillFromPr(pr()));
+    await renderPage();
+    expect(screen.getByText('#42')).toBeInTheDocument();
+    fireEvent.keyDown(textarea(), { key: 'Escape' });
+    expect(screen.queryByText('#42')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Base branch' })).toHaveValue('');
+  });
+
+  it('lists recent workbenches, newest first, and links to History for archived ones', async () => {
+    useWorkbenchStore.getState().setWorkbenches('ws1', [
+      wb('older', { updatedAt: '2026-10-10T00:00:00Z' }),
+      wb('newer', { updatedAt: '2026-10-14T00:00:00Z', repoFullName: 'acme/web' }),
+      wb('gone', { status: 'archived', archivedAt: '2026-10-12T00:00:00Z' }),
+    ]);
+    await renderPage();
+    const rows = screen.getAllByRole('button').filter((b) => b.getAttribute('data-attr') === 'home-recent-row');
+    expect(rows.map((r) => r.textContent?.slice(0, 5))).toEqual(['newer', 'older']);
+    fireEvent.click(screen.getByRole('button', { name: /1 archived/ }));
+    expect(useNavigationStore.getState().route).toEqual({ view: 'history' });
+  });
+});
+
+describe('localPathFor', () => {
+  it.each([
+    ['exact', { 'acme/api': '/a' }, 'acme/api', '/a'],
+    ['case-insensitive', { 'Acme/API': '/a' }, 'acme/api', '/a'],
+    ['missing', { 'acme/web': '/w' }, 'acme/api', null],
+    ['no repo', { 'acme/api': '/a' }, undefined, null],
+  ])('%s', (_label, paths, repo, expected) => {
+    expect(localPathFor(paths, repo)).toBe(expected);
+  });
+});
+
+describe('defaultRepositoryId', () => {
+  it.each([
+    ['stored and still watched', 'r2', 'r2'],
+    ['stored but no longer watched', 'gone', 'r1'],
+    ['nothing stored', null, 'r1'],
+  ])('%s', (_label, stored, expected) => {
+    if (stored) localStorage.setItem('talyn-new-workbench-repo:ws1', stored);
+    expect(defaultRepositoryId('ws1', REPOS)).toBe(expected);
+  });
+
+  it('is empty with no repositories', () => {
+    expect(defaultRepositoryId('ws1', [])).toBe('');
+  });
+});

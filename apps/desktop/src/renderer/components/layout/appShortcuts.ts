@@ -13,6 +13,7 @@ import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { createChatTab } from '../workbench/ChatTabs';
+import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { runPromptAction } from '../workbench/WorkbenchHeader';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
@@ -95,10 +96,7 @@ export function buildAppShortcuts(): Shortcut[] {
       group: 'Workbenches',
       allowInInput: true,
       when: offered,
-      run: () => {
-        nav().navigate({ view: 'home' });
-        wbStore().openNewDialog();
-      },
+      run: () => openNewWorkbench(),
     }),
     fromMenu({
       id: 'settings.open',

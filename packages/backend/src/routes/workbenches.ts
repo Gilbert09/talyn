@@ -5,6 +5,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
   pickWorkbenchName,
+  workbenchNameFromTask,
   WORKBENCH_EFFORTS,
   type ApiResponse,
   type CreateWorkbenchChatInput,
@@ -427,8 +428,9 @@ export function workbenchRoutes(): Router {
       return fail(res, err);
     }
 
-    // The name is unique among live workbenches. Two creates in the same
-    // moment can pick the same city; the index decides, and the loser picks again.
+    // The name is unique among live workbenches. It comes from the first
+    // message when there is one, else a city. Two creates in the same moment
+    // can pick the same name; the index decides, and the loser picks again.
     const id = uuid();
     let row: WorkbenchRow | null = null;
     for (let attempt = 0; attempt < 4 && !row; attempt++) {
@@ -436,7 +438,7 @@ export function workbenchRoutes(): Router {
       if (requestedName && taken.includes(requestedName)) {
         return bad(res, 409, `A workbench named "${requestedName}" already exists.`, 'name_taken');
       }
-      const name = requestedName || pickWorkbenchName(taken);
+      const name = requestedName || (prompt ? workbenchNameFromTask(prompt, taken) : pickWorkbenchName(taken));
       try {
         row = await insertWorkbench({
           id,

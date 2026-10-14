@@ -2,6 +2,7 @@ import {
   checkpointCreateSteps,
   pickWorkbenchName,
   withSeq,
+  workbenchNameFromTask,
   type AgentEventDraft,
   type SendWorkbenchMessageInput,
   type Workbench,
@@ -324,6 +325,8 @@ export interface CreateLocalWorkbenchInput {
   /** An existing local clone. Absent: the main process clones it. */
   repoPath?: string;
   takenNames: string[];
+  /** The first message. Names the workbench; it is sent by the caller once the chat exists. */
+  prompt?: string;
 }
 
 /**
@@ -334,7 +337,9 @@ export interface CreateLocalWorkbenchInput {
 export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Promise<Workbench> {
   const bridge = getWorkbenchBridge();
   if (!bridge) throw new Error('Local workbenches need the Talyn desktop app.');
-  const name = pickWorkbenchName(input.takenNames);
+  const name = input.prompt?.trim()
+    ? workbenchNameFromTask(input.prompt, input.takenNames)
+    : pickWorkbenchName(input.takenNames);
   const branch = input.branch ?? name;
   const baseBranch = input.baseBranch || (await detectDefaultBranch(bridge, input.repoPath)) || 'main';
   const { path } = await bridge.createWorktree({

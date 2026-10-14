@@ -5,7 +5,6 @@ import { SystemStatusBanner } from './SystemStatusBanner';
 import { useAppShortcuts } from './appShortcuts';
 import { SettingsPanel } from '../panels/SettingsPanel';
 import { CommandPalette } from '../CommandPalette';
-import { NewWorkbenchDialog } from '../workbench/NewWorkbenchDialog';
 import { CreateWorkspaceModal } from '../modals/CreateWorkspaceModal';
 import { UpgradeModal } from '../modals/UpgradeModal';
 import { ConnectAgentModal } from '../modals/ConnectAgentModal';
@@ -68,7 +67,6 @@ export function AppShell() {
           </div>
         </main>
       </div>
-      <NewWorkbenchDialog />
       <AddRepositoryModal />
       <CommandPalette />
       <CreateWorkspaceModal open={createWorkspaceOpen} onOpenChange={setCreateWorkspaceOpen} />
