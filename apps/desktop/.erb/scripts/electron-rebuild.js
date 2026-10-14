@@ -7,12 +7,10 @@ if (
   Object.keys(dependencies || {}).length > 0 &&
   fs.existsSync(webpackPaths.appNodeModulesPath)
 ) {
-  const electronRebuildCmd =
-    '../../node_modules/.bin/electron-rebuild --force --types prod,dev,optional --module-dir .';
-  const cmd =
-    process.platform === 'win32'
-      ? electronRebuildCmd.replace(/\//g, '\\')
-      : electronRebuildCmd;
+  // npm workspaces hoist @electron/rebuild to the repo root, so resolve it
+  // rather than assume apps/desktop/node_modules/.bin.
+  const cli = require.resolve('@electron/rebuild/lib/cli.js');
+  const cmd = `"${process.execPath}" "${cli}" --force --types prod,dev,optional --module-dir .`;
   execSync(cmd, {
     cwd: webpackPaths.appPath,
     stdio: 'inherit',
