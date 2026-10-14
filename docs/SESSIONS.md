@@ -30,6 +30,20 @@ for busy) was merged to YAS `main` and deployed on 2026-10-14. It also changed o
 behaviour: a box adopted after a restart or resumed now keeps its own idle timeout (normally
 600 s) instead of the 30-minute default.
 
+**Later on 2026-10-14.**
+- **Hibernated boxes.** A box that was idle long enough moves to object storage. The fleet then
+  refuses every call with 409 `remote_resume_required`, which named the call that may wait:
+  `POST /resume`. Nothing called it, so an old workbench showed the refusal as an error. The
+  workbench fleet client now resumes the box, and then sends the call again.
+- **Claude Code too old for Opus 5.5.** The image pinned Claude Code 2.1.245. With Tom's OK it
+  went to 2.1.296 on YAS `main`. That changes the golden id, so every golden was baked again.
+  Existing boxes keep their old CLI.
+- **The UI name is now "session".** Only the words users see changed.
+- **CI was red on every push to the branch, and nobody looked.** The typecheck failed first,
+  so the test suites never ran. Behind it there were two more failures. A local typecheck
+  passed because `node-pty` was installed on this machine and not in CI. The lesson: on a long
+  branch, watch the branch's own CI run, not only the local checks.
+
 **Process note.** Five parallel agents each running `tsc` and multi-worker tests slowed Tom's
 laptop badly. Agents now run no typecheck; one serial, `nice`d typecheck per package runs after
 they finish, and tests run single-worker on the touched files only.

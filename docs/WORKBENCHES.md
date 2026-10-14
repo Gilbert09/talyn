@@ -1,7 +1,11 @@
 # Workbenches — a sandbox-native Conductor inside Talyn
 
 > Status: **exploration on branch `tom/workbenches`**. Not on `main`, not deployed.
-> Companion fleet branch: `yetanothersandbox-dev/yas` → `tom/workbench-endpoints` (not deployed).
+> Fleet: `tom/workbench-endpoints` and the Claude Code 2.1.296 image are deployed on YAS `main`.
+> `tom/bare-box-repo` is not.
+>
+> **Name.** Users see "session" (from 2026-10-14). The code, routes, tables, IPC channels and
+> these docs keep "workbench".
 
 ## What it is
 
@@ -133,6 +137,25 @@ inside it.
 retry, provisioning (about 10 s with the clone), two turns with recall, a file edit, changes,
 diff, file list and read, the terminal (as user `fleet`), and checkpoint restore.
 
+**Also on 2026-10-14:**
+- **A hibernated box resumes by itself.** When a box has been idle for some time, the fleet
+  moves it to object storage. It then answers every call with 409 `remote_resume_required`
+  until somebody calls `POST /resume`. The workbench fleet client (`withWake` in
+  `sandboxRuntime.ts`) now resumes the box once, and then sends the call again. One resume
+  runs for many calls at the same time. `NO_WAKE` lists the calls that must never resume a
+  box (create, suspend, resume and delete). A resume can take minutes for a large box, and
+  the panels only show "loading" for that time.
+- **Claude Code in the image is 2.1.296.** 2.1.245 refused Opus 5.5 with a 400. A box keeps
+  the disk it was created with, so a box from before the change keeps the old CLI.
+- **Chat totals.** Each turn that completes has no footer of its own now. One bar under the
+  transcript shows the turns, the cost and the tokens for the chat (`chatTotals`). "In"
+  includes cache reads and writes. A turn that ends with an error keeps its footer.
+- **CI.** The branch failed CI on every push until `400fd89dc5`. The cause was a `node-pty`
+  type import from `release/app/node_modules`, which CI does not install. Two more causes were
+  found after it: route wiring that ran when `stores/navigation.ts` loaded (now
+  `installNavigation()`, called from `index.tsx`), and the data API boundary test, which did
+  not list the session tables' grants.
+
 **Not verified:** Create PR. The push was refused because the local-dev GitHub App
 `talyn-app-dev` has Contents: read. The production App has write. Merge and Archive from the new
 header have not run against a real PR.
@@ -184,4 +207,9 @@ header have not run against a real PR.
 - `apps/web` has none of this; it is a separate fork.
 - No billing gates. Not verified on a real fleet: Codex in a sandbox, and GitHub accepting a
   push to `refs/talyn/*`.
-- The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden.
+- The new fleet routes `/pty` and `/ports` need guests booted from a newly baked golden. The
+  golden was baked again on 2026-10-14 for Claude Code 2.1.296. This is not checked yet.
+- A box keeps the Claude Code version it was created with, and nothing updates it.
+- Not run end to end: the local runtime, Codex in a sandbox, a real PR (Create PR, Fix checks,
+  Resolve conflicts, Merge), restore of an archived workbench, the port preview, and a packaged
+  release build. The UI was checked through the API and screenshots only.
