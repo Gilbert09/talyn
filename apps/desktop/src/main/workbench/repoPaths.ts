@@ -60,7 +60,8 @@ export class RepoPaths {
     if (!path.isAbsolute(input.path)) throw new Error('The path must be absolute');
     let root: string;
     try {
-      root = await git(input.path, 'rev-parse', '--show-toplevel');
+      // Git prints forward slashes on Windows; store the platform's own form.
+      root = path.resolve(await git(input.path, 'rev-parse', '--show-toplevel'));
     } catch {
       throw new Error('That folder is not a Git repository');
     }

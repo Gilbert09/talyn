@@ -38,7 +38,7 @@ test('uses a login shell and replays the bounded scrollback on attachment', asyn
   const id = await terminals.open(input);
   expect(native.spawn).toHaveBeenCalledWith(
     expect.any(String),
-    ['-l'],
+    process.platform === 'win32' ? [] : ['-l'],
     expect.objectContaining({ name: 'xterm-256color', cwd: '/tmp' }),
   );
   onData('x'.repeat(300 * 1024));
@@ -83,7 +83,7 @@ test('runs commands in script terminals and sends the exit code', async () => {
   });
   expect(native.spawn).toHaveBeenCalledWith(
     expect.any(String),
-    ['-lc', 'echo hello'],
+    process.platform === 'win32' ? ['/d', '/s', '/c', 'echo hello'] : ['-lc', 'echo hello'],
     expect.any(Object),
   );
   onExit({ exitCode: 2 });

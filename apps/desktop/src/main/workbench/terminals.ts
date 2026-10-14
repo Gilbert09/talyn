@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type * as Pty from 'node-pty';
-import { loginShell, processEnv } from './environment';
+import { loginShell, processEnv, shellArgs } from './environment';
 import { stopGroup, type Emit } from './processes';
 
 const SCROLLBACK_BYTES = 256 * 1024;
@@ -71,7 +71,7 @@ export class Terminals {
     const native = require('node-pty') as typeof Pty;
     const pty = native.spawn(
       loginShell(),
-      input.command === undefined ? ['-l'] : ['-lc', input.command],
+      shellArgs(input.command),
       {
         name: 'xterm-256color',
         cols: 100,

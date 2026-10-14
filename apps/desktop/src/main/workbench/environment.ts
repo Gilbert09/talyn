@@ -8,40 +8,58 @@ export function mergePath(
   shellPath = '',
   inheritedPath = process.env.PATH ?? '',
   home = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
 ): string {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const extra =
+    platform === 'win32'
+      ? [p.join(home, '.local', 'bin')]
+      : [
+          '/opt/homebrew/bin',
+          '/usr/local/bin',
+          p.join(home, '.local/bin'),
+          p.join(home, '.claude/local'),
+          '/usr/bin',
+          '/bin',
+          '/usr/sbin',
+          '/sbin',
+        ];
   return [
     ...new Set(
       [
-        ...shellPath.split(path.delimiter),
-        ...inheritedPath.split(path.delimiter),
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-        path.join(home, '.local/bin'),
-        path.join(home, '.claude/local'),
-        '/usr/bin',
-        '/bin',
-        '/usr/sbin',
-        '/sbin',
+        ...shellPath.split(p.delimiter),
+        ...inheritedPath.split(p.delimiter),
+        ...extra,
       ].filter(
         (entry) =>
-          path.isAbsolute(entry) &&
+          p.isAbsolute(entry) &&
           !entry.includes('\n') &&
           !entry.includes('\r'),
       ),
     ),
-  ].join(path.delimiter);
+  ].join(p.delimiter);
 }
 
 export function loginShell(): string {
+  if (process.platform === 'win32') return process.env.COMSPEC || 'cmd.exe';
   return (
     process.env.SHELL ||
     (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
   );
 }
 
+/** The arguments for `loginShell()`: an interactive shell, or one command. */
+export function shellArgs(command?: string): string[] {
+  if (process.platform === 'win32')
+    return command === undefined ? [] : ['/d', '/s', '/c', command];
+  return command === undefined ? ['-l'] : ['-lc', command];
+}
+
 let cachedPath: Promise<string> | undefined;
 
 export function loginPath(): Promise<string> {
+  // Windows has no login shell to ask; its PATH is already in the environment.
+  if (process.platform === 'win32') cachedPath ??= Promise.resolve(mergePath());
   cachedPath ??= new Promise((resolve) => {
     execFile(
       loginShell(),
@@ -71,15 +89,25 @@ export async function processEnv(
   };
 }
 
+function executableNames(name: string): string[] {
+  if (process.platform !== 'win32') return [name];
+  const extensions = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .filter(Boolean);
+  return extensions.map((extension) => name + extension.toLowerCase());
+}
+
 async function locate(name: string): Promise<string | null> {
   const directories = (await loginPath()).split(path.delimiter);
   for (const directory of directories) {
-    const candidate = path.join(directory, name);
-    try {
-      await fs.access(candidate, constants.X_OK);
-      if ((await fs.stat(candidate)).isFile()) return candidate;
-    } catch {
-      /* Try the next directory. */
+    for (const file of executableNames(name)) {
+      const candidate = path.join(directory, file);
+      try {
+        await fs.access(candidate, constants.X_OK);
+        if ((await fs.stat(candidate)).isFile()) return candidate;
+      } catch {
+        /* Try the next candidate. */
+      }
     }
   }
   return null;
