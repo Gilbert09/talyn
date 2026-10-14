@@ -1366,6 +1366,8 @@ export class FleetClient {
     }
     const message = fleetError?.message || fleetError?.error || `fleet returned ${resp.status}`;
     if (resp.status === 503) throw new FleetCapacityError(message, parseRetryAfterMs(resp));
+    // A 404 about the THING asked for (a missing file) is not a missing sandbox.
+    if (resp.status === 404 && fleetError?.error === 'no_such_file') throw new FleetHttpError(message, 404, 'no_such_file');
     if (isRunNotFoundResponse(resp.status, message)) throw new FleetRunNotFoundError(message);
     throw new FleetHttpError(message, resp.status, fleetError?.error);
   }

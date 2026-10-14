@@ -165,6 +165,8 @@ describe('fleet client: workbench methods', () => {
       [404, { error: 'not_found', message: 'no such sandbox' }, FleetRunNotFoundError, undefined],
       [409, { error: 'not_a_repository', message: 'not a git repository' }, FleetHttpError, 'not_a_repository'],
       [400, { error: 'bad_ref', message: 'unknown ref' }, FleetHttpError, 'bad_ref'],
+      // A missing FILE is not a missing sandbox.
+      [404, { error: 'no_such_file', message: 'no file at a' }, FleetHttpError, 'no_such_file'],
     ])('keeps a real %i as an error, with the fleet code', async (status, body, type, code) => {
       respond = () => json(body, status);
       const err = await client.getDiff('sb', { base: 'x' }).catch((e) => e);

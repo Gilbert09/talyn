@@ -7,6 +7,7 @@ import {
   type WorkbenchDiffStat,
 } from '@talyn/shared';
 import { emitWorkbenchUpdated } from './emit.js';
+import { FleetHttpError } from '../selfHosted/client.js';
 import { WorkbenchError } from './errors.js';
 import { parseSections, sectionsScript } from './execFraming.js';
 import { publicWorkbench } from './prLink.js';
@@ -148,7 +149,12 @@ export function looksBinary(bytes: Buffer): boolean {
 export async function readRepoFile(row: WorkbenchRow, path: string): Promise<{ content: string; binary: boolean }> {
   const safePath = assertRepoPath(path);
   const client = await fleetClientFor(row.workspaceId, row.fleetHost);
-  const fleet = await client.readFile(row.sandboxId!, safePath, { cwd: repoDirFor(row) });
+  const fleet = await client.readFile(row.sandboxId!, safePath, { cwd: repoDirFor(row) }).catch((err: unknown) => {
+    if (err instanceof FleetHttpError && err.code === 'no_such_file') {
+      throw new WorkbenchError(`${safePath} does not exist.`, 404, 'file_not_found');
+    }
+    throw err;
+  });
   if (fleet.supported && fleet.data) {
     if (fleet.data.tooLarge) {
       throw new WorkbenchError(`${safePath} is too large to open here.`, 413, 'file_too_large');
