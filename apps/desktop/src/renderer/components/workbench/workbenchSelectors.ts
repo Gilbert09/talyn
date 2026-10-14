@@ -3,7 +3,7 @@ import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { api, type PRRow } from '../../lib/api';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
-import { opsFor, type WorkbenchOps } from '../../lib/workbenchOps';
+import { opsFor, sandboxUnavailableReason, type WorkbenchOps } from '../../lib/workbenchOps';
 
 export interface RepoGroup {
   repo: string;
@@ -59,10 +59,25 @@ export function useSelectedChat(workbenchId: string): WorkbenchChat | null {
 }
 
 export function useWorkbenchOps(workbench: Workbench): WorkbenchOps {
-  // Rebuilt only when what the ops close over changes.
+  // Rebuilt only when what the ops close over changes. `settings` is keyed by
+  // its JSON: a WS frame hands back a new object each time, which would rebuild
+  // the ops (and refetch the changes) on every frame.
+  const settingsKey = JSON.stringify(workbench.settings ?? {});
+  const reason = workbench.runtime === 'sandbox' ? sandboxUnavailableReason(workbench) : null;
   return useMemo(
     () => opsFor(workbench),
-    [workbench.id, workbench.runtime, workbench.localPath, workbench.deviceId, workbench.baseBranch, workbench.branch, workbench.settings]
+    [
+      workbench.id,
+      workbench.runtime,
+      workbench.localPath,
+      workbench.deviceId,
+      workbench.baseBranch,
+      workbench.branch,
+      workbench.status,
+      workbench.sandboxState,
+      reason,
+      settingsKey,
+    ]
   );
 }
 

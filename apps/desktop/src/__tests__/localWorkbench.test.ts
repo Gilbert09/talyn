@@ -247,6 +247,21 @@ describe('LocalTurnController', () => {
     expect(api.updateLocalChat).toHaveBeenLastCalledWith('c1', expect.objectContaining({ status: 'error' }));
   });
 
+  it.each([
+    ['an error end with text', { isError: true, cancelled: false, resultText: 'claude: auth failed' }, true],
+    ['a cancel', { isError: true, cancelled: true, resultText: 'killed' }, false],
+    ['a clean end', { isError: false, cancelled: false, resultText: 'done' }, false],
+  ])('records a visible error event for %s: %s', async (_n, outcome, recorded) => {
+    const { controller, end } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    end('c1', 1, outcome);
+    await settle();
+    const events = useWorkbenchStore.getState().chatEvents.c1.events.map((e) => e.event as { type: string; subtype?: string; text?: string });
+    const found = events.find((e) => e.type === 'system' && e.subtype === 'error');
+    if (recorded) expect(found?.text).toBe('claude: auth failed');
+    else expect(found).toBeUndefined();
+  });
+
   it('stops listening on teardown', () => {
     const { stop, emit } = setup();
     stop();

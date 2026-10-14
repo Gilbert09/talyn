@@ -232,6 +232,15 @@ export class LocalTurnController {
   async handleTurnEnd(chatId: string, outcome: WorkbenchTurnOutcome): Promise<void> {
     const wasRunning = this.running.get(chatId);
     this.running.delete(chatId);
+    const errorText = outcome.resultText?.trim();
+    if (outcome.isError && !outcome.cancelled && errorText && wasRunning) {
+      // Runs before the flush, so the explanation uploads with the turn's other events.
+      this.record(chatId, wasRunning.turn, {
+        type: 'system',
+        subtype: 'error',
+        text: errorText.slice(-2000),
+      } as AgentEventDraft);
+    }
     await this.flush(chatId);
     const status = outcome.isError && !outcome.cancelled ? 'error' : 'idle';
     const chat = findChat(chatId);

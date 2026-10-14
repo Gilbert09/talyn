@@ -139,9 +139,15 @@ export function Composer({
         model,
         effort: effort ?? undefined,
       });
-      if (res.queued) toast.info('Queued', 'It runs when the current turn ends.');
+      if (res.queued) {
+        toast.info(
+          'Queued',
+          workbench.status === 'provisioning' ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
+        );
+      }
     } catch (err) {
       setDraft(draftKey, text);
+      // A 409 not_ready carries the server's own reason (the sandbox failed or is still starting).
       toast.error('Could not send the message', err instanceof Error ? err.message : undefined);
     } finally {
       setSending(false);
@@ -287,9 +293,9 @@ export function Composer({
           aria-label="Message the agent"
         />
         <div className="flex items-center gap-1 px-2 pb-1.5">
-          <ModelPicker agent={workbench.agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!chat} />
-          <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!chat} />
-          <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!chat} />
+          <ModelPicker agent={workbench.agent} value={model} onChange={(m) => void patchChat({ model: m })} disabled={!chat || Boolean(ops.unavailable)} />
+          <EffortPicker value={effort} onChange={(v) => void patchChat({ effort: v })} disabled={!chat || Boolean(ops.unavailable)} />
+          <PlanToggle on={planMode} onToggle={() => void patchChat({ planMode: !planMode })} disabled={!chat || Boolean(ops.unavailable)} />
           <TodoChip todos={todos} />
           <div className="flex-1" />
           <ContextMeter usage={contextUsage} />

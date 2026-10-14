@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Loader2, Moon, RefreshCw } from 'lucide-react';
 import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { api } from '../../lib/api';
+import { toast } from '../../stores/toast';
 import { chatInsights } from '../../lib/workbenchFormat';
 import { ensureChatHistory, loadWorkbench } from '../../lib/workbenchData';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
@@ -67,7 +69,7 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
         {chat ? (
           <WorkbenchTranscript chat={chat} events={state.events} loading={state.loading} error={state.error} ops={ops} />
         ) : (
-          <div className="flex h-full items-center justify-center bg-[#151517] px-6 text-center text-xs text-zinc-500">
+          <div className="flex h-full items-center justify-center bg-background px-6 text-center text-xs text-muted-foreground">
             {workbench.status === 'provisioning'
               ? 'The workbench is getting ready. You can write the first message now.'
               : 'No chat yet. Send a message to start one.'}
@@ -81,10 +83,44 @@ function ChatView({ workbench, chat, ops }: { workbench: Workbench; chat: Workbe
 
 function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: WorkbenchOps }) {
   const setTerminalTab = useWorkbenchStore((s) => s.setTerminalTab);
+  const hasSetupOutput = useWorkbenchStore((s) => (s.scriptOutput[workbench.id]?.setup?.total ?? 0) > 0);
   const [retrying, setRetrying] = useState(false);
-  const errorText = (workbench as Workbench & { error?: string | null }).error;
 
-  if (ops.unavailable) {
+  // Errors first: a failed start can still say sandboxState 'creating', and a spinner would hide it.
+  if (workbench.status === 'error' || workbench.sandboxState === 'error') {
+    const retry = async () => {
+      setRetrying(true);
+      try {
+        useWorkbenchStore.getState().upsertWorkbench(await api.workbenches.retry(workbench.id));
+      } catch (err) {
+        toast.error('Could not retry', err instanceof Error ? err.message : undefined);
+      } finally {
+        setRetrying(false);
+      }
+    };
+    return (
+      <Banner
+        tone="error"
+        icon={<AlertTriangle className="h-3.5 w-3.5" />}
+        text={workbench.error ?? workbench.statusMessage ?? 'The workbench hit an error. Retry, or delete it.'}
+        action={
+          <>
+            {workbench.runtime === 'sandbox' && (
+              <Button variant="outline" className="h-6 gap-1 px-2 text-xs" disabled={retrying} onClick={() => void retry()}>
+                {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Retry
+              </Button>
+            )}
+            {hasSetupOutput && (
+              <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTerminalTab('setup')}>
+                Show setup output
+              </Button>
+            )}
+          </>
+        }
+      />
+    );
+  }
+  if (ops.unavailable && workbench.status !== 'provisioning') {
     return <Banner tone="muted" icon={<AlertTriangle className="h-3.5 w-3.5" />} text={ops.unavailable} />;
   }
   if (workbench.status === 'provisioning' || workbench.sandboxState === 'creating') {
@@ -93,37 +129,15 @@ function StatusBanner({ workbench, ops }: { workbench: Workbench; ops: Workbench
         tone="muted"
         icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}
         text={
-          workbench.runtime === 'sandbox'
-            ? 'Starting the sandbox and cloning the repository…'
-            : 'Creating the worktree…'
+          workbench.statusMessage ||
+          (workbench.runtime === 'sandbox' ? 'Starting the sandbox and cloning the repository…' : 'Creating the worktree…')
         }
         action={
-          <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTerminalTab('setup')}>
-            Show setup output
-          </Button>
-        }
-      />
-    );
-  }
-  if (workbench.status === 'error' || workbench.sandboxState === 'error') {
-    return (
-      <Banner
-        tone="error"
-        icon={<AlertTriangle className="h-3.5 w-3.5" />}
-        text={errorText || 'The workbench hit an error. Check the setup output, then retry.'}
-        action={
-          <Button
-            variant="ghost"
-            className="h-6 gap-1 px-2 text-xs"
-            disabled={retrying}
-            onClick={async () => {
-              setRetrying(true);
-              await loadWorkbench(workbench.id);
-              setRetrying(false);
-            }}
-          >
-            <RefreshCw className="h-3 w-3" /> Retry
-          </Button>
+          hasSetupOutput ? (
+            <Button variant="ghost" className="h-6 px-2 text-xs" onClick={() => setTerminalTab('setup')}>
+              Show setup output
+            </Button>
+          ) : undefined
         }
       />
     );

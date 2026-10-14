@@ -71,16 +71,16 @@ export function ChangesTab({
   }, [workbench.id]);
 
   useEffect(() => {
-    if (visible) void refresh();
-  }, [visible, turnsEnded, refresh]);
+    if (visible && !ops.unavailable) void refresh();
+  }, [visible, turnsEnded, refresh, ops.unavailable]);
 
   useEffect(() => {
-    if (!visible) return undefined;
+    if (!visible || ops.unavailable) return undefined;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh();
     }, CHANGES_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [visible, refresh]);
+  }, [visible, refresh, ops.unavailable]);
 
   const files = changes?.files ?? [];
   const selected = files.find((f) => f.path === selectedPath) ?? null;

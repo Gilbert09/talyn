@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CheckCircle2, Circle, ListTodo, Loader2, NotebookPen } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle2, ChevronDown, Circle, ListTodo, Loader2, NotebookPen } from 'lucide-react';
 import {
   FLEET_MODELS,
   WORKBENCH_EFFORTS,
@@ -23,8 +23,21 @@ export function defaultModelFor(agent: WorkbenchAgent): string {
   return defaultFleetModelForAgent(agent);
 }
 
+// Self-contained against @tailwindcss/forms: its base styles give every select
+// py-2, a line-height and a chevron background that clip text in a h-6 box.
 const selectClass =
-  'h-6 rounded border border-transparent bg-transparent px-1 text-[11px] text-muted-foreground hover:border-input hover:text-foreground focus:border-input focus:outline-none';
+  'h-6 appearance-none rounded border border-transparent bg-transparent bg-none py-0 pl-1 pr-5 text-[11px] leading-tight text-muted-foreground hover:border-input hover:text-foreground focus:border-input focus:outline-none disabled:opacity-50';
+
+function PickerSelect({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <span className="relative inline-flex items-center">
+      <select {...props} className={selectClass}>
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-1 h-3 w-3 text-muted-foreground" />
+    </span>
+  );
+}
 
 export function ModelPicker({
   agent,
@@ -40,11 +53,10 @@ export function ModelPicker({
   const models = modelsForAgent(agent);
   const known = models.some((m) => m.id === value);
   return (
-    <select
+    <PickerSelect
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
-      className={selectClass}
       title="Model"
       aria-label="Model"
     >
@@ -54,7 +66,7 @@ export function ModelPicker({
           {m.label}
         </option>
       ))}
-    </select>
+    </PickerSelect>
   );
 }
 
@@ -76,11 +88,10 @@ export function EffortPicker({
   disabled?: boolean;
 }) {
   return (
-    <select
+    <PickerSelect
       value={value ?? ''}
       onChange={(e) => onChange((e.target.value || null) as WorkbenchEffort | null)}
       disabled={disabled}
-      className={selectClass}
       title="Reasoning effort"
       aria-label="Reasoning effort"
     >
@@ -90,7 +101,7 @@ export function EffortPicker({
           {EFFORT_LABEL[e]}
         </option>
       ))}
-    </select>
+    </PickerSelect>
   );
 }
 

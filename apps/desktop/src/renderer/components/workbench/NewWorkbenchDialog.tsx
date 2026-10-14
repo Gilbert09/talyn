@@ -6,6 +6,7 @@ import {
   storedFleetModelForAgent,
   type Workbench,
   type WorkbenchAgent,
+  type WorkbenchReadiness,
   type WorkbenchRuntimeKind,
 } from '@talyn/shared';
 import { cn } from '../../lib/utils';
@@ -81,6 +82,26 @@ function NewWorkbenchForm({
     () => (runtime === 'sandbox' ? sandboxAgents : (['claude', 'codex'] as const).filter((a) => Boolean(localAgents?.[a]))),
     [runtime, sandboxAgents, localAgents]
   );
+
+  const [readiness, setReadiness] = useState<WorkbenchReadiness | null>(null);
+  useEffect(() => {
+    if (!workspaceId) return undefined;
+    let cancelled = false;
+    api.workbenches
+      .readiness(workspaceId)
+      .then((r) => {
+        if (!cancelled) setReadiness(r);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+  const sandboxBlocked = readiness !== null && !readiness.sandbox.ok;
+  const agentReason = (a: WorkbenchAgent): string | null =>
+    runtime === 'sandbox' && readiness && !readiness.sandbox.agents[a]?.ok
+      ? (readiness.sandbox.agents[a]?.reason?.message ?? 'Not connected.')
+      : null;
 
   useEffect(() => {
     if (runtime === 'local' && bridge && !localAgents) {
@@ -226,6 +247,13 @@ function NewWorkbenchForm({
               />
             </div>
           </div>
+          {sandboxBlocked && (
+            <ul className="space-y-0.5 text-xs text-amber-700 dark:text-amber-400">
+              {readiness.sandbox.reasons.map((r) => (
+                <li key={r.code}>{r.message}</li>
+              ))}
+            </ul>
+          )}
           {runtime === 'local' && (
             <div className="flex items-center gap-2 text-xs">
               <Button variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => void pickFolder()}>
@@ -240,8 +268,9 @@ function NewWorkbenchForm({
             <Select label="Agent" value={agent ?? ''} onChange={(e) => setAgent(e.target.value as WorkbenchAgent)} disabled={noAgent}>
               {noAgent && <option value="">None available</option>}
               {agents.map((a) => (
-                <option key={a} value={a}>
+                <option key={a} value={a} disabled={Boolean(agentReason(a))}>
                   {AGENT_LABEL[a]}
+                  {agentReason(a) ? ` (${agentReason(a)})` : ''}
                 </option>
               ))}
             </Select>
@@ -281,7 +310,7 @@ function NewWorkbenchForm({
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button size="sm" onClick={() => void submit()} disabled={busy || !repo || !agent || (fromPr && !pr)}>
+          <Button size="sm" onClick={() => void submit()} disabled={busy || !repo || !agent || (fromPr && !pr) || (runtime === 'sandbox' && (sandboxBlocked || Boolean(agentReason(agent))))}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create workbench'}
           </Button>
         </DialogFooter>
@@ -293,7 +322,8 @@ function NewWorkbenchForm({
 /** A new local workbench's first chat, and its first message when one was given. */
 async function startLocalChat(wb: Workbench, model: string, prompt: string): Promise<void> {
   try {
-    const chat = await api.workbenches.createChat(wb.id, { model });
+    // The create route already inserted the first chat; a second would be a duplicate "Chat" tab.
+    const chat = wb.chats?.[0] ?? (await api.workbenches.createChat(wb.id, { model }));
     const store = useWorkbenchStore.getState();
     store.upsertChat(chat);
     store.setChatEventsState(chat.id, { loaded: true });

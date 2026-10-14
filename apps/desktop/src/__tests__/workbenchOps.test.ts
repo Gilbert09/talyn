@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import type { Workbench, WorkbenchLocalBridge } from '@talyn/shared';
-import { localOps } from '../renderer/lib/workbenchOps';
+import { localOps, sandboxOps } from '../renderer/lib/workbenchOps';
 import { getDeviceId, resetDeviceIdCache } from '../renderer/lib/workbenchBridge';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
@@ -136,5 +136,19 @@ describe('localOps', () => {
     const argv = exec.mock.calls[0][1][0].argv;
     expect(argv.slice(0, 2)).toEqual(['sh', '-c']);
     expect(argv.slice(-2)).toEqual(['aGVsbG8=', attachment.path]);
+  });
+});
+
+describe('sandboxOps', () => {
+  it.each([
+    ['ready', { status: 'ready' }, null],
+    ['provisioning', { status: 'provisioning' }, 'The sandbox is starting.'],
+    ['error with message', { status: 'error', error: 'clone failed' }, 'clone failed'],
+    ['error with status message', { status: 'error', statusMessage: 'no fleet' }, 'no fleet'],
+    ['archived', { status: 'archived' }, 'This workbench is archived.'],
+  ] as const)('unavailable: %s', (_n, over, expected) => {
+    const ops = sandboxOps(wb({ runtime: 'sandbox', ...over } as Partial<Workbench>));
+    expect(ops.unavailable).toBe(expected);
+    expect(ops.canRemoveQueued).toBe(true);
   });
 });

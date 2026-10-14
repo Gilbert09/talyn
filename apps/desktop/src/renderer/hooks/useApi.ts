@@ -441,7 +441,17 @@ export function useApiConnection() {
     // merged once per frame, exactly like task:event.
     unsubscribers.push(
       wsClient.on<WorkbenchWsPayloads['workbench:updated']>('workbench:updated', (payload) => {
-        useWorkbenchStore.getState().upsertWorkbench(payload.workbench);
+        const store = useWorkbenchStore.getState();
+        store.upsertWorkbench(payload.workbench);
+        // The row embeds its open chats; replacing the list is what makes a closed chat disappear.
+        const embedded = payload.workbench.chats;
+        if (embedded) {
+          // Upsert (keeps the running-to-idle notification), then drop the chats the row no longer lists.
+          for (const c of embedded) store.upsertChat(c);
+          const open = new Set(embedded.map((c) => c.id));
+          const current = useWorkbenchStore.getState().chats[payload.workbench.id] ?? [];
+          if (current.some((c) => !open.has(c.id))) store.setChats(payload.workbench.id, current.filter((c) => open.has(c.id)));
+        }
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:deleted']>('workbench:deleted', (payload) => {
         useWorkbenchStore.getState().removeWorkbench(payload.id);

@@ -28,6 +28,7 @@ import {
 import { api } from './api';
 import { getDeviceId, getWorkbenchBridge } from './workbenchBridge';
 import { getLocalController, type LocalTurnController } from './localWorkbench';
+import { toast } from '../stores/toast';
 import { useWorkbenchStore } from '../stores/workbenches';
 
 /**
@@ -71,17 +72,30 @@ export interface WorkbenchOps {
 // Sandbox
 // ============================================================================
 
+/** Why a sandbox workbench cannot be acted on right now, or null. */
+export function sandboxUnavailableReason(workbench: Workbench): string | null {
+  if (workbench.status === 'archived' || workbench.archivedAt) return 'This workbench is archived.';
+  if (workbench.status === 'error' || workbench.sandboxState === 'error') {
+    return workbench.error || workbench.statusMessage || 'The sandbox failed to start.';
+  }
+  if (workbench.status === 'provisioning') return 'The sandbox is starting.';
+  return null;
+}
+
 export function sandboxOps(workbench: Workbench): WorkbenchOps {
   const id = workbench.id;
   return {
     runtime: 'sandbox',
-    unavailable: null,
-    canRemoveQueued: false,
+    unavailable: sandboxUnavailableReason(workbench),
+    canRemoveQueued: true,
     canAttach: false,
     send: (chat, input) => api.workbenches.sendMessage(chat.id, input),
     cancel: (chatId) => api.workbenches.cancel(chatId),
-    removeQueued: () => {
-      throw new Error('A sandbox queue cannot be edited yet.');
+    removeQueued: (chatId, messageId) => {
+      api.workbenches
+        .removeQueuedMessage(chatId, messageId)
+        .then((chat) => useWorkbenchStore.getState().upsertChat(chat))
+        .catch((err) => toast.error('Could not remove the queued message', err instanceof Error ? err.message : undefined));
     },
     changes: () => api.workbenches.changes(id),
     diff: async (path) => (await api.workbenches.diff(id, path)).patch,
