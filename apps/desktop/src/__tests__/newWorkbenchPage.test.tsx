@@ -175,8 +175,9 @@ describe('NewWorkbenchPage', () => {
 
   it('disables Local outside the desktop bridge, with its reason', async () => {
     await renderPage();
+    // The reason renders once the readiness answer arrives.
+    expect((await screen.findByText(/Local unavailable:/)).parentElement).toHaveTextContent('only available in the desktop app');
     expect(radio('Local')).toBeDisabled();
-    expect(screen.getByText(/Local unavailable:/).parentElement).toHaveTextContent('only available in the desktop app');
   });
 
   it('moves to an agent that is ready', async () => {
