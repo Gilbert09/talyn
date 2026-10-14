@@ -31,7 +31,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
               // the value ran underneath it on any select narrow enough to shrink to
               // its content — an hour picker reading "09" with an arrow through it.
               // Wide selects never showed it, which is why it survived this long.
-              'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background pl-3 pr-9 py-0 text-sm leading-tight text-foreground ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 appearance-none bg-none',
+              'flex h-8 w-full items-center justify-between rounded-md border border-input bg-background pl-2.5 pr-9 py-0 text-[13px] leading-tight text-foreground ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 appearance-none bg-none',
               error && 'border-red-500',
               className
             )}

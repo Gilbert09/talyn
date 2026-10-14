@@ -46,7 +46,7 @@ export function DialogContent({
         // `relative` anchors the absolute close button below INSIDE the card —
         // without it the X positions against the full-width dialog wrapper and
         // floats at the viewport edge.
-        'pointer-events-auto relative bg-background border rounded-lg shadow-lg p-6 w-full max-w-lg max-h-[90vh] overflow-auto',
+        'pointer-events-auto relative bg-background border rounded-lg shadow-lg p-4 w-full max-w-md max-h-[90vh] overflow-auto',
         className
       )}
       {...props}
@@ -54,7 +54,7 @@ export function DialogContent({
       {onClose && (
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          className="absolute top-3 right-3 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
         >
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
@@ -83,7 +83,7 @@ export function DialogTitle({
 }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
     <h2
-      className={cn('text-lg font-semibold leading-none tracking-tight', className)}
+      className={cn('text-sm font-semibold leading-none tracking-tight', className)}
       {...props}
     />
   );
@@ -107,7 +107,7 @@ export function DialogFooter({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-6', className)}
+      className={cn('flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-4', className)}
       {...props}
     />
   );
