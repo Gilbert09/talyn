@@ -1,7 +1,17 @@
-import { useMemo } from 'react';
-import { Cloud, Laptop } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Archive, Cloud, Copy, ExternalLink, Laptop } from 'lucide-react';
 import type { Workbench } from '@talyn/shared';
 import { cn } from '../../lib/utils';
+import { openExternal } from '../../lib/openExternal';
+import { toast } from '../../stores/toast';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '../ui/context-menu';
+import { ArchiveWorkbenchDialog, archiveWorkbench } from '../workbench/archiveWorkbench';
 import { formatKeys } from '../../lib/shortcuts';
 import { usePullRequestStore } from '../../stores/pullRequests';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -72,27 +82,75 @@ function WorkbenchRow({
   const runtimeLabel = workbench.runtime === 'local' ? 'Local worktree' : suspended ? 'Sandbox (asleep)' : 'Sandbox';
   const diff = workbench.diffStat && workbench.diffStat.files > 0 ? workbench.diffStat : null;
 
+  const prUrl = pr?.summary.url;
+  const [confirming, setConfirming] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  const copyBranch = () => {
+    navigator.clipboard.writeText(workbench.branch).catch(() => toast.error('Could not copy to clipboard'));
+  };
+
+  const archive = async () => {
+    setArchiving(true);
+    const ok = await archiveWorkbench(workbench.id, selected);
+    setArchiving(false);
+    if (ok) setConfirming(false);
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      data-attr="sidebar-workbench-row"
-      aria-current={selected ? 'page' : undefined}
-      className={cn(
-        'app-region-no-drag flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
-        selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
-        suspended && !selected && 'opacity-60'
-      )}
-      title={`${workbench.name} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
-    >
-      {tone === 'idle' && pr ? <PrStateDot state={prDotState(pr.state, pr.summary.draft)} /> : <StatusDot tone={tone} />}
-      <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbench.name}</span>
-      {diff && (
-        <span className="shrink-0 font-mono text-[11px] tabular-nums">
-          <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
-        </span>
-      )}
-      <RuntimeIcon className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={runtimeLabel} />
-    </button>
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={onSelect}
+            data-attr="sidebar-workbench-row"
+            aria-current={selected ? 'page' : undefined}
+            className={cn(
+              'app-region-no-drag flex w-full items-center gap-2 rounded-md px-3 py-1 text-left text-[13px] transition-colors',
+              selected ? 'bg-secondary text-foreground' : 'text-foreground/90 hover:bg-accent/60',
+              suspended && !selected && 'opacity-60'
+            )}
+            title={`${workbench.name} · ${workbench.branch}${shortcut ? ` (${formatKeys(`mod+${shortcut}`)})` : ''}`}
+          >
+            {tone === 'idle' && pr ? <PrStateDot state={prDotState(pr.state, pr.summary.draft)} /> : <StatusDot tone={tone} />}
+            <span className={cn('min-w-0 flex-1 truncate', isUnread ? 'font-semibold' : 'font-normal')}>{workbench.name}</span>
+            {diff && (
+              <span className="shrink-0 font-mono text-[11px] tabular-nums">
+                <span className="text-success">+{diff.added}</span> <span className="text-destructive">−{diff.removed}</span>
+              </span>
+            )}
+            <RuntimeIcon className="h-3 w-3 shrink-0 text-muted-foreground" aria-label={runtimeLabel} />
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-[10rem]">
+          <ContextMenuItem onSelect={onSelect}>Open</ContextMenuItem>
+          {workbench.branch && (
+            <ContextMenuItem onSelect={copyBranch}>
+              <Copy className="h-3.5 w-3.5" />
+              Copy branch name
+            </ContextMenuItem>
+          )}
+          {prUrl && (
+            <ContextMenuItem onSelect={() => void openExternal(prUrl)}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open pull request
+            </ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => setConfirming(true)}>
+            <Archive className="h-3.5 w-3.5" />
+            Archive…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <ArchiveWorkbenchDialog
+        workbench={workbench}
+        open={confirming}
+        busy={archiving}
+        onConfirm={() => void archive()}
+        onCancel={() => setConfirming(false)}
+      />
+    </>
   );
 }

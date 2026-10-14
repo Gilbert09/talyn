@@ -44,6 +44,7 @@ import {
 } from '../../lib/workbenchActions';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { PrPill } from './WorkbenchBadges';
+import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -171,16 +172,8 @@ export function WorkbenchHeader({
 
   const archive = async () => {
     setBusy('archive');
-    try {
-      const wb = await api.workbenches.archive(workbench.id);
-      useWorkbenchStore.getState().upsertWorkbench(wb);
-      useWorkbenchStore.getState().selectWorkbench(null);
-      setConfirm(null);
-    } catch (err) {
-      toast.error('Could not archive the session', err instanceof Error ? err.message : undefined);
-    } finally {
-      setBusy(null);
-    }
+    if (await archiveWorkbench(workbench.id, true)) setConfirm(null);
+    setBusy(null);
   };
 
   const PrimaryIcon = primary ? ACTION_ICON[primary] : null;
@@ -320,11 +313,9 @@ export function WorkbenchHeader({
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
       />
-      <ConfirmDialog
+      <ArchiveWorkbenchDialog
+        workbench={workbench}
         open={confirm === 'archive'}
-        title={`Archive ${workbench.name}?`}
-        description="The session moves to History. The branch, its chats and any PR stay, and you can restore it later."
-        confirmLabel="Archive"
         busy={busy === 'archive'}
         onConfirm={() => void archive()}
         onCancel={() => setConfirm(null)}
