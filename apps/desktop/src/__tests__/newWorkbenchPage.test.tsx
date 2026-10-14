@@ -222,15 +222,6 @@ describe('NewWorkbenchPage', () => {
     expect(useNavigationStore.getState().route).toEqual({ view: 'home' });
   });
 
-  it('"Create without a task" creates with no prompt', async () => {
-    mockCreate.mockResolvedValue(wb('lisbon'));
-    await renderPage();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Create without a task' }));
-    });
-    expect(mockCreate.mock.calls[0][0].prompt).toBeUndefined();
-  });
-
   it('Shift+Tab toggles plan mode', async () => {
     await renderPage();
     const plan = screen.getByRole('button', { name: /Plan/ });

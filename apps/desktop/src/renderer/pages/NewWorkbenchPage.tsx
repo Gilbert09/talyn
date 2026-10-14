@@ -14,7 +14,6 @@ import { useWorkspaceStore } from '../stores/workspace';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
 import { TooltipProvider } from '../components/ui/tooltip';
-import { Kbd } from '../components/ui/kbd';
 import { EffortPicker, ModelPicker, PlanToggle } from '../components/workbench/ComposerControls';
 import { useWorkspaceWorkbenches } from '../components/workbench/workbenchSelectors';
 import {
@@ -357,15 +356,6 @@ export function NewWorkbenchPage() {
               <AgentPicker value={agent} onChange={setAgent} choiceFor={choiceFor} />
               <ModelPicker agent={agent} value={model} onChange={setModel} />
               <EffortPicker value={effort} onChange={setEffort} />
-              <button
-                type="button"
-                onClick={() => void submit('')}
-                disabled={!canCreate}
-                className="ml-auto text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
-                data-attr="new-workbench-empty"
-              >
-                Create without a task
-              </button>
             </div>
 
             {(error || unavailable.length > 0 || agentOk.warning) && (
@@ -397,17 +387,6 @@ export function NewWorkbenchPage() {
               </div>
             )}
 
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1">
-                <Kbd keys={formatKeys('enter')} /> create and start
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Kbd keys={formatKeys('shift+tab')} /> plan mode
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Kbd keys={formatKeys('mod+i')} /> create from a branch or PR
-              </span>
-            </p>
           </div>
 
           <RecentWorkbenches workbenches={workbenches} />
