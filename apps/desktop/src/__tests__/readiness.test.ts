@@ -1,4 +1,4 @@
-jest.mock('../renderer/lib/api', () => ({ api: { workbenches: {} } }));
+jest.mock('../renderer/lib/api', () => ({ ApiNetworkError: class extends Error {}, api: { workbenches: {} } }));
 
 import type { WorkbenchLocalReadiness } from '@talyn/shared';
 import { agentChoice, runtimeChoice } from '../renderer/lib/readiness';

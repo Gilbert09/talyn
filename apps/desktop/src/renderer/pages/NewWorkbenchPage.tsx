@@ -9,7 +9,7 @@ import {
 import { cn } from '../lib/utils';
 import { readSessionDefaults } from '../lib/sessionDefaults';
 import { FOCUS_COMPOSER_EVENT, formatKeys } from '../lib/shortcuts';
-import { agentChoice, runtimeChoice, useReadiness, type WorkbenchRuntime } from '../lib/readiness';
+import { agentChoice, isUnreachable, runtimeChoice, useReadiness, type WorkbenchRuntime } from '../lib/readiness';
 import { useWorkspaceStore } from '../stores/workspace';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkbenchStore, type NewWorkbenchPrefill } from '../stores/workbenches';
@@ -372,13 +372,24 @@ export function NewWorkbenchPage() {
                     {r === 'sandbox' && (
                       <>
                         {' '}
-                        <button
-                          type="button"
-                          className="underline underline-offset-2 hover:text-foreground"
-                          onClick={() => openSettings('agents')}
-                        >
-                          Agents
-                        </button>
+                        {isUnreachable(readiness.sandbox) ? (
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+                            disabled={readiness.loading}
+                            onClick={() => void readiness.refresh()}
+                          >
+                            {readiness.loading ? 'Retrying…' : 'Retry'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-foreground"
+                            onClick={() => openSettings('agents')}
+                          >
+                            Agents
+                          </button>
+                        )}
                       </>
                     )}
                   </p>

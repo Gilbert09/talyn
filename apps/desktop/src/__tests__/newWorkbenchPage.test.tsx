@@ -19,6 +19,9 @@ jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false
 const mockReadiness = jest.fn();
 const mockCreate = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
+  ApiNetworkError: class ApiNetworkError extends Error {
+    online = true;
+  },
   api: {
     workbenches: {
       readiness: (...args: unknown[]) => mockReadiness(...args),
@@ -170,6 +173,18 @@ describe('NewWorkbenchPage', () => {
       'Talyn Fleet is not deployed: set TALYN_FLEET_URL.'
     );
     expect(screen.getByRole('button', { name: 'Create and start' })).toBeDisabled();
+  });
+
+  it('says plainly when the server is down, and Retry asks again', async () => {
+    mockReadiness.mockRejectedValueOnce(new Error('Could not reach backend: GET /workbenches/readiness'));
+    mockReadiness.mockResolvedValue(READY);
+    await renderPage();
+    const reason = await screen.findByText(/Sandbox unavailable:/);
+    expect(reason.parentElement).toHaveTextContent('Talyn’s server is not responding');
+    expect(reason.parentElement).not.toHaveTextContent('GET /workbenches');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(radio('Sandbox')).toBeEnabled());
+    expect(screen.queryByText(/Sandbox unavailable:/)).toBeNull();
   });
 
   it('disables Local outside the desktop bridge, with its reason', async () => {

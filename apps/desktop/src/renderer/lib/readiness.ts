@@ -4,7 +4,7 @@ import type {
   WorkbenchLocalReadiness,
   WorkbenchReadiness,
 } from '@talyn/shared';
-import { api } from './api';
+import { api, ApiNetworkError } from './api';
 import { getWorkbenchBridge } from './workbenchBridge';
 
 export type SandboxReadiness = WorkbenchReadiness['sandbox'];
@@ -79,13 +79,20 @@ export function runtimeChoice(
   return { sandbox: pick('sandbox'), local: pick('local') };
 }
 
+const UNREACHABLE_RETRY_MS = 10_000;
+
+export function isUnreachable(sandbox: SandboxReadiness | null): boolean {
+  return sandbox?.reasons[0]?.code === 'unreachable';
+}
+
 function unreachable(error: unknown): SandboxReadiness {
+  const offline = error instanceof ApiNetworkError && !error.online;
   return {
     ok: false,
     reasons: [
       {
         code: 'unreachable',
-        message: error instanceof Error ? error.message : 'Could not reach Talyn',
+        message: offline ? 'You are offline' : 'Talyn’s server is not responding',
       },
     ],
     agents: {
@@ -132,6 +139,13 @@ export function useReadiness(workspaceId: string | null | undefined): ReadinessS
       window.removeEventListener('focus', onFocus);
     };
   }, [refresh]);
+
+  const down = isUnreachable(state.sandbox);
+  useEffect(() => {
+    if (!down) return undefined;
+    const timer = window.setTimeout(() => void refresh(), UNREACHABLE_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [down, state.sandbox, refresh]);
 
   return { ...state, loading, refresh };
 }
