@@ -12,7 +12,7 @@ import { requestWorkbenchAction, type WorkbenchAction } from '../../lib/workbenc
 import { useNavigationStore } from '../../stores/navigation';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { useWorkspaceStore } from '../../stores/workspace';
-import { createChatTab } from '../workbench/ChatTabs';
+import { closeChatTab, createChatTab } from '../workbench/ChatTabs';
 import { openNewWorkbench } from '../workbench/new/openNewWorkbench';
 import { groupByRepository, isArchived } from '../workbench/workbenchSelectors';
 
@@ -203,7 +203,7 @@ export function buildAppShortcuts(): Shortcut[] {
       run: () => {
         const wb = currentWorkbench();
         const chat = wb ? currentChat(wb) : null;
-        if (wb && chat) wbStore().hideChat(wb.id, chat.id);
+        if (wb && chat) void closeChatTab(wb, chat);
       },
     }),
     fromMenu({

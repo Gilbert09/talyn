@@ -4,6 +4,7 @@ import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import { cn } from '../../lib/utils';
 import { formatKeys } from '../../lib/shortcuts';
 import { api } from '../../lib/api';
+import { opsFor } from '../../lib/workbenchOps';
 import { toast } from '../../stores/toast';
 import { useWorkbenchStore, visibleChats } from '../../stores/workbenches';
 import { StatusDot } from './WorkbenchBadges';
@@ -23,6 +24,23 @@ export async function createChatTab(workbench: Workbench): Promise<WorkbenchChat
   }
 }
 
+/** Close a chat tab for good: the backend marks it closed, so a reload does not bring it back. */
+export async function closeChatTab(workbench: Workbench, chat: WorkbenchChat): Promise<void> {
+  useWorkbenchStore.getState().hideChat(workbench.id, chat.id);
+  try {
+    // The backend stops a running sandbox turn itself; a local turn runs here.
+    if (workbench.runtime === 'local' && chat.status === 'running') await opsFor(workbench).cancel(chat.id);
+    await api.workbenches.closeChat(chat.id);
+  } catch (err) {
+    useWorkbenchStore.setState((s) => {
+      const hiddenChatIds = { ...s.hiddenChatIds };
+      delete hiddenChatIds[chat.id];
+      return { hiddenChatIds };
+    });
+    toast.error('Could not close the chat', err instanceof Error ? err.message : undefined);
+  }
+}
+
 export function ChatTabs({ workbench, selected }: { workbench: Workbench; selected: WorkbenchChat | null }) {
   const allChats = useWorkbenchStore((s) => s.chats);
   const hiddenChatIds = useWorkbenchStore((s) => s.hiddenChatIds);
@@ -32,7 +50,6 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
   );
   const unread = useWorkbenchStore((s) => s.unread);
   const selectChat = useWorkbenchStore((s) => s.selectChat);
-  const hideChat = useWorkbenchStore((s) => s.hideChat);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [title, setTitle] = useState('');
@@ -99,7 +116,7 @@ export function ChatTabs({ workbench, selected }: { workbench: Workbench; select
             )}
             <button
               type="button"
-              onClick={() => hideChat(workbench.id, chat.id)}
+              onClick={() => void closeChatTab(workbench, chat)}
               className="rounded p-0.5 opacity-0 hover:bg-accent group-hover:opacity-100"
               title="Close this tab (⌘W)"
               aria-label={`Close ${chat.title || 'chat'}`}
