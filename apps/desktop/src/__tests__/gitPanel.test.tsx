@@ -8,7 +8,6 @@ import type { Workbench, WorkbenchChanges, WorkbenchChat } from '@talyn/shared';
 import type { PRRow } from '../renderer/lib/api';
 import type { WorkbenchOps } from '../renderer/lib/workbenchOps';
 import { GIT_PANEL_MAX_WIDTH, GIT_PANEL_MIN_WIDTH, readLayout } from '../renderer/lib/workbenchLayout';
-import { VIEWED_STORAGE_PREFIX, loadViewed } from '../renderer/lib/viewedFiles';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { GitPanel } from '../renderer/components/workbench/GitPanel';
 import { WorkbenchChecks } from '../renderer/components/workbench/WorkbenchChecks';
@@ -218,61 +217,7 @@ describe('Checks tab', () => {
   });
 });
 
-describe('Changes tab: Viewed', () => {
-  function renderChanges(ops: WorkbenchOps, turnsEnded = 0) {
-    return render(
-      <ChangesTab
-        workbench={WB}
-        chat={chat}
-        ops={ops}
-        visible
-        turnsEnded={turnsEnded}
-        comments={[]}
-        setComments={() => {}}
-      />
-    );
-  }
-
-  it('a Viewed mark is stored per workbench and path, and survives a remount', async () => {
-    const ops = makeOps();
-    const { unmount } = renderChanges(ops);
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Viewed a.ts' }));
-    await waitFor(() => expect(loadViewed('wb1')['a.ts']).toBeDefined());
-    expect(window.localStorage.getItem(`${VIEWED_STORAGE_PREFIX}wb1`)).toContain('a.ts');
-    unmount();
-    renderChanges(ops);
-    expect(await screen.findByRole('checkbox', { name: 'Viewed a.ts' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Viewed b.ts' })).not.toBeChecked();
-    expect(screen.getByTestId('viewed-count')).toHaveTextContent('1/2 viewed');
-  });
-
-  it('a file whose line counts change becomes unviewed on the next refresh', async () => {
-    let list = changes([['a.ts', 1], ['b.ts', 2]]);
-    const ops = makeOps({ changes: jest.fn(async () => list) as unknown as WorkbenchOps['changes'] });
-    const { rerender } = renderChanges(ops);
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Viewed a.ts' }));
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Viewed a.ts' })).toBeChecked());
-    list = changes([['a.ts', 5], ['b.ts', 2]]);
-    rerender(
-      <ChangesTab workbench={WB} chat={chat} ops={ops} visible turnsEnded={1} comments={[]} setComments={() => {}} />
-    );
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Viewed a.ts' })).not.toBeChecked());
-    expect(loadViewed('wb1')).toEqual({});
-  });
-
-  it('a file whose patch changes with the same counts becomes unviewed after a turn', async () => {
-    let patch = 'first version';
-    const ops = makeOps({ diff: jest.fn(async () => patch) as unknown as WorkbenchOps['diff'] });
-    const { rerender } = renderChanges(ops);
-    fireEvent.click(await screen.findByRole('checkbox', { name: 'Viewed a.ts' }));
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Viewed a.ts' })).toBeChecked());
-    patch = 'second version';
-    rerender(
-      <ChangesTab workbench={WB} chat={chat} ops={ops} visible turnsEnded={1} comments={[]} setComments={() => {}} />
-    );
-    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Viewed a.ts' })).not.toBeChecked());
-  });
-
+describe('Changes tab', () => {
   it('"N comments ready to send" sends them to the agent as one message', async () => {
     const setComments = jest.fn();
     const send = jest.fn(async () => ({ queued: false }));
@@ -290,7 +235,7 @@ describe('Changes tab: Viewed', () => {
         setComments={setComments}
       />
     );
-    await screen.findByRole('checkbox', { name: 'Viewed a.ts' });
+    await screen.findByText('a.ts');
     expect(screen.getByTestId('comment-bar')).toHaveTextContent('2 comments ready to send');
     fireEvent.click(screen.getByRole('button', { name: /Send to agent/ }));
     await waitFor(() => expect(setComments).toHaveBeenCalledWith([]));
@@ -319,7 +264,7 @@ describe('Changes tab: Viewed', () => {
         setComments={setComments}
       />
     );
-    await screen.findByRole('checkbox', { name: 'Viewed a.ts' });
+    await screen.findByText('a.ts');
     fireEvent.click(screen.getByRole('button', { name: /Send to agent/ }));
     await waitFor(() => expect(send).toHaveBeenCalled());
     expect(setComments).not.toHaveBeenCalled();

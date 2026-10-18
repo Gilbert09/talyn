@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import type { Workbench, WorkbenchChangedFile, WorkbenchChat } from '@talyn/shared';
+import type { Workbench, WorkbenchChat } from '@talyn/shared';
 import type { PRCheckContext, PRRow } from '../renderer/lib/api';
 import {
   DEFAULT_LAYOUT,
@@ -15,18 +15,6 @@ import {
   readLayout,
   writeLayout,
 } from '../renderer/lib/workbenchLayout';
-import {
-  VIEWED_STORAGE_PREFIX,
-  fileSignature,
-  hashText,
-  isViewed,
-  loadViewed,
-  markViewed,
-  reconcileViewed,
-  reconcileViewedPatch,
-  saveViewed,
-  unmarkViewed,
-} from '../renderer/lib/viewedFiles';
 import { checkChatLine, checkRequirement, orderChecks, tallyChecks } from '../renderer/lib/workbenchChecks';
 import {
   WORKBENCH_ACTION_SHORTCUT,
@@ -169,79 +157,6 @@ describe('the store keeps the layout', () => {
     window.removeEventListener(FOCUS_COMPOSER_EVENT, focus);
     expect(useWorkbenchStore.getState().drafts.c1).toBe('Look at this\n\nThe CI check `lint` is failing');
     expect(focus).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('viewed files', () => {
-  const file = (path: string, over: Partial<WorkbenchChangedFile> = {}): WorkbenchChangedFile => ({
-    path,
-    status: 'modified',
-    added: 3,
-    removed: 1,
-    binary: false,
-    ...over,
-  });
-
-  it('hashText is stable and tells texts apart', () => {
-    expect(hashText('abc')).toBe(hashText('abc'));
-    expect(hashText('abc')).not.toBe(hashText('abd'));
-    expect(hashText('')).toMatch(/^[0-9a-f]{8}$/);
-  });
-
-  it.each<[string, Partial<WorkbenchChangedFile>]>([
-    ['the added count', { added: 4 }],
-    ['the removed count', { removed: 0 }],
-    ['the status', { status: 'deleted' }],
-    ['a rename', { status: 'renamed', oldPath: 'old.ts' }],
-    ['a binary flag', { binary: true }],
-  ])('a change to %s changes the signature', (_name, over) => {
-    expect(fileSignature(file('a.ts', over))).not.toBe(fileSignature(file('a.ts')));
-  });
-
-  it('mark, check and unmark', () => {
-    const f = file('a.ts');
-    const map = markViewed({}, f, 'patch-a');
-    expect(isViewed(map, f)).toBe(true);
-    expect(isViewed(map, file('b.ts'))).toBe(false);
-    expect(isViewed(map, file('a.ts', { added: 9 }))).toBe(false);
-    expect(unmarkViewed(map, 'a.ts')).toEqual({});
-    expect(unmarkViewed(map, 'zzz')).toBe(map);
-  });
-
-  it('reconcileViewed drops a gone path and a moved signature, keeps the rest, and returns the same map when nothing moved', () => {
-    let map = markViewed({}, file('keep.ts'), 'k');
-    map = markViewed(map, file('gone.ts'), 'g');
-    map = markViewed(map, file('edited.ts'), 'e');
-    const files = [file('keep.ts'), file('edited.ts', { added: 10 })];
-    const next = reconcileViewed(map, files);
-    expect(Object.keys(next)).toEqual(['keep.ts']);
-    expect(reconcileViewed(next, files)).toBe(next);
-  });
-
-  it('reconcileViewedPatch unviews a file whose patch changed with the same counts', () => {
-    const map = markViewed({}, file('a.ts'), 'line one\n');
-    expect(reconcileViewedPatch(map, 'a.ts', 'line one\n')).toBe(map);
-    expect(reconcileViewedPatch(map, 'a.ts', 'line 1\n')).toEqual({});
-    expect(reconcileViewedPatch(map, 'other.ts', 'x')).toBe(map);
-  });
-
-  it('persists per workbench, and an empty map clears the key', () => {
-    const map = markViewed({}, file('a.ts'), 'p');
-    saveViewed('wb1', map);
-    expect(loadViewed('wb1')).toEqual(map);
-    expect(loadViewed('wb2')).toEqual({});
-    saveViewed('wb1', {});
-    expect(window.localStorage.getItem(`${VIEWED_STORAGE_PREFIX}wb1`)).toBeNull();
-  });
-
-  it.each([
-    ['not JSON', '{'],
-    ['a list', '[1,2]'],
-    ['a mark with the wrong shape', JSON.stringify({ 'a.ts': { sig: 1 }, 'b.ts': { sig: 's', hash: 'h' } })],
-  ])('loadViewed tolerates %s', (_name, raw) => {
-    window.localStorage.setItem(`${VIEWED_STORAGE_PREFIX}wb1`, raw);
-    const loaded = loadViewed('wb1');
-    expect(loaded['a.ts']).toBeUndefined();
   });
 });
 

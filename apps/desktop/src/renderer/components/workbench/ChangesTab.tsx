@@ -18,16 +18,6 @@ import { cn } from '../../lib/utils';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { newClientId } from '../../lib/workbenchBridge';
-import {
-  isViewed,
-  loadViewed,
-  markViewed,
-  reconcileViewed,
-  reconcileViewedPatch,
-  saveViewed,
-  unmarkViewed,
-  type ViewedMap,
-} from '../../lib/viewedFiles';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
 import { createChatTab } from './ChatTabs';
@@ -44,9 +34,8 @@ interface Selection {
 const STATUS_ICON = { added: FilePlus, deleted: FileMinus, renamed: FileDiff, modified: FileText } as const;
 
 /**
- * The branch's changes against its base: the file list with a Viewed mark
- * per file, a unified diff of the chosen file, and line comments that collect
- * in a bar and go into the composer as one message.
+ * The branch's changes against its base: the file list, a unified diff of the chosen file, and line comments that collect
+ * in a bar and go to the agent as one message.
  */
 export function ChangesTab({
   workbench,
@@ -70,41 +59,7 @@ export function ChangesTab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [viewed, setViewedState] = useState<ViewedMap>(() => loadViewed(workbench.id));
-  /** Viewed files whose diff is shown anyway, because the person opened it again. */
-  const [expanded, setExpanded] = useState<Record<string, true>>({});
   const loadingRef = useRef(false);
-  const viewedRef = useRef(viewed);
-  /** The turn count the viewed marks were last checked against by patch hash. */
-  const verifiedAt = useRef<number | null>(null);
-
-  const setViewed = useCallback(
-    (update: (cur: ViewedMap) => ViewedMap) => {
-      const next = update(viewedRef.current);
-      if (next === viewedRef.current) return;
-      viewedRef.current = next;
-      setViewedState(next);
-      saveViewed(workbench.id, next);
-    },
-    [workbench.id]
-  );
-
-  // An edit that keeps the line counts only shows in the patch text, so after
-  // a turn each viewed file's patch is read again and compared.
-  const verifyViewed = useCallback(
-    async (files: WorkbenchChangedFile[]) => {
-      for (const f of files) {
-        if (!viewedRef.current[f.path]) continue;
-        try {
-          const patch = await ops.diff(f.path);
-          setViewed((cur) => reconcileViewedPatch(cur, f.path, patch));
-        } catch {
-          // A failed read proves nothing either way; the mark stays.
-        }
-      }
-    },
-    [ops, setViewed]
-  );
 
   const refresh = useCallback(async () => {
     if (ops.unavailable || loadingRef.current) return;
@@ -114,32 +69,21 @@ export function ChangesTab({
       const next = await ops.changes();
       setChanges(next);
       setError(null);
-      setViewed((cur) => reconcileViewed(cur, next.files));
-      if (verifiedAt.current !== turnsEnded) {
-        verifiedAt.current = turnsEnded;
-        void verifyViewed(next.files);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load the changes.');
     } finally {
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [ops, setViewed, verifyViewed, turnsEnded]);
+  }, [ops]);
 
   useEffect(() => {
     setChanges(null);
     setSelectedPath(null);
-    setExpanded({});
-    const loaded = loadViewed(workbench.id);
-    viewedRef.current = loaded;
-    setViewedState(loaded);
-    verifiedAt.current = null;
   }, [workbench.id]);
 
   useEffect(() => {
     if (visible && !ops.unavailable) void refresh();
-    // `refresh` changes with `turnsEnded`; listing both is the same trigger.
   }, [visible, turnsEnded, refresh, ops.unavailable]);
 
   useEffect(() => {
@@ -152,34 +96,6 @@ export function ChangesTab({
 
   const files = changes?.files ?? [];
   const selected = files.find((f) => f.path === selectedPath) ?? null;
-  const viewedCount = files.filter((f) => isViewed(viewed, f)).length;
-
-  const toggleViewed = async (file: WorkbenchChangedFile) => {
-    if (isViewed(viewedRef.current, file)) {
-      setViewed((cur) => unmarkViewed(cur, file.path));
-      return;
-    }
-    try {
-      const patch = await ops.diff(file.path);
-      setViewed((cur) => markViewed(cur, file, patch));
-      setExpanded((cur) => {
-        if (!cur[file.path]) return cur;
-        const next = { ...cur };
-        delete next[file.path];
-        return next;
-      });
-      // Move on to the next file still to read, as a review tool does.
-      if (selectedPath === file.path) {
-        const i = files.findIndex((f) => f.path === file.path);
-        const next = [...files.slice(i + 1), ...files.slice(0, i)].find(
-          (f) => f.path !== file.path && !isViewed(viewedRef.current, f)
-        );
-        if (next) setSelectedPath(next.path);
-      }
-    } catch (err) {
-      toast.error('Could not mark the file as viewed', err instanceof Error ? err.message : undefined);
-    }
-  };
 
   if (ops.unavailable) return <p className="p-3 text-xs text-muted-foreground">{ops.unavailable}</p>;
 
@@ -188,11 +104,6 @@ export function ChangesTab({
       <div className="flex items-center justify-between border-b px-3 py-1.5 text-xs text-muted-foreground">
         <span>
           {files.length} {files.length === 1 ? 'file' : 'files'} changed
-          {viewedCount > 0 && (
-            <span className="ml-2" data-testid="viewed-count">
-              {viewedCount}/{files.length} viewed
-            </span>
-          )}
           {changes && (
             <span className="ml-2 tabular-nums">
               <span className="text-success">+{files.reduce((n, f) => n + f.added, 0)}</span>{' '}
@@ -226,51 +137,20 @@ export function ChangesTab({
               key={f.path}
               file={f}
               active={f.path === selectedPath}
-              viewed={isViewed(viewed, f)}
               onClick={() => setSelectedPath(f.path)}
-              onToggleViewed={() => void toggleViewed(f)}
             />
           ))}
         </ul>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
-        {selected && isViewed(viewed, selected) && !expanded[selected.path] ? (
-          <button
-            type="button"
-            onClick={() => setExpanded((cur) => ({ ...cur, [selected.path]: true }))}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-            Viewed. Show the diff again.
-          </button>
-        ) : (
-          selected && (
-            <>
-              {isViewed(viewed, selected) && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpanded((cur) => {
-                      const next = { ...cur };
-                      delete next[selected.path];
-                      return next;
-                    })
-                  }
-                  className="flex w-full items-center gap-1.5 border-b px-3 py-1 text-left text-[11px] text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronDown className="h-3 w-3" /> Viewed. Collapse.
-                </button>
-              )}
-              <FileDiffView
-                key={`${selected.path}:${changes?.headSha ?? ''}`}
-                file={selected}
-                ops={ops}
-                refreshKey={turnsEnded}
-                onPatch={(patch) => setViewed((cur) => reconcileViewedPatch(cur, selected.path, patch))}
-                onComment={(c) => setComments([...comments, c])}
-              />
-            </>
-          )
+        {selected && (
+          <FileDiffView
+            key={`${selected.path}:${changes?.headSha ?? ''}`}
+            file={selected}
+            ops={ops}
+            refreshKey={turnsEnded}
+            onComment={(c) => setComments([...comments, c])}
+          />
         )}
       </div>
       <CommentBar workbench={workbench} chat={chat} ops={ops} comments={comments} setComments={setComments} />
@@ -281,19 +161,15 @@ export function ChangesTab({
 function FileRow({
   file,
   active,
-  viewed,
   onClick,
-  onToggleViewed,
 }: {
   file: WorkbenchChangedFile;
   active: boolean;
-  viewed: boolean;
   onClick: () => void;
-  onToggleViewed: () => void;
 }) {
   const Icon = STATUS_ICON[file.status];
   return (
-    <li className={cn('flex items-center', active ? 'bg-secondary' : 'hover:bg-accent/60', viewed && 'opacity-60')}>
+    <li className={cn('flex items-center', active ? 'bg-secondary' : 'hover:bg-accent/60')}>
       <button
         type="button"
         onClick={onClick}
@@ -321,19 +197,6 @@ function FileRow({
           </span>
         )}
       </button>
-      <label
-        className="flex shrink-0 cursor-pointer items-center gap-1 px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-        title={viewed ? 'Mark as not viewed' : 'Mark as viewed. A later change to this diff clears the mark.'}
-      >
-        <input
-          type="checkbox"
-          checked={viewed}
-          onChange={onToggleViewed}
-          className="h-3 w-3 accent-primary"
-          aria-label={`Viewed ${file.path}`}
-        />
-        Viewed
-      </label>
     </li>
   );
 }
@@ -342,18 +205,13 @@ function FileDiffView({
   file,
   ops,
   refreshKey,
-  onPatch,
   onComment,
 }: {
   file: WorkbenchChangedFile;
   ops: WorkbenchOps;
   refreshKey: number;
-  /** Every patch read, so a Viewed mark can be checked against it. */
-  onPatch?: (patch: string) => void;
   onComment: (comment: DiffComment) => void;
 }) {
-  const onPatchRef = useRef(onPatch);
-  onPatchRef.current = onPatch;
   const [patch, setPatch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -366,7 +224,6 @@ function FileDiffView({
       .then((p) => {
         if (cancelled) return;
         setPatch(p);
-        onPatchRef.current?.(p);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
