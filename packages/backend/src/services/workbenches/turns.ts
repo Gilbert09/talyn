@@ -2,12 +2,11 @@ import { v4 as uuid } from 'uuid';
 import {
   buildClaudeArgv,
   buildCodexArgv,
-  buildCreatePrTurnInstructions,
   checkpointCreateSteps,
   checkpointRestoreSteps,
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
-  createPrTurnPrompt,
+  workbenchTurnPrompt,
   shellQuote,
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
@@ -315,18 +314,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const resumeSessionId = chat.agentSessionId ?? undefined;
     const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
     // The transcript keeps `message.text`; the hidden instructions reach the agent only.
-    const { prompt, appendSystemPrompt } =
-      message.intent === 'create_pr'
-        ? createPrTurnPrompt({
-            agent,
-            text,
-            instructions: buildCreatePrTurnInstructions({
-              branch: wb.branch,
-              baseBranch: wb.baseBranch,
-              extra: wb.settings?.prompts?.create_pr,
-            }),
-          })
-        : { prompt: text, appendSystemPrompt: undefined };
+    const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
+      agent,
+      text,
+      planMode,
+      intent: message.intent,
+      createPr: { branch: wb.branch, baseBranch: wb.baseBranch, extra: wb.settings?.prompts?.create_pr },
+    });
     const argv =
       agent === 'codex'
         ? buildCodexArgv({

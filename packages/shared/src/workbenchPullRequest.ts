@@ -15,7 +15,7 @@
  * parse the same answer.
  */
 import type { GitStep } from './workbenchGit.js';
-import type { Workbench, WorkbenchAgent } from './workbench.js';
+import type { Workbench } from './workbench.js';
 
 // ============================================================================
 // Shapes
@@ -112,20 +112,6 @@ export function buildCreatePrTurnInstructions(input: {
   const extra = input.extra?.trim();
   if (extra) lines.push('', 'Extra instructions for this pull request:', '', extra);
   return lines.join('\n');
-}
-
-/**
- * How a Create PR turn's instructions reach each agent. Claude takes them as
- * an appended system prompt. Codex has no such flag, so they go in front of
- * the prompt. The stored, visible message is `text` either way.
- */
-export function createPrTurnPrompt(input: {
-  agent: WorkbenchAgent;
-  text: string;
-  instructions: string;
-}): { prompt: string; appendSystemPrompt?: string } {
-  if (input.agent === 'codex') return { prompt: `${input.instructions}\n\n---\n\n${input.text}` };
-  return { prompt: input.text, appendSystemPrompt: input.instructions };
 }
 
 // ============================================================================

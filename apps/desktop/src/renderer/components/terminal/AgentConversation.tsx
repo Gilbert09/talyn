@@ -16,6 +16,7 @@ import {
   groupToolRuns,
   groupedBlockSignature,
   mergeToolBlocks,
+  stripPlanBlocks,
 } from '@talyn/shared';
 
 interface AgentConversationProps {
@@ -219,13 +220,16 @@ function BlockViewImpl({
 }
 
 function TextBlock({ text }: { text: string }) {
+  // A session draws a plan block as its own card, under the turn.
+  const shown = stripPlanBlocks(text);
+  if (!shown) return null;
   return (
     // Paragraph spacing is renderMarkdownish's own (`my-1 leading-relaxed` on
     // its `p`), so this sets size and colour only. Overriding it from here
     // would be two single-class rules at equal specificity fighting over
     // stylesheet order.
     <div className="text-[13px] text-foreground min-w-0 [overflow-wrap:anywhere]">
-      {renderMarkdownish(text)}
+      {renderMarkdownish(shown)}
     </div>
   );
 }

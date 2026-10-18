@@ -1,10 +1,11 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { History, Loader2 } from 'lucide-react';
-import type { WorkbenchChat, WorkbenchEvent } from '@talyn/shared';
+import { findTurnPlan, PLAN_APPROVED_MESSAGE, type WorkbenchChat, type WorkbenchEvent } from '@talyn/shared';
 import { AgentBlocks } from '../terminal/AgentConversation';
 import { renderMarkdownish } from '../../lib/markdown';
 import { chatTotals, compactCount, splitTurns, type TranscriptTurn } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
+import { PlanCard, type PlanCardState } from './PlanCard';
 import { toast } from '../../stores/toast';
 
 /**
@@ -43,6 +44,7 @@ export function WorkbenchTranscript({
 
   const running = chat.status === 'running';
   const totals = useMemo(() => chatTotals(events), [events]);
+  const plans = useMemo(() => turns.map((turn) => findTurnPlan(turn.events)), [turns]);
 
   return (
     <div className="flex h-full min-w-0 flex-col bg-background">
@@ -63,15 +65,29 @@ export function WorkbenchTranscript({
           </div>
         )}
         <div className="space-y-3">
-          {turns.map((turn, i) => (
-            <TurnView
-              key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
-              chatId={chat.id}
-              turn={turn}
-              ops={ops}
-              canRevert={!running && !ops.unavailable && turn.userText !== null}
-            />
-          ))}
+          {turns.map((turn, i) => {
+            const plan = plans[i];
+            const last = i === turns.length - 1;
+            const planState: PlanCardState = last
+              ? 'open'
+              : turns[i + 1].userText === PLAN_APPROVED_MESSAGE
+                ? 'approved'
+                : 'past';
+            return (
+              <TurnView
+                key={`${chat.id}:${turn.turn}:${turn.userSeq ?? i}`}
+                chatId={chat.id}
+                turn={turn}
+                ops={ops}
+                canRevert={!running && !ops.unavailable && turn.userText !== null}
+                plan={
+                  plan ? (
+                    <PlanCard plan={plan} state={planState} {...(last && planState === 'open' ? { chat, ops } : {})} />
+                  ) : null
+                }
+              />
+            );
+          })}
           {running && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> Working…
@@ -129,11 +145,14 @@ const TurnView = React.memo(function TurnView({
   turn,
   ops,
   canRevert,
+  plan,
 }: {
   chatId: string;
   turn: TranscriptTurn;
   ops: WorkbenchOps;
   canRevert: boolean;
+  /** The turn's plan card, drawn after its blocks. */
+  plan: React.ReactNode;
 }) {
   return (
     <div className="space-y-3">
@@ -143,6 +162,7 @@ const TurnView = React.memo(function TurnView({
       {turn.events.length > 0 && (
         <AgentBlocks events={turn.events} scopeId={`${chatId}:${turn.turn}`} hideCompletedResults />
       )}
+      {plan}
     </div>
   );
 });

@@ -6,7 +6,6 @@ import {
   commitAllSteps,
   commitsAheadSteps,
   CREATE_PR_MESSAGE,
-  createPrTurnPrompt,
   describePushFailure,
   MISSING_PR_BLOCK_MESSAGE,
   parseCommitsAhead,
@@ -16,6 +15,7 @@ import {
   pushHeadStep,
   shellQuote,
   toShellScript,
+  workbenchTurnPrompt,
   type AgentEvent,
 } from '@talyn/shared';
 
@@ -112,22 +112,22 @@ describe('buildCreatePrTurnInstructions', () => {
   });
 });
 
-describe('createPrTurnPrompt', () => {
+describe('workbenchTurnPrompt for a Create PR turn', () => {
+  const createPr = { branch: 'tom/x', baseBranch: 'main' };
+
   it('Claude: the visible text is the prompt, the instructions an appended system prompt', () => {
-    const turn = createPrTurnPrompt({ agent: 'claude', text: CREATE_PR_MESSAGE, instructions: 'HIDDEN' });
-    expect(turn).toEqual({ prompt: 'Create a pull request', appendSystemPrompt: 'HIDDEN' });
+    const turn = workbenchTurnPrompt({ agent: 'claude', text: CREATE_PR_MESSAGE, planMode: false, intent: 'create_pr', createPr });
+    expect(turn.prompt).toBe('Create a pull request');
+    expect(turn.appendSystemPrompt).toContain('talyn-pr');
     const argv = buildClaudeArgv({ prompt: turn.prompt, appendSystemPrompt: turn.appendSystemPrompt });
-    expect(argv.slice(argv.indexOf('--append-system-prompt'), argv.indexOf('--append-system-prompt') + 2)).toEqual([
-      '--append-system-prompt',
-      'HIDDEN',
-    ]);
+    expect(argv[argv.indexOf('--append-system-prompt') + 1]).toBe(turn.appendSystemPrompt);
     expect(argv.slice(-2)).toEqual(['--', 'Create a pull request']);
   });
 
   it('Codex: the instructions go in front of the text, with no system prompt', () => {
-    const turn = createPrTurnPrompt({ agent: 'codex', text: CREATE_PR_MESSAGE, instructions: 'HIDDEN' });
+    const turn = workbenchTurnPrompt({ agent: 'codex', text: CREATE_PR_MESSAGE, planMode: false, intent: 'create_pr', createPr });
     expect(turn.appendSystemPrompt).toBeUndefined();
-    expect(turn.prompt.startsWith('HIDDEN')).toBe(true);
+    expect(turn.prompt).toContain('talyn-pr');
     expect(turn.prompt.endsWith('Create a pull request')).toBe(true);
   });
 });

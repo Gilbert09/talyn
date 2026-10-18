@@ -1,7 +1,6 @@
 import {
-  buildCreatePrTurnInstructions,
   checkpointCreateSteps,
-  createPrTurnPrompt,
+  workbenchTurnPrompt,
   DEFAULT_WORKBENCH_EFFORT,
   parsePrDetails,
   pickWorkbenchName,
@@ -194,18 +193,14 @@ export class LocalTurnController {
 
     const text = withAttachmentNote(input.text, input.attachments);
     // The transcript keeps `input.text`; the hidden instructions reach the agent only.
-    const { prompt, appendSystemPrompt } =
-      input.intent === 'create_pr'
-        ? createPrTurnPrompt({
-            agent: chat.agent,
-            text,
-            instructions: buildCreatePrTurnInstructions({
-              branch: workbench.branch,
-              baseBranch: workbench.baseBranch,
-              extra: workbench.settings?.prompts?.create_pr,
-            }),
-          })
-        : { prompt: text, appendSystemPrompt: undefined };
+    const planMode = input.planMode ?? chat.planMode;
+    const { prompt, appendSystemPrompt } = workbenchTurnPrompt({
+      agent: chat.agent,
+      text,
+      planMode,
+      intent: input.intent,
+      createPr: { branch: workbench.branch, baseBranch: workbench.baseBranch, extra: workbench.settings?.prompts?.create_pr },
+    });
     try {
       await this.deps.bridge.startTurn({
         workbenchId: workbench.id,
@@ -216,7 +211,7 @@ export class LocalTurnController {
         prompt,
         model: input.model ?? chat.model ?? undefined,
         effort: input.effort ?? chat.effort ?? DEFAULT_WORKBENCH_EFFORT,
-        planMode: input.planMode ?? chat.planMode,
+        planMode,
         resumeSessionId: chat.agentSessionId ?? undefined,
         ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         attachments: input.attachments,

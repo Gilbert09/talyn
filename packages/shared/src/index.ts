@@ -110,6 +110,7 @@ export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';
 export * from './workbenchPullRequest.js';
+export * from './workbenchPlan.js';
 export * from './workbenchInstructions.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
