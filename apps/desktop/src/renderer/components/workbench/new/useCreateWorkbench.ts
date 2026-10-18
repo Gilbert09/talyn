@@ -6,6 +6,7 @@ import { opsFor } from '../../../lib/workbenchOps';
 import { toast } from '../../../stores/toast';
 import { useNavigationStore } from '../../../stores/navigation';
 import { useWorkbenchStore } from '../../../stores/workbenches';
+import { useWorkspaceStore } from '../../../stores/workspace';
 
 export interface NewWorkbenchSpec {
   workspaceId: string;
@@ -87,6 +88,7 @@ async function createWorkbench(spec: NewWorkbenchSpec): Promise<Workbench> {
       fromPullRequestId: spec.fromPullRequestId,
       repoPath: spec.repoPath,
       takenNames: Object.values(useWorkbenchStore.getState().workbenches).map((w) => w.name),
+      branchPrefix: useWorkspaceStore.getState().workspaces.find((w) => w.id === spec.workspaceId)?.settings?.sessionBranchPrefix,
       prompt,
     });
   }

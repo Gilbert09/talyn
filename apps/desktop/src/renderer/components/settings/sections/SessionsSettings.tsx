@@ -1,4 +1,16 @@
-import { DEFAULT_FLEET_MODEL_ID, FLEET_MODELS, WORKBENCH_EFFORTS, type WorkbenchAgent, type WorkbenchEffort } from '@talyn/shared';
+import { useEffect, useState } from 'react';
+import {
+  DEFAULT_FLEET_MODEL_ID,
+  FLEET_MODELS,
+  WORKBENCH_EFFORTS,
+  normaliseBranchPrefix,
+  type Workspace,
+  type WorkbenchAgent,
+  type WorkbenchEffort,
+} from '@talyn/shared';
+import { api } from '../../../lib/api';
+import { toast } from '../../../stores/toast';
+import { useWorkspaceStore } from '../../../stores/workspace';
 import type { WorkbenchRuntime } from '../../../lib/readiness';
 import { useSessionDefaults, writeSessionDefaults } from '../../../lib/sessionDefaults';
 import { SettingRow, SettingToggle, SettingsPage, SettingsSection, SettingsSelect } from '../../ui/settings';
@@ -11,6 +23,83 @@ const EFFORT_LABEL: Record<WorkbenchEffort, string> = {
   xhigh: 'Extra-high',
   max: 'Max',
 };
+
+function BranchPrefixRow() {
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const setWorkspaces = useWorkspaceStore((s) => s.setWorkspaces);
+  const stored = workspaces.find((w) => w.id === currentWorkspaceId)?.settings?.sessionBranchPrefix ?? '';
+  const [value, setValue] = useState(stored);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setValue(stored), [stored]);
+
+  const typed = value.trim();
+  const example = typed ? `New branches look like ${typed}seattle` : 'New branches use the session name, like seattle';
+
+  const save = async () => {
+    if (!currentWorkspaceId) return;
+    const checked = normaliseBranchPrefix(value);
+    if (!checked.ok) {
+      setError(checked.error);
+      return;
+    }
+    setError(null);
+    if (checked.value === stored) {
+      setValue(checked.value);
+      return;
+    }
+    try {
+      await api.workspaces.update(currentWorkspaceId, {
+        settings: { sessionBranchPrefix: checked.value } as Workspace['settings'],
+      });
+      setWorkspaces(
+        workspaces.map((w) =>
+          w.id === currentWorkspaceId
+            ? { ...w, settings: { ...w.settings, sessionBranchPrefix: checked.value } as Workspace['settings'] }
+            : w,
+        ),
+      );
+      setValue(checked.value);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save the branch prefix');
+    }
+  };
+
+  return (
+    <SettingRow
+      label="Branch prefix"
+      description={
+        <>
+          <span>Added to the branch of every new session. A branch you pick yourself keeps its name.</span>
+          <span className="mt-0.5 block">{example}</span>
+          {error ? (
+            <span role="alert" className="mt-0.5 block text-destructive">
+              {error}
+            </span>
+          ) : null}
+        </>
+      }
+    >
+      <input
+        type="text"
+        value={value}
+        placeholder="e.g. tom/"
+        aria-label="Branch prefix"
+        aria-invalid={error ? true : undefined}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setError(null);
+        }}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+        className="h-7 w-40 rounded-md border border-input bg-background px-2.5 text-xs"
+      />
+    </SettingRow>
+  );
+}
 
 export function SessionsSettings() {
   const defaults = useSessionDefaults();
@@ -66,6 +155,9 @@ export function SessionsSettings() {
           checked={defaults.planMode}
           onChange={(planMode) => writeSessionDefaults({ planMode })}
         />
+      </SettingsSection>
+      <SettingsSection title="Branches">
+        <BranchPrefixRow />
       </SettingsSection>
       <SettingsSection title="Notifications">
         <SettingToggle

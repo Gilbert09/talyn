@@ -326,6 +326,8 @@ export interface CreateLocalWorkbenchInput {
   /** An existing local clone. Absent: the main process clones it. */
   repoPath?: string;
   takenNames: string[];
+  /** The workspace's `sessionBranchPrefix`. Applies only when `branch` is not given. */
+  branchPrefix?: string;
   /** The first message. Names the workbench; it is sent by the caller once the chat exists. */
   prompt?: string;
 }
@@ -341,7 +343,7 @@ export async function createLocalWorkbench(input: CreateLocalWorkbenchInput): Pr
   const name = input.prompt?.trim()
     ? workbenchNameFromTask(input.prompt, input.takenNames)
     : pickWorkbenchName(input.takenNames);
-  const branch = input.branch ?? name;
+  const branch = input.branch ?? `${input.branchPrefix ?? ''}${name}`;
   const baseBranch = input.baseBranch || (await detectDefaultBranch(bridge, input.repoPath)) || 'main';
   const { path } = await bridge.createWorktree({
     repoPath: input.repoPath,

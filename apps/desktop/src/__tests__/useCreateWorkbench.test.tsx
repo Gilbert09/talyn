@@ -7,6 +7,7 @@ import { useCreateWorkbench, type NewWorkbenchSpec } from '../renderer/component
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { useNavigationStore } from '../renderer/stores/navigation';
 import { useToastStore } from '../renderer/stores/toast';
+import { useWorkspaceStore } from '../renderer/stores/workspace';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
 
@@ -237,6 +238,16 @@ describe('useCreateWorkbench: local', () => {
       effort: 'high',
     });
     expect(useWorkbenchStore.getState().selectedChatByWorkbench.wb1).toBe('c1');
+  });
+
+  it('passes the workspace branch prefix to the local worktree', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [{ id: 'ws1', name: 'WS', settings: { sessionBranchPrefix: 'tom/' } }] as never,
+    });
+    mockCreateLocal.mockResolvedValue(workbench({ runtime: 'local' }));
+    await run(local());
+    expect(mockCreateLocal).toHaveBeenCalledWith(expect.objectContaining({ branchPrefix: 'tom/' }));
+    useWorkspaceStore.setState({ workspaces: [] });
   });
 
   it('creates the first chat when the row came back without one', async () => {

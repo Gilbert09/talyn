@@ -14,6 +14,7 @@ import {
   diffStatOf,
   isMergeInProgress,
   isValidBranchName,
+  normaliseBranchPrefix,
   listCheckpointRefs,
   mergeBase,
   mergeChangedFiles,
@@ -103,6 +104,32 @@ describe('isValidBranchName', () => {
     ['x'.repeat(256), false],
   ])('%j → %s', (name, expected) => {
     expect(isValidBranchName(name)).toBe(expected);
+  });
+});
+
+describe('normaliseBranchPrefix', () => {
+  it.each([
+    ['', ''],
+    ['   ', ''],
+    ['tom/', 'tom/'],
+    ['tom-', 'tom-'],
+    ['  tom/  ', 'tom/'],
+    ['feat/tom/', 'feat/tom/'],
+  ])('accepts %j as %j', (raw, value) => {
+    expect(normaliseBranchPrefix(raw)).toEqual({ ok: true, value });
+  });
+
+  it.each([['bad..'], ['has space'], ['~x'], ['/lead'], ['-lead'], ['a//'], ['x'.repeat(41)], ['a:'], [42], [null]])(
+    'rejects %j',
+    (raw) => {
+      const res = normaliseBranchPrefix(raw);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBeTruthy();
+    },
+  );
+
+  it('accepts exactly 40 characters', () => {
+    expect(normaliseBranchPrefix('x'.repeat(40))).toEqual({ ok: true, value: 'x'.repeat(40) });
   });
 });
 

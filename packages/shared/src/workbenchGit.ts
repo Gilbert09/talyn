@@ -212,6 +212,25 @@ export function isValidBranchName(name: string): boolean {
   return !name.split('/').some((part) => part.startsWith('.') || part.endsWith('.lock'));
 }
 
+export const MAX_BRANCH_PREFIX_LENGTH = 40;
+
+/**
+ * The prefix a workspace puts on every NEW session branch, e.g. `tom/`. Used
+ * exactly as typed (no slash is added), so `tom-` works too. Empty means none.
+ */
+export function normaliseBranchPrefix(raw: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  if (typeof raw !== 'string') return { ok: false, error: 'The branch prefix must be text.' };
+  const value = raw.trim();
+  if (!value) return { ok: true, value: '' };
+  if (value.length > MAX_BRANCH_PREFIX_LENGTH) {
+    return { ok: false, error: `The branch prefix can have at most ${MAX_BRANCH_PREFIX_LENGTH} characters.` };
+  }
+  if (!isValidBranchName(`${value}x`)) {
+    return { ok: false, error: 'That prefix cannot start a Git branch name. Avoid spaces, "..", and the characters ~ ^ : ? * [ \\.' };
+  }
+  return { ok: true, value };
+}
+
 // ============================================================================
 // Checkpoints
 // ============================================================================

@@ -296,6 +296,34 @@ describe('routes/workspaces', () => {
       });
     });
 
+    describe('settings.sessionBranchPrefix', () => {
+      it.each([
+        ['tom/', 'tom/'],
+        ['  tom-  ', 'tom-'],
+        ['', ''],
+      ])('stores %j as %j', async (sent, stored) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { sessionBranchPrefix: sent } }),
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).data.settings.sessionBranchPrefix).toBe(stored);
+      });
+
+      it.each([['bad..'], ['has space'], ['~x'], ['/lead'], ['x'.repeat(41)], [42]])('rejects %j with a 400', async (sent) => {
+        await db.insert(workspacesTable).values({ id: 'p', ownerId: TEST_USER_ID, name: 'P', settings: {} });
+        const res = await fetch(`${serverUrl}/workspaces/p`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ settings: { sessionBranchPrefix: sent } }),
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toMatch(/prefix/i);
+      });
+    });
+
     it('updates name + description independently', async () => {
       await db.insert(workspacesTable).values({
         id: 'a',
