@@ -133,9 +133,8 @@ afterEach(cleanup);
 async function renderPage() {
   const utils = render(<NewWorkbenchPage />);
   await waitFor(() => expect(mockReadiness).toHaveBeenCalledWith('ws1'));
-  await act(async () => {
-    await Promise.resolve();
-  });
+  // useReadiness settles through several promise hops; one macrotask drains them all.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
   return utils;
 }
 
