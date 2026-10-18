@@ -11,6 +11,7 @@
 import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
 import type { WorkbenchPrDraft } from './workbenchPullRequest.js';
+import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 
 // ============================================================================
 // Vocabulary
@@ -519,6 +520,12 @@ export interface WorkbenchLocalBridge {
     set(input: { repoFullName: string; path: string }): Promise<Record<string, string>>;
     remove(repoFullName: string): Promise<Record<string, string>>;
   };
+  /**
+   * The Claude and Codex instruction files on this machine, imports inlined,
+   * for the "Your instructions" settings. Optional: an older main process
+   * does not have it.
+   */
+  instructionFiles?(): Promise<WorkbenchInstructionCandidate[]>;
 }
 
 // ============================================================================

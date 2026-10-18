@@ -93,6 +93,8 @@ import type {
   DeveloperRateLimits,
   CreateWorkbenchChatInput,
   CreateWorkbenchInput,
+  PutWorkbenchInstructionFileInput,
+  WorkbenchInstructionFile,
   CreateWorkbenchPullRequestInput,
   CreateWorkbenchPullRequestResult,
   DraftWorkbenchPullRequestInput,
@@ -2610,6 +2612,18 @@ export const workbenches = {
   readiness: (workspaceId: string) =>
     request<WorkbenchReadiness>('GET', `/workbenches/readiness?workspaceId=${enc(workspaceId)}`),
   remove: (id: string) => request<void>('DELETE', `/workbenches/${enc(id)}`),
+
+  // ---- The user's own instruction files, copied into sandbox sessions ----
+  instructions: {
+    /** Every stored file for the workspace. Never the content. */
+    list: (workspaceId: string) =>
+      request<WorkbenchInstructionFile[]>('GET', `/workbenches/instructions?workspaceId=${enc(workspaceId)}`),
+    /** Upsert one file. A file switched off keeps its row but not its content. */
+    put: (input: PutWorkbenchInstructionFileInput) =>
+      request<WorkbenchInstructionFile>('PUT', '/workbenches/instructions', input),
+    remove: (workspaceId: string, key: string) =>
+      request<void>('DELETE', `/workbenches/instructions/${enc(key)}?workspaceId=${enc(workspaceId)}`),
+  },
 
   // ---- Chats ----
   createChat: (workbenchId: string, input: CreateWorkbenchChatInput = {}) =>

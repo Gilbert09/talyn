@@ -20,17 +20,18 @@ import { assertRepoPath, refreshDiffStat } from './changes.js';
 import { emitWorkbenchChat, emitWorkbenchEvents, emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
+import { syncInstructionFiles } from './instructions.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
 import {
   killMarker,
   recordWorkbenchEvent,
   refreshSandboxCredentials,
   repoDirFor,
-  runCapture,
   runGitSteps,
   runStream,
   sandboxScriptEnv,
 } from './sandboxRuntime.js';
+import { writeSandboxFiles, type SandboxFile } from './sandboxFiles.js';
 import {
   appendEvents,
   claimOrEnqueue,
@@ -72,9 +73,6 @@ import {
 /** Events are written in batches: whichever comes first of this many, or this long. */
 const FLUSH_EVENTS = 50;
 const FLUSH_MS = 500;
-
-/** The environment variable a large attachment chunk travels in. Under the kernel's 128 KiB per-string cap. */
-const ATTACHMENT_CHUNK_B64 = 96 * 1024;
 
 interface LiveTurn {
   turn: number;
@@ -292,12 +290,20 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     await refreshSandboxCredentials(wb);
     if (live.cancelRequested) return cancelledOutcome(events);
 
+    const agent = chat.agent === 'codex' ? 'codex' : 'claude';
+    // A reboot rewrites the agent's home files, so this runs every turn. A
+    // failure costs the user's instructions for one turn, not the turn.
+    await syncInstructionFiles(wb, agent).catch((err) => {
+      console.warn(`[workbench] syncing instruction files for chat ${chatId} failed:`, err);
+      recordWorkbenchEvent(wb, 'instructions_sync', err instanceof Error ? err.message : String(err), false);
+    });
+    if (live.cancelRequested) return cancelledOutcome(events);
+
     const attached = await writeAttachments(wb, chatId, turn, message.attachments ?? []);
     const planMode = message.planMode ?? chat.planMode;
     const model = message.model ?? chat.model ?? wb.model ?? undefined;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     const resumeSessionId = chat.agentSessionId ?? undefined;
-    const agent = chat.agent === 'codex' ? 'codex' : 'claude';
     const prompt = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
     const argv =
       agent === 'codex'
@@ -388,8 +394,7 @@ function promptWith(text: string, files: Array<{ path: string; mimeType: string 
 
 /**
  * Put inline attachments on disk in the sandbox, and resolve path ones inside
- * the repository. Inline data travels in env-var chunks, because one argv or
- * env string is capped by the kernel at 128 KiB.
+ * the repository.
  */
 async function writeAttachments(
   wb: WorkbenchRow,
@@ -402,26 +407,18 @@ async function writeAttachments(
   other: Array<{ path: string; mimeType: string }>;
 }> {
   const all: Array<{ path: string; mimeType: string }> = [];
+  const files: SandboxFile[] = [];
   const dir = `/tmp/talyn-attachments/${chatId}/${turn}`;
   for (const [i, a] of attachments.entries()) {
     if (a.path) {
       all.push({ path: `${repoDirFor(wb)}/${assertRepoPath(a.path)}`, mimeType: a.mimeType });
       continue;
     }
-    const safeName = `${i}-${a.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
-    const target = `${dir}/${safeName}`;
-    const data = a.dataBase64 ?? '';
-    for (let off = 0; off === 0 || off < data.length; off += ATTACHMENT_CHUNK_B64) {
-      const r = await runCapture(
-        wb,
-        `mkdir -p ${shellQuote(dir)} && printf %s "$TALYN_CHUNK" | base64 -d ${off === 0 ? '>' : '>>'} ${shellQuote(target)}`,
-        { cwd: '/', env: { TALYN_CHUNK: data.slice(off, off + ATTACHMENT_CHUNK_B64) }, timeoutMs: 30_000, quiet: true },
-      );
-      if (r.exitCode !== 0) throw new Error(`could not write attachment ${a.name}: ${r.stderr.slice(-200)}`);
-      if (data.length === 0) break;
-    }
+    const target = `${dir}/${i}-${a.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}`;
+    files.push({ path: target, base64: a.dataBase64 ?? '' });
     all.push({ path: target, mimeType: a.mimeType });
   }
+  if (files.length > 0) await writeSandboxFiles(wb, files);
   const images = all.filter((f) => f.mimeType.startsWith('image/')).map((f) => f.path);
   const other = all.filter((f) => !f.mimeType.startsWith('image/'));
   return { all, images, other };

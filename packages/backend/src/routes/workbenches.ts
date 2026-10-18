@@ -11,6 +11,7 @@ import {
   type ApiResponse,
   type CreateWorkbenchChatInput,
   type CreateWorkbenchInput,
+  type PutWorkbenchInstructionFileInput,
   type UpdateLocalWorkbenchChatInput,
   type UpdateWorkbenchChatInput,
   type UpdateWorkbenchInput,
@@ -36,6 +37,11 @@ import {
   retryWorkbench,
   scheduleProvision,
 } from '../services/workbenches/lifecycle.js';
+import {
+  listInstructionFiles,
+  putInstructionFile,
+  removeInstructionFile,
+} from '../services/workbenches/instructions.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
 import { createWorkbenchPullRequest, draftWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
@@ -331,6 +337,33 @@ export function workbenchRoutes(): Router {
     }
     const user = assertUser(req);
     ok(res, await workbenchReadiness(workspaceId, { id: user.id, email: user.email }));
+  });
+
+  // ---- Instruction files: the user's own CLAUDE.md, rules and AGENTS.md, for sandbox sessions ----
+
+  /** Every stored file for the workspace, without its content. */
+  router.get('/instructions', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    ok(res, await listInstructionFiles(workspaceId));
+  });
+
+  router.put('/instructions', async (req, res) => {
+    const body = (req.body ?? {}) as Partial<PutWorkbenchInstructionFileInput>;
+    const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    try {
+      ok(res, await putInstructionFile(workspaceId, body.file));
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.delete('/instructions/:key', async (req, res) => {
+    const workspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : '';
+    if (!(await gate(req, res, workspaceId))) return;
+    if (!(await removeInstructionFile(workspaceId, req.params.key))) return bad(res, 404, 'Instruction file not found');
+    ok(res, null);
   });
 
   router.get('/', async (req, res) => {

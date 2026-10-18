@@ -1976,3 +1976,28 @@ export const workbenchCheckpoints = pgTable(
     pk: primaryKey({ name: 'workbench_checkpoints_pkey', columns: [t.chatId, t.turn] }),
   })
 );
+
+/** Instruction files from the user's machine, copied into sandbox sessions (migration 0077). */
+export const workbenchInstructionFiles = pgTable(
+  'workbench_instruction_files',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    agent: text('agent').notNull(),
+    target: text('target').notNull(),
+    repoFullName: text('repo_full_name'),
+    sourcePath: text('source_path').notNull(),
+    /** Imports inlined. Empty while switched off. Never selected by a list. */
+    content: text('content').notNull().default(''),
+    contentHash: text('content_hash').notNull().default(''),
+    bytes: integer('bytes').notNull().default(0),
+    enabled: boolean('enabled').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    workspaceKeyUq: uniqueIndex('uq_workbench_instruction_files_workspace_key').on(t.workspaceId, t.key),
+  })
+);

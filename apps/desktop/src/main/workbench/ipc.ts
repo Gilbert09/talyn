@@ -11,6 +11,7 @@ import {
   stopGitProcesses,
   WorktreeManager,
 } from './git';
+import { discoverInstructionFiles } from './instructionFiles';
 import { WorkbenchPaths } from './paths';
 import { PrDrafts } from './prDraft';
 import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
@@ -176,6 +177,9 @@ export function registerWorkbenchIpc(
   );
   handle('repo-paths:remove', (repoFullName: string) =>
     repoPaths.remove(repoFullName),
+  );
+  handle('instruction-files', async () =>
+    discoverInstructionFiles(await repoPaths.get()),
   );
 
   app.on('before-quit', (event) => {

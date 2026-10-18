@@ -65,6 +65,7 @@ const workbench: WorkbenchLocalBridge = {
     set: (input) => ipcRenderer.invoke('workbench:repo-paths:set', input),
     remove: (repoFullName) => ipcRenderer.invoke('workbench:repo-paths:remove', repoFullName),
   },
+  instructionFiles: () => ipcRenderer.invoke('workbench:instruction-files'),
 };
 
 const electronHandler = {

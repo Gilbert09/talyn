@@ -88,6 +88,26 @@ per-sandbox `idleTtlSec`.
   Never a growing jsonb column on a row (the transcript disk-IO lesson). Paged by `seq`.
 - `workbench_checkpoints` — `chat_id, turn, ref, sha, created_at`.
 
+## Your instruction files in sandboxes (migration `0077_workbench_instruction_files.sql`)
+
+A local session reads the user's `~/.claude/CLAUDE.md` and friends from disk. A sandbox does
+not have them, so Settings → Sessions → "Your instructions" lists them (desktop only, via the
+`workbench:instruction-files` IPC: `~/.claude/CLAUDE.md`, `~/.claude/rules/**/*.md`,
+`~/.codex/AGENTS.md`, and `CLAUDE.local.md` in each repo with a chosen local folder). Claude
+`@path` imports are inlined on the Mac (`inlineInstructionImports` in
+`shared/workbenchInstructions.ts`), because the box has none of the imported files. A file the
+user switches on is uploaded to `workbench_instruction_files` (content only there, never in
+`workspaces.settings`; the list route never returns it; 256 KB cap, about 64k tokens of every
+turn). Switching off keeps the row with empty content, so the next turn removes the copy. The
+desktop re-uploads a switched-on file whose hash changed, at start and when the section opens.
+Before each sandbox turn, `syncInstructionFiles` (non-fatal) writes the session agent's files
+with base64 in exec env chunks (`sandboxFiles.ts`, shared with attachments): Claude files go
+to `$HOME/.claude/rules/talyn-<slug>.md` (stale `talyn-*.md` removed; the fleet's own
+`$HOME/.claude/CLAUDE.md` is never touched), a repo's `CLAUDE.local.md` goes in the repo and
+into `.git/info/exclude`; Codex gets one `<!-- talyn:instructions:start/end -->` block at the
+end of `$HOME/.codex/AGENTS.md`, replaced on every turn because a reboot rewrites that file. A
+workspace that never stored a file for the agent pays no exec.
+
 ## Shared primitives (`packages/shared`)
 
 - `workbench.ts` — types, statuses, `WorkbenchRuntime` interface, city names, `nextAction()`.

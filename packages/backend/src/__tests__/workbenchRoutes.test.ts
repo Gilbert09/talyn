@@ -401,6 +401,32 @@ describe('workbench routes', () => {
       expect(live.map((e: Loose) => e.seq)).toEqual([1, 2, 3, 4]);
     });
 
+    it('copies switched-on instruction files in before the CLI, and a failed copy does not fail the turn', async () => {
+      const { putInstructionFile } = await import('../services/workbenches/instructions.js');
+      await putInstructionFile('ws-a', {
+        key: 'claude-user', agent: 'claude', target: 'user', sourcePath: '~/.claude/CLAUDE.md', content: 'be terse', enabled: true,
+      });
+      scriptedFleet((script) => (script.includes('.claude/rules') ? { exitCode: 1, stderr: 'disk full' } : null));
+      const wb = await createSandboxWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
+      await idle(chatId);
+      const sync = fleet.execs.findIndex((e) => e.script.includes('.claude/rules'));
+      const turn = fleet.execs.findIndex((e) => e.script.startsWith('claude '));
+      expect(sync).toBeGreaterThan(-1);
+      expect(sync).toBeLessThan(turn);
+      expect(fleet.execs[sync].req.env?.TALYN_F0).toBe(Buffer.from('be terse').toString('base64'));
+      expect(await getChat(chatId)).toMatchObject({ status: 'idle', statusMessage: null });
+    });
+
+    it('runs no instruction sync for a workspace that never stored a file', async () => {
+      const wb = await createSandboxWorkbench();
+      const chatId = await chatIdOf(wb.id);
+      await call('POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' });
+      await idle(chatId);
+      expect(fleet.execs.some((e) => e.script.includes('.claude/rules') || e.script.includes('AGENTS.md'))).toBe(false);
+    });
+
     it('runs claude as a sandbox turn: checkpoint, fresh credentials, then the CLI', async () => {
       const wb = await createSandboxWorkbench();
       const chatId = await chatIdOf(wb.id);

@@ -22,6 +22,7 @@ import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { usePullRequestSync } from '../../hooks/usePullRequestSync';
 import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
+import { useInstructionFileSync } from '../../hooks/useInstructionFileSync';
 import { useWorkspaceStore } from '../../stores/workspace';
 import { useBillingStore } from '../../stores/billing';
 import { useWorkbenchStore } from '../../stores/workbenches';
@@ -47,6 +48,7 @@ export function AppShell() {
   useWhatsNew();
   useDeferredRuns();
   useWorkbenchList();
+  useInstructionFileSync();
   useAppShortcuts();
   // Introduces code review once, to somebody who already uses Talyn. Deferred
   // while What's-New is open: the release that flips this feature's availability

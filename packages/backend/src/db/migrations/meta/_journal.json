@@ -540,6 +540,13 @@
       "when": 1790850000000,
       "tag": "0076_workbenches",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1790860000000,
+      "tag": "0077_workbench_instruction_files",
+      "breakpoints": true
     }
   ]
 }
