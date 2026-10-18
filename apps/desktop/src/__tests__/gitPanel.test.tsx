@@ -273,13 +273,14 @@ describe('Changes tab: Viewed', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Viewed a.ts' })).not.toBeChecked());
   });
 
-  it('"N comments ready to send" puts them in the composer as one message', async () => {
+  it('"N comments ready to send" sends them to the agent as one message', async () => {
     const setComments = jest.fn();
+    const send = jest.fn(async () => ({ queued: false }));
     render(
       <ChangesTab
         workbench={WB}
         chat={chat}
-        ops={makeOps()}
+        ops={makeOps({ send } as Partial<WorkbenchOps>)}
         visible
         turnsEnded={0}
         comments={[
@@ -291,11 +292,36 @@ describe('Changes tab: Viewed', () => {
     );
     await screen.findByRole('checkbox', { name: 'Viewed a.ts' });
     expect(screen.getByTestId('comment-bar')).toHaveTextContent('2 comments ready to send');
-    fireEvent.click(screen.getByRole('button', { name: /Add to chat/ }));
-    const draft = useWorkbenchStore.getState().drafts.c1;
-    expect(draft).toContain('I left 2 comments on the diff');
-    expect(draft).toContain('Rename this');
-    expect(draft).toContain('Add a test');
-    expect(setComments).toHaveBeenCalledWith([]);
+    fireEvent.click(screen.getByRole('button', { name: /Send to agent/ }));
+    await waitFor(() => expect(setComments).toHaveBeenCalledWith([]));
+    expect(send).toHaveBeenCalledTimes(1);
+    const [target, input] = send.mock.calls[0] as unknown as [WorkbenchChat, { text: string }];
+    expect(target.id).toBe(chat.id);
+    expect(input.text).toContain('I left 2 comments on the diff');
+    expect(input.text).toContain('Rename this');
+    expect(input.text).toContain('Add a test');
+    expect(useWorkbenchStore.getState().drafts.c1).toBeUndefined();
+  });
+
+  it('keeps the comments when the send fails', async () => {
+    const setComments = jest.fn();
+    const send = jest.fn(async () => {
+      throw new Error('Down');
+    });
+    render(
+      <ChangesTab
+        workbench={WB}
+        chat={chat}
+        ops={makeOps({ send } as Partial<WorkbenchOps>)}
+        visible
+        turnsEnded={0}
+        comments={[{ id: 'x', path: 'src/a.ts', side: 'additions', startLine: 3, endLine: 3, text: 'Rename this' }]}
+        setComments={setComments}
+      />
+    );
+    await screen.findByRole('checkbox', { name: 'Viewed a.ts' });
+    fireEvent.click(screen.getByRole('button', { name: /Send to agent/ }));
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    expect(setComments).not.toHaveBeenCalled();
   });
 });

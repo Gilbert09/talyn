@@ -9,6 +9,7 @@ import {
   Loader2,
   MessageSquarePlus,
   RefreshCw,
+  SendHorizontal,
   X,
 } from 'lucide-react';
 import { PatchDiff } from '@pierre/diffs/react';
@@ -17,7 +18,6 @@ import { cn } from '../../lib/utils';
 import { formatCommentsMessage, type DiffComment } from '../../lib/workbenchFormat';
 import type { WorkbenchOps } from '../../lib/workbenchOps';
 import { newClientId } from '../../lib/workbenchBridge';
-import { insertIntoComposer } from '../../lib/composerInsert';
 import {
   isViewed,
   loadViewed,
@@ -30,6 +30,7 @@ import {
 } from '../../lib/viewedFiles';
 import { toast } from '../../stores/toast';
 import { Button } from '../ui/button';
+import { createChatTab } from './ChatTabs';
 
 /** How often the list refreshes while it is on screen. */
 export const CHANGES_REFRESH_MS = 10_000;
@@ -272,7 +273,7 @@ export function ChangesTab({
           )
         )}
       </div>
-      <CommentBar workbench={workbench} chat={chat} comments={comments} setComments={setComments} />
+      <CommentBar workbench={workbench} chat={chat} ops={ops} comments={comments} setComments={setComments} />
     </div>
   );
 }
@@ -454,26 +455,39 @@ function FileDiffView({
 }
 
 /**
- * The line comments waiting to go to the agent. "Add to chat" puts them in
- * the composer as one message, so they can be read and edited before sending.
+ * The line comments waiting to go to the agent. "Send" sends them to the open
+ * chat as one message; a running turn queues it.
  */
 function CommentBar({
   workbench,
   chat,
+  ops,
   comments,
   setComments,
 }: {
   workbench: Workbench;
   chat: WorkbenchChat | null;
+  ops: WorkbenchOps;
   comments: DiffComment[];
   setComments: (next: DiffComment[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [sending, setSending] = useState(false);
   if (comments.length === 0) return null;
-  const addToChat = () => {
-    insertIntoComposer(workbench.id, chat, formatCommentsMessage(comments));
-    setComments([]);
-    setOpen(false);
+  const send = async () => {
+    setSending(true);
+    try {
+      const target = chat ?? (await createChatTab(workbench));
+      if (!target) return;
+      const res = await ops.send(target, { text: formatCommentsMessage(comments) });
+      setComments([]);
+      setOpen(false);
+      if (res.queued) toast.info('Queued', 'It runs when the current turn ends.');
+    } catch (err) {
+      toast.error('Could not send the comments', err instanceof Error ? err.message : undefined);
+    } finally {
+      setSending(false);
+    }
   };
   return (
     <div className="shrink-0 border-t bg-info/10" data-testid="comment-bar">
@@ -508,8 +522,13 @@ function CommentBar({
           {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           {comments.length} {comments.length === 1 ? 'comment' : 'comments'} ready to send
         </button>
-        <Button className="h-6 gap-1 px-2 text-xs" onClick={addToChat}>
-          <MessageSquarePlus className="h-3 w-3" /> Add to chat
+        <Button
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={() => void send()}
+          disabled={sending || ops.unavailable !== null}
+          title={ops.unavailable ?? undefined}
+        >
+          {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <SendHorizontal className="h-3 w-3" />} Send to agent
         </Button>
       </div>
     </div>
