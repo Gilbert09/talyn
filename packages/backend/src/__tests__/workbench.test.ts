@@ -115,45 +115,36 @@ describe('nextWorkbenchAction', () => {
 describe('action prompts', () => {
   const actions = Object.keys(DEFAULT_WORKBENCH_ACTION_PROMPTS) as WorkbenchPromptAction[];
 
-  it('has a default for every action', () => {
-    expect(actions.sort()).toEqual(['create_pr', 'fix_checks', 'rename_branch', 'resolve_conflicts']);
+  it('has a default for every action, and Create PR is not one', () => {
+    expect(actions.sort()).toEqual(['fix_checks', 'rename_branch', 'resolve_conflicts']);
   });
 
   it.each(actions.map((a) => [a]))('%s mentions the fleet proxy', (action) => {
     expect(DEFAULT_WORKBENCH_ACTION_PROMPTS[action]).toContain('fleet proxy');
   });
 
-  it('create_pr commits, pushes the current branch and opens a PR with gh', () => {
-    const prompt = DEFAULT_WORKBENCH_ACTION_PROMPTS.create_pr;
-    expect(prompt).toMatch(/commit/i);
-    expect(prompt).toContain('git push -u origin HEAD');
-    expect(prompt).toContain('gh pr create');
-    expect(prompt).toMatch(/title/i);
-    expect(prompt).toMatch(/body/i);
-  });
-
   it.each<[string, Parameters<typeof resolveWorkbenchActionPrompt>[1], Record<string, string>, (s: string) => void]>([
     ['default, variables filled', null, { baseBranch: 'main', branch: 'tokyo' }, (s) => {
-      expect(s).toContain('gh pr create --base main');
+      expect(s).toContain('git merge origin/main');
       expect(s).not.toContain('{{baseBranch}}');
     }],
-    ['override used', { prompts: { create_pr: 'Ship {{branch}} to {{ baseBranch }}' } }, { baseBranch: 'dev', branch: 'oslo' }, (s) => {
-      expect(s).toBe('Ship oslo to dev');
+    ['override used', { prompts: { resolve_conflicts: 'Merge {{branch}} with {{ baseBranch }}' } }, { baseBranch: 'dev', branch: 'oslo' }, (s) => {
+      expect(s).toBe('Merge oslo with dev');
     }],
-    ['blank override falls back to default', { prompts: { create_pr: '   ' } }, {}, (s) => {
-      expect(s).toContain('gh pr create');
+    ['blank override falls back to default', { prompts: { resolve_conflicts: '   ' } }, {}, (s) => {
+      expect(s).toContain('Resolve the conflicts');
     }],
-    ['override for another action is ignored', { prompts: { fix_checks: 'x' } }, {}, (s) => {
-      expect(s).toContain('gh pr create');
+    ['override for another action is ignored', { prompts: { fix_checks: 'x', create_pr: 'y' } }, {}, (s) => {
+      expect(s).toContain('Resolve the conflicts');
     }],
-    ['unknown placeholder kept visible', { prompts: { create_pr: 'Hi {{nobody}}' } }, {}, (s) => {
+    ['unknown placeholder kept visible', { prompts: { resolve_conflicts: 'Hi {{nobody}}' } }, {}, (s) => {
       expect(s).toBe('Hi {{nobody}}');
     }],
-    ['variable value with $ is inserted literally', { prompts: { create_pr: 'B={{branch}}' } }, { branch: "$& $' x" }, (s) => {
+    ['variable value with $ is inserted literally', { prompts: { resolve_conflicts: 'B={{branch}}' } }, { branch: "$& $' x" }, (s) => {
       expect(s).toBe("B=$& $' x");
     }],
   ])('%s', (_name, settings, vars, check) => {
-    check(resolveWorkbenchActionPrompt('create_pr', settings, vars));
+    check(resolveWorkbenchActionPrompt('resolve_conflicts', settings, vars));
   });
 });
 

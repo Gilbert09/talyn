@@ -109,6 +109,7 @@ export * from './workbench.js';
 export * from './workbenchGit.js';
 export * from './agentStream.js';
 export * from './workbenchConfig.js';
+export * from './workbenchPullRequest.js';
 
 import type { SkillKey, SkillSource, SkillSummary, SkillUsageEntry } from './skills.js';
 import type { PromptTemplateSettings } from './promptTemplates.js';
@@ -554,6 +555,8 @@ export interface WorkspaceSettings {
    * hands) must not be handed to an agent that cannot run it.
    */
   fleetModels?: Partial<Record<FleetAgent, StoredFleetModelId>>;
+  /** Prefix for every new session branch Talyn names (e.g. `tom/`). Empty or unset: none. */
+  sessionBranchPrefix?: string;
   /**
    * Which cloud provider new tasks dispatch to when more than one is connected.
    * A specific provider pins it; `'ask'` makes the desktop prompt per task (and

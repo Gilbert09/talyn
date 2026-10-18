@@ -10,6 +10,7 @@
  */
 import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
+import type { WorkbenchPrDraft } from './workbenchPullRequest.js';
 
 // ============================================================================
 // Vocabulary
@@ -45,8 +46,11 @@ export const WORKBENCH_EFFORTS: readonly WorkbenchEffort[] = ['low', 'medium', '
 /** What a session or turn with no stored effort runs at. */
 export const DEFAULT_WORKBENCH_EFFORT: WorkbenchEffort = 'high';
 
-/** The prompt-driven actions whose wording a workbench may override. */
-export type WorkbenchPromptAction = 'create_pr' | 'fix_checks' | 'resolve_conflicts' | 'rename_branch';
+/**
+ * The prompt-driven actions whose wording a workbench may override. Create PR
+ * is not one: Talyn opens the PR itself (see `workbenchPullRequest.ts`).
+ */
+export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'rename_branch';
 
 // ============================================================================
 // Public shapes (what the API returns)
@@ -70,7 +74,10 @@ export interface WorkbenchSettings {
     archive?: string | null;
     runMode?: WorkbenchRunMode;
   };
-  prompts?: Partial<Record<WorkbenchPromptAction, string>>;
+  prompts?: Partial<Record<WorkbenchPromptAction, string>> & {
+    /** Extra instructions for the Create PR draft, appended to Talyn's draft prompt. */
+    create_pr?: string;
+  };
 }
 
 export type WorkbenchRunMode = 'concurrent' | 'nonconcurrent';
@@ -466,6 +473,18 @@ export interface WorkbenchLocalBridge {
     attachments?: WorkbenchAttachment[];
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
+  /**
+   * A one-shot, hidden agent run that drafts a pull request (see
+   * `workbenchPullRequest.ts`). Nothing reaches the chat's transcript, and a
+   * Claude run forks `resumeSessionId` rather than continuing it.
+   */
+  draftPullRequest(input: {
+    path: string;
+    agent: WorkbenchAgent;
+    prompt: string;
+    resumeSessionId?: string;
+    model?: string;
+  }): Promise<WorkbenchPrDraft>;
   /** Run argv steps (see `workbenchGit.ts` `GitStep`) in `path`, in order, stopping at the first failure. */
   exec(
     path: string,
@@ -673,21 +692,6 @@ const SANDBOX_GIT_NOTE =
  * {@link resolveWorkbenchActionPrompt}.
  */
 export const DEFAULT_WORKBENCH_ACTION_PROMPTS: Readonly<Record<WorkbenchPromptAction, string>> = {
-  create_pr: [
-    'Open a pull request for the work on this branch.',
-    '',
-    '1. Run `git status` and `git diff {{baseBranch}}...HEAD --stat` to see everything that changed.',
-    '2. Commit every change that belongs in the PR. Use focused commits with conventional messages',
-    '   (`feat: …`, `fix: …`, `chore: …`). Do not commit build output, secrets or local-only files.',
-    '3. Push the current branch: `git push -u origin HEAD`.',
-    '4. Open the PR with `gh pr create --base {{baseBranch}} --title "<title>" --body "<body>"`.',
-    '   - The title: a conventional-commit summary of the change, under 72 characters.',
-    '   - The body: what changed and why, how you tested it, and anything a reviewer must know.',
-    '   - If the repository has a PR template (`.github/pull_request_template.md` or similar), fill it in.',
-    '5. Reply with the PR URL.',
-    '',
-    SANDBOX_GIT_NOTE,
-  ].join('\n'),
   fix_checks: [
     'The CI checks on this branch\'s pull request are failing. Make them pass.',
     '',

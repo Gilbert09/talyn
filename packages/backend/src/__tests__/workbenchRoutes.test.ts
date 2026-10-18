@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { eq } from 'drizzle-orm';
 import { createServer, type Server } from 'http';
 import type { AddressInfo } from 'net';
 import { createTestDb, seedUser } from './helpers/testDb.js';
@@ -213,7 +214,9 @@ describe('workbench routes', () => {
         ['POST', `/workbenches/${wb.id}/chats`, {}],
         ['GET', `/workbenches/${wb.id}/file?path=a`, undefined],
         ['POST', `/workbenches/${wb.id}/scripts/run`, undefined],
-        ['POST', `/workbenches/${wb.id}/actions/create_pr`, undefined],
+        ['POST', `/workbenches/${wb.id}/actions/fix_checks`, undefined],
+        ['POST', `/workbenches/${wb.id}/pull-request`, { title: 't', base: 'main' }],
+        ['POST', `/workbenches/${wb.id}/pull-request/draft`, {}],
         ['GET', `/workbenches/${wb.id}/ports/3000/x`, undefined],
         ['POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' }],
         ['POST', `/workbenches/chats/${chatId}/cancel`, undefined],
@@ -315,6 +318,15 @@ describe('workbench routes', () => {
       await vi.waitFor(async () => expect((await getWorkbench(res.body.data.id))?.status).toBe('error'));
       const got = await call('GET', `/workbenches/${res.body.data.id}`);
       expect(got.body.data.error).toContain('repository not found');
+    });
+
+    it('puts the workspace branch prefix on a new branch, never on an explicit one', async () => {
+      await testDb.db.update(workspaces).set({ settings: { sessionBranchPrefix: 'tom/' } }).where(eq(workspaces.id, 'ws-a'));
+      const fresh = await createSandboxWorkbench();
+      expect(fresh.branch).toBe(`tom/${fresh.name}`);
+      const named = await createSandboxWorkbench({ branch: 'feat/thing' });
+      expect(named.branch).toBe('feat/thing');
+      expect(named.name).not.toContain('/');
     });
 
     it('starts from a pull request on its head branch, linked', async () => {
@@ -1011,13 +1023,13 @@ describe('workbench routes', () => {
 
     it('sends an action as a message, in the workbench\'s own words when it has them', async () => {
       const wb = await createSandboxWorkbench();
-      await call('PATCH', `/workbenches/${wb.id}`, { settings: { prompts: { create_pr: 'Ship {{branch}} to {{baseBranch}}' } } });
-      const res = await call('POST', `/workbenches/${wb.id}/actions/create_pr`);
+      await call('PATCH', `/workbenches/${wb.id}`, { settings: { prompts: { resolve_conflicts: 'Merge {{branch}} with {{baseBranch}}' } } });
+      const res = await call('POST', `/workbenches/${wb.id}/actions/resolve_conflicts`);
       const chatId = await chatIdOf(wb.id);
       expect(res.body.data).toEqual({ chatId });
       await idle(chatId);
       const page = await call('GET', `/workbenches/chats/${chatId}/events`);
-      expect(page.body.data.events[0].event.message.content[0].text).toBe(`Ship ${wb.branch} to main`);
+      expect(page.body.data.events[0].event.message.content[0].text).toBe(`Merge ${wb.branch} with main`);
       expect((await call('POST', `/workbenches/${wb.id}/actions/dance`)).status).toBe(400);
     });
 
@@ -1043,7 +1055,7 @@ describe('workbench routes', () => {
       ['GET', (id: string) => `/workbenches/${id}/files`],
       ['POST', (id: string) => `/workbenches/${id}/scripts/run`],
       ['POST', (id: string) => `/workbenches/${id}/scripts/run/stop`],
-      ['POST', (id: string) => `/workbenches/${id}/actions/create_pr`],
+      ['POST', (id: string) => `/workbenches/${id}/actions/fix_checks`],
       ['GET', (id: string) => `/workbenches/${id}/ports/3000/`],
     ] as const)('answers 409 local_runtime for %s %s', async (method, path) => {
       const wb = await createLocalWorkbench();

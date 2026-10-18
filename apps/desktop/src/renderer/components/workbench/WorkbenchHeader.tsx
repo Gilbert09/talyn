@@ -42,9 +42,10 @@ import {
   type WorkbenchAction,
   type WorkbenchActionRequest,
 } from '../../lib/workbenchActions';
-import type { WorkbenchOps } from '../../lib/workbenchOps';
+import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
+import { CreatePullRequestDialog } from './CreatePullRequestDialog';
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -55,7 +56,7 @@ const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
 };
 
 const ACTION_HINT: Record<WorkbenchAction, string> = {
-  create_pr: 'Ask the agent to commit, push and open a pull request',
+  create_pr: 'Commit, push and open a pull request; the agent drafts the title and description',
   resolve_conflicts: 'Ask the agent to merge the base branch in and resolve the conflicts',
   fix_checks: 'Ask the agent to fix the failing checks; the prompt carries each failing check and its link',
   merge: 'Merge the pull request on GitHub',
@@ -63,13 +64,14 @@ const ACTION_HINT: Record<WorkbenchAction, string> = {
 };
 
 /**
- * Run a header action. Create PR / Fix checks / Resolve conflicts are prompts
- * to the agent; the backend picks the prompt for a sandbox, the local runtime
- * resolves it here. Merge and Archive have their own confirmations.
+ * Run a header action. Fix checks / Resolve conflicts are prompts to the
+ * agent; the backend picks the prompt for a sandbox, the local runtime
+ * resolves it here. Create PR opens its own dialog, and Merge and Archive
+ * have their own confirmations.
  */
 export async function runPromptAction(
   ops: WorkbenchOps,
-  action: 'create_pr' | 'fix_checks' | 'resolve_conflicts',
+  action: WorkbenchPromptActionKind,
   chat: WorkbenchChat | null
 ): Promise<void> {
   try {
@@ -101,7 +103,7 @@ export function WorkbenchHeader({
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
-  const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
+  const [confirm, setConfirm] = useState<'create_pr' | 'merge' | 'archive' | null>(null);
 
   const prLike = pr ? prRowAsLike(pr) : null;
   const primary = primaryWorkbenchAction(workbench, prLike);
@@ -110,7 +112,9 @@ export function WorkbenchHeader({
   const RuntimeIcon = workbench.runtime === 'local' ? Laptop : Cloud;
 
   const disabled = (action: WorkbenchAction) =>
-    busy !== null || (PROMPT_ACTIONS.has(action) && Boolean(ops.unavailable)) || (action === 'merge' && !pr);
+    busy !== null ||
+    ((PROMPT_ACTIONS.has(action) || action === 'create_pr') && Boolean(ops.unavailable)) ||
+    (action === 'merge' && !pr);
 
   const copyBranch = () => {
     navigator.clipboard
@@ -124,7 +128,7 @@ export function WorkbenchHeader({
 
   const run = useCallback(
     async (action: WorkbenchAction) => {
-      if (action === 'merge' || action === 'archive') {
+      if (action === 'create_pr' || action === 'merge' || action === 'archive') {
         setConfirm(action);
         return;
       }
@@ -312,6 +316,13 @@ export function WorkbenchHeader({
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
+      />
+      <CreatePullRequestDialog
+        workbench={workbench}
+        chat={chat}
+        ops={ops}
+        open={confirm === 'create_pr'}
+        onClose={() => setConfirm(null)}
       />
       <ArchiveWorkbenchDialog
         workbench={workbench}

@@ -160,6 +160,19 @@ diff, file list and read, the terminal (as user `fleet`), and checkpoint restore
 `talyn-app-dev` has Contents: read. The production App has write. Merge and Archive from the new
 header have not run against a real PR.
 
+**Create PR is not a prompt.** It opens a dialog (`CreatePullRequestDialog.tsx`). An agent
+only drafts the title, the description and a commit message, in a hidden one-shot run: Claude
+forks the chat's session (`--resume <id> --fork-session --permission-mode dontAsk` with
+read-only `--allowedTools`), Codex runs fresh with `sandbox_mode="read-only"`. Nothing goes
+into the transcript, and the chat's session id does not change. Talyn then commits what is
+uncommitted, checks that the branch is ahead of the base, pushes and opens the PR through the
+GitHub API, and links it. A sandbox does this in `services/workbenches/pullRequest.ts`
+(`POST /workbenches/:id/pull-request/draft` and `POST /workbenches/:id/pull-request`). A local
+session drafts through the `workbench:pr-draft` IPC, commits and pushes with the user's own git
+credentials, and then calls the same route with `pushed: true`. The argv, the git steps, the
+prompt and the parser are in `@talyn/shared` `workbenchPullRequest.ts`.
+`settings.prompts.create_pr` is now extra instructions for the draft.
+
 ### How to run it locally
 
 1. `npm run dev:db` and `npm run dev:redis`.

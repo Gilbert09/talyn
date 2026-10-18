@@ -29,7 +29,8 @@ export const WORKBENCH_ACTION_SHORTCUT: Record<WorkbenchAction, string | null> =
   archive: 'workbench.archive',
 };
 
-export const PROMPT_ACTIONS: ReadonlySet<WorkbenchAction> = new Set(['create_pr', 'resolve_conflicts', 'fix_checks']);
+/** The actions sent to the agent as a message. Create PR is not one: Talyn opens the PR itself. */
+export const PROMPT_ACTIONS: ReadonlySet<WorkbenchAction> = new Set(['resolve_conflicts', 'fix_checks']);
 
 /** The chord of an action ('mod+shift+p'), read from the menu table so the two cannot disagree. */
 export function workbenchActionKeys(action: WorkbenchAction): string | null {

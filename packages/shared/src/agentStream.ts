@@ -63,6 +63,8 @@ export interface ClaudeArgvOptions {
   forkSession?: boolean;
   appendSystemPrompt?: string;
   effort?: WorkbenchEffort;
+  /** Tools allowed without asking (`--allowedTools`). With `dontAsk`, everything else is denied. */
+  allowedTools?: string[];
   /** The executable, default `claude`. */
   binary?: string;
 }
@@ -93,6 +95,8 @@ export function buildClaudeArgv(opts: ClaudeArgvOptions): string[] {
   }
   if (opts.appendSystemPrompt) argv.push('--append-system-prompt', opts.appendSystemPrompt);
   if (opts.effort) argv.push('--effort', opts.effort);
+  // Variadic, so it goes last: the `--` below ends its list.
+  if (opts.allowedTools?.length) argv.push('--allowedTools', ...opts.allowedTools);
   argv.push('--', opts.prompt);
   return argv;
 }

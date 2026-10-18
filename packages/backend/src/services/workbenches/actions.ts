@@ -11,10 +11,11 @@ import { getChat, insertChat, latestChat, rowToChat, type WorkbenchRow } from '.
 import { sendMessage } from './turns.js';
 
 /**
- * The header's one button. Three of the actions are PROMPTS — the agent opens
- * the PR, fixes the checks, resolves the conflicts — sent as an ordinary
- * message, so they queue behind a running turn like anything else. `merge`
- * and `archive` are not agent work.
+ * The header's one button. Two of the actions are PROMPTS — the agent fixes
+ * the checks or resolves the conflicts — sent as an ordinary message, so they
+ * queue behind a running turn like anything else. `merge` and `archive` are
+ * not agent work, and neither is Create PR: Talyn opens the PR itself
+ * (`pullRequest.ts`, `POST /:id/pull-request`).
  */
 
 export const WORKBENCH_ACTIONS: ReadonlyArray<Exclude<WorkbenchNextAction, null>> = [
@@ -26,7 +27,6 @@ export const WORKBENCH_ACTIONS: ReadonlyArray<Exclude<WorkbenchNextAction, null>
 ];
 
 const PROMPT_ACTIONS: ReadonlySet<string> = new Set<WorkbenchPromptAction>([
-  'create_pr',
   'fix_checks',
   'resolve_conflicts',
   'rename_branch',
@@ -44,6 +44,9 @@ export async function runWorkbenchAction(
   if (action === 'merge') {
     await mergeLinkedPullRequest(row);
     return {};
+  }
+  if (action === 'create_pr') {
+    throw new WorkbenchError('Create PR is not a prompt: use POST /workbenches/:id/pull-request.', 400, 'bad_action');
   }
   if (!PROMPT_ACTIONS.has(action)) {
     throw new WorkbenchError(`Unknown action "${action}".`, 400, 'bad_action');

@@ -2732,6 +2732,18 @@ class GitHubService extends EventEmitter {
     );
   }
 
+  /** The open PR whose head is `branch` in this repository, or null. */
+  async findOpenPullRequestForHead(
+    workspaceId: string,
+    owner: string,
+    repo: string,
+    branch: string
+  ): Promise<GitHubPullRequest | null> {
+    const params = new URLSearchParams({ state: 'open', head: `${owner}:${branch}`, per_page: '1' });
+    const prs = await this.apiRequest<GitHubPullRequest[]>(workspaceId, `/repos/${owner}/${repo}/pulls?${params}`);
+    return prs[0] ?? null;
+  }
+
   async createPRReview(
     workspaceId: string,
     owner: string,

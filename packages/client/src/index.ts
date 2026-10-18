@@ -93,6 +93,9 @@ import type {
   DeveloperRateLimits,
   CreateWorkbenchChatInput,
   CreateWorkbenchInput,
+  CreateWorkbenchPullRequestInput,
+  CreateWorkbenchPullRequestResult,
+  DraftWorkbenchPullRequestInput,
   SendWorkbenchMessageInput,
   UpdateLocalWorkbenchChatInput,
   UpdateWorkbenchChatInput,
@@ -103,6 +106,7 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEvent,
   WorkbenchNextAction,
+  WorkbenchPrDraft,
   WorkbenchReadiness,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
@@ -2669,7 +2673,21 @@ export const workbenches = {
   stopScript: (id: string, name: string) =>
     request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}/stop`),
 
-  /** Run a header action (Create PR, Fix checks, …), optionally in a given chat. */
+  /**
+   * Draft a pull request title and body: a hidden one-shot agent run in the
+   * sandbox that forks the chat's session. Sandbox only; the desktop drafts a
+   * local session itself.
+   */
+  draftPullRequest: (id: string, input: DraftWorkbenchPullRequestInput = {}) =>
+    request<WorkbenchPrDraft>('POST', `/workbenches/${enc(id)}/pull-request/draft`, input),
+  /**
+   * Commit what is uncommitted, push the branch and open the PR. A local
+   * session pushes first itself and sends `pushed: true`.
+   */
+  createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
+    request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),
+
+  /** Run a header action (Fix checks, Resolve conflicts, Merge, Archive), optionally in a given chat. */
   action: (id: string, action: Exclude<WorkbenchNextAction, null>, chatId?: string) =>
     request<{ chatId?: string }>(
       'POST',

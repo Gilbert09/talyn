@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   isValidBranchName,
+  normaliseBranchPrefix,
   pickWorkbenchName,
   workbenchNameFromTask,
   WORKBENCH_EFFORTS,
@@ -20,7 +21,7 @@ import {
   type WorkbenchSettings,
 } from '@talyn/shared';
 import { getPoolDbClient, runWithoutScope } from '../db/client.js';
-import { pullRequests as prTable, repositories as reposTable } from '../db/schema.js';
+import { pullRequests as prTable, repositories as reposTable, workspaces as workspacesTable } from '../db/schema.js';
 import { assertUser, handleAccessError, requireWorkspaceAccess } from '../middleware/auth.js';
 import { reconcileDefaultBranch } from '../services/repoDefaultBranch.js';
 import { userMayUseWorkbenches, workbenchesRefusalReason } from '../services/workbenches/access.js';
@@ -36,6 +37,7 @@ import {
   scheduleProvision,
 } from '../services/workbenches/lifecycle.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
+import { createWorkbenchPullRequest, draftWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
 import { fleetClientFor, sandboxIdFor } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
@@ -431,6 +433,20 @@ export function workbenchRoutes(): Router {
     // The name is unique among live workbenches. It comes from the first
     // message when there is one, else a city. Two creates in the same moment
     // can pick the same name; the index decides, and the loser picks again.
+    // Only a branch Talyn names gets the workspace's prefix; a branch the
+    // person picked (a PR, "from branch") is used as it is.
+    let branchPrefix = '';
+    if (!branch) {
+      const stored = (
+        await db
+          .select({ prefix: sql<string | null>`${workspacesTable.settings} ->> 'sessionBranchPrefix'` })
+          .from(workspacesTable)
+          .where(eq(workspacesTable.id, workspaceId))
+          .limit(1)
+      )[0]?.prefix;
+      const checked = normaliseBranchPrefix(stored ?? '');
+      if (checked.ok) branchPrefix = checked.value;
+    }
     const id = uuid();
     let row: WorkbenchRow | null = null;
     for (let attempt = 0; attempt < 4 && !row; attempt++) {
@@ -446,7 +462,7 @@ export function workbenchRoutes(): Router {
           repositoryId: repo.id,
           repoFullName,
           name,
-          branch: branch || name,
+          branch: branch || `${branchPrefix}${name}`,
           baseBranch,
           runtime: body.runtime,
           agent: body.agent,
@@ -647,6 +663,35 @@ export function workbenchRoutes(): Router {
       requireReadySandbox(row);
       await stopScript(row, req.params.name);
       ok(res, null);
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  // ---- Create PR: Talyn commits, pushes and opens it; an agent only drafts the words ----
+
+  router.post('/:id/pull-request/draft', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      const body = (req.body ?? {}) as { chatId?: unknown; base?: unknown };
+      ok(
+        res,
+        await draftWorkbenchPullRequest(row, {
+          ...(typeof body.chatId === 'string' ? { chatId: body.chatId } : {}),
+          ...(typeof body.base === 'string' ? { base: body.base } : {}),
+        }),
+      );
+    } catch (err) {
+      fail(res, err);
+    }
+  });
+
+  router.post('/:id/pull-request', async (req, res) => {
+    const row = await gatedWorkbench(req, res, req.params.id);
+    if (!row) return;
+    try {
+      ok(res, await createWorkbenchPullRequest(row, req.body ?? {}));
     } catch (err) {
       fail(res, err);
     }

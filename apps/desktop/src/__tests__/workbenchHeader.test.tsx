@@ -61,14 +61,16 @@ function prRow(summary: Partial<PRRow['summary']>, state: PRRow['state'] = 'open
   } as PRRow;
 }
 
-function ops(): WorkbenchOps & { runAction: jest.Mock } {
+function ops(): WorkbenchOps & { runAction: jest.Mock; draftPullRequest: jest.Mock } {
   return {
     runtime: 'sandbox',
     unavailable: null,
     canRemoveQueued: false,
     canAttach: false,
     runAction: jest.fn(async () => {}),
-  } as unknown as WorkbenchOps & { runAction: jest.Mock };
+    draftPullRequest: jest.fn(() => new Promise(() => {})),
+    createPullRequest: jest.fn(),
+  } as unknown as WorkbenchOps & { runAction: jest.Mock; draftPullRequest: jest.Mock };
 }
 
 const chat = { id: 'c1' } as WorkbenchChat;
@@ -80,8 +82,8 @@ afterEach(() => {
 
 describe('WorkbenchHeader action cycle', () => {
   // nextWorkbenchAction → the primary button's label, its shortcut and what a click does.
-  it.each<[string, PRRow | null, Partial<Workbench>, string, string | null, 'prompt' | 'confirm', string]>([
-    ['no PR, with changes', null, {}, 'Create PR', 'Ctrl+Shift+P', 'prompt', 'create_pr'],
+  it.each<[string, PRRow | null, Partial<Workbench>, string, string | null, 'prompt' | 'confirm' | 'dialog', string]>([
+    ['no PR, with changes', null, {}, 'Create PR', 'Ctrl+Shift+P', 'dialog', 'create_pr'],
     ['conflicting PR', prRow({ mergeable: 'CONFLICTING', ciStatus: 'failing_required' }), {}, 'Resolve conflicts', null, 'prompt', 'resolve_conflicts'],
     ['failing required checks', prRow({ ciStatus: 'failing_required' }), {}, 'Fix checks', 'Ctrl+Shift+X', 'prompt', 'fix_checks'],
     ['green PR', prRow({}), {}, 'Merge', 'Ctrl+Shift+M', 'confirm', 'merge'],
@@ -98,6 +100,11 @@ describe('WorkbenchHeader action cycle', () => {
     fireEvent.click(button);
     if (kind === 'prompt') {
       await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
+    } else if (kind === 'dialog') {
+      // Create PR is not a prompt: it opens the dialog and starts a hidden draft.
+      expect(o.runAction).not.toHaveBeenCalled();
+      expect(screen.getByRole('dialog', { name: 'Create pull request' })).toBeInTheDocument();
+      expect(o.draftPullRequest).toHaveBeenCalledWith(chat, 'main');
     } else {
       expect(o.runAction).not.toHaveBeenCalled();
       expect(screen.getByRole('alertdialog')).toBeInTheDocument();
@@ -163,8 +170,8 @@ describe('WorkbenchHeader action cycle', () => {
   });
 
   describe('requests from shortcuts and the palette', () => {
-    it.each<[string, PRRow | null, WorkbenchAction, 'prompt' | 'confirm']>([
-      ['create_pr with no PR', null, 'create_pr', 'prompt'],
+    it.each<[string, PRRow | null, WorkbenchAction, 'prompt' | 'confirm' | 'dialog']>([
+      ['create_pr with no PR', null, 'create_pr', 'dialog'],
       ['fix_checks on failing checks', prRow({ ciStatus: 'failing_required' }), 'fix_checks', 'prompt'],
       ['merge on a green PR', prRow({}), 'merge', 'confirm'],
       ['archive at any time', prRow({}), 'archive', 'confirm'],
@@ -173,6 +180,7 @@ describe('WorkbenchHeader action cycle', () => {
       render(<WorkbenchHeader workbench={{ ...WB, pullRequestId: pr ? 'pr1' : null }} pr={pr} chat={chat} ops={o} />);
       act(() => requestWorkbenchAction('wb1', action));
       if (kind === 'prompt') await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
+      else if (kind === 'dialog') expect(screen.getByRole('dialog', { name: 'Create pull request' })).toBeInTheDocument();
       else expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     });
 
