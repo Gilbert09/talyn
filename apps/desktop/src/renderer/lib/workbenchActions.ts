@@ -29,7 +29,7 @@ export const WORKBENCH_ACTION_SHORTCUT: Record<WorkbenchAction, string | null> =
   archive: 'workbench.archive',
 };
 
-/** The actions sent to the agent as a message. Create PR is not one: Talyn opens the PR itself. */
+/** The actions sent to the agent as a prompt. Create PR sends a short message with its own intent instead. */
 export const PROMPT_ACTIONS: ReadonlySet<WorkbenchAction> = new Set(['resolve_conflicts', 'fix_checks']);
 
 /** The chord of an action ('mod+shift+p'), read from the menu table so the two cannot disagree. */

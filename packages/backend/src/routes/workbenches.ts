@@ -43,7 +43,7 @@ import {
   removeInstructionFile,
 } from '../services/workbenches/instructions.js';
 import { linkPullRequest, publicWorkbench, publicWorkbenches } from '../services/workbenches/prLink.js';
-import { createWorkbenchPullRequest, draftWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
+import { createWorkbenchPullRequest } from '../services/workbenches/pullRequest.js';
 import { sandboxRefusal, workbenchReadiness } from '../services/workbenches/readiness.js';
 import { fleetClientFor, sandboxIdFor } from '../services/workbenches/sandboxRuntime.js';
 import { startScript, stopScript } from '../services/workbenches/scripts.js';
@@ -701,24 +701,7 @@ export function workbenchRoutes(): Router {
     }
   });
 
-  // ---- Create PR: Talyn commits, pushes and opens it; an agent only drafts the words ----
-
-  router.post('/:id/pull-request/draft', async (req, res) => {
-    const row = await gatedWorkbench(req, res, req.params.id);
-    if (!row) return;
-    try {
-      const body = (req.body ?? {}) as { chatId?: unknown; base?: unknown };
-      ok(
-        res,
-        await draftWorkbenchPullRequest(row, {
-          ...(typeof body.chatId === 'string' ? { chatId: body.chatId } : {}),
-          ...(typeof body.base === 'string' ? { base: body.base } : {}),
-        }),
-      );
-    } catch (err) {
-      fail(res, err);
-    }
-  });
+  // ---- Create PR: the agent writes the words in a chat turn; Talyn commits, pushes and opens it ----
 
   router.post('/:id/pull-request', async (req, res) => {
     const row = await gatedWorkbench(req, res, req.params.id);

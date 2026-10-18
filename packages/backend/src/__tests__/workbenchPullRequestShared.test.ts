@@ -1,130 +1,165 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildPrDraftArgv,
-  buildPrDraftPrompt,
+  buildBlocks,
+  buildClaudeArgv,
+  buildCreatePrTurnInstructions,
   commitAllSteps,
   commitsAheadSteps,
-  DEFAULT_FLEET_CODEX_MODEL_ID,
-  DEFAULT_FLEET_MODEL_ID,
+  CREATE_PR_MESSAGE,
+  createPrTurnPrompt,
   describePushFailure,
+  MISSING_PR_BLOCK_MESSAGE,
   parseCommitsAhead,
-  parsePrDraft,
-  PR_DRAFT_CLAUDE_TOOLS,
+  parsePrDetails,
   prCommitMessage,
+  pullRequestOutcomeEvent,
   pushHeadStep,
   shellQuote,
   toShellScript,
+  type AgentEvent,
 } from '@talyn/shared';
 
-describe('parsePrDraft', () => {
-  const json = '{"title":"feat: add it","body":"## Summary\\nAdds it.","commitMessage":"feat: wip"}';
-  const expected = { title: 'feat: add it', body: '## Summary\nAdds it.', commitMessage: 'feat: wip' };
+describe('parsePrDetails', () => {
+  const json = '{"title":"feat: add it","body":"## Summary\\nAdds it.","commitMessage":"feat: wip","draft":false}';
+  const expected = { title: 'feat: add it', body: '## Summary\nAdds it.', commitMessage: 'feat: wip', draft: false };
+  const block = (body: string, lang = 'talyn-pr') => `\`\`\`${lang}\n${body}\n\`\`\``;
 
   it.each<[string, string]>([
-    ['a bare object', json],
-    ['a json fence', `Here is the draft:\n\`\`\`json\n${json}\n\`\`\`\nDone.`],
-    ['a plain fence', `\`\`\`\n${json}\n\`\`\``],
-    ['prose around a bare object', `I looked at the diff. ${json} Hope that helps.`],
-    ['the last fence wins', `\`\`\`json\n{"title":"old","body":"x"}\n\`\`\`\nBetter:\n\`\`\`json\n${json}\n\`\`\``],
-    ['the last object wins', `{"title":"old","body":"x"}\n${json}`],
-    ['braces inside the body string', json.replace('Adds it.', 'Adds {it}.')],
-    ['an earlier object with no title is skipped', `${json}\n{"note":"no title here"}`],
-  ])('reads %s', (name, text) => {
-    const result = parsePrDraft(text);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    if (name === 'braces inside the body string') expect(result.draft.body).toBe('## Summary\nAdds {it}.');
-    else expect(result.draft).toEqual(expected);
+    ['a talyn-pr block after a summary', `I added the thing and its tests.\n\n${block(json)}`],
+    ['a talyn-pr block with trailing spaces on the fence', `\`\`\`talyn-pr   \n${json}\n\`\`\``],
+    ['the last talyn-pr block wins', `${block('{"title":"old","body":"x"}')}\nBetter:\n${block(json)}`],
+    ['a talyn-pr block wins over a later json block', `${block(json)}\n${block('{"title":"other","body":"y"}', 'json')}`],
+    ['a json block when there is no talyn-pr block', `Here:\n${block(json, 'json')}`],
+    ['the last json block wins', `${block('{"title":"old"}', 'json')}\n${block(json, 'json')}`],
+    ['a talyn-pr block with no title falls back to json', `${block(json, 'json')}\n${block('{"note":"x"}')}`],
+  ])('reads %s', (_name, text) => {
+    expect(parsePrDetails(text)).toEqual({ ok: true, details: expected });
   });
 
-  it.each<[string, string, Partial<Record<'title' | 'body' | 'commitMessage', string>>]>([
-    ['missing body and commit message default to empty', '{"title":"fix: x"}', { title: 'fix: x', body: '', commitMessage: '' }],
+  it.each<[string, string, string]>([
+    ['braces inside the body string', '{"title":"t","body":"Adds {it}."}', 'Adds {it}.'],
+    ['a code fence inside the body string', '{"title":"t","body":"Run:\\n```bash\\nnpm test\\n```\\nDone."}', 'Run:\n```bash\nnpm test\n```\nDone.'],
+  ])('keeps %s', (_name, object, body) => {
+    const result = parsePrDetails(block(object));
+    expect(result.ok && result.details.body).toBe(body);
+  });
+
+  it.each<[string, string, Partial<Record<'title' | 'body' | 'commitMessage' | 'draft', unknown>>]>([
+    ['missing fields default', '{"title":"fix: x"}', { title: 'fix: x', body: '', commitMessage: '', draft: false }],
+    ['draft true is kept', '{"title":"fix: x","draft":true}', { draft: true }],
+    ['a draft that is not a boolean is false', '{"title":"fix: x","draft":"yes"}', { draft: false }],
     ['a multi-line title collapses to one line', '{"title":"fix:\\n  x  y","body":""}', { title: 'fix: x y' }],
     ['non-string fields are dropped', '{"title":"fix: x","body":3,"commitMessage":null}', { body: '', commitMessage: '' }],
-  ])('%s', (_name, text, fields) => {
-    const result = parsePrDraft(text);
-    expect(result.ok && result.draft).toMatchObject(fields);
+  ])('%s', (_name, object, fields) => {
+    const result = parsePrDetails(block(object));
+    expect(result.ok && result.details).toMatchObject(fields);
   });
 
   it('caps the title at GitHub’s 256 characters', () => {
-    const result = parsePrDraft(JSON.stringify({ title: 'x'.repeat(400), body: '' }));
-    expect(result.ok && result.draft.title.length).toBe(256);
+    const result = parsePrDetails(block(JSON.stringify({ title: 'x'.repeat(400), body: '' })));
+    expect(result.ok && result.details.title.length).toBe(256);
   });
 
   it.each([
     ['empty text', ''],
     ['prose only', 'I could not find any changes.'],
-    ['a blank title', '{"title":"   ","body":"x"}'],
-    ['a title that is not a string', '{"title":42,"body":"x"}'],
-    ['broken JSON', '```json\n{"title": "x", \n```'],
-    ['an array of strings', '["title", "x"]'],
+    ['a bare object with no fence', json],
+    ['a plain fence', `\`\`\`\n${json}\n\`\`\``],
+    ['a blank title', block('{"title":"   ","body":"x"}')],
+    ['a title that is not a string', block('{"title":42,"body":"x"}')],
+    ['broken JSON', '```talyn-pr\n{"title": "x", \n```'],
+    ['an array', block('["title", "x"]')],
   ])('refuses %s', (_name, text) => {
-    expect(parsePrDraft(text)).toEqual({ ok: false, error: 'The agent did not answer with a title and description.' });
+    expect(parsePrDetails(text)).toEqual({ ok: false, error: MISSING_PR_BLOCK_MESSAGE });
   });
 });
 
-describe('buildPrDraftPrompt', () => {
-  it('names the branch and base, the read-only rule, the template paths and the JSON keys', () => {
-    const prompt = buildPrDraftPrompt({ branch: 'oslo', baseBranch: 'develop' });
+describe('buildCreatePrTurnInstructions', () => {
+  it('names the branch and base, the hands-off rule, the template paths and the block', () => {
+    const text = buildCreatePrTurnInstructions({ branch: 'oslo', baseBranch: 'develop' });
     for (const part of [
       '`oslo`',
       'merged into `develop`',
-      'Only read.',
+      'Do not commit, push or open the pull request',
+      'do not run `gh`',
       'git diff origin/develop...HEAD',
       'git status',
       '.github/pull_request_template.md',
+      '.github/PULL_REQUEST_TEMPLATE.md',
       '.github/PULL_REQUEST_TEMPLATE/',
+      'docs/pull_request_template.md',
+      '```talyn-pr',
       '"title"',
       '"body"',
       '"commitMessage"',
-      '```json',
+      '"draft"',
+      'under 72 characters',
     ]) {
-      expect(prompt).toContain(part);
+      expect(text).toContain(part);
     }
-    expect(prompt).not.toContain('Extra instructions');
+    expect(text).not.toContain('Extra instructions');
   });
 
   it.each([
     ['appended when set', 'Link the Linear ticket.', true],
     ['skipped when blank', '   ', false],
     ['skipped when null', null, false],
+    ['skipped when absent', undefined, false],
   ])('extra instructions are %s', (_name, extra, present) => {
-    const prompt = buildPrDraftPrompt({ branch: 'b', baseBranch: 'main', extraInstructions: extra });
-    expect(prompt.includes('Extra instructions for this pull request:')).toBe(present);
-    if (present) expect(prompt.trimEnd().endsWith('Link the Linear ticket.')).toBe(true);
+    const text = buildCreatePrTurnInstructions({ branch: 'b', baseBranch: 'main', extra });
+    expect(text.includes('Extra instructions for this pull request:')).toBe(present);
+    if (present) expect(text.trimEnd().endsWith('Link the Linear ticket.')).toBe(true);
   });
 });
 
-describe('buildPrDraftArgv', () => {
-  it('Claude: a fork of the chat session, the fast model, read-only tools, prompt last', () => {
-    const argv = buildPrDraftArgv({ agent: 'claude', prompt: '- draft it', resumeSessionId: 'sess-1' });
-    expect(argv[0]).toBe('claude');
-    expect(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2)).toEqual(['--model', DEFAULT_FLEET_MODEL_ID]);
-    expect(argv.slice(argv.indexOf('--permission-mode'), argv.indexOf('--permission-mode') + 2)).toEqual(['--permission-mode', 'dontAsk']);
-    expect(argv.slice(argv.indexOf('--resume'), argv.indexOf('--resume') + 3)).toEqual(['--resume', 'sess-1', '--fork-session']);
-    const tools = argv.slice(argv.indexOf('--allowedTools') + 1, argv.indexOf('--'));
-    expect(tools).toEqual([...PR_DRAFT_CLAUDE_TOOLS]);
-    expect(tools.some((t) => /Edit|Write|git (commit|push)/.test(t))).toBe(false);
-    expect(argv.slice(-2)).toEqual(['--', '- draft it']);
+describe('createPrTurnPrompt', () => {
+  it('Claude: the visible text is the prompt, the instructions an appended system prompt', () => {
+    const turn = createPrTurnPrompt({ agent: 'claude', text: CREATE_PR_MESSAGE, instructions: 'HIDDEN' });
+    expect(turn).toEqual({ prompt: 'Create a pull request', appendSystemPrompt: 'HIDDEN' });
+    const argv = buildClaudeArgv({ prompt: turn.prompt, appendSystemPrompt: turn.appendSystemPrompt });
+    expect(argv.slice(argv.indexOf('--append-system-prompt'), argv.indexOf('--append-system-prompt') + 2)).toEqual([
+      '--append-system-prompt',
+      'HIDDEN',
+    ]);
+    expect(argv.slice(-2)).toEqual(['--', 'Create a pull request']);
   });
 
-  it.each([[undefined], [null], ['']])('Claude with no session (%s) runs fresh', (session) => {
-    const argv = buildPrDraftArgv({ agent: 'claude', prompt: 'p', resumeSessionId: session });
-    expect(argv).not.toContain('--resume');
-    expect(argv).not.toContain('--fork-session');
+  it('Codex: the instructions go in front of the text, with no system prompt', () => {
+    const turn = createPrTurnPrompt({ agent: 'codex', text: CREATE_PR_MESSAGE, instructions: 'HIDDEN' });
+    expect(turn.appendSystemPrompt).toBeUndefined();
+    expect(turn.prompt.startsWith('HIDDEN')).toBe(true);
+    expect(turn.prompt.endsWith('Create a pull request')).toBe(true);
+  });
+});
+
+describe('pullRequestOutcomeEvent in the transcript', () => {
+  const render = (event: Record<string, unknown>) => buildBlocks([{ seq: 7, ...event } as AgentEvent]);
+
+  it.each<[string, Parameters<typeof pullRequestOutcomeEvent>[0], Record<string, unknown>]>([
+    [
+      'an opened PR links it',
+      { ok: true, number: 12, url: 'https://github.com/acme/app/pull/12', existing: false },
+      { text: 'Opened pull request #12', url: 'https://github.com/acme/app/pull/12', isError: false },
+    ],
+    [
+      'an existing PR says it was linked',
+      { ok: true, number: 9, url: 'https://github.com/acme/app/pull/9', existing: true },
+      { text: 'Linked the open pull request #9', isError: false },
+    ],
+    [
+      'a failure carries its message',
+      { ok: false, message: 'GitHub refused the push. The Talyn GitHub App needs Contents: Read & write on acme/app.' },
+      { text: 'GitHub refused the push. The Talyn GitHub App needs Contents: Read & write on acme/app.', isError: true },
+    ],
+  ])('%s', (_name, outcome, block) => {
+    expect(pullRequestOutcomeEvent(outcome).type).toBe('talyn_pr');
+    expect(render(pullRequestOutcomeEvent(outcome))).toEqual([
+      expect.objectContaining({ kind: 'system', subtype: 'talyn_pr', key: '7', ...block }),
+    ]);
   });
 
-  it.each([
-    ['the chat model', 'gpt-5.6-sol', 'gpt-5.6-sol'],
-    ['the default when the chat has none', null, DEFAULT_FLEET_CODEX_MODEL_ID],
-  ])('Codex: read-only, never resumed, with %s', (_name, model, expected) => {
-    const argv = buildPrDraftArgv({ agent: 'codex', prompt: 'p', resumeSessionId: 'thread-1', model });
-    expect(argv.slice(0, 2)).toEqual(['codex', 'exec']);
-    expect(argv).not.toContain('resume');
-    expect(argv).not.toContain('thread-1');
-    expect(argv).toContain('sandbox_mode="read-only"');
-    expect(argv.slice(argv.indexOf('-m'), argv.indexOf('-m') + 2)).toEqual(['-m', expected]);
-    expect(argv.at(-1)).toBe('p');
+  it('a failure has no link', () => {
+    expect(render(pullRequestOutcomeEvent({ ok: false, message: 'x' }))[0]).not.toHaveProperty('url');
   });
 });
 
@@ -145,7 +180,7 @@ describe('commit and push steps', () => {
   });
 
   it.each([
-    ['the drafted message', { title: 'feat: t', commitMessage: '  fix: c  ' }, 'fix: c'],
+    ['the agent’s message', { title: 'feat: t', commitMessage: '  fix: c  ' }, 'fix: c'],
     ['the title when the message is blank', { title: ' feat: t ', commitMessage: '   ' }, 'feat: t'],
     ['the title when there is no message', { title: 'feat: t' }, 'feat: t'],
   ])('prCommitMessage uses %s', (_name, input, expected) => {

@@ -39,7 +39,6 @@ const workbench: WorkbenchLocalBridge = {
   removeWorktree: (input) => ipcRenderer.invoke('workbench:remove-worktree', input),
   startTurn: (input) => ipcRenderer.invoke('workbench:start-turn', input),
   cancelTurn: (chatId) => ipcRenderer.invoke('workbench:cancel-turn', chatId),
-  draftPullRequest: (input) => ipcRenderer.invoke('workbench:pr-draft', input),
   exec: (path, steps) => ipcRenderer.invoke('workbench:exec', path, steps),
   readFile: (path, relativePath) => ipcRenderer.invoke('workbench:read-file', path, relativePath),
   listFiles: (path) => ipcRenderer.invoke('workbench:list-files', path),

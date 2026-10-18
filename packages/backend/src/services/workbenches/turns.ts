@@ -2,13 +2,16 @@ import { v4 as uuid } from 'uuid';
 import {
   buildClaudeArgv,
   buildCodexArgv,
+  buildCreatePrTurnInstructions,
   checkpointCreateSteps,
   checkpointRestoreSteps,
   CLAUDE_SANDBOX_ENV,
   createAgentStreamParser,
+  createPrTurnPrompt,
   shellQuote,
   DEFAULT_WORKBENCH_EFFORT,
   WORKBENCH_EFFORTS,
+  WORKBENCH_MESSAGE_INTENTS,
   type AgentEventDraft,
   type SendWorkbenchMessageInput,
   type WorkbenchAttachment,
@@ -22,6 +25,7 @@ import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
 import { safeMarker } from './execFraming.js';
 import { syncInstructionFiles } from './instructions.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
+import { openPullRequestFromTurn } from './pullRequest.js';
 import {
   killMarker,
   recordWorkbenchEvent,
@@ -101,6 +105,9 @@ export function normaliseMessage(input: SendWorkbenchMessageInput): WorkbenchQue
   if (input.effort !== undefined && !WORKBENCH_EFFORTS.includes(input.effort)) {
     throw new WorkbenchError(`Unknown effort "${String(input.effort)}".`, 400, 'bad_effort');
   }
+  if (input.intent !== undefined && !WORKBENCH_MESSAGE_INTENTS.includes(input.intent)) {
+    throw new WorkbenchError(`Unknown intent "${String(input.intent)}".`, 400, 'bad_intent');
+  }
   const attachments = Array.isArray(input.attachments) ? input.attachments.map(normaliseAttachment) : undefined;
   return {
     id: uuid(),
@@ -109,6 +116,7 @@ export function normaliseMessage(input: SendWorkbenchMessageInput): WorkbenchQue
     ...(typeof input.planMode === 'boolean' ? { planMode: input.planMode } : {}),
     ...(typeof input.model === 'string' && input.model.trim() ? { model: input.model.trim() } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.intent ? { intent: input.intent } : {}),
     queuedAt: new Date().toISOString(),
   };
 }
@@ -256,6 +264,7 @@ export function userMessageEvent(message: WorkbenchQueuedMessage): Record<string
     talyn: {
       kind: 'user_message',
       messageId: message.id,
+      ...(message.intent ? { intent: message.intent } : {}),
       ...(message.planMode !== undefined ? { planMode: message.planMode } : {}),
       ...(message.attachments ? { attachments: message.attachments.map((a) => ({ name: a.name, mimeType: a.mimeType })) } : {}),
     },
@@ -304,7 +313,20 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     const model = message.model ?? chat.model ?? wb.model ?? undefined;
     const effort = message.effort ?? (chat.effort as WorkbenchQueuedMessage['effort']) ?? DEFAULT_WORKBENCH_EFFORT;
     const resumeSessionId = chat.agentSessionId ?? undefined;
-    const prompt = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
+    const text = promptWith(message.text, agent === 'codex' ? attached.other : attached.all);
+    // The transcript keeps `message.text`; the hidden instructions reach the agent only.
+    const { prompt, appendSystemPrompt } =
+      message.intent === 'create_pr'
+        ? createPrTurnPrompt({
+            agent,
+            text,
+            instructions: buildCreatePrTurnInstructions({
+              branch: wb.branch,
+              baseBranch: wb.baseBranch,
+              extra: wb.settings?.prompts?.create_pr,
+            }),
+          })
+        : { prompt: text, appendSystemPrompt: undefined };
     const argv =
       agent === 'codex'
         ? buildCodexArgv({
@@ -318,7 +340,7 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
             // be available inside it, and the box has nothing else to protect.
             sandboxMode: planMode ? 'read-only' : 'danger-full-access',
           })
-        : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId });
+        : buildClaudeArgv({ prompt, model, effort, planMode, resumeSessionId, appendSystemPrompt });
     const env = { ...sandboxScriptEnv(wb), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) };
 
     const parser = createAgentStreamParser(agent);
@@ -347,6 +369,13 @@ async function runOneTurn(chatId: string, message: WorkbenchQueuedMessage, turn:
     if (live.cancelRequested) return cancelledOutcome(events, sawResult);
     if (outcome.exitCode === 0 && !parserResult?.isError) {
       await events.flush();
+      // Once per turn, and only from a turn that ended well. The chat stays
+      // `running` meanwhile, so a queued message cannot edit what is committed.
+      if (message.intent === 'create_pr' && !live.cancelRequested) {
+        const fresh = (await getWorkbench(wb.id)) ?? wb;
+        events.add(await openPullRequestFromTurn(fresh, parserResult?.text ?? ''));
+        await events.flush();
+      }
       return { status: 'idle', statusMessage: null, cancelled: false };
     }
     const why =

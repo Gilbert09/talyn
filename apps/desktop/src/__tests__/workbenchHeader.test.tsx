@@ -10,10 +10,14 @@ import { toast } from '../renderer/stores/toast';
 
 const merge = jest.fn();
 const archive = jest.fn();
+const createChat = jest.fn();
 jest.mock('../renderer/lib/api', () => ({
   api: {
     pullRequests: { merge: (...a: unknown[]) => merge(...a) },
-    workbenches: { archive: (...a: unknown[]) => archive(...a) },
+    workbenches: {
+      archive: (...a: unknown[]) => archive(...a),
+      createChat: (...a: unknown[]) => createChat(...a),
+    },
   },
 }));
 jest.mock('../renderer/stores/toast', () => ({
@@ -61,19 +65,19 @@ function prRow(summary: Partial<PRRow['summary']>, state: PRRow['state'] = 'open
   } as PRRow;
 }
 
-function ops(): WorkbenchOps & { runAction: jest.Mock; draftPullRequest: jest.Mock } {
+function ops(): WorkbenchOps & { runAction: jest.Mock; send: jest.Mock } {
   return {
     runtime: 'sandbox',
     unavailable: null,
     canRemoveQueued: false,
     canAttach: false,
     runAction: jest.fn(async () => {}),
-    draftPullRequest: jest.fn(() => new Promise(() => {})),
-    createPullRequest: jest.fn(),
-  } as unknown as WorkbenchOps & { runAction: jest.Mock; draftPullRequest: jest.Mock };
+    send: jest.fn(async () => ({ queued: false })),
+  } as unknown as WorkbenchOps & { runAction: jest.Mock; send: jest.Mock };
 }
 
 const chat = { id: 'c1' } as WorkbenchChat;
+const CREATE_PR = { text: 'Create a pull request', intent: 'create_pr', planMode: false };
 
 afterEach(() => {
   cleanup();
@@ -82,8 +86,8 @@ afterEach(() => {
 
 describe('WorkbenchHeader action cycle', () => {
   // nextWorkbenchAction → the primary button's label, its shortcut and what a click does.
-  it.each<[string, PRRow | null, Partial<Workbench>, string, string | null, 'prompt' | 'confirm' | 'dialog', string]>([
-    ['no PR, with changes', null, {}, 'Create PR', 'Ctrl+Shift+P', 'dialog', 'create_pr'],
+  it.each<[string, PRRow | null, Partial<Workbench>, string, string | null, 'prompt' | 'confirm' | 'send', string]>([
+    ['no PR, with changes', null, {}, 'Create PR', 'Ctrl+Shift+P', 'send', 'create_pr'],
     ['conflicting PR', prRow({ mergeable: 'CONFLICTING', ciStatus: 'failing_required' }), {}, 'Resolve conflicts', null, 'prompt', 'resolve_conflicts'],
     ['failing required checks', prRow({ ciStatus: 'failing_required' }), {}, 'Fix checks', 'Ctrl+Shift+X', 'prompt', 'fix_checks'],
     ['green PR', prRow({}), {}, 'Merge', 'Ctrl+Shift+M', 'confirm', 'merge'],
@@ -100,15 +104,57 @@ describe('WorkbenchHeader action cycle', () => {
     fireEvent.click(button);
     if (kind === 'prompt') {
       await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
-    } else if (kind === 'dialog') {
-      // Create PR is not a prompt: it opens the dialog and starts a hidden draft.
+    } else if (kind === 'send') {
+      // Create PR is a short message with its own intent, sent straight away.
+      await waitFor(() => expect(o.send).toHaveBeenCalledWith(chat, CREATE_PR));
       expect(o.runAction).not.toHaveBeenCalled();
-      expect(screen.getByRole('dialog', { name: 'Create pull request' })).toBeInTheDocument();
-      expect(o.draftPullRequest).toHaveBeenCalledWith(chat, 'main');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     } else {
       expect(o.runAction).not.toHaveBeenCalled();
       expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     }
+  });
+
+  describe('Create PR', () => {
+    const noPr = { ...WB, pullRequestId: null };
+
+    it('opens a chat first when there is none, then sends to it', async () => {
+      const fresh = { id: 'c2', workbenchId: 'wb1' } as WorkbenchChat;
+      createChat.mockResolvedValue(fresh);
+      const o = ops();
+      render(<WorkbenchHeader workbench={noPr} pr={null} chat={null} ops={o} />);
+      fireEvent.click(screen.getByTestId('workbench-primary-action'));
+      await waitFor(() => expect(o.send).toHaveBeenCalledWith(fresh, CREATE_PR));
+      expect(createChat).toHaveBeenCalledWith('wb1', {});
+    });
+
+    it.each<[string, Partial<Workbench>, string]>([
+      ['behind a running turn', {}, 'It runs when the current turn ends.'],
+      ['while the sandbox starts', { status: 'provisioning' }, 'It runs when the sandbox is ready.'],
+    ])('says it is queued %s', async (_name, over, detail) => {
+      const o = ops();
+      o.send.mockResolvedValue({ queued: true });
+      render(<WorkbenchHeader workbench={{ ...noPr, ...over }} pr={null} chat={chat} ops={o} />);
+      act(() => requestWorkbenchAction('wb1', 'create_pr'));
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith('Queued', detail));
+    });
+
+    it('says why the message could not be sent', async () => {
+      const o = ops();
+      o.send.mockRejectedValue(new Error('The session is not ready.'));
+      render(<WorkbenchHeader workbench={noPr} pr={null} chat={chat} ops={o} />);
+      fireEvent.click(screen.getByTestId('workbench-primary-action'));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not create the pull request', 'The session is not ready.'));
+    });
+
+    it('sends nothing when no chat could be opened', async () => {
+      createChat.mockRejectedValue(new Error('offline'));
+      const o = ops();
+      render(<WorkbenchHeader workbench={noPr} pr={null} chat={null} ops={o} />);
+      fireEvent.click(screen.getByTestId('workbench-primary-action'));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not open a new chat', 'offline'));
+      expect(o.send).not.toHaveBeenCalled();
+    });
   });
 
   it('shows no primary while checks are still running, but the menu still offers what applies', () => {
@@ -170,8 +216,8 @@ describe('WorkbenchHeader action cycle', () => {
   });
 
   describe('requests from shortcuts and the palette', () => {
-    it.each<[string, PRRow | null, WorkbenchAction, 'prompt' | 'confirm' | 'dialog']>([
-      ['create_pr with no PR', null, 'create_pr', 'dialog'],
+    it.each<[string, PRRow | null, WorkbenchAction, 'prompt' | 'confirm' | 'send']>([
+      ['create_pr with no PR', null, 'create_pr', 'send'],
       ['fix_checks on failing checks', prRow({ ciStatus: 'failing_required' }), 'fix_checks', 'prompt'],
       ['merge on a green PR', prRow({}), 'merge', 'confirm'],
       ['archive at any time', prRow({}), 'archive', 'confirm'],
@@ -180,7 +226,7 @@ describe('WorkbenchHeader action cycle', () => {
       render(<WorkbenchHeader workbench={{ ...WB, pullRequestId: pr ? 'pr1' : null }} pr={pr} chat={chat} ops={o} />);
       act(() => requestWorkbenchAction('wb1', action));
       if (kind === 'prompt') await waitFor(() => expect(o.runAction).toHaveBeenCalledWith(action, chat));
-      else if (kind === 'dialog') expect(screen.getByRole('dialog', { name: 'Create pull request' })).toBeInTheDocument();
+      else if (kind === 'send') await waitFor(() => expect(o.send).toHaveBeenCalledWith(chat, CREATE_PR));
       else expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     });
 
@@ -197,6 +243,7 @@ describe('WorkbenchHeader action cycle', () => {
       render(<WorkbenchHeader workbench={{ ...WB, pullRequestId: null }} pr={null} chat={chat} ops={o} />);
       act(() => requestWorkbenchAction('other', 'create_pr'));
       expect(o.runAction).not.toHaveBeenCalled();
+      expect(o.send).not.toHaveBeenCalled();
     });
   });
 });

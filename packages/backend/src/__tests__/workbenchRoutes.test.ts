@@ -216,7 +216,6 @@ describe('workbench routes', () => {
         ['POST', `/workbenches/${wb.id}/scripts/run`, undefined],
         ['POST', `/workbenches/${wb.id}/actions/fix_checks`, undefined],
         ['POST', `/workbenches/${wb.id}/pull-request`, { title: 't', base: 'main' }],
-        ['POST', `/workbenches/${wb.id}/pull-request/draft`, {}],
         ['GET', `/workbenches/${wb.id}/ports/3000/x`, undefined],
         ['POST', `/workbenches/chats/${chatId}/messages`, { text: 'hi' }],
         ['POST', `/workbenches/chats/${chatId}/cancel`, undefined],

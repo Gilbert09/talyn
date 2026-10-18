@@ -1,16 +1,6 @@
 import {
   applyWorkbenchScriptOverrides,
-  buildPrDraftPrompt,
   checkpointRestoreSteps,
-  commitAllSteps,
-  commitsAheadSteps,
-  describePushFailure,
-  gitStderrTail,
-  nothingToOpenMessage,
-  parseCommitsAhead,
-  prCommitMessage,
-  pushHeadStep,
-  workingTreeStatus,
   diffNameStatus,
   diffNumstat,
   diffPatch,
@@ -26,8 +16,6 @@ import {
   untrackedFilePatch,
   untrackedFiles,
   workbenchEnv,
-  type CreateWorkbenchPullRequestInput,
-  type CreateWorkbenchPullRequestResult,
   type GitStep,
   type SendWorkbenchMessageInput,
   type Workbench,
@@ -36,7 +24,6 @@ import {
   type WorkbenchChat,
   type WorkbenchLocalBridge,
   type WorkbenchNextAction,
-  type WorkbenchPrDraft,
 } from '@talyn/shared';
 import { api } from './api';
 import { getDeviceId, getWorkbenchBridge } from './workbenchBridge';
@@ -78,10 +65,6 @@ export interface WorkbenchOps {
   stopScript(name: string): Promise<void>;
   /** Fix checks / Resolve conflicts — a prompt to the agent. */
   runAction(action: WorkbenchPromptActionKind, chat: WorkbenchChat | null): Promise<void>;
-  /** A hidden agent run that drafts the PR's words. Forks `chat`'s session when it has one. */
-  draftPullRequest(chat: WorkbenchChat | null, base: string): Promise<WorkbenchPrDraft>;
-  /** Commit what is uncommitted, push the branch and open the PR. No agent involved. */
-  createPullRequest(input: Omit<CreateWorkbenchPullRequestInput, 'pushed'>): Promise<CreateWorkbenchPullRequestResult>;
   attach(file: PastedFile): Promise<WorkbenchAttachment>;
 }
 
@@ -127,8 +110,6 @@ export function sandboxOps(workbench: Workbench): WorkbenchOps {
     runAction: async (action, chat) => {
       await api.workbenches.action(id, action, chat?.id);
     },
-    draftPullRequest: (chat, base) => api.workbenches.draftPullRequest(id, { ...(chat ? { chatId: chat.id } : {}), base }),
-    createPullRequest: (input) => api.workbenches.createPullRequest(id, input),
     attach: async () => {
       throw new Error('Attachments are not supported in sandbox sessions yet.');
     },
@@ -265,35 +246,6 @@ export function localOps(
         baseBranch: workbench.baseBranch,
       });
       await ops.send(chat, { text: prompt });
-    },
-    draftPullRequest: (chat, baseBranch) =>
-      need().draftPullRequest({
-        path,
-        agent: chat?.agent ?? workbench.agent,
-        prompt: buildPrDraftPrompt({
-          branch: workbench.branch,
-          baseBranch,
-          extraInstructions: workbench.settings?.prompts?.create_pr,
-        }),
-        ...(chat?.agentSessionId ? { resumeSessionId: chat.agentSessionId } : {}),
-        ...(chat?.model ? { model: chat.model } : {}),
-      }),
-    createPullRequest: async (input) => {
-      // The user's own git credentials push; the backend only opens the PR.
-      const status = await run([workingTreeStatus()]);
-      if (status.trim()) {
-        const commit = await need().exec(path, commitAllSteps(prCommitMessage(input)));
-        if (commit.exitCode !== 0) {
-          throw new Error(`Could not commit the changes.\n${gitStderrTail(commit.stderr || commit.stdout)}`.trim());
-        }
-      }
-      const ahead = await need().exec(path, commitsAheadSteps(input.base));
-      if (parseCommitsAhead(ahead.stdout) === 0) throw new Error(nothingToOpenMessage(input.base));
-      const push = await need().exec(path, [pushHeadStep()]);
-      if (push.exitCode !== 0) {
-        throw new Error(describePushFailure({ stderr: push.stderr, runtime: 'local', repoFullName: workbench.repoFullName }));
-      }
-      return api.workbenches.createPullRequest(workbench.id, { ...input, pushed: true });
     },
     attach: async (file) => {
       const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '') || 'attachment';

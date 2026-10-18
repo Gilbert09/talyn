@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChevronDown, ChevronRight, Shield } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitPullRequest, Shield } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderMarkdownish } from '../../lib/markdown';
 import type { AgentEvent, GroupedBlock, ToolBlock } from '@talyn/shared';
@@ -202,6 +202,7 @@ function BlockViewImpl({
         />
       );
     case 'system':
+      if (block.subtype === 'talyn_pr') return <PullRequestLine text={block.text} url={block.url} isError={block.isError} />;
       return <SystemBlock text={block.text} subtype={block.subtype} />;
     case 'result':
       return (
@@ -531,6 +532,25 @@ function PermissionBlock({
         </span>
       </div>
       <ToolInputPreview toolName={toolName} toolInput={toolInput} />
+    </div>
+  );
+}
+
+/** What a workbench's Create PR turn did: the PR it opened, or why it did not. */
+function PullRequestLine({ text, url, isError }: { text: string; url?: string; isError?: boolean }) {
+  return (
+    <div
+      className={cn('flex items-start gap-1.5 text-xs', isError ? 'text-destructive' : 'text-muted-foreground')}
+      data-testid="pull-request-outcome"
+    >
+      <GitPullRequest className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="text-foreground underline-offset-2 hover:underline">
+          {text}
+        </a>
+      ) : (
+        <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</span>
+      )}
     </div>
   );
 }

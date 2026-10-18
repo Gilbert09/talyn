@@ -97,7 +97,6 @@ import type {
   WorkbenchInstructionFile,
   CreateWorkbenchPullRequestInput,
   CreateWorkbenchPullRequestResult,
-  DraftWorkbenchPullRequestInput,
   SendWorkbenchMessageInput,
   UpdateLocalWorkbenchChatInput,
   UpdateWorkbenchChatInput,
@@ -108,7 +107,6 @@ import type {
   WorkbenchCheckpoint,
   WorkbenchEvent,
   WorkbenchNextAction,
-  WorkbenchPrDraft,
   WorkbenchReadiness,
 } from '@talyn/shared';
 // Value import (not a type): the SSE frame parser the admin transcript stream
@@ -2688,15 +2686,9 @@ export const workbenches = {
     request<void>('POST', `/workbenches/${enc(id)}/scripts/${enc(name)}/stop`),
 
   /**
-   * Draft a pull request title and body: a hidden one-shot agent run in the
-   * sandbox that forks the chat's session. Sandbox only; the desktop drafts a
-   * local session itself.
-   */
-  draftPullRequest: (id: string, input: DraftWorkbenchPullRequestInput = {}) =>
-    request<WorkbenchPrDraft>('POST', `/workbenches/${enc(id)}/pull-request/draft`, input),
-  /**
-   * Commit what is uncommitted, push the branch and open the PR. A local
-   * session pushes first itself and sends `pushed: true`.
+   * Commit what is uncommitted, push the branch and open the PR. A sandbox
+   * Create PR turn does this server-side; a local session pushes first itself
+   * and sends `pushed: true`.
    */
   createPullRequest: (id: string, input: CreateWorkbenchPullRequestInput) =>
     request<CreateWorkbenchPullRequestResult>('POST', `/workbenches/${enc(id)}/pull-request`, input),

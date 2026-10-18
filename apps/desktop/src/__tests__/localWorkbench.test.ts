@@ -12,10 +12,14 @@ import type {
 import { LocalTurnController } from '../renderer/lib/localWorkbench';
 import { useWorkbenchStore } from '../renderer/stores/workbenches';
 import { userMessageText } from '../renderer/lib/workbenchFormat';
+import { toast } from '../renderer/stores/toast';
 
 jest.mock('../renderer/lib/supabase', () => ({
   isSupabaseConfigured: () => false,
   supabase: null,
+}));
+jest.mock('../renderer/stores/toast', () => ({
+  toast: { success: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
 type TurnEventCb = Parameters<WorkbenchLocalBridge['onTurnEvent']>[0];
@@ -61,6 +65,11 @@ function makeApi() {
       id: chatId,
       status: input.status,
       agentSessionId: input.agentSessionId ?? null,
+    })),
+    createPullRequest: jest.fn(async (_id: string, _input: unknown) => ({
+      workbench: { ...WB, pullRequestId: 'pr-12' },
+      pullRequest: { number: 12, url: 'https://github.com/acme/app/pull/12' },
+      existing: false,
     })),
   };
 }
@@ -267,5 +276,170 @@ describe('LocalTurnController', () => {
     stop();
     emit('c1', 1, { type: 'assistant' } as AgentEventDraft);
     expect(seqs()).toEqual([]);
+  });
+});
+
+describe('LocalTurnController Create PR', () => {
+  const CREATE_PR = { text: 'Create a pull request', intent: 'create_pr' as const };
+  const REPLY =
+    'Added the thing.\n\n```talyn-pr\n{"title":"feat: add the thing","body":"## Summary\\nAdds it.","commitMessage":"feat: wip","draft":false}\n```';
+  const ok = (resultText = REPLY) => ({ sessionId: 's1', isError: false, resultText, cancelled: false });
+
+  type Steps = Array<{ argv: string[] }>;
+  function gitWorld(bridge: ReturnType<typeof setup>['bridge'], over: { push?: { exitCode: number; stderr: string } } = {}) {
+    bridge.exec.mockImplementation(async (_path: string, steps: Steps) => {
+      const argv = steps.flatMap((s) => s.argv);
+      if (argv.includes('--absolute-git-dir')) return { exitCode: 0, stdout: '/repo/.git\n', stderr: '' };
+      if (argv.includes('--porcelain')) return { exitCode: 0, stdout: ' M a.ts\n', stderr: '' };
+      if (argv.includes('rev-list')) return { exitCode: 0, stdout: '2\n', stderr: '' };
+      if (argv.includes('push')) return { exitCode: 0, stdout: '', stderr: '', ...(over.push ?? {}) };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+  }
+  const gitArgvs = (bridge: ReturnType<typeof setup>['bridge']) =>
+    bridge.exec.mock.calls.flatMap((c) => (c[1] as Steps).map((s) => s.argv));
+  const prEvents = () =>
+    useWorkbenchStore
+      .getState()
+      .chatEvents.c1.events.map((e) => e.event as { type: string })
+      .filter((e) => e.type === 'talyn_pr');
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('Claude: shows the short text, and hands the instructions over as a system prompt', async () => {
+    const { controller, bridge } = setup();
+    await controller.send({ ...WB, settings: { prompts: { create_pr: 'Mention the ticket.' } } }, chat(), CREATE_PR);
+    const user = useWorkbenchStore.getState().chatEvents.c1.events[0];
+    expect(userMessageText(user.event)).toBe('Create a pull request');
+    const req = (bridge.startTurn.mock.calls[0] as unknown[])[0] as { prompt: string; appendSystemPrompt?: string };
+    expect(req.prompt).toBe('Create a pull request');
+    expect(req.appendSystemPrompt).toContain('Do not commit, push or open the pull request');
+    expect(req.appendSystemPrompt).toContain('merged into `main`');
+    expect(req.appendSystemPrompt).toContain('Mention the ticket.');
+  });
+
+  it('Codex: the instructions go in front of the prompt, and the transcript keeps the short text', async () => {
+    const { controller, bridge } = setup();
+    await controller.send(WB, chat({ agent: 'codex' }), CREATE_PR);
+    const req = (bridge.startTurn.mock.calls[0] as unknown[])[0] as { prompt: string; appendSystemPrompt?: string };
+    expect(req.appendSystemPrompt).toBeUndefined();
+    expect(req.prompt).toContain('Do not commit, push or open the pull request');
+    expect(req.prompt.endsWith('Create a pull request')).toBe(true);
+    expect(userMessageText(useWorkbenchStore.getState().chatEvents.c1.events[0].event)).toBe('Create a pull request');
+  });
+
+  it('an ordinary message gets no hidden instructions', async () => {
+    const { controller, bridge } = setup();
+    await controller.send(WB, chat(), { text: 'go' });
+    expect(bridge.startTurn).toHaveBeenCalledWith(expect.not.objectContaining({ appendSystemPrompt: expect.anything() }));
+  });
+
+  it('at the end of the turn commits, pushes and asks the backend to open the PR, then says so in the thread', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', ok());
+
+    expect(gitArgvs(bridge)).toContainEqual(['git', 'commit', '-m', 'feat: wip']);
+    expect(gitArgvs(bridge)).toContainEqual(['git', 'push', '-u', 'origin', 'HEAD']);
+    expect(api.createPullRequest).toHaveBeenCalledWith('wb1', {
+      title: 'feat: add the thing',
+      body: '## Summary\nAdds it.',
+      commitMessage: 'feat: wip',
+      draft: false,
+      base: 'main',
+      pushed: true,
+    });
+    expect(prEvents()).toEqual([
+      expect.objectContaining({ type: 'talyn_pr', ok: true, number: 12, url: 'https://github.com/acme/app/pull/12', existing: false }),
+    ]);
+    expect(useWorkbenchStore.getState().workbenches.wb1.pullRequestId).toBe('pr-12');
+    expect(api.uploadLocalEvents.mock.calls.flatMap((c) => c[1]).some((e: WorkbenchEvent) => e.event.type === 'talyn_pr')).toBe(true);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(api.updateLocalChat).toHaveBeenLastCalledWith('c1', expect.objectContaining({ status: 'idle' }));
+  });
+
+  it('runs a queued Create PR with its intent', async () => {
+    const { controller, bridge } = setup();
+    await controller.send(WB, chat(), { text: 'first' });
+    expect((await controller.send(WB, chat({ status: 'running' }), CREATE_PR)).queued).toBe(true);
+    await controller.handleTurnEnd('c1', ok('done'));
+    expect(bridge.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ prompt: 'Create a pull request', appendSystemPrompt: expect.stringContaining('```talyn-pr') })
+    );
+  });
+
+  it('records the missing block in the thread and opens nothing', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', ok('I could not work out what changed.'));
+    expect(prEvents()).toEqual([
+      expect.objectContaining({ ok: false, message: 'The agent did not return a pull request title. Press Create PR to try again.' }),
+    ]);
+    expect(gitArgvs(bridge).some((a) => a.includes('push'))).toBe(false);
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      'Could not open the pull request',
+      'The agent did not return a pull request title. Press Create PR to try again.'
+    );
+  });
+
+  it('records a refused push in the thread and toasts it', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge, { push: { exitCode: 128, stderr: 'remote: Permission to acme/app.git denied to tom.' } });
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', ok());
+    const [outcome] = prEvents() as unknown as Array<{ ok: boolean; message: string }>;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/^GitHub refused the push\. Check that your git credentials can write to acme\/app\./);
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('Could not open the pull request', outcome.message);
+  });
+
+  it.each([
+    ['a failed turn', { isError: true, cancelled: false }],
+    ['a cancelled turn', { isError: false, cancelled: true }],
+  ])('opens nothing after %s', async (_n, over) => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    await controller.send(WB, chat(), CREATE_PR);
+    await controller.handleTurnEnd('c1', { ...ok(), ...over });
+    expect(prEvents()).toEqual([]);
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('opens one PR when the end of the turn is reported twice', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    await controller.send(WB, chat(), CREATE_PR);
+    await Promise.all([controller.handleTurnEnd('c1', ok()), controller.handleTurnEnd('c1', ok())]);
+    expect(api.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(prEvents()).toHaveLength(1);
+  });
+
+  it('keeps the chat busy while the PR is opened, so a message sent meanwhile queues', async () => {
+    const { controller, bridge, api } = setup();
+    gitWorld(bridge);
+    let release: () => void = () => {};
+    api.createPullRequest.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              workbench: { ...WB, pullRequestId: 'pr-12' },
+              pullRequest: { number: 12, url: 'u' },
+              existing: false,
+            });
+        })
+    );
+    await controller.send(WB, chat(), CREATE_PR);
+    const ending = controller.handleTurnEnd('c1', ok());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(controller.isRunning('c1')).toBe(true);
+    expect((await controller.send(WB, chat(), { text: 'next' })).queued).toBe(true);
+    release();
+    await ending;
+    expect(bridge.startTurn).toHaveBeenLastCalledWith(expect.objectContaining({ prompt: 'next' }));
   });
 });

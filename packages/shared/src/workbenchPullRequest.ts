@@ -1,17 +1,19 @@
 /**
- * Create PR for a workbench, without the chat.
+ * Create PR for a workbench, through the chat.
  *
- * Talyn does the git and GitHub work itself: it commits what is uncommitted,
- * pushes the branch and opens the pull request through the GitHub API. An
- * agent only DRAFTS the words, in a one-shot hidden run that forks the chat's
- * session so it knows what was done. Nothing is posted into the transcript.
+ * Create PR sends a short visible message ({@link CREATE_PR_MESSAGE}) to the
+ * chat with the `create_pr` intent. The agent also gets Talyn's instructions
+ * ({@link buildCreatePrTurnInstructions}), which the transcript never shows:
+ * Claude through `--append-system-prompt`, Codex in front of the prompt. The
+ * agent only writes the words, in a ```talyn-pr block at the end of its reply.
+ * When the turn ends, Talyn commits what is uncommitted, pushes the branch and
+ * opens the pull request through the GitHub API, and records the outcome in
+ * the thread ({@link pullRequestOutcomeEvent}).
  *
  * Pure, like the rest of the workbench vocabulary: the backend (sandbox) and
- * the Electron main process (local) both build the same argv, steps and
- * prompt from here, and parse the same answer.
+ * the desktop (local) build the same instructions and steps from here, and
+ * parse the same answer.
  */
-import { DEFAULT_FLEET_CODEX_MODEL_ID, DEFAULT_FLEET_MODEL_ID } from './index.js';
-import { buildClaudeArgv, buildCodexArgv } from './agentStream.js';
 import type { GitStep } from './workbenchGit.js';
 import type { Workbench, WorkbenchAgent } from './workbench.js';
 
@@ -19,18 +21,12 @@ import type { Workbench, WorkbenchAgent } from './workbench.js';
 // Shapes
 // ============================================================================
 
-/** What the draft run answers with. Every field is plain text; `commitMessage` is '' when nothing is uncommitted. */
-export interface WorkbenchPrDraft {
+/** What the agent answers with. `commitMessage` is '' when nothing is uncommitted. */
+export interface WorkbenchPrDetails {
   title: string;
   body: string;
   commitMessage: string;
-}
-
-export interface DraftWorkbenchPullRequestInput {
-  /** The chat whose agent session the draft forks. Default: the latest chat. */
-  chatId?: string;
-  /** Default: the workbench's base branch. */
-  base?: string;
+  draft: boolean;
 }
 
 export interface CreateWorkbenchPullRequestInput {
@@ -57,36 +53,42 @@ export interface CreateWorkbenchPullRequestResult {
 /** GitHub refuses a longer title. */
 export const PR_TITLE_MAX = 256;
 
-/** The draft run's bound. It reads a diff and writes a paragraph; three minutes is generous. */
-export const PR_DRAFT_TIMEOUT_MS = 180_000;
+/** The visible message a Create PR press sends. */
+export const CREATE_PR_MESSAGE = 'Create a pull request';
+
+/** The fence language of the agent's answer. */
+export const PR_BLOCK_FENCE = 'talyn-pr';
+
+export const MISSING_PR_BLOCK_MESSAGE = 'The agent did not return a pull request title. Press Create PR to try again.';
 
 // ============================================================================
-// The draft prompt and argv
+// The hidden instructions
 // ============================================================================
 
 const TEMPLATE_PATHS = [
   '.github/pull_request_template.md',
   '.github/PULL_REQUEST_TEMPLATE.md',
+  '.github/PULL_REQUEST_TEMPLATE/ (any file in it)',
   'PULL_REQUEST_TEMPLATE.md',
   'docs/pull_request_template.md',
-  '.github/PULL_REQUEST_TEMPLATE/ (any file in it)',
 ];
 
 /**
- * The prompt for the draft run. It must only read: Talyn commits, pushes and
- * opens the PR after a person has checked the words. `extraInstructions` is
- * the workbench's own `settings.prompts.create_pr`, appended as it stands.
+ * What the agent is told on a Create PR turn. It must not commit, push or open
+ * the PR: Talyn does that from the block at the end of the reply. `extra` is
+ * the workbench's `settings.prompts.create_pr`, appended as it stands.
  */
-export function buildPrDraftPrompt(input: {
+export function buildCreatePrTurnInstructions(input: {
   branch: string;
   baseBranch: string;
-  extraInstructions?: string | null;
+  extra?: string | null;
 }): string {
   const base = input.baseBranch;
   const lines = [
-    `Write the pull request for the work on this branch (\`${input.branch}\`), to be merged into \`${base}\`.`,
+    `The person pressed Create PR in Talyn. Prepare the pull request for the work on this branch (\`${input.branch}\`), to be merged into \`${base}\`.`,
     '',
-    'Only read. Do not edit files, commit, push or open the pull request: Talyn does that after a person checks your draft.',
+    'Do not commit, push or open the pull request, and do not run `gh`. Talyn commits any uncommitted changes,',
+    'pushes the branch and opens the pull request from your reply when this turn ends.',
     '',
     '1. See everything that changed:',
     '   - `git status` for uncommitted changes, and `git diff HEAD` for their content.',
@@ -94,73 +96,40 @@ export function buildPrDraftPrompt(input: {
     `     (use \`${base}\` instead of \`origin/${base}\` when there is no remote branch).`,
     '2. Look for a pull request template. Check these paths, in any letter case:',
     ...TEMPLATE_PATHS.map((p) => `   - \`${p}\``),
-    '3. Reply with ONLY one JSON object, in a ```json fenced block, with these keys:',
+    '3. Reply with a short summary for the person: two or three sentences on what the pull request contains.',
+    `4. End the reply with one \`\`\`${PR_BLOCK_FENCE} fenced block that holds one JSON object, and write nothing after it:`,
+    '',
+    `\`\`\`${PR_BLOCK_FENCE}`,
+    '{"title": "...", "body": "...", "commitMessage": "...", "draft": false}',
+    '```',
+    '',
     '   - "title": a conventional-commit summary of the change (`feat: …`, `fix: …`, `chore: …`), under 72 characters.',
-    '   - "body": the description, in Markdown. If there is a template, fill it in and keep its headings.',
+    '   - "body": the description, in Markdown, as a JSON string. If there is a template, fill it in and keep its headings.',
     '     Otherwise say what changed and why, how it was tested, and anything a reviewer must know.',
     '   - "commitMessage": a conventional commit message for the uncommitted changes, or "" when there are none.',
+    '   - "draft": true only when the person asked for a draft pull request.',
   ];
-  const extra = input.extraInstructions?.trim();
+  const extra = input.extra?.trim();
   if (extra) lines.push('', 'Extra instructions for this pull request:', '', extra);
   return lines.join('\n');
 }
 
 /**
- * Claude's tools for the draft run: reads only. With `--permission-mode
- * dontAsk`, anything not on this list is denied without a prompt, which is
- * what a headless run needs. Claude Code matches `Bash(git diff:*)` per
- * command, so `git diff && rm x` does not match.
+ * How a Create PR turn's instructions reach each agent. Claude takes them as
+ * an appended system prompt. Codex has no such flag, so they go in front of
+ * the prompt. The stored, visible message is `text` either way.
  */
-export const PR_DRAFT_CLAUDE_TOOLS: readonly string[] = [
-  'Read',
-  'Glob',
-  'Grep',
-  'Bash(git status:*)',
-  'Bash(git diff:*)',
-  'Bash(git log:*)',
-  'Bash(git show:*)',
-  'Bash(git branch:*)',
-  'Bash(git rev-parse:*)',
-  'Bash(ls:*)',
-  'Bash(cat:*)',
-];
-
-/**
- * The draft run's argv.
- *
- * Claude: `claude -p … --model <Sonnet> --permission-mode dontAsk --resume
- * <session> --fork-session --allowedTools …`. The fork is what keeps the
- * chat's own session untouched: the draft gets a new session id, and nothing
- * stores it. With no session yet, it runs fresh.
- *
- * Codex: `codex exec --json … -c sandbox_mode="read-only"`, fresh. Codex has
- * no fork, and `exec resume` would continue the chat's own session.
- */
-export function buildPrDraftArgv(input: {
+export function createPrTurnPrompt(input: {
   agent: WorkbenchAgent;
-  prompt: string;
-  resumeSessionId?: string | null;
-  /** Codex only: the chat's model, which is known to work for this subscription. */
-  model?: string | null;
-}): string[] {
-  if (input.agent === 'codex') {
-    return buildCodexArgv({
-      prompt: input.prompt,
-      model: input.model || DEFAULT_FLEET_CODEX_MODEL_ID,
-      sandboxMode: 'read-only',
-    });
-  }
-  return buildClaudeArgv({
-    prompt: input.prompt,
-    model: DEFAULT_FLEET_MODEL_ID,
-    permissionMode: 'dontAsk',
-    ...(input.resumeSessionId ? { resumeSessionId: input.resumeSessionId, forkSession: true } : {}),
-    allowedTools: [...PR_DRAFT_CLAUDE_TOOLS],
-  });
+  text: string;
+  instructions: string;
+}): { prompt: string; appendSystemPrompt?: string } {
+  if (input.agent === 'codex') return { prompt: `${input.instructions}\n\n---\n\n${input.text}` };
+  return { prompt: input.text, appendSystemPrompt: input.instructions };
 }
 
 // ============================================================================
-// Parsing the draft
+// Parsing the answer
 // ============================================================================
 
 /** The index just past the `{…}` that opens at `start`, string-aware; -1 when it never closes. */
@@ -181,26 +150,30 @@ function objectEnd(text: string, start: number): number {
   return -1;
 }
 
-/** Every top-level JSON object in `text` that parses, in order. */
-function jsonObjects(text: string): Array<Record<string, unknown>> {
+/**
+ * The JSON object that opens each fence of `lang`, in order. The object is
+ * read string-aware rather than up to the closing fence, because a body may
+ * quote a code block of its own.
+ */
+function fencedObjects(text: string, lang: string): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
-  for (let i = text.indexOf('{'); i !== -1; i = text.indexOf('{', i + 1)) {
+  for (const m of text.matchAll(new RegExp(`\`\`\`${lang}[^\\S\\n]*\\n`, 'g'))) {
+    let i = (m.index ?? 0) + m[0].length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== '{') continue;
     const end = objectEnd(text, i);
     if (end === -1) continue;
     try {
       const value: unknown = JSON.parse(text.slice(i, end));
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        out.push(value as Record<string, unknown>);
-        i = end - 1;
-      }
+      if (value && typeof value === 'object' && !Array.isArray(value)) out.push(value as Record<string, unknown>);
     } catch {
-      // Not JSON from here; try the next brace.
+      // Not JSON; the next fence may be.
     }
   }
   return out;
 }
 
-function draftFrom(value: Record<string, unknown>): WorkbenchPrDraft | null {
+function detailsFrom(value: Record<string, unknown>): WorkbenchPrDetails | null {
   if (typeof value.title !== 'string') return null;
   const title = value.title.replace(/\s+/g, ' ').trim().slice(0, PR_TITLE_MAX);
   if (!title) return null;
@@ -208,23 +181,36 @@ function draftFrom(value: Record<string, unknown>): WorkbenchPrDraft | null {
     title,
     body: typeof value.body === 'string' ? value.body.trim() : '',
     commitMessage: typeof value.commitMessage === 'string' ? value.commitMessage.trim() : '',
+    draft: value.draft === true,
   };
 }
 
 /**
- * The draft in the agent's final message. The last ```json fenced block wins;
- * without one, the last JSON object in the text. An object without a title is
- * not a draft.
+ * The pull request in the agent's final message: the last ```talyn-pr block
+ * with a title, else the last ```json block with one. An object without a
+ * title is not an answer.
  */
-export function parsePrDraft(text: string): { ok: true; draft: WorkbenchPrDraft } | { ok: false; error: string } {
-  const fences = [...(text ?? '').matchAll(/```(?:json)?[^\S\n]*\n([\s\S]*?)```/g)].map((m) => m[1]);
-  for (const block of fences.reverse()) {
-    const drafts = jsonObjects(block).map(draftFrom).filter((d): d is WorkbenchPrDraft => d !== null);
-    if (drafts.length > 0) return { ok: true, draft: drafts[drafts.length - 1] };
+export function parsePrDetails(text: string): { ok: true; details: WorkbenchPrDetails } | { ok: false; error: string } {
+  for (const lang of [PR_BLOCK_FENCE, 'json']) {
+    const found = fencedObjects(text ?? '', lang)
+      .map(detailsFrom)
+      .filter((d): d is WorkbenchPrDetails => d !== null);
+    if (found.length > 0) return { ok: true, details: found[found.length - 1] };
   }
-  const drafts = jsonObjects(text ?? '').map(draftFrom).filter((d): d is WorkbenchPrDraft => d !== null);
-  if (drafts.length > 0) return { ok: true, draft: drafts[drafts.length - 1] };
-  return { ok: false, error: 'The agent did not answer with a title and description.' };
+  return { ok: false, error: MISSING_PR_BLOCK_MESSAGE };
+}
+
+// ============================================================================
+// The outcome in the thread
+// ============================================================================
+
+export type PullRequestOutcome =
+  | { ok: true; number: number; url: string; existing: boolean }
+  | { ok: false; message: string };
+
+/** The transcript event that records what a Create PR turn did. `buildBlocks` renders it as one line. */
+export function pullRequestOutcomeEvent(outcome: PullRequestOutcome): Record<string, unknown> {
+  return { type: 'talyn_pr', ...outcome };
 }
 
 // ============================================================================
@@ -270,7 +256,7 @@ export function pushHeadStep(): GitStep {
   return { argv: ['git', 'push', '-u', 'origin', 'HEAD'], env: { GIT_TERMINAL_PROMPT: '0' } };
 }
 
-/** The commit message for uncommitted changes: the draft's, else the title. */
+/** The commit message for uncommitted changes: the agent's, else the title. */
 export function prCommitMessage(input: Pick<CreateWorkbenchPullRequestInput, 'title' | 'commitMessage'>): string {
   return input.commitMessage?.trim() || input.title.trim();
 }

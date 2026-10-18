@@ -13,7 +13,6 @@ import {
 } from './git';
 import { discoverInstructionFiles } from './instructionFiles';
 import { WorkbenchPaths } from './paths';
-import { PrDrafts } from './prDraft';
 import { RepoPaths, repoFullNameFromRemote } from './repoPaths';
 import { Scripts } from './scripts';
 import { Terminals } from './terminals';
@@ -52,7 +51,6 @@ export function registerWorkbenchIpc(
   };
   const trees = new WorktreeManager(paths);
   const agents = new AgentProcesses(paths, emit);
-  const prDrafts = new PrDrafts();
   const terminals = new Terminals(emit);
   const scripts = new Scripts(paths, terminals, emit);
   let shuttingDown = false;
@@ -98,11 +96,6 @@ export function registerWorkbenchIpc(
       agents.startTurn(input),
   );
   handle('cancel-turn', (chatId: string) => agents.cancelTurn(chatId));
-  handle(
-    'pr-draft',
-    (input: Parameters<WorkbenchLocalBridge['draftPullRequest']>[0]) =>
-      prDrafts.draft(input),
-  );
   handle('exec', async (worktree: string, steps: GitStep[]) => {
     // Give checkpoint steps a private index outside the worktree.
     const replacements = new Map<string, string>();
@@ -188,7 +181,6 @@ export function registerWorkbenchIpc(
     if (shuttingDown) return;
     shuttingDown = true;
     stopGitProcesses();
-    prDrafts.shutdown();
     void Promise.allSettled([
       agents.shutdown(),
       scripts.shutdown(),

@@ -180,18 +180,24 @@ diff, file list and read, the terminal (as user `fleet`), and checkpoint restore
 `talyn-app-dev` has Contents: read. The production App has write. Merge and Archive from the new
 header have not run against a real PR.
 
-**Create PR is not a prompt.** It opens a dialog (`CreatePullRequestDialog.tsx`). An agent
-only drafts the title, the description and a commit message, in a hidden one-shot run: Claude
-forks the chat's session (`--resume <id> --fork-session --permission-mode dontAsk` with
-read-only `--allowedTools`), Codex runs fresh with `sandbox_mode="read-only"`. Nothing goes
-into the transcript, and the chat's session id does not change. Talyn then commits what is
-uncommitted, checks that the branch is ahead of the base, pushes and opens the PR through the
-GitHub API, and links it. A sandbox does this in `services/workbenches/pullRequest.ts`
-(`POST /workbenches/:id/pull-request/draft` and `POST /workbenches/:id/pull-request`). A local
-session drafts through the `workbench:pr-draft` IPC, commits and pushes with the user's own git
-credentials, and then calls the same route with `pushed: true`. The argv, the git steps, the
-prompt and the parser are in `@talyn/shared` `workbenchPullRequest.ts`.
-`settings.prompts.create_pr` is now extra instructions for the draft.
+**Create PR goes through the chat, but the agent does not push.** The button sends the short
+message "Create a pull request" with the `create_pr` intent (a running turn queues it). The
+transcript shows only that text. The agent also gets Talyn's instructions: Claude through
+`--append-system-prompt` for that turn, Codex in front of the prompt argument. The instructions
+tell it to read the branch's changes and the PR template, not to commit, push or run `gh`, and
+to end its reply with a ```` ```talyn-pr ```` block (`title`, `body`, `commitMessage`, `draft`).
+When the turn ends well, Talyn parses the last such block and commits what is uncommitted,
+checks that the branch is ahead of the base, pushes and opens the PR through the GitHub API, and
+links it. A sandbox does this in `services/workbenches/pullRequest.ts`
+(`openPullRequestFromTurn`, called from `turns.ts`). A local session does it in
+`LocalTurnController.handleTurnEnd`: it commits and pushes with the user's own git credentials,
+then calls `POST /workbenches/:id/pull-request` with `pushed: true`. The chat stays `running`
+until this is done, so a queued message cannot change what is committed. The outcome goes into
+the thread as a `talyn_pr` event (the PR link, or the error such as the GitHub App's
+Contents: write message), and a failure also shows a toast. A failed or cancelled turn opens
+nothing. The instructions, the git steps and the parser are in `@talyn/shared`
+`workbenchPullRequest.ts`. `settings.prompts.create_pr` is extra instructions, appended to
+Talyn's.
 
 ### How to run it locally
 

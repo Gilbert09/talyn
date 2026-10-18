@@ -28,7 +28,7 @@ import { toast } from '../stores/toast';
 import { trackEvent } from '../lib/analytics';
 import { useWorkbenchStore } from '../stores/workbenches';
 import { reconcileWorkbenches } from '../lib/workbenchData';
-import { installWorkbenchNotifications } from '../lib/workbenchNotify';
+import { installWorkbenchNotifications, toastPullRequestFailures } from '../lib/workbenchNotify';
 import { getLocalController } from '../lib/localWorkbench';
 
 // ---------------------------------------------------------------------------
@@ -460,6 +460,7 @@ export function useApiConnection() {
         useWorkbenchStore.getState().upsertChat(payload.chat);
       }),
       wsClient.on<WorkbenchWsPayloads['workbench:event']>('workbench:event', (payload) => {
+        toastPullRequestFailures(payload.chatId, payload.events);
         const buf = pendingWorkbenchEvents.get(payload.chatId);
         if (buf) buf.push(...payload.events);
         else pendingWorkbenchEvents.set(payload.chatId, [...payload.events]);

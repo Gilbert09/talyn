@@ -1,7 +1,11 @@
 import {
+  buildCreatePrTurnInstructions,
   checkpointCreateSteps,
+  createPrTurnPrompt,
   DEFAULT_WORKBENCH_EFFORT,
+  parsePrDetails,
   pickWorkbenchName,
+  pullRequestOutcomeEvent,
   withSeq,
   workbenchNameFromTask,
   type AgentEventDraft,
@@ -10,7 +14,9 @@ import {
   type WorkbenchAgent,
   type WorkbenchChat,
   type WorkbenchEvent,
+  type PullRequestOutcome,
   type WorkbenchLocalBridge,
+  type WorkbenchMessageIntent,
   type WorkbenchQueuedMessage,
   type WorkbenchTurnOutcome,
 } from '@talyn/shared';
@@ -18,6 +24,8 @@ import { api } from './api';
 import { getDeviceId, getWorkbenchBridge, newClientId } from './workbenchBridge';
 import { ensureChatHistory } from './workbenchData';
 import { makeUserMessageEvent } from './workbenchFormat';
+import { openLocalPullRequest } from './localPullRequest';
+import { toast } from '../stores/toast';
 import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 
 /**
@@ -33,7 +41,7 @@ import { lastSeq, lastTurn, useWorkbenchStore } from '../stores/workbenches';
 /** Upload cadence. One request a second keeps a busy turn to a handful of writes. */
 export const LOCAL_UPLOAD_INTERVAL_MS = 1000;
 
-type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat'>;
+type WorkbenchApi = Pick<typeof api.workbenches, 'uploadLocalEvents' | 'updateLocalChat' | 'createPullRequest'>;
 
 export interface LocalControllerDeps {
   bridge: WorkbenchLocalBridge;
@@ -47,6 +55,9 @@ export interface LocalControllerDeps {
 interface RunningTurn {
   workbenchId: string;
   turn: number;
+  intent?: WorkbenchMessageIntent;
+  /** Set once the turn's pull request is under way, so a second end cannot open another. */
+  pullRequestStarted?: boolean;
 }
 
 export class LocalTurnController {
@@ -159,6 +170,7 @@ export class LocalTurnController {
         planMode: input.planMode,
         model: input.model,
         effort: input.effort,
+        intent: input.intent,
         queuedAt: new Date().toISOString(),
       };
       useWorkbenchStore.getState().enqueueLocal(chat.id, queued);
@@ -173,14 +185,27 @@ export class LocalTurnController {
     if (!path) throw new Error('This session has no local path.');
     const events = useWorkbenchStore.getState().chatEvents[chat.id]?.events ?? [];
     const turn = Math.max(lastTurn(events), this.running.get(chat.id)?.turn ?? 0) + 1;
-    this.running.set(chat.id, { workbenchId: workbench.id, turn });
+    this.running.set(chat.id, { workbenchId: workbench.id, turn, intent: input.intent });
     this.setStatus(chat, 'running');
 
     await this.checkpoint(path, chat.id, turn);
     this.record(chat.id, turn, makeUserMessageEvent(input.text, input.attachments));
     void this.report(chat.id, { status: 'running' });
 
-    const prompt = withAttachmentNote(input.text, input.attachments);
+    const text = withAttachmentNote(input.text, input.attachments);
+    // The transcript keeps `input.text`; the hidden instructions reach the agent only.
+    const { prompt, appendSystemPrompt } =
+      input.intent === 'create_pr'
+        ? createPrTurnPrompt({
+            agent: chat.agent,
+            text,
+            instructions: buildCreatePrTurnInstructions({
+              branch: workbench.branch,
+              baseBranch: workbench.baseBranch,
+              extra: workbench.settings?.prompts?.create_pr,
+            }),
+          })
+        : { prompt: text, appendSystemPrompt: undefined };
     try {
       await this.deps.bridge.startTurn({
         workbenchId: workbench.id,
@@ -193,6 +218,7 @@ export class LocalTurnController {
         effort: input.effort ?? chat.effort ?? DEFAULT_WORKBENCH_EFFORT,
         planMode: input.planMode ?? chat.planMode,
         resumeSessionId: chat.agentSessionId ?? undefined,
+        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
         attachments: input.attachments,
       });
     } catch (err) {
@@ -233,6 +259,12 @@ export class LocalTurnController {
 
   async handleTurnEnd(chatId: string, outcome: WorkbenchTurnOutcome): Promise<void> {
     const wasRunning = this.running.get(chatId);
+    // While the PR is opened the turn still holds the chat, so a message sent
+    // meanwhile queues instead of editing what is being committed.
+    if (wasRunning?.intent === 'create_pr' && !wasRunning.pullRequestStarted && !outcome.isError && !outcome.cancelled) {
+      wasRunning.pullRequestStarted = true;
+      await this.openPullRequest(chatId, wasRunning, outcome.resultText);
+    }
     this.running.delete(chatId);
     const errorText = outcome.resultText?.trim();
     if (outcome.isError && !outcome.cancelled && errorText && wasRunning) {
@@ -256,6 +288,29 @@ export class LocalTurnController {
     const fresh = findChat(chatId);
     if (!workbench || !fresh) return;
     await this.startTurn(workbench, { ...fresh, status: 'idle' }, next);
+  }
+
+  /** The end of a Create PR turn: open the PR from the agent's block, and say what happened in the thread. */
+  private async openPullRequest(chatId: string, run: RunningTurn, finalText: string): Promise<void> {
+    const workbench = useWorkbenchStore.getState().workbenches[run.workbenchId];
+    const parsed = parsePrDetails(finalText);
+    let outcome: PullRequestOutcome;
+    if (!parsed.ok) outcome = { ok: false, message: parsed.error };
+    else if (!workbench) outcome = { ok: false, message: 'The session is no longer loaded.' };
+    else {
+      try {
+        const result = await openLocalPullRequest(this.deps.bridge, this.deps.api, workbench, {
+          ...parsed.details,
+          base: workbench.baseBranch,
+        });
+        useWorkbenchStore.getState().upsertWorkbench(result.workbench);
+        outcome = { ok: true, ...result.pullRequest, existing: result.existing };
+      } catch (err) {
+        outcome = { ok: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    this.record(chatId, run.turn, pullRequestOutcomeEvent(outcome) as AgentEventDraft);
+    if (!outcome.ok) toast.error('Could not open the pull request', outcome.message);
   }
 
   async cancel(chatId: string): Promise<void> {

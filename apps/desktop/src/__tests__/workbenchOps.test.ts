@@ -3,7 +3,7 @@
  */
 import type { Workbench, WorkbenchLocalBridge } from '@talyn/shared';
 import { localOps, sandboxOps } from '../renderer/lib/workbenchOps';
-import { api } from '../renderer/lib/api';
+import { openLocalPullRequest } from '../renderer/lib/localPullRequest';
 import { getDeviceId, resetDeviceIdCache } from '../renderer/lib/workbenchBridge';
 
 jest.mock('../renderer/lib/supabase', () => ({ isSupabaseConfigured: () => false, supabase: null }));
@@ -140,67 +140,73 @@ describe('localOps', () => {
   });
 });
 
-describe('localOps Create PR', () => {
+describe('openLocalPullRequest', () => {
   const input = { title: 'feat: add it', body: 'Body', base: 'main', draft: false, commitMessage: 'feat: the change' };
   const result = { workbench: wb(), pullRequest: { number: 9, url: 'u' }, existing: false };
 
-  function gitBridge(over: { status?: string; ahead?: string; push?: { exitCode: number; stderr: string } } = {}) {
+  function gitBridge(over: { status?: string; statusExit?: number; ahead?: string; push?: { exitCode: number; stderr: string } } = {}) {
     return bridgeWith((steps) => {
-      if (has(steps, 'status', '--porcelain')) return { exitCode: 0, stdout: over.status ?? '' };
+      if (has(steps, 'status', '--porcelain')) {
+        return { exitCode: over.statusExit ?? 0, stdout: over.status ?? '', stderr: over.statusExit ? 'fatal: not a git repository' : '' };
+      }
       if (has(steps, 'rev-list', '--count')) return { exitCode: 0, stdout: over.ahead ?? '2\n' };
       if (has(steps, 'push', '-u', 'origin', 'HEAD')) return { stdout: '', ...(over.push ?? { exitCode: 0, stderr: '' }) };
       return undefined;
     });
   }
 
-  afterEach(() => jest.restoreAllMocks());
+  const fakeApi = () => ({ createPullRequest: jest.fn(async () => result as never) });
 
   it.each([
-    ['dirty: commits with the drafted message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '-m', 'feat: the change']],
-    ['dirty, no drafted message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '-m', 'feat: add it']],
+    ['dirty: commits with the agent’s message, as one argv element', ' M a.ts\n', input, ['git', 'commit', '-m', 'feat: the change']],
+    ['dirty, no message: commits with the title', '?? b.ts\n', { ...input, commitMessage: '' }, ['git', 'commit', '-m', 'feat: add it']],
     ['a message with shell syntax stays one argument', ' M a.ts\n', { ...input, commitMessage: 'fix: $(rm -rf /) `x`' }, ['git', 'commit', '-m', 'fix: $(rm -rf /) `x`']],
     ['clean: no commit', '', input, null],
   ] as const)('%s, then pushes and asks the backend to open the PR', async (_n, status, given, commitArgv) => {
     const { bridge, exec } = gitBridge({ status });
-    const create = jest.spyOn(api.workbenches, 'createPullRequest').mockResolvedValue(result as never);
-    await localOps(wb(), bridge, null).createPullRequest(given);
+    const api = fakeApi();
+    await expect(openLocalPullRequest(bridge, api, wb(), given)).resolves.toBe(result);
     const argvs = exec.mock.calls.flatMap((c) => c[1].map((s: Step) => s.argv));
     const commit = argvs.find((a) => a[1] === 'commit');
     if (commitArgv) expect(commit).toEqual(commitArgv);
     else expect(commit).toBeUndefined();
     expect(argvs).toContainEqual(['git', 'push', '-u', 'origin', 'HEAD']);
-    expect(create).toHaveBeenCalledWith('wb1', { ...given, pushed: true });
+    expect(api.createPullRequest).toHaveBeenCalledWith('wb1', { ...given, pushed: true });
   });
 
   it('refuses when the branch has no commits ahead of the base', async () => {
     const { bridge } = gitBridge({ ahead: '0\n' });
-    const create = jest.spyOn(api.workbenches, 'createPullRequest');
-    await expect(localOps(wb(), bridge, null).createPullRequest(input)).rejects.toThrow(
+    const api = fakeApi();
+    await expect(openLocalPullRequest(bridge, api, wb(), input)).rejects.toThrow(
       'There is nothing to open a pull request for: the branch has no commits ahead of main.',
     );
-    expect(create).not.toHaveBeenCalled();
+    expect(api.createPullRequest).not.toHaveBeenCalled();
   });
 
   it('says what git said when the push is refused, and opens nothing', async () => {
     const { bridge } = gitBridge({
       push: { exitCode: 128, stderr: 'remote: Permission to acme/app.git denied to tom.\nfatal: unable to access: The requested URL returned error: 403' },
     });
-    const create = jest.spyOn(api.workbenches, 'createPullRequest');
-    const err = await localOps(wb(), bridge, null).createPullRequest(input).catch((e: Error) => e);
+    const api = fakeApi();
+    const err = await openLocalPullRequest(bridge, api, wb(), input).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/^GitHub refused the push\. Check that your git credentials can write to acme\/app\./);
     expect((err as Error).message).toContain('error: 403');
-    expect(create).not.toHaveBeenCalled();
+    expect(api.createPullRequest).not.toHaveBeenCalled();
   });
 
-  it('drafts through the bridge, forking the chat session, with the base in the prompt', async () => {
-    const draftPullRequest = jest.fn(async () => ({ title: 't', body: 'b', commitMessage: '' }));
-    const bridge = { draftPullRequest } as unknown as WorkbenchLocalBridge;
-    const chat = { id: 'c1', agent: 'claude', agentSessionId: 'sess-9', model: null } as never;
-    await localOps(wb({ settings: { prompts: { create_pr: 'Mention the ticket.' } } }), bridge, null).draftPullRequest(chat, 'develop');
-    const arg = (draftPullRequest.mock.calls[0] as unknown[])[0] as { path: string; agent: string; resumeSessionId: string; prompt: string };
-    expect(arg).toMatchObject({ path: '/work/lisbon', agent: 'claude', resumeSessionId: 'sess-9' });
-    expect(arg.prompt).toContain('merged into `develop`');
-    expect(arg.prompt).toContain('Mention the ticket.');
+  it.each([
+    ['git status fails', { statusExit: 128 }, /^Could not read the git status\.\nfatal: not a git repository/],
+  ])('stops when %s', async (_n, over, expected) => {
+    const { bridge } = gitBridge(over);
+    const api = fakeApi();
+    await expect(openLocalPullRequest(bridge, api, wb(), input)).rejects.toThrow(expected);
+    expect(api.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses a session with no local path', async () => {
+    const { bridge, exec } = gitBridge();
+    await expect(openLocalPullRequest(bridge, fakeApi(), wb({ localPath: null }), input)).rejects.toThrow('This session has no local path.');
+    expect(exec).not.toHaveBeenCalled();
   });
 });
 

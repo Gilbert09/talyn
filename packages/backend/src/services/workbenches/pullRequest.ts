@@ -1,47 +1,33 @@
 import {
-  buildPrDraftArgv,
-  buildPrDraftPrompt,
-  CLAUDE_SANDBOX_ENV,
   commitAllSteps,
   commitsAheadSteps,
-  createAgentStreamParser,
   describePushFailure,
   gitStderrTail,
   isValidBranchName,
   nothingToOpenMessage,
   parseCommitsAhead,
-  parsePrDraft,
-  PR_DRAFT_TIMEOUT_MS,
+  parsePrDetails,
   PR_TITLE_MAX,
   prCommitMessage,
+  pullRequestOutcomeEvent,
   pushHeadStep,
-  shellQuote,
   workingTreeStatus,
   type CreateWorkbenchPullRequestInput,
   type CreateWorkbenchPullRequestResult,
-  type DraftWorkbenchPullRequestInput,
-  type WorkbenchPrDraft,
 } from '@talyn/shared';
 import { GitHubApiError, GitHubNotConnectedError, githubService } from '../github.js';
 import { prMonitorService } from '../prMonitor.js';
 import { emitWorkbenchUpdated } from './emit.js';
 import { localRuntimeError, notReadyError, WorkbenchError } from './errors.js';
-import { safeMarker } from './execFraming.js';
 import { linkPullRequest, publicWorkbench } from './prLink.js';
-import {
-  recordWorkbenchEvent,
-  refreshSandboxCredentials,
-  repoDirFor,
-  runGitSteps,
-  runStream,
-  sandboxScriptEnv,
-} from './sandboxRuntime.js';
-import { getChat, latestChat, updateWorkbench, type WorkbenchRow } from './store.js';
+import { recordWorkbenchEvent, refreshSandboxCredentials, runGitSteps } from './sandboxRuntime.js';
+import { updateWorkbench, type WorkbenchRow } from './store.js';
 
 /**
- * Create PR without the chat: Talyn commits, pushes and opens the PR itself,
- * and an agent only drafts the words. See `workbenchPullRequest.ts` in
- * `@talyn/shared` for the argv, the steps and the prompt both runtimes share.
+ * Create PR: the chat's agent writes the words in a Create PR turn, and Talyn
+ * commits, pushes and opens the PR itself when that turn ends. See
+ * `workbenchPullRequest.ts` in `@talyn/shared` for the instructions, the steps
+ * and the parser both runtimes share.
  */
 
 /** A push or a fetch through the fleet proxy; generous for a large first push. */
@@ -58,60 +44,6 @@ function requireBase(base: unknown, fallback: string): string {
   const value = typeof base === 'string' && base.trim() ? base.trim() : fallback;
   if (!isValidBranchName(value)) throw new WorkbenchError('The base branch is not a valid branch name.', 400, 'bad_base');
   return value;
-}
-
-// ============================================================================
-// Draft
-// ============================================================================
-
-/**
- * A title, body and commit message for the branch, from a one-shot agent run
- * in the sandbox. Claude forks the chat's session, so the draft knows what was
- * done and the chat's own session is untouched; the forked id is never saved.
- * Allowed while a turn runs: a fork reads the session, it does not join it.
- */
-export async function draftWorkbenchPullRequest(
-  row: WorkbenchRow,
-  input: DraftWorkbenchPullRequestInput = {},
-): Promise<WorkbenchPrDraft> {
-  requireReadySandbox(row);
-  const base = requireBase(input.base, row.baseBranch);
-  const chat = input.chatId ? await getChat(input.chatId) : await latestChat(row.id);
-  if (input.chatId && (!chat || chat.workbenchId !== row.id)) {
-    throw new WorkbenchError('That chat does not belong to this session.', 404, 'not_found');
-  }
-  const agent = row.agent === 'codex' ? 'codex' : 'claude';
-  const argv = buildPrDraftArgv({
-    agent,
-    prompt: buildPrDraftPrompt({ branch: row.branch, baseBranch: base, extraInstructions: row.settings?.prompts?.create_pr }),
-    resumeSessionId: chat?.agentSessionId,
-    model: chat?.model ?? row.model,
-  });
-
-  await refreshSandboxCredentials(row);
-  const parser = createAgentStreamParser(agent);
-  const outcome = await runStream(row, argv.map(shellQuote).join(' '), {
-    marker: safeMarker(`talyn-prdraft-${row.id}`),
-    cwd: repoDirFor(row),
-    env: { ...sandboxScriptEnv(row), ...(agent === 'claude' ? CLAUDE_SANDBOX_ENV : {}) },
-    timeoutMs: PR_DRAFT_TIMEOUT_MS,
-    onStdoutLine: (line) => {
-      parser.push(line);
-    },
-  });
-  const result = parser.result;
-  if (!result || result.isError || outcome.exitCode !== 0) {
-    const why =
-      result?.text?.trim() ||
-      gitStderrTail(outcome.stderrTail) ||
-      (outcome.exitCode === null ? 'The agent stopped without an answer.' : `The agent exited with code ${outcome.exitCode}.`);
-    recordWorkbenchEvent(row, 'pr_draft', `draft failed: ${why.slice(0, 120)}`, false);
-    throw new WorkbenchError(`Could not draft the pull request: ${why.slice(0, 500)}`, 502, 'draft_failed');
-  }
-  const parsed = parsePrDraft(result.text);
-  if (!parsed.ok) throw new WorkbenchError(parsed.error, 502, 'draft_failed');
-  recordWorkbenchEvent(row, 'pr_draft', 'drafted a pull request');
-  return parsed.draft;
 }
 
 // ============================================================================
@@ -272,4 +204,26 @@ async function trackAndLink(row: WorkbenchRow, number: number): Promise<Workbenc
     console.warn(`[workbench] tracking #${number} for ${row.id} failed:`, err);
   }
   return linkPullRequest(row).catch(() => row);
+}
+
+/**
+ * The end of a sandbox Create PR turn: read the agent's ```talyn-pr block and
+ * open the pull request from it. Never throws; the answer is the transcript
+ * event that says what happened.
+ */
+export async function openPullRequestFromTurn(row: WorkbenchRow, finalText: string): Promise<Record<string, unknown>> {
+  const parsed = parsePrDetails(finalText);
+  if (!parsed.ok) {
+    recordWorkbenchEvent(row, 'pr_create', 'no pull request block in the reply', false);
+    return pullRequestOutcomeEvent({ ok: false, message: parsed.error });
+  }
+  try {
+    const result = await createWorkbenchPullRequest(row, { ...parsed.details, base: row.baseBranch });
+    return pullRequestOutcomeEvent({ ok: true, ...result.pullRequest, existing: result.existing });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!(err instanceof WorkbenchError)) console.warn(`[workbench] opening a PR for ${row.id} failed:`, err);
+    recordWorkbenchEvent(row, 'pr_create', `failed: ${message.slice(0, 120)}`, false);
+    return pullRequestOutcomeEvent({ ok: false, message });
+  }
 }

@@ -15,7 +15,7 @@ import {
   PanelRight,
   Wrench,
 } from 'lucide-react';
-import type { Workbench, WorkbenchChat } from '@talyn/shared';
+import { CREATE_PR_MESSAGE, type Workbench, type WorkbenchChat } from '@talyn/shared';
 import { Button } from '../ui/button';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import {
@@ -45,7 +45,7 @@ import {
 import type { WorkbenchOps, WorkbenchPromptActionKind } from '../../lib/workbenchOps';
 import { PrPill } from './WorkbenchBadges';
 import { ArchiveWorkbenchDialog, archiveWorkbench } from './archiveWorkbench';
-import { CreatePullRequestDialog } from './CreatePullRequestDialog';
+import { createChatTab } from './ChatTabs';
 
 const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
   create_pr: GitPullRequest,
@@ -56,7 +56,7 @@ const ACTION_ICON: Record<WorkbenchAction, typeof GitPullRequest> = {
 };
 
 const ACTION_HINT: Record<WorkbenchAction, string> = {
-  create_pr: 'Commit, push and open a pull request; the agent drafts the title and description',
+  create_pr: 'Ask the agent to write the pull request; Talyn then commits, pushes and opens it',
   resolve_conflicts: 'Ask the agent to merge the base branch in and resolve the conflicts',
   fix_checks: 'Ask the agent to fix the failing checks; the prompt carries each failing check and its link',
   merge: 'Merge the pull request on GitHub',
@@ -66,8 +66,9 @@ const ACTION_HINT: Record<WorkbenchAction, string> = {
 /**
  * Run a header action. Fix checks / Resolve conflicts are prompts to the
  * agent; the backend picks the prompt for a sandbox, the local runtime
- * resolves it here. Create PR opens its own dialog, and Merge and Archive
- * have their own confirmations.
+ * resolves it here. Create PR is a short message with the `create_pr` intent
+ * (see {@link sendCreatePullRequest}), and Merge and Archive have their own
+ * confirmations.
  */
 export async function runPromptAction(
   ops: WorkbenchOps,
@@ -79,6 +80,31 @@ export async function runPromptAction(
     toast.info(`${NEXT_ACTION_LABEL[action]}: sent to the agent`);
   } catch (err) {
     toast.error(`Could not ${NEXT_ACTION_LABEL[action].toLowerCase()}`, err instanceof Error ? err.message : undefined);
+  }
+}
+
+/**
+ * Create PR: send "Create a pull request" to the chat, opening one when there
+ * is none. The agent gets Talyn's PR instructions out of sight, and the end of
+ * its turn opens the PR. A running turn queues it like any message.
+ */
+export async function sendCreatePullRequest(
+  workbench: Workbench,
+  ops: Pick<WorkbenchOps, 'send'>,
+  chat: WorkbenchChat | null
+): Promise<void> {
+  try {
+    const target = chat ?? (await createChatTab(workbench));
+    if (!target) return;
+    const res = await ops.send(target, { text: CREATE_PR_MESSAGE, intent: 'create_pr', planMode: false });
+    if (res.queued) {
+      toast.info(
+        'Queued',
+        workbench.status === 'provisioning' ? 'It runs when the sandbox is ready.' : 'It runs when the current turn ends.'
+      );
+    }
+  } catch (err) {
+    toast.error('Could not create the pull request', err instanceof Error ? err.message : undefined);
   }
 }
 
@@ -103,7 +129,7 @@ export function WorkbenchHeader({
   const rightPanelOpen = useWorkbenchStore((s) => s.rightPanelOpen);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState<WorkbenchAction | null>(null);
-  const [confirm, setConfirm] = useState<'create_pr' | 'merge' | 'archive' | null>(null);
+  const [confirm, setConfirm] = useState<'merge' | 'archive' | null>(null);
 
   const prLike = pr ? prRowAsLike(pr) : null;
   const primary = primaryWorkbenchAction(workbench, prLike);
@@ -128,15 +154,16 @@ export function WorkbenchHeader({
 
   const run = useCallback(
     async (action: WorkbenchAction) => {
-      if (action === 'create_pr' || action === 'merge' || action === 'archive') {
+      if (action === 'merge' || action === 'archive') {
         setConfirm(action);
         return;
       }
       setBusy(action);
-      await runPromptAction(ops, action, chat);
+      if (action === 'create_pr') await sendCreatePullRequest(workbench, ops, chat);
+      else await runPromptAction(ops, action, chat);
       setBusy(null);
     },
-    [ops, chat]
+    [workbench, ops, chat]
   );
 
   // Shortcuts and the palette ask through an event, so they get the same
@@ -316,13 +343,6 @@ export function WorkbenchHeader({
         busy={busy === 'merge'}
         onConfirm={() => void merge()}
         onCancel={() => setConfirm(null)}
-      />
-      <CreatePullRequestDialog
-        workbench={workbench}
-        chat={chat}
-        ops={ops}
-        open={confirm === 'create_pr'}
-        onClose={() => setConfirm(null)}
       />
       <ArchiveWorkbenchDialog
         workbench={workbench}

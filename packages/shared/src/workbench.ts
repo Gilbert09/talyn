@@ -10,7 +10,6 @@
  */
 import type { AgentEvent } from './index.js';
 import type { AgentEventDraft } from './agentStream.js';
-import type { WorkbenchPrDraft } from './workbenchPullRequest.js';
 import type { WorkbenchInstructionCandidate } from './workbenchInstructions.js';
 
 // ============================================================================
@@ -53,6 +52,15 @@ export const DEFAULT_WORKBENCH_EFFORT: WorkbenchEffort = 'high';
  */
 export type WorkbenchPromptAction = 'fix_checks' | 'resolve_conflicts' | 'rename_branch';
 
+/**
+ * Why a message was sent, when it was not typed. `create_pr`: the agent gets
+ * Talyn's hidden PR instructions with the short visible text, and the end of
+ * the turn opens the pull request from its answer.
+ */
+export type WorkbenchMessageIntent = 'create_pr';
+
+export const WORKBENCH_MESSAGE_INTENTS: readonly WorkbenchMessageIntent[] = ['create_pr'];
+
 // ============================================================================
 // Public shapes (what the API returns)
 // ============================================================================
@@ -76,7 +84,7 @@ export interface WorkbenchSettings {
     runMode?: WorkbenchRunMode;
   };
   prompts?: Partial<Record<WorkbenchPromptAction, string>> & {
-    /** Extra instructions for the Create PR draft, appended to Talyn's draft prompt. */
+    /** Extra instructions for a Create PR turn, appended to Talyn's hidden PR instructions. */
     create_pr?: string;
   };
 }
@@ -175,6 +183,7 @@ export interface WorkbenchQueuedMessage {
   planMode?: boolean;
   model?: string;
   effort?: WorkbenchEffort;
+  intent?: WorkbenchMessageIntent;
   queuedAt: string;
 }
 
@@ -297,6 +306,8 @@ export interface SendWorkbenchMessageInput {
   planMode?: boolean;
   model?: string;
   effort?: WorkbenchEffort;
+  /** The transcript shows `text`; the intent's hidden instructions go to the agent only. */
+  intent?: WorkbenchMessageIntent;
 }
 
 /** A local runtime reports its chat state to the backend, which owns the row. */
@@ -474,18 +485,6 @@ export interface WorkbenchLocalBridge {
     attachments?: WorkbenchAttachment[];
   }): Promise<void>;
   cancelTurn(chatId: string): Promise<void>;
-  /**
-   * A one-shot, hidden agent run that drafts a pull request (see
-   * `workbenchPullRequest.ts`). Nothing reaches the chat's transcript, and a
-   * Claude run forks `resumeSessionId` rather than continuing it.
-   */
-  draftPullRequest(input: {
-    path: string;
-    agent: WorkbenchAgent;
-    prompt: string;
-    resumeSessionId?: string;
-    model?: string;
-  }): Promise<WorkbenchPrDraft>;
   /** Run argv steps (see `workbenchGit.ts` `GitStep`) in `path`, in order, stopping at the first failure. */
   exec(
     path: string,
