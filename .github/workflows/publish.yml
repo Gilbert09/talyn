@@ -16,6 +16,9 @@ on:
   push:
     tags:
       - 'v*'
+      # A pre-release tag (vX.Y.Z-name.N) is a branch build from its own
+      # workflow, never a stable release.
+      - '!v*-*'
   workflow_dispatch:
     inputs:
       version:

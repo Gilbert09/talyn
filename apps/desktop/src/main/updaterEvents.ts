@@ -18,8 +18,8 @@ export type UpdaterCheckResult =
   | { started: false; reason: 'not-packaged' };
 
 /**
- * Which release feed the updater follows. `stable` (the default) only sees
- * full GitHub releases — the tagged builds; `nightly` also sees pre-releases
- * (the nightly channel).
+ * The channel picked in Settings → About. Nothing publishes nightly builds,
+ * so both channels receive the same stable releases. Which feed the updater
+ * follows comes from the build's own version (`followsPrereleases`).
  */
 export type UpdateChannel = 'stable' | 'nightly';
