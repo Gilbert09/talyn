@@ -21,6 +21,41 @@ export function toStackNodes(rows: PRRow[]): StackNode[] {
 }
 
 /**
+ * The stack relations of one set of rows, linked ONCE. Asking each row about
+ * its own stack with the free functions below re-links every row per call, so
+ * a table that did that for every row was quadratic on every render.
+ */
+export interface StackIndex {
+  /** See {@link stackAncestors}. */
+  ancestors(id: string): PRRow[];
+  /** See {@link stackWithDescendants}. */
+  withDescendants(id: string): PRRow[];
+}
+
+export function buildStackIndex(rows: PRRow[]): StackIndex {
+  const nodes = toStackNodes(rows);
+  const links = linkStack(nodes);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const toRows = (list: { id: string }[]): PRRow[] =>
+    list.map((n) => byId.get(n.id)).filter((r): r is PRRow => !!r);
+  return {
+    ancestors(id) {
+      try {
+        return toRows(ancestorsOf(nodes, id, links));
+      } catch {
+        const self = byId.get(id);
+        return self ? [self] : [];
+      }
+    },
+    withDescendants(id) {
+      const self = byId.get(id);
+      if (!self) return [];
+      return [self, ...toRows(descendantsOf(nodes, id, links))];
+    },
+  };
+}
+
+/**
  * The PRs that must land before `id` can, root-first — which is also the order
  * the queue will merge them in. Includes `id` itself. Empty when `id` isn't in
  * `rows`, and truncated at any gap in the chain (Talyn only tracks PRs you
@@ -30,15 +65,7 @@ export function toStackNodes(rows: PRRow[]): StackNode[] {
  * button.
  */
 export function stackAncestors(rows: PRRow[], id: string): PRRow[] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  try {
-    return ancestorsOf(toStackNodes(rows), id)
-      .map((n) => byId.get(n.id))
-      .filter((r): r is PRRow => !!r);
-  } catch {
-    const self = byId.get(id);
-    return self ? [self] : [];
-  }
+  return buildStackIndex(rows).ancestors(id);
 }
 
 /**
@@ -47,15 +74,7 @@ export function stackAncestors(rows: PRRow[], id: string): PRRow[] {
  * if only `id` came out.
  */
 export function stackWithDescendants(rows: PRRow[], id: string): PRRow[] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const self = byId.get(id);
-  if (!self) return [];
-  return [
-    self,
-    ...descendantsOf(toStackNodes(rows), id)
-      .map((n) => byId.get(n.id))
-      .filter((r): r is PRRow => !!r),
-  ];
+  return buildStackIndex(rows).withDescendants(id);
 }
 
 export interface StackSelection {
@@ -88,9 +107,13 @@ export interface StackSelection {
  * is exactly how the button came to promise merging a stack into one of its own
  * feature branches.
  */
-export function stackSelection(rows: PRRow[], id: string): StackSelection {
-  const below = stackAncestors(rows, id);
-  const above = stackWithDescendants(rows, id).slice(1);
+export function stackSelection(
+  rows: PRRow[],
+  id: string,
+  index: StackIndex = buildStackIndex(rows)
+): StackSelection {
+  const below = index.ancestors(id);
+  const above = index.withDescendants(id).slice(1);
   const isRoot = below.length === 1 && above.length > 0;
   return {
     targets: isRoot ? [...below, ...above] : below,

@@ -59,8 +59,12 @@ import { useWhatsNew } from '../../hooks/useWhatsNew';
 import { useDeferredRuns } from '../../hooks/useDeferredRuns';
 
 export function MainLayout() {
-  const { activePanel, setActivePanel, createWorkspaceOpen, setCreateWorkspaceOpen } =
-    useWorkspaceStore();
+  // Narrow selectors: this component wraps the whole app, so subscribing to the
+  // whole store re-rendered everything on every task or PR change.
+  const activePanel = useWorkspaceStore((s) => s.activePanel);
+  const setActivePanel = useWorkspaceStore((s) => s.setActivePanel);
+  const createWorkspaceOpen = useWorkspaceStore((s) => s.createWorkspaceOpen);
+  const setCreateWorkspaceOpen = useWorkspaceStore((s) => s.setCreateWorkspaceOpen);
   const features = useWorkspaceStore((s) => s.features);
   const upgradeModalOpen = useBillingStore((s) => s.upgradeModalOpen);
   const setUpgradeModalOpen = useBillingStore((s) => s.setUpgradeModalOpen);

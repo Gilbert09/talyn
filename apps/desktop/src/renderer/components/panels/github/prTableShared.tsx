@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ExternalLink,
   GitMerge,
@@ -26,12 +26,7 @@ import {
 } from 'lucide-react';
 import type { PRHumanGate, PRRow, PRSummaryShape } from '../../../lib/api';
 import { copyRich, prMarkdownLink } from '../../../lib/prClipboard';
-import {
-  stackAncestors,
-  stackSelection,
-  stackWithDescendants,
-  type StackMeta,
-} from './stacks';
+import { buildStackIndex, stackSelection, type StackMeta } from './stacks';
 import {
   type TaskStatus,
   type AnyCloudProviderType,
@@ -71,6 +66,64 @@ export type PRTableVariant = 'mine' | 'review' | 'queue';
 
 /** Pixels of indentation per stack depth level. */
 const STACK_INDENT_PX = 16;
+
+/**
+ * A row's place in its stack, worked out once per table render. All
+ * primitives, so the memoized row compares them cheaply.
+ */
+interface RowStackInfo {
+  /** Members of the row's stack, in merge order. 0 where stacks don't show. */
+  size: number;
+  /** Every member is queued: the stack is draining as one unit. */
+  draining: boolean;
+  /** How many PRs this row's "Merge stack" button queues. See stackSelection. */
+  targetCount: number;
+  isRoot: boolean;
+  /** The branch the stack lands on. */
+  base: string | undefined;
+  draftsInTargets: number;
+  unqueuedInTargets: number;
+  /** PRs stacked on top of this one, transitively. */
+  above: number;
+}
+
+const NO_STACK: RowStackInfo = {
+  size: 0,
+  draining: false,
+  targetCount: 0,
+  isRoot: false,
+  base: undefined,
+  draftsInTargets: 0,
+  unqueuedInTargets: 0,
+  above: 0,
+};
+
+/** Link the table's rows once, then read each row's stack from that index. */
+function buildRowStackInfo(rows: PRRow[], variant: PRTableVariant): Map<string, RowStackInfo> {
+  const index = buildStackIndex(rows);
+  const out = new Map<string, RowStackInfo>();
+  for (const row of rows) {
+    const below = index.ancestors(row.id);
+    const above = index.withDescendants(row.id).slice(1);
+    // Reviews never shows stacks, and a PR that left "open" has none.
+    const all = variant === 'review' || row.state !== 'open' ? [] : [...below, ...above];
+    const { targets, isRoot, base } =
+      all.length > 0
+        ? stackSelection(rows, row.id, index)
+        : { targets: [] as PRRow[], isRoot: false, base: undefined };
+    out.set(row.id, {
+      size: all.length,
+      draining: all.length > 1 && all.every((r) => r.mergeQueued),
+      targetCount: targets.length,
+      isRoot,
+      base,
+      draftsInTargets: targets.filter((r) => r.summary.draft === true).length,
+      unqueuedInTargets: targets.filter((r) => !r.mergeQueued).length,
+      above: above.length,
+    });
+  }
+  return out;
+}
 
 interface PRTableProps {
   rows: PRRow[];
@@ -170,6 +223,37 @@ export function PRTable({
   // per row — a row just records its id as "open".
   const [skillPickerRowId, setSkillPickerRowId] = useState<string | null>(null);
   const skillPickerRow = skillPickerRowId ? rows.find((r) => r.id === skillPickerRowId) : null;
+  // Every row's stack from ONE link of the rows. Each row used to re-link the
+  // whole list several times itself, which was quadratic on every render.
+  const stackInfoById = useMemo(() => buildRowStackInfo(rows, variant), [rows, variant]);
+  // Row callbacks must keep their identity, or the memoized rows all re-render
+  // on every table render. The click reads the latest rows and ranking from a
+  // ref instead of closing over them.
+  const selectContext = useRef({ rows, priorityById, onSelect });
+  useLayoutEffect(() => {
+    selectContext.current = { rows, priorityById, onSelect };
+  });
+  const onSelectRow = useCallback((row: PRRow, index: number) => {
+    const ctx = selectContext.current;
+    // Rank is captured HERE, from the array the user is actually
+    // looking at — it cannot be reconstructed afterwards, because by
+    // the time anyone asks, the list has been re-sorted by a poll.
+    // Only in Priority mode: `priorityById` is absent otherwise, and
+    // an event about a ranking that was not in use answers nothing.
+    const verdict = ctx.priorityById?.get(row.id);
+    if (verdict) {
+      trackEvent('pr_review_row_opened', {
+        repo: `${row.owner}/${row.repo}`,
+        pr_number: row.number,
+        rank: index + 1,
+        cohort_size: ctx.rows.length,
+        gate: verdict.gate,
+        score: verdict.score,
+        top_reason: verdict.topReason?.reason,
+      });
+    }
+    ctx.onSelect(row.id);
+  }, []);
   // A parked stack member reads differently when the PR BELOW it is stuck, so
   // each row needs its parent's queue status. Resolved once per table, keyed by
   // repo + PR number — subscribing to the store inside every cell would
@@ -203,9 +287,10 @@ export function PRTable({
           <PRTableRow
             key={row.id}
             row={row}
-            allRows={rows}
+            index={index}
             variant={variant}
-            stack={stackMeta?.get(row.id)}
+            stackDepth={stackMeta?.get(row.id)?.depth}
+            stackInfo={stackInfoById.get(row.id) ?? NO_STACK}
             parentStatus={
               row.mergeQueue?.stackParentNumber != null
                 ? queueStatusByNumber.get(
@@ -216,26 +301,7 @@ export function PRTable({
             viewerLogin={viewerLogin}
             priority={priorityById?.get(row.id) ?? null}
             isSelected={row.id === selectedId}
-            onSelect={() => {
-              // Rank is captured HERE, from the array the user is actually
-              // looking at — it cannot be reconstructed afterwards, because by
-              // the time anyone asks, the list has been re-sorted by a poll.
-              // Only in Priority mode: `priorityById` is absent otherwise, and
-              // an event about a ranking that was not in use answers nothing.
-              const verdict = priorityById?.get(row.id);
-              if (verdict) {
-                trackEvent('pr_review_row_opened', {
-                  repo: `${row.owner}/${row.repo}`,
-                  pr_number: row.number,
-                  rank: index + 1,
-                  cohort_size: rows.length,
-                  gate: verdict.gate,
-                  score: verdict.score,
-                  top_reason: verdict.topReason?.reason,
-                });
-              }
-              onSelect(row.id);
-            }}
+            onSelectRow={onSelectRow}
             onOpenTask={onOpenTask}
             onStopTask={onStopTask}
             onMerge={onMerge}
@@ -244,7 +310,7 @@ export function PRTable({
             onSetWatching={onSetWatching}
             onSetReviewHidden={onSetReviewHidden}
             onCreatePostHogTask={onCreatePostHogTask}
-            onOpenSkillPicker={onRunSkill ? () => setSkillPickerRowId(row.id) : undefined}
+            onOpenSkillPicker={onRunSkill ? setSkillPickerRowId : undefined}
             taskAsk={taskAsk}
             taskProviders={taskProviders}
             onOpenIntegrations={onOpenIntegrations}
@@ -269,16 +335,22 @@ export function PRTable({
   );
 }
 
-function PRTableRow({
+/**
+ * Memoized: a PR echo changes one row, and only that row should re-render.
+ * Every prop must therefore keep its identity across table renders — the
+ * stack placement arrives as primitives and the callbacks are stable.
+ */
+const PRTableRow = React.memo(function PRTableRow({
   row,
-  allRows,
+  index,
   variant,
-  stack,
+  stackDepth,
+  stackInfo,
   parentStatus,
   viewerLogin,
   priority,
   isSelected,
-  onSelect,
+  onSelectRow,
   onOpenTask,
   onStopTask,
   onMerge,
@@ -295,18 +367,20 @@ function PRTableRow({
   taskProvider,
 }: {
   row: PRRow;
-  /** Every row on the page — the set this row's stack is derived from. */
-  allRows: PRRow[];
+  /** Position in the table — the rank the open event reports. */
+  index: number;
   variant: PRTableVariant;
   /** Queue status of the PR below this one in its stack, when it has one. */
   parentStatus?: NonNullable<PRRow['mergeQueue']>['status'];
-  /** Stacked-PR placement for this row, when it belongs to a stack. */
-  stack?: StackMeta;
+  /** Indent depth for this row, when the page stacks PRs (My PRs). */
+  stackDepth?: number;
+  /** This row's stack, derived from every row on the table. */
+  stackInfo: RowStackInfo;
   viewerLogin: string | null;
   /** Why this row ranked where it did — Reviews page, Priority mode only. */
   priority?: PRPriorityVerdict | null;
   isSelected: boolean;
-  onSelect: () => void;
+  onSelectRow: (row: PRRow, index: number) => void;
   onOpenTask: (taskId: string) => void;
   onStopTask: (taskId: string, row?: PRRow) => Promise<void>;
   onMerge: (row: PRRow) => Promise<void>;
@@ -326,8 +400,8 @@ function PRTableRow({
   onSetWatching?: (row: PRRow, enabled: boolean) => Promise<void>;
   onSetReviewHidden?: (row: PRRow, hidden: boolean) => Promise<void>;
   onCreatePostHogTask: (row: PRRow, providerType?: string, model?: string) => Promise<boolean>;
-  /** Open the table-level skill picker for this row (absent → no skill button). */
-  onOpenSkillPicker?: () => void;
+  /** Open the table-level skill picker for a row (absent → no skill button). */
+  onOpenSkillPicker?: (rowId: string) => void;
   taskAsk?: boolean;
   /** One entry per AGENT the workspace can run a task on — Talyn Fleet
    *  contributes one per connected subscription, each carrying its model. */
@@ -339,6 +413,7 @@ function PRTableRow({
   taskProvider?: AnyCloudProviderType | null;
 }) {
   const summary = row.summary;
+  const onSelect = () => onSelectRow(row, index);
   const updatedTooltip = new Date(summary.updatedAt || row.lastPolledAt).toLocaleString();
   const hidden = Boolean(row.reviewHiddenAt);
   const [confirmMerge, setConfirmMerge] = useState(false);
@@ -364,29 +439,19 @@ function PRTableRow({
     billingStatus.plan === 'free' &&
     billingStatus.activeTaskLimit != null &&
     billingStatus.activeTasks >= billingStatus.activeTaskLimit;
-  // Every member of this row's stack, in merge order. Walking down then up from
-  // any member covers the whole chain.
-  const stackAll = useMemo(() => {
-    if (variant === 'review' || row.state !== 'open') return [];
-    const below = stackAncestors(allRows, row.id);
-    const above = stackWithDescendants(allRows, row.id).slice(1);
-    return [...below, ...above];
-  }, [variant, row.state, allRows, row.id]);
   // What this row's button queues, and the branch it lands on. See stackSelection.
-  const { targets: stackTargets, isRoot: isStackRoot, base: stackBase } = useMemo(
-    () =>
-      stackAll.length > 0
-        ? stackSelection(allRows, row.id)
-        : { targets: [] as PRRow[], isRoot: false, base: undefined },
-    [stackAll.length, allRows, row.id]
-  );
-  const stackable = !!onSetMergeQueueStack && stackTargets.length > 1;
-  const draftsInStack = stackTargets.filter((r) => r.summary.draft === true).length;
-  const unqueuedInStack = stackTargets.filter((r) => !r.mergeQueued).length;
+  const {
+    size: stackSize,
+    targetCount: stackTargetCount,
+    isRoot: isStackRoot,
+    base: stackBase,
+    draftsInTargets: draftsInStack,
+    unqueuedInTargets: unqueuedInStack,
+  } = stackInfo;
+  const stackable = !!onSetMergeQueueStack && stackTargetCount > 1;
   // A dequeue has to cascade whenever anything is parked on this PR.
-  const stackDequeue =
-    !!onSetMergeQueueStack && stackWithDescendants(allRows, row.id).length > 1;
-  const stackAbove = stackDequeue ? stackWithDescendants(allRows, row.id).length - 1 : 0;
+  const stackDequeue = !!onSetMergeQueueStack && stackInfo.above > 0;
+  const stackAbove = stackDequeue ? stackInfo.above : 0;
   // Free-plan annotation only, same as atTaskLimit: the button stays enabled and
   // the server stays the authority, but the tooltip can name the exact shortfall
   // because BillingStatus already carries both numbers.
@@ -418,10 +483,10 @@ function PRTableRow({
   // Stacked-PR visual: left indentation by depth so dependents nest under
   // their base PR. Indentation alone conveys the grouping while a stack is just
   // sitting there — a permanent accent bar on every stack would be noise.
-  const stackIndent = (stack?.depth ?? 0) * STACK_INDENT_PX;
+  const stackIndent = (stackDepth ?? 0) * STACK_INDENT_PX;
   // The exception: once EVERY member is queued, the stack is one unit that is
   // actively draining, and that is worth seeing at a glance.
-  const stackDraining = stackAll.length > 1 && stackAll.every((r) => r.mergeQueued);
+  const stackDraining = stackInfo.draining;
 
   // A linked task is "active" while it's queued or running — i.e. not yet
   // fully done. Drives the spinner/label and suppresses the start-task
@@ -854,13 +919,13 @@ function PRTableRow({
               {/* Stack indicator on the bottom PR of a chain — the members merge one
                   at a time from here up. No `ml-*`: the badge group's `gap-2`
                   spaces every chip. */}
-              {variant !== 'queue' && stack?.depth === 0 && stackAll.length > 1 && (
+              {variant !== 'queue' && stackDepth === 0 && stackSize > 1 && (
                 <span
                   className="inline-flex items-center gap-1 rounded bg-pink-200 px-1 py-0.5 text-[10px] uppercase text-pink-800 dark:bg-pink-900 dark:text-pink-200"
-                  title={`This PR is the bottom of a stack of ${stackAll.length}. They land from here up — in one queue run where the repo's merge queue takes stacks, otherwise one at a time.`}
+                  title={`This PR is the bottom of a stack of ${stackSize}. They land from here up — in one queue run where the repo's merge queue takes stacks, otherwise one at a time.`}
                 >
                   <Layers className="h-2.5 w-2.5" />
-                  Stack of {stackAll.length}
+                  Stack of {stackSize}
                 </span>
               )}
               {/* Code review: a phase bar while it runs, a Findings chip when it
@@ -1099,12 +1164,12 @@ function PRTableRow({
                 onClick={runStackQueue}
                 disabled={busy !== null}
                 className="rounded px-1.5 py-0.5 text-[10px] font-medium uppercase text-indigo-700 hover:bg-indigo-500/10 dark:text-indigo-400"
-                title={`Queue all ${stackTargets.length} PRs and merge them into ${stackBase || 'the base branch'}`}
+                title={`Queue all ${stackTargetCount} PRs and merge them into ${stackBase || 'the base branch'}`}
               >
                 {busy === 'stack' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  `Queue ${stackTargets.length}`
+                  `Queue ${stackTargetCount}`
                 )}
               </button>
             ) : (
@@ -1121,8 +1186,8 @@ function PRTableRow({
                   stackWontFit
                     ? `This stack needs ${unqueuedInStack} merge-queue slots; your free plan allows ${billingStatus?.mergeQueueLimit} and ${billingStatus?.queuedPrs} are in use`
                     : (isStackRoot
-                        ? `Merge the whole stack — queues all ${stackTargets.length} PRs and lands them on ${stackBase || 'the base branch'} in order. A merge queue that takes stacks tests all ${stackTargets.length} in one CI round; otherwise they go one at a time, retargeted as each parent lands.`
-                        : `Land this PR and the ${stackTargets.length - 1} below it — queues ${stackTargets.length} PRs onto ${stackBase || 'the base branch'}, in one queue run where the repo's merge queue takes stacks. PRs stacked above this one are left alone.`) +
+                        ? `Merge the whole stack — queues all ${stackTargetCount} PRs and lands them on ${stackBase || 'the base branch'} in order. A merge queue that takes stacks tests all ${stackTargetCount} in one CI round; otherwise they go one at a time, retargeted as each parent lands.`
+                        : `Land this PR and the ${stackTargetCount - 1} below it — queues ${stackTargetCount} PRs onto ${stackBase || 'the base branch'}, in one queue run where the repo's merge queue takes stacks. PRs stacked above this one are left alone.`) +
                       (draftsInStack > 0
                         ? `. Marks ${draftsInStack} draft ${draftsInStack === 1 ? 'PR' : 'PRs'} ready for review.`
                         : '')
@@ -1375,7 +1440,7 @@ function PRTableRow({
               data-attr="pr-row-run-skill"
               onClick={(e) => {
                 e.stopPropagation();
-                onOpenSkillPicker();
+                onOpenSkillPicker(row.id);
               }}
               disabled={taskRunning || busy !== null}
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-violet-500/10 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground dark:hover:text-violet-400"
@@ -1415,7 +1480,7 @@ function PRTableRow({
       </td>
     </tr>
   );
-}
+});
 
 /**
  * The Merge Queue page's second column: position + status + reason. Renders

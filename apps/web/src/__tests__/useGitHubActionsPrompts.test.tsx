@@ -14,7 +14,7 @@ vi.mock('../stores/pullRequests', () => ({
   usePullRequestStore: { getState: () => ({ patchRow, removeRow: vi.fn() }) },
 }));
 vi.mock('../hooks/useApi', () => ({ useTaskActions: () => ({ createTask }) }));
-vi.mock('../hooks/usePullRequestSync', () => ({ refreshPullRequests: vi.fn() }));
+vi.mock('../hooks/usePullRequestSync', () => ({ reloadPullRequests: vi.fn() }));
 vi.mock('../stores/toast', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 vi.mock('../stores/billing', () => ({ maybeHandleBillingLimit: vi.fn() }));
 vi.mock('../lib/githubInstall', () => ({ openGithubAppFlow: vi.fn() }));

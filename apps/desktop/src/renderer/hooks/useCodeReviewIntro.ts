@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { codeReviewOffered } from '@talyn/shared';
 import { usePullRequestStore } from '../stores/pullRequests';
 import { useWorkspaceStore } from '../stores/workspace';
+import type { PRRow } from '../lib/api';
 import { trackEvent } from '../lib/analytics';
 
 /**
@@ -93,37 +94,47 @@ export function useCodeReviewIntro(): CodeReviewIntro {
   const features = useWorkspaceStore((s) => s.features);
   const onboardingComplete = useWorkspaceStore((s) => s.onboardingComplete);
   const justOnboarded = useWorkspaceStore((s) => s.justOnboarded);
-  const rows = usePullRequestStore((s) => s.rows);
   const [open, setOpen] = useState(false);
   const [examplePrId, setExamplePrId] = useState<string | null>(null);
 
   useEffect(() => {
     if (announcedThisLaunch || open) return;
-    // Their OWN pull requests, most recently updated first: the example has to be
-    // something they recognise, and a stranger's PR would read as an odd
-    // suggestion.
-    const mine = rows
-      .filter((r) => r.authored)
-      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-    if (
-      !shouldShowCodeReviewIntro({
-        offered: codeReviewOffered(features),
-        onboardingComplete,
-        justOnboarded,
-        openPrCount: mine.length,
-        seen: readSeen(),
-      })
-    ) {
-      return;
-    }
-    announcedThisLaunch = true;
-    writeSeen();
-    setExamplePrId(mine[0]?.id ?? null);
-    setOpen(true);
-    trackEvent('code_review_intro_shown', { open_prs: mine.length });
-  }, [features, onboardingComplete, justOnboarded, rows, open]);
+    const check = (rows: PRRow[]): void => {
+      if (announcedThisLaunch) return;
+      // Their OWN pull requests, most recently updated first: the example has to be
+      // something they recognise, and a stranger's PR would read as an odd
+      // suggestion.
+      const mine = rows
+        .filter((r) => r.authored)
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+      if (
+        !shouldShowCodeReviewIntro({
+          offered: codeReviewOffered(features),
+          onboardingComplete,
+          justOnboarded,
+          openPrCount: mine.length,
+          seen: readSeen(),
+        })
+      ) {
+        return;
+      }
+      announcedThisLaunch = true;
+      writeSeen();
+      setExamplePrId(mine[0]?.id ?? null);
+      setOpen(true);
+      trackEvent('code_review_intro_shown', { open_prs: mine.length });
+    };
 
-  return { open, examplePrId, dismiss: () => setOpen(false) };
+    // Subscribed outside React: this hook lives in MainLayout, and a `rows`
+    // selector re-rendered the whole app on every PR echo.
+    check(usePullRequestStore.getState().rows);
+    return usePullRequestStore.subscribe((state, prev) => {
+      if (state.rows !== prev.rows) check(state.rows);
+    });
+  }, [features, onboardingComplete, justOnboarded, open]);
+
+  const dismiss = useCallback(() => setOpen(false), []);
+  return { open, examplePrId, dismiss };
 }
 
 /** Test seam: forget that this launch has already announced it. */

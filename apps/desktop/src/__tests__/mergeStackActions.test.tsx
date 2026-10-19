@@ -43,7 +43,7 @@ jest.mock('../renderer/stores/pullRequests', () => ({
   },
 }));
 jest.mock('../renderer/hooks/useApi', () => ({ useTaskActions: () => ({ createTask: jest.fn() }) }));
-jest.mock('../renderer/hooks/usePullRequestSync', () => ({ refreshPullRequests: jest.fn() }));
+jest.mock('../renderer/hooks/usePullRequestSync', () => ({ reloadPullRequests: jest.fn() }));
 jest.mock('../renderer/stores/toast', () => ({
   toast: { success: jest.fn(), error: (...a: unknown[]) => toastError(...a), info: (...a: unknown[]) => toastInfo(...a) },
 }));

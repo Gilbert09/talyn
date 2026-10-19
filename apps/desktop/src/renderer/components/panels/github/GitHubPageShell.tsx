@@ -88,10 +88,14 @@ export function GitHubPageShell({
   const error = usePullRequestStore((s) => s.error);
   const connected = usePullRequestStore((s) => s.connected);
   const initialSync = usePullRequestStore((s) => s.initialSync);
-  const allRows = usePullRequestStore((s) => s.rows);
   const { copyList, connect } = useGitHubActions();
 
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  // Only the open row, not the whole list: a row keeps its identity until it
+  // changes, so this re-renders the shell for that row's echoes alone.
+  const seedRow = usePullRequestStore((s) =>
+    selectedId ? (s.rows.find((r) => r.id === selectedId) ?? null) : null
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Cmd/Ctrl+F focuses the PR search box. Each page mounts its own shell, so
@@ -268,7 +272,7 @@ export function GitHubPageShell({
           pullRequestId={selectedId}
           onClose={() => setSelectedId(null)}
           layout="contained"
-          seedRow={allRows.find((r) => r.id === selectedId) ?? null}
+          seedRow={seedRow}
         />
       </div>
     </div>
