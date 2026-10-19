@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { usePullRequestStore } from '../stores/pullRequests';
+import type { PRRow } from '../lib/api';
 import { useBillingStore } from '../stores/billing';
 import { trackEvent } from '../lib/analytics';
 
@@ -59,7 +60,6 @@ export function shouldAnnounceDeferral(
  * freed up is never shown a wall they are no longer standing at.
  */
 export function useDeferredRuns(): void {
-  const rows = usePullRequestStore((s) => s.rows);
   const plan = useBillingStore((s) => s.status?.plan);
 
   useEffect(() => {
@@ -67,24 +67,33 @@ export function useDeferredRuns(): void {
     // has. Waiting for the status to load also stops the modal racing ahead of
     // a snapshot that would have said `unlimited`.
     if (!plan || plan !== 'free') return;
-    if (announcedThisLaunch) return;
 
-    const deferred = rows.filter((r) => r.autoMergeState?.deferredSince);
-    const now = Date.now();
-    if (!shouldAnnounceDeferral(deferred.length, readLastShown(), now)) return;
+    const check = (rows: PRRow[]): void => {
+      if (announcedThisLaunch) return;
+      const deferred = rows.filter((r) => r.autoMergeState?.deferredSince);
+      const now = Date.now();
+      if (!shouldAnnounceDeferral(deferred.length, readLastShown(), now)) return;
 
-    announcedThisLaunch = true;
-    writeLastShown(now);
-    trackEvent('paywall_shown', {
-      // Same event as the 402 path so the funnel has one denominator; the
-      // reason is what separates "we refused you" from "this quietly stopped".
-      reason: 'task_deferred',
-      trigger: 'auto_keep_deferred',
-      deferred_prs: deferred.length,
-      plan,
+      announcedThisLaunch = true;
+      writeLastShown(now);
+      trackEvent('paywall_shown', {
+        // Same event as the 402 path so the funnel has one denominator; the
+        // reason is what separates "we refused you" from "this quietly stopped".
+        reason: 'task_deferred',
+        trigger: 'auto_keep_deferred',
+        deferred_prs: deferred.length,
+        plan,
+      });
+      useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
+    };
+
+    // Subscribed outside React: this hook lives in MainLayout, and a `rows`
+    // selector re-rendered the whole app on every PR echo.
+    check(usePullRequestStore.getState().rows);
+    return usePullRequestStore.subscribe((state, prev) => {
+      if (state.rows !== prev.rows) check(state.rows);
     });
-    useBillingStore.getState().setUpgradeModalOpen(true, 'task_deferred');
-  }, [rows, plan]);
+  }, [plan]);
 }
 
 /**

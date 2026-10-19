@@ -53,7 +53,7 @@ vi.mock('../stores/pullRequests', () => ({
   },
 }));
 vi.mock('../hooks/useApi', () => ({ useTaskActions: () => ({ createTask: vi.fn() }) }));
-vi.mock('../hooks/usePullRequestSync', () => ({ refreshPullRequests: vi.fn() }));
+vi.mock('../hooks/usePullRequestSync', () => ({ reloadPullRequests: vi.fn() }));
 vi.mock('../stores/toast', () => ({
   toast: { success: vi.fn(), error: toastError, info: toastInfo },
 }));

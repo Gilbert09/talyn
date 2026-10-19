@@ -174,15 +174,26 @@ export async function checkForUpdatesInteractively(): Promise<void> {
   }
 }
 
+/**
+ * Whether this build follows pre-releases. A pre-release version such as
+ * `0.3.31-workbenches.12` names its channel, and electron-updater then takes
+ * only releases with that same name, never a stable one. A stable version
+ * must never follow pre-releases.
+ */
+export function followsPrereleases(version: string): boolean {
+  return /^\d+\.\d+\.\d+-[0-9A-Za-z]/.test(version);
+}
+
 export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   autoUpdater.logger = log;
   log.transports.file.level = 'info';
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  // Channel: `stable` (default) follows tagged full releases only; `nightly`
-  // (allowPrerelease) also follows the nightly pre-releases. Persisted in
-  // userData; switchable from Settings → About.
-  autoUpdater.allowPrerelease = getUpdateChannel() === 'nightly';
+  // Only a pre-release build follows pre-releases, and then only those with
+  // its own name (see followsPrereleases). The Settings channel picker no
+  // longer changes this: nothing publishes nightly builds, and a stable app
+  // with allowPrerelease takes ANY newer pre-release, such as a branch build.
+  autoUpdater.allowPrerelease = followsPrereleases(app.getVersion());
 
   const send = (event: UpdaterEvent) => {
     const win = getWindow();
@@ -230,14 +241,7 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   ipcMain.handle('updater:set-channel', async (_e, channel: UpdateChannel) => {
     const next: UpdateChannel = channel === 'nightly' ? 'nightly' : 'stable';
     setUpdateChannel(next);
-    autoUpdater.allowPrerelease = next === 'nightly';
     log.info(`[updater] channel set to ${next}`);
-    // Re-check right away so switching to nightly offers the newest nightly
-    // (and switching to stable settles on the latest tagged build) without
-    // waiting for the 4h timer.
-    if (app.isPackaged) {
-      autoUpdater.checkForUpdates().catch((err) => log.error('[updater]', err));
-    }
     return next;
   });
 

@@ -635,7 +635,11 @@ export function useInitialDataLoad() {
  * Hook for task actions
  */
 export function useTaskActions() {
-  const { addTask, updateTask, removeTask } = useWorkspaceStore();
+  // Actions only. A bare `useWorkspaceStore()` re-rendered every caller (each
+  // GitHub page among them) on every task update.
+  const addTask = useWorkspaceStore((s) => s.addTask);
+  const updateTask = useWorkspaceStore((s) => s.updateTask);
+  const removeTask = useWorkspaceStore((s) => s.removeTask);
 
   const createTask = useCallback(
     async (data: Parameters<typeof api.tasks.create>[0]) => {

@@ -1155,7 +1155,11 @@ function SelfHostedFleetCard() {
       </div>
 
       <div className="mt-4 space-y-3 border-t pt-4">
-        <FleetAgentRow agent="claude" connected={agents.includes('claude')} needsReauth={false} />
+        <FleetAgentRow
+          agent="claude"
+          connected={agents.includes('claude')}
+          needsReauth={reauth.includes('claude')}
+        />
         <FleetAgentRow
           agent="codex"
           connected={agents.includes('codex')}
@@ -1355,6 +1359,14 @@ export function FleetAgentRow({
           </div>
         )}
       </div>
+
+      {needsReauth && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {agent === 'claude'
+            ? 'Anthropic no longer accepts the saved sign-in, so tasks on Claude cannot run. This happens when the sign-in is revoked or expires, or when the account has no Claude subscription. Sign in to Claude again.'
+            : 'OpenAI no longer accepts the saved sign-in, so tasks on Codex cannot run. This happens when the sign-in is revoked or expires. Sign in to ChatGPT again.'}
+        </p>
+      )}
 
       {showForm && (
         <div className="mt-2 space-y-2">

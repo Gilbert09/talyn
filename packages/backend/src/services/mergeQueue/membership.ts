@@ -9,7 +9,7 @@ import { withMergeQueueLimitGate } from '../billing/entitlements.js';
 import { disableAutoMerge, markReadyForReview } from '../githubAutoMerge.js';
 import { prMonitorService } from '../prMonitor.js';
 import { emitPullRequestUpdated } from '../websocket.js';
-import { broadcastMergeQueuePositions } from '../mergeQueueBroadcast.js';
+import { broadcastMergeQueuePositions, noteMergeQueueEmitted } from '../mergeQueueBroadcast.js';
 import { onQueueMembershipChanged } from './triggers.js';
 import { closeActiveEntry, ensureActiveEntry } from './store.js';
 import type { MergeMethod } from './types.js';
@@ -239,6 +239,17 @@ export function emitDequeued(row: QueueMembershipRow): void {
     lastSummary: row.lastSummary as Record<string, unknown>,
     mergeQueued: false,
   });
+  noteMergeQueueEmitted(row.workspaceId, row.id, null);
+}
+
+/**
+ * Rebroadcast the workspace's queue positions off the caller's transaction.
+ * Not awaited by the request: the run reads every queued row, and it must read
+ * after the caller commits, not inside its transaction. Tests wait for it with
+ * {@link settleQueueFollowUps}.
+ */
+export function broadcastPositionsAfterQueueWrite(workspaceId: string): void {
+  afterQueueWrite(() => broadcastMergeQueuePositions(workspaceId));
 }
 
 /**
@@ -277,7 +288,7 @@ export async function setQueueMembership(opts: {
 
   // Recompute "#N" for the whole queue so the toggled PR gets its real position
   // and every sibling shifts to match — not just after a refresh.
-  await broadcastMergeQueuePositions(row.workspaceId);
+  broadcastPositionsAfterQueueWrite(row.workspaceId);
 
   // Publish a draft, then kick an evaluation so an already-clean PR merges
   // without waiting for the reconciler. Both off the caller's transaction.

@@ -7,6 +7,9 @@ import {
   type PullRequestUpdatePayload,
 } from '../stores/pullRequests';
 
+/** How long `pull_request:updated` echoes are buffered before one store write. */
+export const PR_UPDATE_FLUSH_MS = 40;
+
 /**
  * A real GitHub force-poll followed by a re-list of the workspace's open PRs.
  * Standalone (reads both stores via `getState`) so the page header's Refresh
@@ -54,6 +57,23 @@ export async function refreshPullRequests(
 }
 
 /**
+ * A quiet re-list of the open PRs: no force-poll and no loading state. For
+ * reconciling after a row action — the backend has already written the row by
+ * then, and its WS echo usually lands first anyway. A force-poll asks GitHub
+ * about every watched repo, which is far too slow to hold a button on.
+ */
+export async function reloadPullRequests(): Promise<void> {
+  const currentWorkspaceId = useWorkspaceStore.getState().currentWorkspaceId;
+  if (!currentWorkspaceId) return;
+  try {
+    const data = await api.pullRequests.list({ workspaceId: currentWorkspaceId, state: 'open' });
+    usePullRequestStore.getState().setRows(data);
+  } catch {
+    // The WS echo still reconciles the row.
+  }
+}
+
+/**
  * Owns the open-PR data lifecycle for the whole app: the initial fetch, the
  * PostHog connection probe, and the single `pull_request:updated` subscription
  * that patches rows in place. Mounted once (in MainLayout) so the Sidebar
@@ -76,7 +96,7 @@ export function usePullRequestSync(): void {
     setConnected,
     setViewerLogin,
     setPosthogConnected,
-    applyPullRequestUpdate,
+    applyPullRequestUpdates,
   } = usePullRequestStore.getState();
 
   // Initial fetch of every open PR for the workspace. Relationship/repo
@@ -177,18 +197,42 @@ export function usePullRequestSync(): void {
 
   // Live updates from the prMonitor. A brand-new open PR we don't hold yet
   // can't be hand-merged (we lack workspaceId/repositoryId), so refetch.
+  //
+  // Batched like task events in useApi: the backend sends one message per
+  // queued PR on every enqueue or merge, so a 100-PR queue is 100 messages in a
+  // burst. One `set` per message re-rendered every subscriber 100 times.
   useEffect(() => {
-    const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
-      const needsRefetch = applyPullRequestUpdate(payload as PullRequestUpdatePayload);
+    // An array, not a map keyed by id: two echoes for one PR can each be a
+    // partial patch, so both must be applied, in order.
+    let pending: PullRequestUpdatePayload[] = [];
+    let timer: number | null = null;
+    const flush = () => {
+      timer = null;
+      const batch = pending;
+      pending = [];
+      if (batch.length === 0) return;
+      const needsRefetch = applyPullRequestUpdates(batch);
+      // At most one refetch per flush, however many unknown PRs it held.
       if (needsRefetch && currentWorkspaceId) {
         api.pullRequests
           .list({ workspaceId: currentWorkspaceId, state: 'open' })
           .then(setRows)
           .catch(() => {});
       }
+    };
+    const unsubscribe = api.ws.on('pull_request:updated', (payload) => {
+      pending.push(payload as PullRequestUpdatePayload);
+      // setTimeout, not rAF, so a backgrounded window still applies them.
+      if (timer === null) timer = window.setTimeout(flush, PR_UPDATE_FLUSH_MS);
     });
-    return unsubscribe;
-  }, [currentWorkspaceId, applyPullRequestUpdate, setRows]);
+    return () => {
+      unsubscribe();
+      // Dropped, not flushed: they belong to the workspace we are leaving, and
+      // the next workspace's initial fetch replaces the rows anyway.
+      if (timer !== null) window.clearTimeout(timer);
+      pending = [];
+    };
+  }, [currentWorkspaceId, applyPullRequestUpdates, setRows]);
 
   // Self-heal: while the store holds a fetch error (backend outage, edge
   // 5xx), retry the plain list every 30s until one succeeds — success clears

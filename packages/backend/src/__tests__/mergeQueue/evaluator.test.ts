@@ -48,6 +48,9 @@ import {
   evaluateGroupNow,
 } from '../../services/mergeQueue/evaluator.js';
 import { initMergeQueueTriggers } from '../../services/mergeQueue/triggers.js';
+import * as executorModule from '../../services/mergeQueue/executor.js';
+import { _resetMergeQueueBroadcasts } from '../../services/mergeQueueBroadcast.js';
+import * as prCloudFixModule from '../../services/prCloudFix.js';
 import { mergeQueueReconciler } from '../../services/mergeQueue/reconciler.js';
 
 const { mockRequiresSigning, mockUnsignedCount, mockMarkSigning } = vi.hoisted(() => ({
@@ -341,6 +344,8 @@ describe('mergeQueue v2 pipeline', () => {
   });
 
   afterEach(async () => {
+    // A merge broadcasts positions detached; it must not read the next test's DB.
+    _resetMergeQueueBroadcasts();
     await cleanup();
     vi.restoreAllMocks();
     githubRateGate._reset();
@@ -1723,6 +1728,32 @@ describe('mergeQueue v2 pipeline', () => {
       expect(mergeSpy).toHaveBeenCalledTimes(1); // sibling merged past it
       expect(await entryOf(db, ready.prId)).toBeNull();
     });
+
+    it.each([1, 3, 5])(
+      'eager: %i blocked entries read the cloud env and visual-review settings once per walk',
+      async (count) => {
+        await setMode('eager');
+        for (let i = 0; i < count; i++) await insertQueuedPr(db, { summary: conflictSummary() });
+        const realCreate = executorModule.createWalkReads;
+        const real = realCreate();
+        const cloudEnv = vi.fn((ws: string) => real.cloudEnv(ws));
+        const visualReviewSettings = vi.fn((ws: string) => real.visualReviewSettings(ws));
+        const create = vi
+          .spyOn(executorModule, 'createWalkReads')
+          .mockImplementation(() => realCreate({ cloudEnv, visualReviewSettings }));
+        const directCloudEnv = vi.spyOn(prCloudFixModule, 'resolveCloudEnv');
+
+        await evaluateGroupNow('repo1', 'main', 'test');
+
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(cloudEnv).toHaveBeenCalledTimes(1);
+        expect(visualReviewSettings).toHaveBeenCalledTimes(1);
+        // Semantics unchanged: every blocked entry still got its fix run. Each
+        // dispatch resolves the env afresh, and none of the contexts did.
+        expect(await countTasks(db)).toBe(count);
+        expect(directCloudEnv).toHaveBeenCalledTimes(count);
+      }
+    );
 
     it('ordered (default): unchanged — one same-base merge per evaluation', async () => {
       await setMode('ordered');

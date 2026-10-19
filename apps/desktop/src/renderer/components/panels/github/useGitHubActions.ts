@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { api, type PRRow } from '../../../lib/api';
 import {
   buildMergeablePrompt,
@@ -11,7 +12,7 @@ import {
 import { useWorkspaceStore } from '../../../stores/workspace';
 import { usePullRequestStore } from '../../../stores/pullRequests';
 import { useTaskActions } from '../../../hooks/useApi';
-import { refreshPullRequests } from '../../../hooks/usePullRequestSync';
+import { reloadPullRequests } from '../../../hooks/usePullRequestSync';
 import { toast } from '../../../stores/toast';
 import { maybeHandleBillingLimit } from '../../../stores/billing';
 import { trackEvent } from '../../../lib/analytics';
@@ -29,18 +30,31 @@ import {
  * the same action works no matter which page fired it.
  */
 export function useGitHubActions() {
+  // `useShallow`, not the whole store: every GitHub page calls this, so a bare
+  // `useWorkspaceStore()` re-rendered the PR table on every task update.
   const {
     currentWorkspaceId,
     workspaces,
     environments,
     selectTask,
-    tasks,
     addTask,
     setActivePanel,
     cloudProviders,
     openSettings,
     openConnectAgent,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(
+    useShallow((s) => ({
+      currentWorkspaceId: s.currentWorkspaceId,
+      workspaces: s.workspaces,
+      environments: s.environments,
+      selectTask: s.selectTask,
+      addTask: s.addTask,
+      setActivePanel: s.setActivePanel,
+      cloudProviders: s.cloudProviders,
+      openSettings: s.openSettings,
+      openConnectAgent: s.openConnectAgent,
+    }))
+  );
   const { createTask, stopTask: stopTaskRequest } = useTaskActions();
   const { patchRow, removeRow } = usePullRequestStore.getState();
 
@@ -121,14 +135,16 @@ export function useGitHubActions() {
     (taskId: string) => {
       setActivePanel('queue');
       selectTask(taskId);
-      if (!tasks.some((t) => t.id === taskId)) {
+      // Read at call time: subscribing to `tasks` would rebuild this callback,
+      // and re-render every row, on each transcript flush.
+      if (!useWorkspaceStore.getState().tasks.some((t) => t.id === taskId)) {
         api.tasks
           .get(taskId)
           .then((t) => addTask(t))
           .catch(() => {});
       }
     },
-    [setActivePanel, selectTask, tasks, addTask]
+    [setActivePanel, selectTask, addTask]
   );
 
   // Stop a row's linked task from the row itself. The store update flips the
@@ -162,7 +178,8 @@ export function useGitHubActions() {
 
   // Squash-merge a PR straight from its row. Throws (with GitHub's reason) if
   // rejected so the row can toast it; on success it drops the row optimistically
-  // and reconciles via a re-list.
+  // and reconciles via a re-list. The re-list is not awaited: the row's busy
+  // state must clear when the merge answers, not when the list does.
   const mergeRow = useCallback(
     async (row: PRRow) => {
       const ref = `${row.owner}/${row.repo}#${row.number}`;
@@ -178,7 +195,7 @@ export function useGitHubActions() {
           via: result.via ?? 'auto_merge',
         });
         toast.success(`Submitted ${ref} to the merge queue`, result.message);
-        await refreshPullRequests();
+        void reloadPullRequests();
         return;
       }
       // The PR had already merged/closed on GitHub and our row was stale — the
@@ -187,7 +204,7 @@ export function useGitHubActions() {
       if (result.alreadyTerminal) {
         toast.success(`${ref} was already ${result.merged ? 'merged' : 'closed'}`, result.message);
         removeRow(row.id);
-        await refreshPullRequests();
+        void reloadPullRequests();
         return;
       }
       // GitHub can 200 with `merged: false` — treat that as failure so we
@@ -203,7 +220,7 @@ export function useGitHubActions() {
       });
       toast.success(`Merged ${ref}`, row.summary.title);
       removeRow(row.id);
-      await refreshPullRequests();
+      void reloadPullRequests();
     },
     [removeRow]
   );

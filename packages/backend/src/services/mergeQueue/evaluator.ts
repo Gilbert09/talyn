@@ -28,7 +28,12 @@ import {
   loadActiveGroup,
   touchEvaluated,
 } from './store.js';
-import { evaluateEntry, PR_EVAL_COLUMNS, type PrEvalRow } from './executor.js';
+import {
+  createWalkReads,
+  evaluateEntry,
+  PR_EVAL_COLUMNS,
+  type PrEvalRow,
+} from './executor.js';
 import {
   planStackBatch,
   resolveNativeStackChain,
@@ -43,22 +48,54 @@ import type { PRMergeableSummary } from '@talyn/shared';
  *  is harmless: every write is CAS-guarded and the reconciler retries. */
 export const GROUP_EVALUATION_TIMEOUT_MS = 45_000;
 
+/**
+ * How long a dirty group waits before it walks again. In eager mode a walk
+ * evaluates every entry, and a busy repo sends check webhooks faster than a
+ * 100-entry walk ends, so an immediate re-run meant the group never stopped
+ * walking. Two seconds collects a CI burst into one walk and is small next to
+ * how long a merge takes.
+ */
+export const DIRTY_RERUN_DELAY_MS = 2_000;
+
 interface GroupState {
   running: boolean;
   /** A trigger arrived mid-evaluation — run once more when this one ends. */
   dirty: boolean;
   triggers: Set<string>;
+  /** Set while the group waits out the re-run delay; ends the wait early. */
+  wake?: () => void;
 }
 
 const groups = new Map<string, GroupState>();
+
+/** A person is waiting on these, so they never sit out the re-run delay. */
+function isUrgentTrigger(trigger: string): boolean {
+  return trigger.startsWith('user:');
+}
+
+function waitForRerun(state: GroupState): Promise<void> {
+  if ([...state.triggers].some(isUrgentTrigger)) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, DIRTY_RERUN_DELAY_MS);
+    // A pending re-run must not keep a process (or a test worker) alive.
+    timer.unref?.();
+    function done() {
+      clearTimeout(timer);
+      state.wake = undefined;
+      resolve();
+    }
+    state.wake = done;
+  });
+}
 
 /** Engine flag cache — triggers fire on every PR refresh, so don't pay a
  *  settings read per event. 5s TTL keeps cutover latency negligible. */
 
 /**
  * Schedule an evaluation of one (repo, base) group. Coalescing: triggers for
- * a running group mark it dirty and it re-runs once at the end — a CI burst
- * of 30 check webhooks costs one extra evaluation, not 30.
+ * a running group mark it dirty and it re-runs once at the end, after
+ * {@link DIRTY_RERUN_DELAY_MS} — a CI burst of 30 check webhooks costs one
+ * extra evaluation, not 30. A `user:` trigger skips the delay.
  */
 export function scheduleGroupEvaluation(
   repositoryId: string,
@@ -70,6 +107,7 @@ export function scheduleGroupEvaluation(
   if (state?.running) {
     state.dirty = true;
     state.triggers.add(trigger);
+    if (isUrgentTrigger(trigger)) state.wake?.();
     return;
   }
   const fresh: GroupState = { running: true, dirty: false, triggers: new Set([trigger]) };
@@ -89,8 +127,12 @@ async function runGroupLoop(
   state: GroupState
 ): Promise<void> {
   try {
-    // Loop while triggers keep arriving; each pass is one evaluation.
+    // Loop while triggers keep arriving; each pass is one evaluation. A re-run
+    // first waits out the delay, so triggers that land meanwhile join it.
+    let rerun = false;
     do {
+      if (rerun) await waitForRerun(state);
+      rerun = true;
       state.dirty = false;
       const trigger = [...state.triggers].join('+') || 'unknown';
       state.triggers.clear();
@@ -316,6 +358,7 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
   const inFlight = (e: { status: string; automergeArmedBy: string | null }) =>
     e.status === 'merging' || e.status === 'automerge_armed' || e.automergeArmedBy !== null;
   const inFlightIds = new Set(entries.filter(inFlight).map((e) => e.id));
+  const walkReads = createWalkReads();
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
     const pr = prById.get(entry.pullRequestId);
@@ -347,6 +390,7 @@ async function walkGroup(repositoryId: string, baseBranch: string, trigger: stri
         trigger,
         stackParent,
         stackBatch: stackBatchPlans.get(entry.pullRequestId) ?? null,
+        walkReads,
       });
       if (result.casLost) {
         // Someone newer is writing this group — stop walking; their

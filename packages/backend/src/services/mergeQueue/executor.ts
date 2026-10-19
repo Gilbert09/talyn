@@ -57,13 +57,23 @@ import {
 import { prMonitorService } from '../prMonitor.js';
 import { createCloudTask } from '../taskCreate.js';
 import { TaskLimitError } from '../billing/entitlements.js';
-import { ACTIVE_STATUSES, activePrTaskId, linkedTaskRun, resolveCloudEnv } from '../prCloudFix.js';
+import {
+  ACTIVE_STATUSES,
+  activePrTaskId,
+  linkedTaskRun,
+  resolveCloudEnv,
+  type ResolvedCloudEnv,
+} from '../prCloudFix.js';
 import {
   workspacePromptTemplate,
   workspaceRespondToHumanComments,
 } from '../promptTemplates.js';
 import { emitPullRequestUpdated, emitMergeQueueBlocked } from '../websocket.js';
-import { broadcastMergeQueuePositions, QUEUE_RESET_COLUMNS } from '../mergeQueueBroadcast.js';
+import {
+  broadcastMergeQueuePositions,
+  noteMergeQueueEmitted,
+  QUEUE_RESET_COLUMNS,
+} from '../mergeQueueBroadcast.js';
 import {
   classifyAutoMergeActor,
   disableAutoMerge,
@@ -129,6 +139,41 @@ export interface EvaluateEntryInput {
    * it out). Absent = the serial drain.
    */
   stackBatch?: StackBatchPlan | null;
+  /** Workspace-wide reads shared by every entry of one walk. Absent = read per entry. */
+  walkReads?: WalkReads;
+}
+
+/**
+ * Reads whose answer depends only on the workspace, memoised for one group
+ * walk. An eager walk evaluates every entry, and on a 100-PR queue asking
+ * these per entry was most of the walk's queries. Lazy, so an entry that never
+ * needed a read still does not cause one. A rejected read is forgotten, so one
+ * transient failure costs one entry and not the whole walk.
+ */
+export interface WalkReads {
+  cloudEnv(workspaceId: string): Promise<ResolvedCloudEnv | null>;
+  visualReviewSettings(workspaceId: string): Promise<VisualReviewSettings>;
+}
+
+export function createWalkReads(
+  readers: WalkReads = { cloudEnv: resolveCloudEnv, visualReviewSettings }
+): WalkReads {
+  const memo = <T>(read: (workspaceId: string) => Promise<T>) => {
+    const held = new Map<string, Promise<T>>();
+    return (workspaceId: string): Promise<T> => {
+      let p = held.get(workspaceId);
+      if (!p) {
+        p = read(workspaceId);
+        held.set(workspaceId, p);
+        p.catch(() => held.delete(workspaceId));
+      }
+      return p;
+    };
+  };
+  return {
+    cloudEnv: memo(readers.cloudEnv),
+    visualReviewSettings: memo(readers.visualReviewSettings),
+  };
 }
 
 export interface EvaluateEntryResult {
@@ -200,9 +245,12 @@ async function visualReviewSettings(workspaceId: string): Promise<VisualReviewSe
  * "asked, nothing is gating" — and is what releases a parked entry.
  */
 async function resolveVisualReviewContext(
-  pr: PrEvalRow
+  pr: PrEvalRow,
+  walkReads?: WalkReads
 ): Promise<VisualReviewContext | null | undefined> {
-  const settings = await visualReviewSettings(pr.workspaceId);
+  const settings = await (walkReads?.visualReviewSettings ?? visualReviewSettings)(
+    pr.workspaceId
+  );
   // No `visualReview` settings at all = never ask. Without this the queue would
   // round-trip to PostHog for every blocked PR in every workspace that has
   // PostHog credentials — including the great majority of repos that have no
@@ -273,7 +321,7 @@ async function buildBaseContext(
     // Cached (1h) branch-protection probe; a probe failure reads as null and
     // decide proceeds — the merge's 403 safety net catches a real requirement.
     requiresSignedCommits(pr.workspaceId, pr.owner, pr.repo, entry.baseBranch).catch(() => null),
-    resolveCloudEnv(pr.workspaceId),
+    (input.walkReads?.cloudEnv ?? resolveCloudEnv)(pr.workspaceId),
   ]);
   const graphqlGateBlocked = githubRateGate.isBlocked(accountKey, 'graphql');
   const graphqlBudgetLow = graphqlBudget.shouldDefer(accountKey);
@@ -338,7 +386,7 @@ async function buildBaseContext(
   const visualReview =
     prNeedsFollowup(pr.lastSummary as PRMergeableSummary) ||
     prNeedsHuman(pr.lastSummary as PRMergeableSummary)
-    ? await resolveVisualReviewContext(pr).catch((err) => {
+    ? await resolveVisualReviewContext(pr, input.walkReads).catch((err) => {
         console.warn(
           `[mergeQueueV2] visual-review lookup failed for ${pr.owner}/${pr.repo}#${pr.number}:`,
           err instanceof Error ? err.message : err
@@ -1678,7 +1726,10 @@ async function recordMerged(entry: EntrySnapshot, pr: PrEvalRow): Promise<void> 
     mergeQueued: false,
     mergeQueue: null,
   });
-  await broadcastMergeQueuePositions(pr.workspaceId);
+  noteMergeQueueEmitted(pr.workspaceId, pr.id, null);
+  // Not awaited: the broadcast is coalesced and waits out its window, and the
+  // walk that merged this PR has other entries to evaluate.
+  void broadcastMergeQueuePositions(pr.workspaceId);
 }
 
 function notifyBlocked(entry: EntrySnapshot, pr: PrEvalRow): void {
@@ -1717,6 +1768,7 @@ async function mirrorToPrRow(entry: EntrySnapshot, pr: PrEvalRow, position: numb
         : { mergeQueued: true, updatedAt: new Date() }
     )
     .where(eq(pullRequestsTable.id, pr.id));
+  const mergeQueue = terminal ? null : toPublicMergeQueue(entry, position);
   emitPullRequestUpdated(pr.workspaceId, {
     id: pr.id,
     taskId: pr.taskId,
@@ -1727,6 +1779,7 @@ async function mirrorToPrRow(entry: EntrySnapshot, pr: PrEvalRow, position: numb
     state: pr.state,
     lastSummary: pr.lastSummary as Record<string, unknown>,
     mergeQueued: !terminal,
-    mergeQueue: terminal ? null : toPublicMergeQueue(entry, position),
+    mergeQueue,
   });
+  noteMergeQueueEmitted(pr.workspaceId, pr.id, mergeQueue);
 }
